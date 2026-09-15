@@ -73,6 +73,30 @@ roles:
     rmSync(repoDir, { recursive: true, force: true });
   });
 
+  it('parses an agents resource list and defaults it to empty when absent', async () => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: frontend
+    description: Frontend
+    resources:
+      knowledge: [common, frontend]
+      skills: [common, frontend]
+      agents: [common, frontend]
+  - id: pm
+    description: PM
+    resources:
+      knowledge: [common, pm]
+      skills: [common, pm]
+`);
+
+    const manifest = await loadRolesManifest(repoDir);
+    expect(manifest.roles[0].resources.agents).toEqual(['common', 'frontend']);
+    expect(manifest.roles[1].resources.agents).toEqual([]);
+
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
   it('fails when a role is missing resources', async () => {
     const repoDir = writeManifest(`
 version: 1
@@ -128,6 +152,7 @@ describe('resolveRoleResourceNamespaces', () => {
         resources: {
           knowledge: ['common', 'hai'],
           skills: ['common', 'hai'],
+          agents: [],
         },
       },
       {
@@ -136,6 +161,7 @@ describe('resolveRoleResourceNamespaces', () => {
         resources: {
           knowledge: ['common', 'pm'],
           skills: ['common', 'pm'],
+          agents: [],
         },
       },
       {
@@ -144,6 +170,7 @@ describe('resolveRoleResourceNamespaces', () => {
         resources: {
           knowledge: ['common', 'thpc'],
           skills: ['common', 'thpc'],
+          agents: [],
         },
       },
     ],
@@ -154,6 +181,7 @@ describe('resolveRoleResourceNamespaces', () => {
       knowledge: ['common', 'hai'],
       skills: ['common', 'hai'],
       learnings: [],
+      agents: [],
     });
   });
 
@@ -162,6 +190,7 @@ describe('resolveRoleResourceNamespaces', () => {
       knowledge: ['common', 'hai', 'pm', 'thpc'],
       skills: ['common', 'hai', 'pm', 'thpc'],
       learnings: [],
+      agents: [],
     });
   });
 
@@ -170,11 +199,27 @@ describe('resolveRoleResourceNamespaces', () => {
       knowledge: ['common', 'hai', 'pm'],
       skills: ['common', 'hai', 'pm'],
       learnings: [],
+      agents: [],
     });
   });
 
   it('rejects unknown saved role ids', () => {
     expect(() => resolveRoleResourceNamespaces({ manifest, primaryRole: 'unknown', additionalRoles: [] })).toThrow(/unknown role/i);
+  });
+
+  it('resolves agents namespaces across roles and leaves them empty for roles without agents', () => {
+    const withAgents = {
+      version: 1,
+      roles: [
+        { id: 'frontend', description: '', resources: { knowledge: ['common'], skills: ['common'], agents: ['common', 'frontend'] } },
+        { id: 'devops', description: '', resources: { knowledge: ['common'], skills: ['common'], agents: ['common', 'devops'] } },
+        { id: 'pm', description: '', resources: { knowledge: ['common'], skills: ['common'], agents: [] } },
+      ],
+    };
+    expect(resolveRoleResourceNamespaces({ manifest: withAgents, primaryRole: 'frontend', additionalRoles: ['devops'] }).agents)
+      .toEqual(['common', 'frontend', 'devops']);
+    expect(resolveRoleResourceNamespaces({ manifest: withAgents, primaryRole: 'pm', additionalRoles: [] }).agents)
+      .toEqual([]);
   });
 });
 
@@ -201,6 +246,7 @@ function makeManifest(roles: Array<{ id: string; namespaces: string[] }>): Roles
       resources: {
         knowledge: r.namespaces,
         skills: r.namespaces,
+        agents: [],
       },
     })),
   };
