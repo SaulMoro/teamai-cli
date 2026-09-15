@@ -2,6 +2,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { readFileSafe, ensureDir, writeFile } from './utils/fs.js';
+import { log } from './utils/logger.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills'] as const;
 
@@ -189,4 +190,31 @@ export function activeRoleIds(localConfig: { primaryRole?: string; additionalRol
 export function matchesRoles(entryRoles: string[] | undefined, active: string[] | null): boolean {
   if (!entryRoles || active === null) return true;
   return entryRoles.some((role) => active.includes(role));
+}
+
+/**
+ * Warn once per role id that an entry's `roles:` names but roles.yaml does not
+ * define. A typo would otherwise ship the entry to nobody in silence. Never
+ * fails the run: without a readable manifest there is nothing to check against.
+ */
+export async function warnUnknownRoleIds(
+  repoPath: string,
+  file: string,
+  entries: Array<{ kind: string; name: string; roles?: string[] }>,
+): Promise<void> {
+  if (!entries.some((entry) => entry.roles && entry.roles.length > 0)) return;
+  let known: Set<string>;
+  try {
+    known = new Set(listRoleIds(await loadRolesManifest(repoPath)));
+  } catch {
+    return;
+  }
+  const reported = new Set<string>();
+  for (const entry of entries) {
+    for (const role of entry.roles ?? []) {
+      if (known.has(role) || reported.has(role)) continue;
+      reported.add(role);
+      log.warn(`roles: unknown role id "${role}" in ${file} ${entry.kind} "${entry.name}". Valid roles: ${[...known].join(', ')}`);
+    }
+  }
 }
