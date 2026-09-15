@@ -158,7 +158,7 @@ describe('resolveTeamHooks — roles filter', () => {
     expect(defs.map((d) => d.key)).toEqual(['guard-tf', 'stylelint', 'everyone']);
   });
 
-  it('applies every hook except roles: [] when no role is configured (null)', async () => {
+  it('applies every hook, roles: [] included, when no role is configured (null)', async () => {
     await writeRolesYaml();
     await writeYaml(ROLE_HOOKS);
     const { defs } = await resolveTeamHooks(teamConfig(), repo, { auto: true, activeRoles: null });

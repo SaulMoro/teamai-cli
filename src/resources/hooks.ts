@@ -144,7 +144,7 @@ export async function resolveTeamHooks(
   // transparency print below lists only hooks this member will actually run.
   // `activeRoles` undefined or null means no role configured: nothing filtered.
   await warnUnknownRoleIds(repoPath, 'hooks.yaml', defs.map((d) => ({ kind: 'hook', name: d.key, roles: d.roles })));
-  defs = defs.filter((d) => matchesRoles(d.roles, opts.activeRoles ?? null));
+  defs = defs.filter((d) => matchesRoles(d.roles, opts.activeRoles));
 
   if (sharing.requireTeamScripts) {
     const before = defs.length;

@@ -49,7 +49,7 @@ describe('mcpList', () => {
     const text = out.join('\n');
     expect(text).toContain('playwright  [stdio]');
     expect(text).toContain('roles:    frontend');
-    expect(text).toContain('roles:    (none)');
+    expect(text).toContain('roles:    nobody');
     expect(text.match(/roles:/g)).toHaveLength(2);
   });
 });

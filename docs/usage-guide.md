@@ -725,12 +725,12 @@ servers:
       FORMATTER_MODE: strict
     requires: [npx]                      # skipped with a hint when npx is absent from PATH
     tools: [claude, cursor]              # optional; default is every capable tool
-    roles: [frontend]                    # optional; default is every member
+    roles: [devops]                      # optional; default is every member
 ```
 
 `requires` is resolved from `PATH`. On Windows a name also matches a `PATHEXT` suffix (`uvx` matches `uvx.exe` / `uvx.cmd`).
 
-`roles` lists role ids from `manifest/roles.yaml`. A server ships to a member when one of their roles (`primaryRole` or `additionalRoles`) is listed; `roles: []` ships to nobody, the same way `tools: []` does. A member with no role configured receives every server, matching the unfiltered fallback skills and rules use. When a member changes role, servers that no longer match are removed on the next pull, hand-added servers included in nobody's list are never touched. An id that is not in `roles.yaml` produces one warning per pull. A teamai release older than this field ignores it and installs the server for everyone.
+`roles` lists role ids from `manifest/roles.yaml`. A server ships to a member when one of their roles (`primaryRole` or `additionalRoles`) is listed; `roles: []` ships to nobody, the same way `tools: []` does. A member with no role configured receives every server, matching the unfiltered fallback skills and rules use. When a member changes role, servers that no longer match are removed on the next pull. Hand-added servers are never touched. An id that is not in `roles.yaml` produces one warning per pull. A teamai release older than this field ignores it and installs the server for everyone.
 
 Where each tool's servers land:
 

@@ -705,7 +705,7 @@ servers:
       FORMATTER_MODE: strict
     requires: [npx]                      # PATH 上找不到 npx 时跳过并提示
     tools: [claude, cursor]              # 可选；默认所有支持 MCP 的工具
-    roles: [frontend]                    # 可选；默认所有成员
+    roles: [devops]                      # 可选；默认所有成员
 ```
 
 `requires` 从 `PATH` 解析。Windows 上还会匹配 `PATHEXT` 后缀（`uvx` 可匹配 `uvx.exe` / `uvx.cmd`）。
