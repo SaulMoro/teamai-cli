@@ -27,6 +27,8 @@ const TeamHookSchema = z.object({
   timeout: z.number().optional(),
   /** Optional restriction to specific tools (default = all hook-capable tools). */
   tools: z.array(z.string()).optional(),
+  /** Optional restriction to members holding one of these role ids (default = every member). */
+  roles: z.array(z.string()).optional(),
 });
 
 /** §4.8 team override of built-in (A) hooks. Whitelisted fields only. */
@@ -77,6 +79,7 @@ export function teamHookToDef(h: TeamHook): HookDef {
     timeout: h.timeout,
     description: `${TEAMAI_CUSTOM_HOOK_PREFIX}${h.id}] ${h.description}`,
     tools: h.tools,
+    roles: h.roles,
   };
 }
 
