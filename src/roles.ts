@@ -170,3 +170,23 @@ export function resolveRoleResourceNamespaces(input: {
 
   return namespaces;
 }
+
+/**
+ * Role ids this member holds, primary first, or null when no primary role is
+ * configured. Null means "no role filter": a member without a role keeps
+ * receiving every resource, the same fallback pull applies to skills and rules.
+ */
+export function activeRoleIds(localConfig: { primaryRole?: string; additionalRoles?: string[] }): string[] | null {
+  if (!localConfig.primaryRole) return null;
+  return [...new Set([localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])])];
+}
+
+/**
+ * Does an entry with an optional `roles:` list apply to this member? Mirrors
+ * the `tools:` filter: omitted = everyone, an empty list = nobody. A null
+ * active set (no role configured) matches everything, see activeRoleIds.
+ */
+export function matchesRoles(entryRoles: string[] | undefined, active: string[] | null): boolean {
+  if (!entryRoles || active === null) return true;
+  return entryRoles.some((role) => active.includes(role));
+}
