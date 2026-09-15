@@ -1242,7 +1242,7 @@ Each session card shows a `⚠ N` badge, counting the **number of human interven
 | `toolReject` | User rejected a tool call (permission deny) | A tool_result marked as rejected in the transcript |
 | `correction` | Within 60s after the agent stops, the user submits a follow-up prompt containing a correction keyword ("not right" / "redo" / "wrong" / 「違う」 / 「やり直し」 / etc. — Chinese, English and Japanese built in, plus any team keywords) | The stop → prompt_submit event pattern |
 
-> Privacy: intervention metrics contain counts. Local dashboard events also store the first 200 characters of each prompt and may include the last assistant output.
+> Privacy: only counts are tracked — no prompt or transcript text is ever stored.
 
 Keywords in a space-separated script (English, Spanish, ...) must appear as a whole word, so Spanish "segundo" does not count as `undo`. Chinese and Japanese keywords match as substrings. The built-in list covers only Chinese, English and Japanese; a correction typed in any other language is not detected until the team adds its own words in `teamai.yaml`. Team words are merged with the built-in list and matched case-insensitively under the same rules:
 
@@ -1267,7 +1267,7 @@ Each session card also shows two badges:
 | `💬 N` | The **number of human conversation turns** in the session (how many prompts were sent) | Count of `UserPromptSubmit` events |
 | `⛁ X` | The session's cumulative **token usage** (hover to see input / output / cache read / cache write breakdown) | Claude Code `message.usage`, CodeBuddy `requests[].usage`, or Codex's latest session-level `token_usage_record`; legacy `event_msg.token_count` snapshots are summed once per rollout file |
 
-> Privacy: the shared `prompts` and `tokens` fields contain counts, without prompt or transcript text.
+> Privacy: only turn counts and token counts are tracked — no prompt or transcript text is ever stored.
 
 These two metrics are likewise aggregated into `stats/<user>.yaml` (as `prompts` and `tokens` fields) during `teamai pull`, and shown in the "Conversation Volume & Token Usage" section of `teamai digest`, with team-wide totals, bucketed token totals, and per-person token usage rankings. Tools without transcript access (e.g. Cursor) degrade gracefully: turn counts are still tracked, while tokens show as 0 / N/A.
 

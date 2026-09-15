@@ -1209,7 +1209,7 @@ teamai dashboard --port 8080
 | `toolReject` | 用户拒绝某个工具调用（permission deny） | transcript 中标记拒绝的 tool_result |
 | `correction` | agent stop 后 60s 内用户追加含「不对 / 重来 / 错了 / wrong / redo / 違う / やり直し」等纠偏词（内置中、英、日，外加团队自定义词）的 prompt | stop → prompt_submit 事件模式 |
 
-> 隐私：干预指标记录次数。本地 dashboard 事件还会保存每条 prompt 的前 200 个字符，也可能包含 agent 的最后一次回复。
+> 隐私：只统计**次数**，不落地任何 prompt 或 transcript 原文。
 
 以空格分词的文字（英语、西班牙语等）中的纠偏词必须整词匹配，因此西班牙语 "segundo" 不会被算作 `undo`；中文、日文纠偏词仍按子串匹配。内置列表只覆盖中、英、日三种语言，其他语言的纠偏在团队于 `teamai.yaml` 添加自己的词之前不会被识别。团队词与内置列表合并，忽略大小写，遵循同样的匹配规则：
 
@@ -1234,7 +1234,7 @@ sharing:
 | `💬 N` | 该会话里**人类对话的轮数**（发了几次 prompt） | `UserPromptSubmit` 事件数 |
 | `⛁ X` | 该会话累计 **token 用量**（鼠标悬停看 输入 / 输出 / 缓存读 / 缓存写 明细） | Claude Code `message.usage`、CodeBuddy `requests[].usage`，或 Codex 最新的会话级 `token_usage_record`；旧版 `event_msg.token_count` 按 rollout 文件各取最新快照后累加 |
 
-> 隐私：共享的 `prompts` 和 `tokens` 字段仅包含数量，不包含 prompt 或 transcript 原文。
+> 隐私：只统计**轮数与 token 数量**，不落地任何 prompt 或 transcript 原文。
 
 这两项同样随 `teamai pull` 聚合到 `stats/<user>.yaml`（`prompts` 与 `tokens` 字段），并在 `teamai digest` 的「对话量与 Token 用量」板块给出团队对话总轮数、token 总量（分桶）与人均 token 用量排行。拿不到 transcript 的工具（如 Cursor）会优雅降级：仍统计对话轮数，token 显示为 0 / N/A。
 
