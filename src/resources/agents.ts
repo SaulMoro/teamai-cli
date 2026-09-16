@@ -7,6 +7,7 @@ import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileConte
 import { log } from '../utils/logger.js';
 import { resolveBaseDir, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
 import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
+import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../projects.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import {
@@ -136,11 +137,29 @@ export class AgentsHandler extends ResourceHandler {
     // items for other stems are appended below.
     const items: AgentResourceItem[] = [...directItems];
 
+    const resolved = await resolveResourceNamespaces(localConfig);
+    const activeNamespaces = resolved?.activeNamespaces.agents ?? null;
     for (const [stem, toolFiles] of grouped) {
       // Determine if this agent is already in the team repo (root or agents/<ns>/).
       // A modified agent must be written back where it lives, so its namespace
       // directory is carried into `relativePath` below.
-      const located = await findTeamAgentFile(teamAgentsDir, stem);
+      const sources = await findTeamAgentFiles(teamAgentsDir, stem);
+      const candidates = sources.filter(
+        (file) => activeNamespaces === null || !file.namespace || activeNamespaces.includes(file.namespace),
+      );
+      if (candidates.length > 1) {
+        items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
+          relativePath: `agents/${stem}.yaml`, status: 'modified',
+          skipReason: `Ambiguous agent "${stem}": multiple active sources (${candidates.map((file) => file.path).join(', ')}). Give active agents unique names before pushing.` });
+        continue;
+      }
+      if (sources.length > 0 && candidates.length === 0) {
+        items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
+          relativePath: `agents/${stem}.yaml`, status: 'modified',
+          skipReason: `Agent "${stem}" has no active source. Activate its role or project before pushing local edits.` });
+        continue;
+      }
+      const located = candidates[0];
       const teamYamlPath = located?.ext === '.yaml' ? located.path : path.join(teamAgentsDir, `${stem}.yaml`);
       const teamMdPath = located?.ext === '.md' ? located.path : path.join(teamAgentsDir, `${stem}.md`);
       const hasTeamYaml = located?.ext === '.yaml';
@@ -319,8 +338,7 @@ export class AgentsHandler extends ResourceHandler {
     const agentItem = item as AgentResourceItem;
 
     if (agentItem.skipReason) {
-      log.warn(`[agents] 跳过 ${item.name}: ${agentItem.skipReason}`);
-      log.warn('  建议修改后重新 push 该 subagent');
+      log.warn(`[agents] Skipped ${item.name}: ${agentItem.skipReason}`);
       return;
     }
 
@@ -460,7 +478,7 @@ export class AgentsHandler extends ResourceHandler {
    * Data-safety gate, same as inactive skills: a file is deleted only when it
    * is byte-equal to what pull would render from the team source. A local edit
    * is kept and reported so nothing unpushed is lost. Root-level agents and
-   * agents whose stem is still active never qualify.
+   * agents still deployed to the same tool destination never qualify.
    */
   async cleanupInactiveNamespaces(
     teamConfig: TeamaiConfig,
@@ -469,8 +487,8 @@ export class AgentsHandler extends ResourceHandler {
   ): Promise<void> {
     const items = await this.scanTeamForPull(teamConfig, localConfig);
     const isActive = (item: AgentResourceItem): boolean => !item.namespace || activeNamespaces.includes(item.namespace);
-    const activeStems = new Set(items.filter(isActive).map((item) => item.name));
-    const inactive = items.filter((item) => !isActive(item) && !activeStems.has(item.name) && !BUILTIN_AGENT_NAMES.has(item.name));
+    const active = items.filter(isActive);
+    const inactive = items.filter((item) => !isActive(item) && !BUILTIN_AGENT_NAMES.has(item.name));
     if (inactive.length === 0) return;
 
     const baseDir = resolveBaseDir(localConfig);
@@ -479,9 +497,14 @@ export class AgentsHandler extends ResourceHandler {
       if (!await ResourceHandler.isToolInstalled(toolPath.agents, baseDir)) continue;
       const destDir = path.join(baseDir, toolPath.agents);
 
+      const activeDestinations = new Set<string>();
+      for (const item of active) {
+        const rendered = await this.renderedForTool(item, tool);
+        if (rendered) activeDestinations.add(`${item.name}${rendered.ext}`);
+      }
       for (const item of inactive) {
         const expected = await this.renderedForTool(item, tool);
-        if (!expected) continue;
+        if (!expected || activeDestinations.has(`${item.name}${expected.ext}`)) continue;
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
         const current = await readFileSafe(deployed);
         if (current === null) continue;
@@ -573,7 +596,7 @@ type TeamAgentFile = { path: string; ext: '.yaml' | '.md'; namespace?: string };
 /**
  * Every team file for a stem, root first, then namespaces in directory order,
  * `.yaml` before `.md` in each. A stem may legitimately live in several
- * namespaces, so `remove` needs all of them; push and status take the first.
+ * namespaces, so `remove` needs all of them; push filters by active namespaces.
  */
 export async function findTeamAgentFiles(teamAgentsDir: string, stem: string): Promise<TeamAgentFile[]> {
   const found: TeamAgentFile[] = [];
@@ -584,10 +607,6 @@ export async function findTeamAgentFiles(teamAgentsDir: string, stem: string): P
     }
   }
   return found;
-}
-
-export async function findTeamAgentFile(teamAgentsDir: string, stem: string): Promise<TeamAgentFile | null> {
-  return (await findTeamAgentFiles(teamAgentsDir, stem))[0] ?? null;
 }
 
 /** Apply native-file deltas to the canonical spec, never replace it with a

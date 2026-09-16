@@ -207,6 +207,72 @@ describe('AgentsHandler — Phase 1 push/pull/remove', () => {
     expect(item?.relativePath).toBe('agents/frontend/vr.md');
   });
 
+  it.each(['role', 'project', 'additional role'])('push resolves same-stem agents using the active %s', async (axis) => {
+    await fse.outputFile(path.join(repoPath, 'manifest/roles.yaml'), `version: 1
+roles:
+  - id: active
+    resources:
+      knowledge: []
+      skills: []
+      agents: [zzz]
+  - id: empty
+    resources:
+      knowledge: []
+      skills: []
+`);
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'), `version: 1
+projects:
+  - id: active
+    resources:
+      agents: [zzz]
+`);
+    if (axis === 'project') localConfig.projects = ['active'];
+    else if (axis === 'additional role') {
+      localConfig.primaryRole = 'empty';
+      localConfig.additionalRoles = ['active'];
+    } else localConfig.primaryRole = 'active';
+    const inactive = 'name: reviewer\ndescription: Inactive\ninstructions: Read aaa.\n';
+    await fse.outputFile(path.join(repoPath, 'agents/aaa/reviewer.yaml'), inactive);
+    const sourcePath = path.join(repoPath, 'agents/zzz/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Active\ninstructions: Read zzz.\n');
+    await handler.pullItem({ name: 'reviewer', type: 'agents', sourcePath, relativePath: 'agents/zzz/reviewer.yaml' }, teamConfig, localConfig);
+    expect(await handler.scanLocalForPush(teamConfig, localConfig)).toEqual([]);
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    await fse.writeFile(deployed, (await fse.readFile(deployed, 'utf8')).replace('Read zzz.', 'Edited zzz.'));
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    if (!item) throw new Error('Expected edited agent');
+    expect(item.relativePath).toBe('agents/zzz/reviewer.yaml');
+    await handler.pushItem(item, teamConfig, localConfig);
+    expect(await fse.readFile(sourcePath, 'utf8')).toContain('Edited zzz.');
+    expect(await fse.readFile(path.join(repoPath, 'agents/aaa/reviewer.yaml'), 'utf8')).toBe(inactive);
+  });
+
+  it('does not promote an inactive retained agent to a new root agent', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'), 'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [aaa]\n');
+    await fse.outputFile(path.join(repoPath, 'agents/aaa/reviewer.md'), '# original');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'), '# local edit');
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('no active source');
+    for (const item of items) await handler.pushItem(item, teamConfig, localConfig);
+    expect(await fse.pathExists(path.join(repoPath, 'agents/reviewer.yaml'))).toBe(false);
+    expect(await fse.readFile(path.join(repoPath, 'agents/aaa/reviewer.md'), 'utf8')).toBe('# original');
+  });
+
+  it.each(['zzz', ''])('rejects ambiguous push destinations including root: %s', async (namespace) => {
+    await fse.outputFile(path.join(repoPath, 'agents/aaa/reviewer.md'), '# aaa');
+    await fse.outputFile(path.join(repoPath, 'agents', namespace, 'reviewer.md'), '# zzz');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'), '# edited');
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('Ambiguous');
+    for (const item of items) await handler.pushItem(item, teamConfig, localConfig);
+    expect(await fse.readFile(path.join(repoPath, 'agents/aaa/reviewer.md'), 'utf8')).toBe('# aaa');
+    expect(await fse.readFile(path.join(repoPath, 'agents', namespace, 'reviewer.md'), 'utf8')).toBe('# zzz');
+  });
+
   it('scanLocalForPush detects a brand-new local agent as "new"', async () => {
     await fse.writeFile(path.join(homeDir, '.claude/agents', 'brand-new.md'), '# brand new');
     const items = await handler.scanLocalForPush(teamConfig, localConfig);

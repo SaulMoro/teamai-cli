@@ -510,18 +510,28 @@ async function pushCore(
   // Scan for pushable resources first, then resolve namespace for new skills only.
   // Modified skills already carry their namespace from scanLocalForPush.
   const pushableTypes: ResourceType[] = ['skills', 'rules', 'env', 'agents'];
-  const allItems: ResourceItem[] = [];
+  const fullScan: ResourceItem[] = [];
 
   for (const type of pushableTypes) {
     const handler = getHandler(type);
     const items = await handler.scanLocalForPush(scanTeamConfig, localConfig);
-    allItems.push(...items);
+    fullScan.push(...items);
   }
 
-  // Snapshot the full scan before --skill/--role narrow allItems. prunePendingPushes
+  // Preserve blocked items in the full scan so their pending PR records survive.
+  // Exclude them before selection and grouping: pushItem cannot write their paths.
+  const allItems = fullScan.filter((item) => {
+    if (item.type === 'agents' && 'skipReason' in item
+      && typeof item.skipReason === 'string' && item.skipReason) {
+      log.warn(`[agents] Skipped ${item.name}: ${item.skipReason}`);
+      return false;
+    }
+    return true;
+  });
+
+  // Keep the full scan before --skill/--role narrow allItems. prunePendingPushes
   // must see every pending resource that is still locally present, or narrowing to
   // one skill would drop the other skills' open-PR records and duplicate them next run.
-  const fullScan: ResourceItem[] = [...allItems];
 
   spin.stop();
 

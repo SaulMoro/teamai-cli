@@ -135,6 +135,31 @@ describe('pull agents cleanup after role change', () => {
     await fse.remove(tmpDir);
   });
 
+  it.each([false, true])('cleans same-stem agents per target while preserving local edits: %s', async (edited) => {
+    await fse.outputFile(path.join(repoPath, 'agents/frontend/reviewer.yaml'), 'name: reviewer\ndescription: Old\ninstructions: Review old.\ntargets: [claude]\n');
+    await fse.outputFile(path.join(repoPath, 'agents/devops/reviewer.yaml'), 'name: reviewer\ndescription: New\ninstructions: Review new.\ntargets: [codex]\n');
+    await pull({});
+    const oldCopy = path.join(homeDir, '.claude/agents/reviewer.md');
+    expect(await fse.pathExists(oldCopy)).toBe(true);
+    if (edited) await fse.appendFile(oldCopy, '\nLocal edit.\n');
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(configFor('devops'));
+    await pull({});
+    expect(await fse.pathExists(oldCopy)).toBe(edited);
+    expect(await fse.readFile(path.join(homeDir, '.codex/agents/reviewer.toml'), 'utf8')).toContain('Review new.');
+  });
+
+  it('removes an old Codex render when the active same-stem source is legacy Markdown', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/frontend/reviewer.yaml'), 'name: reviewer\ndescription: Old\ninstructions: Review old.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/devops/reviewer.md'), '# Active legacy agent\n');
+    await pull({});
+    const codexCopy = path.join(homeDir, '.codex/agents/reviewer.toml');
+    expect(await fse.pathExists(codexCopy)).toBe(true);
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(configFor('devops'));
+    await pull({});
+    expect(await fse.pathExists(codexCopy)).toBe(false);
+    expect(await fse.readFile(path.join(homeDir, '.claude/agents/reviewer.md'), 'utf8')).toBe('# Active legacy agent\n');
+  });
+
   it('removes agents of a namespace that stops being active and keeps root agents', async () => {
     await pull({});
 
