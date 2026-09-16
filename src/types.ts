@@ -706,7 +706,10 @@ export interface GlobalOptions {
   claude?: boolean;
   verbose?: boolean;
   silent?: boolean;
-  /** Force full sync even when repo HEAD matches lastPullRev. */
+  /**
+   * Force full sync even when repo HEAD matches lastPullRev (`pull`), or skip
+   * the confirmation prompt (`remove`).
+   */
   force?: boolean;
   /** Push a specific skill by path. */
   skill?: string;

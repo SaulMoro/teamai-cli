@@ -204,10 +204,11 @@ membersCmd
 program
   .command('remove <type> <names...>')
   .description('Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)')
-  .action(async (type, names) => {
+  .option('--force', 'Skip confirmation prompt')
+  .action(async (type, names, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { remove } = await import('./remove.js');
-    await remove(type, names, globalOpts);
+    await remove(type, names, { ...globalOpts, ...cmdOpts });
   });
 
 registerPackagesCommand(program);

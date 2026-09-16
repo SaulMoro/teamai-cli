@@ -1454,10 +1454,11 @@ teamai stats           # Skill usage stats
 teamai update --check  # Check for a CLI update without installing it
 teamai update          # Check for and install a CLI update
 teamai digest          # Generate the weekly team activity digest
-teamai remove skills <name>   # Remove a resource
+teamai remove skills <name>   # Remove a resource (asks for confirmation)
 teamai remove rules <name>
 teamai remove agents <name>
 teamai remove mcp <name>
+teamai remove rules <name> --force   # Skip the prompt, for scripts and CI
 ```
 
 Auto-update runs in the Stop hook and is controlled by two tiers:

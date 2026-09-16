@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ✨ Features
 
+- `teamai remove` accepts `--force` to skip its confirmation prompt, spelled the same way as `teamai uninstall --force`. Without a TTY the prompt answers itself with no, so this is the only way to remove a resource from a script or a test (for [#591](https://github.com/Tencent/teamai-cli/issues/591)).
 - MCP servers in `mcp/mcp.yaml` and hooks in `hooks/hooks.yaml` accept an optional `roles:` list and ship only to members holding one of those roles; a role change removes the previous role's entries on the next pull, and `teamai mcp list` / `teamai hooks list` show the restriction (for [#563](https://github.com/Tencent/teamai-cli/issues/563)).
 - Agents can be scoped by role or project: `agents/<namespace>/` ships only to members whose `roles.yaml` / `projects.yaml` entry lists that namespace under a new optional `agents:` key, and a role change removes the previous namespaces' agents on the next pull (for [#563](https://github.com/Tencent/teamai-cli/issues/563)).
 - First-class Kiro support: skills, steering rules, JSON subagents with CLI `agentSpawn` session-start hooks, and MCP sync to `.kiro/` (for [#500](https://github.com/Tencent/teamai-cli/issues/500)).

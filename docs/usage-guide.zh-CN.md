@@ -1418,10 +1418,11 @@ teamai stats           # skill 使用统计
 teamai update --check  # 仅检查 CLI 更新，不安装
 teamai update          # 检查并安装 CLI 更新
 teamai digest          # 生成团队活动周报
-teamai remove skills <name>   # 删除资源
+teamai remove skills <name>   # 删除资源（需要确认）
 teamai remove rules <name>
 teamai remove agents <name>
 teamai remove mcp <name>
+teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 ```
 
 自动更新在 Stop hook 中执行，可通过两层控制：
