@@ -1414,6 +1414,7 @@ Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` �
 
 ```bash
 teamai doctor          # 配置诊断
+teamai doctor --json   # 同样的诊断结果，以 JSON 输出到 stdout（CI、hook、agent 可直接消费）
 teamai stats           # skill 使用统计
 teamai update --check  # 仅检查 CLI 更新，不安装
 teamai update          # 检查并安装 CLI 更新
@@ -1425,6 +1426,25 @@ teamai remove mcp <name>
 ```
 
 仅当所有检查通过时，`teamai doctor` 才以状态码 0 退出；任一检查失败时以状态码 1 退出。尚未初始化时，它只报告缺少配置，不会臆测 Git 托管平台。
+
+`--json` 把同一份报告作为单个对象打印到 stdout，并将所有日志改走 stderr，因此 `teamai doctor --json 2>/dev/null` 可以整体解析；退出码不变。每个检查都会带上人类模式下显示的修复建议：
+
+```json
+{
+  "ok": false,
+  "scope": "user",
+  "checks": [
+    { "name": "Team repo exists locally", "ok": true },
+    {
+      "name": "teamai hooks in claude settings",
+      "ok": false,
+      "fix": "Run `teamai hooks inject` to inject/update hooks"
+    }
+  ]
+}
+```
+
+尚未初始化时 `scope` 为 `null`。仅当团队仓库声明了 packages 时才会出现 `packages` 字段，内容是已渲染的报告行；`notes` 只在有额外提示时出现 —— 目前是 Codex 信任门槛提醒。
 
 自动更新在 Stop hook 中执行，可通过两层控制：
 

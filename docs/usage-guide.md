@@ -1450,6 +1450,7 @@ Upgrading from an earlier version: `.cursor/rules/*.md` copies written by the ol
 
 ```bash
 teamai doctor          # Config diagnostics
+teamai doctor --json   # Same diagnostics as JSON on stdout (CI, hooks, agents)
 teamai stats           # Skill usage stats
 teamai update --check  # Check for a CLI update without installing it
 teamai update          # Check for and install a CLI update
@@ -1461,6 +1462,25 @@ teamai remove mcp <name>
 ```
 
 `teamai doctor` exits with code 0 only when every check passes, and code 1 when any check fails. Before initialization, it reports the missing configuration without assuming a Git provider.
+
+`--json` prints the same report as one object on stdout and routes every log line to stderr, so `teamai doctor --json 2>/dev/null` parses whole. The exit code is unchanged. Each check carries the fix suggestion it prints in human mode:
+
+```json
+{
+  "ok": false,
+  "scope": "user",
+  "checks": [
+    { "name": "Team repo exists locally", "ok": true },
+    {
+      "name": "teamai hooks in claude settings",
+      "ok": false,
+      "fix": "Run `teamai hooks inject` to inject/update hooks"
+    }
+  ]
+}
+```
+
+`scope` is `null` before initialization. `packages` is present only when the team repo declares packages, and carries the rendered report lines. `notes` appears only when there is an advisory — today, the Codex trust-gate reminder.
 
 Auto-update runs in the Stop hook and is controlled by two tiers:
 

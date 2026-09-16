@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from './config.js';
 import { pathExists, readFileSafe } from './utils/fs.js';
-import { log } from './utils/logger.js';
-import type { GlobalOptions } from './types.js';
+import { log, setStderrOnly } from './utils/logger.js';
+import type { GlobalOptions, LocalConfig } from './types.js';
 import {
   TEAMAI_ENV_START,
   resolveHookScope,
@@ -14,10 +14,48 @@ import {
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
 import { getUserHome } from './utils/home.js';
 
-interface Check {
+export interface Check {
   name: string;
   check: () => Promise<boolean>;
   fix?: string;
+}
+
+/**
+ * Everything the check registry needs to describe this machine. Resolved once
+ * by `resolveDoctorContext`, then passed to `buildChecks` — so any caller
+ * (doctor, and later a post-pull run) builds the same checks the same way.
+ */
+export interface DoctorContext {
+  localConfig: LocalConfig;
+  teamConfig: TeamaiConfig | null;
+  /** Tool paths already narrowed to the enabled, non-excluded agents. */
+  toolPaths: TeamaiConfig['toolPaths'];
+  /** Where hooks are actually injected — see `resolveHookScope` (#264). */
+  baseDir: string;
+}
+
+export interface DoctorOptions extends GlobalOptions {
+  /** Emit the report as JSON on stdout instead of the human rendering. */
+  json?: boolean;
+}
+
+/** One check after it ran. */
+export interface CheckResult {
+  name: string;
+  ok: boolean;
+  fix?: string;
+}
+
+/** What `doctor --json` prints. One object, one place that builds it. */
+export interface DoctorReport {
+  ok: boolean;
+  /** null before initialization, when there is no config to scope. */
+  scope: string | null;
+  checks: CheckResult[];
+  /** Present only when the team repo declares packages. Human text, not checks. */
+  packages?: { ok: boolean; lines: string[] };
+  /** Advisories that are not checks — today, the Codex trust-gate reminder. */
+  notes?: string[];
 }
 
 /**
@@ -67,24 +105,15 @@ async function hasInstalledCodexHooks(toolPaths: TeamaiConfig['toolPaths'], base
   return false;
 }
 
-export async function doctor(options: GlobalOptions): Promise<boolean> {
-  log.info('Running diagnostics...\n');
+/**
+ * Resolve the local/team configuration the checks run against. Returns null
+ * when TeamAI is not initialized here — the caller decides how to report that.
+ */
+export async function resolveDoctorContext(): Promise<DoctorContext | null> {
   const projectConfig = await detectProjectConfig();
   const localConfig = projectConfig ?? (await loadLocalConfig());
-  if (!localConfig) {
-    console.log('  Scope: not initialized\n');
-    console.log('  ✖ TeamAI is not initialized');
-    console.log('    → Run `teamai init <repo-url>` in a project, or add `--scope user` for all projects');
-    console.log('');
-    log.warn('Initialization is required before diagnostics can run.');
-    return false;
-  }
+  if (!localConfig) return null;
 
-  const scope = localConfig.scope ?? 'user';
-  const scopeLabel = `${scope}${scope === 'project' && localConfig.projectRoot ? ` (${localConfig.projectRoot})` : ''}`;
-  console.log(`  Scope: ${scopeLabel}\n`);
-
-  // Try to load team config for dynamic tool paths and provider
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
   const toolPaths: TeamaiConfig['toolPaths'] = teamConfig
     ? Object.fromEntries(
@@ -92,13 +121,22 @@ export async function doctor(options: GlobalOptions): Promise<boolean> {
         .filter(([tool]) => !isAgentExcluded(localConfig, tool)),
     )
     : {};
-  const providerName = teamConfig?.provider;
   // Hook checks must look where hooks are actually injected. resolveHookScope
   // maps a non-self project scope to HOME (#264), matching the injection path in
   // init/pull/hooks-cmd — otherwise doctor checks <projectRoot>/.claude while the
   // hooks live in ~/.claude and always reports them missing.
   const baseDir = resolveHookScope(localConfig).baseDir;
 
+  return { localConfig, teamConfig, toolPaths, baseDir };
+}
+
+/**
+ * The check registry. Exported so callers other than `teamai doctor` can run
+ * the same diagnostics and act on the result.
+ */
+export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig, toolPaths, baseDir } = ctx;
+  const providerName = teamConfig?.provider;
   const checks: Check[] = [];
 
   // Provider-specific checks: gf CLI only needed for TGit, gh CLI for GitHub
@@ -198,31 +236,108 @@ export async function doctor(options: GlobalOptions): Promise<boolean> {
     },
   );
 
-  let allPassed = true;
+  return checks;
+}
+
+/**
+ * Run every check once, in registry order. `onResult` reports each one as it
+ * lands, so the human rendering keeps streaming while a slow check (a provider
+ * CLI auth probe) is still running.
+ */
+async function runChecks(
+  checks: Check[],
+  onResult?: (result: CheckResult) => void,
+): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
   for (const { name, check, fix } of checks) {
     const ok = await check();
-    if (ok) {
-      console.log(`  ✔ ${name}`);
-    } else {
-      console.log(`  ✖ ${name}`);
-      if (fix) console.log(`    → ${fix}`);
-      allPassed = false;
-    }
+    const result: CheckResult = ok ? { name, ok } : { name, ok, fix };
+    results.push(result);
+    onResult?.(result);
   }
+  return results;
+}
+
+/** The only writer of the JSON channel. */
+function emitReport(report: DoctorReport): void {
+  console.log(JSON.stringify(report, null, 2));
+}
+
+/** The human rendering of one finished check. */
+function renderResult({ name, ok, fix }: CheckResult): void {
+  if (ok) {
+    console.log(`  ✔ ${name}`);
+    return;
+  }
+  console.log(`  ✖ ${name}`);
+  if (fix) console.log(`    → ${fix}`);
+}
+
+export async function doctor(options: DoctorOptions): Promise<boolean> {
+  const jsonMode = options.json === true;
+  // In JSON mode stdout is a data channel: route every log line to stderr so a
+  // consumer can parse stdout whole (same trick as hook-dispatch commands).
+  if (jsonMode) setStderrOnly(true);
+
+  log.info('Running diagnostics...\n');
+  const ctx = await resolveDoctorContext();
+  if (!ctx) {
+    const notInitialized: CheckResult = {
+      name: 'TeamAI is not initialized',
+      ok: false,
+      fix: 'Run `teamai init <repo-url>` in a project, or add `--scope user` for all projects',
+    };
+    if (jsonMode) {
+      emitReport({ ok: false, scope: null, checks: [notInitialized] });
+    } else {
+      console.log('  Scope: not initialized\n');
+      renderResult(notInitialized);
+      console.log('');
+    }
+    log.warn('Initialization is required before diagnostics can run.');
+    return false;
+  }
+
+  const { localConfig, toolPaths, baseDir } = ctx;
+  const scope = localConfig.scope ?? 'user';
+  if (!jsonMode) {
+    const scopeLabel = `${scope}${scope === 'project' && localConfig.projectRoot ? ` (${localConfig.projectRoot})` : ''}`;
+    console.log(`  Scope: ${scopeLabel}\n`);
+  }
+
+  const results = await runChecks(await buildChecks(ctx), jsonMode ? undefined : renderResult);
+  let allPassed = results.every((r) => r.ok);
 
   const { pkgDoctorReport } = await import('./pkg/commands.js');
   const packageReport = await pkgDoctorReport(localConfig, process.cwd());
-  if (packageReport) {
-    for (const line of packageReport.lines) console.log(line);
-    if (!packageReport.allPassed) allPassed = false;
-  }
+  if (packageReport && !packageReport.allPassed) allPassed = false;
 
   // Codex trust-gate reminder: even when hooks are installed, Codex may not run
   // them until the user reviews/trusts them. Note only — teamai never writes
   // [hooks.state] to auto-trust.
-  if (await hasInstalledCodexHooks(toolPaths, baseDir)) {
+  const codexNote = await hasInstalledCodexHooks(toolPaths, baseDir)
+    ? codexTrustReminder()
+    : null;
+
+  if (jsonMode) {
+    emitReport({
+      ok: allPassed,
+      scope,
+      checks: results,
+      // pkgDoctorReport renders its own lines; they are human text, not checks.
+      ...(packageReport ? { packages: { ok: packageReport.allPassed, lines: packageReport.lines } } : {}),
+      ...(codexNote ? { notes: [codexNote] } : {}),
+    });
+    return allPassed;
+  }
+
+  if (packageReport) {
+    for (const line of packageReport.lines) console.log(line);
+  }
+
+  if (codexNote) {
     console.log('');
-    log.info(codexTrustReminder());
+    log.info(codexNote);
   }
 
   console.log('');

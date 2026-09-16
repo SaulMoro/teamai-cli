@@ -215,10 +215,11 @@ registerPackagesCommand(program);
 program
   .command('doctor')
   .description('Diagnose configuration issues')
-  .action(async () => {
+  .option('--json', 'Output the report as JSON (suitable for CI)')
+  .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { doctor } = await import('./doctor.js');
-    const allPassed = await doctor(globalOpts);
+    const allPassed = await doctor({ ...globalOpts, ...cmdOpts });
     if (!allPassed) process.exitCode = 1;
   });
 

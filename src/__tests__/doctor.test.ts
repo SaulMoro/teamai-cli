@@ -22,6 +22,7 @@ vi.mock('../utils/logger.js', () => ({
         error: vi.fn(),
         debug: vi.fn(),
     },
+    setStderrOnly: vi.fn(),
 }));
 
 // Mock the tgit provider to avoid side effects
@@ -35,9 +36,10 @@ vi.mock('../providers/tgit/index.js', () => ({
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { pathExists, readFileSafe } from '../utils/fs.js';
 import { TEAMAI_HOOK_SUBCOMMANDS } from '../hooks.js';
-import { log } from '../utils/logger.js';
+import { log, setStderrOnly } from '../utils/logger.js';
 import { isGfInstalled, gfIsAuthenticated } from '../providers/tgit/index.js';
-import { doctor } from '../doctor.js';
+import { buildChecks, doctor, resolveDoctorContext } from '../doctor.js';
+import type { DoctorReport } from '../doctor.js';
 
 const mockedLoadLocalConfig = loadLocalConfig as Mock;
 const mockedLoadTeamConfig = loadTeamConfig as Mock;
@@ -329,5 +331,107 @@ describe('doctor — hook checks', () => {
         expect(allLines.some((line) => line.includes('hooks in claude settings'))).toBe(true);
         expect(allLines.some((line) => line.includes('hooks in codex settings'))).toBe(false);
         expect(allPassed).toBe(true);
+    });
+});
+
+describe('doctor — JSON report', () => {
+    /**
+     * Parses the report and, by insisting on a single console.log, proves that
+     * stdout carried nothing but JSON.
+     */
+    function emittedReport(): DoctorReport {
+        expect(consoleSpy.mock.calls).toHaveLength(1);
+        return JSON.parse(String(consoleSpy.mock.calls[0][0])) as DoctorReport;
+    }
+
+    it('emits a single JSON object carrying every check', async () => {
+        mockedLoadTeamConfig.mockResolvedValue({
+            ...mockTeamConfig,
+            sharing: { env: { injectShellProfile: false } },
+        });
+
+        const allPassed = await doctor({ json: true });
+
+        // stdout must stay a pure data channel: one console.log, logs on stderr.
+        expect(setStderrOnly).toHaveBeenCalledWith(true);
+
+        const report = emittedReport();
+        expect(allPassed).toBe(true);
+        expect(report.ok).toBe(true);
+        expect(report.scope).toBe('user');
+        const names = report.checks.map((c) => c.name);
+        expect(names).toContain('Team repo exists locally');
+        expect(names).toContain('teamai hooks in claude settings');
+        expect(report.checks.every((c) => c.ok)).toBe(true);
+    });
+
+    it('carries the fix string of a failing check', async () => {
+        mockedReadFileSafe.mockImplementation(async (filePath: string) => {
+            if (filePath.includes('settings.json')) {
+                return '{ "hooks": { "command": "bash -lc \\"teamai pull\\"" } }';
+            }
+            if (filePath.includes('.zshrc') || filePath.includes('.bashrc')) {
+                return '# [teamai:env:start]';
+            }
+            return null;
+        });
+
+        const allPassed = await doctor({ json: true });
+
+        const report = emittedReport();
+        expect(allPassed).toBe(false);
+        expect(report.ok).toBe(false);
+        const failing = report.checks.find((c) => c.name === 'teamai hooks in claude settings');
+        expect(failing?.ok).toBe(false);
+        expect(failing?.fix).toContain('teamai hooks inject');
+    });
+
+    it('emits the same envelope before initialization', async () => {
+        mockedLoadLocalConfig.mockResolvedValue(null);
+        mockedLoadTeamConfig.mockResolvedValue(null);
+
+        const allPassed = await doctor({ json: true });
+
+        const report = emittedReport();
+        expect(allPassed).toBe(false);
+        expect(report.ok).toBe(false);
+        expect(report.scope).toBeNull();
+        expect(report.checks).toHaveLength(1);
+        expect(report.checks[0]).toMatchObject({ name: 'TeamAI is not initialized', ok: false });
+        expect(report.checks[0].fix).toContain('teamai init');
+    });
+});
+
+describe('buildChecks', () => {
+    it('runs outside doctor and yields one hook check per enabled agent', async () => {
+        mockedLoadLocalConfig.mockResolvedValue({
+            ...mockLocalConfig,
+            enabledAgents: ['claude'],
+        });
+        mockedLoadTeamConfig.mockResolvedValue({
+            ...mockTeamConfig,
+            toolPaths: {
+                claude: { settings: '.claude/settings.json', skills: '.claude/skills' },
+                codex: { settings: '.codex/hooks.json', skills: '.codex/skills' },
+            },
+        });
+
+        const ctx = await resolveDoctorContext();
+        if (!ctx) throw new Error('expected a resolved doctor context');
+
+        const checks = await buildChecks(ctx);
+        const names = checks.map((c) => c.name);
+
+        expect(names).toContain('teamai hooks in claude settings');
+        expect(names).not.toContain('teamai hooks in codex settings');
+        // Building the registry renders nothing — that is what makes it reusable.
+        expect(consoleSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns a null context before initialization', async () => {
+        mockedLoadLocalConfig.mockResolvedValue(null);
+        mockedLoadTeamConfig.mockResolvedValue(null);
+
+        expect(await resolveDoctorContext()).toBeNull();
     });
 });
