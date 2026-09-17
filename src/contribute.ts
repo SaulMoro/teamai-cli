@@ -5,7 +5,7 @@ import { assertNotReadOnly } from './read-only.js';
 import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import { markContributed } from './contribute-check.js';
-import { savePendingLearning } from './utils/pending-learnings.js';
+import { pendingLearningsDir, savePendingLearning } from './utils/pending-learnings.js';
 import { publishLearning } from './utils/learnings-publish.js';
 import { learningsRoots } from './utils/learnings-roots.js';
 import { isSafeNamespaceSegment, resolveActiveLearningsNamespaces } from './projects.js';
@@ -62,7 +62,11 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
   const indexPath = path.join(teamaiHome, 'search-index.json');
   const { buildIndex } = await import('./utils/search-index.js');
   await buildIndex({
-    learningsDirs: learningsRoots(localConfig).read,
+    // The durable copy of a contribution that could not be published is a
+    // learnings root too. Without it, a member whose worktree cannot be created
+    // at all keeps the note but cannot recall it until it publishes — and
+    // before learnings moved to their own branch, it was always findable.
+    learningsDirs: [pendingLearningsDir(localConfig), ...learningsRoots(localConfig).read],
     // Manifest-resolved namespaces — MUST match what pull indexes by, or a
     // contribute-time rebuild drops the project's other learnings from recall.
     learningsNamespaces: activeLearningsNamespaces,
@@ -179,6 +183,24 @@ export async function contribute(
 
   // Rebuild the index either way: the learning is in the branch worktree, which
   // is a read root, whether or not the push that follows it reached origin.
+  const published = result.status === 'published' || result.status === 'already-present';
+
+  // Not on origin: keep a durable copy outside anything git rewrites, so the
+  // next pull can deliver it. It has to exist before the index is rebuilt, or
+  // a contribution whose worktree could not be created at all would be kept
+  // and still be unfindable.
+  let saved = false;
+  if (!published) {
+    try {
+      await savePendingLearning(localConfig, relPath, content);
+      saved = true;
+    } catch (e) {
+      spin.fail(`Contribution failed: ${(e as Error).message}`);
+      log.info('You can retry with: teamai contribute --file <path>');
+      return;
+    }
+  }
+
   try {
     await rebuildIndexAfterContribute(localConfig);
   } catch (e) {
@@ -190,20 +212,14 @@ export async function contribute(
     await markContributed(sessionId);
   }
 
-  if (result.status === 'published' || result.status === 'already-present') {
+  if (published) {
     spin.succeed(`Contributed: learnings/${relPath}`);
     log.info('Your session knowledge has been shared with the team.');
     return;
   }
 
-  // Not on origin. Keep a durable copy outside anything git rewrites, so the
-  // next pull can deliver it.
-  try {
-    await savePendingLearning(localConfig, relPath, content);
+  if (saved) {
     const reason = result.status === 'failed' ? result.reason : 'another teamai write is in progress';
     spin.warn(`Saved locally (${reason}). Will retry on the next pull.`);
-  } catch (e) {
-    spin.fail(`Contribution failed: ${(e as Error).message}`);
-    log.info('You can retry with: teamai contribute --file <path>');
   }
 }

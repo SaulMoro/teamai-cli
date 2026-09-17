@@ -3,6 +3,7 @@ import matter from 'gray-matter';
 import { requireInit, loadState, saveState, detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
 import { pullRepo, getHeadRev, createGit } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
+import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { learningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
@@ -1012,6 +1013,9 @@ async function pullForScope(
           // Then every published root, so nothing is indexed from one directory
           // that happened to be picked.
           learningsDirs: [
+            // Same reason as contribute: a learning that could not be published
+            // is kept in the queue, and it has to stay findable here until it is.
+            pendingLearningsDir(localConfig),
             ...(effectiveLearningsDir ? [effectiveLearningsDir] : []),
             ...publishedRoots,
           ],
