@@ -329,8 +329,8 @@ const votesSyncHandler: HookHandler = {
       if (verifiedDocIds.length > 0) {
         await incrementUpvoted(votePath, verifiedDocIds);
       }
-      const { usesReportsBranch } = await import('./types.js');
-      if (usesReportsBranch(localConfig)) {
+      const { usesBranchWorktree } = await import('./types.js');
+      if (usesBranchWorktree(localConfig)) {
         // Votes are report data → the teamai-reports orphan branch, written
         // through an isolated worktree (never the default branch / active tree).
         // Stop fires every turn: skip the fetch when nothing is pending.
