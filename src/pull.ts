@@ -114,27 +114,14 @@ async function refreshTeamRepo(
     return { label: 'single-repo (knowledge on main)', version, reportingOnly: false, submodulesFailed: false, submodulesChanged: false };
   }
 
-  // The shared team clone is mutated here (git pull + flushPendingLearnings'
-  // add/commit/push). The partition sync-lock that serializes this against a
+  // The shared team clone is mutated here (git pull). The partition sync-lock
+  // that serializes this against a
   // concurrent pull/push is acquired by the CALLER (pull()) and held across this
   // scope's ENTIRE clone-consuming lifecycle — fetch, resource scan/deploy, and
   // the reconcile/source/report stages — so there is no unlocked window in which
   // another writer could reset/checkout the tree. We must NOT lock here: the lock
   // is non-reentrant, so re-acquiring it in the same process would fail.
   const result = await pullRepo(localConfig.repo.localPath);
-
-  // Publish anything a contribute could not publish at the time (offline, or no
-  // push rights yet). Best-effort: never let it block the pull.
-  try {
-    // pull() holds the partition sync lock across this whole scope and the lock
-    // is not reentrant, so publishing must not try to take it again.
-    const queue = await publishQueuedLearnings(localConfig, localConfig.username, { holdsSyncLock: true });
-    if (queue.published.length > 0) {
-      log.success(`Published ${queue.published.length} learning(s) that could not be pushed earlier`);
-    }
-  } catch (e) {
-    log.debug(`publishing queued learnings skipped: ${(e as Error).message}`);
-  }
 
   let version: string | null = null;
   try {
@@ -608,6 +595,21 @@ async function pullForScope(
   } catch (e) {
     pullSpin.fail(`[${scopeLabel}] Pull failed: ${(e as Error).message}`);
     return;
+  }
+
+  // Publish anything a contribute could not publish at the time (offline, or no
+  // push rights yet). Here rather than inside the refresh, which returns early
+  // for single-repo and HTTP: contribute promises the next pull will retry, and
+  // that promise has to hold in every mode. pull() holds the partition sync lock
+  // across this scope and the lock is not reentrant, so publishing must not try
+  // to take it again. Best-effort: never let it block the pull.
+  try {
+    const queue = await publishQueuedLearnings(localConfig, localConfig.username, { holdsSyncLock: true });
+    if (queue.published.length > 0) {
+      log.success(`Published ${queue.published.length} learning(s) that could not be pushed earlier`);
+    }
+  } catch (e) {
+    log.debug(`publishing queued learnings skipped: ${(e as Error).message}`);
   }
 
   // Read teamai.yaml only after the refresh: a clone that lacks it must still

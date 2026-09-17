@@ -296,8 +296,12 @@ async function loadOrBuildScopeIndex(
   // mirror, and the corpus the team wrote before the split. Picking one of them,
   // as this used to, silently returned less.
   const { learningsRoots } = await import('./utils/learnings-roots.js');
+  const { pendingLearningsDir } = await import('./utils/pending-learnings.js');
   const roots = learningsRoots(localConfig);
-  const indexLearningsDirs = [...roots.read];
+  // The queue holds contributions that could not be published yet. Leaving it
+  // out here would make one of them disappear from recall the moment anything
+  // invalidates the index.
+  const indexLearningsDirs = [pendingLearningsDir(localConfig), ...roots.read];
 
   // The first root that exists is where `File:` paths point when an index entry
   // predates absolute paths.

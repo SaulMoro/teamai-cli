@@ -94,15 +94,18 @@ function lockFilePath(spec: BranchWorktreeSpec, localConfig: LocalConfig): strin
 }
 
 /**
- * Whether HEAD is no longer ahead of the remote-tracking ref. A successful push
- * updates that ref locally, so this is a local rev-list, not a round trip.
+ * Whether there is provably nothing left to send: the remote-tracking ref for
+ * this branch exists and HEAD is not ahead of it.
  *
- * Anything unreadable counts as NOT landed, including a remote-tracking ref
- * that does not exist yet because the branch has never been pushed. Being wrong
- * that way costs one more push attempt; being wrong the other way tells a
- * caller its data is safe on origin when it is sitting in a local commit.
+ * Only ever used to decide whether a worktree with nothing staged still owes
+ * origin a commit. It is not a proof of delivery: `git push` updates the
+ * tracking ref through the remote's FETCH refspec, and a clone made with
+ * `--single-branch` (what CI checkouts and some business repos are) only
+ * fetches the default branch, so a perfectly successful push of a side branch
+ * leaves no tracking ref behind. Anything unreadable therefore means "push and
+ * find out", never "this failed".
  */
-async function isLanded(git: SimpleGit, spec: BranchWorktreeSpec): Promise<boolean> {
+async function nothingLeftToPush(git: SimpleGit, spec: BranchWorktreeSpec): Promise<boolean> {
   try {
     const out = (await git.raw(['rev-list', '--count', `origin/${spec.branch}..HEAD`])).trim();
     return out === '0';
@@ -302,11 +305,11 @@ async function commitAndPushAt(
 
   await git.add(files);
   const status = await git.status();
-  if (status.staged.length === 0 && !options.pushIfUnchanged && await isLanded(git, spec)) {
+  if (status.staged.length === 0 && !options.pushIfUnchanged && await nothingLeftToPush(git, spec)) {
     // Nothing to commit AND nothing to deliver. Those are two different things:
     // an earlier attempt may have committed exactly this content and failed to
     // push it, and a caller that reads "already present" drops the only durable
-    // copy it has. Fall through to the push loop whenever HEAD is still ahead.
+    // copy it has. Fall through to the push loop whenever that is in doubt.
     log.debug(`[${spec.logTag}] nothing to commit`);
     return { status: 'already-present' };
   }
@@ -320,12 +323,12 @@ async function commitAndPushAt(
   // non-fast-forward race.
   for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
     try {
+      // A push that resolves is a push the remote accepted: git exits non-zero
+      // when it refuses one. Do NOT re-check the remote-tracking ref here — it
+      // is only updated through the remote's fetch refspec, so a `--single-branch`
+      // clone would report failure for every successful side-branch push.
       await git.push(['origin', spec.branch]);
-      if (await isLanded(git, spec)) return { status: 'published' };
-      // The push resolved but the branch is still ahead of its remote-tracking
-      // ref, so the write did not land. Retry rather than report success: a
-      // caller holding the only durable copy would otherwise drop it.
-      log.debug(`[${spec.logTag}] push resolved but HEAD is still ahead of origin/${spec.branch}`);
+      return { status: 'published' };
     } catch (pushErr) {
       if (attempt === MAX_PUSH_RETRIES) {
         log.debug(`[${spec.logTag}] push failed after ${attempt} attempts: ${(pushErr as Error).message}`);

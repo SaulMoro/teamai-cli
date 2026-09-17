@@ -2,10 +2,12 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { ensureDir, listDirs, listFiles, listFilesRecursive, pathExists, remove } from './fs.js';
 
+function visibleFiles(files: string[]): string[] {
+  return files.filter((file) => file.split('/').every((segment) => !segment.startsWith('.')));
+}
+
 function visibleMarkdownFiles(files: string[]): string[] {
-  return files.filter((file) =>
-    file.endsWith('.md') && file.split('/').every((segment) => !segment.startsWith('.')),
-  );
+  return visibleFiles(files).filter((file) => file.endsWith('.md'));
 }
 
 /** Resolve one relative path to the absolute file that wins, across roots. */
@@ -65,7 +67,9 @@ export async function mirrorLearnings(
     for (const root of presentRoots) {
       const nsDir = path.join(root, namespace);
       if (!await pathExists(nsDir)) continue;
-      for (const file of visibleMarkdownFiles(await listFilesRecursive(nsDir))) {
+      // Every visible file, not only Markdown: a namespace may carry what its
+      // learnings reference, and the mirror used to copy those too.
+      for (const file of visibleFiles(await listFilesRecursive(nsDir))) {
         if (!resolved.has(file)) resolved.set(file, path.join(nsDir, file));
       }
     }

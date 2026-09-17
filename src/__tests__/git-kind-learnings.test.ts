@@ -142,6 +142,30 @@ describe('contributing to a repo whose default branch is protected', () => {
     expect(await listPendingLearnings(config)).toEqual([]);
   });
 
+  it('reports success from a single-branch clone, where no tracking ref appears', async () => {
+    const { origin } = await seedProtectedOrigin();
+    // What CI checkouts and plenty of business repos are: the fetch refspec
+    // covers the default branch only, so pushing a side branch leaves no
+    // `origin/teamai-learnings` behind even though the push was accepted.
+    const narrow = path.join(tmp, 'narrow-clone');
+    await simpleGit().clone(origin, narrow, ['--single-branch', '--branch', 'main']);
+    await configureGit(narrow);
+    const config: LocalConfig = {
+      repo: { localPath: narrow, remote: origin, kind: 'git' },
+      username: 'alice',
+      scope: 'user',
+      additionalRoles: [],
+    };
+
+    await savePendingLearning(config, 'narrow-2026-01-01-jjj000.md', '# from a narrow clone');
+    const report = await publishQueuedLearnings(config, 'alice');
+
+    expect(report.published).toEqual(['narrow-2026-01-01-jjj000.md']);
+    expect(await refsOf(origin, 'teamai-learnings'))
+      .toContain('learnings/narrow-2026-01-01-jjj000.md');
+    expect(await listPendingLearnings(config)).toEqual([]);
+  });
+
   it('writes into a worktree beside the clone, never into the clone itself', async () => {
     const { clone } = await seedProtectedOrigin();
     const config = gitConfig(clone);

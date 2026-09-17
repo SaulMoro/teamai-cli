@@ -9,6 +9,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
+import { withTimeout } from './async.js';
 import { ensureDir } from './fs.js';
 import { learningsBranch } from './learnings-branch.js';
 import type { PublishResult } from './branch-worktree.js';
@@ -32,6 +33,14 @@ export interface PublishQueueReport {
    */
   lastError?: string;
 }
+
+/**
+ * How long a publish may hold the command up. `contribute` capped its push at
+ * ten seconds before learnings moved to their own branch; without a cap an
+ * unreachable origin or a credential prompt blocks the CLI through five push
+ * and rebase rounds. Timing out is safe: the durable copy stays.
+ */
+const PUBLISH_TIMEOUT_MS = 10_000;
 
 function commitMessageFor(username: string): string {
   return `[teamai] Contribute session knowledge from ${username}`;
@@ -68,7 +77,11 @@ export async function publishQueuedLearnings(
   }
 
   try {
-    const report = await publishToLearningsBranch(localConfig, username, queued);
+    const report = await withTimeout(
+      publishToLearningsBranch(localConfig, username, queued),
+      PUBLISH_TIMEOUT_MS,
+      `Publish timeout (${PUBLISH_TIMEOUT_MS / 1000}s)`,
+    );
 
     for (const relPath of report.published) {
       await dropPendingLearning(localConfig, relPath);
@@ -116,15 +129,19 @@ export async function publishLearning(
     return { status: 'busy' };
   }
   try {
-    return await learningsBranch.update(localConfig, async (worktree) => {
-      const destAbs = path.join(worktree, 'learnings', relPath);
-      await ensureDir(path.dirname(destAbs));
-      await fs.promises.writeFile(destAbs, content, 'utf-8');
-      return {
-        files: [path.posix.join('learnings', relPath.split(path.sep).join('/'))],
-        message: commitMessageFor(username),
-      };
-    });
+    return await withTimeout(
+      learningsBranch.update(localConfig, async (worktree) => {
+        const destAbs = path.join(worktree, 'learnings', relPath);
+        await ensureDir(path.dirname(destAbs));
+        await fs.promises.writeFile(destAbs, content, 'utf-8');
+        return {
+          files: [path.posix.join('learnings', relPath.split(path.sep).join('/'))],
+          message: commitMessageFor(username),
+        };
+      }),
+      PUBLISH_TIMEOUT_MS,
+      `Publish timeout (${PUBLISH_TIMEOUT_MS / 1000}s)`,
+    );
   } catch (e) {
     return { status: 'failed', reason: (e as Error).message };
   } finally {
@@ -144,6 +161,9 @@ export async function publishLearningsMaintenance(
   localConfig: LocalConfig,
   message: string,
 ): Promise<PublishResult> {
+  // An HTTP backend has no branch and no worktree, so there is nothing to
+  // publish and nothing to warn about.
+  if (!learningsBranch.enabled(localConfig)) return { status: 'already-present' };
   // `commitAndPush`, not `update`: maintenance already wrote into the worktree
   // before this call, and `update` syncs with origin first, which can carry
   // those uncommitted files into a rebase or leave them behind.
