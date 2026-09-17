@@ -558,4 +558,15 @@ describe('buildChecks', () => {
         expect(await resolveDoctorContext()).toBeNull();
     });
 
+    it('reports learnings that are written but not published', async () => {
+        mockedLoadLocalConfig.mockResolvedValue(mockLocalConfig);
+        mockedLoadTeamConfig.mockResolvedValue(mockTeamConfig);
+
+        const ctx = await resolveDoctorContext();
+        if (!ctx) throw new Error('expected a resolved doctor context');
+
+        const check = (await buildChecks(ctx)).find((c) => c.name.includes('learnings'));
+        expect(check).toBeDefined();
+        expect(check?.fix).toContain('teamai pull');
+    });
 });

@@ -51,7 +51,7 @@ export async function listPendingLearnings(localConfig: LocalConfig): Promise<st
   try {
     return (await listFilesRecursive(pendingLearningsDir(localConfig)))
       .filter((relPath) => relPath.endsWith('.md'))
-      .filter((relPath) => !relPath.split(path.sep).some((segment) => segment.startsWith('.')));
+      .filter((relPath) => !relPath.split('/').some((segment) => segment.startsWith('.')));
   } catch {
     return [];
   }

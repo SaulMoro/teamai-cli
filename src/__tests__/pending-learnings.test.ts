@@ -91,6 +91,16 @@ describe('the learnings queue', () => {
     expect(await listPendingLearnings(config)).toEqual([]);
   });
 
+  it('ignores a hidden entry inside a namespace, whatever the platform separator is', async () => {
+    // listFilesRecursive always joins with '/', so a filter that split on the
+    // platform separator let these through on Windows.
+    fs.mkdirSync(path.join(pendingDir, 'alpha', '.drafts'), { recursive: true });
+    fs.writeFileSync(path.join(pendingDir, 'alpha', '.drafts', 'wip.md'), '# not ready');
+    await savePendingLearning(config, path.join('alpha', 'real.md'), '# real');
+
+    expect(await listPendingLearnings(config)).toEqual([path.join('alpha', 'real.md')]);
+  });
+
   it('ignores hidden entries and anything that is not markdown', async () => {
     fs.mkdirSync(pendingDir, { recursive: true });
     fs.writeFileSync(path.join(pendingDir, '.DS_Store'), 'junk');

@@ -37,6 +37,11 @@ export interface LearningsRoots {
    * For the same relative path in two roots the first one wins. That rule is
    * applied while collecting, not afterwards, because the relative path is also
    * the id votes are counted by.
+   *
+   * The contribution queue is deliberately NOT here. Recall and the index read
+   * it, so a contribution is findable before it is published, but pruning and
+   * promotion must not act on a learning that has not reached the team yet.
+   * Those callers add `pendingLearningsDir` themselves.
    */
   read: readonly string[];
 }

@@ -6,7 +6,7 @@ import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import { markContributed } from './contribute-check.js';
 import { pendingLearningsDir, savePendingLearning } from './utils/pending-learnings.js';
-import { publishLearning } from './utils/learnings-publish.js';
+import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { learningsRoots } from './utils/learnings-roots.js';
 import { isSafeNamespaceSegment, resolveActiveLearningsNamespaces } from './projects.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
@@ -45,6 +45,10 @@ async function resolveLearningsSubdir(localConfig: LocalConfig): Promise<string>
  * Rebuild this scope's local search index so the freshly-written contribution
  * (and anything pulled just before it) is immediately recallable — otherwise
  * `recall` only picks it up after the next `teamai pull` rebuilds the index (#85).
+ *
+ * The queue is indexed FIRST, ahead of the published roots: a contribution is
+ * recallable the moment it is written, whether or not it has reached origin, and
+ * a queued edit of a published learning is the copy recall serves.
  */
 async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<void> {
   const repoPath = localConfig.repo.localPath;
@@ -62,11 +66,10 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
   const indexPath = path.join(teamaiHome, 'search-index.json');
   const { buildIndex } = await import('./utils/search-index.js');
   await buildIndex({
-    // The durable copy of a contribution that could not be published is a
-    // learnings root too. Without it, a member whose worktree cannot be created
-    // at all keeps the note but cannot recall it until it publishes — and
-    // before learnings moved to their own branch, it was always findable.
-    learningsDirs: [pendingLearningsDir(localConfig), ...learningsRoots(localConfig).read],
+    learningsDirs: [
+      pendingLearningsDir(localConfig),
+      ...learningsRoots(localConfig).read,
+    ],
     // Manifest-resolved namespaces — MUST match what pull indexes by, or a
     // contribute-time rebuild drops the project's other learnings from recall.
     learningsNamespaces: activeLearningsNamespaces,
@@ -85,10 +88,11 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
 //      ├─ requireInit() → localConfig + username
 //      ├─ readFile(path) → validate non-empty
 //      ├─ generateFilename(title) → <title-slug>-<date>-<random>.md
-//      ├─ publishLearning() → the one place that knows the destination
-//      ├─ rebuildIndexAfterContribute() → recallable from the branch worktree
-//      │   ├── confirmed on origin → markContributed()
-//      │   └── not confirmed → keep a durable copy, retried by the next pull
+//      ├─ savePendingLearning() → the durable queue, outside anything git rewrites
+//      ├─ rebuildIndexAfterContribute() → recallable now, online or not
+//      ├─ publishQueuedLearnings() → the one place that knows the destination
+//      │   ├── confirmed on origin → drop the queue entry, markContributed()
+//      │   └── not confirmed → keep it queued, retried by the next pull
 //      └─ done
 //
 
@@ -115,9 +119,10 @@ function generateFilename(title?: string): string {
 /**
  * Handle `teamai contribute --file <path> [--title <title>]`.
  *
- * The contribution goes to the `teamai-learnings` branch, with no pull request
- * and no commit on the default branch. What cannot be published right now is
- * kept outside the clone and retried by the next `teamai pull`.
+ * The contribution is written to the durable queue first and published from
+ * there. Nothing about it depends on the network, on push rights, or on a git
+ * operation succeeding right now: what cannot be published stays queued and the
+ * next `teamai pull` publishes it.
  */
 export async function contribute(
   options: GlobalOptions & { file?: string; title?: string; sessionId?: string; scope?: string },
@@ -179,47 +184,41 @@ export async function contribute(
     await migrateSelfModeGitignore(localConfig);
   }
 
-  const result = await publishLearning(localConfig, username, relPath, content);
-
-  // Rebuild the index either way: the learning is in the branch worktree, which
-  // is a read root, whether or not the push that follows it reached origin.
-  const published = result.status === 'published' || result.status === 'already-present';
-
-  // Not on origin: keep a durable copy outside anything git rewrites, so the
-  // next pull can deliver it. It has to exist before the index is rebuilt, or
-  // a contribution whose worktree could not be created at all would be kept
-  // and still be unfindable.
-  let saved = false;
-  if (!published) {
-    try {
-      await savePendingLearning(localConfig, relPath, content);
-      saved = true;
-    } catch (e) {
-      spin.fail(`Contribution failed: ${(e as Error).message}`);
-      log.info('You can retry with: teamai contribute --file <path>');
-      return;
-    }
+  try {
+    await savePendingLearning(localConfig, relPath, content);
+  } catch (e) {
+    spin.fail(`Contribution failed: ${(e as Error).message}`);
+    log.info('You can retry with: teamai contribute --file <path>');
+    return;
   }
 
+  // Index before publishing: recall finds the contribution even when the push
+  // below cannot run at all.
   try {
     await rebuildIndexAfterContribute(localConfig);
   } catch (e) {
     log.debug(`contribute: index rebuild skipped: ${(e as Error).message}`);
   }
 
+  const report = await publishQueuedLearnings(localConfig, username);
+
+  // The session counts as contributed once the note is durably queued, not once
+  // it reaches origin: the queue always retries, and re-contributing the same
+  // session would add a second copy of the same knowledge rather than fix
+  // anything. `pull` and `doctor` are what tell the user it is still queued.
   const sessionId = options.sessionId || process.env.CLAUDE_SESSION_ID || '';
   if (sessionId) {
     await markContributed(sessionId);
   }
 
-  if (published) {
+  if (report.published.includes(relPath)) {
     spin.succeed(`Contributed: learnings/${relPath}`);
     log.info('Your session knowledge has been shared with the team.');
     return;
   }
 
-  if (saved) {
-    const reason = result.status === 'failed' ? result.reason : 'another teamai write is in progress';
-    spin.warn(`Saved locally (${reason}). Will retry on the next pull.`);
-  }
+  spin.warn(
+    `Saved locally (${report.lastError ?? 'not published yet'}). `
+    + 'It stays recallable here and the next `teamai pull` publishes it.',
+  );
 }

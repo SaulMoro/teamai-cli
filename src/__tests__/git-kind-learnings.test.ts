@@ -166,6 +166,28 @@ describe('contributing to a repo whose default branch is protected', () => {
     expect(await listPendingLearnings(config)).toEqual([]);
   });
 
+  it('names a queue entry it cannot read, instead of failing forever without a reason', async () => {
+    const { origin, clone } = await seedProtectedOrigin();
+    const config = gitConfig(clone);
+
+    await savePendingLearning(config, 'good-2026-01-01-kkk111.md', '# readable');
+    const unreadable = await savePendingLearning(config, 'bad-2026-01-01-lll222.md', '# unreadable');
+    fs.chmodSync(unreadable, 0o000);
+
+    try {
+      const report = await publishQueuedLearnings(config, 'alice');
+
+      expect(report.published).toEqual(['good-2026-01-01-kkk111.md']);
+      expect(await refsOf(origin, 'teamai-learnings'))
+        .toContain('learnings/good-2026-01-01-kkk111.md');
+      // The one that stays behind says which file and why.
+      expect(report.remaining).toBe(1);
+      expect(report.lastError).toContain('bad-2026-01-01-lll222.md');
+    } finally {
+      fs.chmodSync(unreadable, 0o600);
+    }
+  });
+
   it('writes into a worktree beside the clone, never into the clone itself', async () => {
     const { clone } = await seedProtectedOrigin();
     const config = gitConfig(clone);

@@ -220,6 +220,18 @@ export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
       },
       fix: 'Check teamai.yaml in team repo for syntax errors',
     },
+    {
+      // A contribution is kept locally when it cannot be published. Without
+      // this check a member whose pushes are rejected queues notes forever and
+      // is told each time that the next pull will retry.
+      name: 'Contributed learnings are published',
+      check: async () => {
+        const { listPendingLearnings } = await import('./utils/pending-learnings.js');
+        return (await listPendingLearnings(localConfig)).length === 0;
+      },
+      fix: 'Run `teamai pull` to publish them. If they stay queued, check that you '
+        + 'can push to the team repo (run with --verbose to see the push error).',
+    },
     ...await buildHookChecks(toolPaths, baseDir, localConfig),
     {
       name: 'Env variables injected in shell profile',

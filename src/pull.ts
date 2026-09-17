@@ -114,8 +114,8 @@ async function refreshTeamRepo(
     return { label: 'single-repo (knowledge on main)', version, reportingOnly: false, submodulesFailed: false, submodulesChanged: false };
   }
 
-  // The shared team clone is mutated here (git pull). The partition sync-lock
-  // that serializes this against a
+  // The shared team clone is mutated here (git pull + flushPendingLearnings'
+  // add/commit/push). The partition sync-lock that serializes this against a
   // concurrent pull/push is acquired by the CALLER (pull()) and held across this
   // scope's ENTIRE clone-consuming lifecycle — fetch, resource scan/deploy, and
   // the reconcile/source/report stages — so there is no unlocked window in which
@@ -597,16 +597,24 @@ async function pullForScope(
     return;
   }
 
-  // Publish anything a contribute could not publish at the time (offline, or no
-  // push rights yet). Here rather than inside the refresh, which returns early
-  // for single-repo and HTTP: contribute promises the next pull will retry, and
-  // that promise has to hold in every mode. pull() holds the partition sync lock
-  // across this scope and the lock is not reentrant, so publishing must not try
-  // to take it again. Best-effort: never let it block the pull.
+  // Publish what contribute queued. Here rather than inside the refresh, which
+  // returns early for single-repo and HTTP: contribute tells the member the next
+  // pull will retry, and that has to hold in every mode. pull() holds the
+  // partition sync lock across this scope and the lock is not reentrant, so
+  // publishing must not try to take it again. Never let it block the pull.
   try {
     const queue = await publishQueuedLearnings(localConfig, localConfig.username, { holdsSyncLock: true });
     if (queue.published.length > 0) {
-      log.success(`Published ${queue.published.length} learning(s) that could not be pushed earlier`);
+      log.success(`Published ${queue.published.length} queued learning(s)`);
+    }
+    if (queue.remaining > 0) {
+      // Say it out loud. A member whose pushes are rejected would otherwise
+      // queue notes forever and never hear about it.
+      log.warn(
+        `${queue.remaining} learning(s) are written locally but not published`
+        + `${queue.lastError ? `: ${queue.lastError}` : ''}. `
+        + 'They stay recallable here; run `teamai doctor` for what to check.',
+      );
     }
   } catch (e) {
     log.debug(`publishing queued learnings skipped: ${(e as Error).message}`);
@@ -1015,8 +1023,6 @@ async function pullForScope(
           // Then every published root, so nothing is indexed from one directory
           // that happened to be picked.
           learningsDirs: [
-            // Same reason as contribute: a learning that could not be published
-            // is kept in the queue, and it has to stay findable here until it is.
             pendingLearningsDir(localConfig),
             ...(effectiveLearningsDir ? [effectiveLearningsDir] : []),
             ...publishedRoots,

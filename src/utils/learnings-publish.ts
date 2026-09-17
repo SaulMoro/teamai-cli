@@ -9,7 +9,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { withTimeout } from './async.js';
 import { ensureDir } from './fs.js';
 import { learningsBranch } from './learnings-branch.js';
 import type { PublishResult } from './branch-worktree.js';
@@ -34,22 +33,14 @@ export interface PublishQueueReport {
   lastError?: string;
 }
 
-/**
- * How long a publish may hold the command up. `contribute` capped its push at
- * ten seconds before learnings moved to their own branch; without a cap an
- * unreachable origin or a credential prompt blocks the CLI through five push
- * and rebase rounds. Timing out is safe: the durable copy stays.
- */
-const PUBLISH_TIMEOUT_MS = 10_000;
-
 function commitMessageFor(username: string): string {
   return `[teamai] Contribute session knowledge from ${username}`;
 }
 
 /**
- * Publish everything in the queue. Best-effort and non-blocking: it never
- * throws, and it stops at the first failure so the remaining entries are
- * retried on the next run rather than hammering an unreachable origin.
+ * Publish everything in the queue, as one commit. Best-effort and non-blocking:
+ * it never throws, and a failure leaves every entry queued for the next run
+ * rather than hammering an unreachable origin.
  */
 export async function publishQueuedLearnings(
   localConfig: LocalConfig,
@@ -77,11 +68,7 @@ export async function publishQueuedLearnings(
   }
 
   try {
-    const report = await withTimeout(
-      publishToLearningsBranch(localConfig, username, queued),
-      PUBLISH_TIMEOUT_MS,
-      `Publish timeout (${PUBLISH_TIMEOUT_MS / 1000}s)`,
-    );
+    const report = await publishToLearningsBranch(localConfig, username, queued);
 
     for (const relPath of report.published) {
       await dropPendingLearning(localConfig, relPath);
@@ -112,44 +99,6 @@ function syncLockPath(localConfig: LocalConfig): string | null {
 }
 
 /**
- * Publish one contribution to the learnings branch.
- *
- * The caller keeps a durable copy when this does not return `published`: the
- * content is in the worktree either way, and a worktree that later rebases onto
- * a conflicting origin can drop an unpushed commit.
- */
-export async function publishLearning(
-  localConfig: LocalConfig,
-  username: string,
-  relPath: string,
-  content: string,
-): Promise<PublishResult> {
-  const syncLock = syncLockPath(localConfig);
-  if (syncLock && !(await acquireLock(syncLock))) {
-    return { status: 'busy' };
-  }
-  try {
-    return await withTimeout(
-      learningsBranch.update(localConfig, async (worktree) => {
-        const destAbs = path.join(worktree, 'learnings', relPath);
-        await ensureDir(path.dirname(destAbs));
-        await fs.promises.writeFile(destAbs, content, 'utf-8');
-        return {
-          files: [path.posix.join('learnings', relPath.split(path.sep).join('/'))],
-          message: commitMessageFor(username),
-        };
-      }),
-      PUBLISH_TIMEOUT_MS,
-      `Publish timeout (${PUBLISH_TIMEOUT_MS / 1000}s)`,
-    );
-  } catch (e) {
-    return { status: 'failed', reason: (e as Error).message };
-  } finally {
-    if (syncLock) await releaseLock(syncLock);
-  }
-}
-
-/**
  * Publish whatever maintenance just changed in the learnings worktree.
  *
  * Pruning, promotion and confidence write-backs used to mutate a checkout
@@ -161,9 +110,6 @@ export async function publishLearningsMaintenance(
   localConfig: LocalConfig,
   message: string,
 ): Promise<PublishResult> {
-  // An HTTP backend has no branch and no worktree, so there is nothing to
-  // publish and nothing to warn about.
-  if (!learningsBranch.enabled(localConfig)) return { status: 'already-present' };
   // `commitAndPush`, not `update`: maintenance already wrote into the worktree
   // before this call, and `update` syncs with origin first, which can carry
   // those uncommitted files into a rebase or leave them behind.
@@ -184,6 +130,10 @@ async function publishToLearningsBranch(
   queued: string[],
 ): Promise<Omit<PublishQueueReport, 'remaining'>> {
   const published: string[] = [];
+  // An entry nobody can read will be skipped again on every run. Naming it is
+  // the difference between "1 learning is not published" forever with no
+  // reason, and something the member can act on.
+  const unreadable: string[] = [];
 
   const result = await learningsBranch.update(localConfig, async (worktree) => {
     const files: string[] = [];
@@ -191,6 +141,7 @@ async function publishToLearningsBranch(
       const content = await readPendingLearning(localConfig, relPath);
       if (content === null) {
         log.debug(`[learnings] skipping unreadable queue entry ${relPath}`);
+        unreadable.push(relPath);
         continue;
       }
       const destAbs = path.join(worktree, 'learnings', relPath);
@@ -203,13 +154,17 @@ async function publishToLearningsBranch(
     return { files, message: commitMessageFor(username) };
   });
 
+  const unreadableReason = unreadable.length > 0
+    ? `cannot read ${unreadable.join(', ')} in the contribution queue`
+    : undefined;
+
   switch (result.status) {
     case 'published':
-      return { published };
+      return { published, lastError: unreadableReason };
     case 'already-present':
       // The branch already carries exactly this content: an earlier run pushed
       // it and could not confirm. Dropping the queue entry now is safe.
-      return { published };
+      return { published, lastError: unreadableReason };
     case 'busy':
       return { published: [], lastError: 'another teamai write is in progress' };
     case 'failed':

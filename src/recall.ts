@@ -292,15 +292,13 @@ async function loadOrBuildScopeIndex(
     : getTeamaiHome('user');
   const indexPath = path.join(teamaiHome, 'search-index.json');
 
-  // Learnings come from several roots: the learnings branch, the machine-local
-  // mirror, and the corpus the team wrote before the split. Picking one of them,
-  // as this used to, silently returned less.
-  const { learningsRoots } = await import('./utils/learnings-roots.js');
+  // Learnings come from several roots: what is queued but not published yet,
+  // what is on the learnings branch, the machine-local mirror, and the corpus
+  // the team wrote before the split. Picking one of them, as this used to,
+  // silently returned less.
   const { pendingLearningsDir } = await import('./utils/pending-learnings.js');
+  const { learningsRoots } = await import('./utils/learnings-roots.js');
   const roots = learningsRoots(localConfig);
-  // The queue holds contributions that could not be published yet. Leaving it
-  // out here would make one of them disappear from recall the moment anything
-  // invalidates the index.
   const indexLearningsDirs = [pendingLearningsDir(localConfig), ...roots.read];
 
   // The first root that exists is where `File:` paths point when an index entry
