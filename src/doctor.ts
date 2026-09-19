@@ -1,17 +1,12 @@
 import path from 'node:path';
 import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from './config.js';
-import fs from 'node:fs';
-import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
+import { pathExists, readFileSafe } from './utils/fs.js';
 import { log, setStderrOnly } from './utils/logger.js';
-import type { GlobalOptions, ResourceItem } from './types.js';
+import type { GlobalOptions } from './types.js';
 import {
   COPILOT_TOOL_ID,
-  TEAMAI_ENV_START,
-  TEAMAI_ENV_END,
   resolveHookScope,
   resolveToolBaseDir,
-  getDataHome,
-  getMcpSharing,
   isAgentExcluded,
   scopedToolPaths,
   type LocalConfig,
@@ -19,8 +14,6 @@ import {
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { usesCursorMdcRules, usesCopilotInstructions } from './resources/rule-format.js';
-import { splitFrontmatter } from './utils/frontmatter.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
 import {
   buildDeliveryChecks,
