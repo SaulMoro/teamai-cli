@@ -717,10 +717,25 @@ export async function resolveDoctorContext(): Promise<DoctorContext | null> {
 }
 
 /**
+ * Which caller the registry is being built for.
+ *
+ * `pull` runs the registry again at the end of an interactive sync, under a
+ * budget that covers building it as well as running it. Skills and docs cost a
+ * stat per item; rules cost a read per rule per tool and agents parse every
+ * spec. Spending the budget on those loses the cheap checks that catch the bug
+ * this whole line of work exists for, so they are `doctor`-only.
+ *
+ * The stage is a property of the caller, not of a check, which is why it is an
+ * argument here rather than a third optional flag on `Check` beside `source`
+ * and `reportedByPull`.
+ */
+export type CheckStage = 'pull' | 'doctor';
+
+/**
  * The check registry. Exported so callers other than `teamai doctor` can run
  * the same diagnostics and act on the result.
  */
-export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
+export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'doctor'): Promise<Check[]> {
   const { localConfig, teamConfig, toolPaths, baseDir } = ctx;
   const providerName = teamConfig?.provider;
   const checks: Check[] = [];
@@ -817,8 +832,10 @@ export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
     ...await buildEnabledToolChecks(ctx),
     ...await buildHookChecks(toolPaths, baseDir, localConfig),
     ...await buildDeliveryChecks(ctx),
-    ...await buildRulesDeliveryChecks(ctx),
-    ...await buildAgentsDeliveryChecks(ctx),
+    // Built only for `doctor`: the work is in building these, not in running
+    // them, so skipping them post-pull is what keeps the budget for the rest.
+    ...(stage === 'doctor' ? await buildRulesDeliveryChecks(ctx) : []),
+    ...(stage === 'doctor' ? await buildAgentsDeliveryChecks(ctx) : []),
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),

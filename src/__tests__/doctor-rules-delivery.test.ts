@@ -192,6 +192,30 @@ describe('doctor — rules delivered on disk', () => {
     expect(cursor.fix).toContain('not delivered: frontend/scoped');
   });
 
+  it('leaves the rules and agents checks out of the post-pull stage', async () => {
+    await fse.ensureDir(path.join(repoPath, 'agents'));
+    await fse.writeFile(
+      path.join(repoPath, 'agents', 'reviewer.yaml'),
+      'name: reviewer\ndescription: reviews\ninstructions: |\n  Review.\n',
+    );
+    teamConfig.toolPaths.claude = { rules: CLAUDE_RULES, agents: '.claude/agents' };
+    await fse.ensureDir(path.join(homeDir, '.claude/agents'));
+
+    const ctx = await resolveDoctorContext();
+    if (!ctx) throw new Error('expected a resolved doctor context');
+
+    const forDoctor = (await buildChecks(ctx, 'doctor')).map((c) => c.name);
+    const forPull = (await buildChecks(ctx, 'pull')).map((c) => c.name);
+
+    expect(forDoctor.filter((n) => !forPull.includes(n)).sort()).toEqual([
+      'Agents delivered to claude',
+      'Rules delivered to claude',
+      'Rules delivered to cursor',
+    ]);
+    // Everything the pull stage keeps is also in the doctor stage.
+    expect(forPull.filter((n) => !forDoctor.includes(n))).toEqual([]);
+  });
+
   it('never writes to the tool directory it inspects', async () => {
     await deliverPlain(CLAUDE_RULES, 'coding-style');
 

@@ -1960,10 +1960,12 @@ async function reportPostPullChecks(
 
     // The budget covers building the registry as well as running it: the
     // delivery checks stat every desired skill for every tool while the
-    // registry is built, which is where the I/O actually is.
+    // registry is built, which is where the I/O actually is. The `'pull'`
+    // stage leaves out the two that would spend it — rules read every file per
+    // tool, agents parse every spec — so the cheap ones still get to run.
     const results = await withTimeout(
       (async () => {
-        const local = (await buildChecks(ctx))
+        const local = (await buildChecks(ctx, 'pull'))
           .filter((c) => c.source === 'local')
           .filter((c) => !c.reportedByPull || !reported.has(c.reportedByPull));
         return runChecks(local);
