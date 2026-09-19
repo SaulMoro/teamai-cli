@@ -102,19 +102,20 @@ export abstract class ResourceHandler {
    * for one destination is how "Synced N skills" ends up true while a tool
    * receives nothing (#598, #624).
    *
-   * A tool that cannot receive the item — not installed, no configured path,
-   * outside the item's own targets — is absent from the result, so `[]` means
-   * "nothing here receives it". `null` means this resource has no per-tool file
-   * destination at all: docs land in one directory, env in one shell profile,
-   * hooks and MCP as entries inside a tool's own config file. Those keep their
-   * own checks rather than a sentinel tool.
+   * A tool that cannot receive the item is absent from the result: not
+   * installed, no configured path, or outside the item's own targets.
+   *
+   * The default is empty, which also covers a resource with no per-tool file
+   * destination at all. Docs land in one directory, env in one shell profile,
+   * and hooks and MCP are entries inside a tool's own config file, so those
+   * keep checks of their own instead of a sentinel tool.
    */
   async deliveryTargets(
     _teamConfig: TeamaiConfig,
     _localConfig: LocalConfig,
     _item: ResourceItem,
-  ): Promise<DeliveryTarget[] | null> {
-    return null;
+  ): Promise<DeliveryTarget[]> {
+    return [];
   }
 
   /**

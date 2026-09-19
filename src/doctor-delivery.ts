@@ -87,7 +87,7 @@ async function walkDelivery(
   const unreceived: string[] = [];
 
   for (const item of items) {
-    const targets = await handler.deliveryTargets(teamConfig, localConfig, item) ?? [];
+    const targets = await handler.deliveryTargets(teamConfig, localConfig, item);
     if (targets.length === 0) unreceived.push(item.name);
 
     for (const { tool, dest } of targets) {
