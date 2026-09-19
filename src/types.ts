@@ -630,6 +630,12 @@ export interface ResourceDiff {
   removed: ResourceItem[];
 }
 
+/** Where one item lands for one tool. See `ResourceHandler.deliveryTargets`. */
+export interface DeliveryTarget {
+  tool: string;
+  dest: string;
+}
+
 // ─── Hook definitions (unified model, issue #19) ─────────
 //
 //  A single declarative model for both built-in operational hooks (source:

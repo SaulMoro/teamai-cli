@@ -11,6 +11,7 @@ import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSa
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
+import { skillsDirForTool } from './resources/skills.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import { loadTagsConfig, filterByTags } from './utils/tags.js';
@@ -427,21 +428,22 @@ export async function cleanupInactiveNamespaceSkills(
   inactiveSkillNames: Set<string>,
   inactiveSkillSources?: Map<string, string>,
 ): Promise<void> {
-  const baseDir = resolveBaseDir(localConfig);
-
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     if (isAgentExcluded(localConfig, tool)) continue;
-    if (!toolPath.skills) continue;
-    if (!await ResourceHandler.isToolInstalled(toolPath.skills, baseDir)) continue;
-    if (!await pathExists(path.join(baseDir, toolPath.skills))) continue;
+    // Ask where delivery writes, not where the tool root sits: OpenClaw keeps
+    // its skills under a workspace directory, so the generic probe sweeps a
+    // directory a pull never wrote to and leaves the real one untouched (#624).
+    const skillsDir = await skillsDirForTool(tool, toolPath.skills, localConfig);
+    if (skillsDir === null) continue;
+    if (!await pathExists(skillsDir)) continue;
 
-    const localSkillNames = await listDirs(path.join(baseDir, toolPath.skills));
+    const localSkillNames = await listDirs(skillsDir);
     for (const skillName of localSkillNames) {
       if (BUILTIN_SKILL_NAMES.has(skillName)) continue;
       if (retainedSkillNames.has(skillName)) continue;
       if (!inactiveSkillNames.has(skillName)) continue;
 
-      const localSkillDir = path.join(baseDir, toolPath.skills, skillName);
+      const localSkillDir = path.join(skillsDir, skillName);
 
       // Data-safety guard: only delete a deployed skill when it is byte-identical
       // to its team-repo source. If the user modified SKILL.md or added unpushed

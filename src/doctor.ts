@@ -16,7 +16,7 @@ import {
   type TeamaiConfig,
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { skillsReachTool } from './resources/skills.js';
+import { skillsDirForTool } from './resources/skills.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
 import { getUserHome } from './utils/home.js';
@@ -125,7 +125,7 @@ async function buildEnabledToolChecks(ctx: DoctorContext): Promise<Check[]> {
     // such resolver, so it keeps the generic probe.
     const skillsPath = paths.skills;
     const isInstalled = skillsPath
-      ? (): Promise<boolean> => skillsReachTool(tool, skillsPath, localConfig)
+      ? async (): Promise<boolean> => await skillsDirForTool(tool, skillsPath, localConfig) !== null
       : (): Promise<boolean> => isToolInstalledForConfig(tool, probePath, localConfig);
 
     // Pushed whether or not it passes. Every other check in the registry
@@ -219,6 +219,13 @@ async function isReadableFile(filePath: string): Promise<boolean> {
 /** At most this many names in a fix string; the rest are counted. */
 const MAX_NAMED_IN_FIX = 5;
 
+/** Group item names under the tool that did not receive them. */
+function appendTo(buckets: Map<string, string[]>, tool: string, name: string): void {
+  const names = buckets.get(tool);
+  if (names) names.push(name);
+  else buckets.set(tool, [name]);
+}
+
 /** `a, b, c and 4 more` — a fix a human reads, not a wall of paths. */
 function nameList(names: string[]): string {
   if (names.length <= MAX_NAMED_IN_FIX) return names.join(', ');
@@ -239,13 +246,13 @@ function nameList(names: string[]): string {
  * skills that are missing, and a `Check`'s fix is read as it was built.
  */
 async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
-  const { localConfig, teamConfig, toolPaths } = ctx;
+  const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
   // Dynamic: pull.ts imports this module for its post-pull pass, and the desired
   // set is policy that must not be restated here.
   const { buildRolePullContext, resolveDesiredSkills } = await import('./pull.js');
-  const { skillTargetForTool } = await import('./resources/skills.js');
+  const { getHandler } = await import('./resources/index.js');
 
   let items: ResourceItem[];
   try {
@@ -265,32 +272,31 @@ async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
   }
   if (items.length === 0) return [];
 
-  const checks: Check[] = [];
-  for (const [tool, paths] of Object.entries(toolPaths)) {
-    const skillsPath = paths.skills;
-    if (!skillsPath) continue;
+  // A tool absent from every item's targets receives nothing, so nothing is
+  // owed: it is either uninstalled — caught by its own `<tool> is installed`
+  // check — or configured without a skills path.
+  const missing = new Map<string, string[]>();
+  const unreadable = new Map<string, string[]>();
+  const receiving: string[] = [];
 
-    const missing: string[] = [];
-    const unreadable: string[] = [];
-    let installed = true;
-    for (const item of items) {
-      const dest = await skillTargetForTool(tool, skillsPath, localConfig, item.name);
-      if (!dest) {
-        // Not installed. Nothing was promised to this tool, so nothing is owed;
-        // a tool the user listed in enabledAgents is caught by its own check.
-        installed = false;
-        break;
-      }
-      if (!await pathExists(dest)) missing.push(item.name);
-      else if (!await skillIsDiscoverable(dest, item.name)) unreadable.push(item.name);
+  const handler = getHandler('skills');
+  for (const item of items) {
+    const targets = await handler.deliveryTargets(teamConfig, localConfig, item) ?? [];
+    for (const { tool, dest } of targets) {
+      if (!receiving.includes(tool)) receiving.push(tool);
+      if (!await pathExists(dest)) appendTo(missing, tool, item.name);
+      else if (!await skillIsDiscoverable(dest, item.name)) appendTo(unreadable, tool, item.name);
     }
-    if (!installed) continue;
+  }
 
+  return receiving.map((tool) => {
     const problems: string[] = [];
-    if (missing.length > 0) problems.push(`not delivered: ${nameList(missing)}`);
-    if (unreadable.length > 0) problems.push(`delivered but unreadable: ${nameList(unreadable)}`);
+    const notDelivered = missing.get(tool) ?? [];
+    const notReadable = unreadable.get(tool) ?? [];
+    if (notDelivered.length > 0) problems.push(`not delivered: ${nameList(notDelivered)}`);
+    if (notReadable.length > 0) problems.push(`delivered but unreadable: ${nameList(notReadable)}`);
 
-    checks.push({
+    return {
       name: `Skills delivered to ${tool}`,
       source: 'local',
       check: async () => problems.length === 0,
@@ -299,10 +305,8 @@ async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
         + 'If a skill stays unreadable, fix its SKILL.md in the team repo — the '
         + 'frontmatter needs a `name` matching the directory, or the agent never '
         + 'discovers it.',
-    });
-  }
-
-  return checks;
+    };
+  });
 }
 
 /**
