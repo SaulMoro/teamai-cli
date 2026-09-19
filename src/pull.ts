@@ -384,6 +384,33 @@ export async function resolveDesiredSkills(
   return { items, teamItems, skippedByTags };
 }
 
+export interface DesiredRules {
+  /** The rules this member should have: active knowledge namespaces ∩ tag subscriptions. */
+  items: ResourceItem[];
+  /** How many rules the tag channel left out, for the sync line. */
+  skippedByTags: number;
+}
+
+/**
+ * Resolve the rules this member should have. Same contract as
+ * `resolveDesiredSkills`, and for the same reason: `pull` calls it to decide
+ * what to install and `doctor` calls it to check what landed (#624), so the
+ * namespace convention and the tag channel are stated once.
+ */
+export async function resolveDesiredRules(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+): Promise<DesiredRules> {
+  const handler = getHandler('rules');
+  const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
+  const allItems = await handler.scanTeamForPull(teamConfig, localConfig);
+  const knowledgeNs = roleContext ? roleContext.activeNamespaces.knowledge : null;
+  const roleFiltered = filterRulesByKnowledgeNamespaces(allItems, knowledgeNs);
+  const { included, skipped } = filterByTags(roleFiltered, tagsConfig, localConfig.subscribedTags, 'rules');
+  return { items: included, skippedByTags: skipped.length };
+}
+
 // Deployment adds a CONTRIBUTORS file that the team source may not have; ignore it
 // when checking whether a deployed skill still matches its source (same file as
 // resources/skills.ts and pre-push-sync.ts use for modification detection).
@@ -761,9 +788,6 @@ async function pullForScope(
     }
   }
 
-  // Load tags config for filtering
-  const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
-  const subscribedTags = localConfig.subscribedTags;
   const excludedSkills = new Set(localConfig.excludedSkills ?? []);
 
   // Step 2: Sync each resource type
@@ -780,14 +804,10 @@ async function pullForScope(
 
     if (type === 'rules') {
       const rulesHandler = handler as RulesHandler;
-      const allItems = await rulesHandler.scanTeamForPull(freshConfig, localConfig);
-      // Filter by role knowledge namespaces first, then by tags
-      const knowledgeNs = roleContext ? roleContext.activeNamespaces.knowledge : null;
-      const roleFiltered = filterRulesByKnowledgeNamespaces(allItems, knowledgeNs);
-      const { included: items, skipped } = filterByTags(roleFiltered, tagsConfig, subscribedTags, 'rules');
+      const { items, skippedByTags } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
       if (options.dryRun) {
         if (items.length > 0) {
-          log.info(`[${scopeLabel}] [dry-run] Would sync ${items.length} rule(s)${skipped.length > 0 ? ` (skipped ${skipped.length} by tags)` : ''}`);
+          log.info(`[${scopeLabel}] [dry-run] Would sync ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
       } else {
         // Always call pullAllRules, even with an empty set: it also cleans up
@@ -796,7 +816,7 @@ async function pullForScope(
         // would leak those artifacts on the machine after upstream deletion.
         await rulesHandler.pullAllRules(freshConfig, localConfig, items);
         if (items.length > 0) {
-          log.success(`[${scopeLabel}] Synced ${items.length} rule(s)${skipped.length > 0 ? ` (skipped ${skipped.length} by tags)` : ''}`);
+          log.success(`[${scopeLabel}] Synced ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
       }
       totalSynced += items.length;

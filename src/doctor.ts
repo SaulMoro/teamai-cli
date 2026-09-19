@@ -17,6 +17,7 @@ import {
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
+import { usesCursorMdcRules, usesCopilotInstructions } from './resources/rule-format.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
 import { getUserHome } from './utils/home.js';
@@ -310,6 +311,82 @@ async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
 }
 
 /**
+ * Whether a delivered rule is one its tool can actually apply. Cursor-compatible
+ * tools and Copilot read machine-derived frontmatter — `globs`/`alwaysApply` and
+ * `applyTo` — so a copy that landed without it is inert, the same class of
+ * failure as a skill whose SKILL.md an agent cannot discover. A plain `.md` copy
+ * carries no such contract and only has to be readable.
+ */
+async function ruleIsApplicable(tool: string, dest: string): Promise<boolean> {
+  const content = await readFileSafe(dest);
+  if (content === null) return false;
+
+  if (usesCursorMdcRules(tool)) {
+    const { data, valid } = splitFrontmatter(content);
+    return valid && data.alwaysApply !== undefined;
+  }
+  if (usesCopilotInstructions(tool)) {
+    const { data, valid } = splitFrontmatter(content);
+    return valid && typeof data.applyTo === 'string' && data.applyTo.length > 0;
+  }
+  return true;
+}
+
+/**
+ * Build one delivery check per tool that receives rules: every rule the member
+ * should have, against what is on disk for that tool.
+ *
+ * Rules change filename *and* content per tool, so only the handler can say
+ * where one lands. Asking it here is what keeps the check from growing its own
+ * copy of the extension table (#624).
+ */
+async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+
+  const { buildRolePullContext, resolveDesiredRules } = await import('./pull.js');
+  const { getHandler } = await import('./resources/index.js');
+
+  const roleContext = await buildRolePullContext(localConfig);
+  const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
+  if (items.length === 0) return [];
+
+  const missing = new Map<string, string[]>();
+  const inert = new Map<string, string[]>();
+  // A rule's delivered filename carries a per-tool extension, so naming the
+  // directory saves the reader from deriving `.mdc` or `.instructions.md`.
+  const ruleDir = new Map<string, string>();
+
+  const handler = getHandler('rules');
+  for (const item of items) {
+    const targets = await handler.deliveryTargets(teamConfig, localConfig, item) ?? [];
+    for (const { tool, dest } of targets) {
+      if (!ruleDir.has(tool)) ruleDir.set(tool, path.dirname(dest));
+      if (!await isReadableFile(dest)) appendTo(missing, tool, item.name);
+      else if (!await ruleIsApplicable(tool, dest)) appendTo(inert, tool, item.name);
+    }
+  }
+
+  return [...ruleDir].map(([tool, dir]) => {
+    const problems: string[] = [];
+    const notDelivered = missing.get(tool) ?? [];
+    const notApplicable = inert.get(tool) ?? [];
+    if (notDelivered.length > 0) problems.push(`not delivered: ${nameList(notDelivered)}`);
+    if (notApplicable.length > 0) {
+      problems.push(`delivered without the frontmatter ${tool} reads: ${nameList(notApplicable)}`);
+    }
+
+    return {
+      name: `Rules delivered to ${tool}`,
+      source: 'local',
+      check: async () => problems.length === 0,
+      fix: `In ${dir}, ${problems.join('; ')}. Run \`teamai pull --force\`: a plain pull `
+        + 'skips a scope whose team repo has not changed, so it cannot restore this.',
+    };
+  });
+}
+
+/**
  * The docs bundle has one destination rather than one per tool: `DocsHandler`
  * copies the whole `docs/` tree into `sharing.docs.localDir`. So this check
  * compares the two trees, file by file, rather than asking each tool.
@@ -489,6 +566,7 @@ export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
     ...await buildEnabledToolChecks(ctx),
     ...await buildHookChecks(toolPaths, baseDir, localConfig),
     ...await buildDeliveryChecks(ctx),
+    ...await buildRulesDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     {
       name: 'Env variables injected in shell profile',

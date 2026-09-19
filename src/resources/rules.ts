@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { isToolInstalledForConfig, ResourceHandler } from './base.js';
-import type { ResourceItem, ResourceItemStatus, TeamaiConfig, LocalConfig } from '../types.js';
+import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from '../types.js';
@@ -179,9 +179,17 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
-   * Pull a single rule file to all configured AI tool rules/ directories.
+   * Where `item` lands for each tool that receives rules. The filename is
+   * tool-dependent — `.md` verbatim, `.mdc` for Cursor-compatible tools,
+   * `.instructions.md` for Copilot — so a reader cannot derive it from the
+   * rule's name alone.
    */
-  async pullItem(item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  async deliveryTargets(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    item: ResourceItem,
+  ): Promise<DeliveryTarget[]> {
+    const targets: DeliveryTarget[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (isAgentExcluded(localConfig, tool)) continue;
       if (!toolPath.rules) continue;
@@ -193,8 +201,18 @@ export class RulesHandler extends ResourceHandler {
       }
 
       const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
+      targets.push({ tool, dest: path.join(destDir, `${item.name}${ruleFileExtensionForTool(tool)}`) });
+    }
+    return targets;
+  }
+
+  /**
+   * Pull a single rule file to all configured AI tool rules/ directories.
+   */
+  async pullItem(item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+    for (const { tool, dest } of await this.deliveryTargets(teamConfig, localConfig, item)) {
+      const destDir = path.dirname(dest);
       await ensureDir(destDir);
-      const dest = path.join(destDir, `${item.name}${ruleFileExtensionForTool(tool)}`);
       try {
         if (usesCursorMdcRules(tool)) {
           // Cursor-compatible tools need `.mdc` with derived frontmatter.
