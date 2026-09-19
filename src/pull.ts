@@ -411,6 +411,20 @@ export async function resolveDesiredRules(
   return { items: included, skippedByTags: skipped.length };
 }
 
+/**
+ * Resolve the agents this member should have. Throws on a stem collision
+ * between two active namespaces, the same way `pull` aborts the scope: a
+ * caller that cannot say what should be delivered must not guess.
+ */
+export async function resolveDesiredAgents(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+): Promise<ResourceItem[]> {
+  const items = await getHandler('agents').scanTeamForPull(teamConfig, localConfig);
+  return filterAgentsByNamespaces(items, roleContext ? roleContext.activeNamespaces.agents : null);
+}
+
 // Deployment adds a CONTRIBUTORS file that the team source may not have; ignore it
 // when checking whether a deployed skill still matches its source (same file as
 // resources/skills.ts and pre-push-sync.ts use for modification detection).
@@ -834,12 +848,9 @@ async function pullForScope(
       knownRepoSkillNames = new Set(desired.teamItems.map((i) => i.name));
       knownRepoSkillSources = new Map(desired.teamItems.map((i) => [i.name, i.sourcePath]));
     } else if (type === 'agents') {
-      // Role/project namespace filter (root = everyone), same as rules. Throws
-      // on a stem collision; the caller's try/catch logs it and aborts the scope.
-      items = filterAgentsByNamespaces(
-        await handler.scanTeamForPull(freshConfig, localConfig),
-        roleContext ? roleContext.activeNamespaces.agents : null,
-      );
+      // Throws on a stem collision; the caller's try/catch logs it and aborts
+      // the scope.
+      items = await resolveDesiredAgents(freshConfig, localConfig, roleContext);
     } else {
       items = await handler.scanTeamForPull(freshConfig, localConfig);
     }

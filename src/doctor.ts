@@ -387,6 +387,80 @@ async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
 }
 
 /**
+ * Build one delivery check per tool that receives agents.
+ *
+ * An agent's desired set is a relation rather than a product: `spec.targets`
+ * names the tools it is for, and each renders into its own format, so the
+ * handler is the only thing that can say which tools owe what file (#624).
+ */
+async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+
+  const { buildRolePullContext, resolveDesiredAgents } = await import('./pull.js');
+  const { getHandler } = await import('./resources/index.js');
+
+  let items: ResourceItem[];
+  try {
+    const roleContext = await buildRolePullContext(localConfig);
+    items = await resolveDesiredAgents(teamConfig, localConfig, roleContext);
+  } catch (e) {
+    // Two active namespaces claiming one agent name: `pull` aborts the scope
+    // with this message rather than picking one, so `doctor` reports it.
+    return [{
+      name: 'Agents to deliver can be resolved',
+      source: 'local',
+      check: async () => false,
+      fix: `${(e as Error).message}. Until the team repo is fixed, `
+        + 'pull cannot sync agents for this role.',
+    }];
+  }
+  if (items.length === 0) return [];
+
+  const missing = new Map<string, string[]>();
+  const agentDir = new Map<string, string>();
+  // An agent whose spec reaches no tool at all is not a per-tool failure: the
+  // file is in the team repo and nothing renders it anywhere.
+  const unreachable: string[] = [];
+
+  const handler = getHandler('agents');
+  for (const item of items) {
+    const targets = await handler.deliveryTargets(teamConfig, localConfig, item) ?? [];
+    if (targets.length === 0) unreachable.push(item.name);
+    for (const { tool, dest } of targets) {
+      if (!agentDir.has(tool)) agentDir.set(tool, path.dirname(dest));
+      if (!await isReadableFile(dest)) appendTo(missing, tool, item.name);
+    }
+  }
+
+  const checks: Check[] = [...agentDir].map(([tool, dir]) => {
+    const notDelivered = missing.get(tool) ?? [];
+    return {
+      name: `Agents delivered to ${tool}`,
+      source: 'local',
+      check: async () => notDelivered.length === 0,
+      fix: `In ${dir}, not delivered: ${nameList(notDelivered)}. Run \`teamai pull --force\`: `
+        + 'a plain pull skips a scope whose team repo has not changed, so it cannot restore this.',
+    };
+  });
+
+  // Only worth reporting once some tool does receive agents: with none
+  // installed, "reaches no tool" is the machine, not the team repo.
+  if (unreachable.length > 0 && agentDir.size > 0) {
+    checks.push({
+      name: 'Every team agent reaches a tool',
+      source: 'local',
+      check: async () => false,
+      fix: `${nameList(unreachable)} render for no installed tool. Either the spec does not `
+        + 'parse — `teamai pull` names the reason — or its `targets:` lists only tools that '
+        + 'are not installed here.',
+    });
+  }
+
+  return checks;
+}
+
+/**
  * The docs bundle has one destination rather than one per tool: `DocsHandler`
  * copies the whole `docs/` tree into `sharing.docs.localDir`. So this check
  * compares the two trees, file by file, rather than asking each tool.
@@ -567,6 +641,7 @@ export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
     ...await buildHookChecks(toolPaths, baseDir, localConfig),
     ...await buildDeliveryChecks(ctx),
     ...await buildRulesDeliveryChecks(ctx),
+    ...await buildAgentsDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     {
       name: 'Env variables injected in shell profile',
