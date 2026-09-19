@@ -246,8 +246,12 @@ export class EnvHandler extends ResourceHandler {
 
   /**
    * Detect the user's shell profile path.
+   *
+   * Public because `doctor` has to check the same file the injection writes:
+   * a second spelling of this choice would check `.bashrc` while the pull
+   * wrote `.zshrc`, and report a correct install as broken.
    */
-  private detectShellProfile(): string {
+  detectShellProfile(): string {
     const home = getUserHome();
     const shell = process.env.SHELL ?? '';
 
