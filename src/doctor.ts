@@ -10,6 +10,7 @@ import {
   resolveHookScope,
   resolveToolBaseDir,
   getDataHome,
+  getMcpSharing,
   isAgentExcluded,
   scopedToolPaths,
   type LocalConfig,
@@ -461,6 +462,75 @@ async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
 }
 
 /**
+ * Build one check per tool that receives MCP servers.
+ *
+ * An MCP server is an entry inside the tool's own config file, not a file of
+ * its own, so this takes the shape of the hook check rather than of
+ * `deliveryTargets`. It reports two things a pull says once and never again:
+ * a desired server whose entry is not there, and a server the reconcile
+ * skipped — an unresolved `${VAR}` is the reason behind "MCP does not work"
+ * that no other output points at (#662).
+ */
+async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  // HTTP-backed teams have no repo tree: servers arrive through the local-agent
+  // install channel, and the desired set here would always be empty.
+  if (localConfig.repo.kind === 'http') return [];
+
+  const sharing = getMcpSharing(teamConfig);
+  // Nothing was promised automatically, so nothing is owed until the member
+  // runs `teamai mcp inject`.
+  if (!sharing.autoApply) return [];
+
+  const {
+    resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
+    mcpTargetExcluded, installedMcpServerNames,
+  } = await import('./mcp-reconcile.js');
+  const { parseTeamMcpServers } = await import('./resources/mcp.js');
+
+  const teamDefs = await parseTeamMcpServers(localConfig.repo.localPath);
+  if (teamDefs.length === 0) return [];
+
+  const targets = await resolveMcpTargets(teamConfig, localConfig);
+  const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig);
+  const excludedByUser = new Set(localConfig.excludedSkills ?? []);
+
+  const checks: Check[] = [];
+  for (const target of targets) {
+    if (mcpTargetExcluded(localConfig, target)) continue;
+
+    const { desired, skipped } = desiredMcpForTarget(target, teamDefs, desiredContext);
+    const blocked = skipped
+      .filter((change) => !excludedByUser.has(change.server))
+      .map((change) => `${change.server} (${change.reason ?? 'skipped'})`);
+
+    const problems: string[] = [];
+    const installed = await installedMcpServerNames(target);
+    if (installed === null) {
+      problems.push(`${target.file} could not be parsed, so no server was injected`);
+    } else if (desired.size > 0) {
+      const absent = [...desired.keys()].filter((name) => !installed.includes(name));
+      if (absent.length > 0) problems.push(`not injected: ${nameList(absent)}`);
+    }
+    if (blocked.length > 0) problems.push(`skipped: ${nameList(blocked)}`);
+
+    if (problems.length === 0 && desired.size === 0) continue;
+
+    checks.push({
+      name: `MCP servers delivered to ${target.tool}`,
+      source: 'local',
+      check: async () => problems.length === 0,
+      fix: `In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
+        + '`env/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
+        + 'parses as no variables at all. Then run `teamai pull --force`.',
+    });
+  }
+
+  return checks;
+}
+
+/**
  * The docs bundle has one destination rather than one per tool: `DocsHandler`
  * copies the whole `docs/` tree into `sharing.docs.localDir`. So this check
  * compares the two trees, file by file, rather than asking each tool.
@@ -642,6 +712,7 @@ export async function buildChecks(ctx: DoctorContext): Promise<Check[]> {
     ...await buildDeliveryChecks(ctx),
     ...await buildRulesDeliveryChecks(ctx),
     ...await buildAgentsDeliveryChecks(ctx),
+    ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     {
       name: 'Env variables injected in shell profile',
