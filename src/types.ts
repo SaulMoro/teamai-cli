@@ -634,6 +634,13 @@ export interface ResourceDiff {
 export interface DeliveryTarget {
   tool: string;
   dest: string;
+  /**
+   * The exact bytes `pullItem` writes at `dest`, for a handler that renders
+   * its destination rather than copying a tree there. It is what tells a copy
+   * rendered from an older spec from the current one; absent means the handler
+   * cannot say, and only the destination's existence can be judged.
+   */
+  content?: string;
 }
 
 // ─── Hook definitions (unified model, issue #19) ─────────

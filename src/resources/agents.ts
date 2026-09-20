@@ -554,7 +554,7 @@ export class AgentsHandler extends ResourceHandler {
     item: ResourceItem,
   ): Promise<DeliveryTarget[]> {
     return (await this.resolveRenders(teamConfig, localConfig, item))
-      .map(({ tool, dest }) => ({ tool, dest }));
+      .map(({ tool, dest, render }) => ({ tool, dest, content: render.content }));
   }
 
   /**

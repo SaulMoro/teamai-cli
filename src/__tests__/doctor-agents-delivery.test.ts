@@ -17,6 +17,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
+import { AgentsHandler } from '../resources/agents.js';
 import { buildChecks, resolveDoctorContext, type Check } from '../doctor.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -47,10 +48,20 @@ describe('doctor — agents delivered on disk', () => {
     return `name: ${name}\ndescription: does ${name} things\n${targetLine}instructions: |\n  Do the thing.\n`;
   }
 
-  async function deliver(toolPath: string, file: string): Promise<void> {
-    const dest = path.join(homeDir, toolPath, file);
-    await fse.ensureDir(path.dirname(dest));
-    await fse.writeFile(dest, 'rendered');
+  /**
+   * Deliver one agent to one tool the way `pullItem` does: the handler's own
+   * render at the handler's own path. Writing a placeholder instead would make
+   * every fixture a copy rendered from no spec at all.
+   */
+  async function deliver(tool: string, name: string): Promise<void> {
+    const handler = new AgentsHandler();
+    const item = (await handler.scanTeamForPull(teamConfig, localConfig)).find((i) => i.name === name);
+    if (!item) throw new Error(`no team agent named ${name}`);
+    const target = (await handler.deliveryTargets(teamConfig, localConfig, item))
+      .find((t) => t.tool === tool);
+    if (!target) throw new Error(`${name} does not render for ${tool}`);
+    await fse.ensureDir(path.dirname(target.dest));
+    await fse.writeFile(target.dest, target.content ?? '');
   }
 
   async function checks(): Promise<Check[]> {
@@ -108,15 +119,15 @@ describe('doctor — agents delivered on disk', () => {
   });
 
   it('expects each tool its own render extension', async () => {
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
-    await deliver(CODEX_AGENTS, 'reviewer.toml');
+    await deliver('claude', 'reviewer');
+    await deliver('codex', 'reviewer');
 
     expect(await (await agentsCheck('claude')).check()).toBe(true);
     expect(await (await agentsCheck('codex')).check()).toBe(true);
   });
 
   it('fails when the tool-native render is missing, naming its directory', async () => {
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
+    await deliver('claude', 'reviewer');
 
     const codex = await agentsCheck('codex');
     expect(await codex.check()).toBe(false);
@@ -128,9 +139,9 @@ describe('doctor — agents delivered on disk', () => {
 
   it('does not ask a tool the spec does not target', async () => {
     await writeTeamAgent('claude-only', specFor('claude-only', ['claude']));
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
-    await deliver(CLAUDE_AGENTS, 'claude-only.md');
-    await deliver(CODEX_AGENTS, 'reviewer.toml');
+    await deliver('claude', 'reviewer');
+    await deliver('claude', 'claude-only');
+    await deliver('codex', 'reviewer');
 
     expect(await (await agentsCheck('codex')).check()).toBe(true);
     expect(await (await agentsCheck('claude')).check()).toBe(true);
@@ -139,19 +150,30 @@ describe('doctor — agents delivered on disk', () => {
   it('asks only LEGACY_MD_TOOLS for a legacy .md agent', async () => {
     const legacy = path.join(repoPath, 'agents', 'old-hand.md');
     await fse.writeFile(legacy, '# old hand\n');
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
-    await deliver(CLAUDE_AGENTS, 'old-hand.md');
-    await deliver(CODEX_AGENTS, 'reviewer.toml');
+    await deliver('claude', 'reviewer');
+    await deliver('claude', 'old-hand');
+    await deliver('codex', 'reviewer');
 
     // codex is not a legacy .md tool, so it is owed nothing for old-hand.
     expect(await (await agentsCheck('codex')).check()).toBe(true);
     expect(await (await agentsCheck('claude')).check()).toBe(true);
   });
 
+  it('fails when the delivered copy was rendered from an older spec', async () => {
+    await deliver('claude', 'reviewer');
+    await deliver('codex', 'reviewer');
+    await writeTeamAgent('reviewer', specFor('reviewer').replace('Do the thing.', 'Do it differently.'));
+
+    const claude = await agentsCheck('claude');
+    expect(await claude.check()).toBe(false);
+    expect(claude.fix).toContain('delivered from an older spec: reviewer');
+    expect(await (await agentsCheck('codex')).check()).toBe(false);
+  });
+
   it('reports an agent whose spec renders for no installed tool', async () => {
     await writeTeamAgent('broken', 'name: broken\n  bad: [indent\n');
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
-    await deliver(CODEX_AGENTS, 'reviewer.toml');
+    await deliver('claude', 'reviewer');
+    await deliver('codex', 'reviewer');
 
     const check = (await checks()).find((c) => c.name === 'Every team agent reaches a tool');
     if (!check) throw new Error('expected the unreachable-agent check');
@@ -185,7 +207,7 @@ describe('doctor — agents delivered on disk', () => {
 
   it('emits no check for a tool the member disabled', async () => {
     localConfig.disabledAgents = ['codex'];
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
+    await deliver('claude', 'reviewer');
 
     const names = (await checks()).map((c) => c.name);
     expect(names).toContain('Agents delivered to claude');
@@ -200,7 +222,7 @@ describe('doctor — agents delivered on disk', () => {
   });
 
   it('never writes to the tool directory it inspects', async () => {
-    await deliver(CLAUDE_AGENTS, 'reviewer.md');
+    await deliver('claude', 'reviewer');
 
     const before = (await fse.readdir(path.join(homeDir, CODEX_AGENTS))).sort();
     await (await agentsCheck('codex')).check();

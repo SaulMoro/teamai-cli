@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import { getDataHome, getMcpSharing, TEAMAI_ENV_START, TEAMAI_ENV_END } from './types.js';
-import type { ResourceItem } from './types.js';
+import type { DeliveryTarget, ResourceItem } from './types.js';
 import { usesCursorMdcRules, usesCopilotInstructions } from './resources/rule-format.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
@@ -79,7 +79,7 @@ async function walkDelivery(
   handler: ResourceHandler,
   ctx: DoctorContext,
   items: ResourceItem[],
-  classify: (tool: string, dest: string, item: ResourceItem) => Promise<string | null>,
+  classify: (target: DeliveryTarget, item: ResourceItem) => Promise<string | null>,
 ): Promise<{ byTool: Map<string, ToolDelivery>; unreceived: string[] }> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return { byTool: new Map(), unreceived: [] };
@@ -91,13 +91,13 @@ async function walkDelivery(
     const targets = await handler.deliveryTargets(teamConfig, localConfig, item);
     if (targets.length === 0) unreceived.push(item.name);
 
-    for (const { tool, dest } of targets) {
-      let delivery = byTool.get(tool);
+    for (const target of targets) {
+      let delivery = byTool.get(target.tool);
       if (!delivery) {
-        delivery = { dir: path.dirname(dest), problems: new Map() };
-        byTool.set(tool, delivery);
+        delivery = { dir: path.dirname(target.dest), problems: new Map() };
+        byTool.set(target.tool, delivery);
       }
-      const problem = await classify(tool, dest, item);
+      const problem = await classify(target, item);
       if (problem !== null) appendTo(delivery.problems, problem, item.name);
     }
   }
@@ -164,7 +164,7 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
   if (items.length === 0) return [];
 
   const labels = ['not delivered', 'delivered but unreadable'] as const;
-  const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async (_tool, dest, item) => {
+  const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async ({ dest }, item) => {
     if (!await pathExists(dest)) return labels[0];
     return await skillIsDiscoverable(dest, item.name) ? null : labels[1];
   });
@@ -226,7 +226,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
     getHandler('rules'),
     ctx,
     items,
-    async (tool, dest) => {
+    async ({ tool, dest }) => {
       if (!await isReadableFile(dest)) return 'not delivered';
       return await ruleIsApplicable(tool, dest)
         ? null
@@ -279,18 +279,28 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
 
   // An agent whose spec reaches no tool at all is not a per-tool failure: the
   // file is in the team repo and nothing renders it anywhere.
+  const agentLabels = ['not delivered', 'delivered from an older spec'] as const;
   const { byTool, unreceived: unreachable } = await walkDelivery(
     handler,
     ctx,
     items,
-    async (_tool, dest) => await isReadableFile(dest) ? null : 'not delivered',
+    // `pullItem` writes `content` verbatim, so anything else at that path is a
+    // render of an older spec — a copy that landed and is still wrong, the
+    // same class as a rule delivered without the frontmatter its tool reads.
+    async ({ dest, content }) => {
+      // readFileSafe answers both questions at once: a directory or a dangling
+      // link on the name reads as null, the same as nothing being there.
+      const delivered = await readFileSafe(dest);
+      if (delivered === null) return agentLabels[0];
+      return content === undefined || delivered === content ? null : agentLabels[1];
+    },
   );
 
   const checks: Check[] = [...byTool].map(([tool, delivery]) => ({
     name: `Agents delivered to ${tool}`,
     source: 'local',
     check: async () => delivery.problems.size === 0,
-    fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ['not delivered'])}. `
+    fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, agentLabels)}. `
       + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
       + 'so it cannot restore this.',
   }));

@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
 
+/** The `agents/reviewer.yaml` fixture as each tool's renderer writes it. */
+const CLAUDE_AGENT_MD = '---\nname: reviewer\ndescription: reviews\n---\nReview.\n';
+const CODEX_AGENT_TOML = 'name = "reviewer"\ndescription = "reviews"\ndeveloper_instructions = "Review.\\n"\n';
+
 interface CheckResult { name: string; ok: boolean; fix?: string }
 interface DoctorReport { ok: boolean; checks: CheckResult[] }
 
@@ -154,10 +158,12 @@ describe('teamai doctor delivery checks (e2e)', () => {
     write(path.join(home, '.claude/skills/alpha/SKILL.md'), '---\nname: alpha\ndescription: d\n---\n');
     write(path.join(home, '.claude/rules/coding-style.md'), 'Coding style body\n');
     write(path.join(home, '.cursor/rules/coding-style.mdc'), '---\nalwaysApply: true\n---\n\nCoding style body\n');
-    write(path.join(home, '.claude/agents/reviewer.md'), 'rendered');
-    write(path.join(home, '.codex/agents/reviewer.toml'), 'rendered');
+    // What `pullItem` writes for each tool, byte for byte: the check compares
+    // the delivered copy with the render, so a placeholder is a stale copy.
+    write(path.join(home, '.claude/agents/reviewer.md'), CLAUDE_AGENT_MD);
+    write(path.join(home, '.codex/agents/reviewer.toml'), CODEX_AGENT_TOML);
     write(path.join(home, '.codebuddy/rules/coding-style.md'), 'Coding style body\n');
-    write(path.join(home, '.codebuddy/agents/reviewer.md'), 'rendered');
+    write(path.join(home, '.codebuddy/agents/reviewer.md'), CLAUDE_AGENT_MD);
     write(path.join(home, '.config/opencode/rules/coding-style.md'), 'Coding style body\n');
     // The entry teamai renders for claude, placeholder resolved — the check
     // compares the value, so a hand-shaped entry of the same name is not it.
@@ -193,6 +199,15 @@ describe('teamai doctor delivery checks (e2e)', () => {
     expect(mcp.ok).toBe(false);
     expect(mcp.fix).toContain("not the team's definition: jira");
     expect(mcp.fix).toContain('--force');
+  });
+
+  it('reports an agent copy left behind by an older spec', () => {
+    write(path.join(home, '.claude/agents/reviewer.md'), CLAUDE_AGENT_MD.replace('Review.', 'Review it the old way.'));
+
+    const agents = check(runDoctor(), 'Agents delivered to claude');
+
+    expect(agents.ok).toBe(false);
+    expect(agents.fix).toContain('delivered from an older spec: reviewer');
   });
 
   it('reports an env.sh left on the value env.yaml replaced', () => {
