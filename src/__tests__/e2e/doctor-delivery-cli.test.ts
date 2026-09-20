@@ -82,6 +82,8 @@ describe('teamai doctor delivery checks (e2e)', () => {
       '    agents: .codebuddy/agents',
       '  opencode:',
       '    rules: .opencode/rules',
+      '    mcp: .config/opencode/opencode.json',
+      '    mcpProject: opencode.json',
       '    userScope:',
       '      rules: .config/opencode/rules',
     ].join('\n'));
@@ -99,6 +101,9 @@ describe('teamai doctor delivery checks (e2e)', () => {
     ].join('\n'));
     // Deliberately the shorthand form #662 is about.
     write(path.join(repo, 'env', 'env.yaml'), 'JIRA_PASSWORD: "s3cret"\n');
+
+    // OpenCode reads its rules through this glob, not by scanning the directory.
+    write(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ instructions: [] }));
 
     write(path.join(home, '.teamai', 'config.yaml'), [
       'repo:',
@@ -165,6 +170,8 @@ describe('teamai doctor delivery checks (e2e)', () => {
     write(path.join(home, '.codebuddy/rules/coding-style.md'), 'Coding style body\n');
     write(path.join(home, '.codebuddy/agents/reviewer.md'), CLAUDE_AGENT_MD);
     write(path.join(home, '.config/opencode/rules/coding-style.md'), 'Coding style body\n');
+    // The glob the pull adds; without it every .md above is inert.
+    write(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ instructions: ['rules/*.md'] }));
     // The entry teamai renders for claude, placeholder resolved — the check
     // compares the value, so a hand-shaped entry of the same name is not it.
     write(path.join(home, '.claude.json'), JSON.stringify({
@@ -252,6 +259,36 @@ describe('teamai doctor delivery checks (e2e)', () => {
     expect(report.checks.filter((c) => c.name.startsWith('MCP servers delivered to'))).toEqual([]);
 
     write(mcpYaml, original);
+  });
+
+  it('reports rules OpenCode reads none of, though every file is delivered', () => {
+    // Drop the glob, leave the files. The per-file check keeps passing: the
+    // failure is that OpenCode does not scan a rules directory.
+    write(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ instructions: [] }));
+
+    const report = runDoctor();
+
+    expect(check(report, 'Rules delivered to opencode').ok).toBe(true);
+    const active = check(report, 'Team rules are active in opencode');
+    expect(active.ok).toBe(false);
+    expect(active.fix).toContain('inert');
+
+    write(path.join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({ instructions: ['rules/*.md'] }));
+  });
+
+  it('passes a multiline env value the shell quotes across several lines', () => {
+    const envYaml = path.join(repo, 'env', 'env.yaml');
+    const envSh = path.join(home, '.teamai', 'env.sh');
+    const originalYaml = fs.readFileSync(envYaml, 'utf8');
+    const originalSh = fs.readFileSync(envSh, 'utf8');
+
+    write(envYaml, 'variables:\n  - key: JIRA_PASSWORD\n    value: |\n      one\n      two\n');
+    write(envSh, "export JIRA_PASSWORD='one\ntwo\n'\n");
+
+    expect(check(runDoctor(), 'Env variables injected in shell profile').ok).toBe(true);
+
+    write(envYaml, originalYaml);
+    write(envSh, originalSh);
   });
 
   it('passes an env.yaml that declares `variables: []` on purpose', () => {
