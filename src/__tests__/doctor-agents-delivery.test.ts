@@ -159,6 +159,30 @@ describe('doctor — agents delivered on disk', () => {
     expect(check.fix).toContain('broken');
   });
 
+  it('reports the unreachable agents even when no agent reaches any tool', async () => {
+    // The tools are installed and every agent is malformed, so there is no
+    // per-tool check to hang the failure on. Taking the deliveries as proof a
+    // tool was there left this passing (#624 review).
+    await fse.remove(path.join(repoPath, 'agents', 'reviewer.yaml'));
+    await writeTeamAgent('broken', 'name: broken\n  bad: [indent\n');
+
+    const built = await checks();
+    expect(built.filter((c) => c.name.startsWith('Agents delivered to'))).toEqual([]);
+
+    const check = built.find((c) => c.name === 'Every team agent reaches a tool');
+    if (!check) throw new Error('expected the unreachable-agent check');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('broken');
+  });
+
+  it('stays silent about unreachable agents when no tool receives agents at all', async () => {
+    teamConfig.toolPaths = {};
+    await writeTeamAgent('broken', 'name: broken\n  bad: [indent\n');
+
+    const names = (await checks()).map((c) => c.name);
+    expect(names).not.toContain('Every team agent reaches a tool');
+  });
+
   it('emits no check for a tool the member disabled', async () => {
     localConfig.disabledAgents = ['codex'];
     await deliver(CLAUDE_AGENTS, 'reviewer.md');

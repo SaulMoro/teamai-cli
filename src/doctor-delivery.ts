@@ -256,7 +256,8 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
   if (!teamConfig) return [];
 
   const { buildRolePullContext, resolveDesiredAgents } = await import('./pull.js');
-  const { getHandler } = await import('./resources/index.js');
+  const { AgentsHandler } = await import('./resources/agents.js');
+  const handler = new AgentsHandler();
 
   let items: ResourceItem[];
   try {
@@ -278,7 +279,7 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
   // An agent whose spec reaches no tool at all is not a per-tool failure: the
   // file is in the team repo and nothing renders it anywhere.
   const { byTool, unreceived: unreachable } = await walkDelivery(
-    getHandler('agents'),
+    handler,
     ctx,
     items,
     async (_tool, dest) => await isReadableFile(dest) ? null : 'not delivered',
@@ -293,9 +294,12 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
       + 'so it cannot restore this.',
   }));
 
-  // Only worth reporting once some tool does receive agents: with none
-  // installed, "reaches no tool" is the machine, not the team repo.
-  if (unreachable.length > 0 && byTool.size > 0) {
+  // Only worth reporting once a tool is there to receive agents: with none
+  // installed, "reaches no tool" is the machine, not the team repo. The gate is
+  // the installed tools rather than the deliveries, or a set of agents that all
+  // fail to render would report nothing at all.
+  const agentTools = await handler.agentToolDirs(teamConfig, localConfig);
+  if (unreachable.length > 0 && agentTools.length > 0) {
     checks.push({
       name: 'Every team agent reaches a tool',
       source: 'local',

@@ -472,12 +472,7 @@ export class AgentsHandler extends ResourceHandler {
     const inactive = items.filter((item) => !isActive(item) && !BUILTIN_AGENT_NAMES.has(item.name));
     if (inactive.length === 0) return;
 
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.agents || !isKnownTool(tool) || isAgentExcluded(localConfig, tool)) continue;
-      if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) continue;
-      const baseDir = resolveToolBaseDir(tool, localConfig);
-      const destDir = path.join(baseDir, toolPath.agents);
-
+    for (const { tool, dir: destDir } of await this.agentToolDirs(teamConfig, localConfig)) {
       const activeDestinations = new Set<string>();
       for (const item of active) {
         const rendered = await this.renderedForTool(item, tool);
@@ -516,21 +511,41 @@ export class AgentsHandler extends ResourceHandler {
     const agentItem = item as AgentResourceItem;
     const renders: { tool: ToolName; dest: string; render: RenderResult }[] = [];
 
+    for (const { tool, dir } of await this.agentToolDirs(teamConfig, localConfig)) {
+      const render = await this.renderedForTool(agentItem, tool);
+      if (!render) continue;
+
+      renders.push({ tool, dest: path.join(dir, `${item.name}${render.ext}`), render });
+    }
+
+    return renders;
+  }
+
+  /**
+   * Every installed tool that receives agents at all, with the directory its
+   * copies land in — the gate, without asking any agent to render.
+   *
+   * `doctor` needs this on its own. "This agent reaches no tool" is a team-repo
+   * problem only once some tool was there to receive it, and taking the
+   * successful renders as proof of that hides the case where every agent is
+   * malformed: no render, no tool, no failure reported (#624).
+   */
+  async agentToolDirs(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+  ): Promise<{ tool: ToolName; dir: string }[]> {
+    const dirs: { tool: ToolName; dir: string }[] = [];
+
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.agents || !isKnownTool(tool) || isAgentExcluded(localConfig, tool)) continue;
       if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) {
         log.debug(`Skipping agent sync for ${tool}: tool not installed`);
         continue;
       }
-
-      const render = await this.renderedForTool(agentItem, tool);
-      if (!render) continue;
-
-      const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.agents);
-      renders.push({ tool, dest: path.join(destDir, `${item.name}${render.ext}`), render });
+      dirs.push({ tool, dir: path.join(resolveToolBaseDir(tool, localConfig), toolPath.agents) });
     }
 
-    return renders;
+    return dirs;
   }
 
   async deliveryTargets(
