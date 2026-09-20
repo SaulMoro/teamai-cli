@@ -405,7 +405,14 @@ export class AgentsHandler extends ResourceHandler {
       const destDir = path.dirname(dest);
       try {
         await ensureDir(destDir);
-        await removeStaleAgentSiblings(destDir, item.name, render.ext);
+        // Only a rendered spec can leave a sibling behind: its extension follows
+        // the tool's format and changes when `targets` does. A legacy `.md` is
+        // copied verbatim to one extension for every tool, so a same-stem
+        // `.toml`, `.json` or `.agent.md` beside it is the member's own file
+        // and not ours to delete (#624 review).
+        if (!isLegacyAgent(agentItem)) {
+          await removeStaleAgentSiblings(destDir, item.name, render.ext);
+        }
         await writeFile(dest, render.content);
         log.debug(`Rendered agent ${item.name} → ${tool} (${render.ext})`);
       } catch (e) {
