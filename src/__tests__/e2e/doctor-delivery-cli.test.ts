@@ -219,4 +219,48 @@ describe('teamai doctor delivery checks (e2e)', () => {
     expect(env.fix).toContain('JIRA_PASSWORD');
     expect(env.fix).toContain('stale value');
   });
+
+  it('reports a Cursor rule whose globs no longer match the team rule', () => {
+    // Legal frontmatter, wrong scope: Cursor applies it to `**/*.py` while the
+    // team rule scopes it to `**/*.ts`. Reading the keys for presence calls
+    // this delivered; comparing against the render does not.
+    write(path.join(repo, 'rules', 'coding-style.md'), '---\npaths:\n  - "**/*.ts"\n---\nCoding style body\n');
+    write(
+      path.join(home, '.cursor/rules/coding-style.mdc'),
+      '---\nglobs: "**/*.py"\nalwaysApply: false\n---\n\nCoding style body\n',
+    );
+
+    const cursor = check(runDoctor(), 'Rules delivered to cursor');
+
+    expect(cursor.ok).toBe(false);
+    expect(cursor.fix).toContain('delivered from an older copy: coding-style');
+
+    write(path.join(repo, 'rules', 'coding-style.md'), 'Coding style body\n');
+    write(path.join(home, '.cursor/rules/coding-style.mdc'), '---\nalwaysApply: true\n---\n\nCoding style body\n');
+  });
+
+  it('reports an mcp.yaml that does not parse instead of reading it as no MCP', () => {
+    const mcpYaml = path.join(repo, 'mcp', 'mcp.yaml');
+    const original = fs.readFileSync(mcpYaml, 'utf8');
+    write(mcpYaml, 'servers:\n  - name: jira\n    transport: stdio\n');
+
+    const report = runDoctor();
+
+    expect(report.ok).toBe(false);
+    expect(check(report, 'Team MCP servers can be read').ok).toBe(false);
+    // The per-tool checks cannot say anything: there is no desired set.
+    expect(report.checks.filter((c) => c.name.startsWith('MCP servers delivered to'))).toEqual([]);
+
+    write(mcpYaml, original);
+  });
+
+  it('passes an env.yaml that declares `variables: []` on purpose', () => {
+    const envYaml = path.join(repo, 'env', 'env.yaml');
+    const original = fs.readFileSync(envYaml, 'utf8');
+    write(envYaml, 'variables: []\n');
+
+    expect(check(runDoctor(), 'Env variables injected in shell profile').ok).toBe(true);
+
+    write(envYaml, original);
+  });
 });
