@@ -130,6 +130,35 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).toContain('variables:');
   });
 
+  it('passes for a multiline value the shell quotes across several lines', async () => {
+    // A YAML block scalar is a legal env value, and single-quoting one spans
+    // physical lines. A reader that scans env.sh line by line can never match
+    // that export, so it called a correct delivery stale.
+    await writeEnvYaml('variables:\n  - key: TEAM_KEY\n    value: |\n      line one\n      line two\n');
+    await writeEnvSh("export TEAM_KEY='line one\nline two\n'\n");
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
+
+  it('still reports a multiline value that drifted from env.yaml', async () => {
+    await writeEnvYaml('variables:\n  - key: TEAM_KEY\n    value: |\n      line one\n      line two\n');
+    await writeEnvSh("export TEAM_KEY='line one\nsomething else\n'\n");
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('stale value');
+  });
+
+  it('passes for a value carrying a single quote, which the generator escapes', async () => {
+    await writeEnvYaml("variables:\n  - key: TEAM_KEY\n    value: \"it's here\"\n");
+    await writeEnvSh("export TEAM_KEY='it'\\''s here'\n");
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
+
   it('passes for an env.yaml that declares `variables: []` on purpose', async () => {
     // Nothing is owed, so nothing can be undelivered. This parses correctly
     // and is a deliberately empty configuration, not the shorthand form.
