@@ -477,9 +477,22 @@ async function envDeliveryProblems(ctx: DoctorContext): Promise<string[]> {
   if (envSh === null) {
     problems.push(`${envShPath} is missing`);
   } else {
-    const undelivered = declared.filter((v) => !envSh.includes(`export ${v.key}=`));
-    if (undelivered.length > 0) {
-      problems.push(`${envShPath} is missing ${nameList(undelivered.map((v) => v.key))}`);
+    // Line by line against what the injection would write, value included: a
+    // key whose value changed in env.yaml exports the old one until the next
+    // pull rewrites the file, and every shell and MCP server reads that.
+    const lines = new Set(envSh.split('\n').map((line) => line.trim()));
+    const undelivered: string[] = [];
+    const stale: string[] = [];
+    for (const variable of declared) {
+      if (lines.has(envHandler.generateEnvFile([variable]).trim())) continue;
+      if ([...lines].some((line) => line.startsWith(`export ${variable.key}=`))) stale.push(variable.key);
+      else undelivered.push(variable.key);
+    }
+    if (undelivered.length > 0) problems.push(`${envShPath} is missing ${nameList(undelivered)}`);
+    if (stale.length > 0) {
+      problems.push(
+        `${envShPath} has a stale value for ${nameList(stale)}: env.yaml declares a different one`,
+      );
     }
   }
 

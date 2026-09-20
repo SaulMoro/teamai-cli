@@ -159,7 +159,11 @@ describe('teamai doctor delivery checks (e2e)', () => {
     write(path.join(home, '.codebuddy/rules/coding-style.md'), 'Coding style body\n');
     write(path.join(home, '.codebuddy/agents/reviewer.md'), 'rendered');
     write(path.join(home, '.config/opencode/rules/coding-style.md'), 'Coding style body\n');
-    write(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { jira: { command: 'jira-server' } } }));
+    // The entry teamai renders for claude, placeholder resolved — the check
+    // compares the value, so a hand-shaped entry of the same name is not it.
+    write(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { jira: { type: 'stdio', command: 'jira-server', env: { TOKEN: 's3cret' } } },
+    }));
     write(path.join(repo, 'env', 'env.yaml'), 'variables:\n  - key: JIRA_PASSWORD\n    value: "s3cret"\n');
     write(path.join(home, '.teamai', 'env.sh'), "export JIRA_PASSWORD='s3cret'\n");
     // The machine-local KEY=VALUE backup the env channel writes beside env.sh;
@@ -177,5 +181,27 @@ describe('teamai doctor delivery checks (e2e)', () => {
 
     expect(failed).toEqual([]);
     expect(report.ok).toBe(true);
+  });
+
+  it('reports a server of your own holding a team name, which a pull will not overwrite', () => {
+    write(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { jira: { type: 'stdio', command: 'my-own-jira' } },
+    }));
+
+    const mcp = check(runDoctor(), 'MCP servers delivered to claude');
+
+    expect(mcp.ok).toBe(false);
+    expect(mcp.fix).toContain("not the team's definition: jira");
+    expect(mcp.fix).toContain('--force');
+  });
+
+  it('reports an env.sh left on the value env.yaml replaced', () => {
+    write(path.join(home, '.teamai', 'env.sh'), "export JIRA_PASSWORD='rotated-away'\n");
+
+    const env = check(runDoctor(), 'Env variables injected in shell profile');
+
+    expect(env.ok).toBe(false);
+    expect(env.fix).toContain('JIRA_PASSWORD');
+    expect(env.fix).toContain('stale value');
   });
 });

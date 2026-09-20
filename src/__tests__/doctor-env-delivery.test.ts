@@ -130,6 +130,19 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).toContain('variables:');
   });
 
+  it('fails when env.sh still exports the value env.yaml replaced', async () => {
+    await writeEnvSh("export JIRA_PASSWORD='rotated-away'\n");
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('JIRA_PASSWORD');
+    expect(check.fix).toContain('stale value');
+    // The value is a secret: naming the key is the whole diagnosis.
+    expect(check.fix).not.toContain('s3cret');
+    expect(check.fix).not.toContain('rotated-away');
+  });
+
   it('fails when a declared variable never reached env.sh', async () => {
     await writeEnvSh("export OTHER='x'\n");
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
