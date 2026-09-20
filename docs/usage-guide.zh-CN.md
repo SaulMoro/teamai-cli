@@ -1488,7 +1488,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 `Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`、`.instructions.md` 带 `applyTo`），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达但缺少该工具所读 frontmatter 的 rule 会与从未送达的分开报告——它写入成功，却仍然不会生效。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
 
-`MCP servers delivered to <tool>` 检查团队 `mcp.yaml` 为该工具解析出的每个 server 是否已写入该工具自己的配置文件，并列出 reconcile 跳过的 server 及原因。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明）、每个变量是否写进了 `env.sh`，以及注入的代码块是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。
+`MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；过期的旧副本同样等于没送达。两者都报告为 `not the team's definition`，而覆盖非 teamai 写入的条目只有 `teamai pull --force` 能做到。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明）、每个变量是否以 `env.yaml` 声明的值写进了 `env.sh`（残留的旧值会一直被导出到每个 shell 和 MCP server，直到下次 pull），以及注入的代码块是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。
 
 `Contributed learnings are published` 会在 `teamai contribute` 写下、但尚未推送成功的笔记仍在队列中时失败。当本次 pull 已经说过时，手动 `teamai pull` 结束时不会再重复它：pull 会尝试发布队列并自行报告结果，还会带上导致失败的推送错误——这是该检查本身给不出的信息。如果 pull 因为团队仓库刷新失败而根本没走到那一步，该检查会照常打印。
 
