@@ -181,6 +181,29 @@ describe('doctor — MCP servers delivered on disk', () => {
     expect(check.fix).toContain('could not be parsed');
   });
 
+  it('fails when mcp.yaml is present but does not parse', async () => {
+    // The parse yields no servers, exactly as an absent file does. Reading
+    // that as "this team ships no MCP" is what let `doctor --json` answer
+    // ok: true over a team whose every server reaches no tool at all.
+    await writeTeamMcp('servers:\n  - name: docs\n    transport: stdio\n  bad indent\n');
+
+    const check = (await checks()).find((c) => c.name === 'Team MCP servers can be read');
+    if (!check) throw new Error('no MCP parse check');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('does not parse');
+    expect(check.fix).toContain(path.join(repoPath, 'mcp', 'mcp.yaml'));
+  });
+
+  it('fails when mcp.yaml parses as YAML but breaks the server schema', async () => {
+    // `stdio` without `command`: zod refuses it, so the desired set is empty
+    // for a reason a member has to be told rather than shown as success.
+    await writeTeamMcp('servers:\n  - name: docs\n    transport: stdio\n');
+
+    const check = (await checks()).find((c) => c.name === 'Team MCP servers can be read');
+    if (!check) throw new Error('no MCP parse check');
+    expect(await check.check()).toBe(false);
+  });
+
   it('emits no check when the team ships no MCP servers', async () => {
     await fse.remove(path.join(repoPath, 'mcp'));
 

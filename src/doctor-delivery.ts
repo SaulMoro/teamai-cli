@@ -335,9 +335,25 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
     mcpTargetExcluded, installedMcpEntries,
   } = await import('./mcp-reconcile.js');
-  const { parseTeamMcpServers } = await import('./resources/mcp.js');
+  const { readMcpYaml, teamMcpToDef, teamMcpYamlPath } = await import('./resources/mcp.js');
 
-  const teamDefs = await parseTeamMcpServers(localConfig.repo.localPath);
+  // A file that does not parse is not a team without MCP: the pull logs the
+  // reason once and injects nothing anywhere, and every later run is silent.
+  // Flattening it to an empty desired set is what let `doctor --json` answer
+  // `ok: true` over a team whose MCP reaches no tool at all.
+  const read = await readMcpYaml(localConfig.repo.localPath);
+  if (!read.ok) {
+    const yamlPath = teamMcpYamlPath(localConfig.repo.localPath);
+    return [{
+      name: 'Team MCP servers can be read',
+      source: 'local',
+      check: async () => false,
+      fix: `${yamlPath} does not parse: ${read.reason}. No server is injected into any tool `
+        + 'until it is fixed in the team repo and pushed.',
+    }];
+  }
+
+  const teamDefs = (read.yaml?.servers ?? []).map(teamMcpToDef);
   if (teamDefs.length === 0) return [];
 
   const targets = await resolveMcpTargets(teamConfig, localConfig);
