@@ -280,15 +280,7 @@ export async function writeJsonDoc(
  * rest of config.toml byte-identical (comments included).
  */
 export function spliceCodexBlock(source: string, name: string, block: string | null): string {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // The block runs from its header to the next table header that is not one of
-  // its own sub-tables (e.g. [mcp_servers.<name>.env]), or to end-of-input.
-  // End-of-input must be spelled `(?![\s\S])`: JS has no \z, and under the `m`
-  // flag `$` only means end-of-line, which would truncate the match early.
-  const re = new RegExp(
-    String.raw`^\[mcp_servers\.${escaped}\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.${escaped}[.\]])|(?![\s\S]))`,
-    'm',
-  );
+  const re = codexBlockRe(name);
   const match = source.match(re);
 
   if (match) {
@@ -302,6 +294,32 @@ export function spliceCodexBlock(source: string, name: string, block: string | n
   if (block === null) return source;
   const sep = source.length === 0 || source.endsWith('\n\n') ? '' : source.endsWith('\n') ? '\n' : '\n\n';
   return source + sep + block;
+}
+
+/**
+ * Matches one `[mcp_servers.<name>]` block, from its header to the next table
+ * header that is not one of its own sub-tables (e.g. [mcp_servers.<name>.env]),
+ * or to end-of-input. End-of-input must be spelled `(?![\s\S])`: JS has no `\z`,
+ * and under the `m` flag `$` only means end-of-line, which would truncate the
+ * match early.
+ */
+function codexBlockRe(name: string): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    String.raw`^\[mcp_servers\.${escaped}\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.${escaped}[.\]])|(?![\s\S]))`,
+    'm',
+  );
+}
+
+/**
+ * The text of one `[mcp_servers.<name>]` block, trimmed to the single trailing
+ * newline `renderCodexBlock` emits so the two forms compare directly — the
+ * splice pads a written block with a blank line to separate it from the next
+ * table.
+ */
+export function codexBlockIn(source: string, name: string): string | null {
+  const match = source.match(codexBlockRe(name));
+  return match === null ? null : match[0].trimEnd() + '\n';
 }
 
 /** Extract the names of all `[mcp_servers.X]` tables present in a config.toml. */
@@ -425,23 +443,29 @@ export function desiredMcpForTarget(
 }
 
 /**
- * The MCP server names already present in `target`'s own config file, or null
- * when the file exists and cannot be parsed — the same condition that makes the
- * write path abandon the injection rather than clobber a file it does not
- * understand.
+ * The MCP server entries already present in `target`'s own config file, in the
+ * same rendered form `desiredMcpForTarget` produces, or null when the file
+ * exists and cannot be parsed — the same condition that makes the write path
+ * abandon the injection rather than clobber a file it does not understand.
+ *
+ * Entries rather than names, because a name being present does not mean the
+ * team's server arrived: the appliers refuse to overwrite an entry teamai does
+ * not own, so an unrelated server of the same name leaves the key there and the
+ * team's definition undelivered. Only the value tells those two apart.
  *
  * Read-only. An MCP server is an entry inside a tool's config rather than a
  * file of its own, so this, not a destination path, is what "delivered" means.
  */
-export async function installedMcpServerNames(target: McpTarget): Promise<string[] | null> {
+export async function installedMcpEntries(target: McpTarget): Promise<Map<string, unknown> | null> {
   if (target.format === 'codex') {
     const raw = await readFileSafe(target.file);
-    return raw === null ? [] : codexServerNames(raw);
+    if (raw === null) return new Map();
+    return new Map(codexServerNames(raw).map((name) => [name, codexBlockIn(raw, name)]));
   }
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
   const doc = await readJsonDoc(target.file, serverKey, allowBare);
-  return doc === null ? null : Object.keys(doc.servers);
+  return doc === null ? null : new Map(Object.entries(doc.servers));
 }
 
 // ─── Main entry ──────────────────────────────────────────────

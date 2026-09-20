@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import { getDataHome, getMcpSharing, TEAMAI_ENV_START, TEAMAI_ENV_END } from './types.js';
 import type { ResourceItem } from './types.js';
@@ -337,7 +338,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
   const {
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
-    mcpTargetExcluded, installedMcpServerNames,
+    mcpTargetExcluded, installedMcpEntries,
   } = await import('./mcp-reconcile.js');
   const { parseTeamMcpServers } = await import('./resources/mcp.js');
 
@@ -358,12 +359,21 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       .map((change) => `${change.server} (${change.reason ?? 'skipped'})`);
 
     const problems: string[] = [];
-    const installed = await installedMcpServerNames(target);
+    const installed = await installedMcpEntries(target);
     if (installed === null) {
       problems.push(`${target.file} could not be parsed, so no server was injected`);
-    } else if (desired.size > 0) {
-      const absent = [...desired.keys()].filter((name) => !installed.includes(name));
+    } else {
+      const absent: string[] = [];
+      const foreign: string[] = [];
+      for (const [name, { entry }] of desired) {
+        if (!installed.has(name)) absent.push(name);
+        // An entry that is not the one teamai renders is not this server: the
+        // appliers leave an entry they do not own alone, so the name can be
+        // held by something else entirely, and a stale copy is equally undelivered.
+        else if (!isDeepStrictEqual(installed.get(name), entry)) foreign.push(name);
+      }
       if (absent.length > 0) problems.push(`not injected: ${nameList(absent)}`);
+      if (foreign.length > 0) problems.push(`not the team's definition: ${nameList(foreign)}`);
     }
     if (blocked.length > 0) problems.push(`skipped: ${nameList(blocked)}`);
 
@@ -375,7 +385,9 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       check: async () => problems.length === 0,
       fix: `In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
         + '`env/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
-        + 'parses as no variables at all. Then run `teamai pull --force`.',
+        + 'parses as no variables at all. Then run `teamai pull --force`: a pull leaves an entry '
+        + 'teamai does not own untouched, so a server of your own under a team name only gives '
+        + 'way to `--force`.',
     });
   }
 

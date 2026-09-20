@@ -93,10 +93,36 @@ describe('doctor — MCP servers delivered on disk', () => {
     await fse.remove(tempDir);
   });
 
-  it('passes when every desired server has an entry in the tool config', async () => {
-    await writeClaudeConfig({ docs: { command: 'docs-server' } });
+  it('passes when every desired server is installed as teamai renders it', async () => {
+    await writeClaudeConfig({ docs: { type: 'stdio', command: 'docs-server' } });
 
     expect(await (await mcpCheck()).check()).toBe(true);
+  });
+
+  it('passes when the installed entry differs only in key order', async () => {
+    await writeClaudeConfig({ docs: { command: 'docs-server', type: 'stdio' } });
+
+    expect(await (await mcpCheck()).check()).toBe(true);
+  });
+
+  it('fails when the name is held by a server teamai did not write', async () => {
+    // Exactly what reconciliation refuses to overwrite: the key is there, the
+    // team's server is not, and a plain pull skips it rather than clobber it.
+    await writeClaudeConfig({ docs: { type: 'stdio', command: 'my-own-docs-server' } });
+
+    const check = await mcpCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain("not the team's definition: docs");
+    expect(check.fix).toContain('--force');
+  });
+
+  it('fails when the installed entry is a stale copy of the team definition', async () => {
+    await writeClaudeConfig({ docs: { type: 'stdio', command: 'docs-server' } });
+    await writeTeamMcp('servers:\n  - name: docs\n    transport: stdio\n    command: docs-server-v2\n');
+
+    const check = await mcpCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain("not the team's definition: docs");
   });
 
   it('fails and names a desired server with no entry', async () => {
@@ -130,6 +156,23 @@ describe('doctor — MCP servers delivered on disk', () => {
     expect(names).not.toContain('MCP servers delivered to claude');
   });
 
+  it('compares codex blocks by their text, whatever spacing the file has', async () => {
+    teamConfig.toolPaths!.codex = { skills: '.codex/skills', mcp: '.codex/config.toml' };
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    const configToml = path.join(homeDir, '.codex', 'config.toml');
+    await fse.writeFile(
+      configToml,
+      '[mcp_servers.docs]\ncommand = "docs-server"\nargs = []\n\n\n[other]\nx = 1\n',
+    );
+
+    expect(await (await mcpCheck('codex')).check()).toBe(true);
+
+    await fse.writeFile(configToml, '[mcp_servers.docs]\ncommand = "someone-elses"\nargs = []\n');
+    const check = await mcpCheck('codex');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain("not the team's definition: docs");
+  });
+
   it('reports a tool config that cannot be parsed', async () => {
     await fse.writeFile(path.join(homeDir, '.claude.json'), '{ not json');
 
@@ -154,7 +197,7 @@ describe('doctor — MCP servers delivered on disk', () => {
   });
 
   it('never writes to the tool config it inspects', async () => {
-    await writeClaudeConfig({ docs: { command: 'docs-server' } });
+    await writeClaudeConfig({ docs: { type: 'stdio', command: 'docs-server' } });
     const file = path.join(homeDir, '.claude.json');
     const before = await fse.readFile(file, 'utf8');
 
