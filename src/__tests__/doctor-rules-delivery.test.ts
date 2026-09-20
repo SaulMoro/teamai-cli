@@ -34,6 +34,32 @@ describe('doctor — rules delivered on disk', () => {
 
   const CLAUDE_RULES = '.claude/rules';
   const CURSOR_RULES = '.cursor/rules';
+  const OPENCODE_RULES = '.config/opencode/rules';
+  const OPENCODE_CONFIG = '.config/opencode/opencode.json';
+
+  /** Make OpenCode an installed tool that receives rules in this scope. */
+  async function installOpencode(): Promise<void> {
+    teamConfig.toolPaths.opencode = {
+      rules: '.opencode/rules',
+      mcp: OPENCODE_CONFIG,
+      mcpProject: 'opencode.json',
+      userScope: { rules: OPENCODE_RULES },
+    };
+    await fse.ensureDir(path.join(homeDir, OPENCODE_RULES));
+    for (const name of ['coding-style', 'reviews']) {
+      await fse.writeFile(path.join(homeDir, OPENCODE_RULES, `${name}.md`), `Body of ${name}\n`);
+    }
+  }
+
+  async function writeOpencodeConfig(data: unknown): Promise<void> {
+    const file = path.join(homeDir, OPENCODE_CONFIG);
+    await fse.ensureDir(path.dirname(file));
+    await fse.writeFile(file, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+  }
+
+  async function namedCheck(name: string): Promise<Check | undefined> {
+    return (await checks()).find((c) => c.name === name);
+  }
 
   async function writeTeamRule(name: string, frontmatter = ''): Promise<void> {
     const file = path.join(repoPath, 'rules', `${name}.md`);
@@ -177,6 +203,92 @@ describe('doctor — rules delivered on disk', () => {
     await deliverPlain(CLAUDE_RULES, 'reviews');
 
     expect(await (await rulesCheck('claude')).check()).toBe(true);
+  });
+
+  it('fails when opencode.json does not reference the rules glob', async () => {
+    // Every `.md` is delivered byte for byte and OpenCode reads none of them:
+    // it does not scan a rules directory, so the files are inert until the
+    // glob in `instructions` points at them.
+    await installOpencode();
+    await writeOpencodeConfig({ instructions: [] });
+    await deliverPlain(CLAUDE_RULES, 'coding-style');
+    await deliverPlain(CLAUDE_RULES, 'reviews');
+    await deliverMdc('coding-style');
+    await deliverMdc('reviews');
+
+    expect(await (await rulesCheck('opencode')).check()).toBe(true);
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(active).toBeDefined();
+    expect(await active!.check()).toBe(false);
+    expect(active!.fix).toContain('rules/*.md');
+    expect(active!.fix).toContain('inert');
+  });
+
+  it('passes when opencode.json lists the rules glob beside the user\'s own', async () => {
+    await installOpencode();
+    await writeOpencodeConfig({ instructions: ['CONVENTIONS.md', 'rules/*.md'] });
+
+    expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
+  });
+
+  it('fails when opencode.json cannot be parsed, which is when the pull skipped it', async () => {
+    await installOpencode();
+    await writeOpencodeConfig('{ not json');
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(await active!.check()).toBe(false);
+    expect(active!.fix).toContain('could not be read');
+  });
+
+  it('emits no opencode activation check while opencode is not installed here', async () => {
+    expect(await namedCheck('Team rules are active in opencode')).toBeUndefined();
+  });
+
+  it('fails when the Hermes SOUL.md block is gone', async () => {
+    // Hermes has no rules directory: its rules are the contents of a managed
+    // block, so a deleted block is a tool reading none of the team's rules.
+    const hermesHome = path.join(tempDir, 'hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    await fse.writeFile(path.join(hermesHome, 'SOUL.md'), 'My own standing instructions\n');
+
+    const soul = await namedCheck('Team rules are inlined in Hermes SOUL.md');
+    expect(soul).toBeDefined();
+    expect(await soul!.check()).toBe(false);
+    expect(soul!.fix).toContain('carries no teamai rules block');
+  });
+
+  it('fails when the Hermes block holds a stale rule set', async () => {
+    const hermesHome = path.join(tempDir, 'hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    await fse.writeFile(
+      path.join(hermesHome, 'SOUL.md'),
+      '<!-- [teamai:rules:start] -->\nBody of coding-style\n<!-- [teamai:rules:end] -->\n',
+    );
+
+    const soul = await namedCheck('Team rules are inlined in Hermes SOUL.md');
+    expect(await soul!.check()).toBe(false);
+    expect(soul!.fix).toContain('not what the team rules inline to');
+  });
+
+  it('passes when the Hermes block holds every team rule body', async () => {
+    const hermesHome = path.join(tempDir, 'hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    await fse.writeFile(
+      path.join(hermesHome, 'SOUL.md'),
+      '<!-- [teamai:rules:start] -->\nBody of coding-style\n\nBody of reviews\n<!-- [teamai:rules:end] -->\n',
+    );
+
+    expect(await (await namedCheck('Team rules are inlined in Hermes SOUL.md'))!.check()).toBe(true);
+  });
+
+  it('emits no Hermes check while Hermes is not installed here', async () => {
+    vi.stubEnv('HERMES_HOME', path.join(tempDir, 'no-hermes'));
+
+    expect(await namedCheck('Team rules are inlined in Hermes SOUL.md')).toBeUndefined();
   });
 
   it('emits no check for a tool configured without a rules path', async () => {

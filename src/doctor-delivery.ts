@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
-import { getDataHome, getMcpSharing, TEAMAI_ENV_START, TEAMAI_ENV_END } from './types.js';
+import { getDataHome, getMcpSharing, isAgentExcluded, TEAMAI_ENV_START, TEAMAI_ENV_END } from './types.js';
 import type { DeliveryTarget, ResourceItem } from './types.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
@@ -199,12 +199,14 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
   if (items.length === 0) return [];
 
+  const activation = await buildRulesActivationChecks(ctx, items);
+
   // `pullItem` writes the handler's render byte for byte, so anything else at
   // that path is a stale or hand-edited copy. Cursor reads `globs` and
   // `alwaysApply` and Copilot reads `applyTo`; comparing against the render
   // catches a wrong value there, which checking the keys were present did not.
   const ruleLabels = ['not delivered', 'delivered from an older copy'] as const;
-  return [...(await walkDelivery(
+  const perTool: Check[] = [...(await walkDelivery(
     getHandler('rules'),
     ctx,
     items,
@@ -228,6 +230,90 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
       + '`globs`, `alwaysApply` or `applyTo` drifted from the team `.md` applies to the wrong '
       + 'files while looking perfectly well-formed.',
   }));
+
+  return [...activation, ...perTool];
+}
+
+/**
+ * The two rule destinations that are not a file per tool.
+ *
+ * OpenCode does not auto-scan its rules directory: a `.md` copied there is
+ * inert until `opencode.json` references it through the glob the pull owns.
+ * Hermes has no rules directory at all — its rules are inlined into a managed
+ * block of SOUL.md. Both are delivered by `pullAllRules` rather than by
+ * `pullItem`, so `deliveryTargets` cannot see them, and a per-file check
+ * passes over a tool that reads none of what it was given.
+ *
+ * They take the shape of the hook and MCP checks — one destination, not one
+ * per tool — rather than an invented entry in `deliveryTargets`.
+ */
+async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceItem[]): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+
+  const { RulesHandler, hermesRulesText } = await import('./resources/rules.js');
+  const handler = new RulesHandler();
+  const checks: Check[] = [];
+
+  const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig);
+  if (opencode !== null) {
+    const instructions = await readOpencodeInstructions(opencode.configFile);
+    const active = instructions !== null && instructions.includes(opencode.glob);
+    checks.push({
+      name: 'Team rules are active in opencode',
+      source: 'local',
+      check: async () => active,
+      fix: instructions === null
+        ? `${opencode.configFile} could not be read as a JSON object, so the pull left it alone `
+          + `and never added \`${opencode.glob}\` to \`instructions\`. Fix the file, then run `
+          + '`teamai pull --force`.'
+        : `${opencode.configFile} does not list \`${opencode.glob}\` under \`instructions\`. `
+          + 'OpenCode does not scan a rules directory, so every team rule delivered there is '
+          + 'inert until this glob references it. Run `teamai pull --force`: a plain pull skips '
+          + 'a scope whose team repo has not changed, so it cannot restore this.',
+    });
+  }
+
+  const { getHermesHome } = await import('./hermes-home.js');
+  const hermesHome = getHermesHome();
+  if (!isAgentExcluded(localConfig, 'hermes') && await pathExists(hermesHome)) {
+    const { getHermesSoulPath, readSoulRules } = await import('./hermes-config.js');
+    const expected = await hermesRulesText(items);
+    const delivered = await readSoulRules();
+    checks.push({
+      name: 'Team rules are inlined in Hermes SOUL.md',
+      source: 'local',
+      check: async () => delivered !== null && delivered === expected.trim(),
+      fix: delivered === null
+        ? `${getHermesSoulPath()} carries no teamai rules block, so Hermes reads none of the `
+          + 'team rules. Run `teamai pull --force`: a plain pull skips a scope whose team repo '
+          + 'has not changed, so it cannot restore this.'
+        : `The teamai block in ${getHermesSoulPath()} is not what the team rules inline to: `
+          + 'Hermes reads standing instructions from this file rather than a rules directory, '
+          + 'so a stale block is a stale rule set. Run `teamai pull --force` to rewrite it.',
+    });
+  }
+
+  return checks;
+}
+
+/**
+ * The `instructions` entries of an opencode.json, or null when the file is
+ * missing or is not a JSON object — the two cases in which the pull leaves it
+ * strictly alone and the glob never lands.
+ */
+async function readOpencodeInstructions(configFile: string): Promise<unknown[] | null> {
+  const raw = await readFileSafe(configFile);
+  if (raw === null) return null;
+  if (raw.trim() === '') return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const { instructions } = parsed as { instructions?: unknown };
+    return Array.isArray(instructions) ? instructions : [];
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -482,16 +568,19 @@ async function envDeliveryProblems(ctx: DoctorContext): Promise<string[]> {
   if (envSh === null) {
     problems.push(`${envShPath} is missing`);
   } else {
-    // Line by line against what the injection would write, value included: a
-    // key whose value changed in env.yaml exports the old one until the next
-    // pull rewrites the file, and every shell and MCP server reads that.
-    const lines = new Set(envSh.split('\n').map((line) => line.trim()));
+    // Read the file back through the generator's own inverse, value included:
+    // a key whose value changed in env.yaml exports the old one until the next
+    // pull rewrites the file, and every shell and MCP server reads that. It is
+    // a parse rather than a line scan because a value may be multiline — a
+    // YAML block scalar quotes into an export spanning several lines.
+    const { parseEnvFile } = await import('./resources/env.js');
+    const delivered = parseEnvFile(envSh);
     const undelivered: string[] = [];
     const stale: string[] = [];
     for (const variable of declared) {
-      if (lines.has(envHandler.generateEnvFile([variable]).trim())) continue;
-      if ([...lines].some((line) => line.startsWith(`export ${variable.key}=`))) stale.push(variable.key);
-      else undelivered.push(variable.key);
+      const value = delivered.get(variable.key);
+      if (value === undefined) undelivered.push(variable.key);
+      else if (value !== variable.value) stale.push(variable.key);
     }
     if (undelivered.length > 0) problems.push(`${envShPath} is missing ${nameList(undelivered)}`);
     if (stale.length > 0) {

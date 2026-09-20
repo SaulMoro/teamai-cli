@@ -299,13 +299,8 @@ export class RulesHandler extends ResourceHandler {
     if (!isAgentExcluded(localConfig, 'hermes')) {
       const { getHermesHome } = await import('../hermes-home.js');
       if (await pathExists(getHermesHome())) {
-        const bodies: string[] = [];
-        for (const rule of rules) {
-          const body = await readFileSafe(rule.sourcePath);
-          if (body && body.trim() !== '') bodies.push(body.trim());
-        }
         const { upsertSoulRules } = await import('../hermes-config.js');
-        await upsertSoulRules(bodies.join('\n\n'));
+        await upsertSoulRules(await hermesRulesText(rules));
       }
     }
 
@@ -417,29 +412,47 @@ export class RulesHandler extends ResourceHandler {
     localConfig: LocalConfig,
     present: boolean,
   ): Promise<void> {
-    if (isAgentExcluded(localConfig, 'opencode')) return;
-    const scoped = scopedToolPaths(teamConfig, localConfig);
-    const paths = scoped['opencode'];
-    if (!paths?.rules) return;
+    const target = await this.opencodeInstructionsTarget(teamConfig, localConfig);
+    if (target === null) return;
+
+    const { reconcileOpencodeInstructions } = await import('./opencode-config.js');
+    try {
+      await reconcileOpencodeInstructions(target.configFile, target.glob, present);
+    } catch (e) {
+      log.warn(`Failed to update OpenCode instructions in ${target.configFile}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * The opencode.json this scope activates rules through, and the one glob
+   * teamai owns inside it. Null when OpenCode receives no rules here:
+   * excluded, not installed, or configured without a rules or config path.
+   *
+   * Read-only, and public for the same reason `deliveryTargets` is: OpenCode
+   * does not auto-scan its rules directory, so a `.md` sitting there is inert
+   * until this glob references it. A check that derived the path a second time
+   * could look at a different file than the pull writes (#624).
+   */
+  async opencodeInstructionsTarget(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+  ): Promise<{ configFile: string; glob: string } | null> {
+    if (isAgentExcluded(localConfig, 'opencode')) return null;
+    const paths = scopedToolPaths(teamConfig, localConfig)['opencode'];
+    if (!paths?.rules) return null;
 
     const baseDir = resolveBaseDir(localConfig);
     // Only touch opencode.json when OpenCode is actually installed for this scope.
-    if (!await ResourceHandler.isToolInstalled(paths.rules, baseDir)) return;
+    if (!await ResourceHandler.isToolInstalled(paths.rules, baseDir)) return null;
 
     // The config file mirrors the MCP scope fields: <root>/opencode.json in
     // project scope, ~/.config/opencode/opencode.json in user scope.
     const configRel = localConfig.scope === 'project' ? paths.mcpProject : paths.mcp;
-    if (!configRel) return;
-    const configFileAbs = path.join(baseDir, configRel);
-    const rulesDirAbs = path.join(baseDir, paths.rules);
+    if (!configRel) return null;
 
-    const { reconcileOpencodeInstructions, opencodeRulesGlob } = await import('./opencode-config.js');
-    const glob = opencodeRulesGlob(configFileAbs, rulesDirAbs);
-    try {
-      await reconcileOpencodeInstructions(configFileAbs, glob, present);
-    } catch (e) {
-      log.warn(`Failed to update OpenCode instructions in ${configFileAbs}: ${(e as Error).message}`);
-    }
+    const configFile = path.join(baseDir, configRel);
+    const { opencodeRulesGlob } = await import('./opencode-config.js');
+    return { configFile, glob: opencodeRulesGlob(configFile, path.join(baseDir, paths.rules)) };
   }
 
   /**
@@ -474,4 +487,21 @@ function renderRuleForTool(tool: string, source: string): string {
   if (usesCursorMdcRules(tool)) return teamRuleToCursorMdc(source);
   if (usesCopilotInstructions(tool)) return teamRuleToCopilotInstructions(source);
   return source;
+}
+
+/**
+ * The text `upsertSoulRules` inlines into the teamai block of Hermes SOUL.md.
+ *
+ * Hermes reads standing instructions from one file rather than a rules
+ * directory, so its rules are delivered as this block's contents. `doctor`
+ * compares what is in the block with this, the same way it compares a rule
+ * file with its render.
+ */
+export async function hermesRulesText(rules: ResourceItem[]): Promise<string> {
+  const bodies: string[] = [];
+  for (const rule of rules) {
+    const body = await readFileSafe(rule.sourcePath);
+    if (body && body.trim() !== '') bodies.push(body.trim());
+  }
+  return bodies.join('\n\n');
 }
