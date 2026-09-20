@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import { getDataHome, getMcpSharing, TEAMAI_ENV_START, TEAMAI_ENV_END } from './types.js';
 import type { DeliveryTarget, ResourceItem } from './types.js';
-import { usesCursorMdcRules, usesCopilotInstructions } from './resources/rule-format.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
@@ -182,28 +181,6 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
 }
 
 /**
- * Whether a delivered rule is one its tool can actually apply. Cursor-compatible
- * tools and Copilot read machine-derived frontmatter — `globs`/`alwaysApply` and
- * `applyTo` — so a copy that landed without it is inert, the same class of
- * failure as a skill whose SKILL.md an agent cannot discover. A plain `.md` copy
- * carries no such contract and only has to be readable.
- */
-async function ruleIsApplicable(tool: string, dest: string): Promise<boolean> {
-  const content = await readFileSafe(dest);
-  if (content === null) return false;
-
-  if (usesCursorMdcRules(tool)) {
-    const { data, valid } = splitFrontmatter(content);
-    return valid && data.alwaysApply !== undefined;
-  }
-  if (usesCopilotInstructions(tool)) {
-    const { data, valid } = splitFrontmatter(content);
-    return valid && typeof data.applyTo === 'string' && data.applyTo.length > 0;
-  }
-  return true;
-}
-
-/**
  * Build one delivery check per tool that receives rules: every rule the member
  * should have, against what is on disk for that tool.
  *
@@ -222,15 +199,21 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
   if (items.length === 0) return [];
 
+  // `pullItem` writes the handler's render byte for byte, so anything else at
+  // that path is a stale or hand-edited copy. Cursor reads `globs` and
+  // `alwaysApply` and Copilot reads `applyTo`; comparing against the render
+  // catches a wrong value there, which checking the keys were present did not.
+  const ruleLabels = ['not delivered', 'delivered from an older copy'] as const;
   return [...(await walkDelivery(
     getHandler('rules'),
     ctx,
     items,
-    async ({ tool, dest }) => {
-      if (!await isReadableFile(dest)) return 'not delivered';
-      return await ruleIsApplicable(tool, dest)
-        ? null
-        : `delivered without the frontmatter ${tool} reads`;
+    async ({ dest, content }) => {
+      // readFileSafe answers both questions at once: a directory or a dangling
+      // link on the name reads as null, the same as nothing being there.
+      const delivered = await readFileSafe(dest);
+      if (delivered === null) return ruleLabels[0];
+      return content === undefined || delivered === content ? null : ruleLabels[1];
     },
   )).byTool].map(([tool, delivery]) => ({
     name: `Rules delivered to ${tool}`,
@@ -238,10 +221,12 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
     check: async () => delivery.problems.size === 0,
     // The fix names the directory rather than the tool: a rule's delivered
     // filename carries a per-tool extension the reader would have to derive.
-    fix: `In ${delivery.dir}, `
-      + `${describeProblems(delivery.problems, ['not delivered', `delivered without the frontmatter ${tool} reads`])}. `
+    fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ruleLabels)}. `
       + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + 'so it cannot restore this.',
+      + 'so it cannot restore this. An older copy is one whose bytes are no longer what teamai '
+      + `renders for ${tool}, frontmatter included: a \`.mdc\` or \`.instructions.md\` whose `
+      + '`globs`, `alwaysApply` or `applyTo` drifted from the team `.md` applies to the wrong '
+      + 'files while looking perfectly well-formed.',
   }));
 }
 
@@ -286,7 +271,7 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
     items,
     // `pullItem` writes `content` verbatim, so anything else at that path is a
     // render of an older spec — a copy that landed and is still wrong, the
-    // same class as a rule delivered without the frontmatter its tool reads.
+    // same class as a rule whose delivered copy no longer matches its render.
     async ({ dest, content }) => {
       // readFileSafe answers both questions at once: a directory or a dangling
       // link on the name reads as null, the same as nothing being there.

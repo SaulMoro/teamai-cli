@@ -141,7 +141,35 @@ describe('doctor — rules delivered on disk', () => {
 
     const cursor = await rulesCheck('cursor');
     expect(await cursor.check()).toBe(false);
-    expect(cursor.fix).toContain('delivered without the frontmatter cursor reads: reviews');
+    expect(cursor.fix).toContain('delivered from an older copy: reviews');
+  });
+
+  it('reports a .mdc whose globs no longer match the team rule', async () => {
+    // The frontmatter fields are all present and `alwaysApply` is a legal
+    // value, so checking that the keys exist calls this delivered. Cursor
+    // applies it to `**/*.py` while the team rule says `**/*.ts`.
+    await writeTeamRule('reviews', '---\npaths:\n  - "**/*.ts"\n---\n');
+    await deliverPlain(CLAUDE_RULES, 'coding-style');
+    await deliverPlain(CLAUDE_RULES, 'reviews');
+    await deliverMdc('coding-style');
+    await deliverMdc('reviews', '---\nglobs: "**/*.py"\nalwaysApply: false\n---\n\n');
+
+    const cursor = await rulesCheck('cursor');
+    expect(await cursor.check()).toBe(false);
+    expect(cursor.fix).toContain('delivered from an older copy: reviews');
+  });
+
+  it('reports a .md copy whose body drifted from the team rule', async () => {
+    await deliverPlain(CLAUDE_RULES, 'coding-style');
+    const drifted = path.join(homeDir, CLAUDE_RULES, 'reviews.md');
+    await fse.ensureDir(path.dirname(drifted));
+    await fse.writeFile(drifted, 'Something else entirely\n');
+    await deliverMdc('coding-style');
+    await deliverMdc('reviews');
+
+    const claude = await rulesCheck('claude');
+    expect(await claude.check()).toBe(false);
+    expect(claude.fix).toContain('delivered from an older copy: reviews');
   });
 
   it('treats a plain .md rule as applicable without frontmatter', async () => {
