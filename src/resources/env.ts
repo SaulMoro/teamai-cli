@@ -23,6 +23,11 @@ const EnvYamlSchema = z.object({
 export type EnvVariable = z.infer<typeof EnvVariableSchema>;
 export type EnvYaml = z.infer<typeof EnvYamlSchema>;
 
+/** A parsed env.yaml, or the reason it declares nothing. See `readEnvYaml`. */
+export type EnvYamlRead =
+  | { ok: true; variables: EnvVariable[] }
+  | { ok: false; reason: string };
+
 /**
  * Mask an env variable value for display.
  * Shows first 2 chars + "****", or "****" for very short values.
@@ -198,15 +203,45 @@ export class EnvHandler extends ResourceHandler {
    * Parse the env.yaml file and return variables.
    */
   async parseEnvYaml(filePath: string): Promise<EnvYaml> {
-    const content = await readFileSafe(filePath);
-    if (!content) return { variables: [] };
+    const read = await this.readEnvYaml(filePath);
+    return { variables: read.ok ? read.variables : [] };
+  }
 
+  /**
+   * Parse env/env.yaml, keeping the reason a file yielded no variables.
+   *
+   * `parseEnvYaml` answers `[]` to four different files: absent, empty,
+   * `variables: []`, and a shorthand `KEY: value` mapping whose unknown
+   * top-level key zod drops (#662). Only the last is broken, so a caller that
+   * reports on the count alone either misses the bug or calls a deliberately
+   * empty configuration malformed (#624 review).
+   */
+  async readEnvYaml(filePath: string): Promise<EnvYamlRead> {
+    const content = await readFileSafe(filePath);
+    if (content === null) return { ok: true, variables: [] };
+
+    let raw: unknown;
     try {
-      const raw = YAML.parse(content);
-      return EnvYamlSchema.parse(raw);
-    } catch {
-      return { variables: [] };
+      raw = YAML.parse(content);
+    } catch (e) {
+      return { ok: false, reason: `${filePath} is not valid YAML: ${(e as Error).message}` };
     }
+    // An empty document is a file with nothing to deliver, not a broken one.
+    if (raw === null || raw === undefined) return { ok: true, variables: [] };
+
+    if (typeof raw !== 'object' || Array.isArray(raw) || !('variables' in raw)) {
+      return {
+        ok: false,
+        reason: `${filePath} declares no variables. Its top-level key must be \`variables:\`, a list `
+          + 'of `key`/`value` entries — a plain `KEY: value` mapping parses as an empty list',
+      };
+    }
+
+    const parsed = EnvYamlSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, reason: `${filePath} does not match the env.yaml schema: ${parsed.error.message}` };
+    }
+    return { ok: true, variables: parsed.data.variables };
   }
 
   /**

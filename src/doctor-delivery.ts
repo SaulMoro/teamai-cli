@@ -461,24 +461,18 @@ async function envDeliveryProblems(ctx: DoctorContext): Promise<string[]> {
 
   const { EnvHandler } = await import('./resources/env.js');
   const envHandler = new EnvHandler();
-  const declared = (await envHandler.parseEnvYaml(envYamlPath)).variables;
 
+  // The handler distinguishes a file that parses from one that does not, so a
+  // shorthand `KEY: value` mapping is reported (#662) while a deliberate
+  // `variables: []` is not. Counting the variables alone cannot tell them apart.
+  const read = await envHandler.readEnvYaml(envYamlPath);
+  if (!read.ok) return [read.reason];
+
+  const declared = read.variables;
   const problems: string[] = [];
 
-  // A file with content that yields no variables is the shorthand `KEY: value`
-  // form: zod drops the unknown top-level key and defaults `variables` to [],
-  // so the pull writes nothing and says nothing (#662).
-  const raw = await readFileSafe(envYamlPath);
-  if (declared.length === 0) {
-    if (raw !== null && raw.trim() !== '') {
-      problems.push(
-        `${envYamlPath} declares no variables. Its top-level key must be \`variables:\`, a list of `
-        + '`key`/`value` entries — a plain `KEY: value` mapping parses as an empty list',
-      );
-    }
-    // Nothing declared and nothing malformed: there is nothing to deliver.
-    return problems;
-  }
+  // Nothing declared and nothing malformed: there is nothing to deliver.
+  if (declared.length === 0) return problems;
 
   // env.sh lives under teamaiHome, which is <projectRoot>/.teamai in project
   // scope and ~/.teamai in user scope — mirror the path that `teamai pull`

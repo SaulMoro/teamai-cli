@@ -130,6 +130,28 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).toContain('variables:');
   });
 
+  it('passes for an env.yaml that declares `variables: []` on purpose', async () => {
+    // Nothing is owed, so nothing can be undelivered. This parses correctly
+    // and is a deliberately empty configuration, not the shorthand form.
+    await writeEnvYaml('variables: []\n');
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
+
+  it('passes for an empty env.yaml', async () => {
+    await writeEnvYaml('');
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
+
+  it('fails and names the file when env.yaml is not valid YAML', async () => {
+    await writeEnvYaml('variables:\n  - key: A\n   value: bad indent\n');
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain(path.join(repoPath, 'env', 'env.yaml'));
+  });
+
   it('fails when env.sh still exports the value env.yaml replaced', async () => {
     await writeEnvSh("export JIRA_PASSWORD='rotated-away'\n");
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
