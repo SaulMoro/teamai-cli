@@ -733,6 +733,12 @@ export interface McpServerDef {
   tools?: string[];
   /** Restrict to members holding one of these role ids (default = every member; [] = nobody). */
   roles?: string[];
+  /**
+   * Restrict to directories bound to one of these logical project ids (default =
+   * every directory; [] = nobody). ANDs with `roles`: a server scoping both
+   * reaches members who match both.
+   */
+  projects?: string[];
 }
 
 /** One injected MCP server recorded in the manifest. */
