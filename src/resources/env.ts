@@ -324,6 +324,19 @@ export class EnvHandler extends ResourceHandler {
   }
 
   /**
+   * How many of the declared variables actually reach this member and directory.
+   *
+   * Separate from `countEnvVars`, which answers what the TEAM declares and gates
+   * the #662 shape probe. This one is what the pull summary line reports, so a
+   * member scoped to one of three variables is not told three were synced.
+   */
+  async countDeliverableEnvVars(sourcePath: string, localConfig: LocalConfig): Promise<number> {
+    const read = await this.readEnvYaml(sourcePath);
+    if (!read.ok) return 0;
+    return resolveDeliverableEnvVariables(read.variables, resolveMembership(localConfig)).length;
+  }
+
+  /**
    * Read an env.yaml and report the shape problem `describeEnvYamlShapeProblem`
    * detects, or `null` when the file yields a usable shape.
    *

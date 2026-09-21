@@ -1069,12 +1069,21 @@ async function pullForScope(
         continue;
       }
 
+      // What the team declares (`varCount`, above) is not what reaches this
+      // member: a variable can carry `roles:`/`projects:`. Report the delivered
+      // number, and name the declared one when they differ so a member who
+      // expected a variable can see it was scoped away rather than lost.
+      const deliverable = await envHandler.countDeliverableEnvVars(items[0].sourcePath, localConfig);
+      const countLabel = deliverable === varCount
+        ? `${varCount} env variable(s)`
+        : `${deliverable} of ${varCount} env variable(s)`;
+
       if (options.dryRun) {
-        log.info(`[${scopeLabel}] [dry-run] Would sync ${varCount} env variable(s)`);
+        log.info(`[${scopeLabel}] [dry-run] Would sync ${countLabel}`);
       } else {
         await envHandler.pullItem(items[0], freshConfig, localConfig);
         const teamaiHome = getDataHome(localConfig);
-        log.success(`[${scopeLabel}] Synced ${varCount} env variable(s) to ${teamaiHome}/env.sh`);
+        log.success(`[${scopeLabel}] Synced ${countLabel} to ${teamaiHome}/env.sh`);
       }
       totalSynced += 1;
       continue;

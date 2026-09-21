@@ -239,6 +239,21 @@ scope: 'user',
       expect(count).toBe(0);
     });
 
+    it('reports the deliverable count separately, for the pull summary line', async () => {
+      const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
+      await fse.writeFile(envYamlPath, YAML.stringify({
+        variables: [
+          { key: 'A', value: '1', projects: ['checkout'] },
+          { key: 'B', value: '2', projects: ['billing'] },
+          { key: 'C', value: '3' },
+        ],
+      }));
+
+      expect(await handler.countEnvVars(envYamlPath)).toBe(3);
+      expect(await handler.countDeliverableEnvVars(envYamlPath, { ...localConfig, projects: ['checkout'] })).toBe(2);
+      expect(await handler.countDeliverableEnvVars(envYamlPath, localConfig)).toBe(3);
+    });
+
     it('counts what the team declares, not what reaches this member', async () => {
       // countEnvVars gates the #662 "no variables: key" warning in pull.ts: a
       // count of 0 means the file may be malformed. Filtering it would fire that
