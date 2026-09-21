@@ -616,6 +616,75 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai-share-learnings'))).toBe(false);
   });
 
+  it('removes the references an earlier release deployed beside the stub', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://git.woa.com/test/repo.git',
+      provider: 'tgit' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { claude: { skills: '.claude/skills' } },
+    };
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://git.woa.com/test/repo.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+    };
+
+    // What `teamai pull` wrote before the stub: the same directory name, with a
+    // references tree the new deployment does not ship.
+    const stubDir = path.join(homeDir, '.claude/skills/teamai');
+    await fse.ensureDir(path.join(stubDir, 'references'));
+    await fse.writeFile(path.join(stubDir, 'SKILL.md'), '# old body');
+    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), '# old reference');
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    expect(await fse.readdir(stubDir)).toEqual(['SKILL.md']);
+    expect(await fse.readFile(path.join(stubDir, 'SKILL.md'), 'utf8')).toBe(
+      await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8'),
+    );
+  });
+
+  it('prunes legacy skills from the Codex shared directory, and without deploying in reporting-only mode', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    const sharedLegacy = path.join(homeDir, '.agents/skills/team-wiki-codebase');
+    await fse.ensureDir(sharedLegacy);
+    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), '# old');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://example.test/team.git',
+      provider: 'git' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { codex: { skills: '.codex/skills' } },
+    };
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://example.test/team.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+    };
+
+    // Reporting-only teams have nowhere to publish, so nothing is deployed —
+    // but a team that switched to it would otherwise keep the legacy trees.
+    const deployed = await deployBuiltinSkills(teamConfig, localConfig, { reportingOnly: true });
+
+    expect(deployed).toBe(0);
+    expect(await fse.pathExists(sharedLegacy)).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.agents/skills/teamai'))).toBe(false);
+  });
+
   it('deploys a built-in Codex skill to its existing shared location', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
     const sharedSkill = path.join(homeDir, '.agents', 'skills', 'teamai');

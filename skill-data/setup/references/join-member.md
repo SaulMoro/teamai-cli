@@ -138,7 +138,7 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
    tool keeps their team skills up to date; no commands needed.
 2. **Sharing a session learning is automatic — no command to remember.** When a
    session produced something worth sharing, TeamAI **prompts them on its own** (at
-   the end of the session) and the `teamai-share-learnings` skill takes over to
+   the end of the session) and the `share` workflow (`teamai skill get share`) takes over to
    summarize and contribute it. They do **not** invoke `/teamai` for this. (This
    prompt only appears if the admin left team sharing enabled — it is on by
    default; the admin can turn it off in `teamai.yaml`.)

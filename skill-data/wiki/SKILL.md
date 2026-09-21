@@ -80,7 +80,7 @@ Step 3：根据 current_phase 跳转：
 
 ## Update 模式（增量更新）
 
-**触发**：`/team-wiki-codebase --update` 或「增量更新」。
+**触发**：用户要求「增量更新」，或在本 skill 中指定 `--update` 模式。
 **前提**：已有 completed 状态的 progress.json。
 
 ```

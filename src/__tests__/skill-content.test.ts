@@ -283,6 +283,26 @@ describe('teamai skill get / path against the shipped package', () => {
   });
 });
 
+describe('the shipped skill-data content', () => {
+  it('names every skill after its directory, and declares allowed-tools', async () => {
+    for (const skill of await listServableSkills()) {
+      const text = fs.readFileSync(path.join(skill.dir, 'SKILL.md'), 'utf8');
+      // A frontmatter name that disagrees with the directory makes the skill
+      // undiscoverable for the agent and unresolvable for `skill get`.
+      expect(text, skill.name).toMatch(new RegExp(`^name: ${skill.name}$`, 'm'));
+      // Content loaded as text inherits no permissions, so each skill declares
+      // the commands it tells the agent to run.
+      expect(text, skill.name).toMatch(/^allowed-tools: .*Bash\(teamai:\*\)/m);
+    }
+  });
+
+  it('keeps the deployed stub declaring its own name and tools', () => {
+    const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
+    expect(stub).toMatch(/^name: teamai$/m);
+    expect(stub).toMatch(/^allowed-tools: Bash\(teamai:\*\), Bash\(npx teamai-cli:\*\)$/m);
+  });
+});
+
 describe('npm package contents', () => {
   // The whole design fails silently when skill-data/ is missing from
   // package.json "files": every test above still passes against the repo, and

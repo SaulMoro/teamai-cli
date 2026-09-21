@@ -24,8 +24,8 @@ Install: `npm i -g teamai-cli` (Node.js >= 20)
 This file is a discovery stub, not the usage guide. Load the workflow from the CLI before running anything, so the instructions match the installed version:
 
 ```bash
-teamai skill get core             # daily work: pull, push, status, doctor, command reference
-teamai skill get core --full      # adds troubleshooting
+teamai skill get core             # daily work: routing, pull, push, status, doctor
+teamai skill get core --full      # adds the full command reference and troubleshooting
 ```
 
 The CLI serves skill content that always matches the installed version, so instructions never go stale. The content in this stub cannot change between releases, which is why it just points at `skill get`.

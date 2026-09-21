@@ -9,7 +9,7 @@ team"* / *"把这个 xxx skill 分享给团队"* — then you run the publish fo
 
 - **A learning** (a lesson, a gotcha, how you solved something) → this is
   **automatic**: TeamAI prompts at the end of a session worth sharing and the
-  dedicated **`teamai-share-learnings`** skill takes over (it summarizes the
+  dedicated `share` workflow (`teamai skill get share`) takes over (it summarizes the
   session and runs `teamai contribute`). The user does not come through this flow
   for it. (Step A below is only a manual fallback for when that skill isn't
   available.)
@@ -18,7 +18,7 @@ team"* / *"把这个 xxx skill 分享给团队"* — then you run the publish fo
 
 ## Step A — Contribute a learning by hand (fallback only)
 
-> Prefer the **`teamai-share-learnings`** skill. Use these manual steps only if it
+> Prefer the `share` workflow (`teamai skill get share`). Use these manual steps only if it
 > is unavailable in the current tool.
 
 1. Write a short Markdown doc that captures the lesson. Keep it concrete and
@@ -54,7 +54,7 @@ The doc lands in the team's `learnings/` and appears for teammates on their next
 `teamai pull`. It is also searchable via `teamai recall`.
 
 > Tip: if there is a dedicated learnings skill available in this tool
-> (`teamai-share-learnings`), you can use it to auto-summarize the current session
+> (`teamai skill get share`), you can use it to auto-summarize the current session
 > instead of writing the doc by hand.
 
 ## Step B — Contribute a reusable skill

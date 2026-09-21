@@ -17,7 +17,7 @@ service_map:      服务名→仓库映射表（用于跨仓库追踪调用链�
 output_dir:       知识库输出根目录
 project_name:     项目名称（用于文档命名，如 "CVM"）
 product_docs_dir: 产品文档目录（可为空，空则跳过产品约束提取）
-methodology_dir:  references/methodology/ 目录路径
+methodology_dir:  {SKILL_DIR}/references/methodology/ 目录路径
 completed_docs:   已完成的文档列表（断点恢复时跳过）
 parallel_mode:    true | false（默认 true；Type-4 组件文档并行，Type-1~3/5~8 串行）
 ```

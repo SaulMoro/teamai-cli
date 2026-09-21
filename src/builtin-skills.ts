@@ -91,10 +91,12 @@ async function pruneLegacyBuiltinSkills(tool: string, configuredSkillsPath: stri
  */
 export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { reportingOnly?: boolean }): Promise<number> {
   // Reporting-only HTTP mode has no team repo to write to, so the workflows the
-  // stub routes to are non-functional there. Skip built-in skills entirely.
-  if (options?.reportingOnly) {
-    log.debug('Reporting-only mode (no team repo): skipping built-in skills');
-    return 0;
+  // stub routes to are non-functional there. Nothing is deployed, but the
+  // directories earlier releases left behind are still removed: a team that
+  // switched to reporting-only would otherwise keep them for good.
+  const deploy = !options?.reportingOnly;
+  if (!deploy) {
+    log.debug('Reporting-only mode (no team repo): pruning legacy built-in skills without deploying');
   }
 
   const builtinDir = packagedSkillRoots().deployRoot;
@@ -120,7 +122,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
     }
   }
 
-  if (skillNames.length === 0) return 0;
+  if (deploy && skillNames.length === 0) return 0;
 
   const defaultBaseDir = getUserHome();
   let deployed = 0;
@@ -137,9 +139,13 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
       log.debug(`Skipping built-in skill deployment for ${tool}: tool not installed`);
       continue;
     }
+    // An excluded agent is neither written to nor deleted from (usage-guide:
+    // "the enabledAgents whitelist also gates CLI built-in skills"), so its
+    // legacy directories are left alone too.
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
 
     await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir);
+    if (!deploy) continue;
 
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);
@@ -147,6 +153,15 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
 
       try {
         await fse.ensureDir(destDir);
+        // Releases before the discovery stub deployed this same directory with a
+        // references/ tree beside SKILL.md. Copying one file over it would leave
+        // ~39 KB of pre-stub instructions in place forever, so everything the
+        // deployed unit does not contain goes first.
+        for (const entry of await fs.promises.readdir(destDir)) {
+          if (entry === 'SKILL.md') continue;
+          await remove(path.join(destDir, entry));
+          log.debug(`Removed stale built-in skill file ${skillName}/${entry} from ${tool}`);
+        }
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
 
         deployed++;
