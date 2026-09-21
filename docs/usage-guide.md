@@ -744,6 +744,27 @@ teamai env list
 teamai push
 ```
 
+Variables live in the team repo's `env/env.yaml`. `teamai env add` writes the first three fields; `roles` and `projects` are hand-edited, as they are for hooks and MCP servers:
+
+```yaml
+variables:
+  - key: API_ENDPOINT
+    value: https://api.example.com
+    description: Team API endpoint        # optional
+  - key: CHECKOUT_DB_URL
+    value: https://checkout-db.internal
+    projects: [checkout]                  # optional; default is every directory
+  - key: DEPLOY_REGISTRY
+    value: registry.internal
+    roles: [devops]                       # optional; default is every member
+```
+
+`roles` and `projects` follow the same rule as on MCP servers and hooks: omitted reaches everyone, `[]` reaches nobody, an axis the member has not configured filters nothing, and the two compose as **AND**. A variable that no longer matches is removed from `env.sh` on the next pull, so changing role or running `teamai projects set` takes it out of the member's shell. `teamai env add` on an existing key keeps whatever `roles:`/`projects:` it already carries.
+
+`pull` reports what reached this member, naming the declared total when the two differ (`Synced 1 of 3 env variable(s)`), so a variable that was scoped away is distinguishable from one that was lost.
+
+Because the shell profile holds a single teamai block pointing at one `env.sh`, a machine that pulls in several project-scoped directories ends up with the last-pulled directory's variables in new shells. Each directory's own `env.sh` stays correct; it is the shell profile that can only point at one of them.
+
 On `pull`, when `injectShellProfile` is enabled (default), the env block goes into `~/.zshrc` if `$SHELL` is zsh, otherwise `~/.bashrc` — except on Windows: `$SHELL` is normally unset there, and Git Bash starts as a *login* shell that never reads `.bashrc`, so teamai instead prefers an existing `~/.bash_profile`, then `~/.bash_login`, then `~/.profile`, falling back to `~/.bashrc` only when none of them exist (a zsh installed via MSYS2/Cygwin, which does set `$SHELL`, still resolves to `.zshrc`). This matches Git for Windows' own fallback in `/etc/profile.d/bash_profile.sh`, whose guard is `[ -e ~/.bashrc -a ! -e ~/.bash_profile -a ! -e ~/.bash_login -a ! -e ~/.profile ]` — it only synthesizes a `.bash_profile` that sources `.bashrc` in that same one case, which is why a stray `~/.profile` (even one that just sources something else, e.g. `~/.local/bin/env`) is enough to make `.bashrc` alone go unread. Override the target file with `sharing.env.shellProfilePath` in `teamai.yaml`.
 
 This preference order only decides where a *first* pull writes. Every pull after that sticks to whichever candidate already carries this scope's block, rather than re-running the order — otherwise Git for Windows' own bootstrap would move the target out from under it: the same `/etc/profile.d/bash_profile.sh` guard above also means that first pull satisfies its condition (`.bashrc` now exists, nothing else does yet), so the next Git Bash login shell auto-generates a `~/.bash_profile` that sources it. Without sticking to `.bashrc`, the next pull would prefer that newly-created file and inject a second block there, leaving the original — still working, just loaded one hop further away — reported as a dead leftover.
@@ -777,11 +798,18 @@ servers:
     requires: [npx]                      # skipped with a hint when npx is absent from PATH
     tools: [claude, cursor]              # optional; default is every capable tool
     roles: [devops]                      # optional; default is every member
+    projects: [checkout]                 # optional; default is every directory
 ```
 
 `requires` is resolved from `PATH`. On Windows a name also matches a `PATHEXT` suffix (`uvx` matches `uvx.exe` / `uvx.cmd`).
 
 `roles` lists role ids from `manifest/roles.yaml`. A server ships to a member when one of their roles (`primaryRole` or `additionalRoles`) is listed; `roles: []` ships to nobody, the same way `tools: []` does. A member with no role configured receives every server, matching the unfiltered fallback skills and rules use. When a member changes role, servers that no longer match are removed on the next pull. Hand-added servers are never touched. An id that is not in `roles.yaml` produces one warning per pull. A teamai release older than this field ignores it and installs the server for everyone.
+
+`projects` lists project ids from `manifest/projects.yaml` and follows the same rule on the other axis: a server ships to a directory when one of the projects it is bound to (`teamai projects set`) is listed; `projects: []` ships to nobody; a directory bound to no project receives every server. `teamai projects set` to another project removes the ones that no longer match on the next pull. An id that is not in `projects.yaml` produces one warning per pull, and so does a `projects:` key in a team that has no `projects.yaml` at all — there the key restricts nothing and every member receives the server.
+
+The two axes are independent and compose as **AND**: `roles: [frontend]` with `projects: [checkout]` reaches frontend members of checkout, not everyone on either. That is the same way `tools:` and `roles:` already compose, and deliberately not the union that role and project *resource namespaces* take — which answers the different question of which directories to sync.
+
+This is the cost these keys exist to control: a team with five projects and three servers each gives every member of a role fifteen server processes and fifteen tool lists in the context of every session.
 
 Where each tool's servers land:
 
@@ -1396,6 +1424,7 @@ hooks:
     timeout: 15
     tools: [claude, cursor]
     roles: [devops]                      # optional; default is every member
+    projects: [checkout]                 # optional; default is every directory
 
 builtin:
   disabled: [Hook dispatch post-tool-use TodoWrite]
@@ -1410,6 +1439,7 @@ builtin:
 | `matcher` | Optional tool matcher |
 | `tools` | Optional list of target tools (default = all tools that support hooks) |
 | `roles` | Optional list of role ids from `manifest/roles.yaml` (default = every member; `[]` = nobody). Applied before the security gates below; a role change removes the previous role's hooks on the next pull. Ignored by older teamai releases. |
+| `projects` | Optional list of project ids from `manifest/projects.yaml` (default = every directory; `[]` = nobody). Matches the projects this directory is bound to via `teamai projects set`; a rebind removes the previous project's hooks on the next pull. ANDs with `roles`. Ignored by older teamai releases. |
 | `builtin.disabled` | List of disabled built-in hooks |
 | `builtin.overrides` | Only the `timeout` of a built-in hook can be overridden |
 

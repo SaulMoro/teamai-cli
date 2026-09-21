@@ -717,6 +717,27 @@ teamai env list
 teamai push
 ```
 
+变量定义在团队仓库的 `env/env.yaml` 中。`teamai env add` 只写入前三个字段；`roles` 与 `projects` 需要手动编辑，与 hooks、MCP server 一致：
+
+```yaml
+variables:
+  - key: API_ENDPOINT
+    value: https://api.example.com
+    description: 团队 API 地址              # 可选
+  - key: CHECKOUT_DB_URL
+    value: https://checkout-db.internal
+    projects: [checkout]                  # 可选；默认所有目录
+  - key: DEPLOY_REGISTRY
+    value: registry.internal
+    roles: [devops]                       # 可选；默认所有成员
+```
+
+`roles` 与 `projects` 的规则与 MCP server、hooks 完全一致：省略时对所有人生效，`[]` 对任何人都不生效，成员未配置的那个维度不产生过滤，两者以 **AND** 组合。不再匹配的变量会在下一次 pull 时从 `env.sh` 中移除，因此切换角色或执行 `teamai projects set` 会把它从成员的 shell 中撤掉。对已存在的 key 执行 `teamai env add` 会保留它原有的 `roles:`/`projects:`。
+
+`pull` 报告的是实际送达该成员的数量，与声明总数不同时会同时给出总数（`Synced 1 of 3 env variable(s)`），以便区分"被维度过滤掉"和"丢失"。
+
+由于 shell 配置文件中只有一个 teamai 区块、只指向一个 `env.sh`，在多个项目级目录中都执行过 pull 的机器，新开的 shell 里会是最后一次 pull 的那个目录的变量。每个目录自己的 `env.sh` 仍然是正确的；只是 shell 配置文件只能指向其中一个。
+
 `pull` 时，若启用了 `injectShellProfile`（默认启用），`$SHELL` 为 zsh 时环境变量块会写入 `~/.zshrc`，否则写入 `~/.bashrc`——但 Windows 上例外：`$SHELL` 通常未设置，而 Git Bash 以*登录 shell*方式启动，从不读取 `.bashrc`，因此 teamai 会优先选择已存在的 `~/.bash_profile`、其次 `~/.bash_login`、再次 `~/.profile`，只有三者都不存在时才回退到 `~/.bashrc`（通过 MSYS2/Cygwin 安装、会设置 `$SHELL` 的 zsh 仍会解析到 `.zshrc`）。这与 Git for Windows 自身在 `/etc/profile.d/bash_profile.sh` 中的回退逻辑一致，其判断条件是 `[ -e ~/.bashrc -a ! -e ~/.bash_profile -a ! -e ~/.bash_login -a ! -e ~/.profile ]`——只有在这一种情况下它才会生成一个会 source `.bashrc` 的 `.bash_profile`；这也是为什么哪怕一个只 source 了其他内容（例如 `~/.local/bin/env`）的 `~/.profile` 存在，也足以让 `.bashrc` 单独失效。可通过 `teamai.yaml` 中的 `sharing.env.shellProfilePath` 覆盖目标文件。
 
 这个优先级顺序只决定*第一次* pull 写到哪里。此后的每次 pull 都会沿用已经承载着本作用域代码块的那个候选文件，而不会重新走一遍优先级判断——否则 Git for Windows 自身的引导逻辑会把目标文件从脚下换掉：上面那条 `/etc/profile.d/bash_profile.sh` 判断条件，在第一次 pull 之后同样会成立（`.bashrc` 已存在，其余候选文件都还不存在），于是下一次 Git Bash 登录 shell 启动时就会自动生成一个 source 它的 `~/.bash_profile`。如果不沿用 `.bashrc`，下一次 pull 就会转而偏好这个新出现的文件，在那里注入第二个代码块，而原来那个——依旧在正常工作，只是多绕了一跳——则会被误报为失效的遗留代码块。
@@ -750,11 +771,18 @@ servers:
     requires: [npx]                      # PATH 上找不到 npx 时跳过并提示
     tools: [claude, cursor]              # 可选；默认所有支持 MCP 的工具
     roles: [devops]                      # 可选；默认所有成员
+    projects: [checkout]                 # 可选；默认所有目录
 ```
 
 `requires` 从 `PATH` 解析。Windows 上还会匹配 `PATHEXT` 后缀（`uvx` 可匹配 `uvx.exe` / `uvx.cmd`）。
 
 `roles` 填写 `manifest/roles.yaml` 中的角色 id。成员的任一角色（`primaryRole` 或 `additionalRoles`）被列出时才会安装该 server；`roles: []` 对任何人都不安装，与 `tools: []` 一致。未配置角色的成员会收到全部 server，与 skills、rules 的无过滤回退一致。成员切换角色后，不再匹配的 server 会在下一次 pull 时移除，手动添加的 server 不受影响。`roles.yaml` 中不存在的 id 每次 pull 只提示一次。不支持该字段的旧版 teamai 会忽略它并为所有人安装。
+
+`projects` 填写 `manifest/projects.yaml` 中的项目 id，在另一个维度上遵循同一条规则：目录通过 `teamai projects set` 绑定的任一项目被列出时才会安装该 server；`projects: []` 对任何人都不安装；未绑定任何项目的目录会收到全部 server。`teamai projects set` 切换到其他项目后，不再匹配的 server 会在下一次 pull 时移除。`projects.yaml` 中不存在的 id 每次 pull 只提示一次；团队根本没有 `projects.yaml` 时同样会提示——此时该 key 不产生任何限制，所有成员都会收到该 server。
+
+两个维度互相独立，并以 **AND** 组合：`roles: [frontend]` 与 `projects: [checkout]` 同时出现时，只分发给 checkout 上的 frontend 成员，而不是两者的并集。这与 `tools:` 和 `roles:` 现有的组合方式一致，也有意区别于角色与项目**资源命名空间**取并集的行为——后者回答的是"同步哪些目录"这个不同的问题。
+
+这正是这两个 key 要控制的成本：一个有 5 个项目、每个项目 3 个 server 的团队，会让每位持有该角色的成员启动 15 个 server 进程，并在每次会话的上下文中携带 15 份工具列表。
 
 各工具的落点：
 
@@ -1356,6 +1384,7 @@ hooks:
     timeout: 15
     tools: [claude, cursor]
     roles: [devops]                      # 可选；默认所有成员
+    projects: [checkout]                 # 可选；默认所有目录
 
 builtin:
   disabled: [Hook dispatch post-tool-use TodoWrite]
@@ -1370,6 +1399,7 @@ builtin:
 | `matcher` | 可选，工具 matcher |
 | `tools` | 可选，目标工具列表（默认 = 所有 hook 支持的工具） |
 | `roles` | 可选，`manifest/roles.yaml` 中的角色 id 列表（默认 = 所有成员；`[]` = 无人）。在下方安全治理之前生效；切换角色后，原角色的 hooks 会在下一次 pull 时移除。旧版 teamai 会忽略该字段。 |
+| `projects` | 可选，`manifest/projects.yaml` 中的项目 id 列表（默认 = 所有目录；`[]` = 无人）。匹配该目录通过 `teamai projects set` 绑定的项目；切换绑定后，原项目的 hooks 会在下一次 pull 时移除。与 `roles` 以 AND 组合。旧版 teamai 会忽略该字段。 |
 | `builtin.disabled` | 禁用的内置 hook 列表 |
 | `builtin.overrides` | 仅可覆盖内置 hook 的 `timeout` |
 

@@ -91,9 +91,9 @@ teamai push → 创建分支 + MR → reviewer 审批合并
 | **Agents** | `agents/<name>.yaml`、`agents/<namespace>/<name>.yaml` | 根目录 agents 对所有人生效；namespace 子目录只同步给在 `agents:` 中列出它的角色/项目 |
 | **Culture** | `culture.md` | 团队使命、价值观与协作准则——注入各 Agent 的 CLAUDE.md / AGENTS.md，成为每次会话的行事底色 |
 | **CLAUDE.md** | `claudemd/*.md` | |
-| **Env** | `env/` | 通用环境变量、团队级开关；不建议直接放密钥 |
-| **Hooks** | `hooks/hooks.yaml` | 每条 hook 可加 `roles:`，只分发给持有这些角色的成员 |
-| **MCP** | `mcp/mcp.yaml` | 每个 server 可加 `roles:`，只分发给持有这些角色的成员 |
+| **Env** | `env/` | 通用环境变量、团队级开关；不建议直接放密钥。每个变量可加 `roles:` / `projects:` |
+| **Hooks** | `hooks/hooks.yaml` | 每条 hook 可加 `roles:` / `projects:`，只分发给持有这些角色的成员、且绑定了这些项目的目录 |
+| **MCP** | `mcp/mcp.yaml` | 每个 server 可加 `roles:` / `projects:`，只分发给持有这些角色的成员、且绑定了这些项目的目录 |
 | **Packages** | `teamai.yaml` | 目前只支持 npm 包和 Claude 插件 |
 | **Models** | — | 暂时没有对全部 provider 实现 |
 
