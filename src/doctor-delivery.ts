@@ -558,10 +558,17 @@ async function envDeliveryProblems(
   const read = await envHandler.readEnvYaml(envYamlPath);
   if (!read.ok) return { problems: [read.reason], staleProfiles: [] };
 
-  const declared = read.variables;
+  // Only the variables this member and directory are scoped to: the same filter
+  // `pullItem` applies, not a second copy of it. Diffing env.sh against every
+  // DECLARED variable would report a project-scoped one as undelivered on a pull
+  // that correctly withheld it.
+  const { resolveDeliverableEnvVariables } = await import('./resources/env.js');
+  const { resolveMembership } = await import('./membership.js');
+  const declared = resolveDeliverableEnvVariables(read.variables, resolveMembership(localConfig));
   const problems: string[] = [];
 
-  // Nothing declared and nothing malformed: there is nothing to deliver.
+  // Nothing reaches this member and nothing is malformed: there is nothing to
+  // deliver, so there is nothing to report missing.
   if (declared.length === 0) return none;
 
   // env.sh lives under teamaiHome, which is <projectRoot>/.teamai in project

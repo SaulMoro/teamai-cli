@@ -323,4 +323,45 @@ describe('doctor — env variables reach a shell', () => {
 
     expect(await (await envCheck()).check()).toBe(true);
   });
+
+  it('does not report a variable this directory is scoped out of as undelivered', async () => {
+    // The false failure #668 would otherwise introduce: pull correctly withholds
+    // BILLING_URL from a checkout directory, and doctor must not call that a
+    // delivery problem.
+    await writeEnvYaml(
+      'variables:\n'
+      + '  - key: CHECKOUT_URL\n    value: "c"\n    projects: [checkout]\n'
+      + '  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n',
+    );
+    vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
+    await writeEnvSh("export CHECKOUT_URL='c'\n");
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
+
+  it('still reports a scoped-in variable that is missing from env.sh', async () => {
+    await writeEnvYaml(
+      'variables:\n'
+      + '  - key: CHECKOUT_URL\n    value: "c"\n    projects: [checkout]\n'
+      + '  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n',
+    );
+    vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
+    await writeEnvSh('');
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('CHECKOUT_URL');
+    expect(check.fix).not.toContain('BILLING_URL');
+  });
+
+  it('passes when every declared variable is scoped away from this directory', async () => {
+    await writeEnvYaml('variables:\n  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n');
+    vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
+    await writeEnvSh('');
+    await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
+
+    expect(await (await envCheck()).check()).toBe(true);
+  });
 });

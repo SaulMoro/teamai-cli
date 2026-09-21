@@ -65,6 +65,13 @@ vi.mock('../roles.js', () => ({
       agents: [],
     };
   }),
+  // Env delivery resolves the member's role axis (#668), so this partial mock has
+  // to carry activeRoleIds too — the real one is a pure read of localConfig.
+  activeRoleIds: vi.fn((localConfig: { primaryRole?: string; additionalRoles?: string[] }) =>
+    localConfig.primaryRole
+      ? [...new Set([localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])])]
+      : null,
+  ),
 }));
 
 // Isolation: pull() takes a real ~/.teamai/.sync-lock. Parallel vitest workers
