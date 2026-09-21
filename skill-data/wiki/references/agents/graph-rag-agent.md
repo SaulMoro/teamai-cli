@@ -14,7 +14,7 @@ architecture_map: _review/k1-architecture-map.md 完整内容
 doc_list:         _review/k2-doc-list.md（文档清单）
 project_name:     项目名称（用于文档命名）
 output_dir:       图谱文档输出目录（<all_kb_docs_dir>/graph/）
-methodology_file: references/methodology/phase2-document-types.md §Type-9 内容
+methodology_file: {SKILL_DIR}/references/methodology/phase2-document-types.md §Type-9 内容
 ```
 
 ## 执行步骤

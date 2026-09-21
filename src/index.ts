@@ -1249,4 +1249,14 @@ async function publishMaintenance(localConfig: LocalConfig, message: string): Pr
   }
 }
 
-program.parse();
+/**
+ * The command table doubles as the source of truth for the generated skill
+ * command reference (skill-data/core/references/commands.md). Importing this
+ * module with TEAMAI_COMMAND_TABLE_ONLY set yields `program` without running
+ * the CLI.
+ */
+export { program };
+
+if (!process.env.TEAMAI_COMMAND_TABLE_ONLY) {
+  program.parse();
+}

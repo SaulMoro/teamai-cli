@@ -74,7 +74,7 @@ repo per project:
 
 ```bash
 teamai projects list         # projects defined + the ones active in this directory
-teamai projects set <id>     # set the active project(s) for this directory
+teamai projects set [ids...]     # set the active project(s) for this directory
 teamai projects members <id> # who is registered on a project
 ```
 
@@ -114,7 +114,7 @@ teamai env remove <KEY>      # remove
 ## When sync fails
 
 Run `teamai doctor` first. If it reports hook or path problems, load
-`troubleshooting.md`. Have the affected member reopen their session; if their tool
+the troubleshooting reference (`teamai skill get core --full`). Have the affected member reopen their session; if their tool
 has no session-start hook, they run `teamai pull` manually.
 
 ## Capture a lesson learned
@@ -124,7 +124,7 @@ worth sharing, TeamAI prompts the member and the dedicated
 **`teamai-share-learnings`** skill summarizes the session and runs
 `teamai contribute`. Nobody has to invoke it by hand.
 (Publishing a **reusable skill** someone authored is a different task — any member
-can do it, see `contribute-member.md`.)
+can do it, see the share skill, `teamai skill get share --full`.)
 
 ### Turn the sharing prompt on or off (admin)
 

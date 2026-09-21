@@ -115,7 +115,7 @@ session and verify with `teamai pull` + `teamai list`.
 The sandbox **does not add hooks automatically** after `teamai init`. The user
 must **manually edit the config file to register the hook** so auto-sync works.
 Walk them through opening the tool's config and adding the TeamAI session-start
-hook entry; if unsure of the exact config, run `teamai doctor` and `teamai hooks`
+hook entry; if unsure of the exact config, run `teamai doctor` and `teamai hooks list`
 to see what should be present, then have them replicate it. Until then, they can
 sync with a manual `teamai pull`.
 

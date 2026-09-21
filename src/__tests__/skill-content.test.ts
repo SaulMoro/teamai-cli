@@ -210,13 +210,14 @@ describe('teamai skill get / path against the shipped package', () => {
     expect(roots.dataRoot).toBe(path.join(ROOT, 'skill-data'));
   });
 
-  it('prints a shipped skill byte for byte', async () => {
+  it('prints a shipped skill byte for byte, bar the resolved {SKILL_DIR}', async () => {
     const [first] = await listServableSkills();
     await skillGet([first.name]);
 
+    const raw = fs.readFileSync(path.join(first.dir, 'SKILL.md'), 'utf8');
     expect(process.exitCode).toBeUndefined();
     expect(stderr).toBe('');
-    expect(stdout).toBe(fs.readFileSync(path.join(first.dir, 'SKILL.md'), 'utf8'));
+    expect(stdout).toBe(raw.split(SKILL_DIR_PLACEHOLDER).join(first.dir));
   });
 
   it('fails on an unknown name without writing to stdout', async () => {
@@ -234,7 +235,7 @@ describe('teamai skill get / path against the shipped package', () => {
 
     expect(process.exitCode).toBeUndefined();
     expect(stderr).toContain('Unknown flag ignored: --bogus');
-    expect(stdout).toBe(fs.readFileSync(path.join(first.dir, 'SKILL.md'), 'utf8'));
+    expect(stdout).toBe(await renderSkill(first));
   });
 
   it('fails when no name is left after dropping flags', async () => {

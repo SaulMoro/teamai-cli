@@ -19,7 +19,7 @@ platforms, and — most importantly — **do not create a new repo.** Tell the u
 *"Ask your team's TeamAI admin for the repository URL, then come back and paste it
 here."* A member without a repo URL cannot continue; creating one would fork the
 team into a second, empty repo. (Setting up a brand-new team repo is the admin
-flow — see `setup-admin.md` — not this one.)
+flow — see `{SKILL_DIR}/references/setup-admin.md` — not this one.)
 
 ## Step 1 — Install and verify
 
@@ -41,10 +41,9 @@ Match the login to the URL's host (do NOT create a second repo):
 
 - **`git.woa.com/...`** (Tencent TGit / 工蜂) → **you run both the `gf` install and
   the `gf … auth login`** (never tell the user to run them). Follow
-  `provider-tgit.md` ("Log in"); the user's only action is approving the login URL
-  in their browser / iOA. No `GITLAB_URL` needed. (No headless shortcut:
-  `TGIT_TOKEN` is REST-API-only and cannot clone, so the login has to be run once
-  on the machine.)
+  `{SKILL_DIR}/references/provider-tgit.md` ("Log in"); the user's only action is
+  approving the login URL in their browser / iOA. No `GITLAB_URL` needed. (Headless
+  only: pre-set `TGIT_TOKEN`.)
 - **`cnb.cool/...`** → install the CNB CLI, then authorize, in this order:
   1. `npm install -g @cnbcool/cnb-cli`
   2. `cnb login` — have the user approve it in the browser (OAuth2 device flow);
@@ -98,7 +97,8 @@ teamai hooks list      # per-tool: which AI tools actually got the hooks
 Fix anything `doctor` reports. **Don't trust the "Hooks injected into all AI tool
 settings" message alone** — it prints even for tools where nothing was written;
 `teamai doctor` / `teamai hooks list` show the real per-tool status. If it flags
-hook problems, load `troubleshooting.md` ("Which tools actually get hooks").
+hook problems, load the troubleshooting reference (`teamai skill get core --full`),
+section "Which tools actually get hooks".
 
 ## Step 6 — Confirm the skills actually arrived
 
@@ -123,8 +123,7 @@ tool names only, on a separate branch of that same repo.)
 ## Agent-specific note
 
 If this conversation is running in **ChatGPT App** or **WorkBuddy**, the hooks
-that drive auto-sync need an extra manual step — load `troubleshooting.md`
-("Agent-specific caveats") and walk the user through it before finishing.
+that drive auto-sync need an extra manual step — load the troubleshooting reference (`teamai skill get core --full`), section "Agent-specific caveats" and walk the user through it before finishing.
 
 ## If something is denied
 
@@ -146,7 +145,7 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
 3. **They can also contribute a skill — just ask in plain language.** A member does
    not need to be an admin to publish a skill. They tell TeamAI something like
    *"share this xxx skill with my team"* / *"把这个 xxx skill 分享给团队"*, and you
-   run the publish for them (see `contribute-member.md`).
+   run the publish for them (see the share skill, `teamai skill get share --full`).
 4. **How to leave — via the skill, not raw commands.** They can remove TeamAI any
    time by re-invoking the skill; you'll run it for them:
    `/teamai 卸载` / `/teamai Uninstall TeamAI`.

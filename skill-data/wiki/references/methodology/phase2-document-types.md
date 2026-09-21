@@ -95,7 +95,7 @@
 
 ### 从代码生成的步骤
 
-> 详细执行规范见 `references/agents/kb-doc-generator.md`，此处仅列概要：
+> 详细执行规范见 `{SKILL_DIR}/references/agents/kb-doc-generator.md`，此处仅列概要：
 > 1. 代码结构扫描（Glob → Grep → Read 三步法，按语言自适应）
 > 2. 信息提取（10 维度：核心职责/架构层级/上下游/代码入口/核心机制/数据流向/技术栈/数据模型/配置项/定时任务）
 > 3. 文档组装（按上述模板章节顺序）

@@ -1,13 +1,19 @@
 ---
-name: teamai-share-learnings
-description: "Contribute — 分享 Session 经验到团队知识库"
+name: share
+description: >-
+  Turn a session into a team learning: summarize what was solved, discovered or worked around,
+  and publish it to the team knowledge base with `teamai contribute`. Also publishes a reusable
+  skill or a knowledge doc on request. 分享 Session 经验到团队知识库。Loaded on demand by the
+  teamai discovery stub, and by the friction reminder that ends a session worth sharing.
+allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
 # Contribute — 分享 Session 经验到团队知识库
 
 总结本次 AI 编码 session 中学到的经验，推送到团队知识库。
 
-**【重要】所有生成的文档必须使用中文撰写。**
+**文档使用用户本次会话所用的语言撰写**（中文提问 → 中文文档，英文提问 → 英文文档）。
+命令、参数、URL、路径和代码标识符保持原样。
 
 ## When to Use
 
@@ -19,7 +25,7 @@ description: "Contribute — 分享 Session 经验到团队知识库"
 ## How It Works
 
 1. **总结**：回顾本次 session 的工具使用、解决的问题、发现的模式
-2. **生成文档**：用中文撰写 Markdown 文档，涵盖：
+2. **生成文档**：撰写 Markdown 文档（语言同上），涵盖：
    - 任务/问题是什么
    - 关键决策及原因
    - 解决方案、变通方法或发现的模式
@@ -85,3 +91,17 @@ teamai contribute --file /tmp/session-summary.md --title "K8s pod 启动超时�
 - The document is pushed to the team repo's `teamai-learnings` branch, under `learnings/`, with no pull request
 - Team members will see it on their next `teamai pull`
 - Keep summaries concise and actionable — this is a knowledge base, not a diary
+
+## Publishing a reusable skill instead
+
+A member asking to publish a skill ("share this xxx skill with my team") is a
+different flow: see `{SKILL_DIR}/references/contribute-member.md`. This file is for
+turning a *session* into a learning.
+
+## References
+
+| File | When to load it |
+|---|---|
+| `{SKILL_DIR}/references/contribute-member.md` | The user wants to publish a skill, rule or doc they already have, rather than a session summary. |
+
+`teamai skill get share --full` prints this skill with that reference appended.

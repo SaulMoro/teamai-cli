@@ -40,6 +40,8 @@ const SKILL_MD = 'SKILL.md';
  */
 const SKILL_ALIASES: Readonly<Record<string, string>> = {
   default: 'core',
+  onboarding: 'setup',
+  join: 'setup',
   codebase: 'wiki',
   'team-wiki-codebase': 'wiki',
   learning: 'share',

@@ -56,7 +56,7 @@ curl -sSf -m 3 -o /dev/null https://cnb.cool     && echo "cnb: OK"     || echo "
 - **Exactly one reachable** → use that one.
 - **Several reachable** → list them (TGit first when present) and let the user pick.
 - **None reachable** → stop. Tell the user to ask their own admin for a ready-made
-  repo URL, then switch to `join-member.md`.
+  repo URL, then switch to `{SKILL_DIR}/references/join-member.md`.
 
 Choose by **account + reachability only — never by region**.
 
@@ -200,7 +200,7 @@ Claude Code"). Omitting `--agent` gives an interactive picker — select **every
 tool already installed** on the machine. Then **report back which agents were set
 up**, in the user's language: name the tools that will now auto-start TeamAI, and
 any detected tool that was skipped and why (e.g. Codex trust-gate,
-CodeBuddy/WorkBuddy by design — see `troubleshooting.md`).
+CodeBuddy/WorkBuddy by design — see the troubleshooting reference, `teamai skill get core --full`).
 
 ## Step 6 — Verify with doctor
 
@@ -215,8 +215,8 @@ Resolve everything `doctor` flags before continuing.
 it prints even for tools where nothing was written. `teamai doctor` / `teamai hooks
 list` show the real per-tool status. Only the tool you set up (e.g. `claude`) is
 expected to show hooks installed; others are skipped by design or not yet supported,
-which is normal. Full table in `troubleshooting.md` ("Which tools actually get
-hooks").
+which is normal. Full table in the troubleshooting reference
+(`teamai skill get core --full`), section "Which tools actually get hooks".
 
 ## Step 7 — Grant members repo access (required before they can join)
 
@@ -269,7 +269,7 @@ day-to-day work — they can keep letting the AI run things for them:
 - To manage the team later, they run:
   `/teamai 我已经装好了，帮我管理` (Chinese) /
   `/teamai I already have TeamAI set up, help me manage it` (English) — this loads
-  the daily-management flow (`manage-admin.md`): publishing skills, inviting
+  the daily-management flow (`{SKILL_DIR}/references/manage-admin.md`): publishing skills, inviting
   members, roles / packages / env.
 - To share a reusable skill with the team, they run:
   `/teamai 把这个 xxx skill 分享给团队` (Chinese) /
@@ -295,4 +295,4 @@ One line, in their language: *"That removes the hooks and synced resources from
 your machine; your team repo on the website is untouched — you can rejoin any time
 with `/teamai` and the repo URL."*
 
-(If they ask right now, load `uninstall.md` and run it for them.)
+(If they ask right now, load `{SKILL_DIR}/references/uninstall.md` and run it for them.)

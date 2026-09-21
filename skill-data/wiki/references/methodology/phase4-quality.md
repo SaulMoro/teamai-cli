@@ -1,6 +1,6 @@
 # Phase 4: 质量评估与迭代优化
 
-> 辅助工具: `scripts/validate_kb.py` — 自动校验链接完整性、anchor 覆盖率、AI 快速理解表覆盖率、双向链接、README 索引收录率
+> 辅助工具: `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` — 自动校验链接完整性、anchor 覆盖率、AI 快速理解表覆盖率、双向链接、README 索引收录率
 
 ## 五维评估模型
 
@@ -65,7 +65,7 @@
 
 | 问题 | 修复方法 |
 |------|---------|
-| 死链接 | 全局 grep `](` 链接，或运行 `scripts/validate_kb.py` |
+| 死链接 | 全局 grep `](` 链接，或运行 `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` |
 | 术语不一致 | 建立术语表全局替换 |
 | 代码入口过时 | 定期与代码仓库 diff |
 | 约束值过时 | 定期与产品文档交叉比对 |
