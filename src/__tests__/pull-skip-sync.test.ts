@@ -1178,8 +1178,8 @@ describe('enabledAgents whitelist on pull inject, skip-sync, and cleanup (#510)'
     expect(log.success).toHaveBeenCalledWith(
       expect.stringContaining('Already synced at abc1234, skipping'),
     );
-    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/team-wiki-codebase'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/teamai'))).toBe(false);
   });
 
   it('does not delete leftover copies on out-of-whitelist tools', async () => {

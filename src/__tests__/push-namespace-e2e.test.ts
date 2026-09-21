@@ -365,14 +365,13 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
 
     // The root copy is the author's own, placed under rules/fe-know/. Without
     // the placedRules redirect in the pre-push sync it stayed at v1, read as a
-    // local modification, and reverted the teammate's update. (The pull above
-    // also installs the CLI's built-in `teamai` skill, which this run does
-    // push — the assertion is about the rule.)
+    // local modification, and reverted the teammate's update. The built-in
+    // `teamai` skill the pull installed is CLI-owned and not scanned (#730),
+    // so once the rule is synced there is nothing left to push.
     expect(result.output).not.toContain('[rules] my-rule');
+    expect(result.output).toContain('No new or modified resources to push');
     expect(fs.readFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), 'utf8'))
       .toContain('Teammate v2');
-    const { branch } = branchFiles(fixture);
-    expect(git(['show', `${branch}:rules/fe-know/my-rule.md`], fixture.remote)).toContain('Teammate v2');
     expect(git(['show', 'main:rules/fe-know/my-rule.md'], fixture.remote)).toContain('Teammate v2');
   }, 60_000);
 

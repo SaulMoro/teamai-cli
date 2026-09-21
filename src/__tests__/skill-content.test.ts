@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,15 +78,17 @@ describe('packaged skill discovery', () => {
   });
 
   it('resolves legacy directory names as aliases', async () => {
-    writeSkill(roots.dataRoot, 'team-wiki-codebase', '# wiki\n');
-    writeSkill(roots.dataRoot, 'teamai-share-learnings', '# share\n');
+    writeSkill(roots.dataRoot, 'core', '# core\n');
+    writeSkill(roots.dataRoot, 'wiki', '# wiki\n');
+    writeSkill(roots.dataRoot, 'share', '# share\n');
 
-    for (const alias of ['wiki', 'codebase']) {
-      expect((await resolvePackagedSkill(alias, roots))?.name).toBe('team-wiki-codebase');
+    for (const alias of ['wiki', 'codebase', 'team-wiki-codebase']) {
+      expect((await resolvePackagedSkill(alias, roots))?.name, alias).toBe('wiki');
     }
-    for (const alias of ['share', 'learning', 'learnings']) {
-      expect((await resolvePackagedSkill(alias, roots))?.name).toBe('teamai-share-learnings');
+    for (const alias of ['share', 'learning', 'learnings', 'teamai-share-learnings']) {
+      expect((await resolvePackagedSkill(alias, roots))?.name, alias).toBe('share');
     }
+    expect((await resolvePackagedSkill('default', roots))?.name).toBe('core');
     expect(await resolvePackagedSkill('nope', roots)).toBeNull();
   });
 
@@ -268,4 +271,25 @@ describe('teamai skill get / path against the shipped package', () => {
     expect(stdout).toBe('');
     expect(stderr).toContain('Skill not found: no-such-skill');
   });
+});
+
+describe('npm package contents', () => {
+  // The whole design fails silently when skill-data/ is missing from
+  // package.json "files": every test above still passes against the repo, and
+  // `skill get` serves nothing at all once installed from the registry.
+  it('ships both the deployed stub and the served content', () => {
+    const packed = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const files = (JSON.parse(packed) as Array<{ files: Array<{ path: string }> }>)[0]
+      .files.map((f) => f.path);
+
+    expect(files).toContain('skills/teamai/SKILL.md');
+    for (const skill of ['core', 'share', 'wiki']) {
+      expect(files.some((f) => f.startsWith(`skill-data/${skill}/`)), skill).toBe(true);
+    }
+    expect(files).toContain('skill-data/wiki/scripts/scan_repo.py');
+  }, 60_000);
 });

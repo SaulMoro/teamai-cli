@@ -9,6 +9,7 @@
   "files": [
     "dist/**/*.js",
     "skills",
+    "skill-data",
     "agents",
     "README.md",
     "CHANGELOG.md",

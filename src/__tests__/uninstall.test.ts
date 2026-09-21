@@ -120,6 +120,8 @@ async function setupFixture(tmpDir: string) {
   await fse.writeFile(path.join(homeDir, '.claude', 'rules', 'teamai-recall.md'), '# Recall Rule');
   await fse.ensureDir(path.join(homeDir, '.claude', 'agents'));
   await fse.writeFile(path.join(homeDir, '.claude', 'agents', 'teamai-recall.md'), '# Recall Agent');
+  await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'teamai'));
+  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai', 'SKILL.md'), '# teamai stub');
   await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'));
   await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings', 'SKILL.md'), '# Share Learnings');
   await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'));
@@ -978,7 +980,9 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'agents', 'teamai-recall.md'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'rules', 'teamai-recall.md'))).toBe(false);
     expect(await fse.pathExists(codexRecallAgent)).toBe(false);
-    // Built-in skills removed
+    // Built-in skills removed: the deployed stub, and the directories earlier
+    // releases left behind.
+    expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'teamai'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'))).toBe(false);
     // User's own skill still preserved
@@ -1329,6 +1333,7 @@ describe('uninstall', () => {
     });
     // Remove all teamai resources from claude so it has zero teamai presence
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-skill'));
+    await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'));
     await fse.remove(path.join(homeDir, '.claude', 'rules', 'team-rule.md'));
@@ -1393,6 +1398,7 @@ describe('uninstall', () => {
       hooks: { SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo hi' }] }] },
     });
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-skill'));
+    await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'));
     await fse.remove(path.join(homeDir, '.claude', 'rules', 'team-rule.md'));
@@ -1447,6 +1453,7 @@ describe('uninstall', () => {
     });
     // Also remove all other teamai resources so nothing triggers cleanup.
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-skill'));
+    await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'));
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'));
     await fse.remove(path.join(homeDir, '.claude', 'rules', 'team-rule.md'));

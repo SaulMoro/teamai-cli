@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 
-vi.mock('../config.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../config.js')>()),
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+vi.mock('../config.js', () => ({
   requireInit: vi.fn(),
   loadState: vi.fn(),
   saveState: vi.fn(),
@@ -480,11 +482,11 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(deployed).toBeGreaterThan(0);
     expect(await fse.pathExists(path.join(
       homeDir,
-      '.claude/skills/team-wiki-codebase/SKILL.md',
+      '.claude/skills/teamai/SKILL.md',
     ))).toBe(true);
   });
 
-  it('should recursively deploy nested built-in skill files', async () => {
+  it('deploys the discovery stub only, never the packaged content', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
     const teamConfig = {
@@ -513,12 +515,18 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     };
 
     const deployed = await deployBuiltinSkills(teamConfig, localConfig);
-    const skillDir = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    const skillsDir = path.join(homeDir, '.claude/skills');
+    const stubDir = path.join(skillsDir, 'teamai');
 
     expect(deployed).toBeGreaterThan(0);
-    expect(await fse.pathExists(path.join(skillDir, 'SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(skillDir, 'references/methodology/phase0-collection.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(skillDir, 'scripts/scan_repo.py'))).toBe(true);
+    expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
+    // The stub is the whole deployed unit: one file, no references, no scripts.
+    expect(await fse.readdir(stubDir)).toEqual(['SKILL.md']);
+    expect(await fse.readdir(skillsDir)).toEqual(['teamai']);
+    // ...and it is the packaged file verbatim, so a diff means a bug.
+    expect(await fse.readFile(path.join(stubDir, 'SKILL.md'), 'utf8')).toBe(
+      await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8'),
+    );
   });
 
   it('deploys built-in skills to OpenCode user scope under .config/opencode/skills', async () => {
@@ -559,11 +567,11 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     expect(deployed).toBeGreaterThan(0);
     // Written to the user-scope path, NOT the project-scope .opencode/skills.
-    expect(await fse.pathExists(path.join(homeDir, '.config/opencode/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.config/opencode/skills/teamai/SKILL.md'))).toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.opencode'))).toBe(false);
   });
 
-  it('should still deploy team-wiki-codebase when recall is disabled (skipRecall)', async () => {
+  it('still deploys the stub when recall is disabled (skipRecall)', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
     const teamConfig = {
@@ -594,18 +602,16 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const deployed = await deployBuiltinSkills(teamConfig, localConfig, { skipRecall: true });
 
     expect(deployed).toBeGreaterThan(0);
-    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
-    const wikiEnrichFile = path.join(
-      homeDir,
-      '.claude/skills/team-wiki-codebase/references/methodology/phase3-ai-enhancement.md',
-    );
-    expect(await fse.pathExists(wikiEnrichFile)).toBe(true);
-    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai-share-learnings/SKILL.md'))).toBe(false);
+    // The stub routes to every workflow, so recall no longer gates deployment:
+    // `teamai skill get share` decides at run time whether recall is on.
+    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai-share-learnings'))).toBe(false);
   });
 
   it('deploys a built-in Codex skill to its existing shared location', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
-    const sharedSkill = path.join(homeDir, '.agents', 'skills', 'team-wiki-codebase');
+    const sharedSkill = path.join(homeDir, '.agents', 'skills', 'teamai');
     await fse.ensureDir(path.join(homeDir, '.codex'));
     await fse.ensureDir(sharedSkill);
 
@@ -629,7 +635,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await deployBuiltinSkills(teamConfig, localConfig);
 
     expect(await fse.pathExists(path.join(sharedSkill, 'SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(homeDir, '.codex', 'skills', 'team-wiki-codebase'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.codex', 'skills', 'teamai'))).toBe(false);
   });
 });
 
@@ -686,8 +692,8 @@ describe('deployBuiltinSkills — enabledAgents whitelist (#510)', () => {
     const deployed = await deployBuiltinSkills(teamConfig(), localConfig(['workbuddy']));
 
     expect(deployed).toBeGreaterThan(0);
-    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/team-wiki-codebase'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/teamai'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.hermes/skills'))).toBe(false);
   });
 
@@ -696,7 +702,7 @@ describe('deployBuiltinSkills — enabledAgents whitelist (#510)', () => {
     const deployed = await deployBuiltinSkills(teamConfig(), localConfig());
 
     expect(deployed).toBeGreaterThan(0);
-    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/team-wiki-codebase/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.workbuddy/skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.hermes/skills/teamai/SKILL.md'))).toBe(true);
   });
 });

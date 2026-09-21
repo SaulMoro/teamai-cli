@@ -39,13 +39,12 @@ const SKILL_MD = 'SKILL.md';
  * moves under skill-data/.
  */
 const SKILL_ALIASES: Readonly<Record<string, string>> = {
-  core: 'teamai',
-  default: 'teamai',
-  wiki: 'team-wiki-codebase',
-  codebase: 'team-wiki-codebase',
-  share: 'teamai-share-learnings',
-  learning: 'teamai-share-learnings',
-  learnings: 'teamai-share-learnings',
+  default: 'core',
+  codebase: 'wiki',
+  'team-wiki-codebase': 'wiki',
+  learning: 'share',
+  learnings: 'share',
+  'teamai-share-learnings': 'share',
 };
 
 /** A skill directory that ships inside the npm package. */

@@ -139,7 +139,7 @@ describe('recall toggle native agent cleanup', () => {
     await expect(fse.pathExists(path.join(
       copilotHome,
       'skills',
-      'teamai-share-learnings',
+      'teamai',
       'SKILL.md',
     ))).resolves.toBe(true);
 
@@ -156,11 +156,14 @@ describe('recall toggle native agent cleanup', () => {
       'agents',
       'teamai-recall.agent.md',
     ))).resolves.toBe(false);
+    // The deployed stub routes to every workflow, recall-dependent or not, so
+    // disabling recall no longer removes a skill directory.
     await expect(fse.pathExists(path.join(
       copilotHome,
       'skills',
-      'teamai-share-learnings',
-    ))).resolves.toBe(false);
+      'teamai',
+      'SKILL.md',
+    ))).resolves.toBe(true);
   });
 });
 

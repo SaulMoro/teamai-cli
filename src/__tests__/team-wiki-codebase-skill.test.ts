@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SKILL_DIR = path.join(ROOT, 'skills', 'team-wiki-codebase');
+const SKILL_DIR = path.join(ROOT, 'skill-data', 'wiki');
 
 const SKILL_FILES = [
   path.join(SKILL_DIR, 'SKILL.md'),
@@ -20,7 +20,7 @@ const FORBIDDEN_REQUIRED_COMMANDS = [
   'team-wiki refresh',
 ] as const;
 
-describe('team-wiki-codebase builtin skill (issue #360 slice 1)', () => {
+describe('wiki builtin skill content (issue #360 slice 1)', () => {
   it('ships the packaged skill files', () => {
     for (const file of SKILL_FILES) {
       expect(fs.existsSync(file), file).toBe(true);

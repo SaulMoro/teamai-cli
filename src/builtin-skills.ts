@@ -1,47 +1,53 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { ensureSkillFrontmatter, resolveSkillDestination } from './resources/skills.js';
+import { resolveSkillDestination } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
+import { packagedSkillRoots } from './skill-content.js';
 
 // ─── Built-in skills deployment ──────────────────────────
 //
-//  CLI ships with built-in skills (e.g. teamai-contribute).
-//  These are bundled in the npm package under skills/.
-//  On each `teamai pull`, we copy them to local AI tool
-//  skill directories so they're always available and
-//  stay in sync with the CLI version.
+//  The CLI ships one deployable skill: the `teamai` discovery
+//  stub under skills/.  On each `teamai pull` its SKILL.md is
+//  copied to local AI tool skill directories.  The workflow
+//  content it points at is never copied — it lives under
+//  skill-data/ and is printed by `teamai skill get`, so what
+//  the agent reads always matches the installed CLI version.
 //
 //  npm package
-//    skills/teamai-contribute/SKILL.md
+//    skills/teamai/SKILL.md          (about 2 KB)
 //      │
 //      ▼  (teamai pull / teamai init)
-//    ~/.claude/skills/teamai-contribute/SKILL.md
-//    ~/.claude-internal/skills/teamai-contribute/SKILL.md
-//    ~/.codex-internal/skills/teamai-contribute/SKILL.md
-//    ~/.cursor/skills/teamai-contribute/SKILL.md
+//    ~/.claude/skills/teamai/SKILL.md
+//    ~/.codex-internal/skills/teamai/SKILL.md
+//    ~/.cursor/skills/teamai/SKILL.md
 //    ...
+//
+//    skill-data/{core,setup,wiki,share}/   never copied
 //
 
 /**
- * Get the path to the built-in skills directory bundled with the CLI.
- * Resolves relative to the dist/ directory where the compiled CLI lives.
+ * Names of CLI built-in skills. Used by push to exclude them from team repo
+ * push, by pull cleanup, and by uninstall.
  */
-function getBuiltinSkillsDir(): string {
-  // __dirname equivalent for ESM: import.meta.url → file path → parent
-  const distDir = path.dirname(fileURLToPath(import.meta.url));
-  // skills/ is at package root, dist/ is one level down
-  return path.join(distDir, '..', 'skills');
-}
+export const BUILTIN_SKILL_NAMES = new Set(['teamai']);
 
-/** Names of CLI built-in skills. Used by push to exclude them from team repo push. */
-export const BUILTIN_SKILL_NAMES = new Set(['teamai-share-learnings', 'team-wiki-codebase', 'teamai-workflow', 'teamai-import']);
+/**
+ * Built-in skill directories earlier releases deployed, kept only so that pull
+ * can remove them from agent skills directories. Retire this set once 0.23.x is
+ * no longer in the field.
+ */
+export const LEGACY_BUILTIN_SKILL_NAMES = new Set([
+  'teamai-share-learnings',
+  'team-wiki-codebase',
+  'teamai-workflow',
+  'teamai-import',
+]);
 
 /**
  * Built-in skills that depend on recall being enabled. Skipped when recall is disabled.
@@ -52,33 +58,30 @@ export const BUILTIN_SKILL_NAMES = new Set(['teamai-share-learnings', 'team-wiki
  */
 export const RECALL_DEPENDENT_SKILLS = new Set(['teamai-share-learnings']);
 
-async function copyBuiltinSkillDir(srcDir: string, destDir: string): Promise<void> {
-  await fse.copy(srcDir, destDir, {
-    overwrite: true,
-    filter: (srcPath: string) => !path.basename(srcPath).startsWith('.'),
-  });
-}
-
 /**
  * Deploy CLI built-in skills to all configured AI tool skill directories.
  *
- * Copies each skill directory from the npm package's skills/ folder
- * to every tool's skills path defined in teamai.yaml.
+ * Copies the SKILL.md of each skill in the npm package's skills/ folder to
+ * every tool's skills path defined in teamai.yaml. Only that one file: the
+ * deployed unit is a discovery stub, and its workflow content is served by
+ * `teamai skill get` from skill-data/.
+ *
+ * The stub is written verbatim — no frontmatter repair on the way out, so a
+ * deployed copy that differs from the packaged one is a bug, not a variant.
  *
  * Silently skips if:
  * - Built-in skills directory doesn't exist (dev environment without build)
  * - A tool's skills directory is not configured
  */
 export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { reportingOnly?: boolean; skipRecall?: boolean }): Promise<number> {
-  // Reporting-only HTTP mode has no team repo to write to, so the team-repo-
-  // dependent built-in skill (teamai-share-learnings) is non-functional there.
-  // Skip built-in skills entirely.
+  // Reporting-only HTTP mode has no team repo to write to, so the workflows the
+  // stub routes to are non-functional there. Skip built-in skills entirely.
   if (options?.reportingOnly) {
-    log.debug('Reporting-only mode (no team repo): skipping built-in skills (teamai-share-learnings)');
+    log.debug('Reporting-only mode (no team repo): skipping built-in skills');
     return 0;
   }
 
-  const builtinDir = getBuiltinSkillsDir();
+  const builtinDir = packagedSkillRoots().deployRoot;
 
   if (!await pathExists(builtinDir)) {
     log.debug('No built-in skills directory found, skipping deployment');
@@ -126,10 +129,8 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
       const destDir = await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, srcDir);
 
       try {
-        await copyBuiltinSkillDir(srcDir, destDir);
-
-        // Ensure SKILL.md has proper YAML frontmatter (name + description)
-        await ensureSkillFrontmatter(destDir, skillName);
+        await fse.ensureDir(destDir);
+        await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
 
         deployed++;
       } catch (e) {
