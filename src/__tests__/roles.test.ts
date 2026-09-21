@@ -123,6 +123,24 @@ roles:
     rmSync(repoDir, { recursive: true, force: true });
   });
 
+  it('fails when a resource namespace is not a safe path segment (traversal guard)', async () => {
+    // Role namespaces become directory components (skills/<ns>/, agents/<ns>/)
+    // exactly as project namespaces do, so the same boundary guard applies.
+    for (const badNamespace of ['../../evil', 'a/b', '..', 'x\\y']) {
+      const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: hai
+    resources:
+      knowledge: []
+      skills: ['${badNamespace}']
+`);
+
+      await expect(loadRolesManifest(repoDir)).rejects.toThrow(/single path segment/i);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails when duplicate role ids are declared', async () => {
     const repoDir = writeManifest(`
 version: 1

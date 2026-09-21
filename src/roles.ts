@@ -2,17 +2,22 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { readFileSafe, readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
+import { log } from './utils/logger.js';
+// A role namespace is the same kind of path component a project namespace is, so
+// both manifests guard it with one schema. projects.ts imports only a *type*
+// from here, so this direction adds no runtime cycle.
+import { NamespaceSegmentSchema } from './projects.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
 export type RoleResourceType = typeof ROLE_RESOURCE_TYPES[number];
 
 const RoleResourceNamespacesSchema = z.object({
-  knowledge: z.array(z.string().min(1)),
-  skills: z.array(z.string().min(1)),
+  knowledge: z.array(NamespaceSegmentSchema),
+  skills: z.array(NamespaceSegmentSchema),
   // Optional: a role without `agents` receives root-level agents only, which
   // is what every manifest written before this key existed already got.
-  agents: z.array(z.string().min(1)).default([]),
+  agents: z.array(NamespaceSegmentSchema).default([]),
   // learnings is accepted for backward compatibility but ignored at runtime.
   // All learnings are shared flat across the entire team (no namespace isolation).
   learnings: z.array(z.string()).optional(),

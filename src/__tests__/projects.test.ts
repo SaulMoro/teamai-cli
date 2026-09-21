@@ -143,6 +143,42 @@ projects:
     }
   });
 
+  it('rejects a resource namespace that is not a safe path segment (traversal guard)', async () => {
+    // A namespace becomes a directory component (skills/<ns>/, agents/<ns>/) just
+    // as a project id does, so the boundary has to guard both.
+    for (const type of ['knowledge', 'skills', 'learnings', 'agents']) {
+      for (const badNamespace of ['../../evil', 'a/b', '..', 'x\\y']) {
+        const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: x
+    resources: { ${type}: ['${badNamespace}'] }
+`);
+        try {
+          await expect(loadProjectsManifest(repoDir)).rejects.toThrow(/single path segment/i);
+        } finally {
+          rmSync(repoDir, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  it('keeps accepting namespaces that differ from the project id', async () => {
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: alpha
+    resources: { learnings: [alpha-notes], skills: [alpha.v2, alpha_shared] }
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      expect(manifest?.projects[0].resources.learnings).toEqual(['alpha-notes']);
+      expect(manifest?.projects[0].resources.skills).toEqual(['alpha.v2', 'alpha_shared']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('round-trips through save', async () => {
     const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-projsave-'));
     try {
