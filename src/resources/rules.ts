@@ -12,6 +12,7 @@ import {
   teamRuleToCopilotInstructions,
 } from './copilot-instructions.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
+import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -41,8 +42,33 @@ export class RulesHandler extends ResourceHandler {
     // Read tombstones to skip previously deleted resources
     const tombstones = await this.readTombstones(localConfig);
 
+    // A rule placed under rules/<ns>/ on an earlier push is still authored at
+    // the tool's rules root, so matching on the full path alone would read it
+    // as brand new and send a second copy to the shared root — where it would
+    // reach the whole team (issue #649). Index the namespaced team rules by
+    // bare name so that local copy resolves back to the file it came from.
+    // Only namespaces the user actually has active count, mirroring the agents
+    // handler; `null` means nothing is filtering, so every namespace counts.
+    const resolved = await resolveResourceNamespaces(localConfig);
+    const activeKnowledge = resolved?.activeNamespaces.knowledge ?? null;
+    const namespacedTeamRules = new Map<string, string[]>();
+    for (const file of teamRules) {
+      const segments = file.split('/');
+      if (segments.length !== 2) continue; // only one namespace level is scoped
+      const [namespace, basename] = segments;
+      if (activeKnowledge && !activeKnowledge.includes(namespace)) continue;
+      const stem = basename.slice(0, -'.md'.length);
+      const matches = namespacedTeamRules.get(stem) ?? [];
+      matches.push(file);
+      namespacedTeamRules.set(stem, matches);
+    }
+
+    const ambiguousReported = new Set<string>();
+
     // Collect the best candidate for each rule name across all tool directories
-    const candidates = new Map<string, { sourcePath: string; mtime: number; status: ResourceItemStatus }>();
+    const candidates = new Map<string, {
+      sourcePath: string; mtime: number; status: ResourceItemStatus; teamRelPath: string;
+    }>();
     // One read per team rule, shared across every tool dir that compares against it.
     const teamContentCache = new Map<string, string>();
     const readTeamRule = async (filePath: string): Promise<string> => {
@@ -75,7 +101,27 @@ export class RulesHandler extends ResourceHandler {
 
         const localFilePath = path.join(rulesDir, file);
         // Team repo always stores `.md`, keyed by rule name.
-        const teamFileName = `${name}.md`;
+        let teamFileName = `${name}.md`;
+        if (!teamRules.has(teamFileName) && !name.includes('/')) {
+          const namespaced = namespacedTeamRules.get(name) ?? [];
+          if (namespaced.length === 1) {
+            teamFileName = namespaced[0];
+          } else if (namespaced.length > 1) {
+            // Picking one would overwrite another namespace's rule with content
+            // that was never reviewed against it. Warn once per rule, not once
+            // per tool directory that happens to hold a copy.
+            if (!ambiguousReported.has(name)) {
+              ambiguousReported.add(name);
+              log.warn(
+                `[rules] Skipped ${name}: the team repo has it in more than one active namespace `
+                + `(${namespaced.join(', ')}). Rename one, or edit the namespaced copy directly.`,
+              );
+            }
+            continue;
+          }
+        }
+
+        const teamRelPath = `rules/${teamFileName}`;
 
         if (teamRules.has(teamFileName)) {
           // File exists in team repo — check if content differs
@@ -98,7 +144,7 @@ export class RulesHandler extends ResourceHandler {
           const mtime = await getFileMtime(localFilePath);
           const existing = candidates.get(name);
           if (!existing || mtime > existing.mtime) {
-            candidates.set(name, { sourcePath: localFilePath, mtime, status: 'modified' });
+            candidates.set(name, { sourcePath: localFilePath, mtime, status: 'modified', teamRelPath });
           }
         } else {
           // File does not exist in team repo — candidate for "new".
@@ -110,12 +156,12 @@ export class RulesHandler extends ResourceHandler {
           const existing = candidates.get(name);
           if (!existing) {
             const mtime = await getFileMtime(localFilePath);
-            candidates.set(name, { sourcePath: localFilePath, mtime, status: 'new' });
+            candidates.set(name, { sourcePath: localFilePath, mtime, status: 'new', teamRelPath });
           } else if (existing.status === 'new') {
             // Multiple tool dirs have the same new file — pick latest mtime
             const mtime = await getFileMtime(localFilePath);
             if (mtime > existing.mtime) {
-              candidates.set(name, { sourcePath: localFilePath, mtime, status: 'new' });
+              candidates.set(name, { sourcePath: localFilePath, mtime, status: 'new', teamRelPath });
             }
           }
         }
@@ -125,12 +171,17 @@ export class RulesHandler extends ResourceHandler {
     // Convert candidates map to items array
     const items: ResourceItem[] = [];
     for (const [name, candidate] of candidates) {
+      // `rules/<ns>/<file>.md` is namespaced; `rules/<file>.md` is shared. State
+      // it on the item so an open PR can reuse the destination, the way skills do.
+      const segments = candidate.teamRelPath.split('/');
+      const namespace = segments.length > 2 ? segments[1] : undefined;
       items.push({
         name,
         type: 'rules',
         sourcePath: candidate.sourcePath,
-        relativePath: `rules/${name}.md`,
+        relativePath: candidate.teamRelPath,
         status: candidate.status,
+        ...(namespace ? { namespace } : {}),
       });
     }
 

@@ -254,8 +254,11 @@ teamai projects members hai-inference # Who is registered on a project
 Member registration is a **side-effect of `init`**: running `teamai init --project <id>`
 appends `<id>` to your `members/<user>.yaml` roster (append + dedupe across
 directories), so the team can answer "who is on project X". `teamai push --project <id>`
-pushes skills into that project's skills namespace (resolved from the manifest),
-mirroring `teamai push --role`.
+pushes each new resource into that project's namespace for its own resource type
+(resolved from the manifest): a skill into `resources.skills`, a rule into
+`resources.knowledge`, an agent into `resources.agents`. If the project declares
+no namespace for a type being pushed, the push stops and names that type rather
+than writing to the shared root, where the resource would reach everyone.
 
 Example local config:
 
@@ -575,10 +578,10 @@ Exclusion rules take effect after role and tag filtering. When running `teamai p
 ```bash
 teamai push          # Scan for new/modified resources, create an MR
 teamai push --all    # Skip confirmation, push directly
-teamai push --role pm  # Push this skill to skills/pm/<skill-name>/
+teamai push --role pm  # Push into the pm namespace (skills/pm/, rules/pm/, agents/pm/)
 ```
 
-**Namespace selection (new skills):** When pushing a new skill, the CLI automatically detects available namespaces and offers an interactive choice:
+**Namespace selection (new resources):** When pushing a new skill, rule or agent, the CLI automatically detects available namespaces and offers an interactive choice:
 
 ```
 Which namespace should new skills be pushed to?
@@ -588,10 +591,12 @@ Which namespace should new skills be pushed to?
 Choose namespace [1-3] (default: 1 = common):
 ```
 
+- Each resource type resolves from its own axis: skills from the `skills` namespaces, rules from `knowledge`, agents from `agents`. A push that carries several types asks once per axis
 - If `primaryRole` is set, the list of available namespaces is expanded from the manifest
-- If `primaryRole` is not set, the team repo's directory structure is scanned automatically
+- If `primaryRole` is not set, the team repo's directory structure is scanned automatically for skills; a new rule or agent stays at the shared root
 - A single namespace is auto-selected; use `--role <id>` to choose one explicitly
-- Modifying an existing skill automatically keeps its original namespace
+- Modifying an existing resource automatically keeps its original namespace
+- The chosen destination is printed for each resource, e.g. `[rules] my-rule → rules/pm/my-rule.md`
 
 **Updating an open PR instead of duplicating it:** If a resource is already waiting in an unmerged PR, re-running `teamai push` on it updates that existing PR in place (by force-pushing its branch) rather than opening a duplicate. Keep the resource selected to update its PR; deselect it to leave the PR untouched. Unrelated resources selected in the same run go into their own new PR. Once the PR merges (or its branch is removed from the remote), the record is cleared and the next push opens a fresh PR as usual.
 

@@ -22,6 +22,11 @@ import { getDataHome, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafePath, assertSafeResourceName, defaultAllowedRoots } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces } from './roles.js';
+import type { ProjectsManifest } from './projects.js';
+import {
+  isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, resolveProjectNamespace,
+  skillNamespacePath, withNamespace, type PlaceableType,
+} from './push-namespaces.js';
 import { askQuestion, askSelection } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
 
@@ -60,26 +65,102 @@ export async function filterExistingTopLevelPaths(
 }
 
 /**
- * Resolve available skill namespaces for the current user.
- * Returns the deduplicated list from the manifest (via role config),
- * or falls back to [primaryRole] if no manifest exists.
+ * The namespaces this user could push a new `type` into, on that type's own
+ * axis: the deduplicated list from the roles manifest, or — for skills, which
+ * are the only type with a detector — the namespace directories the team repo
+ * already has.
  */
-async function resolveSkillNamespaces(
-  repoPath: string,
-  primaryRole: string,
-  additionalRoles: string[],
-): Promise<string[]> {
-  try {
-    const manifest = await loadRolesManifest(repoPath);
-    const namespaces = resolveRoleResourceNamespaces({
-      manifest,
-      primaryRole,
-      additionalRoles,
-    });
-    return namespaces.skills;
-  } catch {
-    return [primaryRole];
+async function namespaceCandidates(type: PlaceableType, localConfig: LocalConfig): Promise<string[]> {
+  if (localConfig.primaryRole) {
+    try {
+      const manifest = await loadRolesManifest(localConfig.repo.localPath);
+      const namespaces = resolveRoleResourceNamespaces({
+        manifest,
+        primaryRole: localConfig.primaryRole,
+        additionalRoles: localConfig.additionalRoles ?? [],
+      });
+      return namespaces[NAMESPACE_AXIS[type]];
+    } catch {
+      // Legacy fallback: with no readable manifest a role id doubles as its
+      // skills namespace. That convention only ever existed for skills.
+      return type === 'skills' ? [localConfig.primaryRole] : [];
+    }
   }
+
+  // No role configured. Skills can still be placed by detecting the team repo's
+  // existing namespace directories; rules and agents have no such detector, so
+  // a new one stays at the shared root.
+  if (type !== 'skills') return [];
+  try {
+    return await scanTeamRepoNamespaces(localConfig.repo.localPath);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Where a new root-level resource should land, or why push must stop. The two
+ * stop states are separate because they exit differently: a manifest that
+ * cannot answer is a failure (exit 2), while a selection the user typed wrong
+ * ends the run without an error code, as it did before.
+ */
+type NewResourceDestination =
+  | { kind: 'namespace'; namespace: string }
+  | { kind: 'shared-root' }
+  | { kind: 'unresolvable'; message: string }
+  | { kind: 'invalid-selection'; message: string };
+
+/**
+ * Decide the namespace for the new root-level resources of one type.
+ *
+ * Every axis answers this the same way — that consistency is the fix for #649 —
+ * but each reads its own namespace list, so a project whose `knowledge` and
+ * `skills` namespaces differ sends a rule and a skill to different directories.
+ */
+async function resolveNamespaceForNew(
+  type: PlaceableType,
+  options: { role?: string; project?: string; silent?: boolean },
+  localConfig: LocalConfig,
+  projectsManifest: ProjectsManifest | null,
+): Promise<NewResourceDestination> {
+  if (options.project && projectsManifest) {
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
+    return resolved.ok
+      ? { kind: 'namespace', namespace: resolved.namespace }
+      : { kind: 'unresolvable', message: resolved.message };
+  }
+
+  // An explicit --role is a literal namespace on every axis (already checked
+  // for path traversal before selection).
+  if (options.role) return { kind: 'namespace', namespace: options.role };
+
+  const candidates = await namespaceCandidates(type, localConfig);
+  if (candidates.length === 0) return { kind: 'shared-root' };
+  if (candidates.length === 1) return { kind: 'namespace', namespace: candidates[0] };
+  if (options.silent) {
+    // Skills keep their historical silent default (the primary role id); no
+    // other axis ever had that convention, so they take the first candidate.
+    const skillsDefault = type === 'skills' ? localConfig.primaryRole : undefined;
+    return { kind: 'namespace', namespace: skillsDefault ?? candidates[0] };
+  }
+
+  console.log('');
+  console.log(`Which namespace should new ${type} be pushed to?`);
+  candidates.forEach((ns, index) => {
+    console.log(`  ${index + 1}. ${ns}`);
+  });
+  console.log('');
+  const answer = await askQuestion(
+    `Choose namespace [1-${candidates.length}] (default: 1 = ${candidates[0]}): `,
+  );
+  const selection = answer ? Number.parseInt(answer, 10) : 1;
+  if (Number.isNaN(selection) || selection < 1 || selection > candidates.length) {
+    return {
+      kind: 'invalid-selection',
+      message: `Invalid selection. Choose a number between 1 and ${candidates.length}.`,
+    };
+  }
+  return { kind: 'namespace', namespace: candidates[selection - 1] };
 }
 
 /**
@@ -332,39 +413,37 @@ export async function push(
   const { localConfig, teamConfig } = await autoDetectInit();
   assertNotReadOnly(localConfig, 'teamai push');
 
-  // --project is a destination override expressed as a logical project: resolve
-  // it to the project's skills namespace (from manifest/projects.yaml) and reuse
-  // the --role landing logic below. Deliberately manifest-resolved, not the raw
-  // project id, so it agrees with what pull syncs (issue #375 P2 lesson).
+  // --project is a destination override expressed as a logical project. Each
+  // resource type then resolves from its OWN axis in manifest/projects.yaml —
+  // skills from `skills`, rules from `knowledge`, agents from `agents` — because
+  // a project may declare different namespaces for each (issue #649). A missing
+  // namespace only blocks a push that actually selects that type: the skills
+  // axis resolves against the scan, because it also relocates modified skills
+  // and the listing has to show where they go, but a failure there is held
+  // until the selection proves a skill is going out.
+  // Deliberately manifest-resolved, not the raw project id, so it agrees with
+  // what pull syncs (issue #375 P2 lesson).
+  let projectsManifest: ProjectsManifest | null = null;
   if (options.project) {
     if (options.role) {
       log.error('Use either --role or --project, not both.');
       process.exitCode = 2;
       return;
     }
-    const { loadProjectsManifest, resolveProjectResourceNamespaces } = await import('./projects.js');
-    const manifest = await loadProjectsManifest(localConfig.repo.localPath);
-    if (!manifest) {
+    const { loadProjectsManifest, findProject, unknownProjectMessage } = await import('./projects.js');
+    projectsManifest = await loadProjectsManifest(localConfig.repo.localPath);
+    if (!projectsManifest) {
       log.error('This team repo defines no projects (no manifest/projects.yaml).');
       process.exitCode = 2;
       return;
     }
-    let skillNamespaces: string[];
-    try {
-      skillNamespaces = resolveProjectResourceNamespaces({ manifest, activeProjects: [options.project] }).skills;
-    } catch (e) {
-      log.error((e as Error).message);
+    // The id is checked here, not with the namespaces: a typo must fail even on
+    // a push where nothing needs placing, instead of being silently ignored.
+    if (!findProject(projectsManifest, options.project)) {
+      log.error(unknownProjectMessage(projectsManifest, options.project));
       process.exitCode = 2;
       return;
     }
-    if (skillNamespaces.length !== 1) {
-      log.error(skillNamespaces.length === 0
-        ? `Project "${options.project}" declares no skills namespace; use --role <ns> to target one explicitly.`
-        : `Project "${options.project}" maps to multiple skills namespaces (${skillNamespaces.join(', ')}); use --role <ns> to pick one.`);
-      process.exitCode = 2;
-      return;
-    }
-    options.role = skillNamespaces[0];
   }
   try {
     const configContent = await readFileSafe(path.join(localConfig.repo.localPath, 'teamai.yaml'));
@@ -425,7 +504,7 @@ export async function push(
           if (pendingTeamConfig !== null) {
             await writeFile(path.join(wtConfig.repo.localPath, 'teamai.yaml'), pendingTeamConfig);
           }
-          await pushCore(wtConfig, teamConfig, options, pendingTeamConfig, result);
+          await pushCore(wtConfig, teamConfig, options, projectsManifest, pendingTeamConfig, result);
         });
       } catch (e) {
         if (e instanceof EmptyRepoError) {
@@ -453,7 +532,7 @@ export async function push(
     return;
   }
   try {
-    await pushCore(localConfig, teamConfig, options, null, result);
+    await pushCore(localConfig, teamConfig, options, projectsManifest, null, result);
   } finally {
     await releaseLock(syncLock);
   }
@@ -462,7 +541,9 @@ export async function push(
 async function pushCore(
   localConfig: LocalConfig,
   teamConfig: TeamaiConfig,
-  options: GlobalOptions & { all?: boolean; role?: string },
+  options: GlobalOptions & { all?: boolean; role?: string; project?: string },
+  /** Loaded by `push` when --project is given; the namespace source for it. */
+  projectsManifest: ProjectsManifest | null = null,
   initialPendingTeamConfig: string | null = null,
   result?: { completed: boolean },
 ): Promise<void> {
@@ -710,26 +791,52 @@ async function pushCore(
     }
   }
 
-  // An explicit --role is a destination override for every selected skill,
-  // including modified skills. Keep relativePath aligned with pushItem's
+  // An explicit --role or --project is a destination override for every selected
+  // skill, including modified ones. Keep relativePath aligned with pushItem's
   // destination so git stages the files that were actually copied (#331).
+  // Rules and agents are deliberately NOT relocated here: pushItem writes rather
+  // than moves, so moving one that already lives in a namespace would leave the
+  // original behind (#654). They are placed in step 4, and only when new.
+  let skillsDestination: string | undefined;
+  // Held rather than reported: the skills axis resolves here so the listing can
+  // show where a relocated skill goes, but a project that cannot answer for
+  // skills must only stop the push if a skill is actually selected.
+  let skillsDestinationError: string | undefined;
   if (options.role) {
     try {
+      // --role now names a directory on every axis, so this message must not
+      // claim the problem is with a skill.
       assertSafeResourceName(options.role);
+    } catch (e) {
+      log.error(`Invalid --role value "${options.role}": ${(e as Error).message}`);
+      process.exitCode = 2;
+      return;
+    }
+    skillsDestination = options.role;
+  } else if (options.project && projectsManifest && allItems.some((i) => i.type === 'skills')) {
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, 'skills');
+    if (resolved.ok) {
+      skillsDestination = resolved.namespace;
+    } else {
+      skillsDestinationError = resolved.message;
+    }
+  }
+  if (skillsDestination) {
+    try {
       for (const item of allItems) {
         if (item.type === 'skills') {
           assertSafeResourceName(item.name);
         }
       }
     } catch (e) {
-      log.error(`Invalid skill role or name: ${(e as Error).message}`);
+      log.error(`Invalid skill name: ${(e as Error).message}`);
       process.exitCode = 2;
       return;
     }
     for (const item of allItems) {
       if (item.type !== 'skills') continue;
-      item.namespace = options.role;
-      item.relativePath = `skills/${options.role}/${item.name}`;
+      item.namespace = skillsDestination;
+      item.relativePath = skillNamespacePath(skillsDestination, item.name);
     }
   }
 
@@ -772,9 +879,10 @@ async function pushCore(
     const num = `${i + 1}.`.padStart(4);
     console.log(`  ${num} [${item.type}] ${item.name}${statusLabel}`);
     console.log(`       from: ${item.sourcePath}`);
-    // Show destination for modified skills that already have a namespace
-    if (item.type === 'skills' && item.namespace) {
-      console.log(`       to:   skills/${item.namespace}/${item.name}`);
+    // Show the destination whenever it is already namespaced — which one it is
+    // decides who receives the resource, so it is not obvious from the name.
+    if (!isAtSharedRoot(item)) {
+      console.log(`       to:   ${item.relativePath}`);
     }
     const openPrs = findPendingForItem(pendingPushes, item);
     if (openPrs.length > 0) {
@@ -828,13 +936,23 @@ async function pushCore(
       `Updating existing PR instead of creating a new one: ${group.reuse.prUrl ?? group.reuse.branch}`,
     );
     // Reuse the destination chosen when that PR was opened rather than asking
-    // again — a different answer would silently move the skill.
+    // again — a different answer would silently move the resource, and the
+    // branch is force-pushed, so the old copy would not even stay behind.
     for (const item of group.items) {
-      if (item.type !== 'skills' || item.status !== 'new') continue;
+      if (item.status !== 'new' || !isPlaceableType(item.type)) continue;
       const ns = pendingNamespaceFor(group.reuse, item);
       if (!ns) continue;
-      item.namespace = ns;
-      item.relativePath = `skills/${ns}/${item.name}`;
+      if (item.type === 'skills') {
+        // A skill's path is derived from its name, so the recorded namespace
+        // replaces whatever a --role/--project override wrote above.
+        item.namespace = ns;
+        item.relativePath = skillNamespacePath(ns, item.name);
+      } else if (isAtSharedRoot(item)) {
+        // A rule or agent carries its own path from the scanner, and that path
+        // is authoritative when it already names a namespace (#654).
+        item.namespace = ns;
+        item.relativePath = withNamespace(item.relativePath, ns);
+      }
     }
   }
   for (const entry of partiallySelectedEntries(selectedItems, pendingPushes)) {
@@ -844,89 +962,54 @@ async function pushCore(
     );
   }
 
-  // ── Step 4: Resolve namespace for NEW skills only (after selection) ─
-  const newSkills = selectedItems.filter(
-    (i) => i.type === 'skills' && i.status === 'new' && !i.namespace,
-  );
-  let resolvedNamespaceForNew: string | undefined;
+  // ── Step 4: Place NEW root-level resources in a namespace (after selection) ─
+  // One decision per axis: skills from the `skills` namespaces, rules from
+  // `knowledge`, agents from `agents`. Before #649 only skills were placed, so a
+  // new rule or agent landed at the shared root and pull shipped it to every
+  // member. Only items that would otherwise land at the root are touched —
+  // anything the scanner already namespaced keeps the path it came with.
+  // A project that declares no skills namespace only blocks the push once a
+  // skill is actually selected, so a rule can still go out from a scan that
+  // happens to contain an unrelated skill.
+  if (skillsDestinationError && selectedItems.some((i) => i.type === 'skills')) {
+    log.error(skillsDestinationError);
+    process.exitCode = 2;
+    return;
+  }
 
-  if (newSkills.length > 0) {
-    if (options.role) {
-      // Explicit --role flag: use as namespace directly (backward compat)
-      resolvedNamespaceForNew = options.role;
-    } else if (localConfig.primaryRole) {
-      try {
-        const skillNamespaces = await resolveSkillNamespaces(
-          localConfig.repo.localPath,
-          localConfig.primaryRole,
-          localConfig.additionalRoles ?? [],
-        );
+  for (const type of PLACEABLE_TYPES) {
+    const newAtRoot = selectedItems.filter(
+      (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i),
+    );
+    if (newAtRoot.length === 0) continue;
 
-        if (skillNamespaces.length === 0) {
-          resolvedNamespaceForNew = undefined;
-        } else if (skillNamespaces.length === 1) {
-          resolvedNamespaceForNew = skillNamespaces[0];
-        } else if (options.silent) {
-          resolvedNamespaceForNew = localConfig.primaryRole;
-        } else {
-          console.log('');
-          console.log('Which namespace should new skills be pushed to?');
-          skillNamespaces.forEach((ns, index) => {
-            console.log(`  ${index + 1}. ${ns}`);
-          });
-          console.log('');
-          const answer = await askQuestion(
-            `Choose namespace [1-${skillNamespaces.length}] (default: 1 = ${skillNamespaces[0]}): `,
-          );
-          const selection = answer ? Number.parseInt(answer, 10) : 1;
-          if (Number.isNaN(selection) || selection < 1 || selection > skillNamespaces.length) {
-            log.error(`Invalid selection. Choose a number between 1 and ${skillNamespaces.length}.`);
-            return;
-          }
-          resolvedNamespaceForNew = skillNamespaces[selection - 1];
-        }
-      } catch (e) {
-        log.error((e as Error).message);
+    const destination = await resolveNamespaceForNew(type, options, localConfig, projectsManifest);
+    switch (destination.kind) {
+      case 'unresolvable':
+        log.error(destination.message);
+        process.exitCode = 2;
         return;
-      }
-    } else {
-      // No role configured — auto-detect namespaces from team repo structure
-      try {
-        const detectedNamespaces = await scanTeamRepoNamespaces(localConfig.repo.localPath);
-
-        if (detectedNamespaces.length === 0) {
-          resolvedNamespaceForNew = undefined;
-        } else if (detectedNamespaces.length === 1) {
-          resolvedNamespaceForNew = detectedNamespaces[0];
-        } else if (options.silent) {
-          resolvedNamespaceForNew = detectedNamespaces[0];
-        } else {
-          console.log('');
-          console.log('Which namespace should new skills be pushed to?');
-          detectedNamespaces.forEach((ns, index) => {
-            console.log(`  ${index + 1}. ${ns}`);
-          });
-          console.log('');
-          const answer = await askQuestion(
-            `Choose namespace [1-${detectedNamespaces.length}] (default: 1 = ${detectedNamespaces[0]}): `,
-          );
-          const selection = answer ? Number.parseInt(answer, 10) : 1;
-          if (Number.isNaN(selection) || selection < 1 || selection > detectedNamespaces.length) {
-            log.error(`Invalid selection. Choose a number between 1 and ${detectedNamespaces.length}.`);
-            return;
-          }
-          resolvedNamespaceForNew = detectedNamespaces[selection - 1];
+      case 'invalid-selection':
+        log.error(destination.message);
+        return;
+      case 'shared-root':
+        // The one destination that reaches the whole team is the one worth
+        // saying out loud, so it is never the result of a silent fallback.
+        for (const item of newAtRoot) {
+          log.warn(`[${type}] ${item.name} → ${item.relativePath} (shared with everyone: no namespace resolved)`);
         }
-      } catch {
-        resolvedNamespaceForNew = undefined;
-      }
-    }
-
-    // Apply namespace to new skills
-    for (const item of newSkills) {
-      if (resolvedNamespaceForNew) {
-        item.namespace = resolvedNamespaceForNew;
-        item.relativePath = `skills/${resolvedNamespaceForNew}/${item.name}`;
+        continue;
+      case 'namespace':
+        for (const item of newAtRoot) {
+          item.namespace = destination.namespace;
+          item.relativePath = withNamespace(item.relativePath, destination.namespace);
+          // The silent widening in #649 was the real damage: say where it went.
+          log.info(`[${type}] ${item.name} → ${item.relativePath}`);
+        }
+        break;
+      default: {
+        const unhandled: never = destination;
+        throw new Error(`Unhandled namespace destination: ${JSON.stringify(unhandled)}`);
       }
     }
   }

@@ -340,6 +340,107 @@ scope: 'user',
     const names = items.map((i) => i.name);
     expect(names).not.toContain('common/old-rule');
   });
+
+  /**
+   * Once push places a new rule under rules/<ns>/, the author's own copy stays
+   * at the tool's rules root. Matching by full path alone would read it as a
+   * brand-new rule on the next push and send a second copy to the shared root,
+   * where it would reach the whole team (issue #649).
+   */
+  it('matches a root-level local rule against its namespaced team copy', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'fe-know'));
+    await fse.writeFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'team content');
+
+    await fse.writeFile(path.join(homeDir, '.claude/rules/my-rule.md'), 'edited locally');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'my-rule');
+    expect(item?.status).toBe('modified');
+    expect(item?.relativePath).toBe('rules/fe-know/my-rule.md');
+    // Recorded on the item too, so an open PR can reuse the destination.
+    expect(item?.namespace).toBe('fe-know');
+  });
+
+  it('reports a subdirectory rule name as its namespace', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'common'));
+    await fse.writeFile(path.join(teamRulesDir, 'common/coding-standards.md'), 'team');
+
+    await fse.ensureDir(path.join(homeDir, '.claude/rules/common'));
+    await fse.writeFile(path.join(homeDir, '.claude/rules/common/coding-standards.md'), 'edited');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'common/coding-standards');
+    expect(item?.namespace).toBe('common');
+  });
+
+  it('leaves the namespace unset for a rule at the shared root', async () => {
+    await fse.writeFile(path.join(homeDir, '.claude/rules/shared.md'), 'everyone');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'shared');
+    expect(item?.relativePath).toBe('rules/shared.md');
+    expect(item?.namespace).toBeUndefined();
+  });
+
+  it('does not re-push a root-level local rule that equals its namespaced team copy', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'fe-know'));
+    await fse.writeFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'same content');
+
+    await fse.writeFile(path.join(homeDir, '.claude/rules/my-rule.md'), 'same content');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    expect(items.map((i) => i.name)).not.toContain('my-rule');
+  });
+
+  it('leaves an ambiguous root-level rule alone when two namespaces hold that name', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'ns-a'));
+    await fse.ensureDir(path.join(teamRulesDir, 'ns-b'));
+    await fse.writeFile(path.join(teamRulesDir, 'ns-a/my-rule.md'), 'a');
+    await fse.writeFile(path.join(teamRulesDir, 'ns-b/my-rule.md'), 'b');
+
+    await fse.writeFile(path.join(homeDir, '.claude/rules/my-rule.md'), 'local');
+    // A second tool directory holds the same rule, which used to warn twice.
+    await fse.ensureDir(path.join(homeDir, '.codebuddy', 'rules'));
+    await fse.writeFile(path.join(homeDir, '.codebuddy/rules/my-rule.md'), 'local');
+    teamConfig.toolPaths.codebuddy = { skills: '.codebuddy/skills', rules: '.codebuddy/rules' };
+
+    const { log } = await import('../utils/logger.js');
+    vi.mocked(log.warn).mockClear();
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    // Guessing one would overwrite another namespace's rule, so the scan skips
+    // it and says so rather than picking.
+    expect(items.map((i) => i.name)).not.toContain('my-rule');
+    // Once for the rule, not once per tool directory holding a copy.
+    const warnings = vi.mocked(log.warn).mock.calls
+      .filter((call) => String(call[0]).includes('my-rule'));
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('still treats a root-level rule as new when the namespaced copy is not active', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'other-ns'));
+    await fse.writeFile(path.join(teamRulesDir, 'other-ns/my-rule.md'), 'team content');
+    await fse.ensureDir(path.join(localConfig.repo.localPath, 'manifest'));
+    await fse.writeFile(
+      path.join(localConfig.repo.localPath, 'manifest', 'roles.yaml'),
+      'version: 1\nroles:\n  - id: mine\n    description: Mine\n    resources:\n      knowledge: [mine]\n      skills: [mine]\n',
+    );
+
+    await fse.writeFile(path.join(homeDir, '.claude/rules/my-rule.md'), 'local');
+
+    const items = await handler.scanLocalForPush(
+      teamConfig,
+      { ...localConfig, primaryRole: 'mine' },
+    );
+    const item = items.find((i) => i.name === 'my-rule');
+    expect(item?.status).toBe('new');
+    expect(item?.relativePath).toBe('rules/my-rule.md');
+  });
 });
 
 describe('RulesHandler.scanTeamForPull — subdirectory support', () => {

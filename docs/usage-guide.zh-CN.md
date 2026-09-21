@@ -238,8 +238,10 @@ teamai projects members hai-inference # 查看某项目下注册了哪些成员
 
 成员登记是 `init` 的**副作用**：执行 `teamai init --project <id>` 会把 `<id>`
 追加进你的 `members/<user>.yaml` 名册（跨目录 append + 去重），于是团队侧可以回答
-「谁在项目 X」。`teamai push --project <id>` 会把 skill 推送到该项目的 skills
-namespace（从 manifest 解析），对标 `teamai push --role`。
+「谁在项目 X」。`teamai push --project <id>` 会按资源类型各自的维度（从 manifest
+解析）把新资源推送到该项目对应的 namespace：skill 走 `resources.skills`，rule 走
+`resources.knowledge`，agent 走 `resources.agents`。若该项目未为本次推送涉及的类型
+声明 namespace，命令会报错并指明该类型，而不会退回共享根目录（那会发给所有人）。
 
 本地配置示例：
 
@@ -553,10 +555,10 @@ excludedSkills:
 ```bash
 teamai push          # 扫描新增/修改的资源，创建 MR
 teamai push --all    # 跳过确认，直接推送
-teamai push --role pm  # 将本次 skill 推送到 skills/pm/<skill-name>/
+teamai push --role pm  # 推送到 pm namespace（skills/pm/、rules/pm/、agents/pm/）
 ```
 
-**命名空间选择（新 skill）：** 推送新 skill 时，CLI 会自动检测可用的命名空间并提供交互式选择：
+**命名空间选择（新资源）：** 推送新的 skill、rule 或 agent 时，CLI 会自动检测可用的命名空间并提供交互式选择：
 
 ```
 Which namespace should new skills be pushed to?
@@ -566,10 +568,12 @@ Which namespace should new skills be pushed to?
 Choose namespace [1-3] (default: 1 = common):
 ```
 
+- 每种资源类型按各自维度解析：skill 用 `skills`，rule 用 `knowledge`，agent 用 `agents`。一次推送涉及多种类型时，每个维度各询问一次
 - 有 `primaryRole` 时，从 manifest 展开可用 namespace 列表
-- 无 `primaryRole` 时，自动扫描团队仓库目录结构
+- 无 `primaryRole` 时，skill 自动扫描团队仓库目录结构；新的 rule / agent 保留在共享根目录
 - 单一命名空间时自动选中；也可用 `--role <id>` 显式指定
-- 修改已有 skill 时自动保持原 namespace
+- 修改已有资源时自动保持原 namespace
+- 每个资源的落点都会打印出来，例如 `[rules] my-rule → rules/pm/my-rule.md`
 
 **更新已存在的 PR 而非重复创建：** 如果某个资源已在一个未合并的 PR 中等待评审，再次对它执行 `teamai push` 会就地更新那个已存在的 PR（通过 force-push 其分支），而不是新开一个重复的 PR。保持该资源被选中即更新其 PR；取消勾选则不动它。同一次运行中选中的其他无关资源会进入各自新开的 PR。一旦该 PR 合并（或其分支从远端删除），记录会被清除，下次 push 照常新开 PR。
 
