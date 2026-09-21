@@ -16,7 +16,7 @@ import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js'
 const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
 const SKILL_MD = 'SKILL.md';
 const CODEX_TOOL = 'codex';
-const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
+export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
 
 /** Prefer Codex's shared skill when that skill already lives there. */
 export async function resolveSkillDestination(

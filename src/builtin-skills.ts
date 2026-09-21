@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { pathExists } from './utils/fs.js';
+import { pathExists, remove } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { resolveSkillDestination } from './resources/skills.js';
+import { resolveSkillDestination, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
 
@@ -50,13 +50,29 @@ export const LEGACY_BUILTIN_SKILL_NAMES = new Set([
 ]);
 
 /**
- * Built-in skills that depend on recall being enabled. Skipped when recall is disabled.
+ * Remove the skill directories earlier releases deployed.
  *
- * Only teamai-share-learnings belongs here: it contributes learnings back to the
- * team repo, which is meaningful only when recall is on. team-wiki-codebase is a
- * knowledge-base generator and does not depend on recall, so it must always deploy.
+ * Unconditional: those trees were overwritten on every pull (`overwrite: true`),
+ * so no local edit ever survived in them, and leaving them behind costs every
+ * agent on the machine the context they were deployed to save.
  */
-export const RECALL_DEPENDENT_SKILLS = new Set(['teamai-share-learnings']);
+async function pruneLegacyBuiltinSkills(tool: string, configuredSkillsPath: string, baseDir: string): Promise<void> {
+  for (const legacyName of LEGACY_BUILTIN_SKILL_NAMES) {
+    const candidates = [
+      path.join(baseDir, configuredSkillsPath, legacyName),
+      path.join(baseDir, SHARED_AGENT_SKILLS_PATH, legacyName),
+    ];
+    for (const dir of candidates) {
+      if (!await pathExists(dir)) continue;
+      try {
+        await remove(dir);
+        log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})`);
+      } catch (e) {
+        log.debug(`Could not remove legacy built-in skill ${legacyName} from ${tool}: ${(e as Error).message}`);
+      }
+    }
+  }
+}
 
 /**
  * Deploy CLI built-in skills to all configured AI tool skill directories.
@@ -73,7 +89,7 @@ export const RECALL_DEPENDENT_SKILLS = new Set(['teamai-share-learnings']);
  * - Built-in skills directory doesn't exist (dev environment without build)
  * - A tool's skills directory is not configured
  */
-export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { reportingOnly?: boolean; skipRecall?: boolean }): Promise<number> {
+export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { reportingOnly?: boolean }): Promise<number> {
   // Reporting-only HTTP mode has no team repo to write to, so the workflows the
   // stub routes to are non-functional there. Skip built-in skills entirely.
   if (options?.reportingOnly) {
@@ -98,7 +114,6 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
   // Filter to directories that contain SKILL.md
   const skillNames: string[] = [];
   for (const entry of entries) {
-    if (options?.skipRecall && RECALL_DEPENDENT_SKILLS.has(entry)) continue;
     const skillMd = path.join(builtinDir, entry, 'SKILL.md');
     if (await pathExists(skillMd)) {
       skillNames.push(entry);
@@ -123,6 +138,8 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
       continue;
     }
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
+
+    await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir);
 
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);

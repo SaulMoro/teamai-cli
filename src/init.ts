@@ -1622,8 +1622,7 @@ export async function init(options: GlobalOptions & {
     // is available in the IDE right after init, without waiting for first pull.
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const skipRecall = !isRecallEnabled(localConfig, reloadedTeamConfig);
-      const deployed = await deployBuiltinSkills(reloadedTeamConfig, localConfig, { skipRecall });
+      const deployed = await deployBuiltinSkills(reloadedTeamConfig, localConfig);
       if (deployed > 0) {
         log.debug(`Deployed ${deployed} built-in skill(s)`);
       }

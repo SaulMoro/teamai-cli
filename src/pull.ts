@@ -1021,7 +1021,7 @@ async function pullForScope(
           const skipRecall = !isRecallEnabled(localConfig, freshConfig);
           try { const { deployBuiltinAgents } = await import('./builtin-agents.js'); await deployBuiltinAgents(freshConfig, localConfig, { skipRecall }); } catch {}
           try { const { deployBuiltinRules } = await import('./builtin-rules.js'); await deployBuiltinRules(freshConfig, localConfig, { skipRecall }); } catch {}
-          try { const { deployBuiltinSkills } = await import('./builtin-skills.js'); await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly, skipRecall }); } catch {}
+          try { const { deployBuiltinSkills } = await import('./builtin-skills.js'); await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly }); } catch {}
           // Refresh managed culture/shared-instruction blocks as well. A CLI
           // upgrade may add a new target file while the team repo SHA and tool
           // target set remain unchanged.
@@ -1295,8 +1295,7 @@ async function pullForScope(
   if (!options.dryRun) {
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const skipRecallForSkills = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly, skipRecall: skipRecallForSkills });
+      const deployed = await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly });
       if (deployed > 0) {
         log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
       }

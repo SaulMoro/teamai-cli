@@ -49,6 +49,37 @@ const SKILL_ALIASES: Readonly<Record<string, string>> = {
   'teamai-share-learnings': 'share',
 };
 
+/**
+ * Served skills that need recall to be on.
+ *
+ * `share` publishes a session's learnings into the team's learnings branch,
+ * which is meaningful only when recall is enabled. Before the discovery stub the
+ * gate was in deployment — the skill was simply absent. One stub routes to every
+ * workflow, so the gate moved here, where the command can also say what to turn
+ * on.
+ */
+const RECALL_DEPENDENT_SKILLS = new Set(['share']);
+
+/**
+ * Whether recall being off makes this skill unusable right now.
+ *
+ * Fails open: a machine with no team config (a fresh install reading the docs)
+ * gets the content rather than a refusal it cannot act on.
+ */
+export async function blockedByRecall(name: string): Promise<boolean> {
+  if (!RECALL_DEPENDENT_SKILLS.has(name)) return false;
+  try {
+    const [{ autoDetectInit }, { isRecallEnabled }] = await Promise.all([
+      import('./config.js'),
+      import('./types.js'),
+    ]);
+    const { localConfig, teamConfig } = await autoDetectInit();
+    return !isRecallEnabled(localConfig, teamConfig);
+  } catch {
+    return false;
+  }
+}
+
 /** A skill directory that ships inside the npm package. */
 export interface PackagedSkill {
   name: string;
@@ -253,12 +284,20 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
 
   const targets: PackagedSkill[] = [];
   if (options.all) {
+    // An inventory dump is not an attempt to run a workflow, so the recall gate
+    // stays out of it; asking for the skill by name is what hits the gate.
     targets.push(...servable);
   } else {
     for (const name of requested) {
       const skill = await resolvePackagedSkill(name, roots);
       if (!skill) {
         notFound(name, servable);
+        return;
+      }
+      if (await blockedByRecall(skill.name)) {
+        diagnostic(`${chalk.red('✖')} ${skill.name} needs recall, which is disabled for this team.`);
+        diagnostic('  Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
+        process.exitCode = 1;
         return;
       }
       targets.push(skill);

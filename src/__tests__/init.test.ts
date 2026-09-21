@@ -561,7 +561,7 @@ describe('init', () => {
   });
 
   describe('deploys built-in skills after init', () => {
-    it('calls deployBuiltinSkills with teamConfig and skipRecall when loadTeamConfig returns non-null', async () => {
+    it('calls deployBuiltinSkills with teamConfig when loadTeamConfig returns non-null', async () => {
       let cloneDone = false;
       pathExistsFn = (p: string) => {
         if (p === localPath) return cloneDone;
@@ -592,10 +592,11 @@ describe('init', () => {
       await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user' });
 
       expect(mockDeployBuiltinSkills).toHaveBeenCalled();
+      // No recall option: one stub deploys for everyone, and `teamai skill get
+      // share` is where recall is checked (#678).
       expect(mockDeployBuiltinSkills).toHaveBeenCalledWith(
         expect.objectContaining({ team: expect.any(String) }),
         expect.anything(),
-        expect.objectContaining({ skipRecall: expect.any(Boolean) }),
       );
     });
   });

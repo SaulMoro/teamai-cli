@@ -571,7 +571,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.opencode'))).toBe(false);
   });
 
-  it('still deploys the stub when recall is disabled (skipRecall)', async () => {
+  it('deploys the stub regardless of recall, and prunes the legacy directories', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
     const teamConfig = {
@@ -599,11 +599,18 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
       scope: 'user' as const,
     };
 
-    const deployed = await deployBuiltinSkills(teamConfig, localConfig, { skipRecall: true });
+    // Pre-stub releases left these behind in every agent directory.
+    await fse.ensureDir(path.join(homeDir, '.claude/skills/team-wiki-codebase/references'));
+    await fse.writeFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), '# old');
+    await fse.ensureDir(path.join(homeDir, '.claude/skills/teamai-share-learnings'));
+    await fse.writeFile(path.join(homeDir, '.claude/skills/teamai-share-learnings/SKILL.md'), '# old');
+
+    const deployed = await deployBuiltinSkills(teamConfig, localConfig);
 
     expect(deployed).toBeGreaterThan(0);
     // The stub routes to every workflow, so recall no longer gates deployment:
-    // `teamai skill get share` decides at run time whether recall is on.
+    // `teamai skill get share` decides at run time whether recall is on, and the
+    // directories earlier releases deployed are removed on the way.
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai/SKILL.md'))).toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai-share-learnings'))).toBe(false);
