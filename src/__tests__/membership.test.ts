@@ -175,7 +175,7 @@ describe('warnUnknownMembershipIds', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('reports a projects: key as restricting nothing when no projects manifest exists', async () => {
+  it('reports that project ids cannot be checked when no projects manifest exists', async () => {
     const repo = repoWith({ 'manifest/roles.yaml': ROLES_YAML });
     await warnUnknownMembershipIds(repo, 'mcp.yaml', [
       { kind: 'server', name: 'db', projects: ['checkout'] },
@@ -184,7 +184,8 @@ describe('warnUnknownMembershipIds', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     const message = warn.mock.calls[0][0] as string;
     expect(message).toContain('manifest/projects.yaml');
-    expect(message).toContain('restricts nothing');
+    expect(message).toContain('cannot be checked');
+    expect(message).toContain('bound to no project');
     expect(message).toContain('2');
     // Not the typo wording: there is no valid-id list to print.
     expect(message).not.toContain('unknown project id');
@@ -197,7 +198,7 @@ describe('warnUnknownMembershipIds', () => {
     });
     await warnUnknownMembershipIds(repo, 'mcp.yaml', [{ kind: 'server', name: 'db', projects: ['checkout'] }]);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('restricts nothing');
+    expect(warn.mock.calls[0][0]).toContain('cannot be checked');
   });
 
   it('stays silent about roles when the roles manifest cannot be read', async () => {

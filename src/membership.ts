@@ -87,11 +87,15 @@ function warnOnce(dedupeKey: string, message: string): void {
  * there is nothing to check against.
  *
  * The projects axis has one case the roles axis cannot have: a team with no
- * `manifest/projects.yaml` at all (or one defining zero projects). Every member
- * then has a null projects axis, so a `projects:` key restricts nothing and the
- * entry ships to everyone. That is reported with its own wording — there is no
- * valid-id list to suggest, and the mistake is a missing manifest rather than a
- * misspelled id.
+ * `manifest/projects.yaml` at all (or one defining zero projects). There is then
+ * no id list to check against, so that is reported with its own wording rather
+ * than as a typo.
+ *
+ * Note it is NOT the same as "the key has no effect". A directory's active
+ * projects come from its own config.yaml, not from the manifest, so a directory
+ * bound to `billing` still filters out a `projects: [checkout]` entry with the
+ * manifest missing. What the missing manifest does mean is that no id can be
+ * validated, and that a directory bound to no project receives every entry.
  */
 export async function warnUnknownMembershipIds(
   repoPath: string,
@@ -129,9 +133,9 @@ export async function warnUnknownMembershipIds(
   if (knownProjects.length === 0) {
     warnOnce(
       `${file}:projects:<no-manifest>`,
-      `projects: manifest/projects.yaml defines no projects, so "projects:" on ${projectScoped.length} ${file} `
-      + `${projectScoped.length === 1 ? 'entry' : 'entries'} restricts nothing — they are delivered to every member. `
-      + 'Define the projects there, or drop the key.',
+      `projects: manifest/projects.yaml defines no projects, so the "projects:" ids on ${projectScoped.length} `
+      + `${file} ${projectScoped.length === 1 ? 'entry' : 'entries'} cannot be checked, and every directory bound `
+      + 'to no project receives them. Define the projects there, or drop the key.',
     );
     return;
   }

@@ -334,7 +334,7 @@ hooks:
     expect(warnings[0]).toMatch(/unknown project id "chekout".*hooks\.yaml.*"typo"/);
   });
 
-  it('reports that projects: restricts nothing when the team has no projects manifest', async () => {
+  it('reports that project ids cannot be checked when the team has no projects manifest', async () => {
     await writeRolesYaml();
     await writeYaml(PROJECT_HOOKS);
     logWarn.mockClear();
@@ -343,7 +343,7 @@ hooks:
       membership: { roles: null, projects: null },
     });
     expect(defs.map((d) => d.key)).toEqual(['checkout-lint', 'billing-lint', 'everyone', 'nobody']);
-    const warnings = logWarn.mock.calls.map(([m]) => String(m)).filter((m) => /restricts nothing/.test(m));
+    const warnings = logWarn.mock.calls.map(([m]) => String(m)).filter((m) => /cannot be checked/.test(m));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('manifest/projects.yaml');
   });

@@ -439,7 +439,7 @@ servers:
       expect(warnings[0]).toMatch(/unknown project id "chekout".*mcp\.yaml.*"typo"/);
     });
 
-    it('reports that projects: restricts nothing when the team has no projects manifest', async () => {
+    it('reports that project ids cannot be checked when the team has no projects manifest', async () => {
       await fse.ensureDir(path.join(repoPath, 'manifest'));
       await fse.writeFile(path.join(repoPath, 'manifest', 'roles.yaml'), ROLES_YAML);
       await writeMcpYaml(SCOPED_YAML);
@@ -450,9 +450,22 @@ servers:
 
       // Inert key: with no manifest every member's projects axis is null, so all ship.
       expect(Object.keys(await claudeServers()).sort()).toEqual(['billing-db', 'checkout-db', 'shared']);
-      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).filter((m) => /restricts nothing/.test(m));
+      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).filter((m) => /cannot be checked/.test(m));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain('manifest/projects.yaml');
+    });
+
+    it('still filters by projects when the manifest is missing, for a directory that is bound to one', async () => {
+      // A directory's active projects come from its own config.yaml, not from the
+      // manifest. So a missing manifest means the ids cannot be VALIDATED — not
+      // that the key stops restricting, which only holds for a directory bound to
+      // no project.
+      await fse.ensureDir(path.join(repoPath, 'manifest'));
+      await fse.writeFile(path.join(repoPath, 'manifest', 'roles.yaml'), ROLES_YAML);
+      await writeMcpYaml(SCOPED_YAML);
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['billing'] });
+      expect(Object.keys(await claudeServers()).sort()).toEqual(['billing-db', 'shared']);
     });
   });
 
