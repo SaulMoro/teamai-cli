@@ -13,6 +13,8 @@ import {
   skillCatalog,
   skillGet,
   skillPath,
+  type PackagedSkill,
+  type PackagedSkillRoots,
 } from '../skill-content.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -39,6 +41,13 @@ function writeSkill(root: string, name: string, body: string, files: Record<stri
   return dir;
 }
 
+/** Resolve or fail the test, so the assertions below need no non-null operator. */
+async function mustResolve(name: string, roots: PackagedSkillRoots): Promise<PackagedSkill> {
+  const skill = await resolvePackagedSkill(name, roots);
+  if (!skill) throw new Error(`fixture skill not found: ${name}`);
+  return skill;
+}
+
 describe('packaged skill discovery', () => {
   let roots: ReturnType<typeof makeRoots>;
 
@@ -60,12 +69,12 @@ describe('packaged skill discovery', () => {
     expect(servable.every((s) => s.deployed)).toBe(false);
   });
 
-  it('falls back to skills/ before the content moves', async () => {
+  it('serves nothing when only the deployed stub is packaged', async () => {
     writeSkill(roots.deployRoot, 'teamai', '# hub\n');
 
-    const servable = await listServableSkills(roots);
-    expect(servable.map((s) => s.name)).toEqual(['teamai']);
-    expect(servable[0].deployed).toBe(true);
+    // A package without skill-data is broken, not a fallback to serving stubs:
+    // `skill get` reports it and says to reinstall.
+    expect(await listServableSkills(roots)).toEqual([]);
   });
 
   it('keeps the deployed stub reachable by its exact name', async () => {
@@ -117,8 +126,8 @@ describe('renderSkill', () => {
     const body = '---\nname: core\ndescription: d\n---\n\n# core\n\nbody text\n';
     writeSkill(roots.dataRoot, 'core', body);
 
-    const skill = await resolvePackagedSkill('core', roots);
-    expect(await renderSkill(skill!)).toBe(body);
+    const skill = await mustResolve('core', roots);
+    expect(await renderSkill(skill)).toBe(body);
   });
 
   it('appends references/ then templates/, recursively, sorted by relative path', async () => {
@@ -129,8 +138,8 @@ describe('renderSkill', () => {
       'templates/report.md': 'report\n',
     });
 
-    const skill = await resolvePackagedSkill('wiki', roots);
-    const out = await renderSkill(skill!, { full: true });
+    const skill = await mustResolve('wiki', roots);
+    const out = await renderSkill(skill, { full: true });
 
     expect(out).toBe(
       '# wiki\n' +
@@ -146,18 +155,18 @@ describe('renderSkill', () => {
       'references/howto.md': `see ${SKILL_DIR_PLACEHOLDER}/scripts/\n`,
     });
 
-    const skill = await resolvePackagedSkill('wiki', roots);
-    const out = await renderSkill(skill!, { full: true });
+    const skill = await mustResolve('wiki', roots);
+    const out = await renderSkill(skill, { full: true });
 
     expect(out).not.toContain(SKILL_DIR_PLACEHOLDER);
-    expect(out).toContain(`python3 ${skill!.dir}/scripts/scan_repo.py`);
-    expect(out).toContain(`see ${skill!.dir}/scripts/`);
+    expect(out).toContain(`python3 ${skill.dir}/scripts/scan_repo.py`);
+    expect(out).toContain(`see ${skill.dir}/scripts/`);
   });
 
   it('adds a trailing newline to files that lack one', async () => {
     writeSkill(roots.dataRoot, 'core', '# core');
-    const skill = await resolvePackagedSkill('core', roots);
-    expect(await renderSkill(skill!)).toBe('# core\n');
+    const skill = await mustResolve('core', roots);
+    expect(await renderSkill(skill)).toBe('# core\n');
   });
 });
 

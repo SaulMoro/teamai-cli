@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
-import { pathExists } from './utils/fs.js';
+import { listFilesRecursive, pathExists } from './utils/fs.js';
 import { readSkillDescription } from './agent-skills.js';
 
 // ─── CLI-served skill content ────────────────────────────
@@ -137,14 +137,9 @@ async function readSkillDirs(root: string, deployed: boolean): Promise<PackagedS
   return skills;
 }
 
-/**
- * Skills the CLI serves: everything under skill-data/, or — before the content
- * moves there — everything under skills/.
- */
+/** Skills the CLI serves on demand: everything under skill-data/. */
 export async function listServableSkills(roots: PackagedSkillRoots = packagedSkillRoots()): Promise<PackagedSkill[]> {
-  const served = await readSkillDirs(roots.dataRoot, false);
-  if (served.length > 0) return served;
-  return readSkillDirs(roots.deployRoot, true);
+  return readSkillDirs(roots.dataRoot, false);
 }
 
 /**
@@ -174,29 +169,12 @@ async function collectSupplementaryFiles(skillDir: string): Promise<Array<{ rela
   const files: Array<{ relativePath: string; content: string }> = [];
 
   for (const dirName of SUPPLEMENTARY_DIRS) {
-    const root = path.join(skillDir, dirName);
-    if (!(await pathExists(root))) continue;
-
-    // Recursive: our references/ nest (references/methodology/, references/agents/),
-    // so a single-level scan would silently serve an incomplete skill.
-    const walk = async (dir: string): Promise<string[]> => {
-      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      const found: string[] = [];
-      for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          found.push(...(await walk(full)));
-        } else if (entry.isFile()) {
-          found.push(full);
-        }
-      }
-      return found;
-    };
-
-    const absolutePaths = await walk(root);
-    const relativePaths = absolutePaths
-      .map((p) => path.relative(skillDir, p).split(path.sep).join('/'))
+    // listFilesRecursive walks nested directories and skips .pyc, __pycache__ and
+    // the rest of the repo's ignore list, which matters for the wiki's scripts/.
+    // Our references nest (references/methodology/, references/phases/), so a
+    // single-level scan would serve an incomplete skill.
+    const relativePaths = (await listFilesRecursive(path.join(skillDir, dirName)))
+      .map((relative) => `${dirName}/${relative}`)
       .sort();
 
     for (const relativePath of relativePaths) {

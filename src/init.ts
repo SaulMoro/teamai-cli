@@ -1618,8 +1618,9 @@ export async function init(options: GlobalOptions & {
     const filterAgents = requestedAgents.length > 0 ? requestedAgents : undefined;
     await reconcileTeamHooksForConfig(reloadedTeamConfig, localConfig, { filterAgents });
 
-    // Step 7.5: Deploy CLI built-in skills immediately so team-wiki-codebase
-    // is available in the IDE right after init, without waiting for first pull.
+    // Step 7.5: Deploy the built-in discovery stub immediately so the teamai
+    // skill is available in the IDE right after init, without waiting for the
+    // first pull. Its workflows are served by `teamai skill get`.
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
       const deployed = await deployBuiltinSkills(reloadedTeamConfig, localConfig);
@@ -1632,7 +1633,7 @@ export async function init(options: GlobalOptions & {
   }
 
   log.success('teamai initialized successfully!');
-  log.info('Built-in skills (e.g. team-wiki-codebase) are ready to use in your IDE now.');
+  log.info('The built-in teamai skill is ready in your IDE; it loads its workflows with `teamai skill get`.');
   log.info('Skills, rules, env and docs auto-sync on each session start when the selected agent has active TeamAI hooks.');
   log.info('Run `teamai status` to check current config.');
 

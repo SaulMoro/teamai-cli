@@ -13,6 +13,7 @@ TypeScript, Node 20+, tsup (ESM), Vitest. Commands: `npm run build`, `npx tsc --
 ## Rules
 
 - CLI user-facing output must be English. No Chinese in production code. Tests assert English output.
+  例外：`teamai skill get` 打印的 `skill-data/` 内容是文档，保留作者书写的语言；命令自身的提示、错误与 `skill list` 输出仍然必须是英文。
 - Keep bilingual docs in sync (`README` / `*.zh-CN.md`, `docs/usage-guide.*`). Behavior changes must update every affected doc (including `docs/designs/`); grep old wording before opening the PR.
 - **README 精简**：尽量少改动 README，保持简洁。确需改动时，所有语言版本（`README.md` 及全部 `README.*.md`，改前先 `ls README*` 确认清单）必须全部改完并保持一致。
 - **`skill-data/` 与文档同等对待**：那是 agent 真正读到的内容。行为变更必须同步更新受影响的 skill（`core` / `setup` / `wiki` / `share`），并在 PR 前 grep 旧措辞。
