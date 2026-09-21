@@ -13,6 +13,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
+import { resolvePackagedSkill, skillCatalog } from './skill-content.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
@@ -22,7 +23,7 @@ interface ResolvedSkill {
   /** Path used to read SKILL.md, contributors and description. */
   primaryPath: string;
   /** Where the primary copy was discovered. */
-  primaryOrigin: 'team' | 'agent';
+  primaryOrigin: 'team' | 'agent' | 'builtin';
   /** Optional namespace if found in the team repo. */
   namespace?: string;
 }
@@ -48,19 +49,20 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
     return;
   }
 
+  const resolvedName = resolved.name;
   const ctx = await buildClassifyContext(localConfig);
-  const source = classifySkill(name, ctx);
+  const source = classifySkill(resolvedName, ctx);
 
   const description = truncate(await readSkillDescription(path.join(resolved.primaryPath, 'SKILL.md')), DESCRIPTION_MAX);
   const contributors = await SkillsHandler.readContributors(resolved.primaryPath);
 
   const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
-  const tags = tagsConfig?.skills?.[name] ?? [];
+  const tags = tagsConfig?.skills?.[resolvedName] ?? [];
 
-  const installedIn = await collectInstalledAgents(name, agents);
+  const installedIn = await collectInstalledAgents(resolvedName, agents);
 
   printSkillCard({
-    name,
+    name: resolvedName,
     source,
     namespace: resolved.namespace ?? (source.kind === 'team' ? source.namespace : undefined),
     description,
@@ -75,6 +77,35 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
     console.log('');
     console.log(`  Verbose: SKILL.md path is ${path.join(resolved.primaryPath, 'SKILL.md')}`);
   }
+}
+
+/**
+ * `teamai skill` / `teamai skill list` — the repo and installed-agent listing,
+ * plus the catalog the installed CLI serves on demand.
+ */
+export async function skillList(options: GlobalOptions & { json?: boolean }): Promise<void> {
+  const catalog = await skillCatalog();
+
+  if (options.json) {
+    console.log(JSON.stringify({ skills: catalog }, null, 2));
+    return;
+  }
+
+  const { list } = await import('./status.js');
+  await list('skills', { ...options, source: 'all' });
+
+  console.log('=== BUILT-IN SKILLS (served by the CLI) ===');
+  console.log('');
+  if (catalog.length === 0) {
+    console.log('  (none — the installed package ships no skill content)');
+  } else {
+    for (const entry of catalog) {
+      console.log(`  ${entry.name}`);
+      console.log(`    ${truncate(entry.description, DESCRIPTION_MAX) || '(no description)'}`);
+      console.log(`    teamai skill get ${entry.name}`);
+    }
+  }
+  console.log('');
 }
 
 async function locateSkill(
@@ -101,7 +132,15 @@ async function locateSkill(
     }
   }
 
-  // 3. First installed agent that has the skill
+  // 3. Built-in skill served by the CLI (including legacy-name aliases).
+  //    Resolved before the agent fallback: under the discovery-stub model the
+  //    agent directory holds a stub, not the content this command describes.
+  const packaged = await resolvePackagedSkill(name);
+  if (packaged) {
+    return { name: packaged.name, primaryPath: packaged.dir, primaryOrigin: 'builtin' };
+  }
+
+  // 4. First installed agent that has the skill
   for (const agent of agents) {
     if (!agent.installed) continue;
     const candidate = path.join(agent.absoluteSkillsPath, name);
@@ -128,6 +167,12 @@ async function collectInstalledAgents(
   return matches;
 }
 
+const PRIMARY_PATH_LABEL: Record<ResolvedSkill['primaryOrigin'], string> = {
+  team: 'Repo path  ',
+  agent: 'Source path',
+  builtin: 'Package path',
+};
+
 interface SkillCard {
   name: string;
   source: SkillSource;
@@ -136,7 +181,7 @@ interface SkillCard {
   contributors: string[];
   tags: string[];
   primaryPath: string;
-  primaryOrigin: 'team' | 'agent';
+  primaryOrigin: ResolvedSkill['primaryOrigin'];
   installedIn: Array<{ agent: ResolvedAgent; path: string }>;
 }
 
@@ -155,7 +200,10 @@ function printSkillCard(card: SkillCard): void {
   console.log(`  Description  : ${card.description || '(none)'}`);
   console.log(`  Contributors : ${card.contributors.length > 0 ? card.contributors.join(', ') : '(none)'}`);
   console.log(`  Tags         : ${card.tags.length > 0 ? card.tags.join(', ') : '(none)'}`);
-  console.log(`  ${card.primaryOrigin === 'team' ? 'Repo path  ' : 'Source path'}  : ${card.primaryPath}/`);
+  console.log(`  ${PRIMARY_PATH_LABEL[card.primaryOrigin]}  : ${card.primaryPath}/`);
+  if (card.primaryOrigin === 'builtin') {
+    console.log(`  Read it with : teamai skill get ${card.name}`);
+  }
 
   if (card.installedIn.length === 0) {
     console.log('  Installed in : (not installed in any agent yet)');

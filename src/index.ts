@@ -156,17 +156,39 @@ const skillCmd = program
   .description('List and inspect skills (default: list all skills across repo + installed agents)')
   .action(async () => {
     const globalOpts = program.opts() as GlobalOptions;
-    const { list } = await import('./status.js');
-    await list('skills', { ...globalOpts, source: 'all' });
+    const { skillList } = await import('./skill-cmd.js');
+    await skillList(globalOpts);
   });
 
 skillCmd
   .command('list')
   .description('List all skills (alias for: teamai list skills --source all)')
-  .action(async () => {
+  .option('--json', 'Output the CLI-served built-in skill catalog as JSON')
+  .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
-    const { list } = await import('./status.js');
-    await list('skills', { ...globalOpts, source: 'all' });
+    const { skillList } = await import('./skill-cmd.js');
+    await skillList({ ...globalOpts, ...cmdOpts });
+  });
+
+skillCmd
+  .command('get <names...>')
+  .description('Print built-in skill content served by the installed CLI')
+  .option('--full', 'Append the skill\'s references/ and templates/ files')
+  .option('--all', 'Print every skill the CLI serves')
+  // A hallucinated flag should cost a warning, not a failed command: unknown
+  // options fall through to the action, which reports and ignores them.
+  .allowUnknownOption()
+  .action(async (names: string[], cmdOpts) => {
+    const { skillGet } = await import('./skill-content.js');
+    await skillGet(names, { full: cmdOpts.full, all: cmdOpts.all });
+  });
+
+skillCmd
+  .command('path [name]')
+  .description('Print the packaged directory of a built-in skill (for scripts and templates)')
+  .action(async (name: string | undefined) => {
+    const { skillPath } = await import('./skill-content.js');
+    await skillPath(name);
   });
 
 skillCmd
