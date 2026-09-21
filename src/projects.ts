@@ -191,6 +191,21 @@ export function resolveProjectResourceNamespaces(input: {
 }
 
 /**
+ * Logical project ids this directory is bound to, or null when it is bound to
+ * none. Null means "no project filter": entries scoped with `projects:` keep
+ * reaching a directory that has selected no project, the same fallback
+ * `activeRoleIds` applies to a member with no role.
+ *
+ * An empty list collapses to null on purpose — `LocalConfig.projects` treats
+ * absent and empty alike ("no project partitioning"), so a directory cannot
+ * express "member of no project" and thereby opt out of every scoped entry.
+ */
+export function activeProjectIds(localConfig: { projects?: string[] }): string[] | null {
+  const ids = [...new Set(localConfig.projects ?? [])];
+  return ids.length > 0 ? ids : null;
+}
+
+/**
  * Resolve the active **learnings** namespaces for a directory, from the manifest
  * — the SAME source `pull` uses. This is the canonical mapping from active
  * project ids to learnings subdirectories: a project's learnings namespace is
