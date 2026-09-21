@@ -457,7 +457,22 @@ teamai list env --reveal            # Show env values in plaintext (default: mas
 
 teamai skill                        # Equivalent to teamai list skills --source all
 teamai skill show hai-deploy-test   # View a single skill's source / contributor / install locations / description summary
+
+teamai skill list --json            # The built-in skills the installed CLI serves, machine-readable
+teamai skill get core               # Print a built-in workflow: core | setup | wiki | share
+teamai skill get wiki --full        # ...with its references and templates appended
+teamai skill path wiki              # The packaged directory, for the scripts a skill ships
 ```
+
+#### Built-in skills are served, not copied
+
+Agents receive one file from the CLI: `~/.<tool>/skills/teamai/SKILL.md`, a ~2 KB
+discovery stub. The workflows it routes to (`core`, `setup`, `wiki`, `share`) stay
+inside the npm package and are printed by `teamai skill get`, so what an agent reads
+always matches the installed CLI version — `npm i -g teamai-cli@latest` is enough, with
+no pull needed for the content to be current. Older releases copied the whole tree into
+every agent directory; `teamai pull` removes those leftovers. The legacy names still
+resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ---
 
@@ -896,10 +911,10 @@ The AI tracks your coding sessions via Hooks. When a session ends (the Stop hook
 
 Task: Fix duplicate project-level Hook injection
 
-Consider running /teamai-share-learnings to summarize what you learned and share it with your team.
+Consider running /teamai to summarize what you learned and share it with your team (or run `teamai skill get share`).
 ```
 
-The reminder lists the non-zero friction signals that triggered it. When the first task is available, it also includes a redacted, single-line task summary so you can decide whether the session is worth sharing. Using the built-in `/teamai-share-learnings` skill, the AI will automatically summarize the session's learnings and contribute them to the team knowledge base. Each session is prompted at most once.
+The reminder lists the non-zero friction signals that triggered it. When the first task is available, it also includes a redacted, single-line task summary so you can decide whether the session is worth sharing. Using the built-in `share` workflow (`teamai skill get share`), the AI will automatically summarize the session's learnings and contribute them to the team knowledge base. Each session is prompted at most once.
 
 For the Codex family (`codex`, `codex-internal`, `tcodex`), the Stop hook saves contribution and knowledge-reference reminders for the next UserPromptSubmit in the same session. It does not force an extra agent turn. Contribution reminders are delivered once and discarded if you contribute before the next prompt.
 
@@ -920,7 +935,7 @@ Teams that route knowledge sharing through their own review flow (for example, a
 | User override | `~/.teamai/config.yaml` | `contributeHintEnabled` | `true` / `false`, takes priority over the team default |
 | Environment variable | shell | `TEAMAI_CONTRIBUTE_HINT_DISABLED=1` | Force-disables the hint (emergency kill switch) |
 
-Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai-share-learnings` keep working when invoked manually.
+Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai` keep working when invoked manually.
 
 ### Searching knowledge
 
@@ -1841,7 +1856,7 @@ sharing:
   coAuthor:
     enabled: false             # optional; strip AI-tool commit trailers team-wide
   contributeHint:
-    enabled: true              # optional; false = no /teamai-share-learnings nudge after high-friction sessions
+    enabled: true              # optional; false = no /teamai nudge after high-friction sessions
   intervention:
     correctionKeywords: []     # optional; extra course-correction words merged with the built-in zh/en/ja list
   webhooks:                    # optional; notify external endpoints on team events (see "Webhook notifications")

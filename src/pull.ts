@@ -758,7 +758,7 @@ async function pullForScope(
   const pullSpin = spinner(`[${scopeLabel}] Pulling team repo...`).start();
   let currentRev: string | null = null;
   // Reporting-only HTTP endpoints have no team repo to write to, so the
-  // team-repo-dependent built-in skill (teamai-share-learnings) is useless
+  // team-repo-dependent built-in workflows the stub routes to are useless
   // there and must not be injected.
   let reportingOnly = false;
   // A failed submodule update holds the rev back below so the next pull

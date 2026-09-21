@@ -434,7 +434,20 @@ teamai list env --reveal            # 明文显示 env（默认脱敏）
 
 teamai skill                        # 等价于 teamai list skills --source all
 teamai skill show hai-deploy-test   # 看单个 skill 的来源 / 贡献者 / 安装位置 / 描述摘要
+
+teamai skill list --json            # 当前 CLI 提供的内置 skill 清单（机器可读）
+teamai skill get core               # 打印内置工作流：core | setup | wiki | share
+teamai skill get wiki --full        # 同时附上该 skill 的 references 与 templates
+teamai skill path wiki              # 打印打包目录，用于运行 skill 自带的脚本
 ```
+
+#### 内置 skill 由 CLI 提供，不再复制
+
+每个 agent 只收到一个文件：`~/.<tool>/skills/teamai/SKILL.md`，约 2 KB 的发现入口（stub）。
+它指向的工作流（`core`、`setup`、`wiki`、`share`）保留在 npm 包内，由 `teamai skill get` 按需打印，
+因此 agent 读到的内容始终与已安装的 CLI 版本一致——`npm i -g teamai-cli@latest` 之后无需 `teamai pull`
+内容就是最新的。旧版本会把整棵目录复制到每个 agent 下，`teamai pull` 会清除这些残留。
+旧名字仍然可用：`teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---
 
@@ -868,10 +881,10 @@ AI 通过 Hooks 追踪你的编码会话。当会话结束时（Stop hook），�
 
 Task: Fix duplicate project-level Hook injection
 
-Consider running /teamai-share-learnings to summarize what you learned and share it with your team.
+Consider running /teamai to summarize what you learned and share it with your team (or run `teamai skill get share`).
 ```
 
-提醒会列出实际触发它的非零摩擦信号；如果能取得首个任务，还会附上脱敏、单行化后的任务摘要，便于判断本次 session 是否值得分享。使用内置 skill `/teamai-share-learnings`，AI 会自动总结本次 session 经验并贡献到团队知识库。每个 session 最多提示一次。
+提醒会列出实际触发它的非零摩擦信号；如果能取得首个任务，还会附上脱敏、单行化后的任务摘要，便于判断本次 session 是否值得分享。使用内置 skill `/teamai`，AI 会自动总结本次 session 经验并贡献到团队知识库。每个 session 最多提示一次。
 
 在 Codex 系列（`codex`、`codex-internal`、`tcodex`）中，Stop hook 会暂存贡献和知识引用提醒，在同一会话的下一次 UserPromptSubmit 交付，不会强制开启额外一轮。贡献提醒只交付一次；若下一次输入前已经贡献，则丢弃该提醒。
 
@@ -892,7 +905,7 @@ teamai contribute --file /tmp/session.md --scope project
 | 用户覆盖 | `~/.teamai/config.yaml` | `contributeHintEnabled` | `true` / `false`，优先级高于团队默认 |
 | 环境变量 | shell | `TEAMAI_CONTRIBUTE_HINT_DISABLED=1` | 强制关闭提醒（紧急开关） |
 
-只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai-share-learnings` 不受影响。
+只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai` 不受影响。
 
 ### 搜索知识
 
@@ -1788,7 +1801,7 @@ sharing:
   coAuthor:
     enabled: false             # 可选，为全团队去除 AI 工具提交尾注
   contributeHint:
-    enabled: true              # 可选，false = 高摩擦 session 结束后不再提示 /teamai-share-learnings
+    enabled: true              # 可选，false = 高摩擦 session 结束后不再提示 /teamai
   intervention:
     correctionKeywords: []     # 可选，额外的纠偏词，与内置中/英/日列表合并
   webhooks:                    # 可选，在团队事件发生时通知外部端点（见"Webhook 通知"）

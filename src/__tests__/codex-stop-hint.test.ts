@@ -39,7 +39,7 @@ describe('Codex Stop hint handoff with persisted session state', () => {
     expect(await stop.execute(stdin, 'codex')).toBeNull();
     const state = await readContributeState(stdin.session_id);
     expect(state.hinted).toBe(true);
-    expect(state.pendingHint).toContain('teamai-share-learnings');
+    expect(state.pendingHint).toContain('teamai skill get share');
     expect(await stop.execute(stdin, 'codex')).toBeNull();
     expect((await readContributeState(stdin.session_id)).pendingHint).toBe(state.pendingHint);
     expect(JSON.parse((await prompt.execute(stdin, 'codex'))!)).toEqual({

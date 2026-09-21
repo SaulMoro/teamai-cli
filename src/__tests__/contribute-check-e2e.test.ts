@@ -162,7 +162,7 @@ describe('contribute-check E2E', () => {
     expect(result.stdout).toBe('');
     const state = readSessionState(tmpHome, SESSION_ID)!;
     expect(state.hinted).toBe(true);
-    expect(state.pendingHint).toContain('teamai-share-learnings');
+    expect(state.pendingHint).toContain('teamai skill get share');
     const repeated = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID), 'codex');
     expect(repeated.stdout).toBe('');
     expect(readSessionState(tmpHome, SESSION_ID)!.pendingHint).toBe(state.pendingHint);
@@ -194,7 +194,7 @@ describe('contribute-check E2E', () => {
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain(RAW_GITHUB_TOKEN);
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain('50 tool calls');
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain('7 different tools');
-    expect(parsed.hookSpecificOutput.additionalContext).toContain('/teamai-share-learnings');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('/teamai');
     expect(parsed.stopReason).toBeUndefined();
 
     // The real CLI persists hinted=true, so a repeated Stop hook is silent.
