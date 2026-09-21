@@ -213,6 +213,25 @@ describe('hooksList', () => {
         expect(text).toContain('(tools: all, roles: devops)');
         expect(text).toContain('npm run lint  (tools: all)');
     });
+
+    it('prints the projects restriction next to the roles one', async () => {
+        mockedParseTeamHooks.mockResolvedValue([
+            { source: 'team', key: 'checkout-lint', event: 'Stop', command: 'echo checkout', description: '[teamai:hook:checkout-lint] x', projects: ['checkout'] },
+            { source: 'team', key: 'both', event: 'Stop', command: 'echo both', description: '[teamai:hook:both] x', roles: ['frontend'], projects: ['checkout', 'billing'] },
+            { source: 'team', key: 'nobody', event: 'Stop', command: 'echo none', description: '[teamai:hook:nobody] x', projects: [] },
+        ]);
+        const out: string[] = [];
+        const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)); });
+        try {
+            await hooksList({});
+        } finally {
+            spy.mockRestore();
+        }
+        const text = out.join('\n');
+        expect(text).toContain('(tools: all, projects: checkout)');
+        expect(text).toContain('(tools: all, roles: frontend, projects: checkout,billing)');
+        expect(text).toContain('(tools: all, projects: nobody)');
+    });
 });
 
 describe('hooksList', () => {

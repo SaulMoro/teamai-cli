@@ -17,7 +17,7 @@ import {
 } from './types.js';
 import type { HookDef, TeamaiConfig, LocalConfig } from './types.js';
 import { isSelfMode } from './types.js';
-import { activeRoleIds } from './roles.js';
+import { resolveMembership } from './membership.js';
 import { builtinHookDefs, applyBuiltinOverride, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
 import { resolveTeamHooks } from './resources/hooks.js';
@@ -1587,7 +1587,7 @@ export async function reconcileTeamHooksForConfig(
     : await resolveTeamHooks(teamConfig, localConfig.repo.localPath, {
         auto: opts.auto,
         silent: opts.silent,
-        activeRoles: activeRoleIds(localConfig),
+        membership: resolveMembership(localConfig),
       });
   const { baseDir, manifestPath } = resolveHookScope(localConfig);
   const explicitlySelectedAgents = opts.filterAgents ?? localConfig.enabledAgents;

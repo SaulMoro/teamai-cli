@@ -140,7 +140,8 @@ export async function hooksList(_options: GlobalOptions): Promise<void> {
             const matcher = d.matcher ? ` [${d.matcher}]` : '';
             const tools = d.tools && d.tools.length > 0 ? d.tools.join(',') : 'all';
             const roles = d.roles ? `, roles: ${d.roles.length > 0 ? d.roles.join(',') : 'nobody'}` : '';
-            console.log(`  [${d.key}] ${d.event}${matcher}  →  ${d.command}  (tools: ${tools}${roles})`);
+            const projects = d.projects ? `, projects: ${d.projects.length > 0 ? d.projects.join(',') : 'nobody'}` : '';
+            console.log(`  [${d.key}] ${d.event}${matcher}  →  ${d.command}  (tools: ${tools}${roles}${projects})`);
         }
     }
     console.log('');

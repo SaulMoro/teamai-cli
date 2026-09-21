@@ -696,6 +696,11 @@ export interface HookDef {
    * include one of these ids. Omitted = every member; [] = nobody, like tools.
    */
   roles?: string[];
+  /**
+   * Team hooks only: ship only to directories bound to one of these logical
+   * project ids. Omitted = every directory; [] = nobody. ANDs with `roles`.
+   */
+  projects?: string[];
 }
 
 // ─── MCP server definitions ──────────────────────────────
