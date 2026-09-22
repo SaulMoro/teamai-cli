@@ -143,7 +143,12 @@ shipped and the current package no longer does just sat there, so an edit to it
 did survive. Ownership is proven by pathname, not by contents, so the prune
 cannot tell that file from ours — it copies everything it removes to
 `~/.teamai/removed-skills/<run>/<tool>/<skill-root>/<skill>/` first, and the
-migration stops being a one-way door for any of them. A file whose copy fails is
+migration stops being a one-way door for any of them. That path is the machine's
+home, never the tool's base directory, which under project scope is the repo
+root. Only *retired* paths are archived: the stub is rewritten on every session
+start, so archiving it would file an identical copy per session forever. A
+symlinked skill root is refused outright, link and target untouched: everything
+under it matches our names, and none of it is ours. A file whose copy fails is
 kept rather than removed: a backup that did not happen must not authorise the
 delete. The path carries the run and the skill root because neither is unique on
 its own — two pulls land on the same day, and Codex prunes the same skill name

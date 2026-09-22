@@ -14,7 +14,7 @@ import {
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
 import { recallBlockMessage, resolveServableSkill, skillCatalog } from './skill-content.js';
-import type { GlobalOptions, LocalConfig } from './types.js';
+import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
 
@@ -47,7 +47,36 @@ type LocatedSkill = ResolvedSkill | BlockedSkill;
  * we print under "Repo path" or "Installed in".
  */
 export async function skillShow(name: string, options: GlobalOptions): Promise<void> {
-  const { localConfig, teamConfig } = await autoDetectInit();
+  // A packaged skill needs no team: it ships with the CLI. Resolving it first
+  // keeps `teamai skill show core` working on a machine that has never run
+  // `teamai init`, where autoDetectInit has nothing to find.
+  const packaged = await resolveServableSkill(name);
+  let init: { localConfig: LocalConfig; teamConfig: TeamaiConfig };
+  try {
+    init = await autoDetectInit();
+  } catch (e) {
+    if (packaged.kind === 'blocked') {
+      const { headline, hint } = recallBlockMessage(packaged.name);
+      log.error(headline);
+      log.dim(hint);
+      process.exitCode = 1;
+      return;
+    }
+    if (packaged.kind !== 'found') throw e;
+    printSkillCard({
+      name: packaged.skill.name,
+      source: { kind: 'builtin' },
+      description: truncate(await readSkillDescription(path.join(packaged.skill.dir, 'SKILL.md')), DESCRIPTION_MAX),
+      contributors: [],
+      tags: [],
+      primaryPath: packaged.skill.dir,
+      primaryOrigin: 'builtin',
+      installedIn: [],
+    });
+    log.dim('No team is set up on this machine, so contributors, tags and installed agents are not shown.');
+    return;
+  }
+  const { localConfig, teamConfig } = init;
 
   const agents = await detectInstalledAgents(localConfig, teamConfig);
   const located = await locateSkill(name, localConfig, agents);

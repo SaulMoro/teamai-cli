@@ -729,6 +729,36 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
   });
 
+  it('never walks through a symlinked skill root, so it cannot delete the link target', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // A shared checkout the member linked in. Every path under it matches ours
+    // by name, so following the link would delete files we never wrote.
+    const shared = path.join(tmpDir, 'shared-skills/team-wiki-codebase');
+    await fse.ensureDir(shared);
+    await fse.writeFile(path.join(shared, 'SKILL.md'), '# someone else\'s');
+
+    await fse.ensureDir(path.join(homeDir, '.claude/skills'));
+    await fse.symlink(shared, path.join(homeDir, '.claude/skills/team-wiki-codebase'), 'dir');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(shared, 'SKILL.md'), 'utf8')).toBe('# someone else\'s');
+    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(true);
+  });
+
+  it('archives nothing when there is nothing retired to archive', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // Deployment runs on every session start, unchanged revision included. The
+    // stub it rewrites is shipped now, not retired, so it must not be archived
+    // once per session for the life of the install.
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.pathExists(path.join(homeDir, '.teamai/removed-skills'))).toBe(false);
+  });
+
   it('gives each skill root its own backup, so the two Codex copies do not overwrite each other', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

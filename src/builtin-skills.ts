@@ -158,6 +158,8 @@ async function removeEmptyDirs(dir: string): Promise<void> {
  * to write and is not ours to remove, whichever command is doing the removing.
  */
 export interface PruneResult {
+  /** True when the root is a symlink, so nothing under it was read or removed. */
+  skippedSymlink: boolean;
   /** Files left in place because the member, not the CLI, put them there. */
   foreign: number;
   /** Files left in place because their backup could not be written, and why. */
@@ -168,7 +170,7 @@ export interface PruneResult {
 
 /** True when the directory is gone: nothing of the member's, nothing unsaved. */
 export function prunedWhole(result: PruneResult): boolean {
-  return result.foreign === 0 && result.unbackedUp.length === 0;
+  return !result.skippedSymlink && result.foreign === 0 && result.unbackedUp.length === 0;
 }
 
 export async function removeOwnedFiles(
@@ -177,7 +179,16 @@ export async function removeOwnedFiles(
   backupDir?: string,
 ): Promise<PruneResult> {
   const ownedPaths = new Set(owned);
-  const result: PruneResult = { foreign: 0, unbackedUp: [], backedUp: 0 };
+  const result: PruneResult = { skippedSymlink: false, foreign: 0, unbackedUp: [], backedUp: 0 };
+
+  // A symlinked skill root points at files we never wrote — a shared checkout,
+  // a dotfiles repo. `readdir` follows it and every path under it would match
+  // ours by name, so the walk would delete someone else's files through the
+  // link. Ownership stops at the link.
+  if ((await fs.promises.lstat(dir)).isSymbolicLink()) {
+    result.skippedSymlink = true;
+    return result;
+  }
 
   for (const relative of await walkFiles(dir)) {
     if (!ownedPaths.has(relative) && !isDerivedArtifact(relative)) {
@@ -226,9 +237,11 @@ const PRUNE_RUN_ID = `${new Date().toISOString().replace(/[:.]/g, '-')}-${proces
  * name from two roots — Codex reads `.codex/skills` and the shared
  * `.agents/skills` — and those two copies are different files.
  */
-function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillName: string): string {
+function skillBackupDir(tool: string, skillRoot: string, skillName: string): string {
   const rootSlug = skillRoot.replace(/[\\/:]+/g, '-').replace(/^-+/, '');
-  return path.join(baseDir, '.teamai', 'removed-skills', PRUNE_RUN_ID, tool, rootSlug, skillName);
+  // Machine data, not project data: under project scope `baseDir` is the repo
+  // root, where a backup per session start would show up as a dirty tree.
+  return path.join(getUserHome(), '.teamai', 'removed-skills', PRUNE_RUN_ID, tool, rootSlug, skillName);
 }
 
 /**
@@ -255,7 +268,7 @@ export async function pruneLegacyBuiltinSkills(
       const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
-        const backupDir = skillBackupDir(baseDir, tool, root, legacyName);
+        const backupDir = skillBackupDir(tool, root, legacyName);
         const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
         const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
         if (prunedWhole(result)) {
@@ -353,8 +366,13 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         // releases wrote go first — and only those: a file a member added here
         // is theirs, and the old deployment never deleted it either.
         if (await pathExists(destDir)) {
-          const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, destDir), skillName);
-          const result = await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? [], backupDir);
+          // Only the paths this release no longer ships. `SKILL.md` is written
+          // one line below, so pruning it would archive an identical copy on
+          // every session start and never reach a file worth keeping.
+          const shippedNow = new Set(await walkFiles(srcDir));
+          const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
+          const backupDir = skillBackupDir(tool, path.relative(baseDir, destDir), skillName);
+          const result = await removeOwnedFiles(destDir, retired, backupDir);
           if (result.unbackedUp.length > 0) {
             log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
           }
