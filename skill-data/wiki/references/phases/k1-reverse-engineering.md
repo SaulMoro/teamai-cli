@@ -5,7 +5,7 @@
 ### Step 1: Optionally run the scan script (recommended)
 
 ```bash
-python3 {SKILL_DIR}/scripts/scan_repo.py <project_root> --depth 2 --top 10
+python3 "{SKILL_DIR}/scripts/scan_repo.py" <project_root> --depth 2 --top 10
 ```
 Output: file statistics + key file discovery report + language distribution.
 

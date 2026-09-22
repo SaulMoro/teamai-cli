@@ -989,6 +989,57 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'my-own-skill'))).toBe(true);
   });
 
+  it('removes only the packaged files from a CLI-owned skill dir, keeping what the member added', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+
+    // A machine that upgraded through the pre-stub releases: the packaged trees,
+    // with the member's own files mixed into them. Deployment never wrote those
+    // files and never deleted them, so uninstall must not either.
+    const skills = path.join(homeDir, '.claude', 'skills');
+    const stub = path.join(skills, 'teamai');
+    await fse.outputFile(path.join(stub, 'SKILL.md'), '# stub\n');
+    await fse.outputFile(path.join(stub, 'references', 'setup-admin.md'), '# packaged\n');
+    await fse.outputFile(path.join(stub, 'references', 'team-playbook.md'), '# mine\n');
+
+    const legacy = path.join(skills, 'team-wiki-codebase');
+    await fse.outputFile(path.join(legacy, 'SKILL.md'), '# packaged\n');
+    await fse.outputFile(path.join(legacy, 'scripts', 'scan_repo.py'), '# packaged\n');
+    await fse.outputFile(path.join(legacy, 'references', 'methodology', 'my-notes.md'), '# mine\n');
+
+    // Nothing of the member's in this one, so it goes whole.
+    const legacyShare = path.join(skills, 'teamai-share-learnings');
+    await fse.outputFile(path.join(legacyShare, 'SKILL.md'), '# packaged\n');
+
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        claude: {
+          skills: '.claude/skills',
+          rules: '.claude/rules',
+          settings: '.claude/settings.json',
+          claudemd: '.claude/CLAUDE.md',
+          agents: '.claude/agents',
+        },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
+    // The member's files, and the directories holding them, survive.
+    expect(await fse.pathExists(path.join(stub, 'references', 'team-playbook.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(legacy, 'references', 'methodology', 'my-notes.md'))).toBe(true);
+    // Everything TeamAI packaged is gone.
+    expect(await fse.pathExists(path.join(stub, 'SKILL.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(stub, 'references', 'setup-admin.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(legacy, 'SKILL.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(legacy, 'scripts'))).toBe(false);
+    // A directory with nothing of the member's in it still goes whole.
+    expect(await fse.pathExists(legacyShare)).toBe(false);
+  });
+
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

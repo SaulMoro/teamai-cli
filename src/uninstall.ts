@@ -38,7 +38,13 @@ import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
-import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import {
+  BUILTIN_SKILL_NAMES,
+  LEGACY_BUILTIN_SKILL_NAMES,
+  PACKAGED_SKILL_FILES,
+  isCliOwnedSkillName,
+  removeOwnedFiles,
+} from './builtin-skills.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import {
   pathExists,
@@ -677,7 +683,12 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   if (plan.skillDirs.length > 0) {
     console.log(`   Skills (${plan.skillDirs.length} directories):`);
     for (const skillDir of plan.skillDirs) {
-      console.log(`     ${skillDir}`);
+      // A CLI-owned directory loses the files TeamAI packaged, not whatever the
+      // member added beside them, so the prompt must not promise the directory.
+      const suffix = isCliOwnedSkillName(path.basename(skillDir))
+        ? '   (TeamAI-packaged files only; anything you added stays)'
+        : '';
+      console.log(`     ${skillDir}${suffix}`);
     }
     console.log('');
   }
@@ -838,16 +849,35 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
     }
   }
 
-  // (c) Remove synced skills
+  // (c) Remove synced skills.
+  //
+  // A team-repo skill is synced whole, so the whole directory goes. A CLI-owned
+  // one is not: deployment writes only the files in PACKAGED_SKILL_FILES and
+  // never touched a file a member added beside them, so uninstall removes those
+  // same paths and keeps the rest — the same rule pull applies, for the same
+  // reason. Deleting the directory here would undo the guarantee one command over.
+  let removedSkillDirs = 0;
+  const keptSkillDirs: string[] = [];
   for (const skillDir of plan.skillDirs) {
     try {
-      await remove(skillDir);
+      const name = path.basename(skillDir);
+      if (isCliOwnedSkillName(name)) {
+        const removedWhole = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []);
+        if (removedWhole) removedSkillDirs++;
+        else keptSkillDirs.push(skillDir);
+      } else {
+        await remove(skillDir);
+        removedSkillDirs++;
+      }
     } catch (e) {
       log.warn(`Failed to remove skill ${skillDir}: ${(e as Error).message}`);
     }
   }
-  if (plan.skillDirs.length > 0) {
-    log.success(`Removed ${plan.skillDirs.length} skill directories`);
+  if (removedSkillDirs > 0) {
+    log.success(`Removed ${removedSkillDirs} skill directories`);
+  }
+  for (const skillDir of keptSkillDirs) {
+    log.warn(`Kept ${skillDir}: it holds files TeamAI did not put there. The packaged files were removed; delete the rest yourself once you have saved what you need.`);
   }
 
   // (d) Remove synced rules

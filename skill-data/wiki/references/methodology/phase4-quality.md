@@ -1,6 +1,6 @@
 # Phase 4: Quality Assessment and Iterative Improvement
 
-> Helper tool: `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` automatically checks link integrity, anchor coverage, AI Quick Reference table coverage, bidirectional links, and README index inclusion rate
+> Helper tool: `python3 "{SKILL_DIR}/scripts/validate_kb.py" <output_dir>` automatically checks link integrity, anchor coverage, AI Quick Reference table coverage, bidirectional links, and README index inclusion rate
 
 ## Five-Dimension Assessment Model
 
@@ -65,7 +65,7 @@ Maintain a change log at the bottom of every document:
 
 | Issue | Fix method |
 |------|---------|
-| Dead links | Grep `](` links globally, or run `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` |
+| Dead links | Grep `](` links globally, or run `python3 "{SKILL_DIR}/scripts/validate_kb.py" <output_dir>` |
 | Inconsistent terminology | Build a glossary and replace globally |
 | Outdated code entries | Diff against the code repositories periodically |
 | Outdated constraint values | Cross-check against the product docs periodically |

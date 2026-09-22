@@ -5,7 +5,7 @@
 ### Step 1: Automated validation
 
 ```bash
-python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir> --verbose
+python3 "{SKILL_DIR}/scripts/validate_kb.py" <output_dir> --verbose
 ```
 
 `--verbose` prints the details of every item (missing anchors, the exact location of dead links). This is exactly the full output required below.

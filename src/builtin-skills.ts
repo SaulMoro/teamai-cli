@@ -149,8 +149,12 @@ async function removeEmptyDirs(dir: string): Promise<void> {
  * Remove from `dir` the files the CLI put there, then the directories that end
  * up empty. Returns false when the member has files of their own in there, so
  * the caller can say the directory was kept.
+ *
+ * Exported because uninstall must delete a CLI-owned skill directory by the same
+ * rule pull does: a file a member added beside our packaged ones was never ours
+ * to write and is not ours to remove, whichever command is doing the removing.
  */
-async function removeOwnedFiles(dir: string, owned: readonly string[]): Promise<boolean> {
+export async function removeOwnedFiles(dir: string, owned: readonly string[]): Promise<boolean> {
   const ownedPaths = new Set(owned);
   let foreign = 0;
 

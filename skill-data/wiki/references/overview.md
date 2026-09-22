@@ -1,6 +1,6 @@
 # team-wiki-codebase: AI cognition engineering for large codebases
 
-> TeamAI builtin skill: the methodology, scripts and Agent specifications are deployed with `teamai pull` / `teamai init` into the project's `.codebuddy/`, `.cursor/` and similar directories. TeamAI does not ship a separate team-wiki CLI. No extra plugin is required.
+> TeamAI built-in skill. The methodology, scripts and agent specifications are **not** copied into `.claude/`, `.codebuddy/`, `.cursor/` or any other agent directory: they ship inside the installed CLI and are served on demand by `teamai skill get wiki` (`--full` for the references too). What an agent reads therefore always matches the CLI it is running. `teamai skill path wiki` prints the directory that holds the scripts and templates, for the commands below that run them. TeamAI ships no separate team-wiki CLI, and no extra plugin is required.
 
 ## Why this skill exists
 

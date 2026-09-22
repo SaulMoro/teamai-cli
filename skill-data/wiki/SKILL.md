@@ -232,7 +232,7 @@ Human-readable overview (not for execution): `{SKILL_DIR}/references/overview.md
 ```
 <output_dir>/
 ├── README.md                           ← Knowledge base index + retrieval routing rules + cognitive boundary declaration (for AI)
-│                                         Start from the template: cp {SKILL_DIR}/references/templates/project-overview.md <output_dir>/README.md
+│                                         Start from the template: cp "{SKILL_DIR}/references/templates/project-overview.md" <output_dir>/README.md
 ├── {project_name} Technical Architecture.md                ← [Type-1] Architecture overview (target ≤80KB, split automatically when larger)
 ├── {project_name} Technical Architecture-Core Call Chains.md ← [Type-1b] Split out only when Type-1 exceeds 80KB
 ├── {project_name} Technical Architecture-AI Metadata.md    ← [Type-1c] Split out only when Type-1 exceeds 80KB
@@ -307,7 +307,7 @@ _review/                                ← Process files (not part of the knowl
 | Product docs into the graph | Skip. Same English note as above. |
 | Product ↔ code bridging | Use `teamai codebase --reconcile --output <repo>` after product pages and extracted code pages are under `<repo>/teamwiki/`. Prefix with `teamai --dry-run` to preview without updating the graph. |
 | One-shot refresh | Use `teamai codebase --extract <repo> --project <slug> --incremental`, reusing the Phase 0 repository path and project slug even when running from another directory. Do not look for another CLI. |
-| Quality assessment | Use `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` and `teamai codebase --lint --output <repo>` to check `<repo>/teamwiki/` (`--output` takes the repository root, not the `teamwiki/` directory). Skip any extra evaluate binary. |
+| Quality assessment | Use `python3 "{SKILL_DIR}/scripts/validate_kb.py" <output_dir>` and `teamai codebase --lint --output <repo>` to check `<repo>/teamwiki/` (`--output` takes the repository root, not the `teamwiki/` directory). Skip any extra evaluate binary. |
 
 **Path convention**: `{SKILL_DIR}` is the directory printed by `teamai skill path wiki`. The methodology is in `{SKILL_DIR}/references/methodology/`, sub-agent prompts in `{SKILL_DIR}/references/agents/`, and scripts in `{SKILL_DIR}/scripts/`.
 

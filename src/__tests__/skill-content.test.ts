@@ -17,6 +17,7 @@ import {
   type PackagedSkillRoots,
 } from '../skill-content.js';
 import { readSkillDescription } from '../agent-skills.js';
+import { listFilesRecursive } from '../utils/fs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -310,6 +311,33 @@ describe('the shipped skill-data content', () => {
     const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
     expect(stub).toMatch(/^name: teamai$/m);
     expect(stub).toMatch(/^allowed-tools: Bash\(teamai:\*\), Bash\(npx teamai-cli:\*\)$/m);
+  });
+
+  it('quotes {SKILL_DIR} in every command it tells the agent to run', async () => {
+    // The placeholder resolves to the install path, which can hold a space
+    // ("Program Files", "~/Library/Application Support", a user's full name) or
+    // be a Windows path used through Bash. An unquoted occurrence in a command
+    // line splits into two arguments there and the documented invocation fails.
+    const offenders: string[] = [];
+    for (const skill of await listServableSkills()) {
+      const files = [
+        'SKILL.md',
+        ...(await listFilesRecursive(path.join(skill.dir, 'references'))).map((f) => `references/${f}`),
+      ];
+      for (const relative of files) {
+        if (!relative.endsWith('.md')) continue;
+        const text = fs.readFileSync(path.join(skill.dir, relative), 'utf8');
+        text.split('\n').forEach((line, i) => {
+          // A command word followed by the bare placeholder: `python3 {SKILL_DIR}/…`.
+          // Prose and reference tables name the path without running it, and a
+          // quoted occurrence is already correct.
+          if (/(?:^|[`\s(])(?:python3?|node|bash|sh|cp|mv|cat|ls|rm)\s+\{SKILL_DIR\}/.test(line)) {
+            offenders.push(`${skill.name}/${relative}:${i + 1}: ${line.trim()}`);
+          }
+        });
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('keeps the stub description within the 1024-character budget agents load it under', async () => {

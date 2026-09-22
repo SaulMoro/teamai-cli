@@ -125,6 +125,13 @@ there: the legacy prune, `recall disable`, and `uninstall`, whose skill discover
 adds `.agents/skills` for `codex` alone. Without it, an uninstall reported
 success while leaving `~/.agents/skills/teamai` behind.
 
+**`uninstall` deletes a CLI-owned directory by the same rule.** A team-repo skill
+is synced whole, so uninstall removes the whole directory. A CLI-owned one is
+not: deployment writes only `PACKAGED_SKILL_FILES` and never touched a file the
+member added beside them, so uninstall removes those same paths through
+`removeOwnedFiles` and keeps the rest, saying which directory it kept. Deleting
+the directory there would undo, one command over, the guarantee pull makes.
+
 **It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
 lists them, built as the union of `git ls-tree -r <tag> -- skills/` over every
 tag, so each path is provably the CLI's. Those files were overwritten with
