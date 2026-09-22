@@ -34,7 +34,7 @@ npm package
 ├── skills/
 │   └── teamai/SKILL.md          the only unit deployed into agents (~2 KB)
 └── skill-data/                  never deployed; printed by `teamai skill get`
-    ├── core/                    daily sync, routing, generated command reference
+    ├── core/                    daily sync, routing, publishing a skill, command reference
     ├── setup/                   day 0 and repo lifecycle
     ├── wiki/                    codebase knowledge base, incl. scripts/
     └── share/                   session learnings

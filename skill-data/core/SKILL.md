@@ -49,7 +49,8 @@ Usage examples (copy one to get started):
 | The user wants to…                                                    | Load this                                      |
 |-----------------------------------------------------------------------|------------------------------------------------|
 | Set up a team from scratch, join a team, manage one, or uninstall      | `teamai skill get setup`                       |
-| Share or publish a skill, a doc, or what this session taught them      | `teamai skill get share`                       |
+| Publish a skill, rule or doc they already have                         | `{SKILL_DIR}/references/contribute-member.md`  |
+| Share what this session taught them                                    | `teamai skill get share`                       |
 | Understand a large multi-repo codebase, build an architecture wiki     | `teamai skill get wiki`                        |
 | Sync now, see differences, diagnose                                    | `teamai pull` · `teamai status` · `teamai doctor` |
 | Open the team dashboard                                                | `teamai dashboard` — it starts a local server (default port 3721); give the user the URL |
@@ -108,6 +109,7 @@ In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prin
 |---|---|
 | `{SKILL_DIR}/references/commands.md` | Before using any command not in the daily list, or any flag. Generated from the CLI's own command table, so it cannot drift. |
 | `{SKILL_DIR}/references/troubleshooting.md` | A command fails, a hook does not fire, or a host needs manual steps. |
+| `{SKILL_DIR}/references/contribute-member.md` | A member wants to publish a skill, rule or doc they already have. Any member can, not just admins. |
 
-`teamai skill get core --full` prints this skill with both references appended
-(about 32 KB). Load a single file above when you only need one.
+`teamai skill get core --full` prints this skill with all three references
+appended. Load a single file above when you only need one.
