@@ -820,9 +820,26 @@ async function pushCore(
   const pushableTypes: ResourceType[] = ['skills', 'rules', 'env', 'agents'];
   const fullScan: ResourceItem[] = [];
 
+  // Agents are the one type whose SCAN needs the destination: it has to tell
+  // "an edit of the team's copy" from "a new agent for this namespace", and an
+  // explicit --role/--project is what answers that. Rules and skills are placed
+  // after selection, so their scan needs nothing. An unsafe --role resolves to
+  // no candidate here and is rejected with exit 2 before anything is pushed.
+  let requestedAgentsNamespace: string | undefined;
+  if (options.role) {
+    requestedAgentsNamespace = options.role;
+  } else if (options.project && projectsManifest) {
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, 'agents');
+    if (resolved.ok) requestedAgentsNamespace = resolved.namespace;
+  }
+
   for (const type of pushableTypes) {
     const handler = getHandler(type);
-    const items = await handler.scanLocalForPush(scanTeamConfig, localConfig);
+    const items = await handler.scanLocalForPush(
+      scanTeamConfig,
+      localConfig,
+      type === 'agents' ? { namespace: requestedAgentsNamespace } : undefined,
+    );
     fullScan.push(...items);
   }
 

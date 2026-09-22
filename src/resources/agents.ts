@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
-import { isToolInstalledForConfig, ResourceHandler } from './base.js';
+import { isToolInstalledForConfig, ResourceHandler, type ScanForPushOptions } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -63,7 +63,12 @@ export class AgentsHandler extends ResourceHandler {
    * New format (.yaml in team repo): attempts multi-tool reverse + merge.
    * Built-in CLI agents are excluded from push.
    */
-  async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<AgentResourceItem[]> {
+  async scanLocalForPush(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    options?: ScanForPushOptions,
+  ): Promise<AgentResourceItem[]> {
+    const requestedNamespace = options?.namespace;
     const teamAgentsDir = path.join(localConfig.repo.localPath, 'agents');
     const tombstones = await this.readTombstones(localConfig);
     // Single-repo mode: users drop canonical agent files straight into the repo's
@@ -154,18 +159,41 @@ export class AgentsHandler extends ResourceHandler {
       // directory is carried into `relativePath` below.
       const sources = await findTeamAgentFiles(teamAgentsDir, stem);
       const placedNamespace = placedResourcePath(placedAgents, 'agents', stem)?.split('/')[1];
-      const candidates = sources.filter(
-        (file) => activeNamespaces === null || !file.namespace
-          || activeNamespaces.includes(file.namespace)
-          || file.namespace === placedNamespace,
-      );
+      // An explicit --role/--project names the destination, so IT decides which
+      // team file this local agent is an edit of. A copy of the same stem in
+      // another namespace is a different agent — the layout allows that — and
+      // must not block publishing this one, which is what activity filtering
+      // alone did (#649 review).
+      const candidates = requestedNamespace
+        ? sources.filter((file) => file.namespace === requestedNamespace)
+        : sources.filter(
+          (file) => activeNamespaces === null || !file.namespace
+            || activeNamespaces.includes(file.namespace)
+            || file.namespace === placedNamespace,
+        );
       if (candidates.length > 1) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
           skipReason: `Ambiguous agent "${stem}": multiple active sources (${candidates.map((file) => file.path).join(', ')}). Give active agents unique names before pushing.` });
         continue;
       }
-      if (sources.length > 0 && candidates.length === 0) {
+      // A shared-root copy reaches every member, so a namespaced second copy
+      // would leave two active agents answering to the same name — exactly the
+      // collision pull reports and skips. Only reachable with an explicit
+      // destination; without one the root copy is always a candidate.
+      const sharedRoot = candidates.length === 0 && sources.find((file) => !file.namespace);
+      if (sharedRoot) {
+        items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
+          relativePath: `agents/${stem}.yaml`, status: 'modified',
+          skipReason: `Agent "${stem}" already exists at the shared root (agents/${stem}${sharedRoot.ext}), `
+            + `which every member receives. Edit that copy, or rename this agent, rather than publishing `
+            + `a second one into "${requestedNamespace}".` });
+        continue;
+      }
+      // With no destination named, a stem that exists only in namespaces this
+      // directory has not activated is not ours to edit. With one named, the
+      // agent is simply new there, and placement writes it to that namespace.
+      if (!requestedNamespace && sources.length > 0 && candidates.length === 0) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
           skipReason: `Agent "${stem}" has no active source. Activate its role or project before pushing local edits.` });

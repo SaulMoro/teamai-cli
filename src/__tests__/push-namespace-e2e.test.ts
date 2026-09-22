@@ -398,6 +398,33 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(fs.existsSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'))).toBe(false);
   }, 60_000);
 
+  it('publishes an agent into the requested namespace despite the same stem elsewhere', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    // A team agent of the same name in a namespace this directory never
+    // activates. Without the requested destination taking part in candidate
+    // selection, it blocks the push entirely with "no active source".
+    commitOnMain(fixture, 'agents/other-ns/vr.yaml',
+      'name: vr\ndescription: somebody else\'s reviewer\ninstructions: Read other-ns.\n');
+    fs.writeFileSync(
+      path.join(fixture.projectRoot, '.claude/agents', 'vr.md'),
+      '---\nname: vr\ndescription: reviews code\n---\n\nYou review the front end.\n',
+    );
+
+    const result = await runCLI(
+      ['push', '--project', 'front-app', '--all'],
+      fixture.projectRoot,
+      fixture.home,
+    );
+
+    expect(result.output).not.toContain('no active source');
+    expect(result.output).toContain('[agents] vr → agents/fe-agents/vr.yaml');
+    const { branch, files } = branchFiles(fixture);
+    expect(files).toContain('agents/fe-agents/vr.yaml');
+    // The other namespace's agent is a different agent, and stays untouched.
+    expect(git(['show', `${branch}:agents/other-ns/vr.yaml`], fixture.remote))
+      .toContain('Read other-ns.');
+  }, 60_000);
+
   it('refuses a roles manifest namespace that is not a single path segment', async () => {
     const fixture = track(makeFixture({
       agent: 'claude',

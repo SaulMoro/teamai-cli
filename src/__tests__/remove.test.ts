@@ -126,10 +126,36 @@ scope: 'user',
       expect(await handler.publishedNameFor('my-rule', localConfig)).toBeNull();
     });
 
+    it('leaves an unrelated root rule that only shares the basename', async () => {
+      // `remove rules fe/foo` must not take a personal .claude/rules/foo.md
+      // with it. Nothing on this machine says the two are the same rule.
+      await fse.outputFile(path.join(localConfig.repo.localPath, 'rules', 'fe', 'foo.md'), 'team');
+      await fse.writeFile(path.join(homeDir, '.claude', 'rules', 'foo.md'), 'my own foo');
+
+      await handler.removeItem('fe/foo', teamConfig, localConfig);
+
+      expect(await fse.pathExists(path.join(localConfig.repo.localPath, 'rules', 'fe', 'foo.md'))).toBe(false);
+      expect(await fse.readFile(path.join(homeDir, '.claude', 'rules', 'foo.md'), 'utf-8'))
+        .toBe('my own foo');
+    });
+
+    it('ignores a record that points somewhere else', async () => {
+      await fse.outputFile(path.join(localConfig.repo.localPath, 'rules', 'fe', 'foo.md'), 'team');
+      await fse.writeFile(path.join(homeDir, '.claude', 'rules', 'foo.md'), 'my own foo');
+      mockState.placedRules = { foo: 'rules/other-ns/foo.md' };
+
+      await handler.removeItem('fe/foo', teamConfig, localConfig);
+
+      expect(await fse.readFile(path.join(homeDir, '.claude', 'rules', 'foo.md'), 'utf-8'))
+        .toBe('my own foo');
+    });
+
     it('removes the namespaced team file and the author\'s copy at the rules root', async () => {
       await fse.outputFile(
         path.join(localConfig.repo.localPath, 'rules', 'fe-know', 'my-rule.md'), 'team content',
       );
+      // The record is what makes the root copy this rule's, and ours to delete.
+      mockState.placedRules = { 'my-rule': 'rules/fe-know/my-rule.md' };
       // The author's own copy, and the namespaced one a member would receive.
       await fse.writeFile(path.join(homeDir, '.claude', 'rules', 'my-rule.md'), 'local');
       await fse.outputFile(path.join(homeDir, '.claude', 'rules', 'fe-know', 'my-rule.md'), 'local');

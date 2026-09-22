@@ -45,6 +45,18 @@ export async function isToolInstalledForConfig(
  * Abstract base class for resource handlers.
  * Each resource type (skills, rules, docs, env, agents, hooks, mcp) implements this.
  */
+/**
+ * What `push` knows before it scans. Only the destination an explicit
+ * `--role`/`--project` names, and only agents read it: their scan has to
+ * decide which team file a local edit is an edit OF, and that answer changes
+ * when the user has named a namespace (see `AgentsHandler.scanLocalForPush`).
+ * Rules and skills are placed after selection, so their scan needs nothing.
+ */
+export interface ScanForPushOptions {
+  /** The namespace `--role <ns>` / `--project <id>` resolved to, if any. */
+  namespace?: string;
+}
+
 export abstract class ResourceHandler {
   abstract readonly type: ResourceType;
 
@@ -55,6 +67,7 @@ export abstract class ResourceHandler {
   abstract scanLocalForPush(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
+    options?: ScanForPushOptions,
   ): Promise<ResourceItem[]>;
 
   /**

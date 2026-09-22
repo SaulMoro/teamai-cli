@@ -306,6 +306,55 @@ projects:
     expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
   });
 
+  /**
+   * The layout allows the same stem in several namespaces. An explicit
+   * --role/--project names the destination, so a copy in some OTHER namespace
+   * is a different agent and must not block publishing this one — which is
+   * what filtering on activity alone did (#649 review).
+   */
+  it('publishes into the requested namespace despite a stem in an inactive one', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
+      'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Mine\n---\n\nYou review the front end.\n');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe-agents' });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    // New at the shared root; placement then writes it to the requested namespace.
+    expect(items[0]?.status).toBe('new');
+  });
+
+  it('edits the copy in the requested namespace rather than treating it as new', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
+      'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');
+    const requested = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(requested, 'name: reviewer\ndescription: Mine\ninstructions: Read it.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe-agents' });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('modified');
+    expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
+  });
+
+  it('refuses to publish a namespaced second copy beside a shared-root agent', async () => {
+    // The root copy reaches every member, so both would be active at once —
+    // the collision pull reports and skips.
+    await fse.outputFile(path.join(repoPath, 'agents/reviewer.yaml'),
+      'name: reviewer\ndescription: Shared\ninstructions: Read it.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Shared\n---\n\nEdited locally.\n');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe-agents' });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('shared root');
+  });
+
   it('still skips an inactive agent this machine never published', async () => {
     await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
       'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');

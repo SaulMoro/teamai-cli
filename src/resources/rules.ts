@@ -311,8 +311,17 @@ export class RulesHandler extends ResourceHandler {
 
     // The author's own copy is at the rules root under the bare name, whatever
     // namespace the team file ended up in. Leaving it behind re-publishes the
-    // rule on the next push.
-    const localNames = new Set([name, path.basename(name)]);
+    // rule on the next push — but only THIS machine's placement record makes
+    // that copy ours to delete. Without it, `remove rules fe/foo` would take an
+    // unrelated personal .claude/rules/foo.md with it (#649 review).
+    const localNames = new Set([name]);
+    const bareName = path.basename(name);
+    if (bareName !== name) {
+      const placed = placedResourcePath(
+        (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
+      );
+      if (placed === `rules/${name}.md`) localNames.add(bareName);
+    }
 
     // Record tombstone so the resource won't be re-pushed
     await this.addTombstone(name, localConfig);
