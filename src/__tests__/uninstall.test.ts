@@ -989,6 +989,42 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'my-own-skill'))).toBe(true);
   });
 
+  it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+
+    // resolveSkillDestination writes Codex's copy here whenever the skill
+    // already lives in the shared root, so this is where the stub ends up on a
+    // machine that has ever had one.
+    const sharedStub = path.join(homeDir, '.agents', 'skills', 'teamai');
+    await fse.ensureDir(sharedStub);
+    await fse.writeFile(path.join(sharedStub, 'SKILL.md'), '# TeamAI\n');
+    const sharedUserSkill = path.join(homeDir, '.agents', 'skills', 'my-own-skill');
+    await fse.ensureDir(sharedUserSkill);
+    await fse.writeFile(path.join(sharedUserSkill, 'SKILL.md'), '# Mine\n');
+
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        claude: {
+          skills: '.claude/skills',
+          rules: '.claude/rules',
+          settings: '.claude/settings.json',
+          claudemd: '.claude/CLAUDE.md',
+          agents: '.claude/agents',
+        },
+        codex: { skills: '.codex/skills' },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(sharedStub)).toBe(false);
+    expect(await fse.pathExists(sharedUserSkill)).toBe(true);
+  });
+
   it('清理 CLAUDE.md 中所有 teamai section（culture/claudemd/recall-rules）', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

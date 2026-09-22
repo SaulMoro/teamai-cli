@@ -60,7 +60,9 @@ ask ONE short question to pick a row, then proceed.
 
 Sharing a session's learnings needs no menu choice: TeamAI prompts on its own at
 the end of a session that produced something worth sharing, and that prompt means
-`teamai skill get share`. (Only when the admin left team sharing enabled — the default.)
+`teamai skill get share`. (Only when recall is on for the team; it is off by
+default, and `teamai skill get share` says so and names `teamai recall enable`
+when it is not.)
 
 ## Global rules
 

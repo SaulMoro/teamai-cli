@@ -278,15 +278,11 @@ describe('teamai skill get / path against the shipped package', () => {
     expect(stdout).toBe(expected);
   });
 
-  it('prints the packaged directory, and the roots when no name is given', async () => {
+  it('prints the packaged directory of the named skill', async () => {
     const [first] = await listServableSkills();
     await skillPath(first.name);
     expect(stdout.trim()).toBe(first.dir);
     expect(fs.existsSync(path.join(stdout.trim(), 'SKILL.md'))).toBe(true);
-
-    stdout = '';
-    await skillPath();
-    expect(stdout.trim().split('\n')).toContain(path.join(ROOT, 'skills'));
   });
 
   it('fails on an unknown name for path too', async () => {

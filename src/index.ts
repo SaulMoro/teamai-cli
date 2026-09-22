@@ -185,9 +185,9 @@ skillCmd
   });
 
 skillCmd
-  .command('path [name]')
+  .command('path <name>')
   .description('Print the packaged directory of a built-in skill (for scripts and templates)')
-  .action(async (name: string | undefined) => {
+  .action(async (name: string) => {
     const { skillPath } = await import('./skill-content.js');
     await skillPath(name);
   });

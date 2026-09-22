@@ -39,6 +39,7 @@ import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import {
   pathExists,
   readFileSafe,
@@ -349,6 +350,11 @@ async function discoverToolResources(
       const workspaceDir = await resolveOpenclawWorkspaceDir();
       if (workspaceDir) skillRoots.add(path.join(workspaceDir, 'skills'));
     }
+    // `resolveSkillDestination` writes Codex's copy into the shared
+    // .agents/skills root whenever that skill already lives there, so uninstall
+    // must look where deployment could have put it — the legacy prune already
+    // does. Codex only: another tool's pass must not reach into it.
+    if (tool === CODEX_TOOL) skillRoots.add(path.join(baseDir, SHARED_AGENT_SKILLS_PATH));
     for (const skillsDir of skillRoots) {
       if (await pathExists(skillsDir)) {
         const dirs = await listDirs(skillsDir);

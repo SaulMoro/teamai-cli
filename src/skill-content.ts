@@ -349,23 +349,15 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
 }
 
 /**
- * `teamai skill path [name]` — print the packaged directory, for agents that
+ * `teamai skill path <name>` — print the packaged directory, for agents that
  * read files directly or need to run the scripts a skill ships.
+ *
+ * A name is required. Printing the `skill-data/` root instead would hand out the
+ * parent of every served skill, and reading `<root>/share/SKILL.md` from there
+ * is exactly the content the recall gate withholds one command over.
  */
-export async function skillPath(name?: string): Promise<void> {
+export async function skillPath(name: string): Promise<void> {
   const roots = packagedSkillRoots();
-
-  if (!name) {
-    let printed = false;
-    for (const root of [roots.deployRoot, roots.dataRoot]) {
-      if (await pathExists(root)) {
-        console.log(root);
-        printed = true;
-      }
-    }
-    if (!printed) rootsMissing();
-    return;
-  }
 
   const resolved = await resolveServableSkill(name, roots);
   switch (resolved.kind) {

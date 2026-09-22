@@ -62,6 +62,13 @@ describe('teamai skill get / path CLI (e2e)', () => {
     expect(none.stderr).toContain('No skill name provided');
   });
 
+  it('refuses skill path without a name, so the skill-data root is never printed', () => {
+    const bare = run('skill', 'path');
+    expect(bare.status).toBe(1);
+    expect(bare.stdout).toBe('');
+    expect(bare.stderr).toContain("missing required argument 'name'");
+  });
+
   it('runs the wiki scripts from the directory it prints', () => {
     const printed = run('skill', 'path', 'wiki');
     expect(printed.status).toBe(0);

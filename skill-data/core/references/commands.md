@@ -63,7 +63,7 @@ Generated: do not edit by hand. Regenerate with
   - `teamai skill get [names...]` — Print built-in skill content served by the installed CLI
     - `--full` — Append the skill's references/ and templates/ files
     - `--all` — Print every skill the CLI serves
-  - `teamai skill path [name]` — Print the packaged directory of a built-in skill (for scripts and templates)
+  - `teamai skill path <name>` — Print the packaged directory of a built-in skill (for scripts and templates)
   - `teamai skill show <name>` — Show skill metadata: source / contributors / installed agents / description
   - `teamai skill exclude` — Manage per-user skill exclusion (skip sync without affecting team repo)
     - `teamai skill exclude list` — List excluded skills

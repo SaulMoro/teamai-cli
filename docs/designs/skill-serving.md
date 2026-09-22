@@ -78,6 +78,10 @@ task matches             stub body                          ~1.3 KB  holds the c
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
   packaged skill outside that module, and it returns `blocked` instead of the
   skill, so a command cannot print a directory it never received.
+- **`skill path` takes a name, always.** Printing the `skill-data/` root would
+  hand out the parent of every served skill, and `<root>/share/SKILL.md` is
+  readable from there — the content the gate withholds one command over. There is
+  no argument-less form to close that way around.
 - **A member's own skill outranks a packaged name.** `locateSkill` searches the
   team repo, then the installed agents, then the package. `codebase`, `default`,
   `learning` and `share` are ordinary names: a directory a member created under
@@ -114,6 +118,12 @@ packaged, so they are not in it: a directory by either name is the user's own.
 Deployment removes them from every installed, non-excluded agent, in its
 configured skills path; Codex's pass also covers the shared `.agents/skills`,
 which no other tool's pass touches.
+
+Codex's shared root is on the removal side of three commands now, because
+`resolveSkillDestination` puts the stub there whenever the skill already lives
+there: the legacy prune, `recall disable`, and `uninstall`, whose skill discovery
+adds `.agents/skills` for `codex` alone. Without it, an uninstall reported
+success while leaving `~/.agents/skills/teamai` behind.
 
 **It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
 lists them, built as the union of `git ls-tree -r <tag> -- skills/` over every
