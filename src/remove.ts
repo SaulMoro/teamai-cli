@@ -101,18 +101,20 @@ async function removeCore(
   const found: string[] = [];
   const notFound: string[] = [];
   for (const name of names) {
-    if (allNames.has(name)) {
-      found.push(name);
-      continue;
-    }
-    // A resource this machine placed in a namespace is published as
-    // `<ns>/<name>`, while the author's local copy — and so the name they type
-    // — is the bare one. Resolve it rather than answering "not found" about a
-    // resource we know we put there (#649 review).
+    // The placement record is consulted FIRST. A resource this machine placed
+    // in a namespace is published as `<ns>/<name>`, while the author's local
+    // copy — and so the name they type — is the bare one; and the LOCAL scan
+    // contributes that bare name whenever their copy has edits. Taking the
+    // bare match would delete the local copy, report success, and leave the
+    // namespaced team file published (#649 review).
     const published = await handler.publishedNameFor(name, localConfig);
     if (published && allNames.has(published)) {
       log.info(`${name} was published as ${published}`);
       found.push(published);
+      continue;
+    }
+    if (allNames.has(name)) {
+      found.push(name);
     } else {
       notFound.push(name);
     }

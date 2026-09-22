@@ -23,6 +23,7 @@ import { acquireLock, releaseLock } from './update.js';
 import { assertSafePath, assertSafeResourceName, defaultAllowedRoots } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError } from './roles.js';
 import type { ProjectsManifest } from './projects.js';
+import { isSafeNamespaceSegment } from './projects.js';
 import {
   isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, resolveProjectNamespace,
   skillNamespacePath, withNamespace, type PlaceableType,
@@ -95,7 +96,22 @@ async function namespaceCandidates(
         primaryRole: localConfig.primaryRole,
         additionalRoles: localConfig.additionalRoles ?? [],
       });
-      return { ok: true, candidates: namespaces[NAMESPACE_AXIS[type]] };
+      const axis = NAMESPACE_AXIS[type];
+      const candidates = namespaces[axis];
+      // A namespace is ONE directory under the resource root. `--role` and the
+      // projects manifest are both checked for that; the roles manifest was
+      // not, so `foo/bar` went through and pushed an agent to a depth `pull`
+      // never looks at, and a rule whose namespace then read back as `foo`.
+      const unsafe = candidates.find((namespace) => !isSafeNamespaceSegment(namespace));
+      if (unsafe !== undefined) {
+        return {
+          ok: false,
+          message: `The roles manifest declares an unusable ${axis} namespace "${unsafe}": `
+            + "it must be a single path segment (letters, digits, '.', '_', '-'; no '/', '\\', or '..'). "
+            + 'Fix manifest/roles.yaml, or pass --role <ns> to name the namespace for this push.',
+        };
+      }
+      return { ok: true, candidates };
     } catch (e) {
       if (!(e instanceof RolesManifestNotFoundError)) {
         return {
@@ -262,6 +278,34 @@ export { createPrWithFallback };
  * completed push — never on a no-change or PR-creation-failed run (#702 follow-up).
  */
 type PushGroupOutcome = 'pushed' | 'nochange' | 'pr-failed' | 'failed';
+
+/**
+ * Remember where push put each resource it PLACED, so the author can keep
+ * maintaining it. Their own copy stays at the tool's resource root, and the
+ * team file is now under `<root>/<ns>/`: the scanner needs the record to
+ * recognise the two as the same resource (`RulesHandler.scanLocalForPush`),
+ * and `AgentsHandler.scanLocalForPush` needs it to accept a source whose
+ * namespace this directory has not activated.
+ *
+ * Only `new` items are recorded, and only ones that ended up namespaced. A
+ * `modified` resource was found in its namespace by the scanner, which means
+ * that namespace is active here and the scan will find it again; recording it
+ * would turn a temporary activation into standing permission to keep editing
+ * an agent long after the role or project that granted it was dropped.
+ */
+function recordPlacements(state: State, items: ResourceItem[]): void {
+  for (const item of items) {
+    if (item.status !== 'new' || !item.namespace) continue;
+    // A rule the scanner already found in a subdirectory carries the namespace
+    // in its name and matches by full path, so it needs no record.
+    if (item.type === 'rules' && !item.name.includes('/')) {
+      state.placedRules = { ...state.placedRules, [item.name]: item.relativePath };
+    }
+    if (item.type === 'agents') {
+      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
+    }
+  }
+}
 
 /**
  * Give every resource waiting in an open PR back the destination that PR
@@ -1111,6 +1155,11 @@ async function pushCore(
       process.exitCode = 1;
       return;
     }
+    // Per group, and before the early return above can skip it: this group's
+    // resources are on the remote now, so where they went has to be recorded
+    // even if a later group fails. Recorded after the push rather than before,
+    // because a rolled-back group placed nothing.
+    recordPlacements(pushState, group.items);
     if (outcome === 'pushed') anyPushed = true;
     if (outcome === 'pr-failed') anyPrFailed = true;
     configRider = false;
@@ -1130,15 +1179,6 @@ async function pushCore(
     // at the tool's rules root, so the scanner needs this record to recognise
     // it next time (RulesHandler.scanLocalForPush). A rule the scanner already
     // found in a subdirectory carries the namespace in its name and needs none.
-    if (item.type === 'rules' && item.namespace && !item.name.includes('/')) {
-      state.placedRules = { ...state.placedRules, [item.name]: item.relativePath };
-    }
-    // An agent placed in a namespace this directory has not activated would be
-    // skipped as "no active source" on the author's very next edit. The record
-    // is what lets them keep maintaining the agent they just published.
-    if (item.type === 'agents' && item.namespace) {
-      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
-    }
     if (item.type === 'env' && !state.pushedEnvVars.includes(item.name)) {
       state.pushedEnvVars.push(item.name);
     }

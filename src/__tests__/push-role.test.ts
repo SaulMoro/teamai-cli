@@ -1194,6 +1194,83 @@ describe('push namespace routing for rules and agents', () => {
     expect(saved.placedAgents).toEqual({ vr: 'agents/pm/vr.yaml' });
   });
 
+  it('does not record an agent it merely edited in an already-active namespace', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    // The scanner found this agent in a namespace that is active HERE, so it
+    // will find it again. Recording it would turn a temporary activation into
+    // standing permission to keep editing it after the role or project that
+    // granted it is dropped (#649 review round 4).
+    mockHandlers({
+      agents: [{
+        name: 'vr', type: 'agents', sourcePath: '/tmp/vr.md',
+        relativePath: 'agents/hai/vr.yaml', status: 'modified', namespace: 'hai',
+      }],
+    }, []);
+
+    await push({ all: true });
+
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
+    expect(saved.placedAgents ?? {}).toEqual({});
+  });
+
+  it('refuses a roles manifest whose namespace is not a single path segment', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockLoadRolesManifest.mockResolvedValue({
+      version: 1,
+      roles: [
+        { id: 'solo', description: 'Solo', resources: { knowledge: ['foo/bar'], skills: ['solo'], agents: [] } },
+      ],
+    });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: 'solo' }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true });
+
+    // `--role` and the projects manifest are both checked for this; two levels
+    // put an agent below the depth pull looks at, and read back as the wrong
+    // namespace for a rule.
+    expect(process.exitCode).toBe(2);
+    expect(pushedItems).toHaveLength(0);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('foo/bar');
+  });
+
+  it('keeps the placement of a group that pushed when a later group fails', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    // Two groups: the rule belongs to an open PR, the agent does not.
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/9',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }], agents: [{ ...newAgent }] }, pushedItems);
+    // First group pushes, second throws.
+    mockPushRepoBranch.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('remote rejected'));
+
+    await push({ all: true, role: 'pm' });
+
+    expect(process.exitCode).toBe(1);
+    // The rule is on the remote now. Losing where it went means the author's
+    // root copy is reclassified once that PR merges.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
+    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
+  });
+
   it('does not record a rule the scanner already found in a subdirectory', async () => {
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig({ primaryRole: undefined }),

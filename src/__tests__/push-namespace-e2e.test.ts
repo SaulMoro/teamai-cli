@@ -375,6 +375,46 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
       .toContain('You review twice.');
   }, 60_000);
 
+  it('removes the published rule even when the author\'s root copy has local edits', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+
+    // With edits, the LOCAL scan contributes the bare name too. Taking that
+    // match deletes the local copy, reports success, and leaves the namespaced
+    // team file published — the author believes the rule is gone (#649 review).
+    fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), '# Edited\n');
+    const result = await runCLI(
+      ['remove', 'rules', 'my-rule', '--force'],
+      fixture.projectRoot,
+      fixture.home,
+    );
+
+    expect(result.output).toContain('my-rule was published as fe-know/my-rule');
+    const { branch, files } = branchFiles(fixture);
+    expect(branch, result.output).not.toBe('');
+    expect(files).not.toContain('rules/fe-know/my-rule.md');
+    expect(fs.existsSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'))).toBe(false);
+  }, 60_000);
+
+  it('refuses a roles manifest namespace that is not a single path segment', async () => {
+    const fixture = track(makeFixture({
+      agent: 'claude',
+      provider: 'git',
+      rolesManifest: ROLES_MANIFEST.replace('knowledge: [be-know]', 'knowledge: [foo/bar]'),
+    }));
+    fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), '# Rule\n');
+
+    const result = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+
+    // Two levels is a depth pull never looks at for agents, and reads back as
+    // the wrong namespace for a rule.
+    expect(result.code, result.output).toBe(2);
+    expect(result.output).toContain('foo/bar');
+    expect(branchFiles(fixture).branch).toBe('');
+  }, 60_000);
+
   it('removes a rule by the bare name it was published under a namespace with', async () => {
     const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
     writeLocalResources(fixture);
