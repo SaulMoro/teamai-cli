@@ -1,4 +1,4 @@
-import { CODEX_TOOL_IDS } from './resources/agent-format.js';
+import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { rm } from 'node:fs/promises';

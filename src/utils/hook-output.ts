@@ -9,7 +9,15 @@
 export const RELAY_TO_USER_PREFIX =
   'Print the following message verbatim to the user (do NOT paraphrase, summarize, or explain its origin):\n\n';
 
-/** Whether the host puts the Stop payload in front of the user by itself. */
+/**
+ * Whether the host puts the Stop payload in front of the user by itself.
+ *
+ * Only decides whether a *delivered* payload needs the model to relay it. It
+ * says nothing about whether the payload is delivered at all: OpenCode's plugin
+ * spawns the dispatch with stdout ignored (`src/opencode-hooks.ts`), so its Stop
+ * payload reaches neither the user nor the model. That gap predates #719 and is
+ * tracked separately; either answer here is equally inert for OpenCode.
+ */
 export function hostShowsStopPayload(tool: string): boolean {
   // Cursor feeds followup_message to the model and shows nothing.
   return (tool?.toLowerCase() ?? '') !== 'cursor';

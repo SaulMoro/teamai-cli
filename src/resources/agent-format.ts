@@ -8,12 +8,6 @@ import { getDispatchCommand } from '../builtin-hooks.js';
 
 export type ToolName = 'claude' | 'claude-internal' | 'tclaude' | 'codebuddy' | 'codex' | 'codex-internal' | 'tcodex' | 'cursor' | 'copilot' | 'joycode' | 'qoder' | 'kiro' | 'zcode' | 'omp' | 'opencode';
 
-/**
- * Every id that runs Codex. Hook delivery, hook format and the Stop-stdout gate
- * all key off this one list, so a new variant is added once (#719).
- */
-export const CODEX_TOOL_IDS = ['codex', 'codex-internal', 'tcodex'] as const satisfies readonly ToolName[];
-
 export const ALL_SUPPORTED_TOOLS: ToolName[] = [
   'claude',
   'claude-internal',

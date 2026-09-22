@@ -1,4 +1,4 @@
-import { CODEX_TOOL_IDS } from '../resources/agent-format.js';
+import type { ToolName } from '../resources/agent-format.js';
 
 // -*- coding: utf-8 -*-
 /**
@@ -35,6 +35,17 @@ const AGENT_TYPE_ALIASES: Record<string, string> = {
 export function normalizeAgentType(name: string): string {
   return AGENT_TYPE_ALIASES[name] ?? name;
 }
+
+/**
+ * Every id that runs Codex. Hook delivery, hook format and the Stop-stdout gate
+ * all key off this one list, so a new variant is added once (#719).
+ *
+ * It lives here, not beside `ToolName` in `resources/agent-format.ts`: that
+ * module pulls in yaml, gray-matter, smol-toml and builtin-hooks, and
+ * `hook-handlers.ts` imports this file statically on every hook dispatch. The
+ * `ToolName` import above is type-only, so it is erased and costs nothing.
+ */
+export const CODEX_TOOL_IDS = ['codex', 'codex-internal', 'tcodex'] as const satisfies readonly ToolName[];
 
 /**
  * Tools whose Stop hook cannot deliver non-blocking model context.

@@ -283,3 +283,20 @@ describe('reconcileHooksToAllTools routes opencode to the plugin adapter', () =>
     expect(await fse.pathExists(projectPlugin())).toBe(false);
   });
 });
+
+// #719 review: the PR claimed the Stop hint "reaches the user" on OpenCode. It
+// does not. The generated plugin spawns hook-dispatch with stdout ignored, so
+// neither the Stop payload nor the UserPromptSubmit payload ever gets back into
+// the session — a gap that predates #719 and is tracked separately. Pinning it
+// here means the next change that starts relying on OpenCode stdout has to come
+// through this test, instead of the claim being made again from a hook-dispatch
+// run that never went through the adapter.
+describe('OpenCode plugin: hook stdout is discarded (#719 review)', () => {
+  it('spawns hook-dispatch with stdout and stderr ignored', () => {
+    expect(buildPluginSource()).toContain("stdio: ['pipe', 'ignore', 'ignore']");
+  });
+
+  it('says so in the generated file, so a reader is not misled', () => {
+    expect(buildPluginSource()).toContain('cannot inject a hook');
+  });
+});
