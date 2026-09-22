@@ -43,6 +43,7 @@ import {
   LEGACY_BUILTIN_SKILL_NAMES,
   PACKAGED_SKILL_FILES,
   isCliOwnedSkillName,
+  prunedWhole,
   removeOwnedFiles,
 } from './builtin-skills.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
@@ -862,7 +863,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
     try {
       const name = path.basename(skillDir);
       if (isCliOwnedSkillName(name)) {
-        const removedWhole = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []);
+        const removedWhole = prunedWhole(await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []));
         if (removedWhole) removedSkillDirs++;
         else keptSkillDirs.push(skillDir);
       } else {

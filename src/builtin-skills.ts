@@ -157,17 +157,31 @@ async function removeEmptyDirs(dir: string): Promise<void> {
  * rule pull does: a file a member added beside our packaged ones was never ours
  * to write and is not ours to remove, whichever command is doing the removing.
  */
+export interface PruneResult {
+  /** Files left in place because the member, not the CLI, put them there. */
+  foreign: number;
+  /** Files left in place because their backup could not be written, and why. */
+  unbackedUp: { file: string; error: string }[];
+  /** Whether anything was actually copied, so a log only names a backup that exists. */
+  backedUp: number;
+}
+
+/** True when the directory is gone: nothing of the member's, nothing unsaved. */
+export function prunedWhole(result: PruneResult): boolean {
+  return result.foreign === 0 && result.unbackedUp.length === 0;
+}
+
 export async function removeOwnedFiles(
   dir: string,
   owned: readonly string[],
   backupDir?: string,
-): Promise<boolean> {
+): Promise<PruneResult> {
   const ownedPaths = new Set(owned);
-  let foreign = 0;
+  const result: PruneResult = { foreign: 0, unbackedUp: [], backedUp: 0 };
 
   for (const relative of await walkFiles(dir)) {
     if (!ownedPaths.has(relative) && !isDerivedArtifact(relative)) {
-      foreign++;
+      result.foreign++;
       continue;
     }
     const file = path.join(dir, relative);
@@ -179,27 +193,42 @@ export async function removeOwnedFiles(
     // one-way door.
     if (backupDir) {
       try {
-        await fse.copy(file, path.join(backupDir, relative), { overwrite: true });
+        // `errorOnExist` turns a colliding path into a failure rather than a
+        // silent overwrite: a lost copy would be the data loss this exists to
+        // prevent, wearing the log line of a success.
+        await fse.copy(file, path.join(backupDir, relative), { overwrite: false, errorOnExist: true });
+        result.backedUp++;
       } catch (e) {
-        log.debug(`Could not back up ${file}: ${(e as Error).message}`);
+        // A full disk, a read-only home, a colliding copy. Keep the file: a
+        // backup that did not happen must not authorise the delete.
+        result.unbackedUp.push({ file, error: (e as Error).message });
+        continue;
       }
     }
     await remove(file);
   }
   await removeEmptyDirs(dir);
 
-  return foreign === 0;
+  return result;
 }
 
-/** The day's backup root. One per run keeps a re-run from multiplying copies. */
-const PRUNE_STAMP = new Date().toISOString().slice(0, 10);
+/**
+ * One backup root per process run. A date alone collides: two pulls on the same
+ * day would have the second overwrite the first's copies.
+ */
+const PRUNE_RUN_ID = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
 
 /**
  * Where the prune parks what it removes: outside every agent directory, so no
  * agent reads it back as a skill, and under the member's own `~/.teamai`.
+ *
+ * The skill root is part of the path because one tool can prune the same skill
+ * name from two roots — Codex reads `.codex/skills` and the shared
+ * `.agents/skills` — and those two copies are different files.
  */
-function skillBackupDir(baseDir: string, tool: string, skillName: string): string {
-  return path.join(baseDir, '.teamai', 'removed-skills', PRUNE_STAMP, tool, skillName);
+function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillName: string): string {
+  const rootSlug = skillRoot.replace(/[\\/:]+/g, '-').replace(/^-+/, '');
+  return path.join(baseDir, '.teamai', 'removed-skills', PRUNE_RUN_ID, tool, rootSlug, skillName);
 }
 
 /**
@@ -226,12 +255,15 @@ export async function pruneLegacyBuiltinSkills(
       const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
-        const backupDir = skillBackupDir(baseDir, tool, legacyName);
-        const removedWhole = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
-        if (removedWhole) {
-          log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir}); a copy is in ${backupDir}`);
+        const backupDir = skillBackupDir(baseDir, tool, root, legacyName);
+        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
+        const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
+        if (prunedWhole(result)) {
+          log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})${saved}`);
+        } else if (result.unbackedUp.length > 0) {
+          log.warn(`Kept "${legacyName}" (${tool}): ${result.unbackedUp.length} file(s) in ${dir} could not be backed up, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
         } else {
-          log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed (a copy is in ${backupDir}); delete the rest yourself once you have saved what you need.`);
+          log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed${saved}; delete the rest yourself once you have saved what you need.`);
         }
       } catch (e) {
         log.debug(`Could not remove legacy built-in skill ${legacyName} from ${tool}: ${(e as Error).message}`);
@@ -321,7 +353,11 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         // releases wrote go first — and only those: a file a member added here
         // is theirs, and the old deployment never deleted it either.
         if (await pathExists(destDir)) {
-          await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? [], skillBackupDir(baseDir, tool, skillName));
+          const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, destDir), skillName);
+          const result = await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? [], backupDir);
+          if (result.unbackedUp.length > 0) {
+            log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
+          }
         }
         await fse.ensureDir(destDir);
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });

@@ -142,8 +142,12 @@ to delete now. One case the overwrite never reached: a path a retired release
 shipped and the current package no longer does just sat there, so an edit to it
 did survive. Ownership is proven by pathname, not by contents, so the prune
 cannot tell that file from ours — it copies everything it removes to
-`~/.teamai/removed-skills/<date>/<tool>/<skill>/` first, and the migration stops
-being a one-way door for any of them. Directories left empty go; a directory still holding a member's
+`~/.teamai/removed-skills/<run>/<tool>/<skill-root>/<skill>/` first, and the
+migration stops being a one-way door for any of them. A file whose copy fails is
+kept rather than removed: a backup that did not happen must not authorise the
+delete. The path carries the run and the skill root because neither is unique on
+its own — two pulls land on the same day, and Codex prunes the same skill name
+from both `.codex/skills` and the shared `.agents/skills`. Directories left empty go; a directory still holding a member's
 file is kept, and `pull` says which one and why. Python bytecode of a script we
 shipped counts as ours, so a `__pycache__` left by running the wiki scripts does
 not strand the tree. The same rule governs the stub directory: the seven

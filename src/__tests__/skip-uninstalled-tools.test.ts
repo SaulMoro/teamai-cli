@@ -6,6 +6,45 @@ import fse from 'fs-extra';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/** The team config the prune tests share; pass toolPaths to change which tool runs. */
+function legacyPruneTeamConfig(toolPaths: Record<string, { skills: string }> = { claude: { skills: '.claude/skills' } }) {
+  return {
+    team: 'test',
+    description: '',
+    repo: 'https://git.woa.com/test/repo.git',
+    provider: 'tgit' as const,
+    reviewers: [],
+    sharing: {
+      skills: {},
+      rules: { enforced: [] },
+      docs: { localDir: '' },
+      env: { injectShellProfile: true },
+    },
+    toolPaths,
+  };
+}
+
+function legacyPruneLocalConfig(tmpDir: string) {
+  return {
+    repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://git.woa.com/test/repo.git' },
+    username: 'testuser',
+    updatePolicy: 'auto' as const,
+    additionalRoles: [],
+    scope: 'user' as const,
+  };
+}
+
+/**
+ * The one backup root this run created. Its name carries a timestamp, so the
+ * test reads it back instead of reconstructing it and racing the clock.
+ */
+async function onlyRunDir(homeDir: string): Promise<string> {
+  const root = path.join(homeDir, '.teamai/removed-skills');
+  const runs = await fse.readdir(root);
+  expect(runs).toHaveLength(1);
+  return path.join(root, runs[0]);
+}
+
 vi.mock('../config.js', () => ({
   requireInit: vi.fn(),
   loadState: vi.fn(),
@@ -665,10 +704,48 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     expect(await fse.pathExists(wiki)).toBe(false);
 
-    const stamp = new Date().toISOString().slice(0, 10);
-    const backup = path.join(homeDir, '.teamai/removed-skills', stamp, 'claude/team-wiki-codebase');
+    const backup = path.join(await onlyRunDir(homeDir), 'claude/.claude-skills/team-wiki-codebase');
     expect(await fse.readFile(path.join(backup, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
     expect(await fse.readFile(path.join(backup, 'references/methodology/phase0-collection.md'), 'utf8')).toBe('# my notes');
+  });
+
+  it('keeps a file it could not back up, instead of deleting it anyway', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = legacyPruneTeamConfig();
+    const localConfig = legacyPruneLocalConfig(tmpDir);
+
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    await fse.ensureDir(wiki);
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# edited by the member');
+
+    // A file where the backup tree has to start: every copy under it fails, the
+    // way a full disk or a read-only home would.
+    await fse.ensureDir(path.join(homeDir, '.teamai'));
+    await fse.writeFile(path.join(homeDir, '.teamai/removed-skills'), 'not a directory');
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
+  });
+
+  it('gives each skill root its own backup, so the two Codex copies do not overwrite each other', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = legacyPruneTeamConfig({ codex: { skills: '.codex/skills' } });
+    const localConfig = legacyPruneLocalConfig(tmpDir);
+
+    // Codex prunes its own root and the shared one; same skill name, different files.
+    for (const [root, body] of [['.codex/skills', '# from codex'], ['.agents/skills', '# from shared']]) {
+      await fse.ensureDir(path.join(homeDir, root, 'team-wiki-codebase'));
+      await fse.writeFile(path.join(homeDir, root, 'team-wiki-codebase/SKILL.md'), body);
+    }
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    const run = await onlyRunDir(homeDir);
+    expect(await fse.readFile(path.join(run, 'codex/.codex-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# from codex');
+    expect(await fse.readFile(path.join(run, 'codex/.agents-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# from shared');
   });
 
   it('removes the references an earlier release deployed beside the stub', async () => {
