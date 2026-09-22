@@ -13,12 +13,13 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { blockedByRecall, resolvePackagedSkill, skillCatalog } from './skill-content.js';
+import { recallBlockMessage, resolveServableSkill, skillCatalog } from './skill-content.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
 
 interface ResolvedSkill {
+  kind: 'found';
   name: string;
   /** Path used to read SKILL.md, contributors and description. */
   primaryPath: string;
@@ -27,6 +28,14 @@ interface ResolvedSkill {
   /** Optional namespace if found in the team repo. */
   namespace?: string;
 }
+
+/** A packaged skill the recall gate withholds; there is no path to print. */
+interface BlockedSkill {
+  kind: 'blocked';
+  name: string;
+}
+
+type LocatedSkill = ResolvedSkill | BlockedSkill;
 
 /**
  * `teamai skill show <name>` — print metadata about a single
@@ -41,25 +50,25 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   const { localConfig, teamConfig } = await autoDetectInit();
 
   const agents = await detectInstalledAgents(localConfig, teamConfig);
-  const resolved = await locateSkill(name, localConfig, agents);
-  if (!resolved) {
+  const located = await locateSkill(name, localConfig, agents);
+  if (!located) {
     log.error(`Skill "${name}" not found in team repo or any installed agent.`);
     log.dim('Try `teamai list --source all` to see available skills.');
     process.exitCode = 1;
     return;
   }
-
-  const resolvedName = resolved.name;
-
-  // The recall gate holds here too: `skill get` and `skill path` withhold the
-  // share workflow while recall is off, and the card would otherwise print the
-  // very directory they refuse.
-  if (resolved.primaryOrigin === 'builtin' && await blockedByRecall(resolvedName)) {
-    log.error(`${resolvedName} needs recall, which is disabled for this team.`);
-    log.dim('Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
+  // The resolver never hands out a blocked skill, so there is no directory to
+  // print here even by accident; only the refusal is left to do.
+  if (located.kind === 'blocked') {
+    const { headline, hint } = recallBlockMessage(located.name);
+    log.error(headline);
+    log.dim(hint);
     process.exitCode = 1;
     return;
   }
+  const resolved: ResolvedSkill = located;
+
+  const resolvedName = resolved.name;
 
   // A skill served from the package is built in by construction; BUILTIN_SKILL_NAMES
   // only knows the deployed stub, so classifying by name would call `core` local-only.
@@ -105,8 +114,21 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
     return;
   }
 
-  const { list } = await import('./status.js');
-  await list('skills', { ...options, source: 'all' });
+  // The packaged catalog needs no team: a machine that has not run `teamai init`
+  // still gets to discover what the installed CLI serves, like `skill get` does.
+  let initialized = true;
+  try {
+    await autoDetectInit();
+  } catch {
+    initialized = false;
+  }
+  if (initialized) {
+    const { list } = await import('./status.js');
+    await list('skills', { ...options, source: 'all' });
+  } else {
+    log.dim('Not initialized: run `teamai init` to list team and installed skills.');
+    console.log('');
+  }
 
   console.log('=== BUILT-IN SKILLS (served by the CLI) ===');
   console.log('');
@@ -126,13 +148,13 @@ async function locateSkill(
   name: string,
   localConfig: LocalConfig,
   agents: ResolvedAgent[],
-): Promise<ResolvedSkill | null> {
+): Promise<LocatedSkill | null> {
   const teamSkillsDir = path.join(localConfig.repo.localPath, 'skills');
 
   // 1. Flat layout in team repo
   const flat = path.join(teamSkillsDir, name);
   if (await pathExists(path.join(flat, 'SKILL.md'))) {
-    return { name, primaryPath: flat, primaryOrigin: 'team' };
+    return { kind: 'found', name, primaryPath: flat, primaryOrigin: 'team' };
   }
 
   // 2. Namespaced layout in team repo
@@ -141,7 +163,7 @@ async function locateSkill(
     for (const ns of namespaces) {
       const candidate = path.join(teamSkillsDir, ns, name);
       if (await pathExists(path.join(candidate, 'SKILL.md'))) {
-        return { name, primaryPath: candidate, primaryOrigin: 'team', namespace: ns };
+        return { kind: 'found', name, primaryPath: candidate, primaryOrigin: 'team', namespace: ns };
       }
     }
   }
@@ -149,9 +171,10 @@ async function locateSkill(
   // 3. Built-in skill served by the CLI (including legacy-name aliases).
   //    Resolved before the agent fallback: under the discovery-stub model the
   //    agent directory holds a stub, not the content this command describes.
-  const packaged = await resolvePackagedSkill(name);
-  if (packaged) {
-    return { name: packaged.name, primaryPath: packaged.dir, primaryOrigin: 'builtin' };
+  const served = await resolveServableSkill(name);
+  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name };
+  if (served.kind === 'found') {
+    return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };
   }
 
   // 4. First installed agent that has the skill
@@ -159,7 +182,7 @@ async function locateSkill(
     if (!agent.installed) continue;
     const candidate = path.join(agent.absoluteSkillsPath, name);
     if (await pathExists(path.join(candidate, 'SKILL.md'))) {
-      return { name, primaryPath: candidate, primaryOrigin: 'agent' };
+      return { kind: 'found', name, primaryPath: candidate, primaryOrigin: 'agent' };
     }
   }
 

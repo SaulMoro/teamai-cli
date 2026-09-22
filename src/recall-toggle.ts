@@ -9,6 +9,7 @@ import {
   type ToolName,
 } from './resources/agent-format.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
+import { LEGACY_RECALL_SKILL_NAMES, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
   resolveToolBaseDir,
   isRecallEnabled,
@@ -35,6 +36,13 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
           log.debug(`Removed recall rule from ${tool}`);
         }
       }
+    }
+
+    // Remove the legacy recall skill an earlier release deployed. The served
+    // `share` workflow is gated at run time, but a member who upgrades and
+    // disables recall before pulling still has the old directory.
+    if (toolPath.skills && !isAgentExcluded(localConfig, tool)) {
+      await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir, LEGACY_RECALL_SKILL_NAMES);
     }
 
     // Remove recall agent file

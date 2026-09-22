@@ -72,9 +72,16 @@ task matches             stub body                          ~1.3 KB  holds the c
 - **Recall is decided at run time**, not by withholding a directory at deploy
   time, and it holds on every path that hands out content or a location:
   `skill get <name>` refuses, `skill get --all` leaves the skill out and says so
-  on stderr, `skill path <name>` refuses, and `skill list --json` reports
-  `blockedByRecall: true` with `path: null`. With no team config to consult it
-  fails open.
+  on stderr, `skill path <name>` and `skill show <name>` refuse, and
+  `skill list --json` reports `blockedByRecall: true` with `path: null`. With no
+  team config to consult it fails open. The gate lives in one place:
+  `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
+  packaged skill outside that module, and it returns `blocked` instead of the
+  skill, so a command cannot print a directory it never received.
+- **`skill list` needs no team.** The human-readable listing prints the packaged
+  catalog even before `teamai init`, with a hint for the team half, so a fresh
+  machine can discover what the installed CLI serves the way `skill get` lets it.
+
 
 ## Drift guards
 
@@ -104,6 +111,11 @@ configured skills path; Codex's pass also covers the shared `.agents/skills`,
 which no other tool's pass touches. The removal is unconditional
 because those trees were overwritten with `overwrite: true` on every pull, so no
 local edit ever survived in them.
+
+Between the upgrade and that first pull the legacy trees are still on disk, so
+two other commands know the names too: `push` never offers them as new user
+skills (`isCliOwnedSkillName`), and `recall disable` still removes
+`teamai-share-learnings` (`LEGACY_RECALL_SKILL_NAMES`), as it did before the stub.
 
 **Retire that set once 0.23.x is no longer in the field.** The short names
 (`wiki`, `share`) are the canonical ones; the long names survive as aliases in

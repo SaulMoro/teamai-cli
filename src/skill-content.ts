@@ -66,7 +66,7 @@ const RECALL_DEPENDENT_SKILLS = new Set(['share']);
  * Fails open: a machine with no team config (a fresh install reading the docs)
  * gets the content rather than a refusal it cannot act on.
  */
-export async function blockedByRecall(name: string): Promise<boolean> {
+async function blockedByRecall(name: string): Promise<boolean> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return false;
   try {
     const [{ autoDetectInit }, { isRecallEnabled }] = await Promise.all([
@@ -146,7 +146,7 @@ export async function listServableSkills(roots: PackagedSkillRoots = packagedSki
  * Resolve a name or alias to a packaged skill. Servable content wins over the
  * deployed stub, which stays reachable by its exact name for debugging.
  */
-export async function resolvePackagedSkill(
+async function resolvePackagedSkill(
   name: string,
   roots: PackagedSkillRoots = packagedSkillRoots(),
 ): Promise<PackagedSkill | null> {
@@ -163,6 +163,41 @@ export async function resolvePackagedSkill(
     if (match) return match;
   }
   return null;
+}
+
+/**
+ * The outcome of asking for a skill by name. `blocked` carries the same
+ * information as `found`, minus the skill: a caller cannot print a directory it
+ * never received.
+ */
+export type ServableSkillResolution =
+  | { kind: 'found'; skill: PackagedSkill }
+  | { kind: 'blocked'; name: string; reason: 'recall' }
+  | { kind: 'not-found'; name: string };
+
+/**
+ * The only way to obtain a packaged skill outside this module.
+ *
+ * The recall gate is applied here, once, so every command that hands out a
+ * skill's content or its directory (`get`, `path`, `list`, `show`) inherits it
+ * by construction instead of remembering to check.
+ */
+export async function resolveServableSkill(
+  name: string,
+  roots: PackagedSkillRoots = packagedSkillRoots(),
+): Promise<ServableSkillResolution> {
+  const skill = await resolvePackagedSkill(name, roots);
+  if (!skill) return { kind: 'not-found', name };
+  if (await blockedByRecall(skill.name)) return { kind: 'blocked', name: skill.name, reason: 'recall' };
+  return { kind: 'found', skill };
+}
+
+/** The two lines every command prints for a recall-blocked skill. */
+export function recallBlockMessage(name: string): { headline: string; hint: string } {
+  return {
+    headline: `${name} needs recall, which is disabled for this team.`,
+    hint: 'Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.',
+  };
 }
 
 async function collectSupplementaryFiles(skillDir: string): Promise<Array<{ relativePath: string; content: string }>> {
@@ -236,8 +271,9 @@ function rootsMissing(): void {
  * old deployment restriction cannot be sidestepped by asking differently.
  */
 function refuseBlockedByRecall(name: string): void {
-  diagnostic(`${chalk.red('✖')} ${name} needs recall, which is disabled for this team.`);
-  diagnostic('  Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
+  const { headline, hint } = recallBlockMessage(name);
+  diagnostic(`${chalk.red('✖')} ${headline}`);
+  diagnostic(`  ${hint}`);
   process.exitCode = 1;
 }
 
@@ -275,25 +311,26 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
   if (options.all) {
     // The gate holds for the inventory dump too: a blocked skill is left out
     // and named on stderr, the rest is still served.
-    for (const skill of servable) {
-      if (await blockedByRecall(skill.name)) {
-        diagnostic(`${chalk.yellow('⚠')} Skipped ${skill.name}: needs recall, which is disabled for this team (teamai recall enable).`);
+    for (const listed of servable) {
+      const resolved = await resolveServableSkill(listed.name, roots);
+      if (resolved.kind !== 'found') {
+        diagnostic(`${chalk.yellow('⚠')} Skipped ${listed.name}: needs recall, which is disabled for this team (teamai recall enable).`);
         continue;
       }
-      targets.push(skill);
+      targets.push(resolved.skill);
     }
   } else {
     for (const name of requested) {
-      const skill = await resolvePackagedSkill(name, roots);
-      if (!skill) {
+      const resolved = await resolveServableSkill(name, roots);
+      if (resolved.kind === 'not-found') {
         notFound(name, servable);
         return;
       }
-      if (await blockedByRecall(skill.name)) {
-        refuseBlockedByRecall(skill.name);
+      if (resolved.kind === 'blocked') {
+        refuseBlockedByRecall(resolved.name);
         return;
       }
-      targets.push(skill);
+      targets.push(resolved.skill);
     }
   }
 
@@ -330,16 +367,22 @@ export async function skillPath(name?: string): Promise<void> {
     return;
   }
 
-  const skill = await resolvePackagedSkill(name, roots);
-  if (!skill) {
-    notFound(name, await listServableSkills(roots));
-    return;
+  const resolved = await resolveServableSkill(name, roots);
+  switch (resolved.kind) {
+    case 'not-found':
+      notFound(name, await listServableSkills(roots));
+      return;
+    case 'blocked':
+      refuseBlockedByRecall(resolved.name);
+      return;
+    case 'found':
+      console.log(resolved.skill.dir);
+      return;
+    default: {
+      const exhaustive: never = resolved;
+      throw new Error(`Unhandled resolution ${String(exhaustive)}`);
+    }
   }
-  if (await blockedByRecall(skill.name)) {
-    refuseBlockedByRecall(skill.name);
-    return;
-  }
-  console.log(skill.dir);
 }
 
 /**
@@ -360,7 +403,7 @@ export async function skillCatalog(roots: PackagedSkillRoots = packagedSkillRoot
   const skills = await listServableSkills(roots);
   const entries: SkillCatalogEntry[] = [];
   for (const skill of skills) {
-    const blocked = await blockedByRecall(skill.name);
+    const blocked = (await resolveServableSkill(skill.name, roots)).kind === 'blocked';
     entries.push({
       name: skill.name,
       description: await readSkillDescription(path.join(skill.dir, SKILL_MD)),

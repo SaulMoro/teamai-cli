@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-scan_repo.py — 代码仓库结构扫描与统计工具
+scan_repo.py: repository structure scan and statistics tool
 
-用途: Phase 0 源材料采集阶段，快速扫描目标仓库/目录，输出：
-  1. 目录结构树（2层深度）
-  2. 代码统计（语言分布、文件数、总行数）
-  3. 关键文件发现（入口文件、配置文件、Proto/IDL、错误码定义）
-  4. 代码热点（文件行数 Top 20）
+Purpose: in the Phase 0 source material collection stage, quickly scan the target repository/directory and print:
+  1. Directory tree (2 levels deep)
+  2. Code statistics (language distribution, file count, total lines)
+  3. Key file discovery (entry files, config files, Proto/IDL, error code definitions)
+  4. Code hotspots (top 20 files by line count)
 
-使用方式:
+Usage:
   python3 scan_repo.py /path/to/repo
   python3 scan_repo.py /path/to/repo --depth 3 --top 30
 """
@@ -19,38 +19,38 @@ import argparse
 from pathlib import Path
 from collections import defaultdict, Counter
 
-# 关键文件匹配模式
+# Key file match patterns
 KEY_FILE_PATTERNS = {
-    "入口文件": [
+    "Entry files": [
         "main.py", "main.go", "app.py", "app.ts", "app.js",
         "server.py", "server.go", "wsgi.py", "manage.py",
         "cmd/*/main.go", "index.ts", "index.js",
     ],
-    "路由/Handler": [
+    "Routes/Handlers": [
         "*handler*", "*router*", "*controller*", "*dispatch*",
         "*route*", "*api.*", "*endpoint*",
     ],
-    "配置文件": [
+    "Config files": [
         "*.yaml", "*.yml", "*.toml", "*.ini", "*.conf",
         "*config*", "*.env", "*.env.*",
     ],
     "Proto/IDL": [
         "*.proto", "*.thrift", "*.graphql", "*schema*",
     ],
-    "数据库/模型": [
+    "Database/Models": [
         "*model*", "*dao*", "*repository*", "*migration*",
         "*schema*", "*.sql", "*db*",
     ],
-    "常量/错误码": [
+    "Constants/Error codes": [
         "*const*", "*constant*", "*error*", "*code*",
         "*enum*", "*define*", "*exception*",
     ],
-    "测试文件": [
+    "Test files": [
         "*_test.*", "test_*", "*.spec.*", "*_spec.*",
     ],
 }
 
-# 语言扩展名映射
+# Language extension map
 LANG_MAP = {
     ".py": "Python", ".go": "Go", ".js": "JavaScript", ".ts": "TypeScript",
     ".java": "Java", ".rs": "Rust", ".rb": "Ruby", ".php": "PHP",
@@ -61,7 +61,7 @@ LANG_MAP = {
     ".json": "JSON", ".xml": "XML", ".md": "Markdown",
 }
 
-# 忽略目录
+# Ignored directories
 IGNORE_DIRS = {
     ".git", ".svn", "node_modules", "__pycache__", ".tox", ".mypy_cache",
     "venv", ".venv", "env", ".env", "vendor", "dist", "build",
@@ -85,28 +85,28 @@ def count_lines(filepath: Path) -> int:
 
 
 def match_pattern(filename: str, pattern: str) -> bool:
-    """简单的通配符匹配"""
+    """Simple wildcard match"""
     import fnmatch
     return fnmatch.fnmatch(filename.lower(), pattern.lower())
 
 
 def scan_repository(repo_path: Path, depth: int = 2, top_n: int = 20):
-    """扫描仓库，返回统计结果"""
+    """Scan the repository and return the statistics"""
 
     all_files = []
-    lang_stats = Counter()       # 语言 -> (文件数, 行数)
+    lang_stats = Counter()       # language -> (file count, line count)
     lang_lines = Counter()
     key_files = defaultdict(list)
     dir_tree = []
 
-    # 遍历文件
+    # Walk the files
     for root, dirs, files in os.walk(repo_path):
         rel_root = Path(root).relative_to(repo_path)
 
-        # 忽略目录
+        # Skip ignored directories
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.endswith(".egg-info")]
 
-        # 目录树（限制深度）
+        # Directory tree (depth-limited)
         level = len(rel_root.parts)
         if level <= depth:
             indent = "  " * level
@@ -124,13 +124,13 @@ def scan_repository(repo_path: Path, depth: int = 2, top_n: int = 20):
 
             all_files.append((rel_path, ext, lines))
 
-            # 语言统计
+            # Language statistics
             lang = LANG_MAP.get(ext)
             if lang:
                 lang_stats[lang] += 1
                 lang_lines[lang] += lines
 
-            # 关键文件匹配
+            # Key file matching
             for category, patterns in KEY_FILE_PATTERNS.items():
                 for pattern in patterns:
                     if match_pattern(fname, pattern):
@@ -141,35 +141,35 @@ def scan_repository(repo_path: Path, depth: int = 2, top_n: int = 20):
 
 
 def print_report(repo_path: Path, all_files, lang_stats, lang_lines, key_files, dir_tree, top_n: int):
-    """输出扫描报告"""
+    """Print the scan report"""
 
     total_files = len(all_files)
     total_lines = sum(f[2] for f in all_files)
 
     print("=" * 70)
-    print(f"  代码仓库扫描报告: {repo_path.name}")
-    print(f"  路径: {repo_path}")
+    print(f"  Repository scan report: {repo_path.name}")
+    print(f"  Path: {repo_path}")
     print("=" * 70)
 
-    # 1. 基本统计
-    print(f"\n## 1. 基本统计\n")
-    print(f"| 指标 | 数值 |")
+    # 1. Basic statistics
+    print(f"\n## 1. Basic statistics\n")
+    print(f"| Metric | Value |")
     print(f"|------|------|")
-    print(f"| 总文件数 | {total_files} |")
-    print(f"| 总代码行数 | {total_lines:,} |")
-    print(f"| 语言种类 | {len(lang_stats)} |")
+    print(f"| Total files | {total_files} |")
+    print(f"| Total lines of code | {total_lines:,} |")
+    print(f"| Languages | {len(lang_stats)} |")
 
-    # 2. 语言分布
-    print(f"\n## 2. 语言分布\n")
-    print(f"| 语言 | 文件数 | 代码行数 | 占比 |")
+    # 2. Language distribution
+    print(f"\n## 2. Language distribution\n")
+    print(f"| Language | Files | Lines | Share |")
     print(f"|------|--------|---------|------|")
     for lang, count in lang_stats.most_common(15):
         lines = lang_lines[lang]
         pct = f"{lines / total_lines * 100:.1f}%" if total_lines > 0 else "0%"
         print(f"| {lang} | {count} | {lines:,} | {pct} |")
 
-    # 3. 目录结构
-    print(f"\n## 3. 目录结构（前 30 行）\n")
+    # 3. Directory structure
+    print(f"\n## 3. Directory structure (first 30 lines)\n")
     print("```")
     for line in dir_tree[:30]:
         print(line)
@@ -177,41 +177,41 @@ def print_report(repo_path: Path, all_files, lang_stats, lang_lines, key_files, 
         print(f"  ... ({len(dir_tree) - 30} more directories)")
     print("```")
 
-    # 4. 关键文件发现
-    print(f"\n## 4. 关键文件发现\n")
+    # 4. Key file discovery
+    print(f"\n## 4. Key file discovery\n")
     for category, files in key_files.items():
         if files:
-            print(f"\n### {category} ({len(files)} 个)\n")
-            # 去重并排序
+            print(f"\n### {category} ({len(files)} files)\n")
+            # Deduplicate and sort
             seen = set()
             for fpath, lines in sorted(files, key=lambda x: -x[1])[:10]:
                 if fpath not in seen:
                     seen.add(fpath)
-                    print(f"- `{fpath}` ({lines:,} 行)")
+                    print(f"- `{fpath}` ({lines:,} lines)")
 
-    # 5. 代码热点
-    print(f"\n## 5. 代码热点 (Top {top_n})\n")
-    print(f"| 排名 | 文件 | 行数 |")
+    # 5. Code hotspots
+    print(f"\n## 5. Code hotspots (Top {top_n})\n")
+    print(f"| Rank | File | Lines |")
     print(f"|------|------|------|")
     sorted_files = sorted(all_files, key=lambda x: -x[2])
     for i, (fpath, ext, lines) in enumerate(sorted_files[:top_n], 1):
         print(f"| {i} | `{fpath}` | {lines:,} |")
 
     print(f"\n{'=' * 70}")
-    print(f"  扫描完成。共 {total_files} 个文件，{total_lines:,} 行代码。")
+    print(f"  Scan complete. {total_files} files, {total_lines:,} lines of code.")
     print(f"{'=' * 70}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="代码仓库结构扫描与统计工具")
-    parser.add_argument("repo_path", help="要扫描的仓库/目录路径")
-    parser.add_argument("--depth", type=int, default=2, help="目录树深度 (默认 2)")
-    parser.add_argument("--top", type=int, default=20, help="代码热点 Top N (默认 20)")
+    parser = argparse.ArgumentParser(description="Repository structure scan and statistics tool")
+    parser.add_argument("repo_path", help="Path of the repository/directory to scan")
+    parser.add_argument("--depth", type=int, default=2, help="Directory tree depth (default 2)")
+    parser.add_argument("--top", type=int, default=20, help="Code hotspots top N (default 20)")
     args = parser.parse_args()
 
     repo_path = Path(args.repo_path).resolve()
     if not repo_path.is_dir():
-        print(f"错误: {repo_path} 不是有效目录", file=sys.stderr)
+        print(f"Error: {repo_path} is not a valid directory", file=sys.stderr)
         sys.exit(1)
 
     all_files, lang_stats, lang_lines, key_files, dir_tree = scan_repository(

@@ -1,232 +1,232 @@
-# Phase 4: 质量评估与迭代优化
+# Phase 4: Quality Assessment and Iterative Improvement
 
-> 辅助工具: `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` — 自动校验链接完整性、anchor 覆盖率、AI 快速理解表覆盖率、双向链接、README 索引收录率
+> Helper tool: `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` automatically checks link integrity, anchor coverage, AI Quick Reference table coverage, bidirectional links, and README index inclusion rate
 
-## 五维评估模型
+## Five-Dimension Assessment Model
 
-| 维度 | 权重 | 达标标准 |
+| Dimension | Weight | Passing standard |
 |------|------|---------|
-| **覆盖率** | 25% | ≥ 90% 核心组件有文档 |
-| **深度** | 25% | ≥ 80% 代码入口可直接定位 |
-| **一致性** | 20% | 0 死链接，0 矛盾描述 |
-| **AI 可用性** | 20% | RAG 检索准确率 ≥ 85% |
-| **时效性** | 10% | 核心文档更新滞后 ≤ 30 天 |
+| **Coverage** | 25% | ≥ 90% of core components are documented |
+| **Depth** | 25% | ≥ 80% of code entries can be located directly |
+| **Consistency** | 20% | 0 dead links, 0 contradictory descriptions |
+| **AI usability** | 20% | RAG retrieval accuracy ≥ 85% |
+| **Freshness** | 10% | Core document update lag ≤ 30 days |
 
-## 覆盖率检查
+## Coverage Check
 
 ```
-□ 每个代码仓库有对应的组件设计文档？
-□ 每个核心 API 有产品-代码映射？
-□ 每个数据表在某份文档中有 Schema 说明？
-□ 每个 MQ Exchange/Topic/Queue 在拓扑图中标注？
-□ 每个错误码在映射表中？
-□ 每个配置项在配置说明中？
-□ 每个定时任务在某份文档中说明？
+□ Does every code repository have a corresponding component design document?
+□ Does every core API have a product-to-code mapping?
+□ Does every data table have a schema description in some document?
+□ Is every MQ Exchange/Topic/Queue marked in the topology diagram?
+□ Is every error code in the mapping table?
+□ Is every config item in the configuration description?
+□ Is every scheduled task described in some document?
 ```
 
-## RAG 检索测试用例
+## RAG Retrieval Test Cases
 
-| 测试类型 | 示例问题 | 期望命中 |
+| Test type | Example question | Expected hit |
 |---------|---------|---------|
-| 组件定位 | "{组件名}的代码入口在哪？" | 组件设计文档 |
-| 流程追踪 | "{API名}的内部调用链路？" | 产品-代码映射 |
-| 约束查询 | "{操作}的批量上限？" | 规则速查表 |
-| 状态查询 | "处于{状态}时可执行什么操作？" | 状态互斥规则 |
-| 错误排查 | "遇到{错误码}怎么排查？" | 反模式/排障记录 |
-| 代码生成 | "写一个{功能}的 Handler" | SOP + 接口契约 |
-| 概念辨析 | "{A}和{B}区别？" | 产品知识文库 |
+| Component location | "Where is the code entry of {component}?" | Component design document |
+| Flow tracing | "What is the internal call chain of {API name}?" | Product-to-code mapping |
+| Constraint query | "What is the batch cap of {operation}?" | Rules cheat sheet |
+| State query | "Which operations can be executed in state {state}?" | State mutual exclusion rules |
+| Error investigation | "How do I investigate {error code}?" | Anti-patterns / troubleshooting records |
+| Code generation | "Write a Handler for {feature}" | SOP + interface contracts |
+| Concept disambiguation | "What is the difference between {A} and {B}?" | Product knowledge library |
 
-## 增量更新触发表
+## Incremental Update Trigger Table
 
-| 触发条件 | 更新动作 |
+| Trigger condition | Update action |
 |---------|---------|
-| 新增代码仓库 | 生成 Type-4 组件文档 |
-| API 接口变更 | 更新 Type-5 映射 + Type-6 速查表 |
-| 新增产品功能 | 更新 Type-2 业务架构 + Type-8a 知识文库 |
-| 线上故障 | 新增 Type-8d 排障记录 + 更新 Type-8b 反模式 |
-| 架构重构 | 更新 Type-1 架构总览 + 受影响 Type-4 |
-| 配置变更 | 更新对应组件文档的配置章节 |
+| New code repository | Generate a Type-4 component document |
+| API interface change | Update the Type-5 mapping + Type-6 cheat sheet |
+| New product feature | Update the Type-2 business architecture + Type-8a knowledge library |
+| Production incident | Add a Type-8d troubleshooting record + update Type-8b anti-patterns |
+| Architecture refactoring | Update the Type-1 architecture overview + affected Type-4 documents |
+| Config change | Update the configuration section of the corresponding component document |
 
-## 版本管理规范
+## Version Management Convention
 
-每份文档底部维护变更记录：
+Maintain a change log at the bottom of every document:
 
 ```markdown
-## 📝 文档更新记录
+## 📝 Document Change Log
 
 ### vX.Y (YYYY-MM-DD)
-- ✅ **新增**: {新增内容描述}
-- ✅ **修复**: {修复内容描述}
-- ✅ **更新**: {更新内容描述}
-- ⚠️ **废弃**: {废弃内容描述}
+- ✅ **Added**: {description of added content}
+- ✅ **Fixed**: {description of fixed content}
+- ✅ **Updated**: {description of updated content}
+- ⚠️ **Deprecated**: {description of deprecated content}
 ```
 
-## 常见质量问题修复
+## Fixing Common Quality Issues
 
-| 问题 | 修复方法 |
+| Issue | Fix method |
 |------|---------|
-| 死链接 | 全局 grep `](` 链接，或运行 `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` |
-| 术语不一致 | 建立术语表全局替换 |
-| 代码入口过时 | 定期与代码仓库 diff |
-| 约束值过时 | 定期与产品文档交叉比对 |
-| AI 检索失败 | 补充 search-anchor 关键词 |
-| 文档孤岛 | 补充双向链接 |
+| Dead links | Grep `](` links globally, or run `python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir>` |
+| Inconsistent terminology | Build a glossary and replace globally |
+| Outdated code entries | Diff against the code repositories periodically |
+| Outdated constraint values | Cross-check against the product docs periodically |
+| AI retrieval failures | Add search-anchor keywords |
+| Isolated documents | Add bidirectional links |
 
 ---
 
-## 完整生成流水线 Checklist
+## Complete Generation Pipeline Checklist
 
-### Phase 0 Checklist: 源材料采集
-
-```
-□ 所有核心代码仓库已克隆
-□ 产品 API 文档已采集 (接口名/入参/出参/错误码)
-□ 产品使用文档已采集 (使用限制/FAQ/计费说明)
-□ 数据库 Schema 已提取 (DDL/表结构)
-□ 流程编排配置已提取 (workflow_config 等)
-□ Proto/IDL 文件已提取
-□ 错误码定义已提取
-```
-
-### Phase 1 Checklist: 架构逆向工程
+### Phase 0 Checklist: Source Material Collection
 
 ```
-□ 代码知识图谱已构建 (节点+边)
-□ 架构分层已确定 (≥4 层)
-□ 组件关系矩阵已构建 (N×N)
-□ 核心调用链已追踪 (≥5 条核心 API)
-□ MQ 拓扑已推断 (Exchange/Topic/Queue/Routing Key)
-□ 数据库 ER 模型已构建
-□ 术语表已整理 (内外部映射)
+□ All core code repositories cloned
+□ Product API docs collected (interface name / inputs / outputs / error codes)
+□ Product usage docs collected (usage limits / FAQ / billing description)
+□ Database schema extracted (DDL / table schemas)
+□ Workflow orchestration configs extracted (workflow_config etc.)
+□ Proto/IDL files extracted
+□ Error code definitions extracted
 ```
 
-### Phase 2 Checklist: 文档生成
+### Phase 1 Checklist: Architecture Reverse-Engineering
 
 ```
-□ [Type-1] 技术架构总览文档 (1份)
-  □ 包含读者导航指南
-  □ 包含 AI 检索路由规则
-  □ 包含核心链路时序图 (≥5 条)
-  □ 包含组件关系矩阵
-  □ 包含 AI 专用第 9 章
-  □ 包含术语表
-
-□ [Type-2] 业务架构文档 (1份)
-  □ 包含产品能力矩阵
-  □ 包含计费模型（如适用）
-  □ 包含核心实体生命周期状态机
-
-□ [Type-3] 部署架构文档 (1份)
-  □ 包含服务部署矩阵
-  □ 包含环境配置
-
-□ [Type-4] 组件设计文档 (N份)
-  □ 每份包含 AI 快速理解表
-  □ 每份包含双向链接
-  □ 每份包含代码入口 (精确到函数)
-  □ 每份包含架构图 (ASCII Art)
-  □ 每份包含核心流程说明
-
-□ [Type-5] 产品-代码映射文档
-  □ 覆盖所有核心 API
-  □ 每个 API 包含约束表
-  □ 每个 API 包含调用链路
-  □ 每个 API 包含错误码映射
-
-□ [Type-6] 产品规则速查表
-  □ 覆盖所有规则类别
-  □ 约束值精确
-  □ 包含状态互斥矩阵
-
-□ [Type-7] 业务开发规范 SOP
-  □ 包含可运行的代码模板
-  □ 包含错误码对照表
-  □ 包含 AI 评审 CheckList
-
-□ [Type-8] 知识增强文档
-  □ [8a] 产品知识文库 (概念辨析)
-  □ [8b] 反模式与踩坑指南
-  □ [8c] RPC 接口契约
-  □ [8d] 排障案例记录
+□ Code knowledge graph built (nodes + edges)
+□ Architecture layers determined (≥4 layers)
+□ Component relationship matrix built (N×N)
+□ Core call chains traced (≥5 core APIs)
+□ MQ topology inferred (Exchange/Topic/Queue/Routing Key)
+□ Database ER model built
+□ Glossary compiled (external-to-internal mappings)
 ```
 
-### Phase 3 Checklist: AI-Native 增强
+### Phase 2 Checklist: Document Generation
 
 ```
-□ 所有组件文档包含 AI 快速理解表
-□ 主架构文档包含检索路由规则
-□ 所有文档包含 search-anchor
-□ 双向链接网络完整 (0 死链接)
-□ QA 对已生成 (10~20 个)
-□ 文档优先级已定义
+□ [Type-1] Technical architecture overview document (1)
+  □ Includes the reader navigation guide
+  □ Includes AI retrieval routing rules
+  □ Includes core call chain sequence diagrams (≥5)
+  □ Includes the component relationship matrix
+  □ Includes the AI-only chapter 9
+  □ Includes the glossary
+
+□ [Type-2] Business architecture document (1)
+  □ Includes the product capability matrix
+  □ Includes the billing model (if applicable)
+  □ Includes the core entity lifecycle state machine
+
+□ [Type-3] Deployment architecture document (1)
+  □ Includes the service deployment matrix
+  □ Includes environment configuration
+
+□ [Type-4] Component design documents (N)
+  □ Each includes an AI Quick Reference table
+  □ Each includes bidirectional links
+  □ Each includes code entries (precise to the function)
+  □ Each includes an architecture diagram (ASCII Art)
+  □ Each includes core flow descriptions
+
+□ [Type-5] Product-to-code mapping document
+  □ Covers all core APIs
+  □ Each API includes a constraint table
+  □ Each API includes a call chain
+  □ Each API includes an error code mapping
+
+□ [Type-6] Product rules cheat sheet
+  □ Covers all rule categories
+  □ Constraint values are exact
+  □ Includes the state mutual exclusion matrix
+
+□ [Type-7] Business development SOP
+  □ Includes runnable code templates
+  □ Includes the error code mapping table
+  □ Includes the AI review checklist
+
+□ [Type-8] Knowledge enhancement documents
+  □ [8a] Product knowledge library (concept disambiguation)
+  □ [8b] Anti-patterns and pitfalls guide
+  □ [8c] RPC interface contracts
+  □ [8d] Troubleshooting case records
 ```
 
-### Phase 3b Checklist: 图谱文档集 (Graph RAG)
+### Phase 3 Checklist: AI-Native Enhancement
 
 ```
-□ [G1] 组件依赖关系矩阵
-  □ N×N 通信矩阵完整
-  □ 正向/反向依赖索引
-  □ 外部服务依赖
-
-□ [G2] 组件调用链路全景 + 状态机
-  □ 核心 API 端到端链路 (读+写)
-  □ 完整 mermaid 状态机流转图
-  □ 核心状态字段值流转路径表（如有内部状态码）
-  □ 用户可见状态↔内部状态映射关系（如有多层状态）
-  □ 操作-状态约束速查矩阵 (✅/❌)
-  □ AI 状态判断推理规则
-
-□ [G3] 数据流与存储依赖图
-  □ 存储系统依赖矩阵
-  □ MQ 队列拓扑
-  □ 缓存策略矩阵
-
-□ [G4] 错误码组件映射表
-  □ 错误码段分配表
-  □ 外部→内部错误码映射
-
-□ [G5] 跨组件交互场景手册
-  □ ≥10 个场景的 mermaid 时序图
-  □ 每个场景有异常处理
-
-□ [G6] 知识图谱三元组
-  □ Ontology 定义 (实体类型+关系类型)
-  □ 显式三元组 ≥100 条
-  □ 多跳依赖路径索引
-  □ 反向可达索引
-
-□ [G7] 架构风险与影响面分析
-  □ 组件风险等级总表
-  □ 爆炸半径分析 (≥3 个关键组件)
-  □ 聚类分析
-  □ 变更风险评估矩阵
-
-□ [G8] 核心配置参数索引
-  □ 分层配置架构图 (mermaid)
-  □ 每层配置参数表 (配置项/默认值/影响行为/变更风险/生效方式)
-  □ 配置变更影响面速查矩阵
-
-□ [G9] 业务规则约束矩阵
-  □ 操作前置条件矩阵
-  □ 硬件约束详表
-  □ 迁移约束决策树 (mermaid)
-  □ 计费约束详表
-  □ 特殊实例类型约束汇总 (✅/❌/⚠️)
-  □ AI 推理规则速查 (mermaid 流程图)
-
-□ 图谱目录 README.md 索引完整
-  □ 按问题类型查找表
-  □ 检索路由规则建议
+□ All component documents include an AI Quick Reference table
+□ The Technical Architecture document includes retrieval routing rules
+□ All documents include a search-anchor
+□ Bidirectional link network complete (0 dead links)
+□ QA pairs generated (10~20)
+□ Document priorities defined
 ```
 
-### Phase 4 Checklist: 质量评估
+### Phase 3b Checklist: Graph Document Set (Graph RAG)
 
 ```
-□ 覆盖率 ≥ 90%
-□ 代码入口精确度 ≥ 80%
-□ 死链接 = 0 (运行 validate_kb.py 确认)
-□ RAG 检索准确率 ≥ 85%
-□ 核心文档更新滞后 ≤ 30 天
-□ 术语一致性检查通过
+□ [G1] Component Dependency Matrix
+  □ N×N communication matrix complete
+  □ Forward/reverse dependency index
+  □ External service dependencies
+
+□ [G2] Component Call Chain Overview + state machine
+  □ End-to-end core API chains (read + write)
+  □ Complete mermaid state machine diagram
+  □ Core state field value transition path table (if internal state codes exist)
+  □ User-visible state ↔ internal state mapping (if multi-layer states exist)
+  □ Operation-state constraint quick lookup matrix (✅/❌)
+  □ AI state reasoning rules
+
+□ [G3] Data Flow and Storage Dependencies
+  □ Storage system dependency matrix
+  □ MQ queue topology
+  □ Cache strategy matrix
+
+□ [G4] Error Code Component Map
+  □ Error code range allocation table
+  □ External → internal error code mapping
+
+□ [G5] Cross-Component Interaction Scenarios
+  □ mermaid sequence diagrams for ≥10 scenarios
+  □ Every scenario has exception handling
+
+□ [G6] Knowledge Graph Triples
+  □ Ontology definition (entity types + relationship types)
+  □ ≥100 explicit triples
+  □ Multi-hop dependency path index
+  □ Reverse reachability index
+
+□ [G7] Architecture Risks and Impact Analysis
+  □ Component risk level summary table
+  □ Blast radius analysis (≥3 key components)
+  □ Cluster analysis
+  □ Change risk assessment matrix
+
+□ [G8] Core Config Parameter Index
+  □ Layered config architecture diagram (mermaid)
+  □ Config parameter table per layer (config item / default / behavior impact / change risk / activation)
+  □ Config change impact surface quick lookup matrix
+
+□ [G9] Business Rule Constraint Matrix
+  □ Operation precondition matrix
+  □ Detailed hardware constraint table
+  □ Migration constraint decision tree (mermaid)
+  □ Detailed billing constraint table
+  □ Special instance type constraint summary (✅/❌/⚠️)
+  □ AI reasoning rules quick lookup (mermaid flowchart)
+
+□ Graph directory README.md index complete
+  □ Lookup-by-question-type table
+  □ Retrieval routing rule suggestions
+```
+
+### Phase 4 Checklist: Quality Assessment
+
+```
+□ Coverage ≥ 90%
+□ Code entry precision ≥ 80%
+□ Dead links = 0 (confirm by running validate_kb.py)
+□ RAG retrieval accuracy ≥ 85%
+□ Core document update lag ≤ 30 days
+□ Terminology consistency check passed
 ```

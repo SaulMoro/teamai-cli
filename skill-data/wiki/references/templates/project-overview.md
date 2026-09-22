@@ -1,148 +1,148 @@
-# 知识库总览模板
+# Knowledge base overview template
 
-> 用于生成 `<output_dir>/README.md`，在 Phase K2 批次5 生成（知识库顶层索引）。
+> Used to generate `<output_dir>/README.md`, produced in Phase K2 batch 5 (the top-level index of the knowledge base).
 
 ```markdown
-# <项目名称> — 深度知识库
-<!-- search-anchor: <项目名称>, <项目英文名>, 知识库, 架构总览, 快速导航, 组件文档, Graph RAG, 图谱 -->
+# <Project name>: Deep Knowledge Base
+<!-- search-anchor: <project name>, <project English name>, knowledge base, architecture overview, quick navigation, component documents, Graph RAG, graph -->
 
-> **AI 读取指引**：本目录是 AI-Native 知识库。请先阅读本文件了解全局和认知边界，
-> 再按检索路由规则进入对应文档查阅详情。**禁止一次性读取整个知识库目录。**
+> **AI reading guide**: this directory is an AI-Native knowledge base. Read this file first for the global picture and the cognitive boundaries,
+> then follow the retrieval routing rules into the relevant document for details. **Never read the whole knowledge base directory at once.**
 
-## 🤖 知识库检索路由指引（AI 专用）
+## 🤖 Knowledge Base Retrieval Routing Guide (for AI)
 
-### 按问题类型快速导航
+### Quick navigation by question type
 
-| 我想了解… | 应该读… | 路径 |
+| I want to know... | Read... | Path |
 |---------|---------|------|
-| 系统整体架构和分层 | 技术架构文档 | `./{项目名} 技术架构.md` |
-| 某个组件的设计和实现 | 组件设计说明 | `./XX_{组件名}设计说明.md` |
-| 组件之间的依赖关系 | G1 依赖矩阵 | `./graph/G1_*.md` |
-| 某个 API 经过哪些模块 | G2 调用链路全景 | `./graph/G2_*.md` |
-| 数据存在哪里、MQ 拓扑 | G3 数据流 | `./graph/G3_*.md` |
-| 错误码是哪个模块的 | G4 错误码映射 | `./graph/G4_*.md` |
-| 某个业务场景的完整流程 | G5 交互场景手册 | `./graph/G5_*.md` |
-| A 间接依赖谁（多跳查询） | G6 知识图谱三元组 | `./graph/G6_*.md` |
-| X 组件挂了影响多大 | G7 风险分析 | `./graph/G7_*.md` |
-| 怎么修改某个配置 | G8 配置参数索引 | `./graph/G8_*.md` |
-| 某个操作能不能执行 | G9 业务规则约束 | `./graph/G9_*.md` |
-| 产品约束→代码位置映射 | 核心API映射文档 | `./XX_*产品代码映射.md` |
-| 业务开发 SOP | 业务开发规范 | `./XX_*业务开发规范SOP.md` |
+| Overall system architecture and layering | Technical architecture document | `./{project_name} Technical Architecture.md` |
+| Design and implementation of a component | Component design document | `./XX_{component}_Design.md` |
+| Dependencies between components | G1 dependency matrix | `./graph/G1_*.md` |
+| Which modules an API passes through | G2 call chain overview | `./graph/G2_*.md` |
+| Where data lives, MQ topology | G3 data flow | `./graph/G3_*.md` |
+| Which module an error code belongs to | G4 error code map | `./graph/G4_*.md` |
+| The full flow of a business scenario | G5 interaction scenarios | `./graph/G5_*.md` |
+| Who A depends on indirectly (multi-hop query) | G6 knowledge graph triples | `./graph/G6_*.md` |
+| Blast radius if component X goes down | G7 risk analysis | `./graph/G7_*.md` |
+| How to change a configuration | G8 config parameter index | `./graph/G8_*.md` |
+| Whether an operation is allowed | G9 business rule constraints | `./graph/G9_*.md` |
+| Product constraint → code location mapping | Core API mapping document | `./XX_*_Core_API_Product_Code_Mapping.md` |
+| Business development SOP | Business development guidelines | `./XX_*_Business_Development_SOP.md` |
 
-### 检索规则
+### Retrieval rules
 
-- **规则 1 — 先读索引后深入**：遇到不确定的组件，先读本文件找到正确路径，再深入组件文档
-- **规则 2 — 组件内部问题查组件文档**：核心机制、代码入口、数据模型 → `XX_{组件名}设计说明.md`
-- **规则 3 — 跨组件关系问题查图谱**：依赖矩阵、调用链路、影响面 → `graph/` 目录
-- **规则 4 — 操作可行性问题查 G9**：约束矩阵 + 决策树 → `graph/G9_*.md`
-- **规则 5 — `[UNVERIFIED]` 标注的内容不可用于代码生成**，需先人工确认
-- **规则 6 — `AMBIGUOUS` 关系不可用于变更影响评估**，需先明确
+- **Rule 1, index first, then dig in**: for an unfamiliar component, read this file first to find the right path, then go into the component document
+- **Rule 2, component-internal questions go to the component document**: core mechanisms, code entry points, data models → `XX_{component}_Design.md`
+- **Rule 3, cross-component relation questions go to the graph**: dependency matrix, call chains, impact surface → the `graph/` directory
+- **Rule 4, operation feasibility questions go to G9**: constraint matrix + decision tree → `graph/G9_*.md`
+- **Rule 5, content marked `[UNVERIFIED]` must not be used for code generation** until confirmed by a human
+- **Rule 6, `AMBIGUOUS` relations must not be used for change impact assessment** until clarified
 
 ---
 
-## 🚧 认知边界声明（AI 必读）
+## 🚧 Cognitive Boundary Declaration (AI must read)
 
-> 本节声明此知识库**不知道什么**。AI 在回答问题时，如果涉及以下范围，
-> **必须主动告知用户"此信息超出知识库覆盖范围，建议查看源代码/产品文档/联系团队"**，
-> 而不是尝试推断或幻觉。
+> This section declares what this knowledge base **does not know**. When a question touches the areas below, the AI
+> **must proactively tell the user "this information is outside the knowledge base coverage; check the source code / product docs / contact the team"**
+> instead of trying to infer or hallucinate.
 
-### 覆盖范围
+### Coverage
 
-| 维度 | 覆盖 | 说明 |
+| Dimension | Coverage | Notes |
 |------|------|------|
-| 代码基准 | `<commit SHA>` (`<tag>`) | 此版本**之后**的变更不在覆盖范围内 |
-| 生成时间 | `<YYYY-MM-DDTHH:MM:SSZ>` | 知识库与代码的时间锚点 |
-| 核心组件（P0） | <P0组件列表> | 文档深度最高，接口级覆盖 |
-| 重要组件（P1） | <P1组件列表> | 文档深度中等，核心机制覆盖 |
-| 辅助组件（P2） | <P2组件列表> | 文档深度有限，仅架构层面 |
+| Code baseline | `<commit SHA>` (`<tag>`) | Changes **after** this version are not covered |
+| Generated at | `<YYYY-MM-DDTHH:MM:SSZ>` | Time anchor between the knowledge base and the code |
+| Core components (P0) | <P0 component list> | Deepest documentation, interface-level coverage |
+| Important components (P1) | <P1 component list> | Medium documentation depth, core mechanisms covered |
+| Auxiliary components (P2) | <P2 component list> | Limited documentation depth, architecture level only |
 
-### 明确不覆盖（AI 不应尝试回答）
+### Explicitly not covered (AI should not attempt to answer)
 
-| 领域 | 原因 |
+| Area | Reason |
 |------|------|
-| 第三方 SDK/库内部实现 | 知识库只记录调用方式，不涉及第三方源码 |
-| 运维/部署细节（ansible/k8s 配置） | 超出代码知识库范围，需查阅运维文档 |
-| 非代码产出（UI 设计、产品 PRD 原文） | 仅 Type-5/6 桥梁文档有产品约束映射 |
-| 历史架构变迁 | 仅反映当前代码基准版本的架构 |
-| 性能基准数据 | 知识库不包含压测数据 |
-| <项目特定不覆盖项> | <原因> |
+| Internals of third-party SDKs/libraries | The knowledge base records only how they are called, not third-party source |
+| Operations/deployment details (ansible/k8s config) | Outside the scope of a codebase knowledge base; consult the operations docs |
+| Non-code deliverables (UI design, original product PRDs) | Only the Type-5/6 bridge documents map product constraints |
+| Historical architecture evolution | Only the architecture of the current code baseline is reflected |
+| Performance benchmark data | The knowledge base contains no load-test data |
+| <project-specific uncovered items> | <reason> |
 
-### 低可信度区域（AI 回答时需额外警告）
+### Low-confidence areas (extra warning needed when answering)
 
-| 区域 | 原因 | 建议 |
+| Area | Reason | Recommendation |
 |------|------|------|
-| P2 辅助组件的内部细节 | 文档深度有限 | 引用时加"基于有限文档分析" |
-| `[UNVERIFIED]` 标注内容 | 无法回溯到代码 | 必须告知用户"此信息未经代码验证" |
-| `AMBIGUOUS` 关系 | 置信度 < 0.3 | 必须告知用户"此关系存在不确定性" |
-| 产品文档缺失时的 Type-5/6 | 无产品文档输入 | 标注 `[PRODUCT_DOC_MISSING]` |
+| Internal details of P2 auxiliary components | Limited documentation depth | Add "based on limited documentation analysis" when citing |
+| Content marked `[UNVERIFIED]` | Cannot be traced back to code | Must tell the user "this information is not verified against code" |
+| `AMBIGUOUS` relations | Confidence < 0.3 | Must tell the user "this relation is uncertain" |
+| Type-5/6 when product docs are missing | No product doc input | Marked `[PRODUCT_DOC_MISSING]` |
 
-### 知识库更新说明
+### Knowledge base update notes
 
-- **增量更新**：使用 `code-to-knowledge --update` 可仅更新变更文件对应的文档
-- **全量重建**：代码发生大规模重构时建议全量重建
-- **上次更新**：`<ISO8601>`
+- **Incremental update**: `code-to-knowledge --update` updates only the documents of changed files
+- **Full rebuild**: recommended after large-scale code refactoring
+- **Last updated**: `<ISO8601>`
 
 ---
 
-## 项目简介
+## Project introduction
 
-<!-- 1-3 句话：项目背景、核心业务目标、主要用户 -->
+<!-- 1-3 sentences: project background, core business goals, main users -->
 
-## 技术栈
+## Tech stack
 
-| 类别 | 技术 | 说明 |
+| Category | Technology | Notes |
 |------|------|------|
-| 语言 | Go / Python | ... |
-| 框架 | go-zero / FastAPI | ... |
-| 数据库 | MySQL / PostgreSQL | ... |
-| 缓存 | Redis | ... |
-| 消息队列 | Kafka / RabbitMQ | （如有） |
+| Language | Go / Python | ... |
+| Framework | go-zero / FastAPI | ... |
+| Database | MySQL / PostgreSQL | ... |
+| Cache | Redis | ... |
+| Message queue | Kafka / RabbitMQ | (if any) |
 
-## 知识库文档索引
+## Knowledge base document index
 
-### 架构层文档
-| 文档 | 类型 | 规模 | 说明 |
+### Architecture-level documents
+| Document | Type | Size | Notes |
 |------|------|------|------|
-| {项目名} 技术架构.md | Type-1 | ~200KB | 架构总览 |
-| {项目名} 业务架构.md | Type-2 | ~70KB | 产品能力+生命周期 |
-| {项目名} 部署架构.md | Type-3 | ~40KB | 部署拓扑 |
+| {project_name} Technical Architecture.md | Type-1 | ~200KB | Architecture overview |
+| {project_name} Business Architecture.md | Type-2 | ~70KB | Product capabilities + lifecycle |
+| {project_name} Deployment Architecture.md | Type-3 | ~40KB | Deployment topology |
 
-### 组件设计文档
-| 编号 | 组件 | 架构层 | 核心度 | 规模 |
+### Component design documents
+| No. | Component | Layer | Priority | Size |
 |------|------|--------|--------|------|
-| 01 | <组件名> | <层级> | P0 | ~NKB |
+| 01 | <component> | <layer> | P0 | ~NKB |
 
-### 桥梁文档（有产品文档时生成）
-| 文档 | 类型 | 说明 |
+### Bridge documents (generated when product docs exist)
+| Document | Type | Notes |
 |------|------|------|
-| 核心API产品代码映射 | Type-5 | 产品约束→代码位置 |
-| 产品规则速查表 | Type-6 | 使用限制/FAQ→代码 |
-| 业务开发规范SOP | Type-7 | 开发/变更操作规范 |
+| Core API Product Code Mapping | Type-5 | Product constraint → code location |
+| Product Rules Cheat Sheet | Type-6 | Usage limits / FAQ → code |
+| Business Development SOP | Type-7 | Development / change operation guidelines |
 
-### 图谱文档集（Graph RAG）
-| 文档 | 用途 | 规模 |
+### Graph document set (Graph RAG)
+| Document | Purpose | Size |
 |------|------|------|
-| G1~G9 | 跨组件关系索引 | 详见 `graph/README.md` |
+| G1~G9 | Cross-component relation index | See `graph/README.md` |
 
-## 知识库质量概览
+## Knowledge base quality overview
 
-| 指标 | 数值 | 状态 |
+| Metric | Value | Status |
 |------|------|------|
-| 文档总数 | N 份 | — |
-| 内容准确率（有代码引用） | X% | ✅/⚠️ |
-| [UNVERIFIED] 比例 | X% | 目标<15% |
-| 接口覆盖率（非 NONE 组件） | X% | 目标≥90% |
-| AMBIGUOUS 关系数 | N 条 | 需人工确认 |
+| Total documents | N | - |
+| Content accuracy (with code references) | X% | ✅/⚠️ |
+| [UNVERIFIED] ratio | X% | Target <15% |
+| Interface coverage (non-NONE components) | X% | Target ≥90% |
+| AMBIGUOUS relation count | N | Needs human confirmation |
 
-> 详细质量报告见 `_review/k4-quality-report.md`
+> See `_review/k4-quality-report.md` for the detailed quality report
 
-## 代码基准版本
+## Code baseline version
 
-> ⚠️ 本知识库基于以下版本代码生成，代码演进后请运行 `code-to-knowledge --update` 增量更新。
+> ⚠️ This knowledge base was generated from the code version below. After the code evolves, run `code-to-knowledge --update` for an incremental update.
 
-- **Commit**：`<git commit SHA>`
-- **Tag**：`<tag 或 "无 tag">`
-- **生成时间**：`<YYYY-MM-DDTHH:MM:SSZ>`
+- **Commit**: `<git commit SHA>`
+- **Tag**: `<tag or "no tag">`
+- **Generated at**: `<YYYY-MM-DDTHH:MM:SSZ>`
 
-> 版本信息来源：`_review/metadata.json`
+> Version information source: `_review/metadata.json`
 ```

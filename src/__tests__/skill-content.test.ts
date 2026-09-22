@@ -6,11 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SKILL_DIR_PLACEHOLDER,
-  blockedByRecall,
   listServableSkills,
   packagedSkillRoots,
   renderSkill,
-  resolvePackagedSkill,
+  resolveServableSkill,
   skillCatalog,
   skillGet,
   skillPath,
@@ -45,9 +44,16 @@ function writeSkill(root: string, name: string, body: string, files: Record<stri
 
 /** Resolve or fail the test, so the assertions below need no non-null operator. */
 async function mustResolve(name: string, roots: PackagedSkillRoots): Promise<PackagedSkill> {
-  const skill = await resolvePackagedSkill(name, roots);
-  if (!skill) throw new Error(`fixture skill not found: ${name}`);
-  return skill;
+  const resolved = await resolveServableSkill(name, roots);
+  if (resolved.kind !== 'found') throw new Error(`fixture skill not found: ${name} (${resolved.kind})`);
+  return resolved.skill;
+}
+
+/** The name a resolution lands on, or null: what the alias assertions compare. */
+async function resolvedName(name: string, roots: PackagedSkillRoots): Promise<string | null> {
+  const resolved = await resolveServableSkill(name, roots);
+  if (resolved.kind === 'not-found') return null;
+  return resolved.kind === 'found' ? resolved.skill.name : resolved.name;
 }
 
 describe('packaged skill discovery', () => {
@@ -83,8 +89,8 @@ describe('packaged skill discovery', () => {
     writeSkill(roots.deployRoot, 'teamai', '# stub\n');
     writeSkill(roots.dataRoot, 'core', '# core\n');
 
-    const stub = await resolvePackagedSkill('teamai', roots);
-    expect(stub?.dir).toBe(path.join(roots.deployRoot, 'teamai'));
+    const stub = await mustResolve('teamai', roots);
+    expect(stub.dir).toBe(path.join(roots.deployRoot, 'teamai'));
     expect(stub?.deployed).toBe(true);
   });
 
@@ -94,13 +100,13 @@ describe('packaged skill discovery', () => {
     writeSkill(roots.dataRoot, 'share', '# share\n');
 
     for (const alias of ['wiki', 'codebase', 'team-wiki-codebase']) {
-      expect((await resolvePackagedSkill(alias, roots))?.name, alias).toBe('wiki');
+      expect(await resolvedName(alias, roots), alias).toBe('wiki');
     }
     for (const alias of ['share', 'learning', 'learnings', 'teamai-share-learnings']) {
-      expect((await resolvePackagedSkill(alias, roots))?.name, alias).toBe('share');
+      expect(await resolvedName(alias, roots), alias).toBe('share');
     }
-    expect((await resolvePackagedSkill('default', roots))?.name).toBe('core');
-    expect(await resolvePackagedSkill('nope', roots)).toBeNull();
+    expect(await resolvedName('default', roots)).toBe('core');
+    expect(await resolvedName('nope', roots)).toBeNull();
   });
 
   it('ignores directories without SKILL.md and dotfiles', async () => {
@@ -262,7 +268,8 @@ describe('teamai skill get / path against the shipped package', () => {
     // this run's team config decides whether share is in the dump.
     const servable: PackagedSkill[] = [];
     for (const skill of await listServableSkills()) {
-      if (!await blockedByRecall(skill.name)) servable.push(skill);
+      const resolved = await resolveServableSkill(skill.name);
+      if (resolved.kind === 'found') servable.push(resolved.skill);
     }
     await skillGet([], { all: true });
 

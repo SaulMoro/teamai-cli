@@ -85,6 +85,29 @@ describe('recall toggle native agent cleanup', () => {
     expect(await fse.pathExists(legacyMarkdownAgent)).toBe(false);
   });
 
+  it('disable removes the legacy share skill an earlier release deployed, and nothing beside it', async () => {
+    const { localConfig, teamConfig } = await mockAutoDetectInit();
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig,
+      teamConfig: { ...teamConfig, toolPaths: { codex: { agents: '.codex/agents', skills: '.codex/skills' } } },
+    });
+    const skillsDir = path.join(homeDir, '.codex', 'skills');
+    for (const name of ['teamai-share-learnings', 'team-wiki-codebase', 'teamai', 'my-own']) {
+      await fse.ensureDir(path.join(skillsDir, name));
+      await fse.writeFile(path.join(skillsDir, name, 'SKILL.md'), `# ${name}`);
+    }
+
+    await recallDisable({});
+
+    // Upgrade, then `recall disable` before the first pull: the old share
+    // workflow must not stay discoverable. The stub and the user's skills are
+    // not recall artifacts; the wiki tree is pull's to remove.
+    expect(await fse.pathExists(path.join(skillsDir, 'teamai-share-learnings'))).toBe(false);
+    for (const kept of ['team-wiki-codebase', 'teamai', 'my-own']) {
+      expect(await fse.pathExists(path.join(skillsDir, kept, 'SKILL.md')), kept).toBe(true);
+    }
+  });
+
   it('disable preserves non-agent files that only share the recall stem', async () => {
     const backup = path.join(homeDir, '.codex', 'agents', 'teamai-recall.backup');
     await fse.writeFile(backup, 'user backup');

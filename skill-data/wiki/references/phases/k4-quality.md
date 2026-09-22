@@ -1,190 +1,190 @@
-## Phase K4：知识库质量评估与报告
+## Phase K4: Knowledge Base Quality Assessment and Report
 
-**方法论**：`{SKILL_DIR}/references/methodology/phase4-quality.md`
+**Methodology**: `{SKILL_DIR}/references/methodology/phase4-quality.md`
 
-### Step 1：自动校验
+### Step 1: Automated validation
 
 ```bash
 python3 {SKILL_DIR}/scripts/validate_kb.py <output_dir> --verbose
 ```
 
-`--verbose` 打印每一项的明细（缺失的 anchor、死链接的具体位置），这正是下面要求的完整展示。
+`--verbose` prints the details of every item (missing anchors, the exact location of dead links). This is exactly the full output required below.
 
-输出（**必须完整展示，不得只展示通过项**）：
+Output (**must be shown in full, not only the passing items**):
 ```
-链接完整性:     ✅/❌  N 个死链接
-search-anchor:  ✅/⚠️  覆盖率 N/M (X%)
-AI 快速理解表:  ✅/⚠️  覆盖率 N/M (X%)
-双向链接:       ✅/⚠️  覆盖率 N/M (X%)
-README 索引:    ✅/⚠️  收录率 N/M (X%)
-```
-
-### Step 2：准确性审计
-
-从 `accuracy_stats` 汇总全库可信度，同时从 `interface_coverage` 汇总接口覆盖情况：
-
-```
-【内容准确性】
-总声明数:            N 条（业务规则 + 接口描述 + 关系）
-已验证(有代码引用):   N 条 (X%)
-[UNVERIFIED]:        N 条 (X%)
-AMBIGUOUS 关系:      N 条 (X%)
-
-【接口覆盖率】（仅统计 HTTP/MQ/RPC 类型组件，NONE 类型不计入）
-HTTP 接口:   文档记录 M 个 / 扫描基准 N 个 = X%
-MQ Topic:    文档记录 M 个 / 扫描基准 N 个 = X%
-RPC Method:  文档记录 M 个 / 扫描基准 N 个 = X%
-综合覆盖率:  X%    目标 ≥ 90%
-
-⚠️ 接口缺口清单（文档记录 < 扫描基准 的组件）：
-  - ComponentA: 文档记录 8 个，扫描基准 13 个，缺口 5 个 → 建议补充
+Link integrity:          ✅/❌  N dead links
+search-anchor:           ✅/⚠️  coverage N/M (X%)
+AI Quick Reference table: ✅/⚠️  coverage N/M (X%)
+Bidirectional links:     ✅/⚠️  coverage N/M (X%)
+README index:            ✅/⚠️  inclusion rate N/M (X%)
 ```
 
-⚠️ 需人工确认清单：（[UNVERIFIED] > 20% 的文档 + 接口缺口组件 + AMBIGUOUS 关系）
+### Step 2: Accuracy audit
 
-### Step 3：RAG 检索抽检
-
-按 `phase4-quality.md §RAG检索测试用例` 测试 7 类问题各 1 个（详见方法论），记录命中率。
-
-### Step 4：AI 端到端验证（E2E Validation）
-
-**核心思路**：用知识库回答一组标准化问题，然后**回溯代码验证答案正确性**，检测知识库是否能让 AI 给出正确答案。
+Aggregate the credibility of the whole knowledge base from `accuracy_stats`, and the interface coverage from `interface_coverage`:
 
 ```
-Step 4A：生成标准验证问题集（自动，基于已有文档）
+[Content accuracy]
+Total claims:                 N (business rules + interface descriptions + relationships)
+Verified (with code reference): N (X%)
+[UNVERIFIED]:                 N (X%)
+AMBIGUOUS relationships:      N (X%)
 
-  **优先使用用户提供的外部验证集**：
-  IF 用户在 Phase 0 或此时提供了验证问题列表（3~10 个真实业务问题）:
-    → 优先使用用户问题作为验证集（标注来源: USER）
-    → 自动补充至 10~15 题（标注来源: AUTO）
+[Interface coverage] (only HTTP/MQ/RPC type components are counted, NONE type is excluded)
+HTTP interfaces: documented M / scan baseline N = X%
+MQ Topics:       documented M / scan baseline N = X%
+RPC Methods:     documented M / scan baseline N = X%
+Overall coverage: X%    target ≥ 90%
+
+⚠️ Interface gap list (components where documented < scan baseline):
+  - ComponentA: documented 8, scan baseline 13, gap 5 → recommend adding
+```
+
+⚠️ Manual confirmation list: (documents with [UNVERIFIED] > 20% + components with interface gaps + AMBIGUOUS relationships)
+
+### Step 3: RAG retrieval spot check
+
+Following `phase4-quality.md §RAG Retrieval Test Cases`, test 1 question from each of the 7 question types (see the methodology for details) and record the hit rate.
+
+### Step 4: AI end-to-end validation (E2E Validation)
+
+**Core idea**: answer a set of standardised questions using the knowledge base, then **trace back to the code to verify the answers**, to detect whether the knowledge base enables the AI to give correct answers.
+
+```
+Step 4A: Generate the standard validation question set (automatic, based on existing documents)
+
+  **Prefer an external validation set provided by the user**:
+  IF the user provided a list of validation questions (3~10 real business questions) in Phase 0 or now:
+    → use the user's questions as the validation set first (source: USER)
+    → top up automatically to 10~15 questions (source: AUTO)
   ELSE:
-    → 全部自动生成（标注来源: AUTO）
+    → generate all automatically (source: AUTO)
   
-  > 用户提供的问题更有价值，因为 AI 自己出题容易考自己已知的领域，
-  > 真正的盲区（AI 没理解但没意识到的）只有外部问题才能测到。
+  > User-provided questions are more valuable, because when the AI writes its own questions it tends to test areas it already knows,
+  > and the real blind spots (things the AI did not understand and is unaware of) can only be found by external questions.
 
-  从 k1-architecture-map.md 和 k2-doc-list.md 自动生成 10~15 个验证问题：
+  Automatically generate 10~15 validation questions from k1-architecture-map.md and k2-doc-list.md:
 
-  问题类型分布（至少覆盖以下 5 类）：
+  Question type distribution (cover at least the following 5 types):
 
   ┌────────────────────────────────────────────────────────────────────┐
-  │ 类型1：组件职责（3题）                                              │
-  │   模式："<组件名> 的核心职责是什么？代码入口在哪？"                    │
-  │   验证方式：答案中的函数名/文件名必须在代码中存在                      │
+  │ Type 1: component responsibility (3 questions)                     │
+  │   Pattern: "What is the core responsibility of <component>? Where is the code entry point?" │
+  │   Verification: the function / file names in the answer must exist in the code │
   │                                                                    │
-  │ 类型2：调用关系（3题）                                              │
-  │   模式："<组件A> 和 <组件B> 之间是什么关系？通过什么方式通信？"         │
-  │   验证方式：答案与 G1 矩阵 + 代码实际 import/call 一致               │
+  │ Type 2: call relationships (3 questions)                           │
+  │   Pattern: "What is the relationship between <component A> and <component B>? How do they communicate?" │
+  │   Verification: the answer matches the G1 matrix + the actual imports / calls in the code │
   │                                                                    │
-  │ 类型3：操作约束（2题）                                              │
-  │   模式："在 <状态X> 下能否执行 <操作Y>？"                            │
-  │   验证方式：答案与 G9 约束矩阵 + 代码中的状态检查一致                 │
+  │ Type 3: operation constraints (2 questions)                        │
+  │   Pattern: "Can <operation Y> be executed in <state X>?"           │
+  │   Verification: the answer matches the G9 constraint matrix + the state checks in the code │
   │                                                                    │
-  │ 类型4：数据流向（2题）                                              │
-  │   模式："<操作Z> 最终会写入哪些表/队列？"                             │
-  │   验证方式：答案与 G3 数据流 + 代码实际 SQL/MQ 操作一致               │
+  │ Type 4: data flow (2 questions)                                    │
+  │   Pattern: "Which tables / queues does <operation Z> ultimately write to?" │
+  │   Verification: the answer matches the G3 data flow + the actual SQL / MQ operations in the code │
   │                                                                    │
-  │ 类型5：错误排查（2题）                                              │
-  │   模式："错误码 <XXX> 是什么意思？在哪个组件产生？"                    │
-  │   验证方式：答案与 G4 错误码映射 + 代码中的错误定义一致               │
+  │ Type 5: error troubleshooting (2 questions)                        │
+  │   Pattern: "What does error code <XXX> mean? Which component produces it?" │
+  │   Verification: the answer matches the G4 error code map + the error definitions in the code │
   │                                                                    │
-  │ 类型6（可选）：认知边界测试（2题）                                    │
-  │   模式：故意问知识库不覆盖的内容（如第三方 SDK 内部、历史架构变迁）     │
-  │   验证方式：AI 应回答"超出知识库覆盖范围"而非幻觉                     │
+  │ Type 6 (optional): knowledge boundary test (2 questions)           │
+  │   Pattern: deliberately ask about content the knowledge base does not cover (e.g. third-party SDK internals, historical architecture changes) │
+  │   Verification: the AI should answer "outside the knowledge base coverage" rather than hallucinate │
   └────────────────────────────────────────────────────────────────────┘
 
-Step 4B：用知识库回答（模拟 AI 使用场景）
+Step 4B: Answer using the knowledge base (simulating the AI usage scenario)
 
-  FOR 每个验证问题:
-    1. 假设只能读知识库文档，不能直接读代码
-    2. 按检索路由规则，找到对应文档
-    3. 从文档中提取答案
+  FOR each validation question:
+    1. Assume only the knowledge base documents can be read, not the code directly
+    2. Find the relevant document following the retrieval routing rules
+    3. Extract the answer from the document
 
-Step 4C：代码回溯验证
+Step 4C: Code trace-back verification
 
-  FOR 每个答案:
-    1. 用 Grep/Read 直接在代码中验证关键声明
-    2. 判定结果：
-       ✅ CORRECT     — 答案与代码一致
-       ⚠️ PARTIAL     — 答案部分正确，有遗漏或不精确
-       ❌ INCORRECT   — 答案与代码矛盾
-       🔇 BOUNDARY_OK — 认知边界问题，正确拒绝回答（仅类型6）
-       🔇 BOUNDARY_FAIL — 认知边界问题，错误地给出了答案（仅类型6）
+  FOR each answer:
+    1. Verify the key claims directly in the code with Grep/Read
+    2. Judge the result:
+       ✅ CORRECT       : the answer matches the code
+       ⚠️ PARTIAL       : the answer is partially correct, with omissions or imprecision
+       ❌ INCORRECT     : the answer contradicts the code
+       🔇 BOUNDARY_OK   : knowledge boundary question, correctly declined to answer (type 6 only)
+       🔇 BOUNDARY_FAIL : knowledge boundary question, wrongly gave an answer (type 6 only)
 
-Step 4D：写入验证报告
+Step 4D: Write the validation report
 
-  追加到 k4-quality-report.md 的 ## AI 端到端验证 章节：
+  Append to the ## AI End-to-End Validation section of k4-quality-report.md:
 
-  | 问题 | 类型 | 检索文档 | AI答案摘要 | 代码验证 | 结果 |
+  | Question | Type | Retrieved Document | AI Answer Summary | Code Verification | Result |
   |------|------|---------|-----------|---------|------|
-  | Aurora 核心职责？ | 组件职责 | 03_Aurora设计说明.md | 调度编排... | scheduler.go:42 | ✅ |
-  | A→B 通信方式？ | 调用关系 | G1矩阵 | RPC | import rpc_client | ✅ |
-  | 状态X下能否操作Y？ | 操作约束 | G9矩阵 | 不能 | check_state.go:88 | ✅ |
-  | 第三方SDK内部？ | 认知边界 | — | 超出范围 | — | 🔇 OK |
+  | Core responsibility of Aurora? | Component responsibility | 03_Aurora_Design.md | Scheduling orchestration... | scheduler.go:42 | ✅ |
+  | A→B communication method? | Call relationship | G1 matrix | RPC | import rpc_client | ✅ |
+  | Can operation Y run in state X? | Operation constraint | G9 matrix | No | check_state.go:88 | ✅ |
+  | Third-party SDK internals? | Knowledge boundary | — | Out of scope | — | 🔇 OK |
 
-  统计：
+  Statistics:
     CORRECT: N/M (X%)
     PARTIAL: N/M (X%)
-    INCORRECT: N/M (X%) — ❌ 每个 INCORRECT 必须列出具体矛盾点
+    INCORRECT: N/M (X%), ❌ every INCORRECT must list the specific contradiction
     BOUNDARY_OK: N/N
     BOUNDARY_FAIL: N/N
 
-    E2E 准确率 = (CORRECT + BOUNDARY_OK) / 总题数
-    目标: ≥ 80%
+    E2E accuracy = (CORRECT + BOUNDARY_OK) / total questions
+    Target: ≥ 80%
 ```
 
-**如果 E2E 准确率 < 80%**：在质量报告"建议"章节列出需要改进的文档和具体问题。
+**If E2E accuracy < 80%**: list the documents that need improvement and the specific problems in the "Recommendations" section of the quality report.
 
-### Step 5：生成质量报告
+### Step 5: Generate the quality report
 
-写入 `_review/k4-quality-report.md`：
+Write to `_review/k4-quality-report.md`:
 
 ```markdown
-# 知识库质量报告
+# Knowledge Base Quality Report
 
-## 概览
-- 代码基准：<commit SHA> (<tag>)
-- 生成时间：<ISO8601>
-- 文档总数：N 份（Type-1~8: N份，图谱G1~G9: 9份）
+## Overview
+- Code baseline: <commit SHA> (<tag>)
+- Generated at: <ISO8601>
+- Total documents: N (Type-1~8: N, graph G1~G9: 9)
 
-## 准确性
-| 指标 | 数值 | 状态 |
-| 总声明数 | N | — |
-| 有代码引用 | N (X%) | ✅/❌ |
+## Accuracy
+| Metric | Value | Status |
+| Total claims | N | — |
+| With code reference | N (X%) | ✅/❌ |
 | [UNVERIFIED] | N (X%) | ✅/<15% / ⚠️15~25% / ❌>25% |
-| AMBIGUOUS关系 | N | ✅/⚠️ |
+| AMBIGUOUS relationships | N | ✅/⚠️ |
 
-## 结构质量（validate_kb.py 输出）
-（完整展示，不隐藏任何数字）
+## Structural Quality (validate_kb.py output)
+(shown in full, no numbers hidden)
 
-## 跨文档一致性（k3-consistency-check.md 摘要）
-| 指标 | 数值 | 状态 |
-| 矛盾项 | N | ✅=0 / ❌>0 |
-| 缺失引用 | N | ⚠️ |
-| G1偏差 | N | ⚠️ |
-| 一致率 | X% | 目标≥95% |
+## Cross-Document Consistency (summary of k3-consistency-check.md)
+| Metric | Value | Status |
+| Contradictions | N | ✅=0 / ❌>0 |
+| Missing references | N | ⚠️ |
+| G1 deviations | N | ⚠️ |
+| Consistency rate | X% | target ≥95% |
 
-## RAG 检索抽检
-| 测试问题 | 期望命中 | 实际命中 | 结果 |
+## RAG Retrieval Spot Check
+| Test Question | Expected Hit | Actual Hit | Result |
 
-## AI 端到端验证
-| 指标 | 数值 | 状态 |
+## AI End-to-End Validation
+| Metric | Value | Status |
 | CORRECT | N/M (X%) | — |
 | PARTIAL | N/M (X%) | ⚠️ |
 | INCORRECT | N/M (X%) | ❌ |
 | BOUNDARY_OK | N/N | ✅ |
-| E2E 准确率 | X% | 目标≥80% |
+| E2E accuracy | X% | target ≥80% |
 
-INCORRECT 详情：
-（每个 INCORRECT 的具体矛盾点和改进建议）
+INCORRECT details:
+(the specific contradiction and improvement suggestion for every INCORRECT)
 
-## 待人工确认清单
-（[UNVERIFIED] 超标文档 + AMBIGUOUS 关系 + 矛盾项 + 死链接）
+## Manual Confirmation List
+([UNVERIFIED] over-threshold documents + AMBIGUOUS relationships + contradictions + dead links)
 
-## 建议
-（基于一致性校验 + E2E 验证的改进方向）
+## Recommendations
+(improvement directions based on the consistency check + E2E validation)
 ```
 
-**完成后**：更新 `current_phase` 为 `"completed"`，流程结束。
+**When done**: update `current_phase` to `"completed"`. The workflow ends.
 
 ---

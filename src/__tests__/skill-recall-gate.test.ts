@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const autoDetectInit = vi.fn();
 vi.mock('../config.js', () => ({ autoDetectInit }));
 
-import { blockedByRecall, skillCatalog, skillGet, skillPath } from '../skill-content.js';
+import { resolveServableSkill, skillCatalog, skillGet, skillPath } from '../skill-content.js';
 
 /**
  * Recall used to be decided when deploying: the share skill simply was not
@@ -49,7 +49,9 @@ describe('recall gate on served skills', () => {
   it('blocks share when recall is disabled, and says what to turn on', async () => {
     withRecall(false);
 
-    expect(await blockedByRecall('share')).toBe(true);
+    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'recall' });
+    // Aliases land on the same gate: the name in the refusal is the canonical one.
+    expect(await resolveServableSkill('teamai-share-learnings')).toMatchObject({ kind: 'blocked', name: 'share' });
 
     await skillGet(['share']);
     expect(process.exitCode).toBe(1);
@@ -61,7 +63,7 @@ describe('recall gate on served skills', () => {
   it('serves share when recall is enabled', async () => {
     withRecall(true);
 
-    expect(await blockedByRecall('share')).toBe(false);
+    expect(await resolveServableSkill('share')).toMatchObject({ kind: 'found', skill: { name: 'share' } });
 
     await skillGet(['share']);
     expect(process.exitCode).toBeUndefined();
@@ -107,7 +109,7 @@ describe('recall gate on served skills', () => {
     withRecall(false);
 
     for (const name of ['core', 'setup', 'wiki']) {
-      expect(await blockedByRecall(name), name).toBe(false);
+      expect((await resolveServableSkill(name)).kind, name).toBe('found');
     }
   });
 
@@ -116,6 +118,6 @@ describe('recall gate on served skills', () => {
 
     // A fresh machine reading the docs gets the content, not a refusal it
     // cannot act on.
-    expect(await blockedByRecall('share')).toBe(false);
+    expect((await resolveServableSkill('share')).kind).toBe('found');
   });
 });

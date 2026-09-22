@@ -1,124 +1,124 @@
-# team-wiki-codebase — 大型代码库 AI 认知工程
+# team-wiki-codebase: AI cognition engineering for large codebases
 
-> TeamAI builtin skill：方法论、脚本与 Agent 规范随 `teamai pull` / `teamai init` 部署到项目的 `.codebuddy/`、`.cursor/` 等目录。TeamAI does not ship a separate team-wiki CLI. No extra plugin is required.
+> TeamAI builtin skill: the methodology, scripts and Agent specifications are deployed with `teamai pull` / `teamai init` into the project's `.codebuddy/`, `.cursor/` and similar directories. TeamAI does not ship a separate team-wiki CLI. No extra plugin is required.
 
-## 为什么需要这个 skill
+## Why this skill exists
 
-大型项目的 AI 理解困境：
+The AI comprehension problem of large projects:
 
-| 痛点 | 具体表现 |
+| Pain point | Symptom |
 |------|---------|
-| **上下文装不下** | 10+ 仓库、数十万行代码，远超 AI 上下文窗口 |
-| **关系看不清** | 微服务间的 RPC/MQ/DB 依赖散落在各仓库，没有全局视图 |
-| **规则记不住** | 业务约束、状态机、配置参数隐藏在深层调用链中 |
-| **回答不准确** | AI 只看到局部代码，缺乏全局架构认知，容易幻觉 |
-| **token 消耗大** | 每次提问都要重新读大量源码，效率极低 |
+| **Context does not fit** | 10+ repositories and hundreds of thousands of lines of code, far beyond the AI context window |
+| **Relations are unclear** | RPC/MQ/DB dependencies between microservices are scattered across repositories with no global view |
+| **Rules are not remembered** | Business constraints, state machines and config parameters hide deep in call chains |
+| **Answers are inaccurate** | AI sees only local code, lacks global architecture awareness, and hallucinates easily |
+| **High token consumption** | Every question re-reads large amounts of source, which is very inefficient |
 
-## 怎么解决
+## How it is solved
 
-通过架构逆向工程，将海量代码**压缩为结构化知识库**：
+Architecture reverse-engineering **compresses the huge codebase into a structured knowledge base**:
 
-- 每个结论有代码 `文件:行号` 作为证据
-- 每条组件关系有置信度标注（`EXTRACTED` / `INFERRED` / `AMBIGUOUS`）
-- 每次生成后有准确性统计，超标自动警告
-- AI 读知识库而非读源码，**约 1/50 的 token 消耗**获得全局架构认知
-- Phase 0 可用 `teamai codebase --extract` 生成可证据化的结构边（TS/JS/Python/Go AST + 多语言 heuristic）
-- 提取后可用 `teamai codebase --deep-enrich --project <slug> --output <repo>` 生成确定性图谱文档（G1/G2/G3）与深度知识；无需单独的 team-wiki CLI
+- Every conclusion has a code `file:line` as evidence
+- Every component relation carries a confidence label (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`)
+- Every generation run produces accuracy statistics, with automatic warnings when thresholds are exceeded
+- AI reads the knowledge base instead of the source and gains global architecture awareness for **about 1/50 of the tokens**
+- In Phase 0, `teamai codebase --extract` can generate evidence-backed structural edges (TS/JS/Python/Go AST + multi-language heuristics)
+- After extraction, `teamai codebase --deep-enrich --project <slug> --output <repo>` can generate deterministic graph documents (G1/G2/G3) and deep knowledge; no separate team-wiki CLI is needed
 
 ---
 
-## 产出体系
+## Deliverables
 
 ```
 <output_dir>/
-├── README.md                           ← 检索路由指引（AI 专用）
-├── {项目名} 技术架构.md                ← 系统全貌，~200KB
-├── {项目名} 业务架构.md                ← 产品能力 + 生命周期
-├── {项目名} 部署架构.md                ← 部署拓扑
-├── XX_{组件名}设计说明.md × N          ← 每组件一份，含 AI 快速理解表
-├── XX_{项目名}核心API产品代码映射.md    ← 产品约束→代码位置 桥梁文档
-├── XX_{项目名}产品规则速查表.md
-├── XX_{项目名}业务开发规范SOP.md
-├── {反模式/RPC契约/排障记录} × N
-├── _manifest.json                      ← 机器可读 manifest（供后续图谱合并）
-└── graph/                              ← Graph RAG 图谱文档集
-    ├── G1 组件依赖关系矩阵
-    ├── G2 调用链路全景 + 状态机
-    ├── G3 数据流与存储依赖图
-    ├── G4 错误码组件映射表
-    ├── G5 跨组件交互场景手册（≥10个时序图）
-    ├── G6 知识图谱三元组（≥100条，含置信度）
-    ├── G7 架构风险与影响面分析
-    ├── G8 核心配置参数索引
-    └── G9 业务规则约束矩阵 + AI 推理决策树
+├── README.md                           ← Retrieval routing guide (for AI)
+├── {project_name} Technical Architecture.md            ← Whole-system view, ~200KB
+├── {project_name} Business Architecture.md             ← Product capabilities + lifecycle
+├── {project_name} Deployment Architecture.md           ← Deployment topology
+├── XX_{component}_Design.md × N                        ← One per component, with the AI Quick Reference table
+├── XX_{project_name}_Core_API_Product_Code_Mapping.md  ← Product constraint → code location bridge document
+├── XX_{project_name}_Product_Rules_Cheat_Sheet.md
+├── XX_{project_name}_Business_Development_SOP.md
+├── {anti-patterns / RPC contracts / troubleshooting notes} × N
+├── _manifest.json                      ← Machine-readable manifest (for later graph merging)
+└── graph/                              ← Graph RAG graph document set
+    ├── G1 Component dependency matrix
+    ├── G2 Call chain overview + state machines
+    ├── G3 Data flow and storage dependencies
+    ├── G4 Error code component map
+    ├── G5 Cross-component interaction scenarios (≥10 sequence diagrams)
+    ├── G6 Knowledge graph triples (≥100 entries, with confidence)
+    ├── G7 Architecture risks and impact analysis
+    ├── G8 Core config parameter index
+    └── G9 Business rule constraint matrix + AI reasoning decision tree
 ```
 
 ---
 
-## 执行流程
+## Execution flow
 
 ```
-Phase 0  → 初始化：收集路径、项目名、产品文档来源；可选 CLI ast+heuristic 结构基线
+Phase 0  → Initialisation: collect paths, project name, product doc sources; optional CLI ast+heuristic structural baseline
 
-Phase K1 → 架构逆向：关键文件提取 → 分层分析 → 组件关系矩阵
-                                              ⛔ 确认点① 架构理解确认
+Phase K1 → Architecture reverse-engineering: key file extraction → layered analysis → component relation matrix
+                                              ⛔ Confirmation point ① Architecture understanding
 
-Phase K2 → 文档生成（分批并行）：
-             批次1~4: Type-4 组件文档（并行子 Agent 分发）
-                                              ⛔ 确认点② 文档质量抽查
-             批次5~7: 架构总览 + 桥梁文档 + 知识增强
+Phase K2 → Document generation (parallel batches):
+             Batches 1~4: Type-4 component documents (dispatched to parallel sub-agents)
+                                              ⛔ Confirmation point ② Document quality spot check
+             Batches 5~7: architecture overview + bridge documents + knowledge enhancement
 
-Phase K3 → AI-Native 增强：
-             search-anchor + 双向链接 + 检索路由规则
-             Graph RAG 图谱文档集 G1~G9（置信度三态标注）
+Phase K3 → AI-Native enhancement:
+             search-anchor + bidirectional links + retrieval routing rules
+             Graph RAG graph document set G1~G9 (three-state confidence labels)
 
-Phase K4 → 质量评估：
-             validate_kb.py 自动检验
-             全库准确性审计（[UNVERIFIED] 统计 + 接口覆盖率）
-             跨文档一致性校验（矛盾检测 + 自动修复）
-             RAG 检索抽检（7类问题）
-             AI 端到端验证（10~15 个标准问题 + 代码回溯）
-             生成质量报告
+Phase K4 → Quality assessment:
+             validate_kb.py automatic checks
+             Whole-base accuracy audit ([UNVERIFIED] statistics + interface coverage)
+             Cross-document consistency check (contradiction detection + automatic fixes)
+             RAG retrieval spot check (7 question types)
+             AI end-to-end validation (10~15 standard questions + code trace-back)
+             Quality report generation
 ```
 
-支持 `--update` 增量更新（基于文件 hash 缓存，只重跑变更组件）。
+Supports `--update` incremental updates (based on a file hash cache, rerunning only changed components).
 
 ---
 
-## 文件结构
+## File structure
 
-以下文件随 CLI 一起发布；`teamai skill path wiki` 打印其所在目录（本文中的 `{SKILL_DIR}`）。
+The files below ship with the CLI; `teamai skill path wiki` prints the directory that contains them (`{SKILL_DIR}` in this document).
 
 ```
 {SKILL_DIR}/
-├── SKILL.md                                ← 主执行指令（`teamai skill get wiki`）
+├── SKILL.md                                ← Main execution instructions (`teamai skill get wiki`)
 ├── scripts/
-│   ├── scan_repo.py                        ← 仓库扫描辅助工具
-│   └── validate_kb.py                      ← 知识库质量校验工具
+│   ├── scan_repo.py                        ← Repository scan helper
+│   └── validate_kb.py                      ← Knowledge base quality validation tool
 ├── references/
-│   ├── overview.md                         ← 本文件
+│   ├── overview.md                         ← This file
 │   ├── agents/
-│   │   ├── kb-doc-generator.md             ← Type-1~8 文档生成专职 Agent
-│   │   └── graph-rag-agent.md              ← G1~G9 图谱文档专职 Agent
+│   │   ├── kb-doc-generator.md             ← Dedicated Agent for Type-1~8 document generation
+│   │   └── graph-rag-agent.md              ← Dedicated Agent for G1~G9 graph documents
 │   ├── methodology/
-│   │   ├── phase0-collection.md            ← 源材料采集方法
-│   │   ├── phase1-reverse-engineering.md   ← 架构逆向工程方法
-│   │   ├── phase2-document-types.md        ← 九大文档类型规范与质量标准
-│   │   ├── phase3-ai-enhancement.md        ← AI-Native 增强方法
-│   │   └── phase4-quality.md               ← 质量评估 Checklist
-│   ├── phases/                             ← 各 Phase 的执行步骤
+│   │   ├── phase0-collection.md            ← Source material collection method
+│   │   ├── phase1-reverse-engineering.md   ← Architecture reverse-engineering method
+│   │   ├── phase2-document-types.md        ← Specification and quality standards of the nine document types
+│   │   ├── phase3-ai-enhancement.md        ← AI-Native enhancement method
+│   │   └── phase4-quality.md               ← Quality assessment checklist
+│   ├── phases/                             ← Execution steps of each Phase
 │   └── templates/
-│       └── project-overview.md             ← 知识库 README 模板（含认知边界声明）
+│       └── project-overview.md             ← Knowledge base README template (with cognitive boundary declaration)
 ```
 
 ---
 
-## 质量标准
+## Quality standards
 
-| 维度 | 达标标准 |
+| Dimension | Passing standard |
 |------|---------|
-| 覆盖率 | ≥90% P0 核心组件有文档 |
-| 准确性 | [UNVERIFIED] < 15% |
-| 结构质量 | 死链接=0，search-anchor 覆盖率≥95% |
-| AI 可用性 | RAG 检索抽检准确率≥85% |
-| 关系可信度 | AMBIGUOUS 关系 < 10%，全部列入待确认清单 |
+| Coverage | ≥90% of P0 core components have documents |
+| Accuracy | [UNVERIFIED] < 15% |
+| Structural quality | Dead links = 0, search-anchor coverage ≥95% |
+| AI usability | RAG retrieval spot check accuracy ≥85% |
+| Relation trustworthiness | AMBIGUOUS relations < 10%, all listed for confirmation |

@@ -1,89 +1,89 @@
-# Phase 1: 架构逆向工程 — 从代码到架构认知
+# Phase 1: Architecture Reverse-Engineering, From Code to Architectural Understanding
 
-## 1. 自底向上分层法
+## 1. Bottom-Up Layering Method
 
 ```
-Step 1: 识别"叶子节点" — 直接操作基础设施
-  ├── 数据库操作 (MySQL/PostgreSQL/Redis/MongoDB)
-  ├── 消息队列操作 (RabbitMQ/Kafka/RocketMQ)
-  ├── 外部系统调用 (第三方 API / 底层驱动)
-  └── 文件/对象存储操作 (S3/OSS/COS)
+Step 1: Identify "leaf nodes" that operate directly on infrastructure
+  ├── Database operations (MySQL/PostgreSQL/Redis/MongoDB)
+  ├── Message queue operations (RabbitMQ/Kafka/RocketMQ)
+  ├── External system calls (third-party APIs / low-level drivers)
+  └── File/object storage operations (S3/OSS/COS)
 
-Step 2: 识别"中间节点" — 编排和路由
-  ├── 消息路由框架 (消费者路由分发)
-  ├── 任务调度器 (定时任务/延迟任务)
-  ├── 流程编排引擎 (Workflow/Saga/状态机)
-  └── 资源调度器 (负载均衡/资源分配)
+Step 2: Identify "intermediate nodes" that orchestrate and route
+  ├── Message routing frameworks (consumer routing and dispatch)
+  ├── Task schedulers (cron jobs / delayed tasks)
+  ├── Workflow orchestration engines (Workflow/Saga/state machines)
+  └── Resource schedulers (load balancing / resource allocation)
 
-Step 3: 识别"根节点" — 外部入口
-  ├── API 网关 / HTTP Handler / gRPC Server
-  ├── 定时任务入口 (Cron/Scheduler)
-  └── 事件监听入口 (Webhook/EventBus)
+Step 3: Identify "root nodes", the external entry points
+  ├── API gateway / HTTP Handler / gRPC Server
+  ├── Scheduled task entry points (Cron/Scheduler)
+  └── Event listener entry points (Webhook/EventBus)
 
-Step 4: 按调用方向分层
-  外部入口 → 流程编排 → 服务执行 → 资源调度 → 数据操作 → 基础设施
+Step 4: Layer by call direction
+  External entry → workflow orchestration → service execution → resource scheduling → data operations → infrastructure
 ```
 
-### 分层判定规则
+### Layer Assignment Rules
 
-| 判定特征 | 所属层级 | 典型代码模式 |
+| Distinguishing feature | Layer | Typical code pattern |
 |---------|---------|-------------|
-| HTTP/gRPC Server 启动 | API 接入层 | `http.ListenAndServe()`, `grpc.NewServer()` |
-| 参数校验 + 鉴权 + 限流 | API 接入层 | `validate()`, `auth()`, `rateLimit()` |
-| 流程步骤配置和状态机 | 流程引擎层 | `workflow_config`, `state_machine` |
-| MQ 消费 + Handler 路由 | 服务执行层 | `channel.consume()`, `handler.dispatch()` |
-| 调度算法 (Filter/Score) | 资源调度层 | `filter()`, `score()`, `schedule()` |
-| DB CRUD + 缓存操作 | 数据适配层 | `db.query()`, `redis.get()` |
-| 底层系统调用/驱动 | 基础执行层 | `exec()`, `syscall.*`, `driver.*` |
+| HTTP/gRPC Server startup | API access layer | `http.ListenAndServe()`, `grpc.NewServer()` |
+| Parameter validation + auth + rate limiting | API access layer | `validate()`, `auth()`, `rateLimit()` |
+| Workflow step configs and state machines | Workflow engine layer | `workflow_config`, `state_machine` |
+| MQ consumption + Handler routing | Service execution layer | `channel.consume()`, `handler.dispatch()` |
+| Scheduling algorithms (Filter/Score) | Resource scheduling layer | `filter()`, `score()`, `schedule()` |
+| DB CRUD + cache operations | Data adapter layer | `db.query()`, `redis.get()` |
+| Low-level system calls/drivers | Base execution layer | `exec()`, `syscall.*`, `driver.*` |
 
-## 2. 三层穿透追踪法（核心方法论）
+## 2. Three-Layer Penetration Tracing (Core Methodology)
 
-对任何用户可见 API 操作，完成三层穿透追踪：
-
-```
-Layer 1: API 入口层
-  ├── 定位 Handler 函数
-  ├── 提取参数校验逻辑
-  ├── 识别硬编码默认值和白名单
-  └── 确定下游调用方式 (同步RPC / 异步MQ)
-
-Layer 2: 流程编排层
-  ├── 查找流程配置 (workflow_config / saga_config)
-  ├── 解析步骤序列 (步骤名/执行模块/回滚模块/超时/重试)
-  ├── 标注每步的执行模块和回滚模块
-  └── 确定步骤间的数据传递方式
-
-Layer 3: 服务执行层
-  ├── 追踪每个步骤的具体 Handler 实现
-  ├── 识别数据库操作和状态变更
-  ├── 标注外部系统调用
-  └── 确定最终执行结果的回调路径
-
-输出: 完整调用链时序图 + 状态流转图 + 数据流向图
-```
-
-### 调用链文档化标准格式
+For every user-visible API operation, complete a three-layer penetration trace:
 
 ```
-[API名称](代码入口: {仓库}/{路径}/{文件})
-  → 参数校验 + 鉴权限流
-  → [前置检查]: {检查内容}
-  → RPC/MQ → [编排层] ({配置文件}: {操作名})
-    → [服务层] ({配置文件}: {flow_name})
-      → [{步骤1模块}] {步骤1命令} ({具体说明})
-      → [{步骤2模块}] {步骤2命令} ({具体说明})
+Layer 1: API entry layer
+  ├── Locate the Handler function
+  ├── Extract parameter validation logic
+  ├── Identify hard-coded defaults and whitelists
+  └── Determine the downstream call style (synchronous RPC / asynchronous MQ)
+
+Layer 2: Workflow orchestration layer
+  ├── Find the workflow config (workflow_config / saga_config)
+  ├── Parse the step sequence (step name / execution module / rollback module / timeout / retry)
+  ├── Annotate the execution module and rollback module of each step
+  └── Determine how data is passed between steps
+
+Layer 3: Service execution layer
+  ├── Trace the concrete Handler implementation of each step
+  ├── Identify database operations and state changes
+  ├── Annotate external system calls
+  └── Determine the callback path of the final execution result
+
+Output: complete call chain sequence diagram + state transition diagram + data flow diagram
+```
+
+### Standard Format for Documenting Call Chains
+
+```
+[API name](code entry: {repo}/{path}/{file})
+  → parameter validation + auth and rate limiting
+  → [pre-checks]: {check content}
+  → RPC/MQ → [orchestration layer] ({config file}: {operation name})
+    → [service layer] ({config file}: {flow_name})
+      → [{step 1 module}] {step 1 command} ({details})
+      → [{step 2 module}] {step 2 command} ({details})
       → ...
-      → 回调 [编排层]
+      → callback to [orchestration layer]
 ```
 
-## 3. 组件关系矩阵
+## 3. Component Relationship Matrix
 
-构建 N×N 关系矩阵，标注通信方式：
+Build an N×N relationship matrix annotated with the communication style:
 
-| 调用方 ↓ / 被调方 → | 组件A | 组件B | 组件C |
+| Caller ↓ / Callee → | ComponentA | ComponentB | ComponentC |
 |---------------------|-------|-------|-------|
-| **组件A** | — | RPC | MQ |
-| **组件B** | — | — | DB |
-| **组件C** | RPC | MQ | — |
+| **ComponentA** | — | RPC | MQ |
+| **ComponentB** | — | — | DB |
+| **ComponentC** | RPC | MQ | — |
 
-标注: `RPC`(同步) / `MQ`(异步) / `DB`(共享数据库) / `—`(无直接通信)
+Legend: `RPC` (synchronous) / `MQ` (asynchronous) / `DB` (shared database) / `—` (no direct communication)

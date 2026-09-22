@@ -1,341 +1,341 @@
-# Phase 2: 九大文档类型生成规范与模板
+# Phase 2: Generation Specs and Templates for the Nine Document Types
 
-## Type-1: 技术架构总览
+## Type-1: Technical Architecture Overview
 
-**规模**: ~200KB | **数量**: 1 份
+**Size**: ~200KB | **Count**: 1
 
-### 必备章节
+### Required Sections
 
 ```
-读者导航指南 (按角色推荐阅读路径)
-知识库检索路由指引 (AI 专用，4条分流规则+4级优先级)
-1. 架构概述 (30秒快速理解表、整体架构图ASCII、组件关系矩阵)
-2. 三维架构视图 (逻辑/数据/部署)
-3. 核心链路 ⭐ (每条核心API的完整时序图+调用链)
-4. 核心组件详解 (每组件概述+表格)
-5. 配置管理与服务发现
-6. 数据模型与存储架构 ⭐
-7. 高可用与技术架构
-8. 架构演进与设计决策
-9. AI 研发知识库规范 ⭐ (元数据QA/全局状态机/MQ拓扑/调度引擎/跨层追踪)
-附录: 代码仓库/术语表/代码入口索引/错误码
+Reader navigation guide (recommended reading paths by role)
+Knowledge base retrieval routing guide (AI only, 4 routing rules + 4 priority levels)
+1. Architecture overview (30-second quick reference table, overall ASCII architecture diagram, component relationship matrix)
+2. Three-dimensional architecture views (logical/data/deployment)
+3. Core call chains ⭐ (complete sequence diagram + call chain for every core API)
+4. Core components in detail (overview + table per component)
+5. Configuration management and service discovery
+6. Data model and storage architecture ⭐
+7. High availability and technical architecture
+8. Architecture evolution and design decisions
+9. AI development knowledge base spec ⭐ (metadata QA / global state machine / MQ topology / scheduling engine / cross-layer tracing)
+Appendix: code repositories / glossary / code entry index / error codes
 ```
 
-### 生成规则
-- T1-R01: 必须包含读者导航指南
-- T1-R02: 必须包含 AI 检索路由规则
-- T1-R03: 核心链路必须有时序图
-- T1-R04: 组件表必须包含代码仓库列
-- T1-R05: 术语表必须包含内外部映射
-- T1-R06: 必须有 AI 专用第 9 章
-- T1-R07: 架构图使用 ASCII Art
+### Generation Rules
+- T1-R01: must include a reader navigation guide
+- T1-R02: must include AI retrieval routing rules
+- T1-R03: core call chains must have sequence diagrams
+- T1-R04: the component table must include a code repository column
+- T1-R05: the glossary must include external-to-internal mappings
+- T1-R06: must have an AI-only chapter 9
+- T1-R07: architecture diagrams use ASCII Art
 
 ---
 
-## Type-2: 业务架构文档
+## Type-2: Business Architecture Document
 
-**规模**: ~70KB | **数量**: 1 份
-
-```
-1. 产品能力矩阵 (能力域/子能力/对应API/计费影响)
-2. 计费模型详解 (模式对比/状态机/退费续费规则)
-3. 核心实体生命周期 (完整状态机/各状态允许操作/互斥规则)
-4. 核心业务流程 (用户视角时序图+前置条件+异常处理)
-5. 产品规格体系 (命名规则/规格与底层资源映射)
-```
-
----
-
-## Type-3: 部署架构文档
-
-**规模**: ~40KB | **数量**: 1 份
+**Size**: ~70KB | **Count**: 1
 
 ```
-1. 分层部署架构图
-2. 服务部署矩阵 (服务名/部署方式/实例数/资源配置/依赖)
-3. 环境配置 (生产/测试/差异对照)
-4. 部署流程与变更管理
+1. Product capability matrix (capability domain / sub-capability / corresponding API / billing impact)
+2. Billing model in detail (mode comparison / state machine / refund and renewal rules)
+3. Core entity lifecycle (complete state machine / operations allowed per state / mutual exclusion rules)
+4. Core business flows (user-perspective sequence diagram + preconditions + exception handling)
+5. Product specification system (naming rules / mapping from specs to underlying resources)
 ```
 
 ---
 
-## Type-4: 组件设计文档（核心产出）
+## Type-3: Deployment Architecture Document
 
-**规模**: 20~100KB/份 | **数量**: N 份（每组件一份）
-
-### 标准模板
+**Size**: ~40KB | **Count**: 1
 
 ```
-# {组件名} 内部设计说明
-<!-- search-anchor: 组件名, 别名, 核心关键词 -->
-> 项目名称 / 版本 / 代码仓库 / 代码规模
-> 在整体架构中的位置: [📘 链接到主架构文档]
-
-## 🤖 AI 快速理解要点
-（10 维度结构化摘要，详细定义见 [phase3-ai-enhancement.md §1](phase3-ai-enhancement.md)）
-
-## 📋 项目概述 (核心职责+在架构中的位置)
-## 🏗️ 架构设计 (ASCII架构图+核心子模块，函数签名)
-## 📊 数据模型 (SQL DDL带注释+数据流向图)
-## 🔌 接口设计 (对外接口表+对内接口+错误码)
-## ⚙️ 核心流程 (时序图+步骤说明+异常处理)
-## 🔧 配置说明 (配置项/默认值/说明/影响范围)
-## 📈 监控与告警
-## 🐛 常见问题与排障
+1. Layered deployment architecture diagram
+2. Service deployment matrix (service name / deployment method / instance count / resource config / dependencies)
+3. Environment configuration (production / test / difference comparison)
+4. Deployment process and change management
 ```
-
-### 生成规则
-- T4-R01: 必须有 AI 快速理解表
-- T4-R02: 必须有双向链接到主架构文档
-- T4-R03: 核心函数必须列出签名
-- T4-R04: SQL DDL 必须包含注释
-- T4-R05: 配置项必须标注影响范围
-- T4-R06: 架构图使用 ASCII Art
-- T4-R07: 代码入口必须精确到函数名
-
-### 从代码生成的步骤
-
-> 详细执行规范见 `{SKILL_DIR}/references/agents/kb-doc-generator.md`，此处仅列概要：
-> 1. 代码结构扫描（Glob → Grep → Read 三步法，按语言自适应）
-> 2. 信息提取（10 维度：核心职责/架构层级/上下游/代码入口/核心机制/数据流向/技术栈/数据模型/配置项/定时任务）
-> 3. 文档组装（按上述模板章节顺序）
-> 4. 自校验（准确性统计 + 接口对账）
 
 ---
 
-## Type-5: 产品-代码映射（桥梁文档）
+## Type-4: Component Design Document (Core Output)
 
-### 每个核心 API 一节
+**Size**: 20~100KB each | **Count**: N (one per component)
 
-```
-### N.1 用户意图 (一句话)
-### N.2 产品约束 (约束项/约束值/影响组件/校验位置)
-### N.3 用户可见状态流转 (ASCII图+内部状态映射)
-### N.4 内部调用链路 (标准格式精确到代码文件)
-### N.5 写代码时必须考虑的 (硬性约束编号列表)
-### N.6 错误码与内部异常映射 (外部码/内部组件/含义)
-```
-
-### 生成规则
-- T5-R01: 约束表必须标注"影响的组件"和"校验位置"
-- T5-R02: 调用链必须精确到代码文件路径
-- T5-R03: 状态流转必须标注内部状态码映射
-- T5-R04: "写代码时必须考虑的"是强制章节
-- T5-R05: 错误码映射必须包含内部组件归属
-
-### 桥梁文档生成方法（3 Step）
-
-**Step 1: 提取产品约束** — 从产品文档中提取所有影响代码实现的约束：
+### Standard Template
 
 ```
-扫描维度:
-├── 数量限制 (批量上限、配额、最大值)
-├── 类型约束 (枚举值、互斥关系)
-├── 状态前置条件 (操作前资源必须处于什么状态)
-├── 计费规则 (不同计费模式的差异处理)
-├── 安全约束 (鉴权、加密、脱敏)
-└── 兼容性约束 (类型兼容、版本兼容、地域限制)
+# {component} Internal Design
+<!-- search-anchor: component name, aliases, core keywords -->
+> Project name / version / code repository / code size
+> Position in the overall architecture: [📘 link to the Technical Architecture document]
+
+## 🤖 AI Quick Reference
+(10-dimension structured summary, detailed definition in [phase3-ai-enhancement.md §1](phase3-ai-enhancement.md))
+
+## 📋 Project Overview (core responsibilities + position in the architecture)
+## 🏗️ Architecture Design (ASCII architecture diagram + core sub-modules, function signatures)
+## 📊 Data Model (SQL DDL with comments + data flow diagram)
+## 🔌 Interface Design (external interface table + internal interfaces + error codes)
+## ⚙️ Core Flows (sequence diagram + step descriptions + exception handling)
+## 🔧 Configuration (config item / default / description / impact scope)
+## 📈 Monitoring and Alerting
+## 🐛 Common Issues and Troubleshooting
 ```
 
-**Step 2: 映射到代码位置** — 对每个产品约束，追踪到代码中的具体校验位置：
+### Generation Rules
+- T4-R01: must have an AI Quick Reference table
+- T4-R02: must have bidirectional links to the Technical Architecture document
+- T4-R03: core functions must list their signatures
+- T4-R04: SQL DDL must include comments
+- T4-R05: config items must state their impact scope
+- T4-R06: architecture diagrams use ASCII Art
+- T4-R07: code entries must be precise to the function name
+
+### Steps for Generating from Code
+
+> The detailed execution spec is in `{SKILL_DIR}/references/agents/kb-doc-generator.md`; only the outline is listed here:
+> 1. Code structure scan (three-step Glob → Grep → Read, adapted per language)
+> 2. Information extraction (10 dimensions: core responsibilities / architecture layer / upstream and downstream / code entries / core mechanisms / data flow / tech stack / data model / config items / scheduled tasks)
+> 3. Document assembly (in the section order of the template above)
+> 4. Self-check (accuracy statistics + interface reconciliation)
+
+---
+
+## Type-5: Product-to-Code Mapping (Bridge Document)
+
+### One Section per Core API
 
 ```
-产品约束: "{API名} 批量上限 N"
-  ↓ 追踪
-代码位置: {API网关组件} → {文件路径} → validate_params()
-  ↓ 确认
-校验方式: if len(resource_ids) > N: raise InvalidParameterValue
+### N.1 User intent (one sentence)
+### N.2 Product constraints (constraint / value / affected components / validation location)
+### N.3 User-visible state transitions (ASCII diagram + internal state mapping)
+### N.4 Internal call chain (standard format, precise to the code file)
+### N.5 Must-consider items when writing code (numbered list of hard constraints)
+### N.6 Error codes and internal exception mapping (external code / internal component / meaning)
 ```
 
-**Step 3: 构建映射表** — 将上述信息组装为标准的产品-代码映射表（见 Type-5 模板）。
+### Generation Rules
+- T5-R01: the constraint table must state the "affected components" and "validation location"
+- T5-R02: call chains must be precise to the code file path
+- T5-R03: state transitions must be annotated with the internal state code mapping
+- T5-R04: "Must-consider items when writing code" is a mandatory section
+- T5-R05: error code mappings must include the owning internal component
 
-**桥梁文档质量标准**:
+### Bridge Document Generation Method (3 Steps)
 
-| 质量维度 | 标准 | 检查方法 |
+**Step 1: Extract product constraints**. From the product docs, extract every constraint that affects the code implementation:
+
+```
+Scan dimensions:
+├── Quantity limits (batch caps, quotas, maximums)
+├── Type constraints (enum values, mutual exclusion)
+├── State preconditions (what state a resource must be in before an operation)
+├── Billing rules (different handling per billing mode)
+├── Security constraints (auth, encryption, data masking)
+└── Compatibility constraints (type compatibility, version compatibility, regional limits)
+```
+
+**Step 2: Map to code locations**. For each product constraint, trace to the concrete validation location in the code:
+
+```
+Product constraint: "{API name} batch cap N"
+  ↓ trace
+Code location: {API gateway component} → {file path} → validate_params()
+  ↓ confirm
+Validation: if len(resource_ids) > N: raise InvalidParameterValue
+```
+
+**Step 3: Build the mapping table**. Assemble the information above into the standard product-to-code mapping table (see the Type-5 template).
+
+**Bridge document quality criteria**:
+
+| Quality dimension | Standard | Check method |
 |---------|------|---------|
-| **完整性** | 所有核心 API 都有映射 | 对照 API 列表逐一检查 |
-| **精确性** | 代码路径精确到文件和函数 | 实际打开代码验证 |
-| **一致性** | 约束值与产品文档一致 | 交叉比对产品文档 |
-| **时效性** | 与最新代码版本同步 | 定期 diff 检查 |
+| **Completeness** | Every core API has a mapping | Check one by one against the API list |
+| **Precision** | Code paths are precise to file and function | Open the code and verify |
+| **Consistency** | Constraint values match the product docs | Cross-check against the product docs |
+| **Freshness** | In sync with the latest code version | Periodic diff check |
 
 ---
 
-## Type-6: 产品规则速查表
+## Type-6: Product Rules Cheat Sheet
 
 ```
-## N. {规则类别}
-| 规则 | 约束值 | 影响的组件 | 校验位置 | 来源文档 |
+## N. {rule category}
+| Rule | Constraint value | Affected components | Validation location | Source document |
 
-## 状态与操作互斥规则
-| 当前状态 | 允许的操作 | 禁止的操作 |
+## State and Operation Mutual Exclusion Rules
+| Current state | Allowed operations | Forbidden operations |
 ```
 
-- T6-R01: 每条规则必须标注"影响的组件"
-- T6-R02: 约束值必须是精确数字
-- T6-R03: 必须有"来源文档"列
-- T6-R04: 状态互斥规则必须是完整矩阵
+- T6-R01: every rule must state the "affected components"
+- T6-R02: constraint values must be exact numbers
+- T6-R03: must have a "source document" column
+- T6-R04: state mutual exclusion rules must be a complete matrix
 
 ---
 
-## Type-7: 业务开发规范 SOP
+## Type-7: Business Development SOP
 
 ```
-1. 为什么需要标准代码模板 (野生代码问题)
-2. 核心规约 (绝不向外暴露底层错误/Context一传到底/参数前置校验)
-3. 标准 Handler 代码模板 (可直接复制，标注"AI 编码铁律")
-4. 错误码映射对照表 (场景描述用AI思考逻辑/推荐错误码/Message)
-5. AI 评审 CheckList (可机器校验)
+1. Why a standard code template is needed (the problem of unmanaged code)
+2. Core conventions (never expose low-level errors externally / pass Context all the way down / validate parameters up front)
+3. Standard Handler code template (copy-ready, annotated with "AI coding iron rules")
+4. Error code mapping table (scenario described in AI reasoning terms / recommended error code / Message)
+5. AI review checklist (machine-checkable)
 ```
 
-- T7-R01: 代码模板必须可直接复制运行
-- T7-R02: 每个关键注释标注"AI 编码铁律"
-- T7-R03: 错误码表用"AI的思考逻辑"作为场景描述
+- T7-R01: code templates must be directly copyable and runnable
+- T7-R02: every key comment is annotated with "AI coding iron rule"
+- T7-R03: the error code table uses "the AI's reasoning" as the scenario description
 
 ---
 
-## Type-8: 知识增强文档
+## Type-8: Knowledge Enhancement Documents
 
-### Type-8a: 产品知识文库
-标注 `type: bridge`，表格对比易混淆概念，含"代码传参示例"和"架构与业务影响"列。
+### Type-8a: Product Knowledge Library
+Marked `type: bridge`; tables compare easily confused concepts and include "code parameter example" and "architecture and business impact" columns.
 
-### Type-8b: 反模式与踩坑指南
-五段式：**触发场景→错误表现→根因分析→正确做法→关联组件**
-概览表标注编号/分类/严重程度(P0致命/P1严重/P2重要)/关联组件。
+### Type-8b: Anti-Patterns and Pitfalls Guide
+Five-part structure: **trigger scenario → faulty behavior → root cause analysis → correct approach → related components**
+The overview table records number / category / severity (P0 fatal / P1 severe / P2 important) / related components.
 
-### Type-8c: RPC 接口契约
-struct 定义含序列化 Tag + 必填/选填标注 + AI 编码契约要求。
+### Type-8c: RPC Interface Contracts
+Struct definitions with serialization tags + required/optional markers + AI coding contract requirements.
 
-### Type-8d: 排障案例记录 (Memorix)
-结构：问题现象→排查过程(Step N)→根因定位→修复方案→经验总结→关联文档。
+### Type-8d: Troubleshooting Case Records (Memorix)
+Structure: symptom → investigation process (Step N) → root cause → fix → lessons learned → related documents.
 
 ---
 
-## Type-9: 图谱文档集（Graph RAG）
+## Type-9: Graph Document Set (Graph RAG)
 
-**规模**: 10~30KB/份 | **数量**: 5~10 份 | **目录**: `graph/`
+**Size**: 10~30KB each | **Count**: 5~10 | **Directory**: `graph/`
 
-> 将散落在 N 份组件文档中的**跨组件关系信息**抽取为结构化索引，解决 RAG 检索在关系查询场景下的"信息分散"问题。
+> Extracts the **cross-component relationship information** scattered across N component documents into a structured index, solving the "scattered information" problem RAG retrieval hits on relationship queries.
 
-### 图谱文档类型清单
+### Graph Document Type List
 
-| 编号 | 文档名 | 核心内容 | 解决的检索痛点 |
+| ID | Document name | Core content | Retrieval pain point solved |
 |------|--------|---------|--------------|
-| G1 | 组件依赖关系矩阵 | N×N 通信矩阵 + 正向/反向依赖索引 + 外部服务依赖 | "谁依赖 X？" 需遍历所有文档 |
-| G2 | 组件调用链路全景 | 核心 API 端到端链路 + 读写分离机制 + **完整状态机流转图** + 操作-状态约束矩阵 | "API 经过哪些模块？" 信息分散 |
-| G3 | 数据流与存储依赖图 | 存储依赖矩阵 + MQ 队列拓扑 + 缓存策略 | "数据存在哪里？" |
-| G4 | 错误码组件映射表 | 错误码段分配 + 外部→内部映射 | "错误码是哪个模块的？" |
-| G5 | 跨组件交互场景手册 | ≥10 个场景的 mermaid 时序图 + 异常处理 | "配额检查怎么做的？" |
-| G6 | 知识图谱三元组 | (S, P, O) 三元组 + 多跳依赖路径索引 | "A 间接依赖谁？" |
-| G7 | 架构风险与影响面分析 | 爆炸半径 + 聚类分析 + 关键路径/瓶颈 | "X 挂了影响多大？" |
-| G8 | **核心配置参数索引** | 分层配置项→行为影响映射 + 变更影响面速查 | "怎么修改 XX 配置？" |
-| G9 | **业务规则约束矩阵** | 操作前置条件 + 硬件/迁移/计费约束 + AI 推理决策树 | "能不能做 XX？" |
+| G1 | Component Dependency Matrix | N×N communication matrix + forward/reverse dependency index + external service dependencies | "Who depends on X?" requires traversing every document |
+| G2 | Component Call Chain Overview | End-to-end core API chains + read/write separation mechanism + **complete state machine diagram** + operation-state constraint matrix | "Which modules does the API pass through?" information is scattered |
+| G3 | Data Flow and Storage Dependencies | Storage dependency matrix + MQ queue topology + cache strategy | "Where is the data stored?" |
+| G4 | Error Code Component Map | Error code range allocation + external → internal mapping | "Which module owns this error code?" |
+| G5 | Cross-Component Interaction Scenarios | mermaid sequence diagrams for ≥10 scenarios + exception handling | "How is the quota check done?" |
+| G6 | Knowledge Graph Triples | (S, P, O) triples + multi-hop dependency path index | "Who does A depend on indirectly?" |
+| G7 | Architecture Risks and Impact Analysis | Blast radius + cluster analysis + critical paths/bottlenecks | "How big is the impact if X goes down?" |
+| G8 | **Core Config Parameter Index** | Layered config item → behavior impact mapping + change impact surface quick lookup | "How do I change config XX?" |
+| G9 | **Business Rule Constraint Matrix** | Operation preconditions + hardware/migration/billing constraints + AI reasoning decision tree | "Can XX be done?" |
 
-### 图谱文档生成规则
+### Graph Document Generation Rules
 
-- T9-R01: 每份图谱文档必须有 `🤖 AI 快速理解要点` 表
-- T9-R02: 每份图谱文档必须有 `<!-- search-anchor: ... -->` 锚点
-- T9-R03: 图谱目录必须有 `README.md` 索引，含"按问题类型查找"表和"检索路由规则建议"
-- T9-R04: 状态机必须使用 mermaid `stateDiagram-v2` 格式
-- T9-R05: 约束决策树必须使用 mermaid `graph TD` 格式
-- T9-R06: 操作-状态约束必须是 ✅/❌ 矩阵格式
-- T9-R07: 配置参数必须标注"影响行为"、"变更风险"(🟢低/🟡中/🔴高)、"生效方式"(热生效/需重启)
-- T9-R08: 业务规则约束必须包含 AI 推理检查流程（mermaid 流程图）
-- T9-R09: 三元组必须遵循 (Subject, Predicate, Object) 标准格式
-- T9-R10: 图谱文档**不替代**组件文档，而是提供**关系视角的结构化索引**
+- T9-R01: every graph document must have a `🤖 AI Quick Reference` table
+- T9-R02: every graph document must have a `<!-- search-anchor: ... -->` anchor
+- T9-R03: the graph directory must have a `README.md` index with a "lookup by question type" table and "retrieval routing rule suggestions"
+- T9-R04: state machines must use the mermaid `stateDiagram-v2` format
+- T9-R05: constraint decision trees must use the mermaid `graph TD` format
+- T9-R06: operation-state constraints must be in ✅/❌ matrix format
+- T9-R07: config parameters must state "behavior impact", "change risk" (🟢 low / 🟡 medium / 🔴 high), and "activation" (hot reload / restart required)
+- T9-R08: business rule constraints must include an AI reasoning check flow (mermaid flowchart)
+- T9-R09: triples must follow the standard (Subject, Predicate, Object) format
+- T9-R10: graph documents **do not replace** component documents; they provide a **structured index from the relationship perspective**
 
-### 图谱文档生成方法
+### Graph Document Generation Method
 
-**Step 1: 关系抽取** — 从 N 份组件文档中提取跨组件关系：
-
-```
-扫描维度:
-├── 调用关系 (A calls B, 协议, 场景)
-├── 数据依赖 (A reads/writes B, 数据内容)
-├── 消息拓扑 (A publishes_to/consumes_from Queue)
-├── 状态流转 (操作 → 起始状态 → 中间状态 → 终态)
-├── 约束条件 (操作 → 前置条件 → 硬件/计费/配额约束)
-├── 配置映射 (配置项 → 影响行为 → 变更风险)
-└── 错误码归属 (错误码段 → 组件 → 排查方向)
-```
-
-**Step 2: 结构化建模** — 将抽取的关系转化为标准格式：
+**Step 1: Relationship extraction**. Extract cross-component relationships from the N component documents:
 
 ```
-关系矩阵 → N×N 表格
-调用链路 → 端到端文本链路 + mermaid 时序图
-状态机 → mermaid stateDiagram-v2
-约束规则 → 决策树(mermaid graph TD) + 汇总表
-配置索引 → 分层表格(配置项/默认值/影响行为/变更风险/生效方式)
-三元组 → (Subject, Predicate, Object, Protocol, Scenario) 表格
+Scan dimensions:
+├── Call relationships (A calls B, protocol, scenario)
+├── Data dependencies (A reads/writes B, data content)
+├── Message topology (A publishes_to/consumes_from Queue)
+├── State transitions (operation → initial state → intermediate state → final state)
+├── Constraints (operation → preconditions → hardware/billing/quota constraints)
+├── Config mapping (config item → behavior impact → change risk)
+└── Error code ownership (error code range → component → investigation direction)
 ```
 
-**Step 3: 索引织网** — 建立图谱文档间的交叉引用和检索路由：
+**Step 2: Structured modeling**. Convert the extracted relationships into standard formats:
+
+```
+Relationship matrix → N×N table
+Call chains → end-to-end text chain + mermaid sequence diagram
+State machine → mermaid stateDiagram-v2
+Constraint rules → decision tree (mermaid graph TD) + summary table
+Config index → layered table (config item / default / behavior impact / change risk / activation)
+Triples → (Subject, Predicate, Object, Protocol, Scenario) table
+```
+
+**Step 3: Index weaving**. Build cross-references and retrieval routing between the graph documents:
 
 ```
 README.md:
-├── 文档目录表 (文件/大小/核心内容)
-├── 按问题类型查找表 (问题类型/示例/查找文档)
-└── 检索路由规则建议 (关键词→优先检索文档)
+├── Document directory table (file / size / core content)
+├── Lookup-by-question-type table (question type / example / document to consult)
+└── Retrieval routing rule suggestions (keyword → document to search first)
 ```
 
-### 关键模板
+### Key Templates
 
-#### 状态机流转图模板
+#### State Machine Diagram Template
 
 ```markdown
-## 实例状态机完整流转图
+## Complete Instance State Machine Diagram
 
-### 核心状态流转图
+### Core State Transition Diagram
 ​```mermaid
 stateDiagram-v2
     [*] --> PENDING: CreateAction
-    PENDING --> RUNNING: 创建成功 (flag: 2→1)
+    PENDING --> RUNNING: creation succeeded (flag: 2→1)
     RUNNING --> STOPPING: StopAction (flag: 1→8)
-    STOPPING --> STOPPED: 关机成功 (flag: 8→3)
+    STOPPING --> STOPPED: shutdown succeeded (flag: 8→3)
     ...
 ​```
 
-### 操作-状态约束速查矩阵
-| 操作 \ 当前状态 | RUNNING | STOPPED | PENDING | ... |
+### Operation-State Constraint Quick Lookup Matrix
+| Operation \ Current state | RUNNING | STOPPED | PENDING | ... |
 |---------------|:-------:|:-------:|:-------:|:---:|
 | **Start** | ❌ | ✅ | ❌ | ... |
 | **Stop** | ✅ | ❌ | ❌ | ... |
 ```
 
-#### 业务规则约束矩阵模板
+#### Business Rule Constraint Matrix Template
 
 ```markdown
-## 操作前置条件矩阵
-| 操作 | 状态要求 | 硬件约束 | 计费约束 | 配额约束 | 其他约束 |
+## Operation Precondition Matrix
+| Operation | State requirement | Hardware constraint | Billing constraint | Quota constraint | Other constraints |
 
-## 迁移约束决策树
+## Migration Constraint Decision Tree
 ​```mermaid
 graph TD
-    A[迁移请求] --> B{硬件约束1?}
-    B -->|是| C["❌ 禁止"]
-    B -->|否| D{硬件约束2?}
+    A[Migration request] --> B{Hardware constraint 1?}
+    B -->|Yes| C["❌ Forbidden"]
+    B -->|No| D{Hardware constraint 2?}
     ...
 ​```
 
-## AI 推理规则速查
+## AI Reasoning Rules Quick Lookup
 ​```mermaid
 graph TD
-    A["用户问：能否执行 XX？"] --> B["Step 1: 状态检查"]
-    B --> B1{"查操作-状态约束矩阵"}
-    B1 -->|❌| Z1["不能，状态不支持"]
-    B1 -->|✅| C["Step 2: 类型检查"]
+    A["User asks: can XX be executed?"] --> B["Step 1: state check"]
+    B --> B1{"Look up the operation-state constraint matrix"}
+    B1 -->|❌| Z1["No, the state does not allow it"]
+    B1 -->|✅| C["Step 2: type check"]
     ...
 ​```
 ```
 
-#### 配置参数索引模板
+#### Config Parameter Index Template
 
 ```markdown
-## {组件层}配置参数
-| 配置项 | 默认值 | 影响行为 | 变更风险 | 生效方式 |
+## {component layer} Config Parameters
+| Config item | Default | Behavior impact | Change risk | Activation |
 |--------|--------|---------|---------|---------|
-| `config.key` | value | 描述 | 🟢低/🟡中/🔴高 | 热生效/需重启 |
+| `config.key` | value | description | 🟢 low / 🟡 medium / 🔴 high | hot reload / restart required |
 
-## 配置变更影响面速查
-| 变更类型 | 影响范围 | 生效方式 | 回滚策略 | 变更风险 |
+## Config Change Impact Surface Quick Lookup
+| Change type | Impact scope | Activation | Rollback strategy | Change risk |
 ```

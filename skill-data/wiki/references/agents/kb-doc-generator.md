@@ -1,323 +1,323 @@
-# 知识库文档生成 Agent
+# Knowledge Base Document Generator Agent
 
-## 职责
+## Responsibility
 
-为指定批次的组件/文档类型生成知识库文档，严格遵循九大文档类型规范，确保代码可回溯、AI 快速理解表完整、双向链接织网。
+Generate knowledge base documents for the assigned batch of components/document types, strictly following the nine document type specifications, ensuring code traceability, complete AI Quick Reference tables, and a web of bidirectional links.
 
-**此 Agent 在 Phase K2 中被主 Agent 逐批启动，支持并行子 Agent 分发模式。**
+**This agent is started batch by batch by the main agent in Phase K2 and supports the parallel sub-agent dispatch mode.**
 
-## 输入包
-
-```
-component_list:   本批次待生成的组件名或文档类型列表
-                  例如: ["Aurora", "Frame", "CCDB", "Dispatcher"] 或 ["Type-1", "Type-2", "Type-3"]
-architecture_map: _review/k1-architecture-map.md 完整内容
-repos:            仓库列表（[{name, path, language}]），替代旧的 project_root
-service_map:      服务名→仓库映射表（用于跨仓库追踪调用链）
-output_dir:       知识库输出根目录
-project_name:     项目名称（用于文档命名，如 "CVM"）
-product_docs_dir: 产品文档目录（可为空，空则跳过产品约束提取）
-methodology_dir:  {SKILL_DIR}/references/methodology/ 目录路径
-completed_docs:   已完成的文档列表（断点恢复时跳过）
-parallel_mode:    true | false（默认 true；Type-4 组件文档并行，Type-1~3/5~8 串行）
-```
-
-## 执行步骤
-
-### Step 0：加载方法论
-
-读取 `{methodology_dir}/phase2-document-types.md`，加载对应文档类型的模板和生成规则。
-
-### Step 1：断点检查
-
-检查 `completed_docs` 列表，从 `component_list` 中移除已完成项，得到 `pending_list`。
-
-若 `pending_list` 为空，直接返回"全部已完成"摘要，不做任何操作。
-
-### Step 2：分发策略决策
+## Input package
 
 ```
-IF component_list 全为 Type-4 组件文档 AND parallel_mode = true:
-  → 并行模式（Step 2A）
-ELSE（Type-1/2/3/5/6/7/8 或 parallel_mode = false）:
-  → 串行模式（Step 2B）
+component_list:   list of component names or document types to generate in this batch
+                  e.g. ["Aurora", "Frame", "CCDB", "Dispatcher"] or ["Type-1", "Type-2", "Type-3"]
+architecture_map: full content of _review/k1-architecture-map.md
+repos:            repository list ([{name, path, language}]), replaces the old project_root
+service_map:      service name -> repository map (used to trace call chains across repositories)
+output_dir:       knowledge base output root directory
+project_name:     project name (used for document naming, e.g. "CVM")
+product_docs_dir: product documentation directory (may be empty; if empty, skip product constraint extraction)
+methodology_dir:  {SKILL_DIR}/references/methodology/ directory path
+completed_docs:   list of already completed documents (skipped when resuming from checkpoint)
+parallel_mode:    true | false (default true; Type-4 component documents in parallel, Type-1~3/5~8 serially)
 ```
 
-### Step 2A：并行模式（Type-4 组件文档）
+## Execution steps
 
-**MANDATORY：必须使用 Agent tool，禁止一个个顺序处理。**
+### Step 0: Load the methodology
 
-**Step 2A-1：分块**
+Read `{methodology_dir}/phase2-document-types.md` and load the templates and generation rules for the relevant document types.
 
-将 `pending_list` 分成若干块，每块 **3~5 个组件**（组件文档较大，不超过 5 个避免上下文溢出）。
-- 优先把同一架构层的组件放同一块（减少跨层代码读取竞争）
-- 已完成的跳过（断点恢复）
+### Step 1: Checkpoint check
 
-**Step 2A-2：同一条消息并发启动所有子 Agent**
+Check the `completed_docs` list, remove completed items from `component_list`, and obtain `pending_list`.
 
-**在同一次回复中发出所有 Agent tool 调用**。这是并行的唯一方式——分开多次调用则退化为串行。
+If `pending_list` is empty, return an "all completed" summary immediately and perform no other action.
 
-示例（3块并发）：
+### Step 2: Dispatch strategy decision
+
+```
+IF component_list consists only of Type-4 component documents AND parallel_mode = true:
+  → parallel mode (Step 2A)
+ELSE (Type-1/2/3/5/6/7/8 or parallel_mode = false):
+  → serial mode (Step 2B)
+```
+
+### Step 2A: Parallel mode (Type-4 component documents)
+
+**MANDATORY: you must use the Agent tool; processing components one by one in sequence is forbidden.**
+
+**Step 2A-1: Chunking**
+
+Split `pending_list` into chunks of **3~5 components** each (component documents are large; do not exceed 5 to avoid context overflow).
+- Prefer placing components from the same architecture layer in the same chunk (reduces cross-layer code reading contention)
+- Skip completed ones (resume from checkpoint)
+
+**Step 2A-2: Start all sub-agents concurrently in a single message**
+
+**Issue all Agent tool calls in the same reply**. This is the only way to run in parallel; issuing them in separate calls degrades to serial execution.
+
+Example (3 chunks concurrently):
 ```
 [Agent tool call 1: chunk ["Aurora", "Frame"], subagent_type="general-purpose"]
 [Agent tool call 2: chunk ["CCDB", "VSResource"], subagent_type="general-purpose"]
 [Agent tool call 3: chunk ["Dispatcher", "Compute"], subagent_type="general-purpose"]
 ```
 
-每个子 Agent 接收以下 prompt（替换 CHUNK_COMPONENTS、CHUNK_NUM、TOTAL_CHUNKS）：
+Each sub-agent receives the following prompt (replace CHUNK_COMPONENTS, CHUNK_NUM, TOTAL_CHUNKS):
 
 ```
-你是 team-wiki-codebase 的组件文档生成子 Agent。
-为以下组件生成知识库文档（chunk CHUNK_NUM / TOTAL_CHUNKS）：
+You are the component document generation sub-agent of team-wiki-codebase.
+Generate knowledge base documents for the following components (chunk CHUNK_NUM / TOTAL_CHUNKS):
 CHUNK_COMPONENTS
 
-架构参考（精简版，仅含本 chunk 相关组件及其直接上下游）：
+Architecture reference (condensed; only the components in this chunk and their direct upstream/downstream):
 RELEVANT_COMPONENTS_TABLE
-（格式：| 组件名 | 架构层级 | 所属仓库 | 语言 | 上游 | 下游 | 入口文件 |）
+(format: | Component | Architecture layer | Repository | Language | Upstream | Downstream | Entry file |)
 
-服务映射表（用于跨仓库追踪）：
+Service map (for cross-repository tracing):
 SERVICE_MAP_RELEVANT_ENTRIES
 
-项目信息：
-- repos: REPO_LIST（仅列路径，不列详情）
+Project information:
+- repos: REPO_LIST (paths only, no details)
 - output_dir: OUTPUT_DIR
 - project_name: PROJECT_NAME
-- product_docs_dir: PRODUCT_DOCS_DIR（空则跳过产品约束）
+- product_docs_dir: PRODUCT_DOCS_DIR (if empty, skip product constraints)
 
-方法论路径: METHODOLOGY_DIR/phase2-document-types.md
+Methodology path: METHODOLOGY_DIR/phase2-document-types.md
 
-对每个组件执行：
-1. 使用 Glob→Grep→Read 三步法扫描代码（参见 kb-doc-generator.md §Step 2：代码结构扫描规范）
-2. 提取：核心职责/架构层级/上下游/代码入口/核心机制/数据流向/技术栈/数据模型/配置项
-3. 生成符合 Type-4 模板的文档，Write 到 OUTPUT_DIR/XX_组件名设计说明.md
-4. 自校验（见下方 Checklist）
-5. 将完成的组件名写入 OUTPUT_DIR/../_review/_chunk_done_CHUNK_NUM.txt（每行一个）
+For each component:
+1. Scan the code with the Glob→Grep→Read three-step method (see kb-doc-generator.md §Step 2: Code structure scanning rules)
+2. Extract: core responsibility / architecture layer / upstream and downstream / code entry / core mechanisms / data flow / tech stack / data model / config items
+3. Generate a document that follows the Type-4 template and Write it to OUTPUT_DIR/XX_{component}_Design.md
+4. Self-check (see the Checklist below)
+5. Append each completed component name to OUTPUT_DIR/../_review/_chunk_done_CHUNK_NUM.txt (one per line)
 
-自校验 Checklist（每份文档生成后）：
-- [ ] AI 快速理解表 10 维度全部填写且具体（非泛泛描述）？
-- [ ] "代码入口"精确到函数名（不是仅文件名）？
-- [ ] search-anchor 有 5~15 个关键词？
-- [ ] 包含指向主架构文档的双向链接？
-- [ ] 无法回溯的内容已标注 [UNVERIFIED]？
-- [ ] 无空占位章节？
+Self-check Checklist (after each document is generated):
+- [ ] All 10 dimensions of the AI Quick Reference table filled in and specific (not generic descriptions)?
+- [ ] "Code entry" precise to the function name (not just the file name)?
+- [ ] search-anchor has 5~15 keywords?
+- [ ] Contains a bidirectional link to the main architecture document?
+- [ ] Content that cannot be traced is marked [UNVERIFIED]?
+- [ ] No empty placeholder sections?
 
-[UNVERIFIED] 超过 20% → 文档顶部加 ⚠️ 低可信度警告。
+[UNVERIFIED] above 20% → add a ⚠️ low-confidence warning at the top of the document.
 
-无法生成的组件写入 OUTPUT_DIR/../_review/_chunk_failed_CHUNK_NUM.txt 并注明原因。
+Write components that could not be generated to OUTPUT_DIR/../_review/_chunk_failed_CHUNK_NUM.txt with the reason.
 ```
 
-**Step 2A-3：等待并收集结果**
+**Step 2A-3: Wait and collect results**
 
-等待所有子 Agent 完成后：
-- 检查 `_chunk_done_N.txt` 文件确认完成情况
-- 若某块 `_chunk_done_N.txt` 不存在，打印警告：`chunk N 可能未完成，检查子 Agent 是否以 general-purpose 类型运行`
-- 若超过半数块失败，停止并告知用户重新运行
-- 将所有已完成组件合并到 `progress.json` 的 `kb_progress.components_done`
-- 清理临时文件：`rm -f _review/_chunk_done_*.txt _review/_chunk_failed_*.txt`
+After all sub-agents finish:
+- Check the `_chunk_done_N.txt` files to confirm completion status
+- If `_chunk_done_N.txt` is missing for a chunk, print a warning: `chunk N may not have completed; check whether the sub-agent ran as the general-purpose type`
+- If more than half of the chunks failed, stop and tell the user to rerun
+- Merge all completed components into `kb_progress.components_done` in `progress.json`
+- Clean up temporary files: `rm -f _review/_chunk_done_*.txt _review/_chunk_failed_*.txt`
 
-### Step 2B：串行模式（Type-1~3/5~8）
+### Step 2B: Serial mode (Type-1~3/5~8)
 
-对 `pending_list` 中每个文档类型**顺序执行**（这些文档类型相互依赖，必须串行）：
+For each document type in `pending_list`, execute **in sequence** (these document types depend on each other and must be serial):
 
-#### 2B-1：代码结构扫描规范
+#### 2B-1: Code structure scanning rules
 
-使用 `Glob → Grep → Read` 三步法（**按组件所属仓库的语言自适应**）：
+Use the `Glob → Grep → Read` three-step method (**adapt to the language of the component's repository**):
 
 ```
-1. Glob：找到组件对应仓库的入口文件（按语言选择模式）
+1. Glob: find the entry files of the component's repository (choose the pattern by language)
    Go:         main.go / cmd/*/main.go
    Python:     main.py / app.py / manage.py / wsgi.py
    Java:       *Application.java / *Bootstrap.java / src/main/java/**/Main*.java
    TypeScript: app.ts / index.ts / main.ts / server.ts
    Rust:       main.rs / src/main.rs
    
-2. Grep：定位核心 Handler/Router（按语言+框架选择模式）
+2. Grep: locate the core Handlers/Routers (choose the pattern by language + framework)
    Go:         grep -rn 'func.*Handler\|\.GET\|\.POST\|router\.\|@handler' <dir>
    Python:     grep -rn '@app\.\|@router\.\|def.*view\|APIRouter\|include_router' <dir>
    Java:       grep -rn '@RestController\|@Controller\|@Service\|@GetMapping\|@PostMapping\|@RequestMapping' <dir>
    TypeScript: grep -rn 'app\.get\|app\.post\|router\.\|@Get\|@Post\|@Controller' <dir>
    Rust:       grep -rn '\.route\|\.get\|\.post\|#\[get\|#\[post\|async fn' <dir>
 
-   ⚠️ 排除测试文件：--exclude='*_test.*' --exclude='test_*' --exclude='*_mock.*'
+   ⚠️ Exclude test files: --exclude='*_test.*' --exclude='test_*' --exclude='*_mock.*'
    
-3. Read：读取核心文件（按 architecture_map 中的目录价值分级）
-   - ⭐⭐⭐ 必读：业务逻辑层、核心配置文件、DDL
-   - ⭐⭐ 参考：服务上下文初始化、配置文件
-   - ⭐ 可跳过：纯绑定层（通常只是参数透传）
-   - ✗ 禁止：自动生成文件（*.pb.go, *_gen.go, *_generated.*, node_modules/, target/, build/）
+3. Read: read the core files (by the directory value rating in architecture_map)
+   - ⭐⭐⭐ Must read: business logic layer, core config files, DDL
+   - ⭐⭐ Reference: service context initialisation, config files
+   - ⭐ Skippable: pure binding layers (usually just parameter pass-through)
+   - ✗ Forbidden: generated files (*.pb.go, *_gen.go, *_generated.*, node_modules/, target/, build/)
 ```
 
-提取信息（**全部必须有代码文件:行号引用，不得推断**）：
-- 核心职责（一句话，≤30字）
-- 架构层级和上下游组件（通信方式：RPC/MQ/DB）
-- 代码入口（文件名 → 核心函数名）
-- 核心机制（最重要的1~2个技术机制）
-- 数据流向（从哪来 → 经过什么 → 到哪去）
-- 技术栈（语言 + 框架 + 中间件）
-- 数据模型（涉及的表名 + DDL 关键字段）
-- 核心流程（时序图所需的步骤）
-- 配置项（配置键 + 默认值 + 影响范围）
-- 定时任务（如有）
-- 监控指标（如有）
+Extract the following information (**everything must cite a code file:line, no inference**):
+- Core responsibility (one sentence, <=30 words)
+- Architecture layer and upstream/downstream components (communication method: RPC/MQ/DB)
+- Code entry (file name -> core function name)
+- Core mechanisms (the 1~2 most important technical mechanisms)
+- Data flow (where from -> what it passes through -> where to)
+- Tech stack (language + framework + middleware)
+- Data model (tables involved + key DDL fields)
+- Core flows (the steps needed for sequence diagrams)
+- Config items (config key + default value + impact scope)
+- Scheduled tasks (if any)
+- Monitoring metrics (if any)
 
-无法从代码中找到的内容标注 `[UNVERIFIED]`，不得推断。
+Mark content that cannot be found in the code as `[UNVERIFIED]`; do not infer.
 
-#### 2B-2：产品文档提取（Type-5/6/7，或有 product_docs_dir 时）
+#### 2B-2: Product documentation extraction (Type-5/6/7, or when product_docs_dir is set)
 
-若 `product_docs_dir` 非空：
+If `product_docs_dir` is not empty:
 ```
-扫描维度（来自 phase2-document-types.md §Type-5 桥梁文档生成方法）：
-├── 数量限制（批量上限、配额、最大值）
-├── 类型约束（枚举值、互斥关系）
-├── 状态前置条件
-├── 计费规则
-├── 安全约束
-└── 兼容性约束
+Scan dimensions (from phase2-document-types.md §Type-5 bridge document generation method):
+├── Quantity limits (batch caps, quotas, maximums)
+├── Type constraints (enum values, mutual exclusions)
+├── State preconditions
+├── Billing rules
+├── Security constraints
+└── Compatibility constraints
 ```
 
-将每个产品约束追踪到代码校验位置（`if len() > N` 的具体文件:行号）。
+Trace every product constraint to its validation location in the code (the exact file:line of the `if len() > N`).
 
-#### 2B-3：文档生成
+#### 2B-3: Document generation
 
-按照 `phase2-document-types.md` 中对应类型的模板生成文档。
+Generate documents following the template for the corresponding type in `phase2-document-types.md`.
 
-**Type-4 组件文档必须包含（按顺序）**：
+**Type-4 component documents must contain (in order)**:
 
 ```markdown
-# {组件名} 内部设计说明
-<!-- search-anchor: {中文名}, {英文名}, {缩写}, {同义词}, {常见搜索词} -->
-> 项目: {project_name} | 代码仓库: {仓库URL} | 架构层级: {层级}
-> 在整体架构中的位置: [📘 {project_name} 技术架构 - 4.X {组件名}](./{project_name} 技术架构.md#4x-组件名)
+# {component} Internal Design
+<!-- search-anchor: {full name}, {short name}, {abbreviation}, {synonyms}, {common search terms} -->
+> Project: {project_name} | Repository: {repo URL} | Architecture layer: {layer}
+> Position in the overall architecture: [📘 {project_name} Technical Architecture - 4.X {component}](./{project_name} Technical Architecture.md#4x-component)
 
-## 🤖 AI 快速理解要点
-| 维度 | 关键信息 |
+## 🤖 AI Quick Reference
+| Dimension | Key information |
 |------|---------|
-| **核心职责** | {≤30字，具体} |
-| **架构层级** | {层级名} → {角色} |
-| **上游组件** | {组件A(RPC)}, {组件B(MQ)} |
-| **下游组件** | {组件C(RPC)}, {组件D(DB)} |
-| **代码入口** | `{文件名}` → `{核心函数名}()` |
-| **核心机制** | {机制1}；{机制2} |
-| **互斥控制** | {并发控制方式，如"分布式锁 key: xx"} |
-| **数据流向** | {来源} → {处理} → {去向} |
-| **技术栈** | {语言} + {框架} + {中间件} |
-| **定时任务** | {N个定时任务，或"无"} |
+| **Core responsibility** | {<=30 words, specific} |
+| **Architecture layer** | {layer name} → {role} |
+| **Upstream components** | {ComponentA(RPC)}, {ComponentB(MQ)} |
+| **Downstream components** | {ComponentC(RPC)}, {ComponentD(DB)} |
+| **Code entry** | `{file name}` → `{core function name}()` |
+| **Core mechanisms** | {mechanism 1}; {mechanism 2} |
+| **Mutual exclusion** | {concurrency control method, e.g. "distributed lock key: xx"} |
+| **Data flow** | {source} → {processing} → {destination} |
+| **Tech stack** | {language} + {framework} + {middleware} |
+| **Scheduled tasks** | {N scheduled tasks, or "none"} |
 
-## 📋 项目概述
-（核心职责编号列表 + ASCII 架构定位图）
+## 📋 Project Overview
+(numbered list of core responsibilities + ASCII architecture position diagram)
 
-## 🏗️ 架构设计
-（ASCII 架构图 + 核心子模块说明 + 核心函数签名）
+## 🏗️ Architecture Design
+(ASCII architecture diagram + core sub-module descriptions + core function signatures)
 
-## 📊 数据模型
-（SQL DDL 含注释 + 数据流向图）
+## 📊 Data Model
+(SQL DDL with comments + data flow diagram)
 
-## 🔌 接口设计
-（对外/对内接口表 + 错误码定义）
+## 🔌 Interface Design
+(external/internal interface tables + error code definitions)
 
-## ⚙️ 核心流程
-（mermaid 时序图 + 步骤说明 + 异常处理）
+## ⚙️ Core Flows
+(mermaid sequence diagrams + step descriptions + exception handling)
 
-## 🔧 配置说明
-（配置项 / 默认值 / 说明 / 影响范围）
+## 🔧 Configuration
+(config item / default value / description / impact scope)
 
-## 📈 监控与告警
+## 📈 Monitoring and Alerting
 
-## 🐛 常见问题与排障
+## 🐛 Common Issues and Troubleshooting
 
-## 📝 文档更新记录
-### v1.0 ({日期})
-- ✅ **新增**: 初始版本
-> 代码基准：{commit_sha} ({tag})
+## 📝 Document Change Log
+### v1.0 ({date})
+- ✅ **Added**: initial version
+> Code baseline: {commit_sha} ({tag})
 ```
 
-**所有文档 Write 到 `output_dir` 下，禁止先在对话中打印完整内容再写文件。**
+**Write all documents under `output_dir`; printing the full content in the conversation before writing the file is forbidden.**
 
-### Step 3：自校验（准确性验证 + 接口对账）
+### Step 3: Self-check (accuracy verification + interface reconciliation)
 
-每份文档生成后执行，**不得跳过**：
+Run after each document is generated; **must not be skipped**:
 
-**结构完整性**：
-- [ ] AI 快速理解表 10 个维度全部填写，且每个维度都是具体信息（不是"见下文"）？
-- [ ] "代码入口"精确到函数名（`文件名:行号 → 函数名()`）？
-- [ ] search-anchor 有 5~15 个关键词，包含中英文名和同义词？
-- [ ] 包含指向主架构文档的双向链接？
-- [ ] 无空占位章节（没有内容的章节直接删除）？
+**Structural completeness**:
+- [ ] All 10 dimensions of the AI Quick Reference table filled in, each with specific information (not "see below")?
+- [ ] "Code entry" precise to the function name (`file name:line → function()`)?
+- [ ] search-anchor has 5~15 keywords, including full and short names and synonyms?
+- [ ] Contains a bidirectional link to the main architecture document?
+- [ ] No empty placeholder sections (delete sections with no content)?
 
-**接口对账**（仅对 architecture_map 中接口校验类型 ≠ NONE 的组件执行）：
+**Interface reconciliation** (only for components whose interface verification type in architecture_map is not NONE):
 
-从 `_review/interface-inventory.json` 读取该组件的扫描基准数 `scanned`，统计文档中实际记录的接口数 `documented`：
+Read the component's scanned baseline count `scanned` from `_review/interface-inventory.json` and count the interfaces actually recorded in the document as `documented`:
 
 ```
-HTTP 类型：  统计文档 ## 接口设计 节中列出的路由数
-MQ 类型：    统计文档中明确记录的 Topic/Queue/Exchange 数
-RPC 类型：   统计文档中列出的 RPC Method 数
+HTTP type:  count the routes listed in the document's ## Interface Design section
+MQ type:    count the Topics/Queues/Exchanges explicitly recorded in the document
+RPC type:   count the RPC Methods listed in the document
 ```
 
-计算差异：`gap = scanned - documented`
+Compute the difference: `gap = scanned - documented`
 
-处理规则：
-- `gap = 0`        → ✅ 接口覆盖完整
-- `0 < gap ≤ 20%`  → ⚠️ 少量缺口，在文档末尾加 `<!-- INTERFACE_GAP: 疑似遗漏 N 个接口 -->`
-- `gap > 20%`      → ❌ 标记 `[INTERFACE_GAP]`，在摘要中注明，建议补充后重跑
+Handling rules:
+- `gap = 0`        → ✅ interface coverage complete
+- `0 < gap <= 20%`  → ⚠️ minor gap, append `<!-- INTERFACE_GAP: N interfaces possibly missing -->` at the end of the document
+- `gap > 20%`      → ❌ mark `[INTERFACE_GAP]`, note it in the summary, recommend supplementing and rerunning
 
-更新 `progress.json` 中该组件的 `interface_coverage.documented` 字段。
+Update the component's `interface_coverage.documented` field in `progress.json`.
 
-**准确性统计**（每份文档单独统计，返回给主 Agent 汇总）：
+**Accuracy statistics** (computed per document and returned to the main agent for aggregation):
 ```
-统计方法：
-  total_claims = 业务规则条数 + 核心流程步骤数 + 接口描述条数 + 配置项条数
-  verified     = 其中有 file:line 引用的条数
-  unverified   = 标注了 [UNVERIFIED] 的条数
+Method:
+  total_claims = business rule count + core flow step count + interface description count + config item count
+  verified     = those with a file:line reference
+  unverified   = those marked [UNVERIFIED]
   ratio        = unverified / total_claims
 ```
 
-处理规则：
-- `ratio > 20%` → 文档顶部加 `⚠️ 低可信度警告：{unverified}/{total_claims} 项无法回溯到代码`
-- `ratio > 40%` → 摘要中标记 **[HIGH_UNVERIFIED]**，建议人工重点确认
+Handling rules:
+- `ratio > 20%` → add `⚠️ Low-confidence warning: {unverified}/{total_claims} items cannot be traced to code` at the top of the document
+- `ratio > 40%` → mark **[HIGH_UNVERIFIED]** in the summary and recommend focused manual confirmation
 
-### Step 4：返回摘要
+### Step 4: Return summary
 
-返回给主 Agent（主 Agent 将数据累加到 progress.json 的 `accuracy_stats` 和 `interface_coverage`）：
-
-```
-批次完成摘要:
-读取文件: {N} 个（估计 token 消耗: ~{N}k）
-生成文档: {N} 份
-
-准确性统计:
-  总声明数: {N} | 已验证: {N} | [UNVERIFIED]: {N} ({X}%)
-
-接口对账（仅有接口的组件）:
-  ComponentA [HTTP]: 文档 {M} / 基准 {N} = {X}%  ✅/⚠️/❌
-  ComponentB [MQ]:   文档 {M} / 基准 {N} = {X}%  ✅/⚠️/❌
-
-逐文档明细:
-  - {组件名}设计说明.md: {N}KB，声明{N}条，[UNVERIFIED]{N}条({X}%)  [HIGH_UNVERIFIED/INTERFACE_GAP 如适用]
-
-跳过（已完成）: {N} 份
-发现问题: {问题描述 或 "无"}
-```
-
-## 输出
+Return to the main agent (the main agent accumulates the data into `accuracy_stats` and `interface_coverage` in progress.json):
 
 ```
-<output_dir>/XX_{组件名}设计说明.md  ← Type-4 组件文档
-<output_dir>/{project_name} 技术架构.md  ← Type-1（如本批次包含）
-<output_dir>/{project_name} 业务架构.md  ← Type-2
-<output_dir>/{project_name} 部署架构.md  ← Type-3
-<output_dir>/XX_{project_name}核心API产品代码映射.md  ← Type-5
-<output_dir>/XX_{project_name}产品规则速查表.md  ← Type-6
-<output_dir>/XX_{project_name}业务开发规范SOP.md  ← Type-7
-<output_dir>/{知识增强文档}.md  ← Type-8
-返回摘要字符串
+Batch completion summary:
+Files read: {N} (estimated token usage: ~{N}k)
+Documents generated: {N}
+
+Accuracy statistics:
+  Total claims: {N} | Verified: {N} | [UNVERIFIED]: {N} ({X}%)
+
+Interface reconciliation (components with interfaces only):
+  ComponentA [HTTP]: documented {M} / baseline {N} = {X}%  ✅/⚠️/❌
+  ComponentB [MQ]:   documented {M} / baseline {N} = {X}%  ✅/⚠️/❌
+
+Per-document details:
+  - {component}_Design.md: {N}KB, {N} claims, [UNVERIFIED] {N} ({X}%)  [HIGH_UNVERIFIED/INTERFACE_GAP if applicable]
+
+Skipped (already completed): {N}
+Issues found: {issue description or "none"}
 ```
 
-## 约束
+## Output
 
-- **代码为真**：所有描述必须有代码文件引用，不可验证内容必须标注 `[UNVERIFIED]`
-- **模板强制**：生成每类文件前必须先读取对应章节的模板
-- **严禁空文档**：没有实质内容则不创建文件
-- **严禁冗余输出**：直接 Write 文件，不在对话中打印完整内容
-- **命名规范**：组件文档用 `XX_{组件名}设计说明.md`，XX 按依赖链顺序分配（底层组件编号小）
-- **API 未提供时**：Type-5/6 可跳过产品约束映射，将约束值标注为 `[PRODUCT_DOC_MISSING]`
+```
+<output_dir>/XX_{component}_Design.md  ← Type-4 component document
+<output_dir>/{project_name} Technical Architecture.md  ← Type-1 (if included in this batch)
+<output_dir>/{project_name} Business Architecture.md  ← Type-2
+<output_dir>/{project_name} Deployment Architecture.md  ← Type-3
+<output_dir>/XX_{project_name}_Core_API_Product_Code_Mapping.md  ← Type-5
+<output_dir>/XX_{project_name}_Product_Rules_Cheat_Sheet.md  ← Type-6
+<output_dir>/XX_{project_name}_Business_Development_SOP.md  ← Type-7
+<output_dir>/{knowledge_enhancement_doc}.md  ← Type-8
+Returned summary string
+```
+
+## Constraints
+
+- **Code is the truth**: every description must cite a code file; unverifiable content must be marked `[UNVERIFIED]`
+- **Templates are mandatory**: read the template for the corresponding section before generating each file type
+- **No empty documents**: do not create a file without substantive content
+- **No redundant output**: Write files directly; do not print the full content in the conversation
+- **Naming convention**: component documents use `XX_{component}_Design.md`; XX is assigned in dependency-chain order (lower-layer components get smaller numbers)
+- **When no API is provided**: Type-5/6 may skip the product constraint mapping and mark constraint values as `[PRODUCT_DOC_MISSING]`

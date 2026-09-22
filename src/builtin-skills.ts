@@ -53,19 +53,40 @@ export const LEGACY_BUILTIN_SKILL_NAMES = new Set([
 ]);
 
 /**
+ * The legacy directory that depended on recall. `teamai recall disable` still
+ * removes it, as it did before the stub, so a member who upgrades and disables
+ * recall before their next pull is not left with the old share workflow.
+ */
+export const LEGACY_RECALL_SKILL_NAMES = new Set(['teamai-share-learnings']);
+
+/**
+ * Whether a skill directory by this name is the CLI's, current or legacy, and
+ * therefore never a user's own to push. A member who runs `teamai push --all`
+ * after upgrading but before pulling still has the legacy trees on disk.
+ */
+export function isCliOwnedSkillName(name: string): boolean {
+  return BUILTIN_SKILL_NAMES.has(name) || LEGACY_BUILTIN_SKILL_NAMES.has(name);
+}
+
+/**
  * Remove the skill directories earlier releases deployed.
  *
  * Unconditional: those trees were overwritten on every pull (`overwrite: true`),
  * so no local edit ever survived in them, and leaving them behind costs every
  * agent on the machine the context they were deployed to save.
  */
-async function pruneLegacyBuiltinSkills(tool: string, configuredSkillsPath: string, baseDir: string): Promise<void> {
+export async function pruneLegacyBuiltinSkills(
+  tool: string,
+  configuredSkillsPath: string,
+  baseDir: string,
+  names: ReadonlySet<string> = LEGACY_BUILTIN_SKILL_NAMES,
+): Promise<void> {
   // The shared .agents/skills directory belongs to Codex alone. Reaching it from
   // another tool's pass would delete Codex's copies while Codex is excluded or
   // not installed, which the enabledAgents whitelist rules out.
   const skillRoots = [configuredSkillsPath];
   if (tool === CODEX_TOOL) skillRoots.push(SHARED_AGENT_SKILLS_PATH);
-  for (const legacyName of LEGACY_BUILTIN_SKILL_NAMES) {
+  for (const legacyName of names) {
     for (const root of skillRoots) {
       const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;

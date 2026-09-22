@@ -217,6 +217,25 @@ scope: 'user',
     expect(names).not.toContain('ignored-skill');
   });
 
+  it('never offers the directories earlier releases deployed as new skills to push', async () => {
+    // A member who runs `teamai push --all` after upgrading but before their
+    // next pull still has the legacy trees on disk; they are the CLI's, not theirs.
+    for (const legacy of ['team-wiki-codebase', 'teamai-share-learnings', 'teamai']) {
+      const dir = path.join(homeDir, '.claude/skills', legacy);
+      await fse.ensureDir(dir);
+      await fse.writeFile(path.join(dir, 'SKILL.md'), '# packaged by an earlier release');
+    }
+    const mine = path.join(homeDir, '.claude/skills', 'teamai-workflow');
+    await fse.ensureDir(mine);
+    await fse.writeFile(path.join(mine, 'SKILL.md'), '# mine');
+
+    const names = (await handler.scanLocalForPush(teamConfig, localConfig)).map((i) => i.name);
+    expect(names).not.toContain('team-wiki-codebase');
+    expect(names).not.toContain('teamai-share-learnings');
+    expect(names).not.toContain('teamai');
+    expect(names).toContain('teamai-workflow');
+  });
+
   it('should detect both new and modified skills together', async () => {
     // Modified
     const teamSkillDir = path.join(localConfig.repo.localPath, 'skills', 'existing');
