@@ -14,7 +14,7 @@
  */
 import path from 'node:path';
 import { pathExists } from './fs.js';
-import { remoteBranchExists, hashObject, blobInHistory } from './git.js';
+import { remoteBranchExists, hashObject, blobInHistory, pathDeletedSince, getHeadCommit } from './git.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { log } from './logger.js';
 import type { PendingPush, ResourceItem, State } from '../types.js';
@@ -194,8 +194,9 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  * Bring the placement records (`placedRules`, `placedAgents`) in line with
  * the default branch as just pulled. Three moves, in this order:
  *
- *   1. A placement still listed on a pending push whose pushed blob is in
- *      the default branch's history for that path has landed — the PR merged,
+ *   1. A placement still listed on a pending push whose pushed blob entered
+ *      the default branch's history for that path after the revision the
+ *      push branch was built on has landed — the PR merged,
  *      however the platform merged it — and becomes a record. The path merely
  *      existing is not enough: another member may have created it after the
  *      PR was closed, and recording it then would hand their file to this
@@ -203,11 +204,14 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  *      leaves no record whether or not its branch was deleted, and no provider
  *      has to be asked whether a PR is open. While the PR is open the pending
  *      entry itself routes the author's edits back to it (`reuseRecordedDestinations`).
- *      Recording consumes the mark, so a placement is recorded exactly once.
+ *      Recording consumes the mark, so a placement is recorded exactly once,
+ *      and a placement whose path was deleted after it landed is spent unrecorded.
  *   2. A record whose file is gone from the default branch is dropped: the
  *      team deleted the resource. Kept, it would come true again the day
  *      another member creates that path, and their unrelated resource would
- *      then read as this author's.
+ *      then read as this author's. For the same reason a record whose file
+ *      was deleted since the last check (`placementsCheckedAt`) is dropped
+ *      even when the path exists again.
  *   3. A record whose bare name is now ALSO a shared-root file is dropped, with
  *      a warning: the author's root copy can no longer stand for the namespaced
  *      resource, because the shared-root rule of that name is what every tool
@@ -219,9 +223,10 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  */
 export async function reconcilePlacementRecords(
   repoPath: string,
-  state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes'>,
+  state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes' | 'placementsCheckedAt'>,
 ): Promise<boolean> {
   let changed = false;
+  const checkedAt = state.placementsCheckedAt;
   const fieldFor = (type: string): 'placedRules' | 'placedAgents' | null => (
     type === 'rules' ? 'placedRules' : type === 'agents' ? 'placedAgents' : null
   );
@@ -234,7 +239,19 @@ export async function reconcilePlacementRecords(
       if (!field) continue;
       if (!await pathExists(path.join(repoPath, item.relativePath))) continue;
       // An entry with no blob predates the check; existence is all it can offer.
-      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath) !== true) continue;
+      // Bounded by `base`: the same bytes may have sat at this path before the
+      // push, and a PR closed unmerged must not borrow that history.
+      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath, entry.base) !== true) continue;
+      // Placement refuses an occupied path, so a deletion since `base` came
+      // after this placement landed: what is there now was recreated by
+      // someone else, and the placement is spent without a record.
+      if (entry.base && await pathDeletedSince(repoPath, entry.base, item.relativePath) === true) {
+        log.debug(`Not recording placement ${field}.${item.name}: ${item.relativePath} was deleted after it landed`);
+        item.placed = false;
+        delete item.blob;
+        changed = true;
+        continue;
+      }
       log.debug(`Recording placement ${field}.${item.name} → ${item.relativePath}: landed on the default branch`);
       state[field] = { ...state[field], [item.name]: item.relativePath };
       // Consumed: a placement is recorded once. Left marked, it would record
@@ -259,6 +276,13 @@ export async function reconcilePlacementRecords(
         changed = true;
         continue;
       }
+      // Deleted and recreated between two checks — a removal that merged, then
+      // another member's resource at the same path — is not this author's.
+      if (valid && checkedAt && await pathDeletedSince(repoPath, checkedAt, valid) === true) {
+        log.debug(`Dropping placement record ${field}.${name} → ${recorded}: deleted from the default branch since the last check`);
+        changed = true;
+        continue;
+      }
       let shadowed: string | undefined;
       for (const candidate of sharedRootPaths(root, name)) {
         if (await pathExists(path.join(repoPath, candidate))) { shadowed = candidate; break; }
@@ -274,6 +298,16 @@ export async function reconcilePlacementRecords(
       kept[name] = recorded;
     }
     state[field] = kept;
+  }
+
+  // The revision the surviving records were checked against, so the next run
+  // sees a deletion that happened in between even if the path is back by then.
+  if (Object.keys(state.placedRules ?? {}).length + Object.keys(state.placedAgents ?? {}).length > 0) {
+    const head = await getHeadCommit(repoPath);
+    if (head && head !== state.placementsCheckedAt) {
+      state.placementsCheckedAt = head;
+      changed = true;
+    }
   }
   return changed;
 }

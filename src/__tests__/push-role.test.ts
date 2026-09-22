@@ -73,6 +73,7 @@ vi.mock('../utils/git.js', () => ({
   getFileContentAtRev: vi.fn().mockResolvedValue(null),
   hashObject: vi.fn().mockResolvedValue(null),
   blobInHistory: vi.fn().mockResolvedValue(null),
+  getHeadCommit: vi.fn().mockResolvedValue('base000'),
 }));
 
 const mockLoadProjectsManifest = vi.fn().mockResolvedValue(null);
@@ -1447,12 +1448,14 @@ describe('push namespace routing for rules and agents', () => {
     // is marked on the pending PR entry and becomes a record when that merges.
     const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as {
       placedRules?: Record<string, string>;
-      pendingPushes: Array<{ items: Array<Record<string, unknown>> }>;
+      pendingPushes: Array<{ base?: string; items: Array<Record<string, unknown>> }>;
     };
     expect(saved.placedRules ?? {}).toEqual({});
     expect(saved.pendingPushes.at(-1)?.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'rules', name: 'my-rule', relativePath: 'rules/pm/my-rule.md', placed: true }),
     ]));
+    // Landing is later proven only by history after the commit the branch was built on.
+    expect(saved.pendingPushes.at(-1)?.base).toBe('base000');
   });
 
   it('records where it placed a new agent, so the author can still edit it', async () => {

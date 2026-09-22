@@ -126,7 +126,7 @@ scope: 'user',
       expect(await handler.publishedNameFor('my-rule', localConfig)).toBeNull();
     });
 
-    it('tombstones the bare name too, so a copy the sweep skipped cannot come back', async () => {
+    it('tombstones only the published name, even when the record makes the root copy ours', async () => {
       await fse.outputFile(
         path.join(localConfig.repo.localPath, 'rules', 'fe-know', 'my-rule.md'), 'team content',
       );
@@ -134,14 +134,14 @@ scope: 'user',
 
       await handler.removeItem('fe-know/my-rule', teamConfig, localConfig);
 
-      // The local sweep skips excluded tools, so a root copy can outlive the
-      // removal there — and the scan calls it `my-rule`, which the published
-      // tombstone would not match.
+      // Every member reads the tombstone: a bare `my-rule` would sweep their
+      // own root rule of that name and stop them publishing one. A copy an
+      // excluded tool keeps is instead not a push source at all.
       const tombstones = await fse.readFile(
         path.join(localConfig.repo.localPath, 'rules', '.removed'), 'utf-8',
       );
       expect(tombstones.split('\n')).toContain('fe-know/my-rule');
-      expect(tombstones.split('\n')).toContain('my-rule');
+      expect(tombstones.split('\n')).not.toContain('my-rule');
     });
 
     it('tombstones only the name given when no record vouches for the bare one', async () => {

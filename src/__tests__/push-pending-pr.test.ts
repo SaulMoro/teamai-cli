@@ -63,6 +63,7 @@ vi.mock('../utils/git.js', () => ({
   isDedicatedRepoRoot: vi.fn().mockResolvedValue(true),
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
   getFileContentAtRev: vi.fn().mockResolvedValue(null),
+  getHeadCommit: vi.fn().mockResolvedValue('base000'),
 }));
 
 vi.mock('../resources/index.js', () => ({

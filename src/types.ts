@@ -604,7 +604,8 @@ export const PendingPushItemSchema = z.object({
   /**
    * Git blob id of the file this push wrote at `relativePath`, for a placed
    * item. Landing is proven by that blob appearing in the default branch's
-   * history for the path — not by the path merely existing, which another
+   * history for the path after the entry's `base` — not by the path merely
+   * existing, which another
    * member's unrelated file would also satisfy.
    */
   blob: z.string().optional(),
@@ -622,6 +623,12 @@ export const PendingPushSchema = z.object({
   branch: z.string(),
   prUrl: z.string().nullable().default(null),
   createdAt: z.string(),
+  /**
+   * Default-branch commit the branch was built on. A placed item's `blob`
+   * proves landing only in commits after it: the same content may have sat
+   * at that path before this push, and that history proves nothing about it.
+   */
+  base: z.string().optional(),
   items: z.array(PendingPushItemSchema).default([]),
 });
 
@@ -660,6 +667,12 @@ export const StateSchema = z.object({
    * `placedRules`.
    */
   placedAgents: z.record(z.string(), z.string()).optional(),
+  /**
+   * Default-branch commit the placement records were last checked against. A
+   * record whose file was deleted after it is dropped even if something is at
+   * that path again: whatever is there now is somebody else's.
+   */
+  placementsCheckedAt: z.string().optional(),
   pushedSkills: z.array(z.string()).default([]),
   pushedEnvVars: z.array(z.string()).default([]),
   /** Push branches whose PR is still open — see PendingPushSchema. */

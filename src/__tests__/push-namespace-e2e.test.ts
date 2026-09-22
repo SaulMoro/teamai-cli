@@ -712,7 +712,103 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(files).not.toContain('rules/fe-know/my-rule.md');
     // And the author's own copy went with it, or the next push re-publishes it.
     expect(fs.existsSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'))).toBe(false);
+    // The removal is only on its branch, so the record still resolves a retry;
+    // it goes once the default branch no longer has the file.
+    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
+    mergeBranch(fixture, branch);
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
     expect(readState(fixture).placedRules ?? {}).toEqual({});
+  }, 60_000);
+
+  it('does not republish a removed agent from the copy an excluded tool kept', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    // Codex is configured for the team but excluded on this machine, and holds
+    // its own copy of the agent the author publishes and then removes.
+    commitOnMain(fixture, 'teamai.yaml', [
+      fs.readFileSync(path.join(fixture.teamRepo, 'teamai.yaml'), 'utf8'),
+      '  codex:',
+      '    agents: .codex/agents',
+    ].join('\n'));
+    fs.appendFileSync(path.join(fixture.projectRoot, '.teamai', 'config.yaml'), '\nenabledAgents:\n  - claude\n');
+    writeLocalResources(fixture);
+    fs.mkdirSync(path.join(fixture.projectRoot, '.codex/agents'), { recursive: true });
+    fs.writeFileSync(path.join(fixture.projectRoot, '.codex/agents', 'vr.toml'), localAgentFile('codex').content);
+
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    await nextSecond();
+    await runCLI(['remove', 'agents', 'vr', '--force'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+
+    // `remove` leaves an excluded tool's copy alone, by design.
+    expect(fs.existsSync(path.join(fixture.projectRoot, '.codex/agents', 'vr.toml'))).toBe(true);
+    await nextSecond();
+    const again = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+
+    expect(again.output).toContain('Scanning local resources');
+    expect(again.output).not.toContain('[agents] vr');
+    // Both merged branches are gone from the remote, so any branch is this push's.
+    expect(branchFiles(fixture).files.filter((f) => /^agents\/(.+\/)?vr\./.test(f))).toEqual([]);
+  }, 60_000);
+
+  it('cleans the flattened copy of a removed namespaced agent on pull, and never republishes it', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    await nextSecond();
+    await runCLI(['remove', 'agents', 'vr', '--force'], fixture.projectRoot, fixture.home);
+    const removal = branchFiles(fixture).branch;
+    const agentCopy = path.join(fixture.projectRoot, '.claude/agents', 'vr.md');
+    expect(fs.existsSync(agentCopy)).toBe(false);
+
+    // While the removal is under review the agent is still on main, and the
+    // record still delivers it — as a pending removal of any agent would.
+    await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(fs.existsSync(agentCopy)).toBe(true);
+
+    // Merged: the only tombstone is `fe-agents/vr`, but the copy is `vr.md`.
+    mergeBranch(fixture, removal);
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+    expect(fs.existsSync(agentCopy)).toBe(false);
+
+    // And a copy that comes back anyway is not a new agent to publish.
+    fs.writeFileSync(agentCopy, localAgentFile('claude').content);
+    await nextSecond();
+    const again = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+    expect(again.output).toContain('Scanning local resources');
+    expect(again.output).not.toContain('[agents] vr');
+    expect(branchFiles(fixture).files.filter((f) => /^agents\/(.+\/)?vr\./.test(f))).toEqual([]);
+  }, 60_000);
+
+  it('resolves a retried agent removal through the record while the first removal is unmerged', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    commitOnMain(fixture, 'agents/other-ns/vr.yaml',
+      'name: vr\ndescription: somebody else\'s\ninstructions: Read other-ns.\n');
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    await runCLI(['remove', 'agents', 'vr', '--force'], fixture.projectRoot, fixture.home);
+    const first = branchFiles(fixture).branch;
+
+    // The first removal PR is still open. Dropping the record there sent the
+    // retry to the bare stem, which removes `vr` from every namespace.
+    await nextSecond();
+    const retry = await runCLI(['remove', 'agents', 'vr', '--force'], fixture.projectRoot, fixture.home);
+
+    expect(retry.output).toContain('vr was published as fe-agents/vr');
+    const { branch, files } = branchFiles(fixture);
+    expect(branch, retry.output).not.toBe(first);
+    expect(files).not.toContain('agents/fe-agents/vr.yaml');
+    expect(files).toContain('agents/other-ns/vr.yaml');
+
+    mergeBranch(fixture, branch);
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+    expect(readState(fixture).placedAgents ?? {}).toEqual({});
   }, 60_000);
 
   it('stops the push when the roles manifest exists but cannot be parsed', async () => {

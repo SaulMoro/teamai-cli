@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { assertNotReadOnly } from './read-only.js';
@@ -47,32 +46,6 @@ export async function remove(
   }
 
   await removeCore(type, names, options, localConfig, teamConfig);
-}
-
-/**
- * Drop the placement record of each removed resource.
- *
- * `remove` accepts both spellings — the published `<ns>/<name>` and the bare
- * `<name>` the author's own copy carries — and the record is always keyed by
- * the bare one, so the key comes from the basename. The recorded path still has
- * to match the resource being removed, or removing `other-ns/my-rule` would
- * drop the record of a `my-rule` that lives somewhere else entirely.
- *
- * Existence is deliberately NOT the test: the removal only exists on the push
- * branch until its PR merges, and `removeCore` checks the default branch back
- * out before this runs, so the file is still on disk at this point.
- */
-function dropPlacementRecords(
-  records: Record<string, string> | undefined,
-  removed: string[],
-  teamPathsFor: (publishedName: string) => string[],
-): void {
-  if (!records) return;
-  for (const name of removed) {
-    const key = path.basename(name);
-    const recorded = records[key];
-    if (recorded && teamPathsFor(name).includes(recorded)) delete records[key];
-  }
 }
 
 async function removeCore(
@@ -253,13 +226,12 @@ async function removeCore(
   }
   if (type === 'rules') {
     state.pushedRules = state.pushedRules.filter((r) => !found.includes(r));
-    // A record left behind would send the author's local copy back to a path
-    // that is about to stop existing.
-    dropPlacementRecords(state.placedRules, found, (n) => [`rules/${n}.md`]);
   }
-  if (type === 'agents') {
-    dropPlacementRecords(state.placedAgents, found, (n) => [`agents/${n}.yaml`, `agents/${n}.md`]);
-  }
+  // Placement records are NOT dropped here: the removal exists only on its push
+  // branch until the PR merges, and a retry meanwhile must still resolve the
+  // bare name to the one namespaced file — for an agent, the bare stem removes
+  // it from every namespace (#649 review). `reconcilePlacementRecords` drops a
+  // record once the default branch no longer has its file.
   // `wiki` is not tracked in pushedX state; nothing to clean here.
   await saveStateForScope(state, localConfig);
 }

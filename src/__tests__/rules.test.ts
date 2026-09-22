@@ -95,6 +95,16 @@ scope: 'user',
     expect(item!.status).toBe('modified');
   });
 
+  it('does not read rules from a tool this member excluded', async () => {
+    // `removeItem` leaves an excluded tool's copy alone; read here, it would
+    // republish a rule the member just removed (#649 review).
+    await fse.writeFile(path.join(homeDir, '.claude/rules', 'kept-by-excluded.md'), 'old rule');
+
+    const items = await handler.scanLocalForPush(teamConfig, { ...localConfig, disabledAgents: ['claude'] });
+
+    expect(items.find((i) => i.name === 'kept-by-excluded')).toBeUndefined();
+  });
+
   it('should NOT include an unchanged rule', async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
     await fse.writeFile(path.join(teamRulesDir, 'same-rule.md'), 'same content');

@@ -800,4 +800,39 @@ projects:
     const items = await handler.scanLocalForPush(teamConfig, localConfig);
     expect(items.find((i) => i.name === 'ghost')).toBeUndefined();
   });
+
+  it('scanLocalForPush reads a namespaced tombstone as the flattened stem once no namespace has it', async () => {
+    // Every member holds `fe/vr` as `<agents>/vr`. After the removal the only
+    // tombstone is `fe/vr`, and without reading it as `vr` the copy is new.
+    await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
+    await fse.writeFile(path.join(homeDir, '.claude/agents', 'vr.md'), '---\nname: vr\ndescription: d\n---\n\nold\n');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items.find((i) => i.name === 'vr')).toBeUndefined();
+    expect(await handler.removedStems(localConfig)).toEqual(new Set(['fe/vr', 'vr']));
+  });
+
+  it('keeps the flattened stem live while another namespace still has that agent', async () => {
+    await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
+    await fse.ensureDir(path.join(repoPath, 'agents', 'be'));
+    await fse.writeFile(path.join(repoPath, 'agents', 'be', 'vr.yaml'), 'name: vr\ndescription: be\ninstructions: x\n');
+
+    // `vr` here may be be/vr's copy: suppressing it would block editing be/vr.
+    expect(await handler.removedStems(localConfig)).toEqual(new Set(['fe/vr']));
+  });
+
+  it('scanLocalForPush does not publish the copy an excluded tool still holds', async () => {
+    // `removeItem` leaves an excluded tool's copy alone, and a namespaced
+    // removal tombstones only `<ns>/<stem>`: were this copy read, the next push
+    // would republish the agent the author just removed (#649 review).
+    await fse.writeFile(
+      path.join(homeDir, '.codebuddy/agents', 'vr.md'),
+      '---\nname: vr\ndescription: reviews code\n---\n\nYou review.\n',
+    );
+
+    const items = await handler.scanLocalForPush(teamConfig, { ...localConfig, enabledAgents: ['claude'] });
+
+    expect(items.find((i) => i.name === 'vr')).toBeUndefined();
+  });
 });

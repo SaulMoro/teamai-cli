@@ -71,6 +71,10 @@ export class RulesHandler extends ResourceHandler {
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       const rulesPath = toolPath.rules;
       if (!rulesPath) continue;
+      // Not written or cleaned by teamai, so not a source either: `removeItem`
+      // leaves an excluded tool's copy behind, and read here it would republish
+      // the rule just removed (#649 review).
+      if (isAgentExcluded(localConfig, tool)) continue;
       const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), rulesPath);
       if (!await pathExists(rulesDir)) continue;
 
@@ -355,14 +359,13 @@ export class RulesHandler extends ResourceHandler {
       if (placed === `rules/${name}.md`) localNames.add(bareName);
     }
 
-    // Record a tombstone so the resource won't be re-pushed. The bare name gets
-    // one too whenever the record above proved it is this rule: the local sweep
-    // below skips excluded tools, so a root copy can outlive the removal there,
-    // and the scan names it `<name>` — which the published tombstone would not
-    // match (#649 review).
-    for (const tombstoned of localNames) {
-      await this.addTombstone(tombstoned, localConfig);
-    }
+    // Record a tombstone so the resource won't be re-pushed. Only the name
+    // given: every member reads the tombstone, and a bare `<name>` would sweep
+    // and suppress their own unrelated root rule of that name (#649 review).
+    // Members hold a namespaced rule under `<ns>/`, which the published name
+    // matches; the author's root copy is swept below, and a copy an excluded
+    // tool keeps is not a push source (`scanLocalForPush`).
+    await this.addTombstone(name, localConfig);
 
     // Remove from each tool's rules directory. `.mdc` tools may have an older
     // teamai layout wrote `.md` there, so both are removed — otherwise `remove`

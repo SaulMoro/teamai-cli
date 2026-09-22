@@ -83,6 +83,82 @@ describe('reconcilePlacementRecords', () => {
     expect(shadow.placedRules).toEqual({});
   });
 
+  it('proves landing only by commits after the revision the push branch was built on', async () => {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
+      ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',
+    } }).trim();
+    const file = path.join(repoPath, 'rules/fe/my-rule.md');
+    git(['init', '-q', '-b', 'main']);
+    // The same content sat at this path once, long before the push.
+    await fse.outputFile(file, 'ours, as pushed\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'an old rule']);
+    const ours = git(['hash-object', 'rules/fe/my-rule.md']);
+    git(['rm', '-q', 'rules/fe/my-rule.md']); git(['commit', '-q', '-m', 'retired']);
+    const base = git(['rev-parse', '--short', 'HEAD']);
+    // The placement PR is closed unmerged; a teammate then creates the path.
+    await fse.outputFile(file, 'somebody else\'s\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'teammate rule']);
+
+    const entry = { ...pending([{ ...placedRule(), blob: ours }]), base };
+    const closed = { placedRules: {}, placedAgents: {}, pendingPushes: [entry] };
+    expect(await reconcilePlacementRecords(repoPath, closed)).toBe(false);
+    expect(closed.placedRules).toEqual({});
+
+    // Had the PR merged after that revision, the same blob would prove it.
+    await fse.outputFile(file, 'ours, as pushed\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'merge ours']);
+    expect(await reconcilePlacementRecords(repoPath, closed)).toBe(true);
+    expect(closed.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+  });
+
+  it('drops a record whose file was deleted and recreated between two checks', async () => {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
+      ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',
+    } }).trim();
+    const file = path.join(repoPath, 'agents/fe/vr.yaml');
+    git(['init', '-q', '-b', 'main']);
+    await fse.outputFile(file, 'name: vr\n# the author\'s\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'placement merged']);
+    const state = { placedRules: {}, placedAgents: { vr: 'agents/fe/vr.yaml' }, pendingPushes: [] } as {
+      placedRules: Record<string, string>; placedAgents: Record<string, string>;
+      pendingPushes: PendingPush[]; placementsCheckedAt?: string;
+    };
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(state.placementsCheckedAt).toBe(git(['rev-parse', 'HEAD']));
+
+    // The author's removal merges, and another member publishes their own vr
+    // at the same path before the author runs anything.
+    git(['rm', '-q', 'agents/fe/vr.yaml']); git(['commit', '-q', '-m', 'removal merged']);
+    await fse.outputFile(file, 'name: vr\n# somebody else\'s\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'teammate vr']);
+
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(state.placedAgents).toEqual({});
+  });
+
+  it('spends a placement unrecorded when its path was deleted and recreated before the first check', async () => {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
+      ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',
+    } }).trim();
+    const file = path.join(repoPath, 'rules/fe/my-rule.md');
+    git(['init', '-q', '-b', 'main']);
+    await fse.outputFile(path.join(repoPath, 'README.md'), 'seed\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'seed']);
+    const base = git(['rev-parse', 'HEAD']);
+    await fse.outputFile(file, 'ours, as pushed\n');
+    const ours = git(['hash-object', 'rules/fe/my-rule.md']);
+    git(['add', '-A']); git(['commit', '-q', '-m', 'placement merged']);
+    git(['rm', '-q', 'rules/fe/my-rule.md']); git(['commit', '-q', '-m', 'team deleted it']);
+    await fse.outputFile(file, 'somebody else\'s\n');
+    git(['add', '-A']); git(['commit', '-q', '-m', 'teammate rule']);
+
+    const entry = { ...pending([{ ...placedRule(), blob: ours }]), base };
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [entry] };
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(state.placedRules).toEqual({});
+    expect(entry.items[0]?.placed).toBe(false);
+  });
+
   it('records a placement once: not again after the team deleted the file and someone recreated the path', async () => {
     await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'ours');
     const entry = pending([placedRule()]);

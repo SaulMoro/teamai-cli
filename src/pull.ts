@@ -645,7 +645,11 @@ async function cleanupTombstonedResources(
 
   for (const { type, toolPathField } of tombstoneTypes) {
     const handler = getHandler(type);
-    const tombstones = await handler.readTombstones(localConfig);
+    // Agents deploy flattened, so a namespaced agent tombstone has to be read
+    // as the stem the local copy carries (`AgentsHandler.removedStems`).
+    const tombstones = type === 'agents'
+      ? await (handler as AgentsHandler).removedStems(localConfig)
+      : await handler.readTombstones(localConfig);
     if (tombstones.size === 0) continue;
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(freshConfig, localConfig))) {
@@ -779,7 +783,11 @@ async function pullForScope(
   // delivery reads them: a placement whose PR has merged becomes a record, one
   // whose file the team deleted stops being one, and one shadowed by a new
   // shared-root file of the same name is withdrawn (#649 review).
-  if (!options.dryRun) {
+  // Not in single-repo mode: the refresh leaves the member's own checkout as it
+  // is — a feature branch, or a main not pulled yet — which is not the default
+  // branch, and a record dropped against it never comes back. `push` and
+  // `remove` reconcile there against a fresh origin/<default> worktree.
+  if (!options.dryRun && localConfig.repo.kind !== 'self') {
     try {
       const recordsState = await loadStateForScope(localConfig);
       if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {

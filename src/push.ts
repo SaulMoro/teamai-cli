@@ -4,7 +4,7 @@ import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.j
 import { assertNotReadOnly } from './read-only.js';
 import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
-  resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev,
+  resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
 import { reconcilePlacementRecords,
   findPendingForItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
@@ -504,6 +504,9 @@ async function pushGroup(args: {
     const gitFiles = [...new Set([...pushedFiles, ...existingSweepers, ...configFiles])];
     const branchName = reuse?.branch ?? generateBranchName(localConfig.username);
     const commitMsg = `[teamai] Push ${items.length} resource(s) from ${localConfig.username}`;
+    // The default-branch commit the branch is built on, which bounds the
+    // history that can prove a placement landed (`reconcilePlacementRecords`).
+    const base = await getHeadCommit(localConfig.repo.localPath) ?? undefined;
 
     const hasChanges = await pushRepoBranch(
       localConfig.repo.localPath,
@@ -570,12 +573,16 @@ async function pushGroup(args: {
 
     // Remember the open PR so the next run updates it instead of opening a
     // duplicate. Recorded even when PR creation failed: the branch is on the
-    // remote, so pushing again must reuse it.
+    // remote, so pushing again must reuse it. A PR retry pushed nothing, so
+    // the branch — and the blobs and base that prove its placements — is the
+    // one already recorded; this run has no branch checked out to hash.
     recordPendingPush(pushState, {
       branch: branchName,
       prUrl,
       createdAt: new Date().toISOString(),
-      items: await toPendingItems(items, localConfig.repo.localPath),
+      ...(hasChanges
+        ? { base, items: await toPendingItems(items, localConfig.repo.localPath) }
+        : { base: reuse?.base, items: reuse?.items ?? [] }),
     });
 
     // Switch back to the default branch so the next group starts clean

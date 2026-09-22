@@ -105,6 +105,27 @@ export class AgentsHandler extends ResourceHandler {
   readonly type = 'agents' as const;
 
   /**
+   * The tombstones as flattened local copies see them. Removing `fe/vr`
+   * tombstones only `fe/vr`, but every member holds that agent as `<agents>/vr`,
+   * so the tombstone alone never reaches their copy, and the next push reads it
+   * as a new agent and republishes it (#649 review). `vr` counts as removed
+   * here only while no namespace still has an agent of that stem: then the
+   * flattened copy can stand for nothing else, and while one does it is that
+   * agent's copy — suppressing it is what round 8 of the review ruled out.
+   */
+  async removedStems(localConfig: LocalConfig): Promise<Set<string>> {
+    const tombstones = await this.readTombstones(localConfig);
+    const removed = new Set(tombstones);
+    const teamAgentsDir = path.join(localConfig.repo.localPath, 'agents');
+    for (const tombstone of tombstones) {
+      const stem = path.posix.basename(tombstone);
+      if (removed.has(stem)) continue;
+      if ((await findTeamAgentFiles(teamAgentsDir, stem)).length === 0) removed.add(stem);
+    }
+    return removed;
+  }
+
+  /**
    * Scan local AI tool agents/ directories for files that are new or modified
    * compared to the team repo. Groups by agent name stem across all tools.
    *
@@ -118,7 +139,7 @@ export class AgentsHandler extends ResourceHandler {
   ): Promise<AgentResourceItem[]> {
     const requestedNamespace = options?.namespace;
     const teamAgentsDir = path.join(localConfig.repo.localPath, 'agents');
-    const tombstones = await this.readTombstones(localConfig);
+    const tombstones = await this.removedStems(localConfig);
     // Single-repo mode: users drop canonical agent files straight into the repo's
     // own .teamai/agents/ (<name>.yaml, or legacy <name>.md) rather than authoring
     // them in a tool's agents dir. Those are ALREADY in team-repo format, so we
@@ -194,6 +215,11 @@ export class AgentsHandler extends ResourceHandler {
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.agents) continue;
+      // An excluded tool is neither written nor cleaned by teamai, so what it
+      // holds is not a source either: `removeItem` leaves its copy behind, and
+      // a namespaced removal tombstones only `<ns>/<stem>`, so reading that
+      // copy republished the agent just removed (#649 review).
+      if (isAgentExcluded(localConfig, tool)) continue;
       const baseDir = resolveToolBaseDir(tool, localConfig);
       const agentsDir = path.join(baseDir, toolPath.agents);
       if (!await pathExists(agentsDir)) continue;
@@ -301,7 +327,7 @@ export class AgentsHandler extends ResourceHandler {
         // Compare like with like: native files against a native rendering of
         // the canonical YAML. Unchanged/untargeted copies must not join a merge.
         for (const [tool, filePath] of toolFiles) {
-          if (!isKnownTool(tool) || isAgentExcluded(localConfig, tool)
+          if (!isKnownTool(tool)
             || (canonicalSpec.targets && !canonicalSpec.targets.includes(tool))) {
             toolFiles.delete(tool);
             continue;
