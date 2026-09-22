@@ -218,20 +218,18 @@ export async function pruneLegacyBuiltinSkills(
  * The stub is written verbatim — no frontmatter repair on the way out, so a
  * deployed copy that differs from the packaged one is a bug, not a variant.
  *
+ * Reporting-only HTTP teams get the stub too. The release before this one had
+ * nothing to deploy there that worked without a team repo, so it deployed
+ * nothing; the stub's content is served by the installed CLI, and `skill get
+ * wiki` — a local knowledge-base generator — needs no repo at all. Skipping it
+ * while still pruning the legacy trees would leave those members with no
+ * discoverable entry point at all.
+ *
  * Silently skips if:
  * - Built-in skills directory doesn't exist (dev environment without build)
  * - A tool's skills directory is not configured
  */
-export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { reportingOnly?: boolean }): Promise<number> {
-  // Reporting-only HTTP mode has no team repo to write to, so the workflows the
-  // stub routes to are non-functional there. Nothing is deployed, but the
-  // directories earlier releases left behind are still removed: a team that
-  // switched to reporting-only would otherwise keep them for good.
-  const deploy = !options?.reportingOnly;
-  if (!deploy) {
-    log.debug('Reporting-only mode (no team repo): pruning legacy built-in skills without deploying');
-  }
-
+export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig): Promise<number> {
   const builtinDir = packagedSkillRoots().deployRoot;
 
   if (!await pathExists(builtinDir)) {
@@ -255,7 +253,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
     }
   }
 
-  if (deploy && skillNames.length === 0) return 0;
+  if (skillNames.length === 0) return 0;
 
   const defaultBaseDir = getUserHome();
   let deployed = 0;
@@ -278,7 +276,6 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
 
     await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir);
-    if (!deploy) continue;
 
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);

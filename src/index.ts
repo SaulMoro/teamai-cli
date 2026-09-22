@@ -153,7 +153,7 @@ program
 
 const skillCmd = program
   .command('skill')
-  .description('List and inspect skills (default: list all skills across repo + installed agents)')
+  .description('List and inspect skills (default: repo + installed agents, then the CLI-served catalog)')
   .action(async () => {
     const globalOpts = program.opts() as GlobalOptions;
     const { skillList } = await import('./skill-cmd.js');
@@ -162,7 +162,7 @@ const skillCmd = program
 
 skillCmd
   .command('list')
-  .description('List all skills (alias for: teamai list skills --source all)')
+  .description('List team and installed skills, then the built-in catalog the CLI serves')
   .option('--json', 'Output the CLI-served built-in skill catalog as JSON')
   .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;

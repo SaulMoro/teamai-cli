@@ -432,7 +432,7 @@ teamai list --source local          # 各已安装 agent 下的 skills
 teamai list --agent claude --verbose
 teamai list env --reveal            # 明文显示 env（默认脱敏）
 
-teamai skill                        # 等价于 teamai list skills --source all
+teamai skill                        # 先输出 teamai list skills --source all，再列出 CLI 内置 skill 目录
 teamai skill show hai-deploy-test   # 看单个 skill 的来源 / 贡献者 / 安装位置 / 描述摘要
 
 teamai skill list --json            # 当前 CLI 提供的内置 skill 清单（机器可读）

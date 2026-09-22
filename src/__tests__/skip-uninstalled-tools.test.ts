@@ -660,7 +660,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     );
   });
 
-  it('prunes legacy skills from the Codex shared directory, and without deploying in reporting-only mode', async () => {
+  it('prunes legacy skills from the Codex shared directory and deploys the stub beside them', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
     await fse.ensureDir(path.join(homeDir, '.codex'));
@@ -685,13 +685,15 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
       scope: 'user' as const,
     };
 
-    // Reporting-only teams have nowhere to publish, so nothing is deployed —
-    // but a team that switched to it would otherwise keep the legacy trees.
-    const deployed = await deployBuiltinSkills(teamConfig, localConfig, { reportingOnly: true });
+    const deployed = await deployBuiltinSkills(teamConfig, localConfig);
 
-    expect(deployed).toBe(0);
+    expect(deployed).toBe(1);
     expect(await fse.pathExists(sharedLegacy)).toBe(false);
-    expect(await fse.pathExists(path.join(homeDir, '.agents/skills/teamai'))).toBe(false);
+    // Codex reads .codex/skills; the shared .agents/skills is where its legacy
+    // copies live, and the prune is the only thing that reaches in there.
+    expect(await fse.readFile(path.join(homeDir, '.codex/skills/teamai/SKILL.md'), 'utf8')).toBe(
+      await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8'),
+    );
   });
 
   it('records every file the package still ships, so the prune keeps proving ownership', async () => {

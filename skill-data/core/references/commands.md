@@ -57,8 +57,8 @@ Generated: do not edit by hand. Regenerate with
 
 ## skill
 
-- `teamai skill` — List and inspect skills (default: list all skills across repo + installed agents)
-  - `teamai skill list` — List all skills (alias for: teamai list skills --source all)
+- `teamai skill` — List and inspect skills (default: repo + installed agents, then the CLI-served catalog)
+  - `teamai skill list` — List team and installed skills, then the built-in catalog the CLI serves
     - `--json` — Output the CLI-served built-in skill catalog as JSON
   - `teamai skill get [names...]` — Print built-in skill content served by the installed CLI
     - `--full` — Append the skill's references/ and templates/ files

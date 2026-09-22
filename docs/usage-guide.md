@@ -455,7 +455,7 @@ teamai list --source local          # Skills under each installed agent
 teamai list --agent claude --verbose
 teamai list env --reveal            # Show env values in plaintext (default: masked)
 
-teamai skill                        # Equivalent to teamai list skills --source all
+teamai skill                        # teamai list skills --source all, then the CLI-served built-in catalog
 teamai skill show hai-deploy-test   # View a single skill's source / contributor / install locations / description summary
 
 teamai skill list --json            # The built-in skills the installed CLI serves, machine-readable
