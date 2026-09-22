@@ -464,18 +464,51 @@ export class AgentsHandler extends ResourceHandler {
    * Tries both .yaml and .md extensions in the team repo.
    * Records a tombstone to prevent re-push.
    */
+  /**
+   * `vr` when push placed it at `agents/fe/vr.yaml`: the author's local copy is
+   * at the tool's agents root, so the name they type is the bare one. Without
+   * this, `remove` matched that bare name and deleted every `vr` in every
+   * namespace — other people's agents included (#649 review).
+   */
+  async publishedNameFor(name: string, localConfig: LocalConfig): Promise<string | null> {
+    const placed = placedResourcePath(
+      (await loadStateForScope(localConfig)).placedAgents, 'agents', name,
+    );
+    if (!placed) return null;
+    if (!await pathExists(path.join(localConfig.repo.localPath, placed))) return null;
+    return placed.slice('agents/'.length).replace(/\.(yaml|md)$/, '');
+  }
+
+  /**
+   * Remove an agent from the team repo and all local AI tool agents/ directories.
+   *
+   * `name` is either a bare stem, which still means "this agent wherever it
+   * lives", or the published `<ns>/<stem>` that `publishedNameFor` resolved —
+   * and that one names exactly one file, so only it is removed. The local sweep
+   * covers both spellings: a placed agent leaves the author's copy at the
+   * agents root while every other member receives it under `<ns>/`.
+   */
   async removeItem(name: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
     const removed: string[] = [];
 
     const teamAgentsDir = path.join(localConfig.repo.localPath, 'agents');
+    const stem = path.basename(name);
 
-    // Root or agents/<ns>/, both extensions, every namespace the stem lives in.
+    // Both extensions, and every namespace a BARE stem lives in. A published
+    // `<ns>/<stem>` resolves to exactly one file, because the root directory is
+    // one of the directories probed and `<ns>/<stem>.yaml` sits under it — so
+    // naming a namespace leaves the same stem in other namespaces alone.
     for (const located of await findTeamAgentFiles(teamAgentsDir, name)) {
       await remove(located.path);
       removed.push(located.path);
     }
 
-    await this.addTombstone(name, localConfig);
+    // The bare stem gets a tombstone too: the local sweep below skips excluded
+    // tools, so a root copy can outlive the removal there, and the scan names
+    // it `<stem>` — which the published tombstone would not match.
+    for (const tombstoned of new Set([name, stem])) {
+      await this.addTombstone(tombstoned, localConfig);
+    }
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.agents) continue;
@@ -484,12 +517,14 @@ export class AgentsHandler extends ResourceHandler {
       if (isAgentExcluded(localConfig, tool)) continue;
       const baseDir = resolveToolBaseDir(tool, localConfig);
       // Try every native agent extension: the render format varies per tool.
-      for (const ext of AGENT_FILE_EXTENSIONS) {
-        const filePath = path.join(baseDir, toolPath.agents, `${name}${ext}`);
-        if (await pathExists(filePath)) {
-          await remove(filePath);
-          removed.push(filePath);
-          log.debug(`Removed agent ${name} from ${tool}`);
+      for (const localName of new Set([name, stem])) {
+        for (const ext of AGENT_FILE_EXTENSIONS) {
+          const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
+          if (await pathExists(filePath)) {
+            await remove(filePath);
+            removed.push(filePath);
+            log.debug(`Removed agent ${localName} from ${tool}`);
+          }
         }
       }
     }

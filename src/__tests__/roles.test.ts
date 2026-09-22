@@ -31,23 +31,20 @@ describe('loadRolesManifest', () => {
    * unreadable manifest arrived looking exactly like a missing one — and sent
    * those resources to the whole team (#649 review).
    */
-  it('reports an existing manifest it cannot read, rather than a missing one', async () => {
+  // chmod 0o000 has no effect when running as root (CI), so skip — same gate
+  // as `src/__tests__/git-kind-learnings.test.ts` (#727).
+  it.skipIf(process.getuid?.() === 0)('reports an existing manifest it cannot read, rather than a missing one', async () => {
     const repoDir = writeManifest('version: 1\nroles: []\n');
     const manifestPath = path.join(repoDir, 'manifest', 'roles.yaml');
     chmodSync(manifestPath, 0o000);
-    let unreadable = true;
-    try {
-      readFileSync(manifestPath, 'utf-8');
-      unreadable = false; // running as root: the mode does not stop the read
-    } catch { /* expected */ }
 
-    if (unreadable) {
+    try {
       await expect(loadRolesManifest(repoDir)).rejects.toThrow(/could not be read/);
       await expect(loadRolesManifest(repoDir)).rejects.not.toBeInstanceOf(RolesManifestNotFoundError);
+    } finally {
+      if (existsSync(manifestPath)) chmodSync(manifestPath, 0o600);
+      rmSync(repoDir, { recursive: true, force: true });
     }
-
-    chmodSync(manifestPath, 0o600);
-    rmSync(repoDir, { recursive: true, force: true });
   });
 
   it('reports a genuinely missing manifest as not found', async () => {

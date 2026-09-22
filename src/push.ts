@@ -280,6 +280,19 @@ export { createPrWithFallback };
 type PushGroupOutcome = 'pushed' | 'nochange' | 'pr-failed' | 'failed';
 
 /**
+ * The paths that would make `placedAt` a second copy of the same resource.
+ * An agent is canonically `<stem>.yaml`, but `pull` reads a legacy `<stem>.md`
+ * as the same agent, so a new `.md` landing beside an existing `.yaml` (or the
+ * reverse) produces exactly the ambiguity pull reports and skips. Checking the
+ * proposed path alone misses that.
+ */
+function collisionPaths(type: PlaceableType, placedAt: string): string[] {
+  if (type !== 'agents') return [placedAt];
+  const stem = placedAt.replace(/\.(yaml|md)$/, '');
+  return [`${stem}.yaml`, `${stem}.md`];
+}
+
+/**
  * Remember where push put each resource it PLACED, so the author can keep
  * maintaining it. Their own copy stays at the tool's resource root, and the
  * team file is now under `<root>/<ns>/`: the scanner needs the record to
@@ -398,10 +411,18 @@ async function placeNewResources(args: {
           // Anything already there is somebody else's, and `pushItem` writes
           // rather than merges: placing on top of it would replace their work
           // with ours, silently, in a run they never reviewed.
-          if (await pathExists(path.join(localConfig.repo.localPath, placedAt))) {
+          let taken: string | undefined;
+          for (const candidate of collisionPaths(type, placedAt)) {
+            if (await pathExists(path.join(localConfig.repo.localPath, candidate))) {
+              taken = candidate;
+              break;
+            }
+          }
+          if (taken) {
             log.error(
-              `[${type}] ${item.name} cannot be placed: ${placedAt} already exists in the team repo, `
-              + `and this is a new ${type.slice(0, -1)}, so pushing it there would overwrite that copy. `
+              `[${type}] ${item.name} cannot be placed: ${taken} already exists in the team repo, `
+              + `and this is a new ${type.slice(0, -1)}, so pushing it there would `
+              + (taken === placedAt ? 'overwrite that copy. ' : 'leave two copies of the same agent. ')
               + 'Pull and edit the existing one, rename yours, or pass --role <ns> to choose another namespace.',
             );
             process.exitCode = 2;

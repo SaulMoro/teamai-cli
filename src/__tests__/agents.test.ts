@@ -312,6 +312,56 @@ projects:
    * is a different agent and must not block publishing this one — which is
    * what filtering on activity alone did (#649 review).
    */
+  /**
+   * `remove agents vr` matched the bare stem and deleted every `vr` in every
+   * namespace, other people's agents included, and left the namespaced record
+   * behind (#649 review).
+   */
+  it('resolves the bare agent name to the namespace push recorded for it', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'),
+      'name: vr\ndescription: Mine\ninstructions: Read it.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { vr: 'agents/fe/vr.yaml' },
+    });
+
+    expect(await handler.publishedNameFor('vr', localConfig)).toBe('fe/vr');
+  });
+
+  it('does not resolve an agent record whose team file is gone', async () => {
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { vr: 'agents/fe/vr.yaml' },
+    });
+
+    expect(await handler.publishedNameFor('vr', localConfig)).toBeNull();
+  });
+
+  it('removes only the named namespace, leaving the same stem elsewhere', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: Mine\ninstructions: A.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/other/vr.yaml'), 'name: vr\ndescription: Theirs\ninstructions: B.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/vr.md'), '# the author copy');
+
+    await handler.removeItem('fe/vr', teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(repoPath, 'agents/fe/vr.yaml'))).toBe(false);
+    // Somebody else's agent of the same name is not ours to delete.
+    expect(await fse.readFile(path.join(repoPath, 'agents/other/vr.yaml'), 'utf-8')).toContain('Theirs');
+    // The author's own copy is at the agents root under the bare stem.
+    expect(await fse.pathExists(path.join(homeDir, '.claude/agents/vr.md'))).toBe(false);
+    const tombstones = await fse.readFile(path.join(repoPath, 'agents', '.removed'), 'utf-8');
+    expect(tombstones.split('\n')).toContain('fe/vr');
+    expect(tombstones.split('\n')).toContain('vr');
+  });
+
+  it('still removes a bare stem from every namespace', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/other/vr.yaml'), 'name: vr\ndescription: B\ninstructions: B.\n');
+
+    await handler.removeItem('vr', teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(repoPath, 'agents/fe/vr.yaml'))).toBe(false);
+    expect(await fse.pathExists(path.join(repoPath, 'agents/other/vr.yaml'))).toBe(false);
+  });
+
   it('publishes into the requested namespace despite a stem in an inactive one', async () => {
     await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
       'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');

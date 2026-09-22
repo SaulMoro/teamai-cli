@@ -1305,6 +1305,36 @@ describe('push namespace routing for rules and agents', () => {
     }
   });
 
+  it('refuses to place a new .md agent beside an existing .yaml of the same stem', async () => {
+    // pull reads a legacy .md as the same agent as its .yaml, so both copies
+    // would be active at once — the ambiguity pull reports and skips.
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-collide-'));
+    fs.mkdirSync(path.join(repoDir, 'agents', 'pm'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'agents/pm', 'vr.yaml'), 'name: vr\ndescription: team\ninstructions: x\n');
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({
+        repo: { localPath: repoDir, remote: 'https://git.woa.com/test/repo.git' },
+      }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({
+      agents: [{ name: 'vr', type: 'agents', sourcePath: '/tmp/vr.md', relativePath: 'agents/vr.md', status: 'new' }],
+    }, pushedItems);
+
+    try {
+      await push({ all: true, role: 'pm' });
+
+      expect(process.exitCode).toBe(2);
+      expect(pushedItems).toHaveLength(0);
+      expect(fs.existsSync(path.join(repoDir, 'agents/pm', 'vr.md'))).toBe(false);
+      const { log } = await import('../utils/logger.js');
+      expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('agents/pm/vr.yaml');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to place a new skill onto an existing team skill', async () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-collide-'));
     fs.mkdirSync(path.join(repoDir, 'skills', 'pm', 'skill-a'), { recursive: true });
