@@ -90,7 +90,9 @@ arrive as `..` and `frontend.` as `frontend`, escaping the parent in the first
 case and another namespace's directory in the second; `.` and `..` fall out of the
 same rule. A manifest file that exists but cannot be read, or is empty, is an
 error rather than an absent manifest: treating it as absent would drop the
-filtering the manifest exists to apply. The id keeps the
+filtering the manifest exists to apply. Absence means the path is genuinely not
+there — a dangling symlink, on the file or on `manifest/` itself, reads as ENOENT
+but is an error. The id keeps the
 older, narrower rule it has always had — letters, digits, `.`, `_`, `-`, and not
 `.` or `..` — because it is also typed on the command line and split on commas.
 The namespace guard applies to `manifest/roles.yaml`'s active namespaces

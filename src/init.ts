@@ -20,7 +20,7 @@ import {
   isRecallEnabled,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { describeRoles, listRoleIds, loadRolesManifest } from './roles.js';
+import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestMissingError } from './roles.js';
 import { loadProjectsManifest, listProjectIds } from './projects.js';
 import { getMemberConfig, mergeMemberConfig } from './members.js';
 import { askQuestion, askConfirmation, askSelection, closePrompt, isInteractive } from './utils/prompt.js';
@@ -61,6 +61,13 @@ function parseRoleSelection(answer: string, max: number): number[] {
 
   return [...new Set(selections)];
 }
+
+/**
+ * The person did not pick a role at the prompt. Single-repo `init` treats this
+ * like a repo with no manifest — the role can be set later with `teamai roles
+ * set` — while every other caller lets it abort, as it always has.
+ */
+class NoRoleSelectedError extends Error {}
 
 async function promptForRoleProfile(
   repoPath: string,
@@ -108,7 +115,7 @@ async function promptForRoleProfile(
   });
   const [primaryIndex] = parseRoleSelection(primaryAnswer, manifest.roles.length);
   if (!primaryIndex) {
-    throw new Error('A primary role is required.');
+    throw new NoRoleSelectedError('A primary role is required.');
   }
 
   const primaryRole = manifest.roles[primaryIndex - 1];
@@ -433,10 +440,13 @@ export async function initHttp(
   try {
     Object.assign(localConfig, await promptForRoleProfile(localPath, options.role));
   } catch (error) {
-    const msg = (error as Error).message;
-    if (!msg.includes('Roles manifest not found')) {
-      log.debug(`Role selection skipped: ${msg}`);
-    }
+    // Two cases leave the role unset on purpose: a repo with no roles manifest,
+    // and a person who skipped the prompt. Anything else — a manifest that does
+    // not parse, an unknown `--role` — must not be swallowed: a role-less config
+    // matches every role when hooks are reconciled, so it would install exactly
+    // the hooks the manifest restricts.
+    const lenient = error instanceof RolesManifestMissingError || error instanceof NoRoleSelectedError;
+    if (!lenient) throw error;
   }
   Object.assign(localConfig, await resolveActiveProjects(localPath, options.project));
 
@@ -876,10 +886,13 @@ export async function initSelfRepo(options: GlobalOptions & {
   try {
     Object.assign(localConfig, await promptForRoleProfile(localPath, options.role));
   } catch (error) {
-    const msg = (error as Error).message;
-    if (!msg.includes('Roles manifest not found')) {
-      log.debug(`Role selection skipped: ${msg}`);
-    }
+    // Two cases leave the role unset on purpose: a repo with no roles manifest,
+    // and a person who skipped the prompt. Anything else — a manifest that does
+    // not parse, an unknown `--role` — must not be swallowed: a role-less config
+    // matches every role when hooks are reconciled, so it would install exactly
+    // the hooks the manifest restricts.
+    const lenient = error instanceof RolesManifestMissingError || error instanceof NoRoleSelectedError;
+    if (!lenient) throw error;
   }
   Object.assign(localConfig, await resolveActiveProjects(localPath, options.project));
   // Which AI tools to set up in this repo (create skills dir + inject hooks +

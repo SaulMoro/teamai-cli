@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -68,6 +69,31 @@ export function parseManifest<S extends z.ZodTypeAny>(schema: S, raw: unknown, k
 }
 
 /**
+ * The first component of `target` that exists as a symbolic link pointing at
+ * nothing, or `null` when the path is simply not there.
+ *
+ * ENOENT is not proof of absence: a dangling link anywhere on the path — the
+ * file itself, or the `manifest/` directory — reads exactly like a file that was
+ * never written. Absence is the one answer that lets a caller drop its
+ * filtering, so it has to be the true one. `lstat` sees each link itself, and
+ * `stat` says whether it leads anywhere.
+ */
+async function danglingLinkOnPath(target: string): Promise<string | null> {
+  let current = target;
+  for (;;) {
+    const link = await fs.lstat(current).catch(() => null);
+    if (link) {
+      if (!link.isSymbolicLink()) return null;
+      const resolves = await fs.stat(current).then(() => true, () => false);
+      return resolves ? null : current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+/**
  * Read a manifest file, separating "there is no such file" from every other
  * reason a read can fail. `readFileSafe` collapses the two into `null`, and a
  * caller that treats `null` as "this team does not use roles/projects" would
@@ -80,12 +106,9 @@ export async function readManifestFile(manifestPath: string, kind: 'projects' | 
     content = await fs.readFile(manifestPath, 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // ENOENT is not proof of absence: a committed symlink pointing at a file
-      // that is not there reads the same way. `lstat` sees the link itself, so
-      // only a path that resolves to nothing at all counts as "no manifest".
-      const present = await fs.lstat(manifestPath).then(() => true, () => false);
-      if (!present) return null;
-      throw new Error(`Could not read ${kind} manifest ${manifestPath}: it is a symbolic link with no target.`);
+      const dangling = await danglingLinkOnPath(manifestPath);
+      if (!dangling) return null;
+      throw new Error(`Could not read ${kind} manifest ${manifestPath}: ${dangling} is a symbolic link with no target.`);
     }
     throw new Error(`Could not read ${kind} manifest ${manifestPath}: ${(error as Error).message}`);
   }

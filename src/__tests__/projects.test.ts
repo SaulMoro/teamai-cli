@@ -232,6 +232,19 @@ projects:
     }
   });
 
+  it('treats a dangling manifest/ directory link as broken too', async () => {
+    // Both readFile and lstat on the file give ENOENT when the DIRECTORY is the
+    // dangling link, so the whole path has to be walked before absence is
+    // believed — otherwise the team looks unpartitioned and filtering falls open.
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-projdirlink-'));
+    try {
+      symlinkSync(path.join(repoDir, 'nowhere'), path.join(repoDir, 'manifest'));
+      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(/symbolic link with no target/i);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('treats a symlink with no target as broken, not as an absent manifest', async () => {
     // A dangling link fails to read with ENOENT exactly as a missing file does,
     // and "missing" is the one answer that lets a caller drop its filtering.
