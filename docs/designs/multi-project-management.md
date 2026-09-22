@@ -81,13 +81,14 @@ projects:
       agents:    [hai-inference]   # optional; agents/<namespace>/ scoped to this project
 ```
 
-The id and every namespace are refused at the manifest boundary unless they are a
-single path segment (no `/`, `\`, `:` or control character, and not `.`, `..` or
-any other name made only of dots and spaces — Win32 strips trailing spaces and
-periods, so `.. ` would arrive as `..`),
-since each becomes a directory component. The id is narrower still — letters,
-digits, `.`, `_`, `-` — because it is also typed on the command line and split on
-commas. The same guard applies to `manifest/roles.yaml`'s active namespaces
+The id and every namespace are refused at the manifest boundary unless they can
+name a directory without escaping it, since each becomes a directory component. A
+namespace must be a single path segment: no `/`, `\`, `:` or control character,
+and not `.`, `..` or any other name made only of dots and spaces (Win32 strips
+trailing spaces and periods, so `.. ` would arrive as `..`). The id keeps the
+older, narrower rule it has always had — letters, digits, `.`, `_`, `-`, and not
+`.` or `..` — because it is also typed on the command line and split on commas.
+The namespace guard applies to `manifest/roles.yaml`'s active namespaces
 (`knowledge`, `skills`, `agents`); its `learnings:` is kept for backward
 compatibility, ignored at runtime, and therefore unchecked.
 

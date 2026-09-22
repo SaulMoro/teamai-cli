@@ -16,10 +16,11 @@ export type ProjectResourceType = typeof PROJECT_RESOURCE_TYPES[number];
 
 /**
  * A project id becomes a path component (`skills/<id>/`, `learnings/<id>/`) just
- * as a resource namespace does, so it carries the same traversal guard. It is
- * narrower than a namespace on purpose: an id is also typed on the command line
- * and split on commas (`teamai projects set a,b`), so it keeps the ASCII
- * spelling it has always had.
+ * as a resource namespace does, so it is guarded here too — but by its own older
+ * rule, not the namespace one. An id is also typed on the command line and split
+ * on commas (`teamai projects set a,b`), so its ASCII allowlist already excludes
+ * most of what the namespace guard has to test for, and holding it to the rest
+ * would reject ids that work today (`...` is a directory POSIX accepts).
  *
  * Both are enforced here at the manifest boundary, the only place they enter the
  * process: an id read from elsewhere (a hand-edited config.yaml `projects`

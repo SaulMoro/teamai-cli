@@ -244,13 +244,21 @@ projects:
 ```
 
 The project id and every namespace under `resources:` become a directory name
-(`skills/<namespace>/`, `learnings/<namespace>/`, `agents/<namespace>/`), so each
-must be a single path segment: no `/`, `\`, `:` or control character, and not `.`,
-`..` or any other name made only of dots and spaces (Windows strips trailing
-spaces and periods, so `.. ` would arrive as `..`). A namespace is otherwise free — a non-ASCII name or one with a space is
-still a valid directory. A project id is narrower, because it is also typed on
-the command line: letters, digits, `.`, `_` and `-`. A manifest that breaks
-either rule fails to parse, and the error names the offending entry.
+(`skills/<namespace>/`, `learnings/<namespace>/`, `agents/<namespace>/`), so
+neither may escape the directory it names.
+
+A **namespace** must be a single path segment: no `/`, `\`, `:` or control
+character, and not `.`, `..` or any other name made only of dots and spaces
+(Windows strips trailing spaces and periods, so `.. ` would arrive as `..`).
+Anything else a filesystem accepts stays valid — a non-ASCII name, or one holding
+a space.
+
+A **project id** keeps its own older and narrower rule, because it is also typed
+on the command line and split on commas: letters, digits, `.`, `_` and `-`, and
+not `.` or `..`.
+
+A manifest that breaks either rule fails to parse, and the error names the
+offending entry.
 
 **Commands** (low-frequency correction/query, mirroring `teamai roles …`):
 
