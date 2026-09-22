@@ -315,6 +315,31 @@ projects:
     expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
   });
 
+  // A projects manifest with none of its projects active here: every namespace
+  // is inactive, and only the shared root is delivered.
+  const nothingActive = () => fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+    'version: 1\nprojects:\n  - id: elsewhere\n    resources:\n      agents: [zzz]\n');
+
+  it('holds a recorded agent that changed on the team since this machine last synced it', async () => {
+    // Agents have no pre-push sync: a teammate's edit made before the author's
+    // next pull would be overwritten by the stale local copy (#649 review).
+    await nothingActive();
+    await fse.outputFile(path.join(repoPath, 'agents/fe-agents/reviewer.yaml'),
+      'name: reviewer\ndescription: Published\ninstructions: A teammate rewrote this.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Published\n---\n\nRead it.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' }, lastPullRev: 'abc1234',
+    });
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('name: reviewer\ndescription: Published\ninstructions: Read it.\n'));
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('changed on the team since this machine last synced it');
+    expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', './agents/fe-agents/reviewer.yaml');
+  });
+
   /**
    * The layout allows the same stem in several namespaces. An explicit
    * --role/--project names the destination, so a copy in some OTHER namespace
@@ -462,6 +487,7 @@ projects:
   });
 
   it('publishes into the requested namespace despite a stem in an inactive one', async () => {
+    await nothingActive();
     await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
       'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');
     await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
@@ -476,6 +502,7 @@ projects:
   });
 
   it('edits the copy in the requested namespace rather than treating it as new', async () => {
+    await nothingActive();
     await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
       'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');
     const requested = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
@@ -490,9 +517,9 @@ projects:
     expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
   });
 
-  it('refuses to publish a namespaced second copy beside a shared-root agent', async () => {
-    // The root copy reaches every member, so both would be active at once —
-    // the collision pull reports and skips.
+  it('edits the shared-root agent it was deployed from, never a namespaced second copy', async () => {
+    // The root copy reaches every member, so the local file is its copy; a
+    // namespaced second one would leave two active agents of that name.
     await fse.outputFile(path.join(repoPath, 'agents/reviewer.yaml'),
       'name: reviewer\ndescription: Shared\ninstructions: Read it.\n');
     await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
@@ -501,7 +528,24 @@ projects:
     const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe-agents' });
 
     expect(items).toHaveLength(1);
-    expect(items[0]?.skipReason).toContain('shared root');
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.status).toBe('modified');
+    expect(items[0]?.relativePath).toBe('agents/reviewer.yaml');
+  });
+
+  it('compares a deployed agent with its active source, not with the requested namespace\'s file', async () => {
+    // common is active and delivered `vr`; fe/vr is another agent, inactive
+    // here. `push --role fe` must not read the untouched common copy as an
+    // edit of fe/vr and write it over that file (#649 review).
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: base\n    resources:\n      agents: [common]\n');
+    localConfig.projects = ['base'];
+    const common = { name: 'vr', type: 'agents' as const, sourcePath: path.join(repoPath, 'agents/common/vr.yaml'), relativePath: 'agents/common/vr.yaml' };
+    await fse.outputFile(common.sourcePath, 'name: vr\ndescription: Common\ninstructions: Read common.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: Front\ninstructions: Read fe.\n');
+    await handler.pullItem(common, teamConfig, localConfig);
+
+    expect(await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe' })).toEqual([]);
   });
 
   /**

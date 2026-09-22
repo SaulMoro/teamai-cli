@@ -16,8 +16,11 @@ vi.mock('../utils/logger.js', () => ({
 
 // Mock getFileContentAtRev since test dirs are not real git repos
 const mockGetFileContentAtRev = vi.fn<(repoPath: string, rev: string, filePath: string) => Promise<Buffer | null>>();
+const mockGetFileContentWhenAdded = vi.fn<(repoPath: string, filePath: string) => Promise<Buffer | null>>()
+  .mockResolvedValue(null);
 vi.mock('../utils/git.js', () => ({
   getFileContentAtRev: (...args: [string, string, string]) => mockGetFileContentAtRev(...args),
+  getFileContentWhenAdded: (...args: [string, string]) => mockGetFileContentWhenAdded(...args),
   createGit: vi.fn(),
   pullRepo: vi.fn(),
   pushRepoBranch: vi.fn(),
@@ -114,6 +117,22 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     const content = await fse.readFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'utf-8');
     expect(content).toBe('teammate v2');
     expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', 'rules/fe-know/my-rule.md');
+  });
+
+  it('syncs a placement that landed after the last pull from the version it was added with', async () => {
+    // Placed, merged, recorded — and a teammate edits it before the author's
+    // next pull. At lastPullRev the file did not exist yet (#649 review).
+    await fse.outputFile(path.join(repoPath, 'rules/fe-know', 'my-rule.md'), 'teammate v2');
+    await fse.writeFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'as placed');
+    mockGetFileContentAtRev.mockResolvedValue(null);
+    mockGetFileContentWhenAdded.mockResolvedValueOnce(Buffer.from('as placed'));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234', {
+      'my-rule': 'rules/fe-know/my-rule.md',
+    });
+
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'utf-8')).toBe('teammate v2');
+    expect(mockGetFileContentWhenAdded).toHaveBeenCalledWith(repoPath, 'rules/fe-know/my-rule.md');
   });
 
   it('keeps following the record when a shared-root rule with the same name exists', async () => {

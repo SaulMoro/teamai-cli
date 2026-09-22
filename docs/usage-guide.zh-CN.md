@@ -578,7 +578,7 @@ Choose namespace [1-3] (default: 1 = common):
 - `teamai push --dry-run` 会做同样的落点解析，并在同样的无法解析情况下报错，不会把真实命令会拒绝的推送报为可行
 - 已落点的资源在发布它的机器上仍可维护：PR 未合并期间，待评审 PR 记录会把作者对自己副本的修改带回该 PR；文件进入默认分支后，`state.json` 会记录 push 的落点，因此修改仍会写回同一个文件；即使 agent 落在本目录未激活的 namespace，也不会被当作“无活跃源”跳过
 - `teamai remove rules <name>` 同时接受作者副本的简名和发布名 `<namespace>/<name>`：会打印实际解析到的名字，并同时删除带 namespace 的团队文件和作者在 rules 根目录的副本。若无法先刷新团队仓库，`remove` 会以退出码 1 停止且不删除任何内容，因为过期的克隆可能把名字解析到错误的文件
-- 使用 `--role`/`--project` 时，指定的 namespace 同时决定本地 agent 对应哪个团队文件：同名 agent 允许存在于多个 namespace，因此其他 namespace 的同名副本不会阻止你发布；但共享根目录已有同名 agent 时会阻止，因为两者会同时生效
+- 本地 agent 被视为其来源团队 agent 的编辑：优先是活跃 namespace 或共享根目录中的 agent，其次是本机放置的 agent。只有两者都不存在时，才由 `--role`/`--project` 决定，此时该 agent 在该 namespace 中是新的。同名 agent 允许存在于多个 namespace，因此你未指定的非活跃 namespace 中的同名副本不会阻止你发布。本机放置的 agent 若在本机上次同步后被团队修改，会暂缓推送，直到你运行 `teamai pull`，因为 agents 没有推送前同步
 - 新资源绝不会覆盖已存在的资源：若解析出的 namespace 下已有同名文件，命令会报错并指出该文件：请先 pull 并修改已有副本、重命名自己的资源，或用 `--role <ns>` 换一个 namespace
 - 本目录未激活的 namespace 下的 agent 可通过落点记录继续编辑，`pull` 也会基于同一记录下发它，使本地副本与团队文件保持同步；若已激活的 namespace 中已有同名 agent，则以它为准
 - 待评审 PR 中的资源默认沿用该 PR 的落点；但若本次 push 明确指定的 namespace 与记录的落点不同（共享根目录也算一种落点），则以命令行为准，原 PR 保持不动，并提示该冲突

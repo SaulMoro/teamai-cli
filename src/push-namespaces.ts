@@ -157,6 +157,10 @@ export function placedResourcePath(
   if (segments.length !== 3) return null;
   if (segments[0] !== root) return null;
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null;
+  // The namespace must be the same safe segment push itself would write. A
+  // `\` in it is a separator on Windows, where `path.join` then walks out of
+  // the resource root that the `/` split above seemed to confine it to.
+  if (!isSafeNamespaceSegment(segments[1] ?? '')) return null;
   // Exactly the resource's own file: `<name>.md` for a rule, `<name>.yaml` or a
   // legacy `<name>.md` for an agent. A prefix test would accept
   // `<name>.backup.md` and redirect scanning, syncing and removal onto an

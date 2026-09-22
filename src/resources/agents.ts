@@ -12,6 +12,7 @@ import { isSafeNamespaceSegment } from '../projects.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
+import { getFileContentAtRev, getFileContentWhenAdded } from '../utils/git.js';
 import {
   parseAgentYaml,
   serializeAgentYaml,
@@ -160,7 +161,7 @@ export class AgentsHandler extends ResourceHandler {
     // namespace this directory need not have activated. Without the record it
     // would read as "no active source" and the author could never edit the
     // agent they just created (#649 review).
-    const placedAgents = (await loadStateForScope(localConfig)).placedAgents;
+    const { placedAgents, lastPullRev } = await loadStateForScope(localConfig);
 
     const directItems: AgentResourceItem[] = [];
     const directStems = new Set<string>();
@@ -197,6 +198,13 @@ export class AgentsHandler extends ResourceHandler {
                 if (teamRelPath !== placed) supersedes = placed;
                 basePath = path.join(localConfig.repo.localPath, placed);
                 baseExists = true;
+                if (await recordedAgentMovedOn(localConfig.repo.localPath, placed, lastPullRev)) {
+                  directItems.push({ name: stem, type: 'agents', sourcePath: activePath,
+                    relativePath: placed, status: 'modified', namespace: placed.split('/')[1],
+                    skipReason: staleRecordedAgentReason(stem, placed) });
+                  directStems.add(stem);
+                  continue;
+                }
               }
             }
             if (baseExists && !supersedes && await fileContentEqual(activePath, basePath)) continue; // unchanged
@@ -266,42 +274,34 @@ export class AgentsHandler extends ResourceHandler {
       // directory is carried into `relativePath` below.
       const sources = await findTeamAgentFiles(teamAgentsDir, stem);
       const placedNamespace = placedResourcePath(placedAgents, 'agents', stem)?.split('/')[1];
-      // An explicit --role/--project names the destination, so IT decides which
-      // team file this local agent is an edit of. A copy of the same stem in
-      // another namespace is a different agent — the layout allows that — and
-      // must not block publishing this one, which is what activity filtering
-      // alone did (#649 review).
+      // Which team file this local agent is a copy of, in the order pull
+      // delivers them: an active source (the shared root counts) is what was
+      // deployed here, then the one this machine's record names. Only when
+      // neither exists does an explicit --role/--project decide — the agent
+      // then needs a destination, and a same-stem copy in some other inactive
+      // namespace is a different agent that must not block it (#649 review).
+      // Letting the flag win outright compared an active agent's rendering
+      // with the requested namespace's file and overwrote it without an edit.
       const active = sources.filter(
         (file) => activeNamespaces === null || !file.namespace
           || activeNamespaces.includes(file.namespace),
       );
-      // The record is a FALLBACK, not an additional candidate: when an active
-      // namespace already holds this stem, that is the agent deployed here, and
-      // `pull` leaves the recorded one undelivered for exactly that reason.
-      const candidates = requestedNamespace
-        ? sources.filter((file) => file.namespace === requestedNamespace)
-        : active.length > 0
-          ? active
-          : sources.filter((file) => file.namespace === placedNamespace);
+      const inRequested = (files: TeamAgentFile[]) => files.filter((file) => file.namespace === requestedNamespace);
+      const recorded = placedNamespace ? sources.filter((file) => file.namespace === placedNamespace) : [];
+      const candidates = active.length > 0
+        // Two active sources collide; the flag may say which one is meant.
+        ? (requestedNamespace && active.length > 1 && inRequested(active).length === 1 ? inRequested(active) : active)
+        : recorded.length > 0
+          ? recorded
+          : requestedNamespace ? inRequested(sources) : [];
       if (candidates.length > 1) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
           skipReason: `Ambiguous agent "${stem}": multiple active sources (${candidates.map((file) => file.path).join(', ')}). Give active agents unique names before pushing.` });
         continue;
       }
-      // A shared-root copy reaches every member, so a namespaced second copy
-      // would leave two active agents answering to the same name — exactly the
-      // collision pull reports and skips. Only reachable with an explicit
-      // destination; without one the root copy is always a candidate.
-      const sharedRoot = candidates.length === 0 && sources.find((file) => !file.namespace);
-      if (sharedRoot) {
-        items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
-          relativePath: `agents/${stem}.yaml`, status: 'modified',
-          skipReason: `Agent "${stem}" already exists at the shared root (agents/${stem}${sharedRoot.ext}), `
-            + `which every member receives. Edit that copy, or rename this agent, rather than publishing `
-            + `a second one into "${requestedNamespace}".` });
-        continue;
-      }
+      // A shared-root copy is always active, so it is a candidate above and
+      // this local file is an edit of it: no namespaced second copy is made.
       // With no destination named, a stem that exists only in namespaces this
       // directory has not activated is not ours to edit. With one named, the
       // agent is simply new there, and placement writes it to that namespace.
@@ -313,6 +313,15 @@ export class AgentsHandler extends ResourceHandler {
         continue;
       }
       const located = candidates[0];
+      if (located && active.length === 0 && recorded.length > 0) {
+        const recordedPath = `agents/${located.namespace}/${stem}${located.ext}`;
+        if (await recordedAgentMovedOn(localConfig.repo.localPath, recordedPath, lastPullRev)) {
+          items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
+            relativePath: recordedPath, status: 'modified', namespace: located.namespace,
+            skipReason: staleRecordedAgentReason(stem, recordedPath) });
+          continue;
+        }
+      }
 
       const teamYamlPath = located?.ext === '.yaml' ? located.path : path.join(teamAgentsDir, `${stem}.yaml`);
       const teamMdPath = located?.ext === '.md' ? located.path : path.join(teamAgentsDir, `${stem}.md`);
@@ -843,6 +852,28 @@ export async function listTeamAgentDirs(teamAgentsDir: string): Promise<TeamAgen
 }
 
 type TeamAgentFile = { path: string; ext: '.yaml' | '.md'; namespace?: string };
+
+/**
+ * Whether a team agent reached through this machine's placement record has
+ * changed since this machine's copy of it was current: the version at the last
+ * pull, or — for a placement that landed after it — the version it was added
+ * with. Agents have no pre-push sync, so a teammate's edit made before the
+ * author's next pull would otherwise be overwritten by the stale local copy
+ * (#649 review). A guard, not a merge: `pull` delivers the recorded agent and
+ * moves the baseline, after which the edit can be pushed.
+ */
+async function recordedAgentMovedOn(repoPath: string, relPath: string, lastPullRev: string | null): Promise<boolean> {
+  const current = await readFileSafe(path.join(repoPath, relPath));
+  if (current === null) return false;
+  const baseline = (lastPullRev ? await getFileContentAtRev(repoPath, lastPullRev, `./${relPath}`) : null)
+    ?? await getFileContentWhenAdded(repoPath, relPath);
+  return baseline !== null && baseline.toString('utf-8') !== current;
+}
+
+function staleRecordedAgentReason(stem: string, relPath: string): string {
+  return `Agent "${stem}" (${relPath}) changed on the team since this machine last synced it, `
+    + 'so pushing your copy would overwrite that change. Run `teamai pull`, reapply any local edit, and push again.';
+}
 
 /**
  * Every team file for a stem, root first, then namespaces in directory order,

@@ -151,6 +151,14 @@ describe('placedResourcePath', () => {
     expect(placedResourcePath({ x: 'skills/ns/x.md' }, 'rules', 'x')).toBeNull();
   });
 
+  it('rejects a namespace segment that is not a safe directory name', () => {
+    // On Windows `path.join` reads the backslashes as separators, so this
+    // escapes the resource root although it has three `/` segments (#649 review).
+    expect(placedResourcePath({ foo: 'rules/..\\..\\victim/foo.md' }, 'rules', 'foo')).toBeNull();
+    expect(placedResourcePath({ vr: 'agents/fe\\..\\..\\x/vr.yaml' }, 'agents', 'vr')).toBeNull();
+    expect(placedResourcePath({ foo: 'rules/fe:ads/foo.md' }, 'rules', 'foo')).toBeNull();
+  });
+
   it('rejects a record that is not namespaced or not named after the resource', () => {
     expect(placedResourcePath({ x: 'rules/x.md' }, 'rules', 'x')).toBeNull();
     expect(placedResourcePath({ x: 'rules/ns/sub/x.md' }, 'rules', 'x')).toBeNull();

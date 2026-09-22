@@ -13,7 +13,7 @@ import {
   readFileSafe,
   writeFile,
 } from './fs.js';
-import { getFileContentAtRev } from './git.js';
+import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { ResourceHandler } from '../resources/base.js';
 import { ruleFileExtensionForTool, usesCursorMdcRules } from '../resources/rule-format.js';
 import { teamRuleToCursorMdc, cursorMdcBodyEqualsTeamMd } from '../resources/cursor-mdc.js';
@@ -107,10 +107,21 @@ async function syncRulesToLocal(
       // in the team repo, and both sides must compare against that file or the
       // scan reverts a teammate's update.
       const placed = placedResourcePath(placedRules, 'rules', name);
+      let viaRecord = false;
       if (placed && await pathExists(path.join(repoPath, placed))) {
         teamRelPath = placed;
         teamFilePath = path.join(repoPath, placed);
+        viaRecord = true;
       }
+      // A placement that landed after the last pull did not exist at
+      // `lastPullRev`, yet the author's root copy is exactly what landed. Its
+      // base is the version the file was added with; without it a teammate's
+      // edit before the author's next pull was skipped here, and the stale
+      // copy went back over it (#649 review).
+      const baseVersion = async (): Promise<Buffer | null> => (
+        await getFileContentAtRev(repoPath, lastPullRev, teamRelPath)
+        ?? (viaRecord ? await getFileContentWhenAdded(repoPath, teamRelPath) : null)
+      );
 
       // Only process files that exist in both places but differ
       if (!await pathExists(teamFilePath)) continue;
@@ -120,7 +131,7 @@ async function syncRulesToLocal(
         if (localRaw === null || teamRaw === null) continue;
         if (cursorMdcBodyEqualsTeamMd(localRaw, teamRaw)) continue;
 
-        const oldContent = await getFileContentAtRev(repoPath, lastPullRev, teamRelPath);
+        const oldContent = await baseVersion();
         if (oldContent === null) continue; // Didn't exist at lastPullRev — ambiguous, skip
 
         // Compare bodies: the local `.mdc` never matched the team `.md` byte for byte.
@@ -134,7 +145,7 @@ async function syncRulesToLocal(
       if (await fileContentEqual(localFilePath, teamFilePath)) continue;
 
       // They differ — check if local matches the old team repo version
-      const oldContent = await getFileContentAtRev(repoPath, lastPullRev, teamRelPath);
+      const oldContent = await baseVersion();
       if (oldContent === null) continue; // File didn't exist at lastPullRev — ambiguous, skip
 
       if (await fileContentEqualToBuffer(localFilePath, oldContent)) {

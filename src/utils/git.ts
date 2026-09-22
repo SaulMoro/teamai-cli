@@ -900,6 +900,21 @@ export async function pathDeletedSince(
   }
 }
 
+/**
+ * The content `filePath` had in the latest commit that added it, or null. For
+ * a resource created after the last pull there is no `lastPullRev` version to
+ * compare with, and this is the version the member's copy started from.
+ */
+export async function getFileContentWhenAdded(repoPath: string, filePath: string): Promise<Buffer | null> {
+  try {
+    const sha = (await createGit(repoPath).raw(['log', 'HEAD', '--diff-filter=A', '--format=%H', '-1', '--', filePath])).trim();
+    return sha ? await getFileContentAtRev(repoPath, sha, `./${filePath}`) : null;
+  } catch (e) {
+    log.debug(`git log --diff-filter=A failed for ${filePath}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** Full commit id of `rev` (HEAD by default), or null when it names none. */
 export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<string | null> {
   try {
