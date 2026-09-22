@@ -84,10 +84,13 @@ projects:
 The id and every namespace are refused at the manifest boundary unless they can
 name a directory without escaping it, since each becomes a directory component. A
 namespace must be a single path segment: no `/`, `\`, `:` or control character,
-and no trailing `.` or space (Win32 strips those from every component, so `.. `
-would arrive as `..` and `frontend.` as `frontend`, escaping the parent in the
-first case and another namespace's directory in the second; `.` and `..` fall out
-of the same rule). The id keeps the
+no trailing `.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …).
+Win32 strips a trailing period or space from every component, so `.. ` would
+arrive as `..` and `frontend.` as `frontend`, escaping the parent in the first
+case and another namespace's directory in the second; `.` and `..` fall out of the
+same rule. A manifest file that exists but cannot be read, or is empty, is an
+error rather than an absent manifest: treating it as absent would drop the
+filtering the manifest exists to apply. The id keeps the
 older, narrower rule it has always had — letters, digits, `.`, `_`, `-`, and not
 `.` or `..` — because it is also typed on the command line and split on commas.
 The namespace guard applies to `manifest/roles.yaml`'s active namespaces

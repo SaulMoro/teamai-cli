@@ -1,9 +1,9 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { readFileSafe, readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
+import { ensureDir, writeFile } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import { NamespaceSegmentSchema, parseManifest } from './manifest-schema.js';
+import { NamespaceSegmentSchema, parseManifest, readManifestFile } from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -110,8 +110,11 @@ export class RolesManifestMissingError extends Error {
 
 export async function loadRolesManifest(repoPath: string): Promise<RolesManifest> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
-  const content = await readFileSafe(manifestPath);
-  if (!content) {
+  // Absence is the only case that may relax filtering downstream, so it is the
+  // only one that becomes RolesManifestMissingError: an unreadable or empty file
+  // throws a plain error and fails the pull.
+  const content = await readManifestFile(manifestPath, 'roles');
+  if (content === null) {
     throw new RolesManifestMissingError(manifestPath);
   }
 
@@ -134,11 +137,14 @@ export async function loadRolesManifest(repoPath: string): Promise<RolesManifest
  * roles.yaml does not parse deserves to be told why.
  */
 export async function loadRolesManifestIfPresent(repoPath: string): Promise<RolesManifest | null> {
-  const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
-  // readFileIfExists, not readFileSafe: a manifest that exists but cannot be
-  // read is a failure to report, not a team without roles.
-  if ((await readFileIfExists(manifestPath)) === null) return null;
-  return loadRolesManifest(repoPath);
+  // Only absence relaxes to null: a manifest that exists but cannot be read or
+  // parsed is a failure to report, not a team without roles.
+  try {
+    return await loadRolesManifest(repoPath);
+  } catch (error) {
+    if (error instanceof RolesManifestMissingError) return null;
+    throw error;
+  }
 }
 
 export async function saveRolesManifest(repoPath: string, manifest: RolesManifest): Promise<void> {

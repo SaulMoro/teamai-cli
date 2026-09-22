@@ -1,8 +1,8 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
-import { NamespaceSegmentSchema, parseManifest } from './manifest-schema.js';
+import { ensureDir, writeFile } from './utils/fs.js';
+import { NamespaceSegmentSchema, parseManifest, readManifestFile } from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
 /**
@@ -113,7 +113,9 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
  */
 export async function loadProjectsManifest(repoPath: string): Promise<ProjectsManifest | null> {
   const manifestPath = path.join(repoPath, 'manifest', 'projects.yaml');
-  const content = await readFileIfExists(manifestPath);
+  // Only an absent file means "this team has no projects": an unreadable or empty
+  // one throws, so the pull fails rather than quietly syncing as if unpartitioned.
+  const content = await readManifestFile(manifestPath, 'projects');
   if (content === null) {
     return null;
   }

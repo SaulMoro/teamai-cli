@@ -11,6 +11,7 @@ import {
   resolveRoleResourceNamespaces,
   activeRoleIds,
   loadRolesManifestIfPresent,
+  RolesManifestMissingError,
 } from '../roles.js';
 import type { RolesManifest } from '../roles.js';
 
@@ -131,6 +132,7 @@ roles:
       'a\u0009b', 'a\u007fb', 'a\u0085b',
       '.. ', '.. .', '...', '. ', '  ',
       'frontend.', 'frontend ', 'frontend..',
+      'CON', 'nul', 'COM1', 'CON.txt',
     ]) {
       const repoDir = writeManifest(`
 version: 1
@@ -144,6 +146,24 @@ roles:
       await expect(loadRolesManifest(repoDir)).rejects.toThrow(/single path segment/i);
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  it('reports an empty manifest as broken rather than missing', async () => {
+    // Only ENOENT may become RolesManifestMissingError: that is the one case the
+    // pull is allowed to treat as "this team has no roles" and stop filtering.
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-rolesempty-'));
+    mkdirSync(path.join(repoDir, 'manifest'), { recursive: true });
+    writeFileSync(path.join(repoDir, 'manifest', 'roles.yaml'), '\n');
+
+    await expect(loadRolesManifest(repoDir)).rejects.toThrow(/is empty/i);
+    await expect(loadRolesManifest(repoDir)).rejects.not.toBeInstanceOf(RolesManifestMissingError);
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('reports an absent manifest with the typed missing error', async () => {
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-rolesnone-'));
+    await expect(loadRolesManifest(repoDir)).rejects.toBeInstanceOf(RolesManifestMissingError);
+    rmSync(repoDir, { recursive: true, force: true });
   });
 
   it('names the offending entry instead of dumping a raw ZodError', async () => {

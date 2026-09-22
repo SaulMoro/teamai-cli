@@ -158,6 +158,9 @@ projects:
         // Win32 strips the trailing character here too, so each of these is
         // `frontend` on that filesystem — another namespace's directory.
         'frontend.', 'frontend ', 'frontend..',
+        // Windows opens a device for these in any directory, with or without an
+        // extension, so they cannot name the directory the manifest means.
+        'CON', 'con', 'NUL', 'aux', 'COM1', 'lpt9', 'CON.txt',
       ]) {
         const repoDir = writeManifest(`
 version: 1
@@ -203,6 +206,46 @@ projects:
     try {
       const manifest = await loadProjectsManifest(repoDir);
       expect(manifest?.projects[0].id).toBe('...');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a name that merely starts like a device name', async () => {
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: alpha
+    resources: { skills: [console, connect, community, complex, nullable] }
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      expect(manifest?.projects[0].resources.skills).toEqual([
+        'console', 'connect', 'community', 'complex', 'nullable',
+      ]);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats an empty manifest as broken, not as an absent one', async () => {
+    // `readFileSafe` returned null for an empty or unreadable file just as it did
+    // for a missing one, and a null manifest means "this team has no projects" —
+    // i.e. no project filtering at all. Only ENOENT may mean that.
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-projempty-'));
+    try {
+      mkdirSync(path.join(repoDir, 'manifest'), { recursive: true });
+      writeFileSync(path.join(repoDir, 'manifest', 'projects.yaml'), '   \n');
+      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(/is empty/i);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null only when the manifest file is absent', async () => {
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-projnone-'));
+    try {
+      expect(await loadProjectsManifest(repoDir)).toBeNull();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

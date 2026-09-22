@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import { z } from 'zod';
 
 /**
@@ -25,14 +26,25 @@ const UNSAFE_SEGMENT = /[/\\:\u0000-\u001f\u007f-\u009f]/;
 // Refusing the trailing character covers both, and `.`/`..` fall out of it.
 const TRAILING_DOT_OR_SPACE = /[ .]$/;
 
+// Windows reserves these names for devices in every directory, extension or not:
+// `CON`, `NUL`, `COM1`, `CON.txt` all open a device rather than a file, so a
+// namespace spelled that way cannot be the directory the manifest means. The
+// project id is deliberately left out of this, the way it is left out of the
+// rules above: it is a working POSIX directory name that the id rule has always
+// accepted, and narrowing it would break manifests that parse today.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+
 /** True if `seg` is safe to use as a single path segment (no separators, no `..`). */
 export function isSafeNamespaceSegment(seg: string): boolean {
-  return seg.length > 0 && !UNSAFE_SEGMENT.test(seg) && !TRAILING_DOT_OR_SPACE.test(seg);
+  return seg.length > 0
+    && !UNSAFE_SEGMENT.test(seg)
+    && !TRAILING_DOT_OR_SPACE.test(seg)
+    && !WINDOWS_DEVICE_NAME.test(seg);
 }
 
 /** A resource namespace: one path segment that cannot escape its parent. */
 export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, {
-  message: "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, and no trailing '.' or space, which also rules out '.' and '..')",
+  message: "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, no trailing '.' or space, which also rules out '.' and '..', and not a Windows device name such as 'CON' or 'COM1')",
 });
 
 /**
@@ -48,4 +60,25 @@ export function parseManifest<S extends z.ZodTypeAny>(schema: S, raw: unknown, k
     .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
     .join('; ');
   throw new Error(`Invalid ${kind} manifest: ${detail}`);
+}
+
+/**
+ * Read a manifest file, separating "there is no such file" from every other
+ * reason a read can fail. `readFileSafe` collapses the two into `null`, and a
+ * caller that treats `null` as "this team does not use roles/projects" would
+ * then drop its filtering because the file is unreadable or empty — the fail-open
+ * direction. Absence returns `null` here; anything else throws.
+ */
+export async function readManifestFile(manifestPath: string, kind: 'projects' | 'roles'): Promise<string | null> {
+  let content: string;
+  try {
+    content = await fs.readFile(manifestPath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error(`Could not read ${kind} manifest ${manifestPath}: ${(error as Error).message}`);
+  }
+  if (content.trim() === '') {
+    throw new Error(`Invalid ${kind} manifest: ${manifestPath} is empty. Delete it, or give it a version and a ${kind} list.`);
+  }
+  return content;
 }
