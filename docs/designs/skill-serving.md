@@ -134,13 +134,14 @@ the directory there would undo, one command over, the guarantee pull makes.
 
 **It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
 lists them, built as the union of `git ls-tree -r <tag> -- skills/` over every
-tag, so each path is provably the CLI's. Those files were overwritten with
+tag, plus `references/provider-tgit.md`, which #724 put on `main` unreleased and
+the next release therefore ships, so each path is provably the CLI's. Those files were overwritten with
 `overwrite: true` on every pull and no local edit ever survived in one; a file a
 member added beside them was never touched by the old deployment and is not ours
 to delete now. Directories left empty go; a directory still holding a member's
 file is kept, and `pull` says which one and why. Python bytecode of a script we
 shipped counts as ours, so a `__pycache__` left by running the wiki scripts does
-not strand the tree. The same rule governs the stub directory: the six
+not strand the tree. The same rule governs the stub directory: the seven
 `teamai/references/*.md` a pre-stub release wrote are removed by name, not by
 "everything that is not SKILL.md".
 

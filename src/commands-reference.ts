@@ -51,7 +51,7 @@ function renderCommand(command: Command, parents: string[]): string[] {
   for (const option of visibleOptions(command)) {
     lines.push(renderOption(option));
   }
-  for (const sub of command.commands as Command[]) {
+  for (const sub of command.commands) {
     lines.push(...renderCommand(sub, path).map((line) => `  ${line}`));
   }
   return lines;
@@ -66,7 +66,7 @@ export function renderCommandsReference(program: Command): string {
     sections.push(['## Global options', '', ...globalOptions.map(renderOption).map((l) => l.slice(2))].join('\n'));
   }
 
-  for (const command of program.commands as Command[]) {
+  for (const command of program.commands) {
     sections.push([`## ${command.name()}`, '', ...renderCommand(command, [])].join('\n'));
   }
 

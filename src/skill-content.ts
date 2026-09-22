@@ -383,26 +383,34 @@ export async function skillPath(name: string): Promise<void> {
  * A skill the recall gate blocks is still listed, so the agent learns it exists
  * and what to turn on, but its directory is withheld like `skill path` does.
  */
-export interface SkillCatalogEntry {
+interface SkillCatalogEntryFields {
   name: string;
   description: string;
-  path: string | null;
   deployed: boolean;
-  blockedByRecall: boolean;
 }
+
+/**
+ * `blockedByRecall` carries the directory with it: a blocked entry has no path
+ * to report, and a served one always has. Both variants keep the `path` key so
+ * the JSON shape does not change with the gate.
+ */
+export type SkillCatalogEntry =
+  | (SkillCatalogEntryFields & { blockedByRecall: false; path: string })
+  | (SkillCatalogEntryFields & { blockedByRecall: true; path: null });
 
 export async function skillCatalog(roots: PackagedSkillRoots = packagedSkillRoots()): Promise<SkillCatalogEntry[]> {
   const skills = await listServableSkills(roots);
   const entries: SkillCatalogEntry[] = [];
   for (const skill of skills) {
     const blocked = (await resolveServableSkill(skill.name, roots)).kind === 'blocked';
-    entries.push({
+    const fields: SkillCatalogEntryFields = {
       name: skill.name,
       description: await readSkillDescription(path.join(skill.dir, SKILL_MD)),
-      path: blocked ? null : skill.dir,
       deployed: skill.deployed,
-      blockedByRecall: blocked,
-    });
+    };
+    entries.push(blocked
+      ? { ...fields, blockedByRecall: true, path: null }
+      : { ...fields, blockedByRecall: false, path: skill.dir });
   }
   return entries;
 }

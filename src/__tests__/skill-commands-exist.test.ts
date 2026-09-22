@@ -58,7 +58,7 @@ function resolveCommand(program: Command, tokens: string[]): { command: Command;
   let command = program;
   let index = 0;
   while (index < tokens.length) {
-    const next = (command.commands as Command[]).find(
+    const next = command.commands.find(
       (c) => c.name() === tokens[index] || c.aliases().includes(tokens[index]),
     );
     if (!next) break;
