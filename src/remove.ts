@@ -108,7 +108,12 @@ async function removeCore(
     // bare match would delete the local copy, report success, and leave the
     // namespaced team file published (#649 review).
     const published = await handler.publishedNameFor(name, localConfig);
-    if (published && allNames.has(published)) {
+    if (published) {
+      // Not cross-checked against `allNames`: `publishedNameFor` has already
+      // proved the file is in the team repo, and the scans do not all spell a
+      // namespaced resource the same way — `scanTeamForPull` reports an agent
+      // by its bare stem, so requiring membership here silently fell back to
+      // the bare name and removed that agent from EVERY namespace (#649 review).
       log.info(`${name} was published as ${published}`);
       found.push(published);
       continue;

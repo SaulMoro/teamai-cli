@@ -441,6 +441,38 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(git(['show', 'main:rules/be-know/foo.md'], fixture.remote)).toContain('The team rule');
   }, 60_000);
 
+  it('removes only the published agent, through the real remove command', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    // A second agent of the same name in another namespace, and the author's
+    // own, published through --project.
+    commitOnMain(fixture, 'agents/other-ns/vr.yaml',
+      'name: vr\ndescription: somebody else\'s\ninstructions: Read other-ns.\n');
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+
+    const result = await runCLI(
+      ['remove', 'agents', 'vr', '--force'],
+      fixture.projectRoot,
+      fixture.home,
+    );
+
+    // The bare stem is what the author knows; it has to resolve to what push
+    // published, or removal falls back to the stem and takes every namespace.
+    expect(result.output).toContain('vr was published as fe-agents/vr');
+    const { branch, files } = branchFiles(fixture);
+    expect(branch, result.output).not.toBe('');
+    expect(files).not.toContain('agents/fe-agents/vr.yaml');
+    // Somebody else's agent of the same name survives.
+    expect(git(['show', `${branch}:agents/other-ns/vr.yaml`], fixture.remote))
+      .toContain('Read other-ns.');
+    // And the tombstone names only the published agent: a bare `vr` would
+    // suppress other-ns/vr for anyone who activates that namespace.
+    const tombstones = git(['show', `${branch}:agents/.removed`], fixture.remote).split('\n');
+    expect(tombstones).toContain('fe-agents/vr');
+    expect(tombstones).not.toContain('vr');
+  }, 60_000);
+
   it('refuses a roles manifest namespace that is not a single path segment', async () => {
     const fixture = track(makeFixture({
       agent: 'claude',

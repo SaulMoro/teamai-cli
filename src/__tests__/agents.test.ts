@@ -339,6 +339,11 @@ projects:
     await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: Mine\ninstructions: A.\n');
     await fse.outputFile(path.join(repoPath, 'agents/other/vr.yaml'), 'name: vr\ndescription: Theirs\ninstructions: B.\n');
     await fse.outputFile(path.join(homeDir, '.claude/agents/vr.md'), '# the author copy');
+    // Push recorded where it put this agent; that record is what makes the
+    // flattened local copy this agent's rather than another namespace's.
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { vr: 'agents/fe/vr.yaml' },
+    });
 
     await handler.removeItem('fe/vr', teamConfig, localConfig);
 
@@ -349,7 +354,22 @@ projects:
     expect(await fse.pathExists(path.join(homeDir, '.claude/agents/vr.md'))).toBe(false);
     const tombstones = await fse.readFile(path.join(repoPath, 'agents', '.removed'), 'utf-8');
     expect(tombstones.split('\n')).toContain('fe/vr');
-    expect(tombstones.split('\n')).toContain('vr');
+    // Agents deploy flattened, so a bare `vr` tombstone would suppress and
+    // delete be/vr the moment that namespace became active.
+    expect(tombstones.split('\n')).not.toContain('vr');
+  });
+
+  it('keeps the flattened local copy when no record proves it is this agent\'s', async () => {
+    // Agents deploy flattened, so ~/.claude/agents/vr.md could be be/vr's
+    // deployment. Without a record, removing fe/vr must not take it.
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/vr.md'), '# some other namespace copy');
+
+    await handler.removeItem('fe/vr', teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(repoPath, 'agents/fe/vr.yaml'))).toBe(false);
+    expect(await fse.readFile(path.join(homeDir, '.claude/agents/vr.md'), 'utf-8'))
+      .toBe('# some other namespace copy');
   });
 
   it('still removes a bare stem from every namespace', async () => {

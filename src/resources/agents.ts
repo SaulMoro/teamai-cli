@@ -503,11 +503,23 @@ export class AgentsHandler extends ResourceHandler {
       removed.push(located.path);
     }
 
-    // The bare stem gets a tombstone too: the local sweep below skips excluded
-    // tools, so a root copy can outlive the removal there, and the scan names
-    // it `<stem>` — which the published tombstone would not match.
-    for (const tombstoned of new Set([name, stem])) {
-      await this.addTombstone(tombstoned, localConfig);
+    // Only the name given. Agents deploy FLATTENED — `~/.claude/agents/<stem>` —
+    // so a bare-stem tombstone is read globally by both the push scan and the
+    // post-pull cleanup: removing `fe/vr` would suppress and delete `be/vr` the
+    // moment that namespace became active (#649 review). Rules can afford the
+    // bare spelling because they keep their namespace directory locally.
+    await this.addTombstone(name, localConfig);
+
+    // The author's own copy IS flattened, though, and it is theirs only when
+    // this machine's record says the file just removed is where push put it.
+    const localNames = new Set([name]);
+    if (stem !== name) {
+      const placed = placedResourcePath(
+        (await loadStateForScope(localConfig)).placedAgents, 'agents', stem,
+      );
+      if (placed === `agents/${name}.yaml` || placed === `agents/${name}.md`) {
+        localNames.add(stem);
+      }
     }
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
@@ -517,7 +529,7 @@ export class AgentsHandler extends ResourceHandler {
       if (isAgentExcluded(localConfig, tool)) continue;
       const baseDir = resolveToolBaseDir(tool, localConfig);
       // Try every native agent extension: the render format varies per tool.
-      for (const localName of new Set([name, stem])) {
+      for (const localName of localNames) {
         for (const ext of AGENT_FILE_EXTENSIONS) {
           const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
           if (await pathExists(filePath)) {
