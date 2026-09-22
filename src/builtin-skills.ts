@@ -71,8 +71,10 @@ export function isCliOwnedSkillName(name: string): boolean {
 /**
  * Every file a release ever packaged under `skills/`, by directory name.
  *
- * Built as the union of `git ls-tree -r <tag> -- skills/` over all 91 tags, so a
- * path listed here was written by the CLI and is ours to remove. Deployment
+ * Built as the union of `git ls-tree -r <tag> -- skills/` over all 91 tags, plus
+ * `references/provider-tgit.md`, which main carries unreleased and the next
+ * release therefore ships. Every path listed here is written by the CLI and is
+ * ours to remove. Deployment
  * copied these trees with `overwrite: true` and never deleted anything, so a
  * file that is *not* listed here was put there by the member and survives.
  *
@@ -85,6 +87,7 @@ export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new 
     'references/contribute-member.md',
     'references/join-member.md',
     'references/manage-admin.md',
+    'references/provider-tgit.md',
     'references/setup-admin.md',
     'references/troubleshooting.md',
     'references/uninstall.md',

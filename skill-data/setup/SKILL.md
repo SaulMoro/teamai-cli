@@ -34,8 +34,9 @@ is missing.
 | Anything that breaks along the way                                           | `teamai skill get core --full` (troubleshooting) |
 
 Supported Git providers are Tencent TGit (工蜂), GitHub, GitLab and CNB;
-`setup-admin.md` carries the detection probe, the sign-in and create-repo URLs,
-and the per-provider caveats.
+`{SKILL_DIR}/references/setup-admin.md` carries the detection probe, the sign-in
+and create-repo URLs, and the per-provider caveats, and points at
+`{SKILL_DIR}/references/provider-tgit.md` for everything TGit-specific.
 
 ## Rules for these flows
 
@@ -71,5 +72,6 @@ In the files below, `{SKILL_DIR}` is the directory `teamai skill path setup` pri
 | `{SKILL_DIR}/references/join-member.md` | Joining an existing team from a repo URL. |
 | `{SKILL_DIR}/references/manage-admin.md` | Day-to-day admin: publishing resources, roles, projects, MCP, env, members. |
 | `{SKILL_DIR}/references/uninstall.md` | Removing TeamAI from a machine or from one agent. |
+| `{SKILL_DIR}/references/provider-tgit.md` | Tencent TGit (工蜂): reachability probe, `gf` install and login, repo creation on init. |
 
-`teamai skill get setup --full` prints this skill with all four appended (about 36 KB).
+`teamai skill get setup --full` prints this skill with all five appended.

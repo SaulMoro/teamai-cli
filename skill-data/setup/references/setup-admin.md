@@ -25,8 +25,8 @@ through these sub-steps **in order**:
 ### 2a — Ask which platform they know
 
 **Tencent-internal first:** before asking, probe whether TGit (工蜂) is reachable
-on this machine — see `provider-tgit.md` ("Probe reachability") for the one-line
-`x-env: tgit` check. If it says `tgit: OK`, **list Tencent TGit (工蜂) first** and
+on this machine — see `{SKILL_DIR}/references/provider-tgit.md` ("Probe
+reachability") for the one-line `x-env: tgit` check. If it says `tgit: OK`, **list Tencent TGit (工蜂) first** and
 prefer it. Then ask: *"Have you heard of / do you have an account on any of these —
 Tencent TGit (工蜂), GitHub, GitLab, or CNB (cnb.cool)?"*
 
@@ -42,7 +42,7 @@ If they name one, use that platform and go to sub-step 2c.
 
 Test which sites this network can actually reach (probe each, ~3s timeout each).
 The TGit probe checks the `x-env: tgit` header, not just reachability (see
-`provider-tgit.md`); the others just check reachability:
+`{SKILL_DIR}/references/provider-tgit.md`); the others just check reachability:
 
 ```bash
 curl -sS -m 3 -D - -o /dev/null https://git.woa.com 2>/dev/null | grep -qi '^x-env:[[:space:]]*tgit' && echo "tgit: OK" || echo "tgit: unreachable"
@@ -74,7 +74,7 @@ the repository, then continue to the next step:
 
 > **Tencent TGit (工蜂):** don't send the user to the browser to create the repo —
 > prefer letting `teamai init` create it via the API in Step 5. See
-> `provider-tgit.md` ("When you `teamai init` on TGit").
+> `{SKILL_DIR}/references/provider-tgit.md` ("When you `teamai init` on TGit").
 
 Tell the user to sign in, create an **empty** repo (suggested name
 `TeamAi-<team-name>`), and give you the resulting repo URL. Explain in one
@@ -93,8 +93,8 @@ platform's CLI credentials. Have the user complete the matching CLI login:
 
 ### Tencent TGit (工蜂)
 
-See `provider-tgit.md` ("Log in") — you install `gf` and run `gf auth login`
-yourself; the user only approves in the browser / iOA. No `GITLAB_URL` needed.
+See `{SKILL_DIR}/references/provider-tgit.md` ("Log in") — you install `gf` and
+run `gf auth login` yourself; the user only approves in the browser / iOA. No `GITLAB_URL` needed.
 Then return here for Step 4.
 
 ### CNB — install the CLI, authorize, then read the repo (in this order)
@@ -173,8 +173,8 @@ teamai init https://<platform>/<org>/<repo-name> --scope user
 If the repo does not exist yet, `init` offers to create it — accept the prompt.
 
 - **Tencent TGit (工蜂):** `gf` and login are already done, so init creates the
-  repo via the API when it's missing — see `provider-tgit.md` ("When you
-  `teamai init` on TGit").
+  repo via the API when it's missing — see
+  `{SKILL_DIR}/references/provider-tgit.md` ("When you `teamai init` on TGit").
 - **CNB caveat:** a `cnb login` token **cannot create** an org or repo — that is
   exactly why the CNB flow has the user create the repo on the website first
   (Step 2c). If the org/repo is still missing here, `init` prints web links

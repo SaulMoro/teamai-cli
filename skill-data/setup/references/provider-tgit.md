@@ -2,8 +2,9 @@
 
 git.woa.com is **Tencent-internal only**. TeamAI supports it natively as the `tgit`
 provider — it recognizes the host on its own, so you **never** set `GITLAB_URL`.
-Both `setup-admin.md` and `join-member.md` point here for the reachability probe
-and the `gf` login; follow the relevant section for whichever flow you are in.
+Both `{SKILL_DIR}/references/setup-admin.md` and
+`{SKILL_DIR}/references/join-member.md` point here for the reachability probe and
+the `gf` login; follow the relevant section for whichever flow you are in.
 
 ## Probe reachability (setup flow only)
 
