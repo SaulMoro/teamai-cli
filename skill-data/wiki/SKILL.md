@@ -9,7 +9,6 @@ description: >-
   the code directly. Triggers: architecture analysis, architecture reverse-engineering,
   codebase knowledge base, code-to-knowledge, architecture wiki, large multi-repo codebase.
   Loaded on demand by the teamai discovery stub.
-allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*), Bash(python3:*)
 ---
 
 # wiki: AI cognition engineering for large codebases

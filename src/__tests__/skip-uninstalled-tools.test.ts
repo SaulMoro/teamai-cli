@@ -834,6 +834,27 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.openclaw/skills'))).toBe(false);
   });
 
+  it('refuses a linked HERMES_HOME outside the home directory, the root itself not only what is under it', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const target = path.join(tmpDir, 'dotfiles/hermes');
+    await fse.ensureDir(path.join(target, 'skills/team-wiki-codebase'));
+    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    const hermesHome = path.join(tmpDir, 'elsewhere/hermes');
+    await fse.ensureDir(path.dirname(hermesHome));
+    await fse.symlink(target, hermesHome, 'dir');
+    vi.stubEnv('HERMES_HOME', hermesHome);
+
+    const deployed = await deployBuiltinSkills(
+      legacyPruneTeamConfig({ hermes: { skills: '.hermes/skills' } }),
+      legacyPruneLocalConfig(tmpDir),
+    );
+
+    expect(deployed).toBe(0);
+    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.pathExists(path.join(target, 'skills/teamai'))).toBe(false);
+  });
+
   it('keeps a member\'s file under a __pycache__ that is not bytecode of a shipped script', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

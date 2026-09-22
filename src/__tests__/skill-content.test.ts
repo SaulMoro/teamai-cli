@@ -295,15 +295,16 @@ describe('teamai skill get / path against the shipped package', () => {
 });
 
 describe('the shipped skill-data content', () => {
-  it('names every skill after its directory, and declares allowed-tools', async () => {
+  it('names every skill after its directory, and promises no permissions it cannot grant', async () => {
     for (const skill of await listServableSkills()) {
       const text = fs.readFileSync(path.join(skill.dir, 'SKILL.md'), 'utf8');
       // A frontmatter name that disagrees with the directory makes the skill
       // undiscoverable for the agent and unresolvable for `skill get`.
       expect(text, skill.name).toMatch(new RegExp(`^name: ${skill.name}$`, 'm'));
-      // Content loaded as text inherits no permissions, so each skill declares
-      // the commands it tells the agent to run.
-      expect(text, skill.name).toMatch(/^allowed-tools: .*Bash\(teamai:\*\)/m);
+      // `skill get` prints this frontmatter as command output; the agent never
+      // processes it as skill metadata, so an `allowed-tools` line here would
+      // claim grants that do not happen. Only the deployed stub's counts.
+      expect(text, skill.name).not.toMatch(/^allowed-tools:/m);
     }
   });
 
@@ -311,7 +312,8 @@ describe('the shipped skill-data content', () => {
     const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
     expect(stub).toMatch(/^name: teamai$/m);
     // The stub is the always-loaded unit, so it pre-approves only the read-only
-    // `teamai skill …` commands it asks for; the served skills grant the rest.
+    // `teamai skill …` commands it asks for. Everything else a served workflow
+    // runs goes through the agent's own permission prompt.
     expect(stub).toMatch(/^allowed-tools: Bash\(teamai skill:\*\), Bash\(npx teamai-cli skill:\*\)$/m);
   });
 

@@ -12,6 +12,7 @@ vi.mock('../utils/logger.js', () => ({
     debug: vi.fn(),
     dim: vi.fn(),
   },
+  setStderrOnly: vi.fn(() => false),
 }));
 
 import type { LocalConfig, TeamaiConfig } from '../types.js';

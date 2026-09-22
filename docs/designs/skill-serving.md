@@ -48,11 +48,11 @@ What an agent reads, and when:
 ```text
 session start            stub frontmatter (description)   1 005 B   always in context
 task matches             stub body                          1 524 B  holds the commands
-`teamai skill get core`  daily workflow                     6 533 B  on demand
+`teamai skill get core`  daily workflow                     6 479 B  on demand
 `… core --full`          + commands.md, contribute-member,
-                           troubleshooting                 36 321 B  on demand
-`… setup` / `wiki`       5 620 B / 19 386 B                          on demand
-`… setup --full` / `… wiki --full`   38 624 B / 133 020 B            on demand
+                           troubleshooting                 36 267 B  on demand
+`… setup` / `wiki`       5 566 B / 19 315 B                          on demand
+`… setup --full` / `… wiki --full`   38 570 B / 132 949 B            on demand
 ```
 
 Served sizes include the resolved `{SKILL_DIR}`, so they grow with the install

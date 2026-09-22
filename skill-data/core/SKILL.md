@@ -3,7 +3,6 @@ name: core
 description: >-
   TeamAI daily workflow: route a /teamai request, sync with pull and push, inspect status,
   diagnose with doctor, and reach the specialized workflows. Loaded by the teamai discovery stub.
-allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
 # teamai — daily workflow

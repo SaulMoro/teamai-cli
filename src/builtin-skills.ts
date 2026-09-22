@@ -314,21 +314,24 @@ export interface BuiltinSkillsTarget {
   skillsDir: string;
   /**
    * The tool's base directory when the skills directory sits under it, else
-   * the skills directory's parent: OpenClaw's workspace and a `HERMES_HOME`
-   * can live anywhere, and the guard must still walk every component the CLI
-   * did not choose.
+   * the parent of the configured root: OpenClaw's workspace and a
+   * `HERMES_HOME` can live anywhere, and the guard must still check that root
+   * and every component below it.
    */
   guardBase: string;
 }
 
 /**
  * The base the link guard walks down from: the tool's base directory when
- * `skillsDir` sits under it, else `skillsDir`'s parent.
+ * `skillsDir` sits under it. Otherwise the root was configured outside it
+ * (`HERMES_HOME`, an OpenClaw workspace), and the walk starts above that root
+ * so the root itself is checked too: a linked `HERMES_HOME` is refused like a
+ * linked `~/.claude`.
  */
 export function skillsGuardBase(toolBaseDir: string, skillsDir: string): string {
   const relative = path.relative(toolBaseDir, skillsDir);
   const underBase = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-  return underBase ? toolBaseDir : path.dirname(skillsDir);
+  return underBase ? toolBaseDir : path.dirname(path.dirname(skillsDir));
 }
 
 /**

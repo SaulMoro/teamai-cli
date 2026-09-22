@@ -122,6 +122,25 @@ describe('recall gate on served skills', () => {
     expect((await skillCatalog()).find((entry) => entry.name === 'share')).toMatchObject({ blockedBy: 'read-only', path: null });
   });
 
+  it('keeps a config-migration line off stdout, so the content and the JSON stay exact', async () => {
+    // Loading an upgraded config can migrate it and say so with log.info.
+    autoDetectInit.mockImplementation(async () => {
+      const { log } = await import('../utils/logger.js');
+      log.info('Migrated legacy teamai config to default role profile: hai');
+      return { localConfig: { recallEnabled: true }, teamConfig: { sharing: { recall: { enabled: true } } } };
+    });
+
+    await skillGet(['share']);
+    expect(stdout.startsWith('---\nname: share')).toBe(true);
+    expect(stdout).not.toContain('Migrated legacy');
+    expect(stderr).toContain('Migrated legacy');
+
+    stdout = '';
+    const { skillList } = await import('../skill-cmd.js');
+    await skillList({ json: true });
+    expect(() => JSON.parse(stdout)).not.toThrow();
+  });
+
   it('never gates the skills that do not depend on recall', async () => {
     withRecall(false);
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { listFilesRecursive, pathExists } from './utils/fs.js';
 import { readSkillDescription } from './agent-skills.js';
+import { setStderrOnly } from './utils/logger.js';
 
 // ─── CLI-served skill content ────────────────────────────
 //
@@ -77,7 +78,17 @@ async function blockReason(name: string): Promise<SkillBlockReason | null> {
       import('./config.js'),
       import('./types.js'),
     ]);
-    const { localConfig, teamConfig } = await autoDetectInit();
+    // Loading the config can migrate it and say so with `log.info`. That line
+    // must not land in the skill content or the JSON these commands print on
+    // stdout, so config loading reports on stderr for this one call.
+    const previous = setStderrOnly(true);
+    let loaded: Awaited<ReturnType<typeof autoDetectInit>>;
+    try {
+      loaded = await autoDetectInit();
+    } finally {
+      setStderrOnly(previous);
+    }
+    const { localConfig, teamConfig } = loaded;
     // `teamai contribute` refuses a read-only source (read-only.ts), so the
     // workflow would fail at its last step after the agent did all the work.
     if (localConfig.repo?.kind === 'http') return 'read-only';

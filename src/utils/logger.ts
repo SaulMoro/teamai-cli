@@ -115,10 +115,13 @@ export function setSilent(s: boolean): void {
 
 /**
  * Route non-error log output to stderr. Used by hook-dispatch commands to
- * keep stdout as a clean JSON channel for the AI tool.
+ * keep stdout as a clean JSON channel for the AI tool. Returns the previous
+ * mode, so a caller that needs it for one step can put it back.
  */
-export function setStderrOnly(s: boolean): void {
+export function setStderrOnly(s: boolean): boolean {
+  const previous = stderrMode;
   stderrMode = s;
+  return previous;
 }
 
 /** Write a "non-error" log line. Goes to stderr in hook mode, stdout otherwise. */

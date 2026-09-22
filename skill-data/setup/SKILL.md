@@ -3,7 +3,6 @@ name: setup
 description: >-
   TeamAI day 0 and repo lifecycle: create a team repo as admin, join an existing team as a member,
   manage members, roles, MCP and env, and uninstall. Loaded on demand by the teamai discovery stub.
-allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
 # teamai — setup and lifecycle

@@ -4,7 +4,6 @@ description: >-
   Turn a session into a team learning: summarize what was solved, discovered or worked around,
   and publish it to the team knowledge base with `teamai contribute`. Loaded on demand by the
   teamai discovery stub, and by the friction reminder that ends a session worth sharing.
-allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
 # Contribute — share what a session taught you with the team
