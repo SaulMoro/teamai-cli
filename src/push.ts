@@ -861,11 +861,16 @@ async function pushCore(
   // after selection, so their scan needs nothing. An unsafe --role resolves to
   // no candidate here and is rejected with exit 2 before anything is pushed.
   let requestedAgentsNamespace: string | undefined;
+  let agentsDestinationError: string | undefined;
   if (options.role) {
     requestedAgentsNamespace = options.role;
   } else if (options.project && projectsManifest) {
     const resolved = resolveProjectNamespace(projectsManifest, options.project, 'agents');
-    if (resolved.ok) requestedAgentsNamespace = resolved.namespace;
+    if (resolved.ok) {
+      requestedAgentsNamespace = resolved.namespace;
+    } else {
+      agentsDestinationError = resolved.message;
+    }
   }
 
   for (const type of pushableTypes) {
@@ -876,6 +881,17 @@ async function pushCore(
       type === 'agents' ? { namespace: requestedAgentsNamespace } : undefined,
     );
     fullScan.push(...items);
+  }
+
+  // A project that cannot answer for agents has to fail HERE, not at step 4.
+  // Unlike skills, an agent with no resolvable destination is dropped by the
+  // scan itself — skipped as "no active source" — so deferring the error until
+  // the selection proves one is going out means never raising it, and the run
+  // ends "No new or modified resources" on a flag that could not be honoured.
+  if (agentsDestinationError && fullScan.some((item) => item.type === 'agents')) {
+    log.error(agentsDestinationError);
+    process.exitCode = 2;
+    return;
   }
 
   // Preserve blocked items in the full scan so their pending PR records survive.

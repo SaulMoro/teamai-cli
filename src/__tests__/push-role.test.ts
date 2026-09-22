@@ -1006,6 +1006,38 @@ describe('push namespace routing for rules and agents', () => {
     expect(pushedItems[0]?.namespace).toBeUndefined();
   });
 
+  it('fails on a project with no agents namespace even when the scan skipped the agent', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'docs-only', name: 'Docs', description: '',
+        resources: { knowledge: ['docs-know'], skills: [], learnings: [], agents: [] },
+      }],
+    });
+    // The scan drops this one itself, so an error deferred to selection would
+    // never be raised and the run would end "No new or modified resources".
+    mockHandlers({
+      agents: [{
+        name: 'vr', type: 'agents', sourcePath: '/tmp/agents',
+        relativePath: 'agents/vr.yaml', status: 'modified',
+        skipReason: 'Agent "vr" has no active source. Activate its role or project before pushing local edits.',
+      }],
+    }, pushedItems);
+
+    await push({ all: true, project: 'docs-only' });
+
+    expect(process.exitCode).toBe(2);
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('agents namespace');
+  });
+
   it('pushes a selected rule when only the unselected skill lacks a project namespace', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({

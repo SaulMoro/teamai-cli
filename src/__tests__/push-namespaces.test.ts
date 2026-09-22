@@ -157,6 +157,16 @@ describe('placedResourcePath', () => {
     expect(placedResourcePath({ x: 'rules/ns/other.md' }, 'rules', 'x')).toBeNull();
   });
 
+  it('requires the exact filename, not merely the resource name as a prefix', () => {
+    // `x.backup.md` is somebody else's file. Trusting it would point scanning,
+    // the pre-push sync and removal at an unrelated resource (#649 review).
+    expect(placedResourcePath({ x: 'rules/ns/x.backup.md' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ x: 'rules/ns/x.yaml' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ vr: 'agents/ns/vr.old.yaml' }, 'agents', 'vr')).toBeNull();
+    // A legacy `.md` agent is still the agent itself.
+    expect(placedResourcePath({ vr: 'agents/ns/vr.md' }, 'agents', 'vr')).toBe('agents/ns/vr.md');
+  });
+
   it('resolves an agent record, whose file keeps the canonical .yaml', () => {
     expect(placedResourcePath({ vr: 'agents/fe-agents/vr.yaml' }, 'agents', 'vr'))
       .toBe('agents/fe-agents/vr.yaml');

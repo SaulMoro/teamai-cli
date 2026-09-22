@@ -157,8 +157,12 @@ export function placedResourcePath(
   if (segments.length !== 3) return null;
   if (segments[0] !== root) return null;
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null;
-  // `<name>.md` for a rule, `<name>.yaml` (or a legacy `.md`) for an agent.
-  if (!segments[2].startsWith(`${name}.`)) return null;
+  // Exactly the resource's own file: `<name>.md` for a rule, `<name>.yaml` or a
+  // legacy `<name>.md` for an agent. A prefix test would accept
+  // `<name>.backup.md` and redirect scanning, syncing and removal onto an
+  // unrelated file that happens to sit there.
+  const allowed = root === 'rules' ? [`${name}.md`] : [`${name}.yaml`, `${name}.md`];
+  if (!allowed.includes(segments[2])) return null;
 
   return recorded;
 }
