@@ -3,7 +3,7 @@
 Goal: the user turns something they built into team knowledge everyone can pull.
 **Any member can do this — you do not need to be an admin.** The usual entry point
 is the user just asking in plain language, e.g. *"share this xxx skill with my
-team"* / *"把这个 xxx skill 分享给团队"* — then you run the publish for them.
+team"*, in whatever language they work in — then you run the publish for them.
 
 ## Which kind of contribution?
 

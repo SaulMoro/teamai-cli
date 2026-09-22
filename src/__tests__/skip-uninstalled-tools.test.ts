@@ -694,6 +694,42 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.agents/skills/teamai'))).toBe(false);
   });
 
+  it('leaves the Codex shared directory alone when another tool prunes and Codex is excluded', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    await fse.ensureDir(path.join(homeDir, '.claude'));
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    const sharedLegacy = path.join(homeDir, '.agents/skills/team-wiki-codebase');
+    await fse.ensureDir(sharedLegacy);
+    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), '# codex copy');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://example.test/team.git',
+      provider: 'git' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { claude: { skills: '.claude/skills' }, codex: { skills: '.codex/skills' } },
+    };
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://example.test/team.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+      enabledAgents: ['claude'],
+    };
+
+    const deployed = await deployBuiltinSkills(teamConfig, localConfig);
+
+    // .agents/skills is Codex's; the whitelist says Codex is neither written to
+    // nor deleted from, and Claude's pass must not reach it on Codex's behalf.
+    expect(deployed).toBe(1);
+    expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.readFile(path.join(sharedLegacy, 'SKILL.md'), 'utf8')).toBe('# codex copy');
+  });
+
   it('deploys a built-in Codex skill to its existing shared location', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
     const sharedSkill = path.join(homeDir, '.agents', 'skills', 'teamai');

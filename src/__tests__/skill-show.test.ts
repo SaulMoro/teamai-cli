@@ -147,6 +147,34 @@ describe('skillShow locator', () => {
     expect(text).toContain('claude');
   });
 
+  it('classifies a skill served from the package as builtin', async () => {
+    // Only the deployed stub is in BUILTIN_SKILL_NAMES; the served workflows
+    // are built in by where they were found, not by name.
+    const lines = await runSkillShow('core', fx);
+    const text = lines.join('\n');
+    expect(text).toContain('Source       : [builtin]');
+    expect(text).toContain('Read it with : teamai skill get core');
+    expect(text).not.toContain('[local-only]');
+  });
+
+  it('refuses share while recall is disabled, like skill get and skill path do', async () => {
+    // The fixture's team has no recall setting, so it is off by default.
+    const lines = await runSkillShow('share', fx);
+    expect(process.exitCode).toBe(1);
+    expect(lines.find((l) => l.includes('skill: share'))).toBeUndefined();
+    expect(lines.join('\n')).not.toContain('skill-data');
+    process.exitCode = 0;
+  });
+
+  it('shows share once recall is enabled', async () => {
+    fx.localConfig.recallEnabled = true;
+    const lines = await runSkillShow('share', fx);
+    const text = lines.join('\n');
+    expect(process.exitCode).toBe(0);
+    expect(text).toContain('skill: share');
+    expect(text).toContain('Source       : [builtin]');
+  });
+
   it('exits with non-zero code when skill not found', async () => {
     process.exitCode = 0;
     const lines = await runSkillShow('does-not-exist', fx);

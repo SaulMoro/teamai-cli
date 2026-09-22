@@ -172,6 +172,16 @@ describe('teamai skill recall gate CLI (e2e)', () => {
     expect(dir.stdout).toBe('');
     expect(dir.stderr).toContain('share needs recall');
 
+    const shown = run('skill', 'show', 'share');
+    expect(shown.status).toBe(1);
+    expect(shown.stdout).not.toContain('skill: share');
+    expect(shown.stdout).not.toContain('skill-data');
+
+    const core = run('skill', 'show', 'core');
+    expect(core.status, core.stderr).toBe(0);
+    expect(core.stdout).toContain('Source       : [builtin]');
+    expect(core.stdout).toContain('Read it with : teamai skill get core');
+
     const listed = run('skill', 'list', '--json');
     expect(listed.status).toBe(0);
     const catalog = JSON.parse(listed.stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
@@ -185,6 +195,7 @@ describe('teamai skill recall gate CLI (e2e)', () => {
     expect(run('skill', 'get', '--all').stdout.match(/^name: /gm)).toHaveLength(4);
     const servedDir = run('skill', 'path', 'share').stdout.trim();
     expect(fs.existsSync(path.join(servedDir, 'SKILL.md'))).toBe(true);
+    expect(run('skill', 'show', 'share').stdout).toContain(`Package path  : ${servedDir}/`);
     const after = JSON.parse(run('skill', 'list', '--json').stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
     expect(after.skills.find((s) => s.name === 'share')).toMatchObject({ blockedByRecall: false, path: servedDir });
   });

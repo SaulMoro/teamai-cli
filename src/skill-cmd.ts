@@ -13,7 +13,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { resolvePackagedSkill, skillCatalog } from './skill-content.js';
+import { blockedByRecall, resolvePackagedSkill, skillCatalog } from './skill-content.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
@@ -50,8 +50,22 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   }
 
   const resolvedName = resolved.name;
-  const ctx = await buildClassifyContext(localConfig);
-  const source = classifySkill(resolvedName, ctx);
+
+  // The recall gate holds here too: `skill get` and `skill path` withhold the
+  // share workflow while recall is off, and the card would otherwise print the
+  // very directory they refuse.
+  if (resolved.primaryOrigin === 'builtin' && await blockedByRecall(resolvedName)) {
+    log.error(`${resolvedName} needs recall, which is disabled for this team.`);
+    log.dim('Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
+    process.exitCode = 1;
+    return;
+  }
+
+  // A skill served from the package is built in by construction; BUILTIN_SKILL_NAMES
+  // only knows the deployed stub, so classifying by name would call `core` local-only.
+  const source: SkillSource = resolved.primaryOrigin === 'builtin'
+    ? { kind: 'builtin' }
+    : classifySkill(resolvedName, await buildClassifyContext(localConfig));
 
   const description = truncate(await readSkillDescription(path.join(resolved.primaryPath, 'SKILL.md')), DESCRIPTION_MAX);
   const contributors = await SkillsHandler.readContributors(resolved.primaryPath);

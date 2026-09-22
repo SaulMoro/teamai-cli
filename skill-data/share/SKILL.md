@@ -3,17 +3,18 @@ name: share
 description: >-
   Turn a session into a team learning: summarize what was solved, discovered or worked around,
   and publish it to the team knowledge base with `teamai contribute`. Also publishes a reusable
-  skill or a knowledge doc on request. 分享 Session 经验到团队知识库。Loaded on demand by the
-  teamai discovery stub, and by the friction reminder that ends a session worth sharing.
+  skill or a knowledge doc on request. Loaded on demand by the teamai discovery stub, and by
+  the friction reminder that ends a session worth sharing.
 allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
-# Contribute — 分享 Session 经验到团队知识库
+# Contribute — share what a session taught you with the team
 
-总结本次 AI 编码 session 中学到的经验，推送到团队知识库。
+Summarize what this AI coding session taught you and push it to the team knowledge base.
 
-**文档使用用户本次会话所用的语言撰写**（中文提问 → 中文文档，英文提问 → 英文文档）。
-命令、参数、URL、路径和代码标识符保持原样。
+**Write the document in the language the user used in this session** (a Chinese conversation
+gets a Chinese document, an English one an English document). Commands, flags, URLs, paths and
+code identifiers stay as they are.
 
 ## When to Use
 
@@ -24,15 +25,15 @@ allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 
 ## How It Works
 
-1. **总结**：回顾本次 session 的工具使用、解决的问题、发现的模式
-2. **生成文档**：撰写 Markdown 文档（语言同上），涵盖：
-   - 任务/问题是什么
-   - 关键决策及原因
-   - 解决方案、变通方法或发现的模式
-   - 哪些工具/skill 特别有用
-   - 踩坑点和注意事项
-3. **保存临时文件**：写入临时文件
-4. **推送到团队**：运行 `teamai contribute --file <path> --title "<title>"`
+1. **Summarize**: review the tools used, the problems solved and the patterns found in this session
+2. **Write the document**: a Markdown document (language as above) covering:
+   - What the task or problem was
+   - The key decisions and why they were made
+   - The solution, workaround or pattern discovered
+   - Which tools or skills proved especially useful
+   - Pitfalls and things to watch out for
+3. **Save it**: write the document to a temporary file
+4. **Push it to the team**: run `teamai contribute --file <path> --title "<title>"`
 
 ## Document Template
 
@@ -43,8 +44,8 @@ makes the document searchable.
 ## Example
 
 ```bash
-# AI 生成总结文档到 /tmp/session-summary.md 后
-teamai contribute --file /tmp/session-summary.md --title "K8s pod 启动超时排查"
+# After writing the summary to /tmp/session-summary.md
+teamai contribute --file /tmp/session-summary.md --title "Debugging K8s pod startup timeouts"
 ```
 
 ## Important

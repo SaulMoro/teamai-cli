@@ -6,7 +6,7 @@ import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { resolveSkillDestination, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
+import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
 
@@ -60,12 +60,14 @@ export const LEGACY_BUILTIN_SKILL_NAMES = new Set([
  * agent on the machine the context they were deployed to save.
  */
 async function pruneLegacyBuiltinSkills(tool: string, configuredSkillsPath: string, baseDir: string): Promise<void> {
+  // The shared .agents/skills directory belongs to Codex alone. Reaching it from
+  // another tool's pass would delete Codex's copies while Codex is excluded or
+  // not installed, which the enabledAgents whitelist rules out.
+  const skillRoots = [configuredSkillsPath];
+  if (tool === CODEX_TOOL) skillRoots.push(SHARED_AGENT_SKILLS_PATH);
   for (const legacyName of LEGACY_BUILTIN_SKILL_NAMES) {
-    const candidates = [
-      path.join(baseDir, configuredSkillsPath, legacyName),
-      path.join(baseDir, SHARED_AGENT_SKILLS_PATH, legacyName),
-    ];
-    for (const dir of candidates) {
+    for (const root of skillRoots) {
+      const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
         await remove(dir);

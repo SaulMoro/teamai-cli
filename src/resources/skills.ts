@@ -15,7 +15,7 @@ import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js'
 /** File name used to track who has contributed (pushed) a skill. */
 const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
 const SKILL_MD = 'SKILL.md';
-const CODEX_TOOL = 'codex';
+export const CODEX_TOOL = 'codex';
 export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
 
 /** Prefer Codex's shared skill when that skill already lives there. */

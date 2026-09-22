@@ -99,8 +99,9 @@ installed.
 earlier releases deployed: `team-wiki-codebase` and `teamai-share-learnings`.
 `teamai-workflow` and `teamai-import` sat in the old guard set but were never
 packaged, so they are not in it: a directory by either name is the user's own.
-Deployment removes them from every installed agent, in the configured skills
-path and in Codex's shared `.agents/skills`. The removal is unconditional
+Deployment removes them from every installed, non-excluded agent, in its
+configured skills path; Codex's pass also covers the shared `.agents/skills`,
+which no other tool's pass touches. The removal is unconditional
 because those trees were overwritten with `overwrite: true` on every pull, so no
 local edit ever survived in them.
 
