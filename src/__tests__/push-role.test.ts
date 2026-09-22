@@ -287,6 +287,27 @@ describe('push namespace routing', () => {
     expect(pushedItems[0].relativePath).toBe('skills/hai/skill-a');
   });
 
+  it('refuses a role id that cannot be a namespace in silent mode, even with a valid manifest', async () => {
+    mockLoadRolesManifest.mockResolvedValue({
+      version: 1,
+      roles: [
+        { id: 'CON', description: 'device-named role', resources: { knowledge: ['common'], skills: ['common', 'hai'], agents: [] } },
+      ],
+    });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: 'CON', additionalRoles: [] }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockSkillHandler();
+
+    await push({ all: true, silent: true });
+
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.stringMatching(/Invalid role id used as a skills namespace "CON"/),
+    );
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+  });
+
   it('explicit --role flag bypasses namespace resolution', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({

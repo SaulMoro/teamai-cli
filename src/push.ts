@@ -871,7 +871,12 @@ async function pushCore(
         } else if (skillNamespaces.length === 1) {
           resolvedNamespaceForNew = skillNamespaces[0];
         } else if (options.silent) {
-          resolvedNamespaceForNew = localConfig.primaryRole;
+          // The role id stands in for a namespace here too, and the manifest
+          // never validated it as one: guard it before it becomes a path.
+          [resolvedNamespaceForNew] = assertSafeFallbackNamespaces(
+            [localConfig.primaryRole],
+            'role id used as a skills namespace',
+          );
         } else {
           console.log('');
           console.log('Which namespace should new skills be pushed to?');
