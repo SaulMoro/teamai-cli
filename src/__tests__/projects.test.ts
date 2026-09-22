@@ -187,6 +187,24 @@ projects:
     }
   });
 
+  it('leaves the project id rule exactly where it was', async () => {
+    // The namespace guard tightened; the id did not. '...' is a working POSIX
+    // directory name that the id rule has always accepted, so a manifest using
+    // it must keep parsing.
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: '...'
+    resources: { skills: [alpha] }
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      expect(manifest?.projects[0].id).toBe('...');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('names the offending entry instead of dumping a raw ZodError', async () => {
     const repoDir = writeManifest(`
 version: 1

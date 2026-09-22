@@ -87,7 +87,9 @@ any other name made only of dots and spaces — Win32 strips trailing spaces and
 periods, so `.. ` would arrive as `..`),
 since each becomes a directory component. The id is narrower still — letters,
 digits, `.`, `_`, `-` — because it is also typed on the command line and split on
-commas. The same guard applies to `manifest/roles.yaml`.
+commas. The same guard applies to `manifest/roles.yaml`'s active namespaces
+(`knowledge`, `skills`, `agents`); its `learnings:` is kept for backward
+compatibility, ignored at runtime, and therefore unchecked.
 
 Agent push uses the same role/project namespace resolution as pull and skips ambiguous source destinations. On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
 

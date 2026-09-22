@@ -1488,10 +1488,13 @@ roles:
       agents:    [common, frontend]   # optional; omitted = root-level agents only
 ```
 
-Every namespace listed under `resources:` becomes a directory name, so it must be
-a single path segment — no `/`, `\`, `:` or control character, and not `.`, `..`
-or any other name made only of dots and spaces — in `manifest/roles.yaml` exactly
-as in `manifest/projects.yaml`.
+Every namespace that takes effect — `knowledge`, `skills` and `agents` — becomes a
+directory name, so it must be a single path segment: no `/`, `\`, `:` or control
+character, and not `.`, `..` or any other name made only of dots and spaces, in
+`manifest/roles.yaml` exactly as in `manifest/projects.yaml`. A role's
+`learnings:` is accepted for backward compatibility and ignored at runtime
+(learnings are namespaced by project, not by role), so it names no directory and
+is not checked.
 
 `teamai pull` copies these into each Tier-1 tool's `agents/` directory (e.g. `~/.claude/agents/`), flattened by file name, so two active namespaces must not define the same agent name (pull reports the collision and skips the scope). `teamai pull` writes `<name>.toml` for Codex tools, `<name>.json` for Kiro, `<name>.agent.md` for Copilot, and `<name>.md` for every other tool. When a member changes role, agents of the namespaces that stopped being active are removed on the next pull, unless the deployed copy was edited locally, in which case it is kept with a warning. Without a configured role, every agent syncs. `teamai push` resolves the source using the same active role and project namespaces as pull. It writes edits to that source and skips ambiguous destinations with a warning; an agent with only inactive sources is also skipped. Skipped agents do not block other resources in the same push. A new agent lands at the root. Cleanup checks each tool separately, respecting YAML `targets` and legacy format support. An active same-named agent protects a deployed file only when it targets that tool and output file. `teamai remove agents <name>` records a tombstone. The next pull on every other machine deletes `<name>.agent.md`, `<name>.md`, `<name>.toml` and `<name>.json` from each synced tool's agents directory. That cleanup also runs when the pull finds the team repo unchanged. The CLI's built-in `teamai-recall` profile is deployed alongside team agents but is not uploaded by `teamai push`.
 

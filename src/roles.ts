@@ -17,6 +17,8 @@ const RoleResourceNamespacesSchema = z.object({
   agents: z.array(NamespaceSegmentSchema).default([]),
   // learnings is accepted for backward compatibility but ignored at runtime.
   // All learnings are shared flat across the entire team (no namespace isolation).
+  // It never becomes a directory here, so it stays a plain string: holding an old
+  // manifest to the namespace rule would reject it over a field nothing reads.
   learnings: z.array(z.string()).optional(),
 });
 
