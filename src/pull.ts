@@ -9,7 +9,7 @@ import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { learningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
-import { prunePlacementRecords } from './utils/pending-push.js';
+import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
@@ -775,16 +775,14 @@ async function pullForScope(
     return;
   }
 
-  // A placement record whose team file is gone — deleted upstream, or never
-  // merged — must not survive to claim the next same-named file somebody
-  // creates. Settle it against the tree just refreshed, before delivery reads
-  // the records (#649 review). A record whose PR is still open is kept; one
-  // whose branch is gone from origin is not, since the merge would have put
-  // the file on the default branch just refreshed.
+  // Settle the placement records against the tree just refreshed, before
+  // delivery reads them: a placement whose PR has merged becomes a record, one
+  // whose file the team deleted stops being one, and one shadowed by a new
+  // shared-root file of the same name is withdrawn (#649 review).
   if (!options.dryRun) {
     try {
       const recordsState = await loadStateForScope(localConfig);
-      if (await prunePlacementRecords(localConfig.repo.localPath, recordsState)) {
+      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
         await saveStateForScope(recordsState, localConfig);
       }
     } catch (e) {

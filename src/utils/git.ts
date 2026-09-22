@@ -847,6 +847,31 @@ export async function resetToCleanMaster(git: SimpleGit, localPath?: string): Pr
  * Uses `git show <rev>:<path>` to retrieve historical file content.
  * Returns null if the file doesn't exist at that revision or if the rev is invalid.
  */
+/** The git blob id of a working-tree file, as `git hash-object` reports it; null if unreadable. */
+export async function hashObject(repoPath: string, filePath: string): Promise<string | null> {
+  try {
+    return (await createGit(repoPath).raw(['hash-object', '--', filePath])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `blob` was ever the content of `filePath` on the current branch.
+ * Squash- and rebase-merges rewrite commits but keep the blob, so this is what
+ * tells "our push landed here" from "somebody else created this path" when
+ * the branch itself is no longer around to ask. Null when git cannot say.
+ */
+export async function blobInHistory(repoPath: string, blob: string, filePath: string): Promise<boolean | null> {
+  try {
+    const out = await createGit(repoPath).raw(['log', 'HEAD', `--find-object=${blob}`, '--format=%H', '--', filePath]);
+    return out.trim().length > 0;
+  } catch (e) {
+    log.debug(`git log --find-object failed for ${filePath}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 export async function getFileContentAtRev(
   repoPath: string,
   rev: string,

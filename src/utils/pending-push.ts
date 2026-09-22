@@ -14,7 +14,8 @@
  */
 import path from 'node:path';
 import { pathExists } from './fs.js';
-import { remoteBranchExists } from './git.js';
+import { remoteBranchExists, hashObject, blobInHistory } from './git.js';
+import { placedResourcePath } from '../push-namespaces.js';
 import { log } from './logger.js';
 import type { PendingPush, ResourceItem, State } from '../types.js';
 
@@ -137,63 +138,136 @@ export function recordPendingPush(state: State, entry: PendingPush): void {
   ];
 }
 
-export function toPendingItems(items: ResourceItem[]): PendingPush['items'] {
-  return items.map((i) => ({
-    type: i.type,
-    name: i.name,
-    relativePath: i.relativePath,
-    namespace: i.namespace,
-  }));
+/**
+ * The pending-entry view of the pushed items. Called after `pushItem` and
+ * before the branch is switched away, while `relativePath` is the file this
+ * run wrote: a placed item records its blob so landing can later be proven.
+ */
+export async function toPendingItems(items: ResourceItem[], repoPath: string): Promise<PendingPush['items']> {
+  const out: PendingPush['items'] = [];
+  for (const i of items) {
+    const placed = isPlacement(i);
+    const blob = placed ? await hashObject(repoPath, i.relativePath) : null;
+    out.push({
+      type: i.type,
+      name: i.name,
+      relativePath: i.relativePath,
+      namespace: i.namespace,
+      ...(placed ? { placed: true } : {}),
+      ...(blob ? { blob } : {}),
+    });
+  }
+  return out;
 }
 
 /**
- * Drop placement records (`placedRules`, `placedAgents`) whose target is
- * neither on the default branch nor awaiting review in an open PR.
+ * Whether pushing `item` PLACED it: a root-authored rule or agent that this
+ * run wrote under `<root>/<ns>/`, which is what a placement record is for.
+ * The author's copy stays at the tool's resource root, so the scanner needs
+ * the record to recognise the two as one resource (`RulesHandler`), and
+ * `AgentsHandler` needs it to accept a source whose namespace this directory
+ * has not activated.
  *
- * A record is written when the branch reaches the remote, before the PR
- * merges, so a target missing from the default branch is normal while that
- * PR is open. It is permanent once the PR was closed unmerged or the file was
- * deleted upstream — and a record kept past that point comes true again the
- * day another member creates the same path: the scan, the pre-push sync and
- * removal would then treat their unrelated resource as this author's, and the
- * author's own root copy would be pushed over it (#649 review).
- *
- * A referencing PR branch is looked up on origin, the way `prunePendingPushes`
- * does, and a record is kept when the remote cannot answer. `verifyBranches:
- * false` trusts the pending entries as they stand instead.
+ * Only a `new` item that ended up namespaced counts. A `modified` one was
+ * found in its namespace by the scanner, which means that namespace is active
+ * here and the scan will find it again; recording it would turn a temporary
+ * activation into standing permission to keep editing an agent long after the
+ * role or project that granted it was dropped. The one exception is an agent
+ * the scan reached THROUGH its record and rewrote under another extension
+ * (`supersedes`): the record has to follow it to the new path.
  */
-export async function prunePlacementRecords(
+export function isPlacement(item: ResourceItem): boolean {
+  if (item.type === 'agents' && 'supersedes' in item && typeof item.supersedes === 'string') return true;
+  if (item.status !== 'new' || !item.namespace) return false;
+  // A rule the scanner already found in a subdirectory carries the namespace
+  // in its name and matches by full path, so it needs no record.
+  if (item.type === 'rules') return !item.name.includes('/');
+  return item.type === 'agents';
+}
+
+/** The shared-root file(s) that, if present, mean `name` is not ours to redirect. */
+function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
+  return root === 'rules' ? [`rules/${name}.md`] : [`agents/${name}.yaml`, `agents/${name}.md`];
+}
+
+/**
+ * Bring the placement records (`placedRules`, `placedAgents`) in line with
+ * the default branch as just pulled. Three moves, in this order:
+ *
+ *   1. A placement still listed on a pending push whose pushed blob is in
+ *      the default branch's history for that path has landed — the PR merged,
+ *      however the platform merged it — and becomes a record. The path merely
+ *      existing is not enough: another member may have created it after the
+ *      PR was closed, and recording it then would hand their file to this
+ *      author. Nothing is recorded before landing, so a PR closed unmerged
+ *      leaves no record whether or not its branch was deleted, and no provider
+ *      has to be asked whether a PR is open. While the PR is open the pending
+ *      entry itself routes the author's edits back to it (`reuseRecordedDestinations`).
+ *   2. A record whose file is gone from the default branch is dropped: the
+ *      team deleted the resource. Kept, it would come true again the day
+ *      another member creates that path, and their unrelated resource would
+ *      then read as this author's.
+ *   3. A record whose bare name is now ALSO a shared-root file is dropped, with
+ *      a warning: the author's root copy can no longer stand for the namespaced
+ *      resource, because the shared-root rule of that name is what every tool
+ *      dir holds at that path, and following the record would push that
+ *      unrelated rule over the author's namespaced one.
+ *
+ * Runs after the pull in `push` and after the refresh in `pull`, before
+ * anything reads the records. Returns whether `state` changed.
+ */
+export async function reconcilePlacementRecords(
   repoPath: string,
   state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes'>,
-  options: { verifyBranches?: boolean } = {},
 ): Promise<boolean> {
-  const verifyBranches = options.verifyBranches ?? true;
-  const branchAlive = new Map<string, boolean | null>();
-  const awaitingReview = async (relativePath: string): Promise<boolean> => {
-    for (const entry of state.pendingPushes ?? []) {
-      if (!entry.items.some((item) => item.relativePath === relativePath)) continue;
-      if (!verifyBranches) return true;
-      if (!branchAlive.has(entry.branch)) {
-        branchAlive.set(entry.branch, await remoteBranchExists(repoPath, entry.branch));
-      }
-      // `null` = could not ask; keep the record rather than guess.
-      if (branchAlive.get(entry.branch) !== false) return true;
-    }
-    return false;
-  };
-
   let changed = false;
-  for (const field of ['placedRules', 'placedAgents'] as const) {
-    const records = state[field];
-    if (!records) continue;
-    for (const [name, recorded] of Object.entries(records)) {
-      if (await pathExists(path.join(repoPath, recorded))) continue;
-      if (await awaitingReview(recorded)) continue;
-      log.debug(`Dropping placement record ${field}.${name} → ${recorded}: not on the default branch and not awaiting review`);
-      const { [name]: _dropped, ...rest } = records;
-      state[field] = rest;
+  const fieldFor = (type: string): 'placedRules' | 'placedAgents' | null => (
+    type === 'rules' ? 'placedRules' : type === 'agents' ? 'placedAgents' : null
+  );
+
+  // 1. Landed placements become records.
+  for (const entry of state.pendingPushes ?? []) {
+    for (const item of entry.items) {
+      if (!item.placed) continue;
+      const field = fieldFor(item.type);
+      if (!field) continue;
+      if (state[field]?.[item.name] === item.relativePath) continue;
+      if (!await pathExists(path.join(repoPath, item.relativePath))) continue;
+      // An entry with no blob predates the check; existence is all it can offer.
+      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath) !== true) continue;
+      log.debug(`Recording placement ${field}.${item.name} → ${item.relativePath}: landed on the default branch`);
+      state[field] = { ...state[field], [item.name]: item.relativePath };
       changed = true;
     }
+  }
+
+  // 2 and 3. Records the default branch no longer backs.
+  for (const [field, root] of [['placedRules', 'rules'], ['placedAgents', 'agents']] as const) {
+    const records = state[field];
+    if (!records) continue;
+    const kept: Record<string, string> = {};
+    for (const [name, recorded] of Object.entries(records)) {
+      const valid = placedResourcePath(records, root, name);
+      if (valid && !await pathExists(path.join(repoPath, valid))) {
+        log.debug(`Dropping placement record ${field}.${name} → ${recorded}: gone from the default branch`);
+        changed = true;
+        continue;
+      }
+      let shadowed: string | undefined;
+      for (const candidate of sharedRootPaths(root, name)) {
+        if (await pathExists(path.join(repoPath, candidate))) { shadowed = candidate; break; }
+      }
+      if (shadowed) {
+        log.warn(
+          `[${root}] ${name}: ${shadowed} now exists at the shared root, so your local ${name} follows that `
+          + `file from here on and no longer stands for ${recorded}. Edit ${recorded} through its namespace.`,
+        );
+        changed = true;
+        continue;
+      }
+      kept[name] = recorded;
+    }
+    state[field] = kept;
   }
   return changed;
 }

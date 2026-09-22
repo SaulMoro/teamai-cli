@@ -290,9 +290,15 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(files).not.toContain('rules/my-rule.md');
     expect(files).not.toContain('agents/vr.yaml');
 
-    // The author's copy stays at the tool's rules root, so push records where
-    // it put it; without that the next scan reads it as a brand-new rule.
-    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
+    // The author's copy stays at the tool's rules root, so push marks where it
+    // put it on the pending PR entry; the record itself is written once the
+    // PR merges (see the next case), so a PR closed unmerged leaves none.
+    const state = readState(fixture) as { placedRules?: unknown; pendingPushes: Array<{ items: Array<Record<string, unknown>> }> };
+    expect(state.placedRules ?? {}).toEqual({});
+    expect(state.pendingPushes.at(-1)?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', placed: true }),
+      expect.objectContaining({ type: 'agents', name: 'vr', relativePath: 'agents/fe-agents/vr.yaml', placed: true }),
+    ]));
   }, 60_000);
 
   it('sends an edit of the root copy back to the same namespace after the PR merges', async () => {
@@ -307,6 +313,8 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
       fixture.home,
     );
     expect(unchanged.output).toContain('No new or modified resources to push');
+    // That run found the file on the default branch, so the placement is a record now.
+    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
 
     fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), '# Rule v2\n');
     const edited = await runCLI(
@@ -568,7 +576,8 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     writeLocalResources(fixture);
     await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
     mergeBranch(fixture, branchFiles(fixture).branch);
-    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/be-know/my-rule.md' });
+    const landed = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(readState(fixture).placedRules, landed.output).toEqual({ 'my-rule': 'rules/be-know/my-rule.md' });
     deleteOnMain(fixture, 'rules/be-know/my-rule.md');
 
     const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
@@ -577,6 +586,52 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     // Left in place, the record would claim the next `rules/be-know/my-rule.md`
     // anybody creates as this author's, and their root copy would push over it.
     expect(readState(fixture).placedRules ?? {}).toEqual({});
+  }, 60_000);
+
+  it('never records a placement whose PR was closed without merging, even with the branch kept', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
+    expect(branchFiles(fixture).files).toContain('rules/be-know/my-rule.md');
+
+    // Nothing merges. The branch stays on the remote, as a closed PR's often does.
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+    expect(readState(fixture).placedRules ?? {}).toEqual({});
+
+    // A teammate later publishes an unrelated rule at that very path.
+    commitOnMain(fixture, 'rules/be-know/my-rule.md', '# Somebody else\'s rule\n');
+    const again = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(again.code, again.output).toBe(0);
+    // Delivered to its namespace directory; the author's root copy is untouched.
+    expect(fs.readFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), 'utf8')).toBe('# Rule v1\n');
+    expect(fs.readFileSync(path.join(fixture.projectRoot, '.claude/rules/be-know', 'my-rule.md'), 'utf8'))
+      .toContain("Somebody else's rule");
+  }, 60_000);
+
+  it('withdraws a placement record when a shared-root rule takes the name', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/be-know/my-rule.md' });
+
+    commitOnMain(fixture, 'rules/my-rule.md', '# Shared rule for everyone\n');
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+
+    expect(pulled.output).toContain('rules/my-rule.md now exists at the shared root');
+    expect(readState(fixture).placedRules ?? {}).toEqual({});
+    const rulesDir = path.join(fixture.projectRoot, '.claude/rules');
+    expect(fs.readFileSync(path.join(rulesDir, 'my-rule.md'), 'utf8')).toContain('Shared rule');
+    expect(fs.readFileSync(path.join(rulesDir, 'be-know', 'my-rule.md'), 'utf8')).toContain('Rule v1');
+    // And the next push does not follow the withdrawn record onto the namespaced file.
+    fs.writeFileSync(path.join(rulesDir, 'my-rule.md'), '# Shared rule, edited here\n');
+    await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+    const { branch, files } = branchFiles(fixture);
+    expect(files, branch).toContain('rules/my-rule.md');
+    expect(git(['show', `${branch}:rules/be-know/my-rule.md`], fixture.remote)).toContain('Rule v1');
   }, 60_000);
 
   it('removes only the published agent, through the real remove command', async () => {

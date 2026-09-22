@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
+import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { assertNotReadOnly } from './read-only.js';
 import { pullRepo, pushRepoBranch, checkoutMaster, generateBranchName } from './utils/git.js';
 import { createPrWithFallback, filterExistingTopLevelPaths } from './push.js';
@@ -89,6 +90,18 @@ async function removeCore(
     try {
       await pullRepo(localConfig.repo.localPath);
     } catch { /* continue even if pull fails */ }
+  }
+
+  // `publishedNameFor` below resolves the bare name the author types through
+  // the placement record, and a placement becomes a record only once it has
+  // landed on the default branch — which this may be the first command to see.
+  try {
+    const recordsState = await loadStateForScope(localConfig);
+    if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
+      await saveStateForScope(recordsState, localConfig);
+    }
+  } catch (e) {
+    log.debug(`Placement record cleanup skipped: ${(e as Error).message}`);
   }
 
   const handler = getHandler(type as ResourceType);

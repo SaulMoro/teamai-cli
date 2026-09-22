@@ -6,7 +6,7 @@ import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev,
 } from './utils/git.js';
-import { prunePlacementRecords,
+import { reconcilePlacementRecords,
   findPendingForItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
@@ -292,42 +292,6 @@ function collisionPaths(type: PlaceableType, placedAt: string): string[] {
   return [`${stem}.yaml`, `${stem}.md`];
 }
 
-/**
- * Remember where push put each resource it PLACED, so the author can keep
- * maintaining it. Their own copy stays at the tool's resource root, and the
- * team file is now under `<root>/<ns>/`: the scanner needs the record to
- * recognise the two as the same resource (`RulesHandler.scanLocalForPush`),
- * and `AgentsHandler.scanLocalForPush` needs it to accept a source whose
- * namespace this directory has not activated.
- *
- * Only `new` items are recorded, and only ones that ended up namespaced. A
- * `modified` resource was found in its namespace by the scanner, which means
- * that namespace is active here and the scan will find it again; recording it
- * would turn a temporary activation into standing permission to keep editing
- * an agent long after the role or project that granted it was dropped.
- */
-function recordPlacements(state: State, items: ResourceItem[]): void {
-  for (const item of items) {
-    // A recorded agent whose canonical source changed extension was written
-    // to a new path this run; the record has to follow it or the next scan
-    // finds nothing at the recorded one and reads the agent as new. The scan
-    // only sets `supersedes` when it reached the file through the record.
-    if (item.type === 'agents' && supersededPathOf(item)) {
-      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
-      continue;
-    }
-    if (item.status !== 'new' || !item.namespace) continue;
-    // A rule the scanner already found in a subdirectory carries the namespace
-    // in its name and matches by full path, so it needs no record.
-    if (item.type === 'rules' && !item.name.includes('/')) {
-      state.placedRules = { ...state.placedRules, [item.name]: item.relativePath };
-    }
-    if (item.type === 'agents') {
-      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
-    }
-  }
-}
-
 /** The team-relative path `pushItem` retired while writing `item`, if any. */
 function supersededPathOf(item: ResourceItem): string | undefined {
   return 'supersedes' in item && typeof item.supersedes === 'string' ? item.supersedes : undefined;
@@ -611,7 +575,7 @@ async function pushGroup(args: {
       branch: branchName,
       prUrl,
       createdAt: new Date().toISOString(),
-      items: toPendingItems(items),
+      items: await toPendingItems(items, localConfig.repo.localPath),
     });
 
     // Switch back to the default branch so the next group starts clean
@@ -877,15 +841,15 @@ async function pushCore(
     }
   }
 
-  // Placement records outlive their purpose when the PR they were written for
-  // is closed unmerged, or the team file is later deleted. Settle that against
-  // the clone just pulled, BEFORE the scan reads the records: a stale one would
-  // match the next same-named file anybody creates (#649 review). Not when the
+  // Settle the placement records against the clone just pulled, BEFORE the
+  // scan reads them: a placement whose PR has merged becomes a record, one
+  // whose file the team deleted stops being one, and one shadowed by a new
+  // shared-root file of the same name is withdrawn (#649 review). Not when the
   // clone is stale itself — a file missing from an unrefreshed tree proves nothing.
   if (!teamRepoStale) {
     try {
       const recordsState = await loadStateForScope(localConfig);
-      if (await prunePlacementRecords(localConfig.repo.localPath, recordsState)) {
+      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
         await saveStateForScope(recordsState, localConfig);
       }
     } catch (e) {
@@ -1370,11 +1334,10 @@ async function pushCore(
       process.exitCode = 1;
       return;
     }
-    // Per group, and before the early return above can skip it: this group's
-    // resources are on the remote now, so where they went has to be recorded
-    // even if a later group fails. Recorded after the push rather than before,
-    // because a rolled-back group placed nothing.
-    recordPlacements(pushState, group.items);
+    // Where this group's placed resources went travels on its pending entry
+    // (`toPendingItems`), written by `pushGroup` when the branch reaches the
+    // remote; it becomes a record once the file lands on the default branch
+    // (`reconcilePlacementRecords`).
     if (outcome === 'pushed') anyPushed = true;
     if (outcome === 'pr-failed') anyPrFailed = true;
     configRider = false;

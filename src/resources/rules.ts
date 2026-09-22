@@ -272,7 +272,13 @@ export class RulesHandler extends ResourceHandler {
     const placed = placedResourcePath(
       (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
     );
-    return placed === `rules/${teamName}.md` ? bareName : teamName;
+    if (placed !== `rules/${teamName}.md`) return teamName;
+    // A shared-root rule of the same name owns the root path in every tool
+    // dir; delivering both there would leave whichever wrote last. The
+    // reconcile pass withdraws the record for this case, but delivery must
+    // not depend on having run after it.
+    if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${bareName}.md`))) return teamName;
+    return bareName;
   }
 
   /**
@@ -434,12 +440,19 @@ export class RulesHandler extends ResourceHandler {
     // name — it is `<ns>/<name>` there, or absent when the namespace is not
     // active here — so the sweep below would delete the author's own file,
     // local edits and all (#649 review). The record is what marks it as ours,
-    // and only while the team file it points at still exists.
-    const placedRules = (await loadStateForScope(localConfig)).placedRules;
+    // and only while the team file it points at still exists. Before the PR
+    // merges there is no record yet — the placement is on the pending entry —
+    // and the copy is just as much ours then.
+    const { placedRules, pendingPushes } = await loadStateForScope(localConfig);
     for (const name of Object.keys(placedRules ?? {})) {
       const placed = placedResourcePath(placedRules, 'rules', name);
       if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
         teamRuleNames.add(name);
+      }
+    }
+    for (const entry of pendingPushes ?? []) {
+      for (const item of entry.items) {
+        if (item.placed && item.type === 'rules') teamRuleNames.add(item.name);
       }
     }
     const tombstones = await this.readTombstones(localConfig);

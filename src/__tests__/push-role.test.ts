@@ -71,6 +71,8 @@ vi.mock('../utils/git.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
   remoteBranchExists: vi.fn().mockResolvedValue(true),
   getFileContentAtRev: vi.fn().mockResolvedValue(null),
+  hashObject: vi.fn().mockResolvedValue(null),
+  blobInHistory: vi.fn().mockResolvedValue(null),
 }));
 
 const mockLoadProjectsManifest = vi.fn().mockResolvedValue(null);
@@ -1260,39 +1262,50 @@ describe('push namespace routing for rules and agents', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('could not be refreshed');
   });
 
-  it('drops a placement record whose PR was closed without merging, before scanning', async () => {
-    mockAutoDetectInit.mockResolvedValue({
-      localConfig: makeLocalConfig(),
-      teamConfig: makeTeamConfig(),
-    });
-    // The recorded target is not on the default branch and the branch that
-    // carried it is gone: the PR was closed, not merged. Kept, the record would
-    // come true again the day another member creates that very path, and the
-    // author's unrelated root copy would then be pushed over it (#649 review).
-    const { remoteBranchExists } = await import('../utils/git.js');
-    vi.mocked(remoteBranchExists).mockResolvedValue(false);
-    mockLoadStateForScope.mockResolvedValue({
-      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
-      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
-      placedRules: { 'my-rule': 'rules/fe-know/my-rule.md' },
-      pendingPushes: [{
-        branch: 'teamai/push/test/20260101-000000',
-        prUrl: 'https://git.woa.com/mr/14',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
-      }],
-    });
-    mockHandlers({}, []);
-
+  it('turns a placement into a record only once its file is on the default branch, before scanning', async () => {
+    // Pushed and awaiting review: nothing on the default branch yet, so no
+    // record — a PR closed unmerged, branch kept or not, looks exactly like
+    // this and must not leave one behind (#649 review).
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-landed-'));
     try {
+      mockAutoDetectInit.mockResolvedValue({
+        localConfig: makeLocalConfig({
+          repo: { localPath: repoDir, remote: 'https://git.woa.com/test/repo.git' },
+        }),
+        teamConfig: makeTeamConfig(),
+      });
+      const awaiting = {
+        lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+        pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null, placedRules: {},
+        pendingPushes: [{
+          branch: 'teamai/push/test/20260101-000000',
+          prUrl: 'https://git.woa.com/mr/14',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know', placed: true }],
+        }],
+      };
+      mockLoadStateForScope.mockImplementation(async () => structuredClone(awaiting));
+      mockHandlers({}, []);
+
+      await push({ all: true });
+      const recordedEarly = mockSaveStateForScope.mock.calls
+        .map((call) => call[0] as { placedRules?: Record<string, string> })
+        .some((state) => 'my-rule' in (state.placedRules ?? {}));
+      expect(recordedEarly).toBe(false);
+
+      // The PR merged: the file is on the default branch now.
+      fs.mkdirSync(path.join(repoDir, 'rules', 'fe-know'), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, 'rules/fe-know', 'my-rule.md'), 'landed');
+      mockSaveStateForScope.mockClear();
+
       await push({ all: true });
 
       const saved = mockSaveStateForScope.mock.calls
         .map((call) => call[0] as { placedRules?: Record<string, string> })
-        .find((state) => state.placedRules !== undefined && !('my-rule' in state.placedRules));
-      expect(saved, 'no saved state dropped the record').toBeDefined();
+        .find((state) => 'my-rule' in (state.placedRules ?? {}));
+      expect(saved?.placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
     } finally {
-      vi.mocked(remoteBranchExists).mockResolvedValue(true);
+      fs.rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
@@ -1323,8 +1336,12 @@ describe('push namespace routing for rules and agents', () => {
     const staged = mockPushRepoBranch.mock.calls[0]?.[2] as string[];
     expect(staged).toContain('agents/fe-agents/vr.yaml');
     expect(staged).toContain('agents/fe-agents/vr.md');
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
-    expect(saved.placedAgents).toEqual({ vr: 'agents/fe-agents/vr.yaml' });
+    // The move is a placement of the new path: it becomes the record once the
+    // PR merges, and the recorded .md is dropped then, when it is gone.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { pendingPushes: Array<{ items: Array<Record<string, unknown>> }> };
+    expect(saved.pendingPushes.at(-1)?.items).toEqual([
+      expect.objectContaining({ type: 'agents', name: 'vr', relativePath: 'agents/fe-agents/vr.yaml', placed: true }),
+    ]);
   });
 
   it('rejects an unknown --project even when nothing needs placing', async () => {
@@ -1426,9 +1443,16 @@ describe('push namespace routing for rules and agents', () => {
     await push({ all: true, role: 'pm' });
 
     // The author's copy stays at the tool's rules root, so the scanner needs
-    // the record to map it back to rules/pm/ instead of reading it as new.
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
-    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/pm/my-rule.md' });
+    // the record to map it back to rules/pm/ instead of reading it as new. It
+    // is marked on the pending PR entry and becomes a record when that merges.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as {
+      placedRules?: Record<string, string>;
+      pendingPushes: Array<{ items: Array<Record<string, unknown>> }>;
+    };
+    expect(saved.placedRules ?? {}).toEqual({});
+    expect(saved.pendingPushes.at(-1)?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'rules', name: 'my-rule', relativePath: 'rules/pm/my-rule.md', placed: true }),
+    ]));
   });
 
   it('records where it placed a new agent, so the author can still edit it', async () => {
@@ -1443,8 +1467,10 @@ describe('push namespace routing for rules and agents', () => {
     // AgentsHandler.scanLocalForPush only accepts a source whose namespace is
     // ACTIVE here; without the record the author's next edit is skipped as
     // "no active source" and the agent they just published is unmaintainable.
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
-    expect(saved.placedAgents).toEqual({ vr: 'agents/pm/vr.yaml' });
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { pendingPushes: Array<{ items: Array<Record<string, unknown>> }> };
+    expect(saved.pendingPushes.at(-1)?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'agents', name: 'vr', relativePath: 'agents/pm/vr.yaml', placed: true }),
+    ]));
   });
 
   it('does not record an agent it merely edited in an already-active namespace', async () => {
@@ -1465,8 +1491,10 @@ describe('push namespace routing for rules and agents', () => {
 
     await push({ all: true });
 
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
-    expect(saved.placedAgents ?? {}).toEqual({});
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { pendingPushes: Array<{ items: Array<Record<string, unknown>> }> };
+    expect(saved.pendingPushes.at(-1)?.items).toEqual([
+      expect.not.objectContaining({ placed: true }),
+    ]);
   });
 
   it('refuses a roles manifest whose namespace is not a single path segment', async () => {
@@ -1613,8 +1641,11 @@ describe('push namespace routing for rules and agents', () => {
     expect(process.exitCode).toBe(1);
     // The rule is on the remote now. Losing where it went means the author's
     // root copy is reclassified once that PR merges.
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
-    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/pm/my-rule.md' });
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { pendingPushes: Array<{ branch: string; items: Array<Record<string, unknown>> }> };
+    const reused = saved.pendingPushes.find((entry) => entry.branch === 'teamai/push/test/20260101-000000');
+    expect(reused?.items).toEqual([
+      expect.objectContaining({ type: 'rules', name: 'my-rule', relativePath: 'rules/pm/my-rule.md', placed: true }),
+    ]);
   });
 
   it('refuses to place a new rule onto an existing team file', async () => {
@@ -1745,8 +1776,10 @@ describe('push namespace routing for rules and agents', () => {
     await push({ all: true });
 
     // Its local path already carries the namespace, so full-path matching works.
-    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
-    expect(saved.placedRules ?? {}).toEqual({});
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { pendingPushes: Array<{ items: Array<Record<string, unknown>> }> };
+    expect(saved.pendingPushes.at(-1)?.items).toEqual([
+      expect.not.objectContaining({ placed: true }),
+    ]);
   });
   it('stops the push when the roles manifest exists but cannot be read', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];

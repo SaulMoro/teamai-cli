@@ -593,6 +593,21 @@ export const PendingPushItemSchema = z.object({
   relativePath: z.string(),
   /** Skill namespace chosen at push time, reapplied when the PR is updated. */
   namespace: z.string().optional(),
+  /**
+   * True when this push PLACED the resource: a root-authored rule or agent
+   * written under `<root>/<ns>/`. Once `relativePath` is on the default
+   * branch — the PR merged — it becomes a `placedRules`/`placedAgents` record
+   * (`reconcilePlacementRecords`). Until then nothing records it, so a PR
+   * closed unmerged leaves no record behind, branch deleted or not.
+   */
+  placed: z.boolean().optional(),
+  /**
+   * Git blob id of the file this push wrote at `relativePath`, for a placed
+   * item. Landing is proven by that blob appearing in the default branch's
+   * history for the path — not by the path merely existing, which another
+   * member's unrelated file would also satisfy.
+   */
+  blob: z.string().optional(),
 });
 
 /**
