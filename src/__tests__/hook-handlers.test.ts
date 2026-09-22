@@ -295,10 +295,25 @@ describe('hook-handlers registry', () => {
     const result = await handler.execute({ session_id: 's', cwd: '/x' }, 'cursor');
     expect(result).not.toBeNull();
     const parsed = JSON.parse(result!);
-    expect(parsed.followup_message).toBe('[teamai] hello');
+    expect(parsed.followup_message).toContain('[teamai] hello');
+    // Cursor hides the payload, so the model is asked to pass it on.
+    expect(parsed.followup_message).toContain('verbatim');
   });
 
-  it.each(['codebuddy', 'codex'])('contribute-check handler asks to stash (not stdout) for %s', async (tool) => {
+  it('gives Claude the hint alone, with nothing telling the model to reprint it', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+
+    mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] hello' });
+
+    const result = await handler.execute({ session_id: 's', cwd: '/x' }, 'claude');
+    const parsed = JSON.parse(result!);
+    expect(parsed.hookSpecificOutput.additionalContext).toBe('[teamai] hello');
+  });
+
+  it.each(['codebuddy', 'codex', 'codex-internal', 'tcodex'])('contribute-check handler asks to stash (not stdout) for %s', async (tool) => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'stop' && r.handler.name === 'contribute-check',

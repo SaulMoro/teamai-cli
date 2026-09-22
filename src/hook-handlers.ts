@@ -244,6 +244,22 @@ async function contributeHintAllowed(): Promise<boolean> {
   }
 }
 
+/**
+ * Ask the model to declare which recalled documents it actually used.
+ *
+ * English, like every other user-facing string: Claude Code prints the Stop
+ * payload, so this reaches the terminal of anyone whose team has recall on. It
+ * restates the requirement `compileRecallRulesBlock` already ships (#719).
+ */
+export function buildVotesNudge(recalledDocIds: readonly string[]): string {
+  return (
+    `This session recalled team knowledge through teamai (candidate doc-ids: ${recalledDocIds.join(', ')}). `
+    + 'Before you finish, declare the entries you actually used by appending '
+    + '`<!-- teamai:referenced-doc-ids: [the-doc-ids-you-used] -->` to your final reply. '
+    + 'Declare an empty list `[]` if you used none.'
+  );
+}
+
 const contributeCheckHandler: HookHandler = {
   name: 'contribute-check',
   async execute(stdin, tool) {
@@ -290,7 +306,10 @@ const pendingHintHandler: HookHandler = {
     const hint = (await contributeHintAllowed()) ? stashed : null;
     const votesHint = await pending.takePendingVotesHint(sessionId);
 
-    const combined = [hint, votesHint].filter(Boolean).join('\n');
+    // The votes nudge instructs the model; the contribute hint asks it to relay
+    // a message to the user and so must run to the end of the payload. Reversing
+    // the order would leave "print the following verbatim" with no clear end (#719).
+    const combined = [votesHint, hint].filter(Boolean).join('\n');
     if (!combined) return null;
 
     return JSON.stringify({
@@ -420,9 +439,7 @@ const votesSyncHandler: HookHandler = {
       if (nudged) {
         const { formatStopHookOutput } = await import('./utils/hook-output.js');
         const { STOP_STDOUT_UNSUPPORTED_TOOLS } = await import('./utils/tool-names.js');
-        const msg =
-          `你本次通过 teamai 召回了团队知识（候选 doc-id：${recalled.join(', ')}）。` +
-          `结束前请在回复末尾声明你实际用到的条目：<!-- teamai:referenced-doc-ids: [用到的doc-id] -->；没用到就留空 []。`;
+        const msg = buildVotesNudge(recalled);
         // For tools whose Stop stdout is ignored, stash the nudge for delivery
         // on the next UserPromptSubmit (same cross-process mechanism as contribute).
         if (STOP_STDOUT_UNSUPPORTED_TOOLS.has(tool ?? '')) {

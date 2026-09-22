@@ -41,8 +41,18 @@ export function normalizeAgentType(name: string): string {
  * and injected on the next UserPromptSubmit instead (which they DO consume).
  *
  * Matched against the raw, lowercase tool literal passed through hook dispatch
- * (not run through normalizeAgentType). A future variant id (e.g.
- * "codebuddy-internal") would miss this Set and fall back to the dropped-stdout
- * Stop path, so add such variants here explicitly.
+ * (not run through normalizeAgentType), which is why every id of a family has
+ * to be listed. `codex-internal` and `tcodex` run the same Codex and were
+ * missing, so their users lost the hint twice over: Codex rejected the Stop
+ * payload and the stash that would have recovered it never ran (#719).
+ *
+ * A future variant id (e.g. "codebuddy-internal") would miss this Set the same
+ * way, so add such variants here explicitly.
  */
-export const STOP_STDOUT_UNSUPPORTED_TOOLS = new Set(['codebuddy', 'workbuddy', 'codex']);
+export const STOP_STDOUT_UNSUPPORTED_TOOLS = new Set([
+  'codebuddy',
+  'workbuddy',
+  'codex',
+  'codex-internal',
+  'tcodex',
+]);
