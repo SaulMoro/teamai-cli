@@ -1206,7 +1206,38 @@ async function pushCore(
   // branch, which updates it in place; everything else goes into a new PR. Both
   // can happen in one run, so editing a resource under review updates its PR
   // without dragging unrelated resources into that review.
-  const groups = planPushGroups(selectedItems, pendingPushes);
+  // An open PR is matched by type and name alone. When the user has NAMED a
+  // destination, a pending entry that put the same-named resource somewhere
+  // else is a different resource: reusing its branch would force-push this
+  // content into that PR and move it to the wrong namespace (#649 review).
+  const requestedNamespaceFor = (type: PlaceableType): string | undefined => {
+    if (options.role) return options.role;
+    if (!options.project || !projectsManifest) return undefined;
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
+    return resolved.ok ? resolved.namespace : undefined;
+  };
+  const conflictsWithRequest = (recorded: { type: string; namespace?: string }): boolean => {
+    if (!recorded.namespace) return false;
+    if (!isPlaceableType(recorded.type as ResourceType)) return false;
+    const requested = requestedNamespaceFor(recorded.type as PlaceableType);
+    return requested !== undefined && requested !== recorded.namespace;
+  };
+  const reusablePending = pendingPushes.filter((entry) => {
+    const conflicting = entry.items.filter(conflictsWithRequest);
+    if (conflicting.length === 0) return true;
+    // Neither silent answer is safe: honouring the PR ignores the flag the user
+    // typed, and reusing the branch force-pushes this content into a review it
+    // may have nothing to do with. Say what is happening and open a new PR.
+    for (const recorded of conflicting) {
+      log.warn(
+        `[${recorded.type}] ${recorded.name} is awaiting review at ${recorded.relativePath} `
+        + `(${entry.prUrl ?? entry.branch}). This push names a different namespace, so it goes to a `
+        + 'separate PR and that one is left untouched.',
+      );
+    }
+    return false;
+  });
+  const groups = planPushGroups(selectedItems, reusablePending);
   reuseRecordedDestinations(groups);
   for (const entry of partiallySelectedEntries(selectedItems, pendingPushes)) {
     log.warn(

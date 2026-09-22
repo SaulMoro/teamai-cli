@@ -10,7 +10,6 @@ import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../projects.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
-import { getFileContentAtRev } from '../utils/git.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import {
@@ -91,8 +90,7 @@ export class AgentsHandler extends ResourceHandler {
     // namespace this directory need not have activated. Without the record it
     // would read as "no active source" and the author could never edit the
     // agent they just created (#649 review).
-    const pushState = await loadStateForScope(localConfig);
-    const placedAgents = pushState.placedAgents;
+    const placedAgents = (await loadStateForScope(localConfig)).placedAgents;
 
     const directItems: AgentResourceItem[] = [];
     const directStems = new Set<string>();
@@ -191,13 +189,18 @@ export class AgentsHandler extends ResourceHandler {
       // another namespace is a different agent — the layout allows that — and
       // must not block publishing this one, which is what activity filtering
       // alone did (#649 review).
+      const active = sources.filter(
+        (file) => activeNamespaces === null || !file.namespace
+          || activeNamespaces.includes(file.namespace),
+      );
+      // The record is a FALLBACK, not an additional candidate: when an active
+      // namespace already holds this stem, that is the agent deployed here, and
+      // `pull` leaves the recorded one undelivered for exactly that reason.
       const candidates = requestedNamespace
         ? sources.filter((file) => file.namespace === requestedNamespace)
-        : sources.filter(
-          (file) => activeNamespaces === null || !file.namespace
-            || activeNamespaces.includes(file.namespace)
-            || file.namespace === placedNamespace,
-        );
+        : active.length > 0
+          ? active
+          : sources.filter((file) => file.namespace === placedNamespace);
       if (candidates.length > 1) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
@@ -228,29 +231,6 @@ export class AgentsHandler extends ResourceHandler {
         continue;
       }
       const located = candidates[0];
-
-      // Accepted only because of the placement record: this namespace is NOT
-      // active here, so `pull` never refreshed a local copy of it, and the
-      // pre-push sync covers rules and skills but not agents. If the canonical
-      // file moved on since the last pull, the local rendering is stale and
-      // pushing it would revert whoever changed it (#649 review).
-      if (located?.namespace && located.namespace === placedNamespace
-        && !(activeNamespaces ?? []).includes(located.namespace)
-        && pushState.lastPullRev) {
-        const relFromRepo = path.relative(localConfig.repo.localPath, located.path);
-        const atLastPull = await getFileContentAtRev(
-          localConfig.repo.localPath, pushState.lastPullRev, relFromRepo,
-        );
-        const current = await readFileSafe(located.path);
-        if (atLastPull !== null && current !== null && atLastPull.toString('utf-8') !== current) {
-          items.push({ name: stem, type: 'agents', sourcePath: located.path,
-            relativePath: relFromRepo, status: 'modified',
-            skipReason: `Agent "${stem}" changed in the team repo (${relFromRepo}) since your last pull, `
-              + 'and its namespace is not active here, so your copy cannot be compared against it. '
-              + 'Run `teamai pull` first, then push again.' });
-          continue;
-        }
-      }
 
       const teamYamlPath = located?.ext === '.yaml' ? located.path : path.join(teamAgentsDir, `${stem}.yaml`);
       const teamMdPath = located?.ext === '.md' ? located.path : path.join(teamAgentsDir, `${stem}.md`);

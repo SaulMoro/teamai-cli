@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import matter from 'gray-matter';
+import { placedResourcePath } from './push-namespaces.js';
 import { requireInit, loadState, saveState, detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
 import { pullRepo, getHeadRev, createGit } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
@@ -272,10 +273,27 @@ export function filterRulesByKnowledgeNamespaces(
 export function filterAgentsByNamespaces(
   agents: ResourceItem[],
   agentNamespaces: string[] | null,
+  placedAgents?: Record<string, string>,
 ): ResourceItem[] {
-  const kept = agentNamespaces
+  const active = agentNamespaces
     ? agents.filter((agent) => !agent.namespace || agentNamespaces.includes(agent.namespace))
     : agents;
+
+  // An agent this machine published with --role/--project lives in a namespace
+  // this directory need not activate, and push lets the author keep editing it
+  // through that record. Pull has to deliver it for the same reason: otherwise
+  // the local copy never tracks the team file, and the next push writes a stale
+  // rendering over whoever changed it (#649 review). A stem an ACTIVE namespace
+  // already claims is left alone — that agent is the one deployed here, and two
+  // would collide on the same flattened filename.
+  const claimed = new Set(active.map((agent) => agent.name));
+  const recovered = placedAgents
+    ? agents.filter((agent) => agent.namespace
+      && !claimed.has(agent.name)
+      && placedResourcePath(placedAgents, 'agents', agent.name)
+        === `agents/${agent.namespace}/${path.basename(agent.relativePath)}`)
+    : [];
+  const kept = recovered.length > 0 ? [...active, ...recovered] : active;
 
   const seen = new Map<string, ResourceItem>();
   for (const agent of kept) {
@@ -422,7 +440,12 @@ export async function resolveDesiredAgents(
   roleContext: RolePullContext | null,
 ): Promise<ResourceItem[]> {
   const items = await getHandler('agents').scanTeamForPull(teamConfig, localConfig);
-  return filterAgentsByNamespaces(items, roleContext ? roleContext.activeNamespaces.agents : null);
+  const { placedAgents } = await loadStateForScope(localConfig);
+  return filterAgentsByNamespaces(
+    items,
+    roleContext ? roleContext.activeNamespaces.agents : null,
+    placedAgents,
+  );
 }
 
 // Deployment adds a CONTRIBUTORS file that the team source may not have; ignore it

@@ -1194,10 +1194,17 @@ describe('push namespace routing for rules and agents', () => {
 
     await push({ all: true, role: 'pm' });
 
-    // The branch is force-pushed, so honouring --role here would move the skill
-    // inside the open PR rather than leaving a copy behind.
-    expect(pushedItems[0]?.relativePath).toBe('skills/js/skill-a');
-    expect(pushedItems[0]?.namespace).toBe('js');
+    // Supersedes the original #331/#654 rule that the PR's destination always
+    // won. Matching is by type and name only, so an open PR for a DIFFERENT
+    // resource of the same name would capture this push and force-push into a
+    // review it has nothing to do with (#649 review). The flag the user typed
+    // decides, the open PR is left alone, and the collision is reported.
+    expect(pushedItems[0]?.relativePath).toBe('skills/pm/skill-a');
+    expect(pushedItems[0]?.namespace).toBe('pm');
+    const { log } = await import('../utils/logger.js');
+    const said = vi.mocked(log.warn).mock.calls.flat().join(' ');
+    expect(said).toContain('awaiting review at skills/js/skill-a');
+    expect(said).toContain('separate PR');
   });
 
   it('reuses the namespace recorded for a rule when updating its open PR', async () => {
@@ -1318,20 +1325,22 @@ describe('push namespace routing for rules and agents', () => {
         branch: 'teamai/push/test/20260101-000000',
         prUrl: 'https://git.woa.com/mr/9',
         createdAt: '2026-01-01T00:00:00.000Z',
-        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/pm/my-rule.md', namespace: 'pm' }],
       }],
     });
     mockHandlers({ rules: [{ ...newRule }], agents: [{ ...newAgent }] }, pushedItems);
     // First group pushes, second throws.
     mockPushRepoBranch.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('remote rejected'));
 
+    // The PR's namespace matches what --role asks for, so its branch is reused
+    // and the run really does have two groups.
     await push({ all: true, role: 'pm' });
 
     expect(process.exitCode).toBe(1);
     // The rule is on the remote now. Losing where it went means the author's
     // root copy is reclassified once that PR merges.
     const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
-    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
+    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/pm/my-rule.md' });
   });
 
   it('refuses to place a new rule onto an existing team file', async () => {

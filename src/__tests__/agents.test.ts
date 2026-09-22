@@ -485,26 +485,27 @@ projects:
    * the pre-push sync covers rules and skills but not agents. Pushing a stale
    * rendering over a teammate's newer canonical file is the risk (#649 review).
    */
-  it('refuses to push over a recorded agent that moved on since the last pull', async () => {
+  it('prefers an active source over the placement record', async () => {
+    // The record is a FALLBACK. When an active namespace holds this stem, that
+    // is the agent deployed here — and the one pull delivers.
     await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
-      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
-    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
-    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Teammate v2\ninstructions: Newer.\n');
+      'version: 1\nprojects:\n  - id: active\n    resources:\n      agents: [common]\n');
+    localConfig.projects = ['active'];
+    await fse.outputFile(path.join(repoPath, 'agents/common/reviewer.yaml'),
+      'name: reviewer\ndescription: Active\ninstructions: Read common.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/fe-agents/reviewer.yaml'),
+      'name: reviewer\ndescription: Recorded\ninstructions: Read fe.\n');
     await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
-      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+      '---\nname: reviewer\ndescription: Active\n---\n\nEdited locally.\n');
     await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
-      lastPullRev: 'abc1234',
       placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
     });
-    // At the last pull the canonical file said something else.
-    mockGetFileContentAtRev.mockResolvedValue(
-      Buffer.from('name: reviewer\ndescription: v1\ninstructions: Older.\n'),
-    );
 
     const items = await handler.scanLocalForPush(teamConfig, localConfig);
 
     expect(items).toHaveLength(1);
-    expect(items[0]?.skipReason).toContain('since your last pull');
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.relativePath).toBe('agents/common/reviewer.yaml');
   });
 
   it('pushes a recorded agent whose canonical file has not moved', async () => {
