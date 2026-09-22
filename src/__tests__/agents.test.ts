@@ -810,16 +810,32 @@ projects:
     const items = await handler.scanLocalForPush(teamConfig, localConfig);
 
     expect(items.find((i) => i.name === 'vr')).toBeUndefined();
-    expect(await handler.removedStems(localConfig)).toEqual(new Set(['fe/vr', 'vr']));
+    expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr', 'vr']));
   });
 
-  it('keeps the flattened stem live while another namespace still has that agent', async () => {
+  it('keeps the flattened stem live while this directory still receives an agent of that stem', async () => {
     await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
     await fse.ensureDir(path.join(repoPath, 'agents', 'be'));
     await fse.writeFile(path.join(repoPath, 'agents', 'be', 'vr.yaml'), 'name: vr\ndescription: be\ninstructions: x\n');
 
-    // `vr` here may be be/vr's copy: suppressing it would block editing be/vr.
-    expect(await handler.removedStems(localConfig)).toEqual(new Set(['fe/vr']));
+    // No roles or projects here, so be/vr is delivered, and `vr` is its copy:
+    // suppressing it would block editing be/vr.
+    expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr']));
+  });
+
+  it('retires the flattened stem when the surviving same-stem agent is not active here', async () => {
+    // An fe member: fe/vr is removed, be/vr survives but is not theirs, so the
+    // `vr` they hold is the removed fe/vr, not a copy of be/vr (#649 review).
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: front\n    resources:\n      agents: [fe]\n  - id: back\n    resources:\n      agents: [be]\n');
+    localConfig.projects = ['front'];
+    await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
+    await fse.outputFile(path.join(repoPath, 'agents/be/vr.yaml'), 'name: vr\ndescription: be\ninstructions: x\n');
+    await fse.writeFile(path.join(homeDir, '.claude/agents', 'vr.md'), '---\nname: vr\ndescription: d\n---\n\nold fe\n');
+
+    expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr', 'vr']));
+    expect((await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe' })).find((i) => i.name === 'vr'))
+      .toBeUndefined();
   });
 
   it('scanLocalForPush does not publish the copy an excluded tool still holds', async () => {

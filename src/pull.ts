@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import matter from 'gray-matter';
 import { selectAgentsForDirectory } from './resources/agents.js';
 import { requireInit, loadState, saveState, detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { learningsRoots } from './utils/learnings-roots.js';
@@ -648,7 +648,7 @@ async function cleanupTombstonedResources(
     // Agents deploy flattened, so a namespaced agent tombstone has to be read
     // as the stem the local copy carries (`AgentsHandler.removedStems`).
     const tombstones = type === 'agents'
-      ? await (handler as AgentsHandler).removedStems(localConfig)
+      ? await (handler as AgentsHandler).removedStems(freshConfig, localConfig)
       : await handler.readTombstones(localConfig);
     if (tombstones.size === 0) continue;
 
@@ -783,14 +783,17 @@ async function pullForScope(
   // delivery reads them: a placement whose PR has merged becomes a record, one
   // whose file the team deleted stops being one, and one shadowed by a new
   // shared-root file of the same name is withdrawn (#649 review).
-  // Not in single-repo mode: the refresh leaves the member's own checkout as it
-  // is — a feature branch, or a main not pulled yet — which is not the default
-  // branch, and a record dropped against it never comes back. `push` and
-  // `remove` reconcile there against a fresh origin/<default> worktree.
-  if (!options.dryRun && localConfig.repo.kind !== 'self') {
+  // In single-repo mode the refresh leaves the member's own checkout as it is —
+  // a feature branch, or a main not pulled yet — so the records are settled
+  // against origin/<default> as a ref instead: a record dropped against that
+  // checkout would never come back (#649 review).
+  if (!options.dryRun) {
     try {
+      const tip = localConfig.repo.kind === 'self'
+        ? `origin/${await getDefaultBranch(localConfig.repo.localPath)}`
+        : undefined;
       const recordsState = await loadStateForScope(localConfig);
-      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
+      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState, tip)) {
         await saveStateForScope(recordsState, localConfig);
       }
     } catch (e) {

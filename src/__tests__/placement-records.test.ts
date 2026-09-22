@@ -136,6 +136,86 @@ describe('reconcilePlacementRecords', () => {
     expect(state.placedAgents).toEqual({});
   });
 
+  describe('the checkpoint and the ref it is read from', () => {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
+      ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',
+    } }).trim();
+    type ReconcileState = Parameters<typeof reconcilePlacementRecords>[1];
+    const commitFile = async (rel: string, content: string, message: string) => {
+      await fse.outputFile(path.join(repoPath, rel), content);
+      git(['add', '-A']); git(['commit', '-q', '-m', message]);
+      return git(['hash-object', rel]);
+    };
+
+    it('clears the checkpoint with the last record, so a later re-placement at that path is recorded', async () => {
+      git(['init', '-q', '-b', 'main']);
+      await commitFile('rules/fe/my-rule.md', 'first\n', 'placement merged');
+      const state: ReconcileState = { placedRules: { 'my-rule': 'rules/fe/my-rule.md' }, placedAgents: {}, pendingPushes: [] };
+      await reconcilePlacementRecords(repoPath, state);
+      git(['rm', '-q', 'rules/fe/my-rule.md']); git(['commit', '-q', '-m', 'removal merged']);
+      await reconcilePlacementRecords(repoPath, state);
+      expect(state.placedRules).toEqual({});
+      expect(state.placementsCheckedAt).toBeUndefined();
+
+      // The author places the rule again, and that PR merges.
+      const base = git(['rev-parse', 'HEAD']);
+      const blob = await commitFile('rules/fe/my-rule.md', 'second\n', 're-placement merged');
+      state.pendingPushes = [{ ...pending([{ ...placedRule(), blob }]), base }];
+      await reconcilePlacementRecords(repoPath, state);
+
+      expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+    });
+
+    it('keeps a record made in this run although the checkpoint predates an earlier deletion of its path', async () => {
+      git(['init', '-q', '-b', 'main']);
+      await commitFile('rules/fe/other.md', 'other\n', 'another placement');
+      const state: ReconcileState = { placedRules: { other: 'rules/fe/other.md' }, placedAgents: {}, pendingPushes: [] };
+      await reconcilePlacementRecords(repoPath, state);
+      // Before the author's next check: my-rule is created and deleted by
+      // somebody, then the author's own placement of it lands.
+      await commitFile('rules/fe/my-rule.md', 'somebody\'s\n', 'teammate rule');
+      git(['rm', '-q', 'rules/fe/my-rule.md']); git(['commit', '-q', '-m', 'teammate removal']);
+      const base = git(['rev-parse', 'HEAD']);
+      const blob = await commitFile('rules/fe/my-rule.md', 'ours\n', 'our placement merged');
+      state.pendingPushes = [{ ...pending([{ ...placedRule(), blob }]), base }];
+
+      await reconcilePlacementRecords(repoPath, state);
+
+      expect(state.placedRules).toEqual({ other: 'rules/fe/other.md', 'my-rule': 'rules/fe/my-rule.md' });
+    });
+
+    it('reads the default branch through a ref when the checkout is somewhere else', async () => {
+      // A single-repo member on a feature branch cut before the placement merged.
+      git(['init', '-q', '-b', 'main']);
+      await commitFile('README.md', 'seed\n', 'seed');
+      git(['checkout', '-q', '-b', 'feature']);
+      git(['checkout', '-q', 'main']);
+      const base = git(['rev-parse', 'HEAD']);
+      const blob = await commitFile('rules/fe/my-rule.md', 'ours\n', 'placement merged');
+      git(['checkout', '-q', 'feature']);
+      const state: ReconcileState = {
+        placedRules: {}, placedAgents: {}, pendingPushes: [{ ...pending([{ ...placedRule(), blob }]), base }],
+      };
+
+      expect(await reconcilePlacementRecords(repoPath, state, 'main')).toBe(true);
+      expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+      expect(state.placementsCheckedAt).toBe(git(['rev-parse', 'main']));
+      // Reconciled against the checkout itself, the same record is dropped.
+      const againstCheckout: ReconcileState = { ...state, placedRules: { ...state.placedRules } };
+      await reconcilePlacementRecords(repoPath, againstCheckout);
+      expect(againstCheckout.placedRules).toEqual({});
+    });
+
+    it('changes nothing when the ref cannot be resolved', async () => {
+      git(['init', '-q', '-b', 'main']);
+      await commitFile('README.md', 'seed\n', 'seed');
+      const state: ReconcileState = { placedRules: { 'my-rule': 'rules/fe/my-rule.md' }, placedAgents: {}, pendingPushes: [] };
+
+      expect(await reconcilePlacementRecords(repoPath, state, 'origin/main')).toBe(false);
+      expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+    });
+  });
+
   it('spends a placement unrecorded when its path was deleted and recreated before the first check', async () => {
     const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
       ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',

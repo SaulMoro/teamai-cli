@@ -858,19 +858,20 @@ export async function hashObject(repoPath: string, filePath: string): Promise<st
 
 /**
  * Whether `blob` became or stopped being the content of `filePath` in a commit
- * on the current branch after `since` (the whole history when absent).
- * Squash- and rebase-merges rewrite commits but keep the blob, so this is what
- * tells "our push landed here" from "somebody else created this path" when
- * the branch itself is no longer around to ask. Null when git cannot say.
+ * reachable from `tip` (HEAD by default) after `since` (the whole history when
+ * absent). Squash- and rebase-merges rewrite commits but keep the blob, so this
+ * is what tells "our push landed here" from "somebody else created this path"
+ * when the branch itself is no longer around to ask. Null when git cannot say.
  */
 export async function blobInHistory(
   repoPath: string,
   blob: string,
   filePath: string,
   since?: string,
+  tip = 'HEAD',
 ): Promise<boolean | null> {
   try {
-    const range = since ? `${since}..HEAD` : 'HEAD';
+    const range = since ? `${since}..${tip}` : tip;
     const out = await createGit(repoPath).raw(['log', range, `--find-object=${blob}`, '--format=%H', '--', filePath]);
     return out.trim().length > 0;
   } catch (e) {
@@ -880,13 +881,18 @@ export async function blobInHistory(
 }
 
 /**
- * Whether a commit on the current branch after `since` deleted `filePath`.
- * A path that exists now may still have been deleted and recreated in that
- * range, by someone else. Null when git cannot say.
+ * Whether a commit reachable from `tip` (HEAD by default) after `since` deleted
+ * `filePath`. A path that exists now may still have been deleted and recreated
+ * in that range, by someone else. Null when git cannot say.
  */
-export async function pathDeletedSince(repoPath: string, since: string, filePath: string): Promise<boolean | null> {
+export async function pathDeletedSince(
+  repoPath: string,
+  since: string,
+  filePath: string,
+  tip = 'HEAD',
+): Promise<boolean | null> {
   try {
-    const out = await createGit(repoPath).raw(['log', `${since}..HEAD`, '--diff-filter=D', '--format=%H', '--', filePath]);
+    const out = await createGit(repoPath).raw(['log', `${since}..${tip}`, '--diff-filter=D', '--format=%H', '--', filePath]);
     return out.trim().length > 0;
   } catch (e) {
     log.debug(`git log --diff-filter=D failed for ${filePath}: ${(e as Error).message}`);
@@ -894,10 +900,10 @@ export async function pathDeletedSince(repoPath: string, since: string, filePath
   }
 }
 
-/** Full commit id of HEAD, or null when there is none. */
-export async function getHeadCommit(localPath: string): Promise<string | null> {
+/** Full commit id of `rev` (HEAD by default), or null when it names none. */
+export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<string | null> {
   try {
-    return (await createGit(localPath).raw(['rev-parse', '--verify', 'HEAD^{commit}'])).trim() || null;
+    return (await createGit(localPath).raw(['rev-parse', '--verify', `${rev}^{commit}`])).trim() || null;
   } catch {
     return null;
   }

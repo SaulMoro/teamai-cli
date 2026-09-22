@@ -22,6 +22,7 @@ vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
   createGit: vi.fn(),
+  getDefaultBranch: vi.fn().mockResolvedValue('main'),
 }));
 
 vi.mock('../utils/pending-push.js', () => ({
@@ -111,10 +112,11 @@ function config(kind: 'git' | 'self'): LocalConfig {
  * Placement records are settled against the default branch. An independent
  * clone is that branch once pulled; a single-repo member's own checkout is
  * whatever they have out — a feature branch, a main not pulled yet — and a
- * record dropped against it never comes back (#649 review). There `push` and
- * `remove` settle the records in a fresh origin/<default> worktree instead.
+ * record dropped against it never comes back, while skipping the pass there
+ * left a merged placement unrecorded until the next push (#649 review). So a
+ * single-repo pull reads the default branch as the ref origin/<default>.
  */
-describe('teamai pull settles placement records only against the default branch', () => {
+describe('teamai pull settles placement records against the default branch', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig);
@@ -132,14 +134,14 @@ describe('teamai pull settles placement records only against the default branch'
 
     await pull({ silent: true, force: true });
 
-    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(testRoot, 'team-repo'), expect.anything());
+    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(testRoot, 'team-repo'), expect.anything(), undefined);
   });
 
-  it('not in single-repo mode, where the checkout is the member\'s own', async () => {
+  it('in single-repo mode, through origin/<default> rather than the member\'s checkout', async () => {
     vi.mocked(loadLocalConfigForScope).mockResolvedValue(config('self'));
 
     await pull({ silent: true, force: true });
 
-    expect(reconcilePlacementRecords).not.toHaveBeenCalled();
+    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(business, '.teamai'), expect.anything(), 'origin/main');
   });
 });

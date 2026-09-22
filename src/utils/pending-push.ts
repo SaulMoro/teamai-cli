@@ -14,7 +14,7 @@
  */
 import path from 'node:path';
 import { pathExists } from './fs.js';
-import { remoteBranchExists, hashObject, blobInHistory, pathDeletedSince, getHeadCommit } from './git.js';
+import { remoteBranchExists, hashObject, blobInHistory, pathDeletedSince, getHeadCommit, getFileContentAtRev } from './git.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { log } from './logger.js';
 import type { PendingPush, ResourceItem, State } from '../types.js';
@@ -220,13 +220,31 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  *
  * Runs after the pull in `push` and after the refresh in `pull`, before
  * anything reads the records. Returns whether `state` changed.
+ *
+ * `tip` names the default branch as a git ref, for a checkout that is not the
+ * default branch itself — a single-repo member's own working tree. Without
+ * it, the working tree and HEAD are the default branch as just pulled.
  */
 export async function reconcilePlacementRecords(
   repoPath: string,
   state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes' | 'placementsCheckedAt'>,
+  tip?: string,
 ): Promise<boolean> {
+  // A ref that cannot be resolved says nothing about any file: reading every
+  // record as "gone" against it would drop them all.
+  if (tip && !await getHeadCommit(repoPath, tip)) {
+    log.debug(`Placement records not reconciled: ${tip} cannot be resolved here`);
+    return false;
+  }
+  const exists = tip
+    ? async (rel: string) => await getFileContentAtRev(repoPath, tip, `./${rel}`) !== null
+    : (rel: string) => pathExists(path.join(repoPath, rel));
+  const history = tip ?? 'HEAD';
   let changed = false;
   const checkedAt = state.placementsCheckedAt;
+  // Recorded in step 1 of this very run, against their own `base`: the
+  // previous checkpoint predates them and says nothing about them.
+  const recordedNow = new Set<string>();
   const fieldFor = (type: string): 'placedRules' | 'placedAgents' | null => (
     type === 'rules' ? 'placedRules' : type === 'agents' ? 'placedAgents' : null
   );
@@ -237,15 +255,15 @@ export async function reconcilePlacementRecords(
       if (!item.placed) continue;
       const field = fieldFor(item.type);
       if (!field) continue;
-      if (!await pathExists(path.join(repoPath, item.relativePath))) continue;
+      if (!await exists(item.relativePath)) continue;
       // An entry with no blob predates the check; existence is all it can offer.
       // Bounded by `base`: the same bytes may have sat at this path before the
       // push, and a PR closed unmerged must not borrow that history.
-      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath, entry.base) !== true) continue;
+      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath, entry.base, history) !== true) continue;
       // Placement refuses an occupied path, so a deletion since `base` came
       // after this placement landed: what is there now was recreated by
       // someone else, and the placement is spent without a record.
-      if (entry.base && await pathDeletedSince(repoPath, entry.base, item.relativePath) === true) {
+      if (entry.base && await pathDeletedSince(repoPath, entry.base, item.relativePath, history) === true) {
         log.debug(`Not recording placement ${field}.${item.name}: ${item.relativePath} was deleted after it landed`);
         item.placed = false;
         delete item.blob;
@@ -254,6 +272,7 @@ export async function reconcilePlacementRecords(
       }
       log.debug(`Recording placement ${field}.${item.name} → ${item.relativePath}: landed on the default branch`);
       state[field] = { ...state[field], [item.name]: item.relativePath };
+      recordedNow.add(`${field}:${item.name}`);
       // Consumed: a placement is recorded once. Left marked, it would record
       // again after the team deleted the file and another member recreated
       // the path — the blob stays in history, so the check above would still
@@ -271,21 +290,22 @@ export async function reconcilePlacementRecords(
     const kept: Record<string, string> = {};
     for (const [name, recorded] of Object.entries(records)) {
       const valid = placedResourcePath(records, root, name);
-      if (valid && !await pathExists(path.join(repoPath, valid))) {
+      if (valid && !await exists(valid)) {
         log.debug(`Dropping placement record ${field}.${name} → ${recorded}: gone from the default branch`);
         changed = true;
         continue;
       }
       // Deleted and recreated between two checks — a removal that merged, then
       // another member's resource at the same path — is not this author's.
-      if (valid && checkedAt && await pathDeletedSince(repoPath, checkedAt, valid) === true) {
+      if (valid && checkedAt && !recordedNow.has(`${field}:${name}`)
+        && await pathDeletedSince(repoPath, checkedAt, valid, history) === true) {
         log.debug(`Dropping placement record ${field}.${name} → ${recorded}: deleted from the default branch since the last check`);
         changed = true;
         continue;
       }
       let shadowed: string | undefined;
       for (const candidate of sharedRootPaths(root, name)) {
-        if (await pathExists(path.join(repoPath, candidate))) { shadowed = candidate; break; }
+        if (await exists(candidate)) { shadowed = candidate; break; }
       }
       if (shadowed) {
         log.warn(
@@ -302,12 +322,17 @@ export async function reconcilePlacementRecords(
 
   // The revision the surviving records were checked against, so the next run
   // sees a deletion that happened in between even if the path is back by then.
+  // With no record left there is nothing it could vouch for, and kept it would
+  // later read a deletion from before a new record existed as that record's.
   if (Object.keys(state.placedRules ?? {}).length + Object.keys(state.placedAgents ?? {}).length > 0) {
-    const head = await getHeadCommit(repoPath);
+    const head = await getHeadCommit(repoPath, history);
     if (head && head !== state.placementsCheckedAt) {
       state.placementsCheckedAt = head;
       changed = true;
     }
+  } else if (state.placementsCheckedAt !== undefined) {
+    delete state.placementsCheckedAt;
+    changed = true;
   }
   return changed;
 }
