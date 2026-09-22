@@ -232,9 +232,11 @@ projects:
 （`skills/<namespace>/`、`learnings/<namespace>/`、`agents/<namespace>/`），因此
 都不能越出自己命名的目录。
 
-**namespace** 必须是单个路径片段：不含 `/`、`\`、`:` 和控制字符，且不能是 `.`、
-`..` 或任何只由点和空格组成的名称（Windows 会删除结尾的空格与句点，`.. ` 最终会
-变成 `..`）。除此之外不受限制 —— 非 ASCII 名称或含空格的名称仍是合法目录。
+**namespace** 必须是单个路径片段：不含 `/`、`\`、`:` 和控制字符，且结尾不能是
+`.` 或空格。Windows 会从每个路径片段删除结尾的句点与空格，因此 `.. ` 最终变成
+`..` 越出上级目录，`frontend.` 最终变成 `frontend` 落进另一个 namespace 的目录；
+该规则同时排除了 `.` 与 `..`。除此之外不受限制 —— 非 ASCII 名称、名称中间含空格
+的目录仍然合法。
 
 **项目 id** 沿用它原有的、更严格的规则，因为它还会在命令行中输入并按逗号切分：
 只允许字母、数字、`.`、`_` 和 `-`，且不能是 `.` 或 `..`。
@@ -1453,8 +1455,8 @@ roles:
 ```
 
 真正生效的 namespace（`knowledge`、`skills`、`agents`）都会成为目录名，因此必须是
-单个路径片段：不含 `/`、`\`、`:` 和控制字符，且不能是 `.`、`..` 或任何只由点和空格
-组成的名称，`manifest/roles.yaml` 与 `manifest/projects.yaml` 规则一致。role 的
+单个路径片段：不含 `/`、`\`、`:` 和控制字符，且结尾不能是 `.` 或空格，
+`manifest/roles.yaml` 与 `manifest/projects.yaml` 规则一致。role 的
 `learnings:` 仅为向后兼容而保留、运行时忽略（learnings 按 project 而非 role 划分
 namespace），不会成为目录名，因此不做校验。
 

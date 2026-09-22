@@ -84,8 +84,10 @@ projects:
 The id and every namespace are refused at the manifest boundary unless they can
 name a directory without escaping it, since each becomes a directory component. A
 namespace must be a single path segment: no `/`, `\`, `:` or control character,
-and not `.`, `..` or any other name made only of dots and spaces (Win32 strips
-trailing spaces and periods, so `.. ` would arrive as `..`). The id keeps the
+and no trailing `.` or space (Win32 strips those from every component, so `.. `
+would arrive as `..` and `frontend.` as `frontend`, escaping the parent in the
+first case and another namespace's directory in the second; `.` and `..` fall out
+of the same rule). The id keeps the
 older, narrower rule it has always had — letters, digits, `.`, `_`, `-`, and not
 `.` or `..` — because it is also typed on the command line and split on commas.
 The namespace guard applies to `manifest/roles.yaml`'s active namespaces

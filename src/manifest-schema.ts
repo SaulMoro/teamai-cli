@@ -18,20 +18,21 @@ import { z } from 'zod';
 // what it is in a terminal that reports the path back.
 const UNSAFE_SEGMENT = /[/\\:\u0000-\u001f\u007f-\u009f]/;
 
-// Win32 strips trailing spaces and periods from a path component, so `.. `, `.. .`
-// and `...` all reach the filesystem as `..` or as nothing at all. A segment of
-// nothing but dots and spaces is therefore `.` or `..` in disguise; `a..` is not,
-// it stays inside its parent, so only the whole-string form is refused.
-const DOTS_AND_SPACES = /^[ .]+$/;
+// Win32 strips trailing spaces and periods from every path component, so a
+// namespace ending in one is not the directory the manifest names: `.. ` arrives
+// as `..` and escapes the parent, `frontend.` arrives as `frontend` and lands in
+// another namespace's directory, which is the isolation the namespace exists for.
+// Refusing the trailing character covers both, and `.`/`..` fall out of it.
+const TRAILING_DOT_OR_SPACE = /[ .]$/;
 
 /** True if `seg` is safe to use as a single path segment (no separators, no `..`). */
 export function isSafeNamespaceSegment(seg: string): boolean {
-  return seg.length > 0 && !UNSAFE_SEGMENT.test(seg) && !DOTS_AND_SPACES.test(seg);
+  return seg.length > 0 && !UNSAFE_SEGMENT.test(seg) && !TRAILING_DOT_OR_SPACE.test(seg);
 }
 
 /** A resource namespace: one path segment that cannot escape its parent. */
 export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, {
-  message: "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, and not '.', '..' or any other name made only of dots and spaces)",
+  message: "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, and no trailing '.' or space, which also rules out '.' and '..')",
 });
 
 /**

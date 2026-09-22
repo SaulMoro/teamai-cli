@@ -248,10 +248,11 @@ The project id and every namespace under `resources:` become a directory name
 neither may escape the directory it names.
 
 A **namespace** must be a single path segment: no `/`, `\`, `:` or control
-character, and not `.`, `..` or any other name made only of dots and spaces
-(Windows strips trailing spaces and periods, so `.. ` would arrive as `..`).
-Anything else a filesystem accepts stays valid — a non-ASCII name, or one holding
-a space.
+character, and no trailing `.` or space. Windows strips those from every path
+component, so `.. ` would arrive as `..` and escape the parent, and `frontend.`
+would arrive as `frontend` and land in another namespace's directory; the rule
+also rules out `.` and `..`. Anything else a filesystem accepts stays valid — a
+non-ASCII name, or one holding a space inside it.
 
 A **project id** keeps its own older and narrower rule, because it is also typed
 on the command line and split on commas: letters, digits, `.`, `_` and `-`, and
@@ -1498,8 +1499,8 @@ roles:
 
 Every namespace that takes effect — `knowledge`, `skills` and `agents` — becomes a
 directory name, so it must be a single path segment: no `/`, `\`, `:` or control
-character, and not `.`, `..` or any other name made only of dots and spaces, in
-`manifest/roles.yaml` exactly as in `manifest/projects.yaml`. A role's
+character, and no trailing `.` or space, in `manifest/roles.yaml` exactly as in
+`manifest/projects.yaml`. A role's
 `learnings:` is accepted for backward compatibility and ignored at runtime
 (learnings are namespaced by project, not by role), so it names no directory and
 is not checked.

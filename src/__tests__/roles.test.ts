@@ -130,6 +130,7 @@ roles:
       '../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil',
       'a\u0009b', 'a\u007fb', 'a\u0085b',
       '.. ', '.. .', '...', '. ', '  ',
+      'frontend.', 'frontend ', 'frontend..',
     ]) {
       const repoDir = writeManifest(`
 version: 1

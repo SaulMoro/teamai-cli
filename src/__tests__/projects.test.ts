@@ -155,6 +155,9 @@ projects:
         '../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil',
         'a\u0009b', 'a\u007fb', 'a\u0085b',
         '.. ', '.. .', '...', '. ', '  ',
+        // Win32 strips the trailing character here too, so each of these is
+        // `frontend` on that filesystem — another namespace's directory.
+        'frontend.', 'frontend ', 'frontend..',
       ]) {
         const repoDir = writeManifest(`
 version: 1
