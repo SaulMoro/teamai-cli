@@ -30,6 +30,13 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
   // through to an unfiltered sync that reinstalls every project's skills/rules.
   // So we return a real (possibly empty-active) context and let the cleanup path
   // below prune the now-inactive project namespaces.
+  //
+  // This returns before roles.yaml is read, and deliberately so: the branch is
+  // reached only when the member HAS NO ROLE, and a role-less member resolves to
+  // the same unfiltered sync when roles.yaml is perfectly valid — every role
+  // namespace below is gated on `primaryRole`. The manifest gates nothing for
+  // them, so reading it here could only add a new way for their pull to fail,
+  // never close a gap. A member WITH a role never reaches this line.
   if (!hasRole && !hasProjects && !teamHasProjects) return null;
 
   // ── Role namespaces (optional) ──

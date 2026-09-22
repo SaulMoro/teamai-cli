@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -161,6 +161,8 @@ projects:
         // Windows opens a device for these in any directory, with or without an
         // extension, so they cannot name the directory the manifest means.
         'CON', 'con', 'NUL', 'aux', 'COM1', 'lpt9', 'CON.txt',
+        // Windows reads the superscript forms as device numbers too.
+        'COM\u00b9', 'LPT\u00b3',
       ]) {
         const repoDir = writeManifest(`
 version: 1
@@ -225,6 +227,22 @@ projects:
       expect(manifest?.projects[0].resources.skills).toEqual([
         'console', 'connect', 'community', 'complex', 'nullable', 'COM0', 'LPT0',
       ]);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a symlink with no target as broken, not as an absent manifest', async () => {
+    // A dangling link fails to read with ENOENT exactly as a missing file does,
+    // and "missing" is the one answer that lets a caller drop its filtering.
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-projlink-'));
+    try {
+      mkdirSync(path.join(repoDir, 'manifest'), { recursive: true });
+      symlinkSync(
+        path.join(repoDir, 'manifest', 'nowhere.yaml'),
+        path.join(repoDir, 'manifest', 'projects.yaml'),
+      );
+      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(/symbolic link with no target/i);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
