@@ -1,7 +1,7 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { readFileSafe, ensureDir, writeFile } from './utils/fs.js';
+import { readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
 import type { ResourceNamespaces } from './roles.js';
 
 /**
@@ -99,11 +99,13 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
  * Load the projects manifest. Returns `null` when the file is absent — projects
  * are optional (a team without partitioning has no projects.yaml), so every
  * project code path short-circuits on `null` and behaves exactly as before.
+ * A file that exists but cannot be read or parsed throws, so a caller never
+ * mistakes a broken manifest for a team without one.
  */
 export async function loadProjectsManifest(repoPath: string): Promise<ProjectsManifest | null> {
   const manifestPath = path.join(repoPath, 'manifest', 'projects.yaml');
-  const content = await readFileSafe(manifestPath);
-  if (!content) {
+  const content = await readFileIfExists(manifestPath);
+  if (content === null) {
     return null;
   }
 

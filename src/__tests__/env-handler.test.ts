@@ -517,6 +517,27 @@ scope: 'user',
     // sticking to wherever the block already lives, the next pull would
     // prefer that newly-existing .bash_profile and inject a second, separate
     // block there instead of updating the one already in .bashrc.
+    // Root writes a read-only file, and Windows has no POSIX mode bits.
+    const cannotRevokeWrite = process.platform === 'win32' || process.getuid?.() === 0;
+    it.skipIf(cannotRevokeWrite)('leaves an unchanged shell profile alone on a repeat pull', async () => {
+      // pullItem runs on every pull, including the revision fast path a
+      // SessionStart hook takes each session. A profile that already carries
+      // the block must not be rewritten: made read-only here, so a write would
+      // throw rather than merely bump a timestamp.
+      const bashrcPath = path.join(homeDir, '.bashrc');
+      await handler.pullItem(item, teamConfig, localConfig);
+      const first = await fse.readFile(bashrcPath, 'utf-8');
+      expect(first).toContain(TEAMAI_ENV_START);
+
+      await fse.chmod(bashrcPath, 0o444);
+      try {
+        await expect(handler.pullItem(item, teamConfig, localConfig)).resolves.toBeUndefined();
+      } finally {
+        await fse.chmod(bashrcPath, 0o644);
+      }
+      expect(await fse.readFile(bashrcPath, 'utf-8')).toBe(first);
+    });
+
     it('keeps updating .bashrc in place after Git for Windows auto-generates a forwarding .bash_profile', async () => {
       vi.stubEnv('SHELL', '');
       vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');

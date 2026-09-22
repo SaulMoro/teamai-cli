@@ -673,17 +673,23 @@ async function cleanupTombstonedResources(
  * from the original pull() function to support both user and project scope.
  */
 /**
- * Report the one shape that makes an env count of 0 a mistake rather than an
- * empty file: no top-level `variables:` key, which zod accepts without a word.
- * The env resource is skipped the moment its count reads 0, so this is the only
- * place the check can run (#662).
+ * Env on the "Already synced" fast path: deliver what env.yaml scopes to this
+ * directory, and report the one shape that makes an env count of 0 a mistake
+ * rather than an empty file (no top-level `variables:` key, which zod accepts
+ * without a word, #662).
  *
- * Called from both the full sync and the "Already synced" fast path. A machine
- * that recorded `lastPullRev` before the file was mangled keeps that rev and
- * takes the fast path on every later pull, so the Step 2 call site alone would
- * never reach it — the misconfiguration would stay invisible.
+ * Hooks and MCP are reconciled outside `pullForScope`, so the fast path never
+ * hides a scoping change from them. Env is delivered inside the loop, and the
+ * loop is exactly what the fast path skips. Two things reach a machine with an
+ * unchanged `lastPullRev` only through here: a CLI upgrade that starts
+ * honouring `roles:`/`projects:` on env variables (the repo did not move, so
+ * without this a variable scoped away stays exported until `--force`), and a
+ * mangled env.yaml on a machine that recorded its rev before the mangling.
+ *
+ * Quiet by design: this runs on every session start. `pullItem` rewrites
+ * `env.sh` from the filtered set and leaves an unchanged shell profile alone.
  */
-async function warnIfEnvYamlShapeIsWrong(
+async function reconcileEnvForUnchangedRepo(
   freshConfig: TeamaiConfig,
   localConfig: LocalConfig,
 ): Promise<void> {
@@ -692,12 +698,15 @@ async function warnIfEnvYamlShapeIsWrong(
     const envItems = await envHandler.scanTeamForPull(freshConfig, localConfig);
     if (envItems.length === 0) return;
     const varCount = await envHandler.countEnvVars(envItems[0].sourcePath);
-    if (varCount !== 0) return;
-    const shapeProblem = await envHandler.describeEnvYamlShapeProblemAt(envItems[0].sourcePath);
-    if (shapeProblem) log.warn(shapeProblem);
+    if (varCount === 0) {
+      const shapeProblem = await envHandler.describeEnvYamlShapeProblemAt(envItems[0].sourcePath);
+      if (shapeProblem) log.warn(shapeProblem);
+      return;
+    }
+    await envHandler.pullItem(envItems[0], freshConfig, localConfig);
   } catch (e) {
-    // Never let a diagnostic take down the pull it is diagnosing.
-    log.debug(`env.yaml shape check skipped: ${(e as Error).message}`);
+    // Never let this take down the pull it is running beside.
+    log.debug(`env reconcile on unchanged repo skipped: ${(e as Error).message}`);
   }
 }
 
@@ -981,10 +990,11 @@ async function pullForScope(
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel);
-          // A repo that has not moved can still carry a malformed env.yaml, and
-          // the Step 2 check below is unreachable from this branch.
+          // A repo that has not moved can still carry a malformed env.yaml, or
+          // scope a variable this CLI version now withholds; the Step 2 env
+          // branch below is unreachable from here.
           if (resourceTypes.includes('env')) {
-            await warnIfEnvYamlShapeIsWrong(freshConfig, localConfig);
+            await reconcileEnvForUnchangedRepo(freshConfig, localConfig);
           }
           // The knowledge branch has its own history: a teammate's contribution
           // moves teamai-learnings without touching main, so main's revision is

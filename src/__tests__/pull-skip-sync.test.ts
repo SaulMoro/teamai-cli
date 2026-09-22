@@ -179,6 +179,42 @@ describe('pull skip-sync when repo HEAD unchanged', () => {
     expect(saveStateForScope).not.toHaveBeenCalled();
   });
 
+  it('re-delivers env on the revision fast path so a variable scoped away by an upgrade leaves env.sh', async () => {
+    // The machine pulled with a CLI that ignored `roles:` on env variables, so
+    // env.sh holds every declared variable and lastPullRev matches HEAD. The
+    // repo has not moved; only the CLI has. Hooks and MCP reconcile outside the
+    // fast path already; env must not be the one axis a plain `teamai pull`
+    // leaves stale until --force.
+    await fse.ensureDir(path.join(repoPath, 'env'));
+    await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), [
+      'variables:',
+      '  - key: SHARED_URL',
+      '    value: https://shared.example',
+      '  - key: DEVOPS_ONLY',
+      '    value: devops-secret',
+      '    roles: [devops]',
+      '',
+    ].join('\n'));
+    const envShPath = path.join(homeDir, '.teamai', 'env.sh');
+    await fse.ensureDir(path.dirname(envShPath));
+    await fse.writeFile(envShPath, "export SHARED_URL='https://shared.example'\nexport DEVOPS_ONLY='devops-secret'\n");
+
+    vi.mocked(getHeadRev).mockResolvedValue('abc1234');
+    vi.mocked(loadStateForScope).mockResolvedValue(emptyState({
+      lastPullRev: 'abc1234',
+      lastPullTargets: ['claude'],
+    }));
+
+    await pull({});
+
+    expect(log.success).toHaveBeenCalledWith(expect.stringContaining('Already synced at abc1234, skipping'));
+    const envSh = await fse.readFile(envShPath, 'utf8');
+    expect(envSh).toContain("export SHARED_URL='https://shared.example'");
+    expect(envSh).not.toContain('DEVOPS_ONLY');
+    // Still the fast path: the revision cache is not rewritten.
+    expect(saveStateForScope).not.toHaveBeenCalled();
+  });
+
   it('stops before the revision fast path when role-scoped resources cannot be resolved', async () => {
     await fse.remove(path.join(repoPath, 'skills', 'common'));
     await fse.writeFile(path.join(repoPath, 'skills', 'common'), 'not a directory\n');

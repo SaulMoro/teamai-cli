@@ -462,7 +462,8 @@ export class EnvHandler extends ResourceHandler {
    * Inject the shell block into the profile file (idempotent).
    */
   private async injectShellProfile(profilePath: string, block: string): Promise<void> {
-    let content = await readFileSafe(profilePath) ?? '';
+    const original = await readFileSafe(profilePath) ?? '';
+    let content = original;
 
     const startIdx = content.indexOf(TEAMAI_ENV_START);
     const endIdx = content.indexOf(TEAMAI_ENV_END);
@@ -480,6 +481,10 @@ export class EnvHandler extends ResourceHandler {
       content += '\n' + block + '\n';
     }
 
+    // Skip the write when nothing changed: this runs on every pull, including
+    // the revision fast path a SessionStart hook takes each session, and the
+    // member's shell profile should not churn for it.
+    if (content === original) return;
     await writeFile(profilePath, content);
   }
 

@@ -251,6 +251,19 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(claudeSettings).toContain('echo shared');
     expect(claudeSettings).not.toContain('echo billing');
 
+    // ── Upgrade path: repo unchanged, CLI newer ────────────────────────────
+    // A CLI that ignored `roles:`/`projects:` on env left DEVOPS_ONLY in
+    // env.sh, and the recorded revision still matches HEAD. A plain pull takes
+    // the "Already synced" fast path and must still rewrite env.sh from the
+    // filtered set, or the withheld secret stays exported until --force.
+    fs.appendFileSync(envShPath(), "export DEVOPS_ONLY='devops-secret'\n");
+    const pullUnchanged = await runCLI(['pull'], projectRoot, home);
+    expect(pullUnchanged.code, pullUnchanged.output).toBe(0);
+    expect(pullUnchanged.output).toContain('Already synced');
+    const envUnchanged = readEnvSh();
+    expect(envUnchanged).toContain('CHECKOUT_URL');
+    expect(envUnchanged).not.toContain('DEVOPS_ONLY');
+
     // ── Rebind to billing: what checkout delivered must be REMOVED ─────────
     const setBilling = await runCLI(['projects', 'set', 'billing'], projectRoot, home);
     expect(setBilling.code, setBilling.output).toBe(0);

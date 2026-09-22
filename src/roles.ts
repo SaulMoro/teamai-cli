@@ -1,7 +1,7 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { readFileSafe, ensureDir, writeFile } from './utils/fs.js';
+import { readFileSafe, readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -118,7 +118,9 @@ export async function loadRolesManifest(repoPath: string): Promise<RolesManifest
  */
 export async function loadRolesManifestIfPresent(repoPath: string): Promise<RolesManifest | null> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
-  if (!(await readFileSafe(manifestPath))) return null;
+  // readFileIfExists, not readFileSafe: a manifest that exists but cannot be
+  // read is a failure to report, not a team without roles.
+  if ((await readFileIfExists(manifestPath)) === null) return null;
   return loadRolesManifest(repoPath);
 }
 
