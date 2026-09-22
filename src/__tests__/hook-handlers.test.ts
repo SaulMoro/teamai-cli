@@ -122,7 +122,7 @@ vi.mock('../project-agent-root.js', () => ({
   seedProjectAgentRoot: mockSeedProjectAgentRoot,
 }));
 
-import { buildHandlerRegistry, filterHandlersForConfig, type HandlerRegistration } from '../hook-handlers.js';
+import { buildHandlerRegistry, buildVotesNudge, filterHandlersForConfig, type HandlerRegistration } from '../hook-handlers.js';
 import { createDispatcher } from '../hook-dispatch.js';
 
 // ── Tests ────────────────────────────────────────────────
@@ -1231,8 +1231,7 @@ describe('post-tool-use Skill-matcher dispatch routes Cursor SKILL.md Read to th
 });
 
 describe('buildVotesNudge', () => {
-  it('names the candidates, the marker and the empty case, in English', async () => {
-    const { buildVotesNudge } = await import('../hook-handlers.js');
+  it('names the candidates, the marker and the empty case, in English', () => {
     const msg = buildVotesNudge(['auth-retry', 'k8s-oom']);
 
     expect(msg).toContain('auth-retry, k8s-oom');
