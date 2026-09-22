@@ -239,7 +239,7 @@ scope: 'user',
       expect(count).toBe(0);
     });
 
-    it('reports the deliverable count separately, for the pull summary line', async () => {
+    it('counts the declared total, which the pull summary pairs with the deliverable one', async () => {
       const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
       await fse.writeFile(envYamlPath, YAML.stringify({
         variables: [
@@ -249,9 +249,14 @@ scope: 'user',
         ],
       }));
 
+      // `pullForScope` pairs this with resolveDeliverableEnvVariables to print
+      // "Synced 2 of 3". The count itself stays unfiltered (see #662 above).
       expect(await handler.countEnvVars(envYamlPath)).toBe(3);
-      expect(await handler.countDeliverableEnvVars(envYamlPath, { ...localConfig, projects: ['checkout'] })).toBe(2);
-      expect(await handler.countDeliverableEnvVars(envYamlPath, localConfig)).toBe(3);
+      const read = await handler.readEnvYaml(envYamlPath);
+      expect(read.ok && resolveDeliverableEnvVariables(read.variables, { roles: null, projects: ['checkout'] }))
+        .toHaveLength(2);
+      expect(read.ok && resolveDeliverableEnvVariables(read.variables, { roles: null, projects: null }))
+        .toHaveLength(3);
     });
 
     it('counts what the team declares, not what reaches this member', async () => {

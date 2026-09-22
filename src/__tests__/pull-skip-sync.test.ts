@@ -40,7 +40,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-vi.mock('../roles.js', () => ({
+vi.mock('../roles.js', async () => ({
   loadRolesManifest: vi.fn().mockResolvedValue({
     version: 1,
     roles: [
@@ -66,12 +66,11 @@ vi.mock('../roles.js', () => ({
     };
   }),
   // Env delivery resolves the member's role axis (#668), so this partial mock has
-  // to carry activeRoleIds too — the real one is a pure read of localConfig.
-  activeRoleIds: vi.fn((localConfig: { primaryRole?: string; additionalRoles?: string[] }) =>
-    localConfig.primaryRole
-      ? [...new Set([localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])])]
-      : null,
-  ),
+  // to carry activeRoleIds and the loader membership.ts reads. Taken from the real
+  // module rather than restated, so a change to either cannot drift from its stub.
+  activeRoleIds: (await vi.importActual<typeof import('../roles.js')>('../roles.js')).activeRoleIds,
+  listRoleIds: (await vi.importActual<typeof import('../roles.js')>('../roles.js')).listRoleIds,
+  loadRolesManifestIfPresent: vi.fn().mockResolvedValue(null),
 }));
 
 // Isolation: pull() takes a real ~/.teamai/.sync-lock. Parallel vitest workers

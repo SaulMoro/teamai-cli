@@ -111,6 +111,18 @@ describe('matchesMembership', () => {
     expect(matchesMembership({ roles: ['devops'], projects: ['billing'] }, member)).toBe(false);
   });
 
+  it('intersects a member bound to SEVERAL projects, rather than comparing one active project', () => {
+    // The line the issue calls out: `projects:` matches on an intersection, the
+    // same way `roles:` does, and not on equality with a single active project.
+    const onBoth = { roles: null, projects: ['checkout', 'billing'] };
+    expect(matchesMembership({ projects: ['checkout'] }, onBoth)).toBe(true);
+    expect(matchesMembership({ projects: ['billing'] }, onBoth)).toBe(true);
+    expect(matchesMembership({ projects: ['billing', 'legacy'] }, onBoth)).toBe(true);
+    expect(matchesMembership({ projects: ['legacy'] }, onBoth)).toBe(false);
+    // Symmetric: neither side is privileged, both may hold several ids.
+    expect(matchesMembership({ roles: ['devops', 'data'] }, { roles: ['data', 'pm'], projects: null })).toBe(true);
+  });
+
   it('keeps the axes independent: an unconfigured axis never vetoes a configured one', () => {
     // Member on `checkout` with no role configured: a frontend+checkout entry reaches them.
     expect(matchesMembership({ roles: ['frontend'], projects: ['checkout'] }, { roles: null, projects: ['checkout'] }))
@@ -201,7 +213,37 @@ describe('warnUnknownMembershipIds', () => {
     expect(warn.mock.calls[0][0]).toContain('cannot be checked');
   });
 
-  it('stays silent about roles when the roles manifest cannot be read', async () => {
+  it('reports why a projects manifest did not load, instead of claiming there are none', async () => {
+    // loadProjectsManifest returns null ONLY when the file is absent; it throws
+    // for bad YAML, bad shape, a duplicate id or an unsafe namespace. Collapsing
+    // the two would tell a maintainer with a broken manifest to "define the
+    // projects there", and throw away the only message naming the real fault.
+    const repo = repoWith({
+      'manifest/roles.yaml': ROLES_YAML,
+      'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: dup\n    resources: {}\n  - id: dup\n    resources: {}\n',
+    });
+    await warnUnknownMembershipIds(repo, 'mcp.yaml', [{ kind: 'server', name: 'db', projects: ['checkout'] }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0][0] as string;
+    expect(message).toContain('cannot be checked');
+    expect(message).toContain('duplicate project id "dup"');
+    expect(message).not.toContain('defines no projects');
+  });
+
+  it('reports why a roles manifest did not load, but stays silent when there simply is none', async () => {
+    const broken = repoWith({ 'manifest/roles.yaml': 'version: 1\nroles: []\n' });
+    await warnUnknownMembershipIds(broken, 'hooks.yaml', [{ kind: 'hook', name: 'fmt', roles: ['frontend'] }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('manifest/roles.yaml could not be read');
+
+    warn.mockClear();
+    __resetMembershipWarnings();
+    const absent = repoWith({ 'manifest/projects.yaml': PROJECTS_YAML });
+    await warnUnknownMembershipIds(absent, 'hooks.yaml', [{ kind: 'hook', name: 'fmt', roles: ['frontend'] }]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent about roles when the team has no roles manifest at all', async () => {
     const repo = repoWith({ 'manifest/projects.yaml': PROJECTS_YAML });
     await warnUnknownMembershipIds(repo, 'hooks.yaml', [{ kind: 'hook', name: 'fmt', roles: ['frontend'] }]);
     expect(warn).not.toHaveBeenCalled();

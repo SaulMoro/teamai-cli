@@ -1073,7 +1073,20 @@ async function pullForScope(
       // member: a variable can carry `roles:`/`projects:`. Report the delivered
       // number, and name the declared one when they differ so a member who
       // expected a variable can see it was scoped away rather than lost.
-      const deliverable = await envHandler.countDeliverableEnvVars(items[0].sourcePath, localConfig);
+      //
+      // Resolved here rather than inside pullItem so `--dry-run` warns about an
+      // unknown role or project id too. Checking a scoping edit is exactly what
+      // a maintainer runs --dry-run for, and hooks and MCP already warn there.
+      const { resolveDeliverableEnvVariables } = await import('./resources/env.js');
+      const { resolveMembership, warnUnknownMembershipIds } = await import('./membership.js');
+      const declaredVars = (await envHandler.readEnvYaml(items[0].sourcePath));
+      const declared = declaredVars.ok ? declaredVars.variables : [];
+      await warnUnknownMembershipIds(
+        localConfig.repo.localPath,
+        'env.yaml',
+        declared.map((v) => ({ kind: 'variable', name: v.key, roles: v.roles, projects: v.projects })),
+      );
+      const deliverable = resolveDeliverableEnvVariables(declared, resolveMembership(localConfig)).length;
       const countLabel = deliverable === varCount
         ? `${varCount} env variable(s)`
         : `${deliverable} of ${varCount} env variable(s)`;

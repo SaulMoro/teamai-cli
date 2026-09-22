@@ -108,6 +108,20 @@ export async function loadRolesManifest(repoPath: string): Promise<RolesManifest
   return validateManifestShape(raw);
 }
 
+/**
+ * The roles manifest, or `null` when the team has none.
+ *
+ * Mirrors `loadProjectsManifest`'s contract: absent is a value, invalid is an
+ * error. `loadRolesManifest` throws for both, which callers that must tell them
+ * apart cannot use — a team with no roles.yaml is ordinary, while one whose
+ * roles.yaml does not parse deserves to be told why.
+ */
+export async function loadRolesManifestIfPresent(repoPath: string): Promise<RolesManifest | null> {
+  const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
+  if (!(await readFileSafe(manifestPath))) return null;
+  return loadRolesManifest(repoPath);
+}
+
 export async function saveRolesManifest(repoPath: string, manifest: RolesManifest): Promise<void> {
   // Re-validate before writing to prevent persisting invalid manifests
   validateManifestShape(manifest);

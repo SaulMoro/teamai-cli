@@ -274,11 +274,9 @@ export class EnvHandler extends ResourceHandler {
     // declares variables none of which reach this member must still get an
     // env.sh written (an empty one), because that is what REMOVES the variables
     // an earlier pull had given them.
-    await warnUnknownMembershipIds(
-      localConfig.repo.localPath,
-      'env.yaml',
-      envConfig.variables.map((v) => ({ kind: 'variable', name: v.key, roles: v.roles, projects: v.projects })),
-    );
+    //
+    // The unknown-id warning belongs to `pullForScope`, not here, so that
+    // `--dry-run` reports it as well (this method never runs on that path).
     const variables = resolveDeliverableEnvVariables(envConfig.variables, resolveMembership(localConfig));
 
     // Write the machine-local KEY=VALUE backup (for loadEnvFile / buildVarTable).
@@ -321,19 +319,6 @@ export class EnvHandler extends ResourceHandler {
     } catch {
       return 0;
     }
-  }
-
-  /**
-   * How many of the declared variables actually reach this member and directory.
-   *
-   * Separate from `countEnvVars`, which answers what the TEAM declares and gates
-   * the #662 shape probe. This one is what the pull summary line reports, so a
-   * member scoped to one of three variables is not told three were synced.
-   */
-  async countDeliverableEnvVars(sourcePath: string, localConfig: LocalConfig): Promise<number> {
-    const read = await this.readEnvYaml(sourcePath);
-    if (!read.ok) return 0;
-    return resolveDeliverableEnvVariables(read.variables, resolveMembership(localConfig)).length;
   }
 
   /**
