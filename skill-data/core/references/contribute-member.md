@@ -8,18 +8,17 @@ team"*, in whatever language they work in — then you run the publish for them.
 ## Which kind of contribution?
 
 - **A learning** (a lesson, a gotcha, how you solved something) → this is
-  **automatic**: TeamAI prompts at the end of a session worth sharing and the
+  **automatic** once recall is on (off by default): TeamAI prompts at the end of a session worth sharing and the
   dedicated `share` workflow (`teamai skill get share`) takes over (it summarizes the
   session and runs `teamai contribute`). The user does not come through this flow
-  for it. (Step A below is only a manual fallback for when that skill isn't
-  available.)
+  for it. (Step A below is only a manual fallback for while recall is off.)
 - **A reusable skill** (a `SKILL.md` others invoke) → author the skill, then
   `teamai push` (Step B — the main purpose of this reference).
 
 ## Step A — Contribute a learning by hand (fallback only)
 
-> Prefer the `share` workflow (`teamai skill get share`). Use these manual steps only if it
-> is unavailable in the current tool.
+> Prefer the `share` workflow (`teamai skill get share`). Use these manual steps only while
+> it refuses because recall is off.
 
 1. Write a short Markdown doc that captures the lesson. Keep it concrete and
    actionable — a knowledge base, not a diary. Include YAML frontmatter for search
@@ -53,9 +52,8 @@ team"*, in whatever language they work in — then you run the publish for them.
 The doc lands in the team's `learnings/` and appears for teammates on their next
 `teamai pull`. It is also searchable via `teamai recall`.
 
-> Tip: if there is a dedicated learnings skill available in this tool
-> (`teamai skill get share`), you can use it to auto-summarize the current session
-> instead of writing the doc by hand.
+> Tip: while recall is on, `teamai skill get share` auto-summarizes the current
+> session instead of you writing the doc by hand.
 
 ## Step B — Contribute a reusable skill
 

@@ -61,9 +61,9 @@ ask ONE short question to pick a row, then proceed.
 
 Sharing a session's learnings needs no menu choice: TeamAI prompts on its own at
 the end of a session that produced something worth sharing, and that prompt means
-`teamai skill get share`. (Only when recall is on for the team; it is off by
-default, and `teamai skill get share` says so and names `teamai recall enable`
-when it is not.)
+`teamai skill get share`. (Only when recall is on; it is off by default. The team turns it on with
+`sharing.recall.enabled: true` in `teamai.yaml`, a member with `teamai recall enable`;
+while it is off, `teamai skill get share` says so.)
 
 ## Global rules
 
@@ -103,7 +103,7 @@ generated reference below. Read it instead of guessing a flag.
 
 ## References
 
-In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prints.
+In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prints; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.
 
 | File | When to load it |
 |---|---|

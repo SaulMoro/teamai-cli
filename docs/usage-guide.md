@@ -474,9 +474,12 @@ from the CLI, `~/.<tool>/skills/teamai/SKILL.md`, a small discovery stub that po
 those commands. Older releases copied the whole tree into every agent directory, where it
 went stale between pulls; `teamai pull` removes those leftovers, keeping a copy of every
 removed file under `~/.teamai/removed-skills/`, one directory per pull, so an edit you made
-to one of them is not lost. A directory that also holds a file of your own is kept and named
-in the pull output. `share` is served only while recall is on for the team: until
-`teamai recall enable`, `teamai skill get share` refuses and says so. The legacy names still
+to one of them is not lost (until `teamai uninstall`, which removes `~/.teamai/` and this
+archive with it). A directory that also holds a file of your own is kept, with only the
+packaged files removed, and named in the pull output. `share` is served only while recall is
+on (off by default; `sharing.recall.enabled: true` in `teamai.yaml` for the team, or
+`teamai recall enable` for one machine): until then `teamai skill get share` refuses and says so.
+It also refuses on a read-only HTTP source, where `teamai contribute` cannot write. The legacy names still
 resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ---
@@ -942,7 +945,7 @@ Teams that route knowledge sharing through their own review flow (for example, a
 
 Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai` keep working when invoked manually.
 
-The reminder is also withheld while recall is off for the team (the default until `teamai recall enable`): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on.
+The reminder is also withheld while recall is off (the default until `sharing.recall.enabled: true` in `teamai.yaml`, or `teamai recall enable` on one machine): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on.
 
 ### Searching knowledge
 

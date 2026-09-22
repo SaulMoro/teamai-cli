@@ -1066,6 +1066,22 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
   });
 
+  it('does not delete through a linked skills root, the same line pull stops at', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    // The member's dotfiles checkout, linked in as ~/.claude/skills.
+    const dotfiles = path.join(tmpDir, 'dotfiles-skills');
+    await fse.move(path.join(homeDir, '.claude', 'skills'), dotfiles);
+    await fse.symlink(dotfiles, path.join(homeDir, '.claude', 'skills'), 'dir');
+
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(dotfiles, 'teamai', 'SKILL.md'))).toBe(true);
+  });
+
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

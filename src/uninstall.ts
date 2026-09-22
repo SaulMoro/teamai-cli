@@ -893,7 +893,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // A different reason, so a different sentence: nothing here was touched, and
   // "delete the rest yourself" would send the member into the link target.
   for (const skillDir of linkedSkillDirs) {
-    log.warn(`Kept ${skillDir}: it is a symlink, so TeamAI left it and whatever it points at alone.`);
+    log.warn(`Kept ${skillDir}: it is reached through a symlink, so TeamAI left it and whatever the link points at alone.`);
   }
   for (const { skillDir, first } of failedSkillDirs) {
     log.warn(`Could not delete packaged files under ${skillDir}. First: ${first.file} — ${first.error}. Fix the permissions and run \`teamai uninstall\` again, or delete the directory yourself.`);

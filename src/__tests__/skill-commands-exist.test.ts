@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,7 +109,7 @@ function validate(program: Command, invocations: Invocation[]): string[] {
 
 describe('commands named by the served skill content', () => {
   it('all exist in the CLI command table', async () => {
-    process.env.TEAMAI_COMMAND_TABLE_ONLY = '1';
+    vi.stubEnv('TEAMAI_COMMAND_TABLE_ONLY', '1');
     const { program } = await import('../index.js');
 
     const problems = validate(program, collectInvocations());
@@ -117,7 +117,7 @@ describe('commands named by the served skill content', () => {
   });
 
   it('catches the drift it exists to catch', async () => {
-    process.env.TEAMAI_COMMAND_TABLE_ONLY = '1';
+    vi.stubEnv('TEAMAI_COMMAND_TABLE_ONLY', '1');
     const { program } = await import('../index.js');
 
     // `teamai extract graph` is the command the wiki skill advertised until this

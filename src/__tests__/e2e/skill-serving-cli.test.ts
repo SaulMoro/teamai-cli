@@ -205,9 +205,9 @@ describe('teamai skill recall gate CLI (e2e)', () => {
 
     const listed = run('skill', 'list', '--json');
     expect(listed.status).toBe(0);
-    const catalog = JSON.parse(listed.stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
-    expect(catalog.skills.find((s) => s.name === 'share')).toMatchObject({ blockedByRecall: true, path: null });
-    expect(catalog.skills.filter((s) => s.name !== 'share').every((s) => !s.blockedByRecall && s.path !== null)).toBe(true);
+    const catalog = JSON.parse(listed.stdout) as { skills: Array<{ name: string; path: string | null; blockedBy: string | null }> };
+    expect(catalog.skills.find((s) => s.name === 'share')).toMatchObject({ blockedBy: 'recall', path: null });
+    expect(catalog.skills.filter((s) => s.name !== 'share').every((s) => s.blockedBy === null && s.path !== null)).toBe(true);
 
     const enable = run('recall', 'enable');
     expect(enable.status, enable.stderr).toBe(0);
@@ -216,8 +216,8 @@ describe('teamai skill recall gate CLI (e2e)', () => {
     expect(run('skill', 'get', '--all').stdout.match(/^name: /gm)).toHaveLength(4);
     const servedDir = run('skill', 'path', 'share').stdout.trim();
     expect(fs.existsSync(path.join(servedDir, 'SKILL.md'))).toBe(true);
-    expect(run('skill', 'show', 'share').stdout).toContain(`Package path  : ${servedDir}/`);
-    const after = JSON.parse(run('skill', 'list', '--json').stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
-    expect(after.skills.find((s) => s.name === 'share')).toMatchObject({ blockedByRecall: false, path: servedDir });
+    expect(run('skill', 'show', 'share').stdout).toContain(`Package dir  : ${servedDir}/`);
+    const after = JSON.parse(run('skill', 'list', '--json').stdout) as { skills: Array<{ name: string; path: string | null; blockedBy: string | null }> };
+    expect(after.skills.find((s) => s.name === 'share')).toMatchObject({ blockedBy: null, path: servedDir });
   });
 });

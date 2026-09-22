@@ -40,8 +40,8 @@ export const BUILTIN_SKILL_NAMES = new Set(['teamai']);
 
 /**
  * Built-in skill directories earlier releases deployed, kept only so that pull
- * can remove them from agent skills directories. Retire this set once 0.23.x is
- * no longer in the field.
+ * can remove them from agent skills directories. Retire this set once 0.25.x,
+ * the last release to deploy them, is no longer in the field.
  *
  * Only names the CLI actually wrote belong here. `teamai-workflow` and
  * `teamai-import` were reserved in the old BUILTIN_SKILL_NAMES guard but never
@@ -72,9 +72,8 @@ export function isCliOwnedSkillName(name: string): boolean {
 /**
  * Every file a release ever packaged under `skills/`, by directory name.
  *
- * Built as the union of `git ls-tree -r <tag> -- skills/` over all 98 tags,
- * minus `teamai-wiki` (below), plus `references/provider-tgit.md`, which main
- * carries unreleased and the next release therefore ships. Every path listed
+ * Built as the union of `git ls-tree -r <tag> -- skills/` over all 99 tags
+ * through v0.25.0, minus `teamai-wiki` (below). Every path listed
  * here is written by the CLI and is ours to remove. Deployment
  * copied these trees with `overwrite: true` and never deleted anything, so a
  * file that is *not* listed here was put there by the member and survives.
@@ -111,12 +110,16 @@ export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new 
 ]);
 
 /**
- * Python bytecode cache of a script we shipped. Compiler output of our own
- * files, so it carries nothing a member wrote and does not make a directory
- * theirs.
+ * Python bytecode cache of a script we shipped: `a/__pycache__/x.cpython-311.pyc`
+ * for an owned `a/x.py`. Compiler output of our own file, so it carries nothing
+ * a member wrote and does not make a directory theirs. Anything else under a
+ * `__pycache__` is not ours to remove.
  */
-function isDerivedArtifact(relativePath: string): boolean {
-  return relativePath.endsWith('.pyc') || relativePath.split('/').includes('__pycache__');
+function isDerivedArtifact(relativePath: string, owned: ReadonlySet<string>): boolean {
+  const parts = relativePath.split('/');
+  if (parts.length < 2 || parts[parts.length - 2] !== '__pycache__' || !relativePath.endsWith('.pyc')) return false;
+  const stem = parts[parts.length - 1].split('.')[0];
+  return owned.has([...parts.slice(0, -2), `${stem}.py`].join('/'));
 }
 
 /**
@@ -155,7 +158,7 @@ async function removeEmptyDirs(dir: string): Promise<void> {
 
 /** What `removeOwnedFiles` did and did not do, for the caller to report. */
 export interface PruneResult {
-  /** True when a link sits between the base and the root: nothing was touched. */
+  /** True when the skills root or the skill directory is a link: nothing was touched. */
   skippedSymlink: boolean;
   /** Files left in place because the member, not the CLI, put them there. */
   foreign: number;
@@ -188,18 +191,17 @@ export async function removeOwnedFiles(
   dir: string,
   owned: readonly string[],
   backupDir?: string,
-  baseDir?: string,
 ): Promise<PruneResult> {
   const ownedPaths = new Set(owned);
   const result: PruneResult = {
     skippedSymlink: false, foreign: 0, unbackedUp: [], notRemoved: [], backedUp: 0,
   };
 
-  // A link anywhere between the base directory and this one points at files we
-  // never wrote — a shared checkout, a dotfiles repo. `readdir` follows it and
-  // every path under it matches ours by name, so the walk would delete someone
-  // else's files through the link. Ownership stops at the first link.
-  if (baseDir ? await crossesSymlink(baseDir, dir) : (await fs.promises.lstat(dir)).isSymbolicLink()) {
+  // A linked skills root or skill directory points at files we never wrote — a
+  // shared checkout, a dotfiles repo. `readdir` follows it and every path under
+  // it matches ours by name, so the walk would delete someone else's files
+  // through the link. Ownership stops at the first link.
+  if (await reachedThroughLink(dir)) {
     result.skippedSymlink = true;
     return result;
   }
@@ -215,7 +217,7 @@ export async function removeOwnedFiles(
   }
 
   for (const relative of entries) {
-    if (!ownedPaths.has(relative) && !isDerivedArtifact(relative)) {
+    if (!ownedPaths.has(relative) && !isDerivedArtifact(relative, ownedPaths)) {
       result.foreign++;
       continue;
     }
@@ -254,23 +256,20 @@ export async function removeOwnedFiles(
 }
 
 /**
- * True when any path component between `baseDir` and `target` is a symlink.
+ * True when `skillDir` (`<agent dir>/<skills root>/<skill>`) or its skills root
+ * is a symlink.
  *
- * Checking `target` alone is not enough: a member who links `~/.claude/skills`
- * at a dotfiles checkout leaves every skill directory under it a real
- * directory, so `lstat` on one says nothing. Components at or above `baseDir`
- * are not checked — a home directory that itself sits under a link is ordinary,
- * and refusing there would disable deployment for those machines.
+ * Checking the skill directory alone is not enough: a member who links
+ * `~/.claude/skills` at a dotfiles checkout leaves every skill directory under
+ * it a real directory, so `lstat` on one says nothing. The agent directory and
+ * everything above it are not checked: a linked `~/.claude` (stow, chezmoi) or
+ * home is ordinary, every other resource the sync writes goes through it too,
+ * and refusing there would leave those machines on the pre-stub trees forever.
  */
-async function crossesSymlink(baseDir: string, target: string): Promise<boolean> {
-  const relative = path.relative(baseDir, target);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return true;
-
-  let walked = baseDir;
-  for (const segment of relative.split(path.sep).filter(Boolean)) {
-    walked = path.join(walked, segment);
+async function reachedThroughLink(skillDir: string): Promise<boolean> {
+  for (const candidate of [path.dirname(skillDir), skillDir]) {
     try {
-      if ((await fs.promises.lstat(walked)).isSymbolicLink()) return true;
+      if ((await fs.promises.lstat(candidate)).isSymbolicLink()) return true;
     } catch {
       return false; // does not exist yet: nothing to walk through
     }
@@ -329,7 +328,7 @@ export async function pruneLegacyBuiltinSkills(
       if (!await pathExists(dir)) continue;
       try {
         const backupDir = skillBackupDir(baseDir, tool, root, legacyName);
-        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir, baseDir);
+        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
         const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
         if (prunedWhole(result)) {
           log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})${saved}`);
@@ -429,7 +428,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         // A symlinked destination points somewhere we do not own. Writing
         // through it would put the stub outside the agent directory, which is
         // the same reason the prune refuses to walk it. Neither step runs.
-        if (await crossesSymlink(baseDir, destDir)) {
+        if (await reachedThroughLink(destDir)) {
           log.warn(`Skipped ${skillName} (${tool}): ${destDir} is reached through a symlink, and TeamAI does not write through one. Remove the link to let the skill deploy.`);
           continue;
         }
@@ -445,7 +444,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           const shippedNow = new Set(await walkFiles(srcDir));
           const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
           const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
-          const result = await removeOwnedFiles(destDir, retired, backupDir, baseDir);
+          const result = await removeOwnedFiles(destDir, retired, backupDir);
           if (result.unbackedUp.length > 0) {
             log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
           }

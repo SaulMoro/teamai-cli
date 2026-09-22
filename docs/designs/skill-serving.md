@@ -1,6 +1,6 @@
 # Serving built-in skill content from the CLI
 
-Issue: [#678](https://github.com/Tencent/teamai-cli/issues/678). Unreleased; the package is at 0.22.0.
+Issue: [#678](https://github.com/Tencent/teamai-cli/issues/678). Unreleased; targets the release after 0.25.0.
 
 ## The problem
 
@@ -46,14 +46,17 @@ npm package
 What an agent reads, and when:
 
 ```text
-session start            stub frontmatter (description)     875 B   always in context
-task matches             stub body                          1 408 B  holds the commands
-`teamai skill get core`  daily workflow                     6 383 B  on demand
+session start            stub frontmatter (description)   1 005 B   always in context
+task matches             stub body                          1 524 B  holds the commands
+`teamai skill get core`  daily workflow                     6 533 B  on demand
 `… core --full`          + commands.md, contribute-member,
-                           troubleshooting                 36 213 B  on demand
-`… setup` / `wiki`       5 553 B / 19 088 B                          on demand
-`… setup --full` / `… wiki --full`   38 571 B / 132 722 B            on demand
+                           troubleshooting                 36 321 B  on demand
+`… setup` / `wiki`       5 620 B / 19 386 B                          on demand
+`… setup --full` / `… wiki --full`   38 624 B / 133 020 B            on demand
 ```
+
+Served sizes include the resolved `{SKILL_DIR}`, so they grow with the install
+path (measured here from a 77-character one).
 
 ## Contracts worth keeping
 
@@ -72,10 +75,13 @@ task matches             stub body                          1 408 B  holds the c
 - **Nothing repairs the deployed stub.** `ensureSkillFrontmatter` is not called
   on it, so deployed and packaged bytes are identical and a diff means a bug.
 - **Recall is decided at run time**, not by withholding a directory at deploy
-  time, and it holds on every path that hands out content or a location:
+  time, and so is the read-only HTTP source that `reportingOnly` used to skip
+  `share` for (`teamai contribute` refuses there, so the workflow would fail at
+  its last step; `skill list --json` reports `blockedBy: "read-only"`). Both hold
+  on every path that hands out content or a location:
   `skill get <name>` refuses, `skill get --all` leaves the skill out and says so
   on stderr, `skill path <name>` and `skill show <name>` refuse, and
-  `skill list --json` reports `blockedByRecall: true` with `path: null`. With no
+  `skill list --json` reports `blockedBy: "recall"` with `path: null`. With no
   team config to consult — or one it cannot load — it fails open: a refusal the
   member cannot act on is worse than serving the workflow. The Stop-hook share
   reminder is gated the same way (`contributeHintAllowed`, `src/hook-handlers.ts`),
@@ -83,10 +89,9 @@ task matches             stub body                          1 408 B  holds the c
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
   packaged skill outside that module, and it returns `blocked` instead of the
   skill, so a command cannot print a directory it never received.
-- **`skill path` takes a name, always.** Printing the `skill-data/` root would
-  hand out the parent of every served skill, and `<root>/share/SKILL.md` is
-  readable from there — the content the gate withholds one command over. There is
-  no argument-less form to close that way around.
+- **`skill path` takes a name, always,** and a blocked name gets the same
+  refusal as `skill get`. The gate routes the agent away from a workflow that
+  cannot finish; it is not access control, since the files ship in the package.
 - **A member's own skill outranks a packaged name.** `locateSkill` searches the
   team repo, then the installed agents, then the package. `codebase`, `default`,
   `learning` and `share` are ordinary names: a directory a member created under
@@ -120,7 +125,8 @@ Two tests, both in the unit suite:
 A third, in `skill-content.test.ts`, asserts through `npm pack` that both
 `skills/` and `skill-data/` are in the published tarball. Without it, a missing
 `package.json` "files" entry passes every other test and serves nothing once
-installed.
+installed. The same file fails on Chinese text under `skills/` or `skill-data/`:
+both reach the agent as CLI output, which the repo keeps English.
 
 ## Migration
 
@@ -150,9 +156,9 @@ member did not ask anything to be removed by, while uninstall is them asking for
 all of it to go. Leaving copies behind would be the thing they ran it to avoid.
 
 **It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
-lists them, built as the union of `git ls-tree -r <tag> -- skills/` over all 98
-tags, minus `teamai-wiki` (see below), plus `references/provider-tgit.md`, which
-#724 put on `main` unreleased and the next release therefore ships. Every path
+lists them, built as the union of `git ls-tree -r <tag> -- skills/` over all 99
+tags through v0.25.0, minus `teamai-wiki` (see below); `references/provider-tgit.md`
+first shipped in 0.25.0. Every path
 in it is provably the CLI's. Those files were overwritten with
 `overwrite: true` on every pull and no local edit ever survived in one; a file a
 member added beside them was never touched by the old deployment and is not ours
@@ -165,11 +171,13 @@ migration stops being a one-way door for any of them. That path is the machine's
 home, never the tool's base directory, which under project scope is the repo
 root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A
-link anywhere between the tool's base directory and the skill directory is
-refused outright — neither pruned nor written through, link and target
-untouched: everything under it matches our names, and none of it is ours. That
-walk-up check is pull's; `uninstall` has only the skill directory in hand and
-checks that one, which is enough for the member who asked for the removal. The
+linked skills root (`~/.claude/skills`) or skill directory is refused outright —
+neither pruned nor written through, link and target untouched: everything under
+it matches our names, and none of it is ours. Pull, deploy and `uninstall` apply
+the same check. The agent directory and everything above it are not checked: a
+linked `~/.claude` (stow, chezmoi) is ordinary, every other resource the sync
+writes goes through it, and refusing there would leave those machines on the
+pre-stub trees forever. The
 `<base>` segment is there because `inheritUserScope` deploys the user base and
 then the project base in one process, with the same tool, root and skill name. A file whose copy fails is
 kept rather than removed: a backup that did not happen must not authorise the
@@ -191,7 +199,7 @@ two other commands know the names too: `push` never offers them as new user
 skills (`isCliOwnedSkillName`), and `recall disable` still removes
 `teamai-share-learnings` (`LEGACY_RECALL_SKILL_NAMES`), as it did before the stub.
 
-**Retire that set once 0.23.x is no longer in the field.** The short names
+**Retire that set once 0.25.x, the last release to deploy those trees, is no longer in the field.** The short names
 (`wiki`, `share`) are the canonical ones; the long names survive as aliases in
 `SKILL_ALIASES` (`src/skill-content.ts`) for documentation and muscle memory,
 and can be dropped on the same schedule.

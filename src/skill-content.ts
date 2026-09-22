@@ -50,33 +50,40 @@ const SKILL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Served skills that need recall to be on.
+ * Served skills that write to the team repo and need recall to be on.
  *
  * `share` publishes a session's learnings into the team's learnings branch,
- * which is meaningful only when recall is enabled. Before the discovery stub the
- * gate was in deployment — the skill was simply absent. One stub routes to every
- * workflow, so the gate moved here, where the command can also say what to turn
- * on.
+ * which is meaningful only when recall is enabled, and impossible against a
+ * read-only HTTP source. Before the discovery stub both gates were in
+ * deployment (`skipRecall`, `reportingOnly`) — the skill was simply absent. One
+ * stub routes to every workflow, so the gates moved here, where the command can
+ * also say why.
  */
 const RECALL_DEPENDENT_SKILLS = new Set(['share']);
 
+/** Why a served skill is withheld right now. */
+export type SkillBlockReason = 'recall' | 'read-only';
+
 /**
- * Whether recall being off makes this skill unusable right now.
+ * What makes this skill unusable right now, or null.
  *
  * Fails open: a machine with no team config (a fresh install reading the docs)
  * gets the content rather than a refusal it cannot act on.
  */
-async function blockedByRecall(name: string): Promise<boolean> {
-  if (!RECALL_DEPENDENT_SKILLS.has(name)) return false;
+async function blockReason(name: string): Promise<SkillBlockReason | null> {
+  if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
   try {
     const [{ autoDetectInit }, { isRecallEnabled }] = await Promise.all([
       import('./config.js'),
       import('./types.js'),
     ]);
     const { localConfig, teamConfig } = await autoDetectInit();
-    return !isRecallEnabled(localConfig, teamConfig);
+    // `teamai contribute` refuses a read-only source (read-only.ts), so the
+    // workflow would fail at its last step after the agent did all the work.
+    if (localConfig.repo?.kind === 'http') return 'read-only';
+    return isRecallEnabled(localConfig, teamConfig) ? null : 'recall';
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -172,13 +179,13 @@ async function resolvePackagedSkill(
  */
 export type ServableSkillResolution =
   | { kind: 'found'; skill: PackagedSkill }
-  | { kind: 'blocked'; name: string; reason: 'recall' }
+  | { kind: 'blocked'; name: string; reason: SkillBlockReason }
   | { kind: 'not-found'; name: string };
 
 /**
  * The only way to obtain a packaged skill outside this module.
  *
- * The recall gate is applied here, once, so every command that hands out a
+ * The recall and read-only gates are applied here, once, so every command that hands out a
  * skill's content or its directory (`get`, `path`, `list`, `show`) inherits it
  * by construction instead of remembering to check.
  */
@@ -188,16 +195,29 @@ export async function resolveServableSkill(
 ): Promise<ServableSkillResolution> {
   const skill = await resolvePackagedSkill(name, roots);
   if (!skill) return { kind: 'not-found', name };
-  if (await blockedByRecall(skill.name)) return { kind: 'blocked', name: skill.name, reason: 'recall' };
+  const reason = await blockReason(skill.name);
+  if (reason) return { kind: 'blocked', name: skill.name, reason };
   return { kind: 'found', skill };
 }
 
-/** The two lines every command prints for a recall-blocked skill. */
-export function recallBlockMessage(name: string): { headline: string; hint: string } {
-  return {
-    headline: `${name} needs recall, which is disabled for this team.`,
-    hint: 'Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.',
-  };
+/** The two lines every command prints for a blocked skill. */
+export function blockMessage(name: string, reason: SkillBlockReason): { headline: string; hint: string } {
+  switch (reason) {
+    case 'recall':
+      return {
+        headline: `${name} needs recall, which is disabled for this team.`,
+        hint: 'Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.',
+      };
+    case 'read-only':
+      return {
+        headline: `${name} is not available: this team uses a read-only HTTP source, so nothing can be contributed from here.`,
+        hint: 'Ask a team admin to add the learning to the team repo.',
+      };
+    default: {
+      const exhaustive: never = reason;
+      throw new Error(`Unhandled block reason ${String(exhaustive)}`);
+    }
+  }
 }
 
 async function collectSupplementaryFiles(skillDir: string): Promise<Array<{ relativePath: string; content: string }>> {
@@ -266,12 +286,13 @@ function rootsMissing(): void {
 }
 
 /**
- * Refuse a skill the recall gate blocks. Every path that hands out a skill's
- * content or its directory goes through here, so the gate that replaced the
- * old deployment restriction cannot be sidestepped by asking differently.
+ * Refuse a blocked skill. Every command that hands out a skill's content or its
+ * directory goes through here, so an agent is routed away from a workflow that
+ * cannot finish whichever way it asks. A routing aid, not access control: the
+ * files ship in the npm package either way.
  */
-function refuseBlockedByRecall(name: string): void {
-  const { headline, hint } = recallBlockMessage(name);
+function refuseBlocked(name: string, reason: SkillBlockReason): void {
+  const { headline, hint } = blockMessage(name, reason);
   diagnostic(`${chalk.red('✖')} ${headline}`);
   diagnostic(`  ${hint}`);
   process.exitCode = 1;
@@ -313,11 +334,13 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
     // and named on stderr, the rest is still served.
     for (const listed of servable) {
       const resolved = await resolveServableSkill(listed.name, roots);
-      // The listing and the resolver read one catalog, so `not-found` cannot
-      // happen here; it is still its own branch so the message stays truthful.
-      if (resolved.kind === 'not-found') continue;
-      if (resolved.kind === 'blocked') {
-        diagnostic(`${chalk.yellow('⚠')} Skipped ${listed.name}: needs recall, which is disabled for this team (teamai recall enable).`);
+      // The listing and the resolver read one catalog, so a listed name is
+      // either found or blocked.
+      if (resolved.kind !== 'found') {
+        if (resolved.kind === 'blocked') {
+          const { headline, hint } = blockMessage(listed.name, resolved.reason);
+          diagnostic(`${chalk.yellow('⚠')} Skipped ${listed.name}. ${headline} ${hint}`);
+        }
         continue;
       }
       targets.push(resolved.skill);
@@ -330,7 +353,7 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
         return;
       }
       if (resolved.kind === 'blocked') {
-        refuseBlockedByRecall(resolved.name);
+        refuseBlocked(resolved.name, resolved.reason);
         return;
       }
       targets.push(resolved.skill);
@@ -355,9 +378,8 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
  * `teamai skill path <name>` — print the packaged directory, for agents that
  * read files directly or need to run the scripts a skill ships.
  *
- * A name is required. Printing the `skill-data/` root instead would hand out the
- * parent of every served skill, and reading `<root>/share/SKILL.md` from there
- * is exactly the content the recall gate withholds one command over.
+ * A name is required, and a blocked skill gets the same refusal as `skill get`,
+ * so an agent asking for the directory is routed the same way.
  */
 export async function skillPath(name: string): Promise<void> {
   const roots = packagedSkillRoots();
@@ -368,7 +390,7 @@ export async function skillPath(name: string): Promise<void> {
       notFound(name, await listServableSkills(roots));
       return;
     case 'blocked':
-      refuseBlockedByRecall(resolved.name);
+      refuseBlocked(resolved.name, resolved.reason);
       return;
     case 'found':
       console.log(resolved.skill.dir);
@@ -393,27 +415,27 @@ interface SkillCatalogEntryFields {
 }
 
 /**
- * `blockedByRecall` carries the directory with it: a blocked entry has no path
- * to report, and a served one always has. Both variants keep the `path` key so
- * the JSON shape does not change with the gate.
+ * `blockedBy` carries the directory with it: a blocked entry has no path to
+ * report, and a served one always has. Both variants keep the `path` key so the
+ * JSON shape does not change with the gate.
  */
 export type SkillCatalogEntry =
-  | (SkillCatalogEntryFields & { blockedByRecall: false; path: string })
-  | (SkillCatalogEntryFields & { blockedByRecall: true; path: null });
+  | (SkillCatalogEntryFields & { blockedBy: null; path: string })
+  | (SkillCatalogEntryFields & { blockedBy: SkillBlockReason; path: null });
 
 export async function skillCatalog(roots: PackagedSkillRoots = packagedSkillRoots()): Promise<SkillCatalogEntry[]> {
   const skills = await listServableSkills(roots);
   const entries: SkillCatalogEntry[] = [];
   for (const skill of skills) {
-    const blocked = (await resolveServableSkill(skill.name, roots)).kind === 'blocked';
+    const resolved = await resolveServableSkill(skill.name, roots);
     const fields: SkillCatalogEntryFields = {
       name: skill.name,
       description: await readSkillDescription(path.join(skill.dir, SKILL_MD)),
       deployed: skill.deployed,
     };
-    entries.push(blocked
-      ? { ...fields, blockedByRecall: true, path: null }
-      : { ...fields, blockedByRecall: false, path: skill.dir });
+    entries.push(resolved.kind === 'blocked'
+      ? { ...fields, blockedBy: resolved.reason, path: null }
+      : { ...fields, blockedBy: null, path: skill.dir });
   }
   return entries;
 }

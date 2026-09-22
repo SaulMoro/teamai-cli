@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
+import { listFilesRecursive } from '../utils/fs.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -785,6 +786,61 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // The prune refuses to walk the link; the copy must refuse to write through
     // it too, or the guarantee stops one line short of where it is claimed.
     expect(await fse.readFile(path.join(outside, 'SKILL.md'), 'utf8')).toBe('# not ours');
+  });
+
+  it('deploys and prunes through a linked agent directory, the stow / chezmoi layout', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // Every other resource the sync writes goes through a linked ~/.claude; the
+    // stub and the migration must not be the ones left behind on those machines.
+    const dotfiles = path.join(tmpDir, 'dotfiles/claude');
+    await fse.ensureDir(path.join(dotfiles, 'skills/team-wiki-codebase'));
+    await fse.writeFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), '# pre-stub');
+    await fse.remove(path.join(homeDir, '.claude'));
+    await fse.symlink(dotfiles, path.join(homeDir, '.claude'), 'dir');
+
+    const deployed = await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(deployed).toBe(1);
+    expect(await fse.pathExists(path.join(dotfiles, 'skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(dotfiles, 'skills/team-wiki-codebase'))).toBe(false);
+  });
+
+  it('keeps a member\'s file under a __pycache__ that is not bytecode of a shipped script', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    await fse.ensureDir(path.join(wiki, 'scripts/__pycache__'));
+    await fse.ensureDir(path.join(wiki, 'notes/__pycache__'));
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# packaged');
+    await fse.writeFile(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'), 'bytecode');
+    await fse.writeFile(path.join(wiki, 'notes/__pycache__/keep.txt'), '# mine');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.pathExists(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'))).toBe(false);
+    expect(await fse.readFile(path.join(wiki, 'notes/__pycache__/keep.txt'), 'utf8')).toBe('# mine');
+  });
+
+  it('keeps both copies when the user and the project scope prune the same skill in one run', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // `inheritUserScope`: user base, then project base, same tool, root and name.
+    const projectRoot = path.join(tmpDir, 'work/proj');
+    const projectConfig = { ...legacyPruneLocalConfig(tmpDir), scope: 'project' as const, projectRoot };
+    for (const [base, body] of [[homeDir, '# user copy'], [projectRoot, '# project copy']]) {
+      await fse.ensureDir(path.join(base, '.claude/skills/team-wiki-codebase'));
+      await fse.writeFile(path.join(base, '.claude/skills/team-wiki-codebase/SKILL.md'), body);
+    }
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+    await deployBuiltinSkills(legacyPruneTeamConfig(), projectConfig);
+
+    expect(await fse.pathExists(path.join(projectRoot, '.claude/skills/team-wiki-codebase'))).toBe(false);
+    const archived = (await listFilesRecursive(path.join(homeDir, '.teamai/removed-skills')))
+      .filter((f) => f.endsWith('team-wiki-codebase/SKILL.md'));
+    const bodies = await Promise.all(archived.map((f) => fse.readFile(path.join(homeDir, '.teamai/removed-skills', f), 'utf8')));
+    expect(bodies.sort()).toEqual(['# project copy', '# user copy']);
   });
 
   it('archives nothing when there is nothing retired to archive', async () => {

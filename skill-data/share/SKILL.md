@@ -63,7 +63,7 @@ is for turning a *session* into a learning.
 
 ## References
 
-In the files below, `{SKILL_DIR}` is the directory `teamai skill path share` prints.
+In the files below, `{SKILL_DIR}` is the directory `teamai skill path share` prints; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.
 
 | File | When to load it |
 |---|---|

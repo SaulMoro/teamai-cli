@@ -24,13 +24,13 @@ through these sub-steps **in order**:
 
 ### 2a — Ask which platform they know
 
-**Tencent-internal first:** before asking, probe whether TGit (工蜂) is reachable
+**Tencent-internal first:** before asking, probe whether TGit is reachable
 on this machine — see `{SKILL_DIR}/references/provider-tgit.md` ("Probe
-reachability") for the one-line `x-env: tgit` check. If it says `tgit: OK`, **list Tencent TGit (工蜂) first** and
+reachability") for the one-line `x-env: tgit` check. If it says `tgit: OK`, **list Tencent TGit first** and
 prefer it. Then ask: *"Have you heard of / do you have an account on any of these —
-Tencent TGit (工蜂), GitHub, GitLab, or CNB (cnb.cool)?"*
+Tencent TGit, GitHub, GitLab, or CNB (cnb.cool)?"*
 
-- **Tencent TGit (工蜂)** — https://git.woa.com (Tencent-internal only; shown
+- **Tencent TGit** — https://git.woa.com (Tencent-internal only; shown
   first when the probe above says `tgit: OK`)
 - **GitHub** — https://github.com
 - **GitLab** — https://gitlab.com (or a self-hosted company GitLab)
@@ -51,7 +51,7 @@ curl -sSf -m 3 -o /dev/null https://gitlab.com  && echo "gitlab: OK"  || echo "g
 curl -sSf -m 3 -o /dev/null https://cnb.cool     && echo "cnb: OK"     || echo "cnb: unreachable"
 ```
 
-- **TGit reachable (`tgit: OK`)** → prefer Tencent TGit (工蜂); it is the
+- **TGit reachable (`tgit: OK`)** → prefer Tencent TGit; it is the
   Tencent-internal default.
 - **Exactly one reachable** → use that one.
 - **Several reachable** → list them (TGit first when present) and let the user pick.
@@ -67,12 +67,12 @@ the repository, then continue to the next step:
 
 | Platform | Sign in / sign up            | Create a new repo (do this)        |
 |----------|------------------------------|------------------------------------|
-| Tencent TGit (工蜂) | https://git.woa.com | https://git.woa.com/projects/new |
+| Tencent TGit | https://git.woa.com | https://git.woa.com/projects/new |
 | GitHub   | https://github.com/login     | https://github.com/new             |
 | GitLab   | https://gitlab.com/users/sign_in | https://gitlab.com/projects/new |
 | CNB      | https://cnb.cool             | https://cnb.cool/new/repos (org first: https://cnb.cool/new/groups) |
 
-> **Tencent TGit (工蜂):** don't send the user to the browser to create the repo —
+> **Tencent TGit:** don't send the user to the browser to create the repo —
 > prefer letting `teamai init` create it via the API in Step 5. See
 > `{SKILL_DIR}/references/provider-tgit.md` ("When you `teamai init` on TGit").
 
@@ -91,7 +91,7 @@ computer only holds a synced copy — you never put business code in it."*
 Signing in on the website (Step 2c) is not enough — `teamai init` also needs the
 platform's CLI credentials. Have the user complete the matching CLI login:
 
-### Tencent TGit (工蜂)
+### Tencent TGit
 
 See `{SKILL_DIR}/references/provider-tgit.md` ("Log in") — you install `gf` and
 run `gf auth login` yourself; the user only approves in the browser / iOA. No `GITLAB_URL` needed.
@@ -172,7 +172,7 @@ teamai init https://<platform>/<org>/<repo-name> --scope user
 
 If the repo does not exist yet, `init` offers to create it — accept the prompt.
 
-- **Tencent TGit (工蜂):** `gf` and login are already done, so init creates the
+- **Tencent TGit:** `gf` and login are already done, so init creates the
   repo via the API when it's missing — see
   `{SKILL_DIR}/references/provider-tgit.md` ("When you `teamai init` on TGit").
 - **CNB caveat:** a `cnb login` token **cannot create** an org or repo — that is
@@ -227,7 +227,7 @@ read/write access to it on the platform website**, or their `teamai init` / `pul
 
 Tell the admin (in their language) to add every member on the repo's website:
 
-- **Tencent TGit (工蜂):** repo → 成员管理 / Members → add each member with at
+- **Tencent TGit:** repo → Members → add each member with at
   least **Developer** (read/write) access.
 - **GitHub:** repo → Settings → Collaborators → add with **Write**.
 - **GitLab:** repo → Settings → Members → add with **Developer** or above.
@@ -249,10 +249,8 @@ carries counts + tool names only, on a separate branch of that same repo.)
 
 1. Give the user their **repo web URL** to share.
 2. Give them a ready-to-forward invite line **written in their language**, with the
-   URL filled in. The `/teamai` prefix stays as-is; translate the rest. For a
-   Chinese-speaking user, that is:
-   `/teamai 帮我加入团队的 TeamAI，仓库地址是 <URL>`
-   (English user: `/teamai Help me join my team's TeamAI, repo URL is <URL>`.)
+   URL filled in. The `/teamai` prefix stays as-is; translate the rest:
+   `/teamai Help me join my team's TeamAI, repo URL is <URL>`
    Tell them to send the URL + this line to each member.
 3. Remind them (in their language): **new resources appear only after opening a
    fresh session** in the AI tool. Right after init the skills folder may look
@@ -266,19 +264,13 @@ The user may not be comfortable with the command line, so **don't just hand them
 list of `teamai …` commands.** Instead, point them back to *this skill* for
 day-to-day work — they can keep letting the AI run things for them:
 
-- To manage the team later, they run:
-  `/teamai 我已经装好了，帮我管理` (Chinese) /
-  `/teamai I already have TeamAI set up, help me manage it` (English) — this loads
+- To manage the team later, they run (in their language):
+  `/teamai I already have TeamAI set up, help me manage it` — this loads
   the daily-management flow (`{SKILL_DIR}/references/manage-admin.md`): publishing skills, inviting
   members, roles / packages / env.
-- To share a reusable skill with the team, they run:
-  `/teamai 把这个 xxx skill 分享给团队` (Chinese) /
-  `/teamai Share this <skill-name> skill with my team` (English) — see
-  `contribute-member.md`.
-- Sharing a **session's learnings** is **automatic** — do **not** send them to
-  `/teamai` for it. TeamAI prompts on its own at the end of a session worth
-  sharing, and the separate **`teamai-share-learnings`** skill takes over. (Only
-  when the admin left team sharing on — the default.)
+- To share something they learned, once recall is on (off by default; turn it on
+  team-wide with `sharing.recall.enabled: true` in `teamai.yaml`, then `teamai push`):
+  `/teamai I want to contribute what I learned to my team`.
 
 Mention the underlying commands (`teamai push`, `teamai roles`, …) only as a note
 for users who *do* want them — the primary path is re-invoking `/teamai`.
@@ -289,7 +281,7 @@ Finish by telling the user, **in their language**, that they can remove TeamAI a
 time — and that they don't need the command line to do it. They just re-invoke the
 skill and you'll handle it:
 
-`/teamai 卸载` (Chinese) / `/teamai Uninstall TeamAI` (English)
+`/teamai Uninstall TeamAI` (in their language; the `/teamai` prefix stays as-is)
 
 One line, in their language: *"That removes the hooks and synced resources from
 your machine; your team repo on the website is untouched — you can rejoin any time

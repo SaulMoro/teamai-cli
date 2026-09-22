@@ -41,7 +41,10 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
     // Remove the legacy recall skill an earlier release deployed. The served
     // `share` workflow is gated at run time, but a member who upgrades and
     // disables recall before pulling still has the old directory.
-    if (toolPath.skills && !isAgentExcluded(localConfig, tool)) {
+    // Same gates as deployment: an uninstalled Codex must not have the shared
+    // .agents/skills root pruned on its behalf.
+    if (toolPath.skills && !isAgentExcluded(localConfig, tool)
+      && await isToolInstalledForConfig(tool, toolPath.skills, localConfig)) {
       await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir, LEGACY_RECALL_SKILL_NAMES);
     }
 

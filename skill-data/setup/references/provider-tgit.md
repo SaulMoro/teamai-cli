@@ -1,4 +1,4 @@
-# Provider: Tencent TGit (工蜂)
+# Provider: Tencent TGit
 
 git.woa.com is **Tencent-internal only**. TeamAI supports it natively as the `tgit`
 provider — it recognizes the host on its own, so you **never** set `GITLAB_URL`.
@@ -10,7 +10,7 @@ the `gf` login; follow the relevant section for whichever flow you are in.
 
 When an admin is choosing a platform and hasn't named one, check whether this
 machine can reach TGit. A request to git.woa.com that returns the header
-`x-env: tgit` means TGit (工蜂) is reachable — plain reachability is not enough,
+`x-env: tgit` means TGit is reachable — plain reachability is not enough,
 the header is what confirms it:
 
 ```bash

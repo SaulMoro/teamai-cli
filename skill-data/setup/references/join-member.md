@@ -39,7 +39,7 @@ If it fails, Node.js ≥ 20 is missing — have them install Node 20+ first.
 
 Match the login to the URL's host (do NOT create a second repo):
 
-- **`git.woa.com/...`** (Tencent TGit / 工蜂) → **you run both the `gf` install and
+- **`git.woa.com/...`** (Tencent TGit) → **you run both the `gf` install and
   the `gf … auth login`** (never tell the user to run them). Follow
   `{SKILL_DIR}/references/provider-tgit.md` ("Log in"); the user's only action is
   approving the login URL in their browser / iOA. No `GITLAB_URL` needed. (Headless
@@ -140,16 +140,16 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
    session produced something worth sharing, TeamAI **prompts them on its own** (at
    the end of the session) and the `share` workflow (`teamai skill get share`) takes over to
    summarize and contribute it. They do **not** invoke `/teamai` for this. (This
-   prompt only appears when recall is on for the team — it is off by default,
-   `teamai recall enable` turns it on — and the admin has not switched the
+   prompt only appears when recall is on — it is off by default; the admin turns it
+   on in `teamai.yaml` (`sharing.recall.enabled`), a member with `teamai recall enable` — and the admin has not switched the
    reminder off in `teamai.yaml`.)
 3. **They can also contribute a skill — just ask in plain language.** A member does
    not need to be an admin to publish a skill. They tell TeamAI something like
-   *"share this xxx skill with my team"* / *"把这个 xxx skill 分享给团队"*, and you
+   *"share this xxx skill with my team"*, in their own language, and you
    run the publish for them (see `$(teamai skill path core)/references/contribute-member.md`;
    it needs no recall).
 4. **How to leave — via the skill, not raw commands.** They can remove TeamAI any
    time by re-invoking the skill; you'll run it for them:
-   `/teamai 卸载` / `/teamai Uninstall TeamAI`.
+   `/teamai Uninstall TeamAI` (in their language; the `/teamai` prefix stays as-is).
    One line, in their language: *"This only removes things from your machine; the
    team repo stays — rejoin any time with `/teamai` and the repo URL."*

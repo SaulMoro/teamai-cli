@@ -91,7 +91,7 @@ describe('recall gate on served skills', () => {
     expect(stderr).toContain('share needs recall');
 
     const share = (await skillCatalog()).find((entry) => entry.name === 'share');
-    expect(share).toMatchObject({ blockedByRecall: true, path: null });
+    expect(share).toMatchObject({ blockedBy: 'recall', path: null });
   });
 
   it('serves the share directory through skill path and the catalog when recall is enabled', async () => {
@@ -102,7 +102,24 @@ describe('recall gate on served skills', () => {
     expect(stdout.trim()).toMatch(/skill-data[\\/]share$/);
 
     const share = (await skillCatalog()).find((entry) => entry.name === 'share');
-    expect(share).toMatchObject({ blockedByRecall: false, path: stdout.trim() });
+    expect(share).toMatchObject({ blockedBy: null, path: stdout.trim() });
+  });
+
+  it('withholds share from a read-only HTTP team, whose `teamai contribute` always refuses', async () => {
+    // Recall on, so only the source decides: the workflow's last step would fail
+    // after the agent had written the whole learning.
+    autoDetectInit.mockResolvedValue({
+      localConfig: { recallEnabled: true, repo: { kind: 'http', localPath: '/tmp', remote: '' } },
+      teamConfig: { sharing: { recall: { enabled: true } } },
+    });
+
+    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'read-only' });
+    await skillGet(['share']);
+    expect(process.exitCode).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('read-only HTTP source');
+    expect(stderr).not.toContain('teamai recall enable');
+    expect((await skillCatalog()).find((entry) => entry.name === 'share')).toMatchObject({ blockedBy: 'read-only', path: null });
   });
 
   it('never gates the skills that do not depend on recall', async () => {

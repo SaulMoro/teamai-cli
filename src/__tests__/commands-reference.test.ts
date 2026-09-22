@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderCommandsReference, COMMANDS_REFERENCE_PATH } from '../commands-reference.js';
@@ -9,7 +9,7 @@ describe('generated command reference', () => {
   it('matches the CLI command table', async () => {
     // Guard the CLI entry so importing it yields the command table instead of
     // parsing this test run's argv.
-    process.env.TEAMAI_COMMAND_TABLE_ONLY = '1';
+    vi.stubEnv('TEAMAI_COMMAND_TABLE_ONLY', '1');
     const { program } = await import('../index.js');
 
     // Regenerate with `npx vitest run commands-reference -u` when a command,

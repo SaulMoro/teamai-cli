@@ -186,7 +186,7 @@ describe('skillCatalog', () => {
       writeSkill(roots.dataRoot, 'core', '---\nname: core\ndescription: Daily sync\n---\n\n# core\n');
       const catalog = await skillCatalog(roots);
       expect(catalog).toEqual([
-        { name: 'core', description: 'Daily sync', path: path.join(roots.dataRoot, 'core'), deployed: false, blockedByRecall: false },
+        { name: 'core', description: 'Daily sync', path: path.join(roots.dataRoot, 'core'), deployed: false, blockedBy: null },
       ]);
     } finally {
       fs.rmSync(roots.tmp, { recursive: true, force: true });
@@ -336,6 +336,21 @@ describe('the shipped skill-data content', () => {
           if (/(?:^|[`\s(])(?:python3?|node|bash|sh|cp|mv|cat|ls|rm)\s+\{SKILL_DIR\}/.test(line)) {
             offenders.push(`${skill.name}/${relative}:${i + 1}: ${line.trim()}`);
           }
+        });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('ships no Chinese text in the deployed stub or the served content', async () => {
+    // Both reach the agent as CLI output (`teamai skill get` prints skill-data/),
+    // which the repo rule keeps English; the agent translates for the user.
+    const offenders: string[] = [];
+    for (const root of ['skills', 'skill-data']) {
+      for (const relative of await listFilesRecursive(path.join(ROOT, root))) {
+        const text = fs.readFileSync(path.join(ROOT, root, relative), 'utf8');
+        text.split('\n').forEach((line, i) => {
+          if (/[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(line)) offenders.push(`${root}/${relative}:${i + 1}`);
         });
       }
     }

@@ -448,8 +448,11 @@ teamai skill path wiki              # 打印打包目录，用于运行 skill �
 无需 `teamai pull` 内容就是最新的。每个 agent 只收到一个文件：`~/.<tool>/skills/teamai/SKILL.md`，
 一个指向这些命令的小型发现入口（stub）。旧版本会把整棵目录复制到每个 agent 下，两次 pull 之间内容会过时；
 `teamai pull` 会清除这些残留，并把每个被删除的文件先复制到 `~/.teamai/removed-skills/` 下（每次 pull 一个目录），
-你对其中文件的修改不会丢失；目录里若还有你自己的文件，则整个目录保留并在 pull 输出中点名。`share` 只在团队开启
-recall 后才会提供：`teamai recall enable` 之前，`teamai skill get share` 会拒绝并说明原因。旧名字仍然可用：
+你对其中文件的修改不会丢失（`teamai uninstall` 会删除 `~/.teamai/`，这份备份也随之删除）；目录里若还有你自己的文件，
+只删除其中的打包文件，保留该目录和你的文件，并在 pull 输出中点名。`share` 只在开启 recall 后才会提供（默认关闭；
+团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）：在此之前，
+`teamai skill get share` 会拒绝并说明原因。
+只读 HTTP 源上它同样会拒绝，因为 `teamai contribute` 无法写入。旧名字仍然可用：
 `teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---
@@ -910,7 +913,7 @@ teamai contribute --file /tmp/session.md --scope project
 
 只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai` 不受影响。
 
-团队未开启 recall 时（默认关闭，`teamai recall enable` 开启）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。
+未开启 recall 时（默认关闭；团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。
 
 ### 搜索知识
 

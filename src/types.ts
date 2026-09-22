@@ -85,8 +85,8 @@ export const SharingConfigSchema = z.object({
   // Optional (not .default) so existing TeamaiConfig literals stay valid; use
   // isContributeHintEnabled() for the resolved view.
   contributeHint: z.object({
-    /** Team default: whether the Stop hook nudges members to run
-     *  /teamai after a high-friction session. Teams that route
+    /** Team default: whether the Stop hook nudges members towards the
+     *  share workflow after a high-friction session. Teams that route
      *  knowledge sharing through their own review flow can turn the nudge off
      *  without disabling the rest of the Stop hook (update check, votes sync,
      *  dashboard reporting). */

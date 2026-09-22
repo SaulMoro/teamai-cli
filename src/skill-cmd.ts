@@ -13,7 +13,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { recallBlockMessage, resolveServableSkill, skillCatalog } from './skill-content.js';
+import { blockMessage, resolveServableSkill, skillCatalog, type SkillBlockReason } from './skill-content.js';
 import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
@@ -29,10 +29,11 @@ interface ResolvedSkill {
   namespace?: string;
 }
 
-/** A packaged skill the recall gate withholds; there is no path to print. */
+/** A packaged skill the serving gate withholds; there is no path to print. */
 interface BlockedSkill {
   kind: 'blocked';
   name: string;
+  reason: SkillBlockReason;
 }
 
 type LocatedSkill = ResolvedSkill | BlockedSkill;
@@ -47,16 +48,15 @@ type LocatedSkill = ResolvedSkill | BlockedSkill;
  * we print under "Repo path" or "Installed in".
  */
 export async function skillShow(name: string, options: GlobalOptions): Promise<void> {
-  // A packaged skill needs no team: it ships with the CLI. Resolving it first
-  // keeps `teamai skill show core` working on a machine that has never run
-  // `teamai init`, where autoDetectInit has nothing to find.
-  const packaged = await resolveServableSkill(name);
   let init: { localConfig: LocalConfig; teamConfig: TeamaiConfig };
   try {
     init = await autoDetectInit();
-  } catch (e) {
+  } catch {
+    // A packaged skill needs no team: it ships with the CLI, so `teamai skill
+    // show core` still works on a machine that has never run `teamai init`.
+    const packaged = await resolveServableSkill(name);
     if (packaged.kind === 'blocked') {
-      const { headline, hint } = recallBlockMessage(packaged.name);
+      const { headline, hint } = blockMessage(packaged.name, packaged.reason);
       log.error(headline);
       log.dim(hint);
       process.exitCode = 1;
@@ -94,7 +94,7 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   // The resolver never hands out a blocked skill, so there is no directory to
   // print here even by accident; only the refusal is left to do.
   if (located.kind === 'blocked') {
-    const { headline, hint } = recallBlockMessage(located.name);
+    const { headline, hint } = blockMessage(located.name, located.reason);
     log.error(headline);
     log.dim(hint);
     process.exitCode = 1;
@@ -170,7 +170,9 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
     console.log('  (none — the installed package ships no skill content)');
   } else {
     for (const entry of catalog) {
-      console.log(`  ${entry.name}${entry.blockedByRecall ? '  (needs recall — teamai recall enable)' : ''}`);
+      const note = entry.blockedBy === 'recall' ? '  (needs recall — teamai recall enable)'
+        : entry.blockedBy === 'read-only' ? '  (not available on a read-only HTTP source)' : '';
+      console.log(`  ${entry.name}${note}`);
       console.log(`    ${truncate(entry.description, DESCRIPTION_MAX) || '(no description)'}`);
       console.log(`    teamai skill get ${entry.name}`);
     }
@@ -218,7 +220,7 @@ async function locateSkill(
   //    so it answers for the names nothing on this machine claims: `core` and
   //    `wiki` live in the package, and the agent directory holds only the stub.
   const served = await resolveServableSkill(name);
-  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name };
+  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name, reason: served.reason };
   if (served.kind === 'found') {
     return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };
   }
@@ -244,7 +246,7 @@ async function collectInstalledAgents(
 const PRIMARY_PATH_LABEL: Record<ResolvedSkill['primaryOrigin'], string> = {
   team: 'Repo path  ',
   agent: 'Source path',
-  builtin: 'Package path',
+  builtin: 'Package dir',
 };
 
 interface SkillCard {
@@ -280,7 +282,10 @@ function printSkillCard(card: SkillCard): void {
   }
 
   if (card.installedIn.length === 0) {
-    console.log('  Installed in : (not installed in any agent yet)');
+    // A served skill is never copied into an agent, so "yet" would be false.
+    console.log(card.primaryOrigin === 'builtin'
+      ? '  Installed in : (served by the CLI, not installed)'
+      : '  Installed in : (not installed in any agent yet)');
   } else {
     const first = card.installedIn[0];
     console.log(`  Installed in : ${first.agent.id} (${first.path})`);
