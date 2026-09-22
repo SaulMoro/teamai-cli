@@ -3,10 +3,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import { readFileSafe, readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
 import { log } from './utils/logger.js';
-// A role namespace is the same kind of path component a project namespace is, so
-// both manifests guard it with one schema. projects.ts imports only a *type*
-// from here, so this direction adds no runtime cycle.
-import { NamespaceSegmentSchema } from './projects.js';
+import { NamespaceSegmentSchema, parseManifest } from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -84,7 +81,7 @@ function validateManifestShape(raw: unknown): RolesManifest {
     }
   }
 
-  const manifest = RolesManifestSchema.parse(raw);
+  const manifest = parseManifest(RolesManifestSchema, raw, 'roles');
   const ids = new Set<string>();
   for (const role of manifest.roles) {
     if (ids.has(role.id)) {

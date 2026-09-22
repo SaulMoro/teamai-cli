@@ -2,6 +2,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
+import { NamespaceSegmentSchema, parseManifest } from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
 /**
@@ -14,32 +15,24 @@ const PROJECT_RESOURCE_TYPES = ['knowledge', 'skills', 'learnings', 'agents'] as
 export type ProjectResourceType = typeof PROJECT_RESOURCE_TYPES[number];
 
 /**
- * A project id and every resource namespace become path components
- * (`skills/<id>/`, `learnings/<namespace>/`), so neither may contain a path
- * separator or `..`.
+ * A project id becomes a path component (`skills/<id>/`, `learnings/<id>/`) just
+ * as a resource namespace does, so it carries the same traversal guard. It is
+ * narrower than a namespace on purpose: an id is also typed on the command line
+ * and split on commas (`teamai projects set a,b`), so it keeps the ASCII
+ * spelling it has always had.
  *
- * Both are enforced here at the manifest boundary, which is the only place they
- * enter the process: an id read from elsewhere (a hand-edited config.yaml
- * `projects` field) is resolved through `getProjectOrThrow`, so it can only ever
- * name a project this manifest already validated. `contribute.ts` and
+ * Both are enforced here at the manifest boundary, the only place they enter the
+ * process: an id read from elsewhere (a hand-edited config.yaml `projects`
+ * field) is resolved through `getProjectOrThrow`, so it can only ever name a
+ * project this manifest already validated. `contribute.ts` and
  * `resources/agents.ts` keep their own `isSafeNamespaceSegment` guards on the
  * resolved namespace as defence in depth.
  */
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 
-/** True if `seg` is safe to use as a single path segment (no separators, no `..`). */
-export function isSafeNamespaceSegment(seg: string): boolean {
-  return SAFE_ID.test(seg) && seg !== '.' && seg !== '..';
+function isSafeProjectId(id: string): boolean {
+  return SAFE_ID.test(id) && id !== '.' && id !== '..';
 }
-
-/** Message shared by the id and namespace guards, so both read the same. */
-export const SAFE_SEGMENT_MESSAGE =
-  "must be a single path segment (letters, digits, '.', '_', '-'; no '/', '\\\\', or '..')";
-
-/** A resource namespace: one safe path segment. */
-export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, {
-  message: `resource namespace ${SAFE_SEGMENT_MESSAGE}`,
-});
 
 const ProjectResourceNamespacesSchema = z.object({
   knowledge: z.array(NamespaceSegmentSchema).default([]),
@@ -49,8 +42,8 @@ const ProjectResourceNamespacesSchema = z.object({
 });
 
 const ProjectSchema = z.object({
-  id: z.string().min(1).refine(isSafeNamespaceSegment, {
-    message: `project id ${SAFE_SEGMENT_MESSAGE}`,
+  id: z.string().min(1).refine(isSafeProjectId, {
+    message: "project id must be a single path segment (letters, digits, '.', '_', '-'; no '/', '\\\\', or '..')",
   }),
   name: z.string().default(''),
   description: z.string().default(''),
@@ -98,7 +91,7 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
     }
   }
 
-  const manifest = ProjectsManifestSchema.parse(raw);
+  const manifest = parseManifest(ProjectsManifestSchema, raw, 'projects');
   const ids = new Set<string>();
   for (const project of manifest.projects) {
     if (ids.has(project.id)) {

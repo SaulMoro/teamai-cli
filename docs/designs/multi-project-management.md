@@ -81,6 +81,12 @@ projects:
       agents:    [hai-inference]   # optional; agents/<namespace>/ scoped to this project
 ```
 
+The id and every namespace are refused at the manifest boundary unless they are a
+single path segment (no `/`, `\`, `:` or control character, and not `.` or `..`),
+since each becomes a directory component. The id is narrower still — letters,
+digits, `.`, `_`, `-` — because it is also typed on the command line and split on
+commas. The same guard applies to `manifest/roles.yaml`.
+
 Agent push uses the same role/project namespace resolution as pull and skips ambiguous source destinations. On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
 
 Directory layout reuses the existing namespace convention, adding one learnings layer:

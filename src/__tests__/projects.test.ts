@@ -147,7 +147,7 @@ projects:
     // A namespace becomes a directory component (skills/<ns>/, agents/<ns>/) just
     // as a project id does, so the boundary has to guard both.
     for (const type of ['knowledge', 'skills', 'learnings', 'agents']) {
-      for (const badNamespace of ['../../evil', 'a/b', '..', 'x\\y']) {
+      for (const badNamespace of ['../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil']) {
         const repoDir = writeManifest(`
 version: 1
 projects:
@@ -174,6 +174,46 @@ projects:
       const manifest = await loadProjectsManifest(repoDir);
       expect(manifest?.projects[0].resources.learnings).toEqual(['alpha-notes']);
       expect(manifest?.projects[0].resources.skills).toEqual(['alpha.v2', 'alpha_shared']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('names the offending entry instead of dumping a raw ZodError', async () => {
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: alpha
+    resources: { skills: [good, '../evil'] }
+`);
+    try {
+      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(
+        /^Invalid projects manifest: projects\.0\.resources\.skills\.1: resource namespace must be a single path segment/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a namespace that is an unusual but traversal-free directory name', async () => {
+    // The guard is about escaping the parent directory, not about spelling: a
+    // namespace a filesystem accepts as one directory keeps parsing, so a team
+    // whose namespaces are non-ASCII or hold a space is not forced to rename.
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: alpha
+    resources:
+      skills: ["\u7814\u53d1", "team frontend", "team@frontend", "..notes"]
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      expect(manifest?.projects[0].resources.skills).toEqual([
+        '\u7814\u53d1',
+        'team frontend',
+        'team@frontend',
+        '..notes',
+      ]);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

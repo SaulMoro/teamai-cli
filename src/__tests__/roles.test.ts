@@ -126,7 +126,7 @@ roles:
   it('fails when a resource namespace is not a safe path segment (traversal guard)', async () => {
     // Role namespaces become directory components (skills/<ns>/, agents/<ns>/)
     // exactly as project namespaces do, so the same boundary guard applies.
-    for (const badNamespace of ['../../evil', 'a/b', '..', 'x\\y']) {
+    for (const badNamespace of ['../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil']) {
       const repoDir = writeManifest(`
 version: 1
 roles:
@@ -139,6 +139,22 @@ roles:
       await expect(loadRolesManifest(repoDir)).rejects.toThrow(/single path segment/i);
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  it('names the offending entry instead of dumping a raw ZodError', async () => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: hai
+    resources:
+      knowledge: []
+      skills: ['a/b']
+`);
+
+    await expect(loadRolesManifest(repoDir)).rejects.toThrow(
+      /^Invalid roles manifest: roles\.0\.resources\.skills\.0: resource namespace must be a single path segment/,
+    );
+    rmSync(repoDir, { recursive: true, force: true });
   });
 
   it('fails when duplicate role ids are declared', async () => {

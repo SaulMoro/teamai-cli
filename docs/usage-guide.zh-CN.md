@@ -228,6 +228,13 @@ projects:
       agents:    [hai-inference]   # 可选
 ```
 
+项目 id 与 `resources:` 下的每个 namespace 都会成为目录名
+（`skills/<namespace>/`、`learnings/<namespace>/`、`agents/<namespace>/`），因此
+必须是单个路径片段：不含 `/`、`\`、`:` 和控制字符，且不能是 `.` 或 `..`。除此
+之外 namespace 不受限制 —— 非 ASCII 名称或含空格的名称仍是合法目录。项目 id 更
+严格，因为它还会在命令行中输入：只允许字母、数字、`.`、`_` 和 `-`。违反任一规则
+的 manifest 会解析失败，错误信息会指出具体条目。
+
 **命令**（低频的事后修正与查询，对标 `teamai roles …`）：
 
 ```bash
@@ -1438,6 +1445,10 @@ roles:
       skills:    [common, frontend]
       agents:    [common, frontend]   # 可选；省略 = 只同步根目录 agents
 ```
+
+`resources:` 下列出的每个 namespace 都会成为目录名，因此必须是单个路径片段 ——
+不含 `/`、`\`、`:` 和控制字符，且不能是 `.` 或 `..` —— `manifest/roles.yaml` 与
+`manifest/projects.yaml` 规则一致。
 
 `teamai pull` 会将它们按文件名拍平复制到每个 Tier-1 工具的 `agents/` 目录（如 `~/.claude/agents/`），因此两个活跃 namespace 不能定义同名 agent（pull 会报告冲突并跳过该 scope）。`teamai pull` 为 Codex 系工具写入 `<name>.toml`，为 Kiro 写入 `<name>.json`，为 Copilot 写入 `<name>.agent.md`，其余工具写入 `<name>.md`。成员切换角色后，不再活跃的 namespace 中的 agents 会在下一次 pull 时被移除；若本地副本已被手动修改，则保留并给出警告。未配置角色时同步全部 agents。`teamai push` 使用与 pull 相同的活跃角色和项目 namespace 来确定源文件，并将修改写回该源文件；若存在多个候选目标，则跳过并给出警告。若源文件均不活跃，也会跳过。跳过的 agent 不会阻止同一次 push 中的其他资源。新 agent 落在根目录。清理会逐个工具检查 YAML 的 `targets` 和旧格式支持；只有活跃的同名 agent 会写入该工具的同一输出文件时，才保留该文件。`teamai remove agents <name>` 会记录 tombstone。其他机器下一次 pull 时，会从每个同步中的工具的 agents 目录删除 `<name>.agent.md`、`<name>.md`、`<name>.toml` 和 `<name>.json`。即使该次 pull 发现团队仓库没有变化，也会执行清理。CLI 内置的 `teamai-recall` 配置与团队 agents 并列部署，但不会被 `teamai push` 上传。
 
