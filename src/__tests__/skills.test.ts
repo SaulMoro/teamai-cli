@@ -334,6 +334,15 @@ scope: 'user',
     expect(items.find((item) => item.name === 'role-skill')?.status).toBe('modified');
   });
 
+  it('refuses a role id that cannot be a namespace when roles.yaml is absent, instead of joining it onto the repo', async () => {
+    localConfig.primaryRole = '../../outside';
+    localConfig.additionalRoles = [];
+
+    await expect(handler.scanLocalForPush(teamConfig, localConfig)).rejects.toThrow(
+      /Invalid role id used as a skills namespace "\.\.\/\.\.\/outside"/,
+    );
+  });
+
   it('blocks skills that exist in non-allowed namespaces', async () => {
     localConfig.primaryRole = 'hai';
     localConfig.additionalRoles = [];

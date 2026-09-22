@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { push } from '../push.js';
+import { RolesManifestMissingError } from '../roles.js';
+import { log } from '../utils/logger.js';
 
 const mockAutoDetectInit = vi.fn();
 const mockPullRepo = vi.fn();
@@ -348,6 +350,22 @@ describe('push namespace routing', () => {
     } finally {
       process.exitCode = originalExitCode;
     }
+  });
+
+  it('rejects a role id that cannot be a namespace when roles.yaml is absent', async () => {
+    mockLoadRolesManifest.mockRejectedValue(new RolesManifestMissingError('/repo/manifest/roles.yaml'));
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: '../../outside', additionalRoles: [] }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockSkillHandler();
+
+    await push({ all: true });
+
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.stringMatching(/Invalid role id used as a skills namespace "\.\.\/\.\.\/outside"/),
+    );
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
   });
 
   it('rejects an unsafe scanned skill name before building the role path', async () => {

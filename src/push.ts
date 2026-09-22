@@ -22,6 +22,7 @@ import { getDataHome, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafePath, assertSafeResourceName, defaultAllowedRoots } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestMissingError } from './roles.js';
+import { assertSafeFallbackNamespaces } from './manifest-schema.js';
 import { askQuestion, askSelection } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
 
@@ -81,7 +82,7 @@ async function resolveSkillNamespaces(
     // Only an absent manifest falls back to the role id as the namespace; a
     // broken one would send the push into a namespace nothing validated.
     if (!(error instanceof RolesManifestMissingError)) throw error;
-    return [primaryRole];
+    return assertSafeFallbackNamespaces([primaryRole], 'role id used as a skills namespace');
   }
 }
 

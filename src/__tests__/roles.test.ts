@@ -201,6 +201,28 @@ roles:
   });
 });
 
+describe('loadRolesManifest with a home-relative repo path', () => {
+  it("expands '~' the way the helpers it replaced did, instead of reading under cwd", async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'teamai-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const manifestDir = path.join(home, '.teamai', 'team-repo', 'manifest');
+      mkdirSync(manifestDir, { recursive: true });
+      writeFileSync(path.join(manifestDir, 'roles.yaml'), 'version: 1\nroles:\n  - id: hai\n    resources: { knowledge: [], skills: [common] }\n', 'utf-8');
+
+      const manifest = await loadRolesManifest('~/.teamai/team-repo');
+      expect(manifest.roles[0]?.resources.skills).toEqual(['common']);
+
+      // A missing file under `~` is still reported as absent, not as an error.
+      await expect(loadRolesManifest('~/.teamai/other-repo')).rejects.toBeInstanceOf(RolesManifestMissingError);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('loadRolesManifestIfPresent', () => {
   it('returns null when the manifest is absent', async () => {
     const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-noroles-'));

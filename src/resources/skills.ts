@@ -9,6 +9,7 @@ import { BUILTIN_SKILL_NAMES } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
 import { getHermesHome } from '../hermes-home.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestMissingError } from '../roles.js';
+import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 
@@ -276,7 +277,10 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
     // manifest that is not there — one that exists and does not parse must not be
     // silently replaced by a guess at its contents.
     if (!(error instanceof RolesManifestMissingError)) throw error;
-    return [localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])];
+    return assertSafeFallbackNamespaces(
+      [localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])],
+      'role id used as a skills namespace',
+    );
   }
 }
 

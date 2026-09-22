@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { expandHome } from './utils/fs.js';
 import { z } from 'zod';
 
 /**
@@ -48,10 +49,25 @@ export function isSafeNamespaceSegment(seg: string): boolean {
     && !WINDOWS_DEVICE_NAME.test(seg);
 }
 
+const NAMESPACE_RULE = "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, no trailing '.' or space, which also rules out '.' and '..', and not a Windows device name such as 'CON' or 'COM1')";
+
 /** A resource namespace: one path segment that cannot escape its parent. */
-export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, {
-  message: "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, no trailing '.' or space, which also rules out '.' and '..', and not a Windows device name such as 'CON' or 'COM1')",
-});
+export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, { message: NAMESPACE_RULE });
+
+/**
+ * A role id that stands in for a namespace when `roles.yaml` is absent. The
+ * manifest never validated it, so it gets the same check here before it can
+ * become a path component; an unsafe one fails the command rather than being
+ * joined onto the team repo.
+ */
+export function assertSafeFallbackNamespaces(ids: string[], source: string): string[] {
+  const unsafe = ids.find((id) => !isSafeNamespaceSegment(id));
+  if (unsafe !== undefined) {
+    throw new Error(`Invalid ${source} "${unsafe}": ${NAMESPACE_RULE}`);
+  }
+  return ids;
+}
+
 
 /**
  * Parse a manifest, reporting a failure the way the hand-written checks around
@@ -101,19 +117,23 @@ async function danglingLinkOnPath(target: string): Promise<string | null> {
  * direction. Absence returns `null` here; anything else throws.
  */
 export async function readManifestFile(manifestPath: string, kind: 'projects' | 'roles'): Promise<string | null> {
+  // `repo.localPath` is documented as `~/.teamai/...`; the helpers this replaced
+  // expanded it, and a path left unexpanded would be searched under the current
+  // directory, read as absent, and relax the filtering.
+  const resolvedPath = expandHome(manifestPath);
   let content: string;
   try {
-    content = await fs.readFile(manifestPath, 'utf-8');
+    content = await fs.readFile(resolvedPath, 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      const dangling = await danglingLinkOnPath(manifestPath);
+      const dangling = await danglingLinkOnPath(resolvedPath);
       if (!dangling) return null;
-      throw new Error(`Could not read ${kind} manifest ${manifestPath}: ${dangling} is a symbolic link with no target.`);
+      throw new Error(`Could not read ${kind} manifest ${resolvedPath}: ${dangling} is a symbolic link with no target.`);
     }
-    throw new Error(`Could not read ${kind} manifest ${manifestPath}: ${(error as Error).message}`);
+    throw new Error(`Could not read ${kind} manifest ${resolvedPath}: ${(error as Error).message}`);
   }
   if (content.trim() === '') {
-    throw new Error(`Invalid ${kind} manifest: ${manifestPath} is empty. Delete it, or give it a version and a ${kind} list.`);
+    throw new Error(`Invalid ${kind} manifest: ${resolvedPath} is empty. Delete it, or give it a version and a ${kind} list.`);
   }
   return content;
 }
