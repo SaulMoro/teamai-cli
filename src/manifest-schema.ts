@@ -13,7 +13,10 @@ import { z } from 'zod';
  */
 // `:` is unsafe with the separators rather than merely unusual: on Windows
 // `path.resolve(base, 'C:evil')` is drive-relative and lands outside `base`.
-const UNSAFE_SEGMENT = /[/\\:\u0000-\u001f]/;
+// The control ranges are both of them, C0 with DEL and C1: a segment carrying one
+// is a name no admin typed on purpose, and it renders as something other than
+// what it is in a terminal that reports the path back.
+const UNSAFE_SEGMENT = /[/\\:\u0000-\u001f\u007f-\u009f]/;
 
 /** True if `seg` is safe to use as a single path segment (no separators, no `..`). */
 export function isSafeNamespaceSegment(seg: string): boolean {

@@ -126,7 +126,10 @@ roles:
   it('fails when a resource namespace is not a safe path segment (traversal guard)', async () => {
     // Role namespaces become directory components (skills/<ns>/, agents/<ns>/)
     // exactly as project namespaces do, so the same boundary guard applies.
-    for (const badNamespace of ['../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil']) {
+    for (const badNamespace of [
+      '../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil',
+      'a\u0009b', 'a\u007fb', 'a\u0085b',
+    ]) {
       const repoDir = writeManifest(`
 version: 1
 roles:

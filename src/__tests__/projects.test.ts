@@ -147,7 +147,12 @@ projects:
     // A namespace becomes a directory component (skills/<ns>/, agents/<ns>/) just
     // as a project id does, so the boundary has to guard both.
     for (const type of ['knowledge', 'skills', 'learnings', 'agents']) {
-      for (const badNamespace of ['../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil']) {
+      // '\u0009' (C0), '\u007f' (DEL) and '\u0085' (C1) stand for the three control
+      // ranges the message promises to reject.
+      for (const badNamespace of [
+        '../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil',
+        'a\u0009b', 'a\u007fb', 'a\u0085b',
+      ]) {
         const repoDir = writeManifest(`
 version: 1
 projects:
