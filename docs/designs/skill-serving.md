@@ -171,13 +171,17 @@ migration stops being a one-way door for any of them. That path is the machine's
 home, never the tool's base directory, which under project scope is the repo
 root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A
-linked skills root (`~/.claude/skills`) or skill directory is refused outright —
-neither pruned nor written through, link and target untouched: everything under
-it matches our names, and none of it is ours. Pull, deploy and `uninstall` apply
-the same check. The agent directory and everything above it are not checked: a
-linked `~/.claude` (stow, chezmoi) is ordinary, every other resource the sync
-writes goes through it, and refusing there would leave those machines on the
-pre-stub trees forever. The
+link on any component between the tool's base directory and the skill
+directory — `~/.claude`, `~/.config/opencode`, `~/.claude/skills`, the skill
+directory itself — is refused outright: neither pruned nor written through, link
+and target untouched, since everything under it matches our names and none of it
+is ours. Pull, deploy and `uninstall` apply the same check; uninstall carries
+each skill directory's base for it. Components at or above the base are not
+checked: a home directory under a link is ordinary. The cost is a member whose
+whole `~/.claude` is a link (stow, chezmoi): the stub is not deployed and the
+legacy trees stay, with a warning on each pull naming the path, until the link
+is replaced by a directory. Deleting through a link is the one thing the prune
+must never do, so that member is told rather than guessed for. The
 `<base>` segment is there because `inheritUserScope` deploys the user base and
 then the project base in one process, with the same tool, root and skill name. A file whose copy fails is
 kept rather than removed: a backup that did not happen must not authorise the

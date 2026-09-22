@@ -158,7 +158,7 @@ async function removeEmptyDirs(dir: string): Promise<void> {
 
 /** What `removeOwnedFiles` did and did not do, for the caller to report. */
 export interface PruneResult {
-  /** True when the skills root or the skill directory is a link: nothing was touched. */
+  /** True when a link sits between the base and the skill directory: nothing was touched. */
   skippedSymlink: boolean;
   /** Files left in place because the member, not the CLI, put them there. */
   foreign: number;
@@ -190,6 +190,7 @@ export function prunedWhole(result: PruneResult): boolean {
 export async function removeOwnedFiles(
   dir: string,
   owned: readonly string[],
+  baseDir: string,
   backupDir?: string,
 ): Promise<PruneResult> {
   const ownedPaths = new Set(owned);
@@ -197,11 +198,11 @@ export async function removeOwnedFiles(
     skippedSymlink: false, foreign: 0, unbackedUp: [], notRemoved: [], backedUp: 0,
   };
 
-  // A linked skills root or skill directory points at files we never wrote — a
-  // shared checkout, a dotfiles repo. `readdir` follows it and every path under
-  // it matches ours by name, so the walk would delete someone else's files
-  // through the link. Ownership stops at the first link.
-  if (await reachedThroughLink(dir)) {
+  // A link anywhere between the base directory and this one points at files we
+  // never wrote — a shared checkout, a dotfiles repo. `readdir` follows it and
+  // every path under it matches ours by name, so the walk would delete someone
+  // else's files through the link. Ownership stops at the first link.
+  if (await crossesSymlink(baseDir, dir)) {
     result.skippedSymlink = true;
     return result;
   }
@@ -256,20 +257,25 @@ export async function removeOwnedFiles(
 }
 
 /**
- * True when `skillDir` (`<agent dir>/<skills root>/<skill>`) or its skills root
- * is a symlink.
+ * True when any path component between `baseDir` and `target` is a symlink, or
+ * `target` is not under `baseDir` at all.
  *
- * Checking the skill directory alone is not enough: a member who links
- * `~/.claude/skills` at a dotfiles checkout leaves every skill directory under
- * it a real directory, so `lstat` on one says nothing. The agent directory and
- * everything above it are not checked: a linked `~/.claude` (stow, chezmoi) or
- * home is ordinary, every other resource the sync writes goes through it too,
- * and refusing there would leave those machines on the pre-stub trees forever.
+ * Checking `target` alone is not enough: a member who links `~/.claude/skills`
+ * — or `~/.config/opencode`, or `~/.claude` itself — at a dotfiles checkout
+ * leaves every skill directory under it a real directory, so `lstat` on one
+ * says nothing. Components at or above `baseDir` are not checked: a home
+ * directory that itself sits under a link is ordinary, and refusing there would
+ * disable deployment for those machines.
  */
-async function reachedThroughLink(skillDir: string): Promise<boolean> {
-  for (const candidate of [path.dirname(skillDir), skillDir]) {
+async function crossesSymlink(baseDir: string, target: string): Promise<boolean> {
+  const relative = path.relative(baseDir, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return true;
+
+  let walked = baseDir;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    walked = path.join(walked, segment);
     try {
-      if ((await fs.promises.lstat(candidate)).isSymbolicLink()) return true;
+      if ((await fs.promises.lstat(walked)).isSymbolicLink()) return true;
     } catch {
       return false; // does not exist yet: nothing to walk through
     }
@@ -328,7 +334,7 @@ export async function pruneLegacyBuiltinSkills(
       if (!await pathExists(dir)) continue;
       try {
         const backupDir = skillBackupDir(baseDir, tool, root, legacyName);
-        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
+        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], baseDir, backupDir);
         const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
         if (prunedWhole(result)) {
           log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})${saved}`);
@@ -428,7 +434,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         // A symlinked destination points somewhere we do not own. Writing
         // through it would put the stub outside the agent directory, which is
         // the same reason the prune refuses to walk it. Neither step runs.
-        if (await reachedThroughLink(destDir)) {
+        if (await crossesSymlink(baseDir, destDir)) {
           log.warn(`Skipped ${skillName} (${tool}): ${destDir} is reached through a symlink, and TeamAI does not write through one. Remove the link to let the skill deploy.`);
           continue;
         }
@@ -444,7 +450,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           const shippedNow = new Set(await walkFiles(srcDir));
           const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
           const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
-          const result = await removeOwnedFiles(destDir, retired, backupDir);
+          const result = await removeOwnedFiles(destDir, retired, baseDir, backupDir);
           if (result.unbackedUp.length > 0) {
             log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
           }

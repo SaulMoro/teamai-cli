@@ -788,22 +788,25 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.readFile(path.join(outside, 'SKILL.md'), 'utf8')).toBe('# not ours');
   });
 
-  it('deploys and prunes through a linked agent directory, the stow / chezmoi layout', async () => {
+  it('stops at a link on any component below the base, not only the last two', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
-    // Every other resource the sync writes goes through a linked ~/.claude; the
-    // stub and the migration must not be the ones left behind on those machines.
-    const dotfiles = path.join(tmpDir, 'dotfiles/claude');
+    // `~/.config/opencode` linked at a dotfiles checkout: the skills root and
+    // the skill directory under it are real directories, the link is higher up.
+    const dotfiles = path.join(tmpDir, 'dotfiles/opencode');
     await fse.ensureDir(path.join(dotfiles, 'skills/team-wiki-codebase'));
-    await fse.writeFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), '# pre-stub');
-    await fse.remove(path.join(homeDir, '.claude'));
-    await fse.symlink(dotfiles, path.join(homeDir, '.claude'), 'dir');
+    await fse.writeFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.ensureDir(path.join(homeDir, '.config'));
+    await fse.symlink(dotfiles, path.join(homeDir, '.config/opencode'), 'dir');
 
-    const deployed = await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+    const deployed = await deployBuiltinSkills(
+      legacyPruneTeamConfig({ opencode: { skills: '.config/opencode/skills' } }),
+      legacyPruneLocalConfig(tmpDir),
+    );
 
-    expect(deployed).toBe(1);
-    expect(await fse.pathExists(path.join(dotfiles, 'skills/teamai/SKILL.md'))).toBe(true);
-    expect(await fse.pathExists(path.join(dotfiles, 'skills/team-wiki-codebase'))).toBe(false);
+    expect(deployed).toBe(0);
+    expect(await fse.readFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.pathExists(path.join(dotfiles, 'skills/teamai'))).toBe(false);
   });
 
   it('keeps a member\'s file under a __pycache__ that is not bytecode of a shipped script', async () => {

@@ -91,8 +91,11 @@ interface RemovalPlan {
   hookManifestPath: string;
   /** CLAUDE.md files with teamai rules blocks. */
   claudeMdFiles: string[];
-  /** Skill directories synced from team repo. */
-  skillDirs: string[];
+  /**
+   * Skill directories synced from team repo, each with the base directory its
+   * skills root hangs off: the prune refuses a link anywhere below that base.
+   */
+  skillDirs: SkillDirEntry[];
   /** Rule .md files synced from team repo (plus CLI built-in rules). */
   ruleFiles: string[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -116,6 +119,12 @@ interface RemovalPlan {
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
+/** A skill directory to remove, and the base the link guard starts from. */
+interface SkillDirEntry {
+  dir: string;
+  baseDir: string;
+}
+
 interface ToolResources {
   hookFiles: Array<{ path: string; tool: string; manifestPath: string }>;
   openclawHookDirs: Array<{ hooksDir: string; tool: string }>;
@@ -123,7 +132,7 @@ interface ToolResources {
   ompHookFile: string | null;
   dshHookFile: string | null;
   claudeMdFiles: string[];
-  skillDirs: string[];
+  skillDirs: SkillDirEntry[];
   ruleFiles: string[];
   agentFiles: string[];
 }
@@ -352,22 +361,23 @@ async function discoverToolResources(
 
   // (c) Skills — only those matching team repo
   if (toolPath.skills) {
-    const skillRoots = new Set([path.join(baseDir, toolPath.skills)]);
+    // Skills root → the base the link guard starts from.
+    const skillRoots = new Map([[path.join(baseDir, toolPath.skills), baseDir]]);
     if (tool === 'openclaw') {
       const workspaceDir = await resolveOpenclawWorkspaceDir();
-      if (workspaceDir) skillRoots.add(path.join(workspaceDir, 'skills'));
+      if (workspaceDir) skillRoots.set(path.join(workspaceDir, 'skills'), workspaceDir);
     }
     // `resolveSkillDestination` writes Codex's copy into the shared
     // .agents/skills root whenever that skill already lives there, so uninstall
     // must look where deployment could have put it — the legacy prune already
     // does. Codex only: another tool's pass must not reach into it.
-    if (tool === CODEX_TOOL) skillRoots.add(path.join(baseDir, SHARED_AGENT_SKILLS_PATH));
-    for (const skillsDir of skillRoots) {
+    if (tool === CODEX_TOOL) skillRoots.set(path.join(baseDir, SHARED_AGENT_SKILLS_PATH), baseDir);
+    for (const [skillsDir, rootBase] of skillRoots) {
       if (await pathExists(skillsDir)) {
         const dirs = await listDirs(skillsDir);
         for (const dir of dirs) {
           if (teamSkillNames.has(dir)) {
-            res.skillDirs.push(path.join(skillsDir, dir));
+            res.skillDirs.push({ dir: path.join(skillsDir, dir), baseDir: rootBase });
           }
         }
       }
@@ -683,7 +693,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
 
   if (plan.skillDirs.length > 0) {
     console.log(`   Skills (${plan.skillDirs.length} directories):`);
-    for (const skillDir of plan.skillDirs) {
+    for (const { dir: skillDir } of plan.skillDirs) {
       // A CLI-owned directory loses the files TeamAI packaged, not whatever the
       // member added beside them, so the prompt must not promise the directory.
       const suffix = isCliOwnedSkillName(path.basename(skillDir))
@@ -865,11 +875,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   const keptSkillDirs: string[] = [];
   const linkedSkillDirs: string[] = [];
   const failedSkillDirs: { skillDir: string; first: { file: string; error: string } }[] = [];
-  for (const skillDir of plan.skillDirs) {
+  for (const { dir: skillDir, baseDir } of plan.skillDirs) {
     try {
       const name = path.basename(skillDir);
       if (isCliOwnedSkillName(name)) {
-        const result = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []);
+        const result = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? [], baseDir);
         if (prunedWhole(result)) removedSkillDirs++;
         else if (result.skippedSymlink) linkedSkillDirs.push(skillDir);
         // A delete that failed is not a member's file: say what happened, not

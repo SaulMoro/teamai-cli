@@ -1082,6 +1082,21 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(dotfiles, 'teamai', 'SKILL.md'))).toBe(true);
   });
 
+  it('does not delete through a linked agent directory either, a link higher up the path', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const dotfiles = path.join(tmpDir, 'dotfiles-claude');
+    await fse.move(path.join(homeDir, '.claude'), dotfiles);
+    await fse.symlink(dotfiles, path.join(homeDir, '.claude'), 'dir');
+
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(dotfiles, 'skills', 'teamai', 'SKILL.md'))).toBe(true);
+  });
+
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
