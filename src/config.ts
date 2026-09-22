@@ -19,7 +19,7 @@ import { readFileSafe, readJson, writeFile, writeJson, expandHome, pathExists } 
 import { resolveAnchors } from './utils/git.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';
-import { loadRolesManifest } from './roles.js';
+import { loadRolesManifest, RolesManifestMissingError } from './roles.js';
 
 async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string): Promise<LocalConfig> {
   if (config.primaryRole) {
@@ -29,7 +29,10 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
   let manifest;
   try {
     manifest = await loadRolesManifest(config.repo.localPath);
-  } catch {
+  } catch (error) {
+    // A repo with no manifest has nothing to migrate. A broken one leaves the
+    // config role-less, which downstream reads as "no filter", so it surfaces.
+    if (!(error instanceof RolesManifestMissingError)) throw error;
     return config;
   }
 

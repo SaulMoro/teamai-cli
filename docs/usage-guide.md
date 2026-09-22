@@ -249,7 +249,7 @@ neither may escape the directory it names.
 
 A **namespace** must be a single path segment: no `/`, `\`, `:` or control
 character, no trailing `.` or space, and not a Windows device name (`CON`, `NUL`,
-`AUX`, `PRN`, `COM0`–`COM9`, `LPT0`–`LPT9`, with or without an extension).
+`AUX`, `PRN`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an extension).
 Windows strips a trailing period or space from every path component, so `.. `
 would arrive as `..` and escape the parent while `frontend.` would arrive as
 `frontend` and land in another namespace's directory; the same rule rules out `.`

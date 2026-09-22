@@ -211,17 +211,19 @@ projects:
     }
   });
 
-  it('keeps a name that merely starts like a device name', async () => {
+  it('keeps a name that merely starts like a device name, and the unreserved COM0/LPT0', async () => {
     const repoDir = writeManifest(`
 version: 1
 projects:
   - id: alpha
-    resources: { skills: [console, connect, community, complex, nullable] }
+    resources: { skills: [console, connect, community, complex, nullable, COM0, LPT0] }
 `);
     try {
       const manifest = await loadProjectsManifest(repoDir);
+      // COM0 and LPT0 are ordinary names: Windows reserves COM1-COM9 and
+      // LPT1-LPT9 only, so rejecting them would cost compatibility for nothing.
       expect(manifest?.projects[0].resources.skills).toEqual([
-        'console', 'connect', 'community', 'complex', 'nullable',
+        'console', 'connect', 'community', 'complex', 'nullable', 'COM0', 'LPT0',
       ]);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

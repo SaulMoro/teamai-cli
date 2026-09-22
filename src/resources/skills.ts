@@ -8,7 +8,7 @@ import { log } from '../utils/logger.js';
 import { BUILTIN_SKILL_NAMES } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
 import { getHermesHome } from '../hermes-home.js';
-import { loadRolesManifest, resolveRoleResourceNamespaces } from '../roles.js';
+import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestMissingError } from '../roles.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 
@@ -271,8 +271,11 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
       additionalRoles: localConfig.additionalRoles ?? [],
     });
     return namespaces.skills;
-  } catch {
-    // Fallback: use role ids as namespace names (legacy behavior)
+  } catch (error) {
+    // Fallback: use role ids as namespace names (legacy behavior). Reserved for a
+    // manifest that is not there — one that exists and does not parse must not be
+    // silently replaced by a guess at its contents.
+    if (!(error instanceof RolesManifestMissingError)) throw error;
     return [localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])];
   }
 }
