@@ -6,6 +6,8 @@ import type { Command } from 'commander';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SKILL_DATA = path.join(ROOT, 'skill-data');
+/** The deployed stub is the one file agents always hold, so its commands are checked too. */
+const DEPLOYED_STUB = path.join(ROOT, 'skills', 'teamai', 'SKILL.md');
 
 /** Every `teamai …` invocation written in the served skill content. */
 interface Invocation {
@@ -24,7 +26,7 @@ function markdownFiles(dir: string): string[] {
 
 function collectInvocations(): Invocation[] {
   const found: Invocation[] = [];
-  for (const file of markdownFiles(SKILL_DATA)) {
+  for (const file of [...markdownFiles(SKILL_DATA), DEPLOYED_STUB]) {
     const relative = path.relative(ROOT, file);
     const lines = fs.readFileSync(file, 'utf8').split('\n');
 

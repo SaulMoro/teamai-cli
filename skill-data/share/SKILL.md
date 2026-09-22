@@ -62,6 +62,8 @@ turning a *session* into a learning.
 
 ## References
 
+In the files below, `{SKILL_DIR}` is the directory `teamai skill path share` prints.
+
 | File | When to load it |
 |---|---|
 | `{SKILL_DIR}/references/doc-template.md` | Writing the learning document: template, frontmatter fields, tag taxonomy. |

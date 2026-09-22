@@ -107,3 +107,85 @@ describe('teamai skill get / path CLI (e2e)', () => {
     expect(full.stdout.length).toBeGreaterThan(run('skill', 'get', 'wiki').stdout.length);
   });
 });
+
+/**
+ * The gate the deployment restriction became. The HOME above has no team
+ * config, so every call there fails open; this one carries a team whose recall
+ * is off (the default for a fresh team), the case a member actually hits.
+ */
+describe('teamai skill recall gate CLI (e2e)', () => {
+  let home: string;
+
+  function run(...args: string[]) {
+    return spawnSync(process.execPath, [CLI, ...args], {
+      cwd: home,
+      env: { ...process.env, HOME: home, USERPROFILE: home, FORCE_COLOR: '0' },
+      encoding: 'utf8',
+    });
+  }
+
+  beforeAll(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-skill-recall-e2e-'));
+    const repo = path.join(home, '.teamai', 'team-repo');
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, 'teamai.yaml'), [
+      'team: recall-gate-e2e',
+      `repo: ${repo}`,
+      'provider: git',
+      'usageReport: false',
+      'sharing:',
+      '  env:',
+      '    injectShellProfile: false',
+    ].join('\n'));
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), [
+      'repo:',
+      `  localPath: ${repo}`,
+      `  remote: ${repo}`,
+      'username: e2e-user',
+      'updatePolicy: skip',
+      'scope: user',
+    ].join('\n'));
+  });
+
+  afterAll(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('withholds share on every content path while recall is off, and serves it once enabled', () => {
+    const status = run('recall', 'status');
+    expect(status.stdout, status.stderr).toContain('Recall: disabled');
+
+    const byName = run('skill', 'get', 'share');
+    expect(byName.status).toBe(1);
+    expect(byName.stdout).toBe('');
+    expect(byName.stderr).toContain('share needs recall');
+    expect(byName.stderr).toContain('teamai recall enable');
+
+    const all = run('skill', 'get', '--all');
+    expect(all.status, all.stderr).toBe(0);
+    expect(all.stdout.match(/^name: /gm)).toEqual(['name: ', 'name: ', 'name: ']);
+    expect(all.stdout).not.toContain('name: share');
+    expect(all.stderr).toContain('Skipped share');
+
+    const dir = run('skill', 'path', 'share');
+    expect(dir.status).toBe(1);
+    expect(dir.stdout).toBe('');
+    expect(dir.stderr).toContain('share needs recall');
+
+    const listed = run('skill', 'list', '--json');
+    expect(listed.status).toBe(0);
+    const catalog = JSON.parse(listed.stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
+    expect(catalog.skills.find((s) => s.name === 'share')).toMatchObject({ blockedByRecall: true, path: null });
+    expect(catalog.skills.filter((s) => s.name !== 'share').every((s) => !s.blockedByRecall && s.path !== null)).toBe(true);
+
+    const enable = run('recall', 'enable');
+    expect(enable.status, enable.stderr).toBe(0);
+
+    expect(run('skill', 'get', 'share').stdout).toContain('name: share');
+    expect(run('skill', 'get', '--all').stdout.match(/^name: /gm)).toHaveLength(4);
+    const servedDir = run('skill', 'path', 'share').stdout.trim();
+    expect(fs.existsSync(path.join(servedDir, 'SKILL.md'))).toBe(true);
+    const after = JSON.parse(run('skill', 'list', '--json').stdout) as { skills: Array<{ name: string; path: string | null; blockedByRecall: boolean }> };
+    expect(after.skills.find((s) => s.name === 'share')).toMatchObject({ blockedByRecall: false, path: servedDir });
+  });
+});

@@ -17,6 +17,7 @@ import {
   type PackagedSkill,
   type PackagedSkillRoots,
 } from '../skill-content.js';
+import { readSkillDescription } from '../agent-skills.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -306,6 +307,14 @@ describe('the shipped skill-data content', () => {
     const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
     expect(stub).toMatch(/^name: teamai$/m);
     expect(stub).toMatch(/^allowed-tools: Bash\(teamai:\*\), Bash\(npx teamai-cli:\*\)$/m);
+  });
+
+  it('keeps the stub description within the 1024-character budget agents load it under', async () => {
+    // With one deployed skill, this description is the only text an agent sees
+    // at selection time, and hosts cap it at 1024 characters.
+    const description = await readSkillDescription(path.join(ROOT, 'skills/teamai/SKILL.md'));
+    expect(description.length).toBeGreaterThan(0);
+    expect(description.length).toBeLessThanOrEqual(1024);
   });
 });
 

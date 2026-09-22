@@ -4,16 +4,27 @@ Issue: [#678](https://github.com/Tencent/teamai-cli/issues/678). Shipped in 0.23
 
 ## The problem
 
-`deployBuiltinSkills` copied three whole skill directories — 176 KB — into every
-installed agent's skills directory, on `init`, on `pull` and on a recall toggle.
-Nothing else redeployed them, so `npm i -g teamai-cli@latest` left the previous
-content in place until the member ran a pull. Four commits exist only to
-re-align deployed text after a command changed (`e151d43`, `1ca43ac`, `8bb0548`,
-`2ddb546`), and `skills/team-wiki-codebase/SKILL.md` alone was 38 705 bytes —
-roughly 10k tokens read on every activation, before the agent opened a single
-reference file.
+The built-in skills describe the CLI, but they did not travel with it.
+`deployBuiltinSkills` copied three whole skill directories into every installed
+agent's skills directory on `init`, on `pull` and on a recall toggle, and nothing
+else touched them. After `npm i -g teamai-cli@latest` the agent kept reading the
+previous release's instructions until the member happened to run a pull, and a
+machine with several agents could hold several different versions at once. Four
+commits exist only to re-align deployed text after a command changed (`e151d43`,
+`1ca43ac`, `8bb0548`, `2ddb546`), and every one of them needed a pull on every
+machine to take effect.
+
+The copies were also large — 176 KB per agent, with
+`skills/team-wiki-codebase/SKILL.md` alone at 38 705 bytes read in full on every
+activation — but that is the secondary cost. The primary one is that the agent's
+instructions and the binary they describe were versioned separately.
 
 ## The shape
+
+**The skill content is versioned with the CLI.** It ships inside the npm package
+and is printed by the installed binary, so `teamai skill get core` on version X
+prints version X's instructions, byte for byte, with no pull in between.
+Upgrading the CLI is the update; there is nothing else to sync.
 
 One deployable unit, everything else served on demand. The pattern is
 `vercel-labs/agent-browser`'s, verified against its published 0.38.1 package.
@@ -35,8 +46,8 @@ npm package
 What an agent reads, and when:
 
 ```text
-session start            stub frontmatter description      ~1.3 KB   always in context
-task matches             stub body                          ~0.9 KB  holds the commands
+session start            stub frontmatter (description)    ~0.9 KB  always in context
+task matches             stub body                          ~1.3 KB  holds the commands
 `teamai skill get core`  daily workflow                     ~5.7 KB  on demand
 `… core --full`          + troubleshooting + commands.md     ~32 KB   on demand
 `… setup` / `wiki` / `share`                                          on demand

@@ -63,6 +63,8 @@ platform's website, as `manage-admin.md` describes.
 
 ## References
 
+In the files below, `{SKILL_DIR}` is the directory `teamai skill path setup` prints.
+
 | File | When to load it |
 |---|---|
 | `{SKILL_DIR}/references/setup-admin.md` | Creating a team repo: provider detection, auth, repo creation, first push. |
@@ -70,4 +72,4 @@ platform's website, as `manage-admin.md` describes.
 | `{SKILL_DIR}/references/manage-admin.md` | Day-to-day admin: publishing resources, roles, projects, MCP, env, members. |
 | `{SKILL_DIR}/references/uninstall.md` | Removing TeamAI from a machine or from one agent. |
 
-`teamai skill get setup --full` prints this skill with all four appended (about 31 KB).
+`teamai skill get setup --full` prints this skill with all four appended (about 36 KB).

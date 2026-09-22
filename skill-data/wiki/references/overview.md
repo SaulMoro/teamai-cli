@@ -87,25 +87,28 @@ Phase K4 → 质量评估：
 
 ## 文件结构
 
+以下文件随 CLI 一起发布；`teamai skill path wiki` 打印其所在目录（本文中的 `{SKILL_DIR}`）。
+
 ```
-team-wiki-codebase/
-├── SKILL.md                                ← 主执行指令（AI 加载）
-├── README.md                               ← 本文件
+{SKILL_DIR}/
+├── SKILL.md                                ← 主执行指令（`teamai skill get wiki`）
 ├── scripts/
 │   ├── scan_repo.py                        ← 仓库扫描辅助工具
 │   └── validate_kb.py                      ← 知识库质量校验工具
-└── references/
-    ├── agents/
-    │   ├── kb-doc-generator.md             ← Type-1~8 文档生成专职 Agent
-    │   └── graph-rag-agent.md              ← G1~G9 图谱文档专职 Agent
-    ├── methodology/
-    │   ├── phase0-collection.md            ← 源材料采集方法
-    │   ├── phase1-reverse-engineering.md   ← 架构逆向工程方法
-    │   ├── phase2-document-types.md        ← 九大文档类型规范与质量标准
-    │   ├── phase3-ai-enhancement.md        ← AI-Native 增强方法
-    │   └── phase4-quality.md               ← 质量评估 Checklist
-    └── templates/
-        └── project-overview.md             ← 知识库 README 模板（含认知边界声明）
+├── references/
+│   ├── overview.md                         ← 本文件
+│   ├── agents/
+│   │   ├── kb-doc-generator.md             ← Type-1~8 文档生成专职 Agent
+│   │   └── graph-rag-agent.md              ← G1~G9 图谱文档专职 Agent
+│   ├── methodology/
+│   │   ├── phase0-collection.md            ← 源材料采集方法
+│   │   ├── phase1-reverse-engineering.md   ← 架构逆向工程方法
+│   │   ├── phase2-document-types.md        ← 九大文档类型规范与质量标准
+│   │   ├── phase3-ai-enhancement.md        ← AI-Native 增强方法
+│   │   └── phase4-quality.md               ← 质量评估 Checklist
+│   ├── phases/                             ← 各 Phase 的执行步骤
+│   └── templates/
+│       └── project-overview.md             ← 知识库 README 模板（含认知边界声明）
 ```
 
 ---

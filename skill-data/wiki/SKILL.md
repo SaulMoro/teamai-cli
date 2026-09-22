@@ -221,7 +221,7 @@ Step 7：组件级 diff（处理新增/删除仓库或组件）
 
 人类可读概览（非执行用）：`{SKILL_DIR}/references/overview.md`。
 
-`teamai skill get wiki --full` 一次性打印全部参考文件（约 100 KB），仅在需要通读时使用。
+`teamai skill get wiki --full` 一次性打印全部参考文件（约 115 KB），仅在需要通读时使用。
 
 ## 输出目录结构
 

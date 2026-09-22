@@ -5,7 +5,7 @@ description: >-
   tools. Use when the task operates on team-shared AI configuration or team knowledge: setting up a
   team repo, joining one, managing members, syncing with pull or push, or checking team status.
   Also use to build or query a codebase knowledge base for a large multi-repo project (架构分析,
-  架构逆向, 代码知识库, code-to-knowledge, architecture wiki), and to share what a session taught you
+  架构逆向, 代码知识库, code-to-knowledge, team-wiki-codebase, architecture wiki), and to share what a session taught you
   back to the team (分享 Session 经验, contribute a learning, share this with my team), including
   after a friction reminder. Triggers include "set up teamai", "join the team repo", "sync team
   skills", "team wiki", "share what I learned", and running /teamai. Talking about a team needs no

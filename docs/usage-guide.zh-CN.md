@@ -441,13 +441,13 @@ teamai skill get wiki --full        # 同时附上该 skill 的 references 与 t
 teamai skill path wiki              # 打印打包目录，用于运行 skill 自带的脚本
 ```
 
-#### 内置 skill 由 CLI 提供，不再复制
+#### 内置 skill 随 CLI 一起版本化
 
-每个 agent 只收到一个文件：`~/.<tool>/skills/teamai/SKILL.md`，约 2 KB 的发现入口（stub）。
-它指向的工作流（`core`、`setup`、`wiki`、`share`）保留在 npm 包内，由 `teamai skill get` 按需打印，
-因此 agent 读到的内容始终与已安装的 CLI 版本一致——`npm i -g teamai-cli@latest` 之后无需 `teamai pull`
-内容就是最新的。旧版本会把整棵目录复制到每个 agent 下，`teamai pull` 会清除这些残留。
-旧名字仍然可用：`teamai skill get team-wiki-codebase` 等价于 `wiki`。
+内置工作流（`core`、`setup`、`wiki`、`share`）随 npm 包一起发布，由已安装的 CLI 通过 `teamai skill get`
+按需打印，因此 agent 读到的内容始终与正在运行的 CLI 版本一致——`npm i -g teamai-cli@latest` 本身就是更新，
+无需 `teamai pull` 内容就是最新的。每个 agent 只收到一个文件：`~/.<tool>/skills/teamai/SKILL.md`，
+一个指向这些命令的小型发现入口（stub）。旧版本会把整棵目录复制到每个 agent 下，两次 pull 之间内容会过时；
+`teamai pull` 会清除这些残留。旧名字仍然可用：`teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---
 

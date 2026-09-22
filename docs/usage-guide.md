@@ -464,14 +464,15 @@ teamai skill get wiki --full        # ...with its references and templates appen
 teamai skill path wiki              # The packaged directory, for the scripts a skill ships
 ```
 
-#### Built-in skills are served, not copied
+#### Built-in skills are versioned with the CLI
 
-Agents receive one file from the CLI: `~/.<tool>/skills/teamai/SKILL.md`, a ~2 KB
-discovery stub. The workflows it routes to (`core`, `setup`, `wiki`, `share`) stay
-inside the npm package and are printed by `teamai skill get`, so what an agent reads
-always matches the installed CLI version — `npm i -g teamai-cli@latest` is enough, with
-no pull needed for the content to be current. Older releases copied the whole tree into
-every agent directory; `teamai pull` removes those leftovers. The legacy names still
+The built-in workflows (`core`, `setup`, `wiki`, `share`) ship inside the npm package
+and are printed by the installed binary with `teamai skill get`, so what an agent reads
+always matches the CLI version it is running — `npm i -g teamai-cli@latest` is the
+update, with no pull needed for the content to be current. Agents receive a single file
+from the CLI, `~/.<tool>/skills/teamai/SKILL.md`, a small discovery stub that points at
+those commands. Older releases copied the whole tree into every agent directory, where it
+went stale between pulls; `teamai pull` removes those leftovers. The legacy names still
 resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ---
