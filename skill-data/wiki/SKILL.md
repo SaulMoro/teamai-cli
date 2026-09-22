@@ -16,7 +16,7 @@ description: >-
 > Prerequisites: an accessible source directory (multiple repositories supported), Python 3, and an installed teamai CLI.
 > The methodology, sub-agent prompts, templates and scripts ship with the CLI. Run `teamai skill path wiki` to get their absolute path;
 > `{SKILL_DIR}` in this document refers to that path; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.
-> Write documents in the language the user works in. When updating an existing knowledge base, keep its file names and headings; `validate_kb.py` accepts both the current English and the earlier Chinese headings.
+> Write the knowledge-base documents in Simplified Chinese, as earlier releases did. When updating an existing knowledge base, keep its file names and headings; `validate_kb.py` accepts both the current English and the earlier Chinese headings.
 > The Phase 0 structural baseline uses `teamai codebase --extract`. TeamAI does not ship a separate team-wiki CLI. No extra plugin is required.
 
 **The problem**: large projects (10+ repositories, dozens of microservices, years of iteration) defeat global understanding by AI. The context window cannot hold all the code, component relations are scattered everywhere, and business rules hide deep in call chains. Letting AI read the code directly is both slow (huge token counts) and inaccurate (no global view).

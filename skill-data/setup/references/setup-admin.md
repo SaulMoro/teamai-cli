@@ -200,7 +200,7 @@ Claude Code"). Omitting `--agent` gives an interactive picker — select **every
 tool already installed** on the machine. Then **report back which agents were set
 up**, in the user's language: name the tools that will now auto-start TeamAI, and
 any detected tool that was skipped and why (e.g. Codex trust-gate,
-CodeBuddy/WorkBuddy by design — see the troubleshooting reference, `$(teamai skill path core)/references/troubleshooting.md`).
+CodeBuddy/WorkBuddy by design — see the troubleshooting reference, `"$(teamai skill path core)/references/troubleshooting.md"`).
 
 ## Step 6 — Verify with doctor
 
@@ -216,7 +216,7 @@ it prints even for tools where nothing was written. `teamai doctor` / `teamai ho
 list` show the real per-tool status. Only the tool you set up (e.g. `claude`) is
 expected to show hooks installed; others are skipped by design or not yet supported,
 which is normal. Full table in the troubleshooting reference
-(`$(teamai skill path core)/references/troubleshooting.md`), section "Which tools actually get hooks".
+(`"$(teamai skill path core)/references/troubleshooting.md"`), section "Which tools actually get hooks".
 
 ## Step 7 — Grant members repo access (required before they can join)
 

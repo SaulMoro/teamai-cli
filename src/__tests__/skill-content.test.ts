@@ -317,7 +317,7 @@ describe('the shipped skill-data content', () => {
     expect(stub).toMatch(/^allowed-tools: Bash\(teamai skill:\*\), Bash\(npx teamai-cli skill:\*\)$/m);
   });
 
-  it('quotes {SKILL_DIR} in every command it tells the agent to run', async () => {
+  it('quotes {SKILL_DIR} and $(teamai skill path …) in every command it tells the agent to run', async () => {
     // The placeholder resolves to the install path, which can hold a space
     // ("Program Files", "~/Library/Application Support", a user's full name) or
     // be a Windows path used through Bash. An unquoted occurrence in a command
@@ -336,6 +336,11 @@ describe('the shipped skill-data content', () => {
           // Prose and reference tables name the path without running it, and a
           // quoted occurrence is already correct.
           if (/(?:^|[`\s(])(?:python3?|node|bash|sh|cp|mv|cat|ls|rm)\s+\{SKILL_DIR\}/.test(line)) {
+            offenders.push(`${skill.name}/${relative}:${i + 1}: ${line.trim()}`);
+          }
+          // `$(teamai skill path …)` is word-split in a shell command just the
+          // same, so it is always written inside double quotes.
+          if (/(?<!")\$\(teamai skill path /.test(line)) {
             offenders.push(`${skill.name}/${relative}:${i + 1}: ${line.trim()}`);
           }
         });

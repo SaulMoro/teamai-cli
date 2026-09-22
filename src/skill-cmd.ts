@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { autoDetectInit } from './config.js';
+import { autoDetectInit, NotInitializedError } from './config.js';
 import { log } from './utils/logger.js';
 import { listDirs, pathExists } from './utils/fs.js';
 import { SkillsHandler } from './resources/skills.js';
@@ -52,9 +52,11 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   let init: { localConfig: LocalConfig; teamConfig: TeamaiConfig };
   try {
     init = await autoDetectInit();
-  } catch {
+  } catch (e) {
     // A packaged skill needs no team: it ships with the CLI, so `teamai skill
     // show core` still works on a machine that has never run `teamai init`.
+    // Only that case: a broken config is reported, not read as "no team".
+    if (!(e instanceof NotInitializedError)) throw e;
     const packaged = await resolveServableSkill(name);
     if (packaged.kind === 'blocked') {
       const { headline, hint } = blockMessage(packaged.name, packaged.reason);
@@ -154,7 +156,8 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
   let initialized = true;
   try {
     await autoDetectInit();
-  } catch {
+  } catch (e) {
+    if (!(e instanceof NotInitializedError)) throw e;
     initialized = false;
   }
   if (initialized) {

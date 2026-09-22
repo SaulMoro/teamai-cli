@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { autoDetectInit, logDim } = vi.hoisted(() => ({ autoDetectInit: vi.fn(), logDim: vi.fn() }));
-vi.mock('../config.js', () => ({ autoDetectInit }));
+const { autoDetectInit, logDim, NotInitializedError } = vi.hoisted(() => ({
+  autoDetectInit: vi.fn(),
+  logDim: vi.fn(),
+  NotInitializedError: class NotInitializedError extends Error {},
+}));
+vi.mock('../config.js', () => ({ autoDetectInit, NotInitializedError }));
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: logDim },
+  setStderrOnly: vi.fn(() => false),
 }));
 
 import { skillList } from '../skill-cmd.js';
@@ -32,7 +37,7 @@ describe('teamai skill list before init', () => {
   });
 
   it('prints the packaged catalog and says what to run for the rest', async () => {
-    autoDetectInit.mockRejectedValue(new Error('teamai is not initialized. Run `teamai init` first.'));
+    autoDetectInit.mockRejectedValue(new NotInitializedError('teamai is not initialized. Run `teamai init` first.'));
 
     await skillList({});
 
@@ -42,5 +47,14 @@ describe('teamai skill list before init', () => {
       expect(stdout).toContain(`teamai skill get ${name}`);
     }
     expect(logDim).toHaveBeenCalledWith(expect.stringContaining('teamai init'));
+  });
+
+  it('reports a broken config instead of calling the machine uninitialized', async () => {
+    // A config that exists but cannot be used is not "no team": telling the
+    // member to run `teamai init` would send them to re-init over a real setup.
+    autoDetectInit.mockRejectedValue(new Error('Team config (teamai.yaml) not found. Check your repo path.'));
+
+    await expect(skillList({})).rejects.toThrow('Team config (teamai.yaml) not found');
+    expect(logDim).not.toHaveBeenCalledWith(expect.stringContaining('Not initialized'));
   });
 });

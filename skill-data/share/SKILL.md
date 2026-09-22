@@ -10,9 +10,8 @@ description: >-
 
 Summarize what this AI coding session taught you and push it to the team knowledge base.
 
-**Write the document in the language the user used in this session** (a Chinese conversation
-gets a Chinese document, an English one an English document). Commands, flags, URLs, paths and
-code identifiers stay as they are.
+**Write the document in Simplified Chinese**, as earlier releases required. Commands, flags,
+URLs, paths and code identifiers stay as they are.
 
 ## When to Use
 
@@ -57,7 +56,7 @@ teamai contribute --file /tmp/session-summary.md --title "Debugging K8s pod star
 
 A member asking to publish a skill ("share this xxx skill with my team") is a
 different flow, and it does not need recall: it lives in the `core` skill, at
-`$(teamai skill path core)/references/contribute-member.md`. This file
+`"$(teamai skill path core)/references/contribute-member.md"`. This file
 is for turning a *session* into a learning.
 
 ## References

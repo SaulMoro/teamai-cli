@@ -114,7 +114,7 @@ teamai env remove <KEY>      # remove
 ## When sync fails
 
 Run `teamai doctor` first. If it reports hook or path problems, load
-the troubleshooting reference (`$(teamai skill path core)/references/troubleshooting.md`). Have the affected member reopen their session; if their tool
+the troubleshooting reference (`"$(teamai skill path core)/references/troubleshooting.md"`). Have the affected member reopen their session; if their tool
 has no session-start hook, they run `teamai pull` manually.
 
 ## Capture a lesson learned
@@ -126,7 +126,7 @@ worth sharing, TeamAI prompts the member and the dedicated
 `share` workflow (`teamai skill get share`) summarizes the session and runs
 `teamai contribute`. Nobody has to invoke it by hand.
 (Publishing a **reusable skill** someone authored is a different task — any member
-can do it, see `$(teamai skill path core)/references/contribute-member.md`.)
+can do it, see `"$(teamai skill path core)/references/contribute-member.md"`.)
 
 ### Turn the sharing prompt on or off (admin)
 
