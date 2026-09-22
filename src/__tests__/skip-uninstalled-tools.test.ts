@@ -8,7 +8,9 @@ import { listFilesRecursive } from '../utils/fs.js';
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** The team config the prune tests share; pass toolPaths to change which tool runs. */
-function legacyPruneTeamConfig(toolPaths: Record<string, { skills: string }> = { claude: { skills: '.claude/skills' } }) {
+function legacyPruneTeamConfig(
+  toolPaths: Record<string, { skills: string; userScope?: { skills: string } }> = { claude: { skills: '.claude/skills' } },
+) {
   return {
     team: 'test',
     description: '',
@@ -847,6 +849,24 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     const deployed = await deployBuiltinSkills(
       legacyPruneTeamConfig({ hermes: { skills: '.hermes/skills' } }),
+      legacyPruneLocalConfig(tmpDir),
+    );
+
+    expect(deployed).toBe(0);
+    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.pathExists(path.join(target, 'skills/teamai'))).toBe(false);
+  });
+
+  it('refuses a linked COPILOT_HOME, which is Copilot\'s own base directory in user scope', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const target = path.join(tmpDir, 'dotfiles/copilot');
+    await fse.ensureDir(path.join(target, 'skills/team-wiki-codebase'));
+    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.symlink(target, path.join(homeDir, '.copilot'), 'dir');
+
+    const deployed = await deployBuiltinSkills(
+      legacyPruneTeamConfig({ copilot: { skills: '.github/skills', userScope: { skills: 'skills' } } }),
       legacyPruneLocalConfig(tmpDir),
     );
 

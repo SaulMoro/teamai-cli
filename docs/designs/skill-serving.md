@@ -76,8 +76,9 @@ path (measured here from a 77-character one).
   `recall disable` and `uninstall` resolve the skills directory through
   `skillsDirForTool`, the resolver team-skill sync uses, so OpenClaw gets it in
   its workspace and Hermes under `HERMES_HOME` rather than under a tool root
-  that agent never reads. The link guard walks from the tool's base directory
-  when the skills directory is under it, else from that directory's parent.
+  that agent never reads. The link guard walks from the scope root (home, or
+  the project root) when the skills directory is under it, else from just above
+  the configured root, so that root is checked too.
 - **Nothing repairs the deployed stub.** `ensureSkillFrontmatter` is not called
   on it, so deployed and packaged bytes are identical and a diff means a bug.
 - **Recall is decided at run time**, not by withholding a directory at deploy
@@ -177,9 +178,9 @@ migration stops being a one-way door for any of them. That path is the machine's
 home, never the tool's base directory, which under project scope is the repo
 root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A
-link on any component between the tool's base directory and the skill
-directory — `~/.claude`, `~/.config/opencode`, `~/.claude/skills`, the skill
-directory itself — is refused outright: neither pruned nor written through, link
+link on any component between the scope root (home, or the project root) and
+the skill directory — `~/.claude`, `~/.config/opencode`, `~/.claude/skills`,
+`COPILOT_HOME`, the skill directory itself — is refused outright: neither pruned nor written through, link
 and target untouched, since everything under it matches our names and none of it
 is ours. Pull, deploy and `uninstall` apply the same check; uninstall carries
 each skill directory's base for it. Components at or above the base are not

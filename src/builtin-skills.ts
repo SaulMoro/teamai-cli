@@ -5,7 +5,7 @@ import fse from 'fs-extra';
 import { pathExists, remove } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
-import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
+import { resolveBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDirForTool, skillTargetForTool } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
@@ -313,25 +313,27 @@ function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillN
 export interface BuiltinSkillsTarget {
   skillsDir: string;
   /**
-   * The tool's base directory when the skills directory sits under it, else
-   * the parent of the configured root: OpenClaw's workspace and a
-   * `HERMES_HOME` can live anywhere, and the guard must still check that root
-   * and every component below it.
+   * The scope root (home, or the project root) when the skills directory sits
+   * under it, else the parent of the configured root: `COPILOT_HOME`,
+   * `HERMES_HOME` and OpenClaw's workspace can live anywhere, and the guard
+   * must still check that root and every component below it.
    */
   guardBase: string;
 }
 
 /**
- * The base the link guard walks down from: the tool's base directory when
- * `skillsDir` sits under it. Otherwise the root was configured outside it
- * (`HERMES_HOME`, an OpenClaw workspace), and the walk starts above that root
- * so the root itself is checked too: a linked `HERMES_HOME` is refused like a
- * linked `~/.claude`.
+ * The base the link guard walks down from: the scope root — home, or the
+ * project root — when `skillsDir` sits under it, since a link at or above that
+ * is ordinary. Not the tool's base directory: for Copilot that is
+ * `COPILOT_HOME`, and starting there would never check whether `COPILOT_HOME`
+ * itself is a link. A root configured outside the scope root (`HERMES_HOME`,
+ * an OpenClaw workspace) has the walk start just above it, so that root is
+ * checked too.
  */
-export function skillsGuardBase(toolBaseDir: string, skillsDir: string): string {
-  const relative = path.relative(toolBaseDir, skillsDir);
-  const underBase = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-  return underBase ? toolBaseDir : path.dirname(path.dirname(skillsDir));
+export function skillsGuardBase(scopeRoot: string, skillsDir: string): string {
+  const relative = path.relative(scopeRoot, skillsDir);
+  const underRoot = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return underRoot ? scopeRoot : path.dirname(path.dirname(skillsDir));
 }
 
 /**
@@ -352,7 +354,7 @@ export async function builtinSkillsTarget(
   }
   const skillsDir = await skillsDirForTool(tool, configuredSkillsPath, localConfig);
   if (skillsDir === null) return null;
-  return { skillsDir, guardBase: skillsGuardBase(resolveToolBaseDir(tool, localConfig), skillsDir) };
+  return { skillsDir, guardBase: skillsGuardBase(resolveBaseDir(localConfig), skillsDir) };
 }
 
 /**

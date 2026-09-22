@@ -254,6 +254,8 @@ async function discoverToolResources(
   tool: string,
   toolPath: TeamaiConfig['toolPaths'][string],
   baseDir: string,
+  /** Home, or the project root: where the skills link guard starts (`skillsGuardBase`). */
+  scopeRoot: string,
   teamSkillNames: Set<string>,
   teamRuleNames: Set<string>,
   teamAgentNames: Set<string>,
@@ -364,25 +366,29 @@ async function discoverToolResources(
   // (c) Skills — only those matching team repo
   if (toolPath.skills) {
     // Skills root → the base the link guard starts from.
-    const skillRoots = new Map([[path.join(baseDir, toolPath.skills), baseDir]]);
+    const configuredSkills = path.join(baseDir, toolPath.skills);
+    const skillRoots = new Map([[configuredSkills, skillsGuardBase(scopeRoot, configuredSkills)]]);
     // OpenClaw and Hermes receive skills where team sync and the stub put them
     // (`skillsDirForTool`): the workspace, and HERMES_HOME.
     if (tool === 'openclaw') {
       const workspaceDir = await resolveOpenclawWorkspaceDir();
       if (workspaceDir) {
         const workspaceSkills = path.join(workspaceDir, 'skills');
-        skillRoots.set(workspaceSkills, skillsGuardBase(baseDir, workspaceSkills));
+        skillRoots.set(workspaceSkills, skillsGuardBase(scopeRoot, workspaceSkills));
       }
     }
     if (tool === 'hermes') {
       const hermesSkills = path.join(getHermesHome(), 'skills');
-      skillRoots.set(hermesSkills, skillsGuardBase(baseDir, hermesSkills));
+      skillRoots.set(hermesSkills, skillsGuardBase(scopeRoot, hermesSkills));
     }
     // `resolveSkillDestination` writes Codex's copy into the shared
     // .agents/skills root whenever that skill already lives there, so uninstall
     // must look where deployment could have put it — the legacy prune already
     // does. Codex only: another tool's pass must not reach into it.
-    if (tool === CODEX_TOOL) skillRoots.set(path.join(baseDir, SHARED_AGENT_SKILLS_PATH), baseDir);
+    if (tool === CODEX_TOOL) {
+      const sharedSkills = path.join(baseDir, SHARED_AGENT_SKILLS_PATH);
+      skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
+    }
     for (const [skillsDir, rootBase] of skillRoots) {
       if (await pathExists(skillsDir)) {
         const dirs = await listDirs(skillsDir);
@@ -499,6 +505,7 @@ async function buildRemovalPlan(
         tool,
         toolPath,
         resolveToolBaseDir(tool, localConfig),
+        resolveBaseDir(localConfig),
         teamSkillNames,
         teamRuleNames,
         teamAgentNames,

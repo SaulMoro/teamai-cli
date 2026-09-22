@@ -1097,6 +1097,24 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(dotfiles, 'skills', 'teamai', 'SKILL.md'))).toBe(true);
   });
 
+  it('does not delete through a linked COPILOT_HOME, Copilot\'s own base directory in user scope', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const target = path.join(tmpDir, 'dotfiles-copilot');
+    await fse.ensureDir(path.join(target, 'skills', 'teamai'));
+    await fse.writeFile(path.join(target, 'skills', 'teamai', 'SKILL.md'), '# stub in the checkout');
+    await fse.symlink(target, path.join(homeDir, '.copilot'), 'dir');
+
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    const teamConfig = makeTeamConfig();
+    teamConfig.toolPaths.copilot = { skills: '.github/skills', userScope: { skills: 'skills' } };
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(target, 'skills', 'teamai', 'SKILL.md'))).toBe(true);
+  });
+
   it('removes the stub where Hermes keeps skills, under HERMES_HOME outside the home directory', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
