@@ -410,6 +410,31 @@ projects:
       expect(items[0]?.relativePath).toBe('agents/fe/vr.yaml');
     });
 
+    it('follows a renamed canonical source to its new extension and retires the recorded file', async () => {
+      const self = selfConfig();
+      // Recorded and published as legacy .md; the author has since rewritten it as .yaml.
+      await fse.outputFile(path.join(repoPath, 'agents/fe/vr.md'), '# vr\nLegacy body.\n');
+      await fse.outputFile(path.join(tmpDir, '.teamai/agents/vr.yaml'),
+        'name: vr\ndescription: Rewritten\ninstructions: Read it.\n');
+      await fse.outputJson(path.join(getDataHome(self), 'state.json'), {
+        placedAgents: { vr: 'agents/fe/vr.md' },
+      });
+
+      const items = await handler.scanLocalForPush(teamConfig, self);
+
+      // Keeping the recorded .md as relativePath made pushGroup stage a path
+      // pushItem never wrote — the .yaml went unstaged and the .md stayed.
+      expect(items).toHaveLength(1);
+      expect(items[0]?.status).toBe('modified');
+      expect(items[0]?.relativePath).toBe('agents/fe/vr.yaml');
+      expect(items[0]).toMatchObject({ supersedes: 'agents/fe/vr.md' });
+
+      await handler.pushItem(items[0]!, teamConfig, self);
+
+      expect(await fse.pathExists(path.join(repoPath, 'agents/fe/vr.yaml'))).toBe(true);
+      expect(await fse.pathExists(path.join(repoPath, 'agents/fe/vr.md'))).toBe(false);
+    });
+
     it('removes the canonical source so the agent cannot republish itself', async () => {
       const self = selfConfig();
       await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');

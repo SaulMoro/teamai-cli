@@ -243,6 +243,16 @@ function commitOnMain(fixture: Fixture, relPath: string, content: string): void 
   fs.rmSync(clone, { recursive: true, force: true });
 }
 
+/** Delete a file straight off the remote's default branch, as a teammate would. */
+function deleteOnMain(fixture: Fixture, relPath: string): void {
+  const clone = path.join(fixture.sandbox, `mate-rm-${Date.now()}`);
+  git(['clone', '-q', fixture.remote, clone], fixture.sandbox);
+  git(['rm', '-q', relPath], clone);
+  git(['commit', '-q', '-m', `teammate: delete ${relPath}`], clone);
+  git(['push', '-q', 'origin', 'main'], clone);
+  fs.rmSync(clone, { recursive: true, force: true });
+}
+
 const cleanups: string[] = [];
 afterEach(() => {
   while (cleanups.length) {
@@ -537,6 +547,36 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     const { files } = branchFiles(fixture);
     expect(files, result.output).toContain('rules/fe-know-v2/my-rule.md');
     expect(files).not.toContain('rules/fe-know/my-rule.md');
+  }, 60_000);
+
+  it('refuses a --project push when the team clone cannot be refreshed', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    // The clone's manifest is whatever the last pull left. Point origin
+    // somewhere unreachable so this run cannot refresh it.
+    git(['remote', 'set-url', 'origin', path.join(fixture.sandbox, 'nowhere.git')], fixture.teamRepo);
+
+    const result = await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('could not be refreshed');
+    expect(branchFiles(fixture).branch).toBe('');
+  }, 60_000);
+
+  it('pull drops the placement record of a rule the team has since deleted', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/be-know/my-rule.md' });
+    deleteOnMain(fixture, 'rules/be-know/my-rule.md');
+
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+
+    // Left in place, the record would claim the next `rules/be-know/my-rule.md`
+    // anybody creates as this author's, and their root copy would push over it.
+    expect(readState(fixture).placedRules ?? {}).toEqual({});
   }, 60_000);
 
   it('removes only the published agent, through the real remove command', async () => {

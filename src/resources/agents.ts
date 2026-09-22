@@ -50,6 +50,12 @@ export interface AgentResourceItem extends ResourceItem {
   needsDestination?: boolean;
   /** True when item came from a legacy .md team-repo file (older format). */
   legacy?: boolean;
+  /**
+   * Team-relative path of the file this push retires: the recorded canonical
+   * file when the author renamed their source from `.md` to `.yaml` or back.
+   * `pushItem` deletes it and `push` stages the deletion and moves the record.
+   */
+  supersedes?: string;
 }
 
 /**
@@ -145,6 +151,7 @@ export class AgentsHandler extends ResourceHandler {
             let teamRelPath = `${relDir}/${file}`;
             let basePath = path.join(localConfig.repo.localPath, teamRelPath);
             let baseExists = await pathExists(basePath);
+            let supersedes: string | undefined;
             // A canonical source authored at .teamai/agents/ root and placed
             // under agents/<ns>/ has nothing at agents/<stem>.yaml, so without
             // the record it reads as brand new — and the collision check then
@@ -152,12 +159,17 @@ export class AgentsHandler extends ResourceHandler {
             if (!baseExists && !namespace) {
               const placed = placedResourcePath(placedAgents, 'agents', stem);
               if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
-                teamRelPath = placed;
+                // The destination keeps the record's directory but THIS file's
+                // extension: `pushItem` writes by the source's extension, so a
+                // relativePath still naming the recorded `.md` would stage a
+                // path nothing was written to, and leave that `.md` behind.
+                teamRelPath = `${path.posix.dirname(placed)}/${file}`;
+                if (teamRelPath !== placed) supersedes = placed;
                 basePath = path.join(localConfig.repo.localPath, placed);
                 baseExists = true;
               }
             }
-            if (baseExists && await fileContentEqual(activePath, basePath)) continue; // unchanged
+            if (baseExists && !supersedes && await fileContentEqual(activePath, basePath)) continue; // unchanged
 
             directItems.push({
               name: stem,
@@ -169,6 +181,7 @@ export class AgentsHandler extends ResourceHandler {
               ...(baseExists && teamRelPath !== `${relDir}/${file}`
                 ? { namespace: teamRelPath.split('/')[1] }
                 : {}),
+              ...(supersedes ? { supersedes } : {}),
             });
             directStems.add(stem);
           }
@@ -480,6 +493,14 @@ export class AgentsHandler extends ResourceHandler {
     if (item.sourcePath !== dest) {
       await ensureDir(path.dirname(dest));
       await copyFile(item.sourcePath, dest);
+    }
+    // The recorded file under the other extension is the same agent; two
+    // canonical files for one stem is what pull reports as a collision.
+    if (agentItem.supersedes) {
+      const retired = path.resolve(localConfig.repo.localPath, agentItem.supersedes);
+      assertWithinRoot(path.join(localConfig.repo.localPath, 'agents'), retired,
+        `Invalid superseded agent path outside team repo agents directory: ${agentItem.supersedes}`);
+      if (retired !== dest) await remove(retired);
     }
     log.debug(`Copied agent ${item.name} → team repo (${ext} verbatim)`);
   }

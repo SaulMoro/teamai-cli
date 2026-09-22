@@ -6,7 +6,7 @@ import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev,
 } from './utils/git.js';
-import {
+import { prunePlacementRecords,
   findPendingForItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
@@ -308,6 +308,14 @@ function collisionPaths(type: PlaceableType, placedAt: string): string[] {
  */
 function recordPlacements(state: State, items: ResourceItem[]): void {
   for (const item of items) {
+    // A recorded agent whose canonical source changed extension was written
+    // to a new path this run; the record has to follow it or the next scan
+    // finds nothing at the recorded one and reads the agent as new. The scan
+    // only sets `supersedes` when it reached the file through the record.
+    if (item.type === 'agents' && supersededPathOf(item)) {
+      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
+      continue;
+    }
     if (item.status !== 'new' || !item.namespace) continue;
     // A rule the scanner already found in a subdirectory carries the namespace
     // in its name and matches by full path, so it needs no record.
@@ -318,6 +326,11 @@ function recordPlacements(state: State, items: ResourceItem[]): void {
       state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
     }
   }
+}
+
+/** The team-relative path `pushItem` retired while writing `item`, if any. */
+function supersededPathOf(item: ResourceItem): string | undefined {
+  return 'supersedes' in item && typeof item.supersedes === 'string' ? item.supersedes : undefined;
 }
 
 /**
@@ -370,8 +383,10 @@ async function placeNewResources(args: {
   localConfig: LocalConfig;
   projectsManifest: ProjectsManifest | null;
   skillsDestinationError?: string;
+  /** The clone could not be refreshed this run; its manifests may be stale. */
+  teamRepoStale?: boolean;
 }): Promise<boolean> {
-  const { items, options, localConfig, projectsManifest, skillsDestinationError } = args;
+  const { items, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale } = args;
 
   // A project that declares no skills namespace only blocks the push once a
   // skill is actually selected, so a rule can still go out from a scan that
@@ -387,6 +402,22 @@ async function placeNewResources(args: {
       (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i),
     );
     if (newAtRoot.length === 0) continue;
+
+    // Same reasoning as --project in pushCore, for the roles manifest: a
+    // namespace resolved from an unrefreshed clone may name the wrong members.
+    // A team with no roles manifest at all resolves from nothing that can go
+    // stale, and keeps its pre-manifest behaviour.
+    if (
+      teamRepoStale && !options.role
+      && await pathExists(path.join(localConfig.repo.localPath, 'manifest', 'roles.yaml'))
+    ) {
+      log.error(
+        `Cannot place new ${type}: the team repo could not be refreshed, so manifest/roles.yaml may be `
+        + 'stale. Fix the pull and retry, or name the namespace with --role <ns>.',
+      );
+      process.exitCode = 1;
+      return false;
+    }
 
     const destination = await resolveNamespaceForNew(type, options, localConfig, projectsManifest);
     switch (destination.kind) {
@@ -473,6 +504,10 @@ async function pushGroup(args: {
       await handler.pushItem(item, teamConfig, localConfig);
       workingTreeDirtied = true;
       pushedFiles.push(item.relativePath);
+      // A file this write retired (a canonical agent renamed .md ↔ .yaml) is
+      // tracked on the default branch, so staging its path stages the removal.
+      const supersedes = supersededPathOf(item);
+      if (supersedes) pushedFiles.push(supersedes);
     }
 
     // Refresh marketplace.json if it exists and skills were pushed
@@ -761,6 +796,9 @@ async function pushCore(
   // working-tree content before the reset and restore it after pull, so config edits
   // survive and get committed alongside resources (see gitFiles construction below).
   let pendingTeamConfig: string | null = initialPendingTeamConfig;
+  // Set when the pull below failed: everything read from the clone after this
+  // point is the previous pull's, manifests included.
+  let teamRepoStale = false;
   if (!selfMode) {
     const pullSpin = spinner('Pulling latest changes...').start();
     try {
@@ -793,6 +831,7 @@ async function pushCore(
       }
       pullSpin.succeed('Up to date');
     } catch (e) {
+      teamRepoStale = true;
       pullSpin.warn(`Pull failed: ${(e as Error).message}`);
     }
   }
@@ -811,6 +850,17 @@ async function pushCore(
   // state of it.
   let projectsManifest: ProjectsManifest | null = null;
   if (options.project) {
+    // A warning is not enough here: with the clone unrefreshed, a namespace
+    // the remote has changed would send this run's new rules and agents to
+    // the members of the OLD one, and nothing later in the run can tell.
+    if (teamRepoStale) {
+      log.error(
+        'Cannot resolve --project destinations: the team repo could not be refreshed, so '
+        + 'manifest/projects.yaml may be stale. Fix the pull and retry, or name the namespace with --role <ns>.',
+      );
+      process.exitCode = 1;
+      return;
+    }
     const { loadProjectsManifest, findProject, unknownProjectMessage } = await import('./projects.js');
     projectsManifest = await loadProjectsManifest(localConfig.repo.localPath);
     if (!projectsManifest) {
@@ -824,6 +874,22 @@ async function pushCore(
       log.error(unknownProjectMessage(projectsManifest, options.project));
       process.exitCode = 2;
       return;
+    }
+  }
+
+  // Placement records outlive their purpose when the PR they were written for
+  // is closed unmerged, or the team file is later deleted. Settle that against
+  // the clone just pulled, BEFORE the scan reads the records: a stale one would
+  // match the next same-named file anybody creates (#649 review). Not when the
+  // clone is stale itself — a file missing from an unrefreshed tree proves nothing.
+  if (!teamRepoStale) {
+    try {
+      const recordsState = await loadStateForScope(localConfig);
+      if (await prunePlacementRecords(localConfig.repo.localPath, recordsState)) {
+        await saveStateForScope(recordsState, localConfig);
+      }
+    } catch (e) {
+      log.debug(`Placement record cleanup skipped: ${(e as Error).message}`);
     }
   }
 
@@ -1237,7 +1303,7 @@ async function pushCore(
     // destination first, then placement for whatever is still at the root.
     reuseRecordedDestinations(planPushGroups(allItems, reusablePending));
     const placed = await placeNewResources({
-      items: allItems, options, localConfig, projectsManifest, skillsDestinationError,
+      items: allItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale,
     });
     if (!placed) return;
     log.info('Dry run — no changes made');
@@ -1279,7 +1345,7 @@ async function pushCore(
 
   // ── Step 4: Place NEW root-level resources in a namespace (after selection) ─
   if (!await placeNewResources({
-    items: selectedItems, options, localConfig, projectsManifest, skillsDestinationError,
+    items: selectedItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale,
   })) return;
 
   // ── Step 5: Push each group — one branch/PR per group ──────────────

@@ -1232,6 +1232,101 @@ describe('push namespace routing for rules and agents', () => {
     expect(pushedItems[0]?.relativePath).toBe('rules/fe-know/my-rule.md');
   });
 
+  it('stops a --project push when the team clone could not be refreshed', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockPullRepo.mockRejectedValueOnce(new Error('could not resolve host'));
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'front-app', name: 'Front', description: '',
+        resources: { knowledge: ['fe-know'], skills: ['fe-skills'], learnings: [], agents: ['fe-agents'] },
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true, project: 'front-app' });
+
+    // The manifest in the clone is the previous pull's. A namespace the remote
+    // has since changed would route this rule to the wrong members, and a
+    // warning does not stop that (#649 review).
+    expect(process.exitCode).toBe(1);
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('could not be refreshed');
+  });
+
+  it('drops a placement record whose PR was closed without merging, before scanning', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    // The recorded target is not on the default branch and the branch that
+    // carried it is gone: the PR was closed, not merged. Kept, the record would
+    // come true again the day another member creates that very path, and the
+    // author's unrelated root copy would then be pushed over it (#649 review).
+    const { remoteBranchExists } = await import('../utils/git.js');
+    vi.mocked(remoteBranchExists).mockResolvedValue(false);
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      placedRules: { 'my-rule': 'rules/fe-know/my-rule.md' },
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/14',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
+      }],
+    });
+    mockHandlers({}, []);
+
+    try {
+      await push({ all: true });
+
+      const saved = mockSaveStateForScope.mock.calls
+        .map((call) => call[0] as { placedRules?: Record<string, string> })
+        .find((state) => state.placedRules !== undefined && !('my-rule' in state.placedRules));
+      expect(saved, 'no saved state dropped the record').toBeDefined();
+    } finally {
+      vi.mocked(remoteBranchExists).mockResolvedValue(true);
+    }
+  });
+
+  it('moves the placement record to the extension a renamed canonical agent now has', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null, pendingPushes: [],
+      placedAgents: { vr: 'agents/fe-agents/vr.md' },
+    });
+    // The scan followed the record to the legacy .md, but the source is a
+    // .yaml now: the write goes to one path, so the record and the staged
+    // file must both follow it, and the .md it replaces must go too.
+    mockHandlers({
+      agents: [{
+        name: 'vr', type: 'agents', sourcePath: '/tmp/.teamai/agents/vr.yaml',
+        relativePath: 'agents/fe-agents/vr.yaml', status: 'modified', namespace: 'fe-agents',
+        supersedes: 'agents/fe-agents/vr.md',
+      }],
+    }, pushedItems);
+
+    await push({ all: true });
+
+    const staged = mockPushRepoBranch.mock.calls[0]?.[2] as string[];
+    expect(staged).toContain('agents/fe-agents/vr.yaml');
+    expect(staged).toContain('agents/fe-agents/vr.md');
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
+    expect(saved.placedAgents).toEqual({ vr: 'agents/fe-agents/vr.yaml' });
+  });
+
   it('rejects an unknown --project even when nothing needs placing', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({
