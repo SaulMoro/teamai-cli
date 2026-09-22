@@ -6,8 +6,8 @@ import { pathExists, remove } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
-import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
+import { ResourceHandler } from './resources/base.js';
+import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDirForTool, skillTargetForTool } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
 
@@ -309,6 +309,49 @@ function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillN
   return path.join(getUserHome(), '.teamai', 'removed-skills', PRUNE_RUN_ID, baseSlug, tool, rootSlug, skillName);
 }
 
+/** Where a tool keeps its skills on this machine, and where the link guard starts. */
+export interface BuiltinSkillsTarget {
+  skillsDir: string;
+  /**
+   * The tool's base directory when the skills directory sits under it, else
+   * the skills directory's parent: OpenClaw's workspace and a `HERMES_HOME`
+   * can live anywhere, and the guard must still walk every component the CLI
+   * did not choose.
+   */
+  guardBase: string;
+}
+
+/**
+ * The base the link guard walks down from: the tool's base directory when
+ * `skillsDir` sits under it, else `skillsDir`'s parent.
+ */
+export function skillsGuardBase(toolBaseDir: string, skillsDir: string): string {
+  const relative = path.relative(toolBaseDir, skillsDir);
+  const underBase = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return underBase ? toolBaseDir : path.dirname(skillsDir);
+}
+
+/**
+ * The skills directory `tool` receives built-ins into, or null when it cannot
+ * receive them. The same resolver team-skill sync uses (`skillsDirForTool`),
+ * so the stub lands where every other skill does — OpenClaw's workspace,
+ * `HERMES_HOME` — and the prune looks where earlier releases wrote.
+ */
+export async function builtinSkillsTarget(
+  tool: string,
+  configuredSkillsPath: string,
+  localConfig?: LocalConfig,
+): Promise<BuiltinSkillsTarget | null> {
+  if (!localConfig) {
+    const baseDir = getUserHome();
+    if (!await ResourceHandler.isToolInstalled(configuredSkillsPath, baseDir)) return null;
+    return { skillsDir: path.join(baseDir, configuredSkillsPath), guardBase: baseDir };
+  }
+  const skillsDir = await skillsDirForTool(tool, configuredSkillsPath, localConfig);
+  if (skillsDir === null) return null;
+  return { skillsDir, guardBase: skillsGuardBase(resolveToolBaseDir(tool, localConfig), skillsDir) };
+}
+
 /**
  * Remove the skill directories earlier releases deployed.
  *
@@ -319,22 +362,21 @@ function skillBackupDir(baseDir: string, tool: string, skillRoot: string, skillN
  */
 export async function pruneLegacyBuiltinSkills(
   tool: string,
-  configuredSkillsPath: string,
-  baseDir: string,
+  { skillsDir, guardBase }: BuiltinSkillsTarget,
   names: ReadonlySet<string> = LEGACY_BUILTIN_SKILL_NAMES,
 ): Promise<void> {
   // The shared .agents/skills directory belongs to Codex alone. Reaching it from
   // another tool's pass would delete Codex's copies while Codex is excluded or
   // not installed, which the enabledAgents whitelist rules out.
-  const skillRoots = [configuredSkillsPath];
-  if (tool === CODEX_TOOL) skillRoots.push(SHARED_AGENT_SKILLS_PATH);
+  const skillRoots = [skillsDir];
+  if (tool === CODEX_TOOL) skillRoots.push(path.join(guardBase, SHARED_AGENT_SKILLS_PATH));
   for (const legacyName of names) {
     for (const root of skillRoots) {
-      const dir = path.join(baseDir, root, legacyName);
+      const dir = path.join(root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
-        const backupDir = skillBackupDir(baseDir, tool, root, legacyName);
-        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], baseDir, backupDir);
+        const backupDir = skillBackupDir(guardBase, tool, path.relative(guardBase, root), legacyName);
+        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], guardBase, backupDir);
         const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
         if (prunedWhole(result)) {
           log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})${saved}`);
@@ -404,31 +446,30 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
 
   if (skillNames.length === 0) return 0;
 
-  const defaultBaseDir = getUserHome();
   let deployed = 0;
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig ?? {}))) {
     if (!toolPath.skills) continue;
-    const baseDir = localConfig ? resolveToolBaseDir(tool, localConfig) : defaultBaseDir;
 
-    // Skip tools that are not installed
-    const installed = localConfig
-      ? await isToolInstalledForConfig(tool, toolPath.skills, localConfig)
-      : await ResourceHandler.isToolInstalled(toolPath.skills, baseDir);
-    if (!installed) {
+    // Skip tools that cannot receive skills: not installed, no workspace.
+    const target = await builtinSkillsTarget(tool, toolPath.skills, localConfig);
+    if (!target) {
       log.debug(`Skipping built-in skill deployment for ${tool}: tool not installed`);
       continue;
     }
+    const baseDir = target.guardBase;
     // An excluded agent is neither written to nor deleted from (usage-guide:
     // "the enabledAgents whitelist also gates CLI built-in skills"), so its
     // legacy directories are left alone too.
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
 
-    await pruneLegacyBuiltinSkills(tool, toolPath.skills, baseDir);
+    await pruneLegacyBuiltinSkills(tool, target);
 
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);
-      const destDir = await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, srcDir);
+      const destDir = localConfig
+        ? await skillTargetForTool(tool, toolPath.skills, localConfig, skillName, srcDir) ?? path.join(target.skillsDir, skillName)
+        : await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, srcDir);
 
       try {
         // A symlinked destination points somewhere we do not own. Writing

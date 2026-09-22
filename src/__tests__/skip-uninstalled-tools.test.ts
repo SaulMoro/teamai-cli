@@ -809,6 +809,31 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(dotfiles, 'skills/teamai'))).toBe(false);
   });
 
+  it('deploys the stub and prunes where team skills land for Hermes and OpenClaw, not under the tool root', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // Hermes honours HERMES_HOME, which can live outside HOME; OpenClaw reads
+    // skills from its workspace. Team-skill sync already resolves both.
+    const hermesHome = path.join(tmpDir, 'elsewhere/hermes');
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    await fse.ensureDir(path.join(hermesHome, 'skills/team-wiki-codebase'));
+    await fse.writeFile(path.join(hermesHome, 'skills/team-wiki-codebase/SKILL.md'), '# pre-stub');
+    const workspace = path.join(homeDir, '.openclaw/workspace');
+    await fse.ensureDir(workspace);
+
+    const deployed = await deployBuiltinSkills(
+      legacyPruneTeamConfig({ hermes: { skills: '.hermes/skills' }, openclaw: { skills: '.openclaw/skills' } }),
+      legacyPruneLocalConfig(tmpDir),
+    );
+
+    expect(deployed).toBe(2);
+    expect(await fse.pathExists(path.join(hermesHome, 'skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(hermesHome, 'skills/team-wiki-codebase'))).toBe(false);
+    expect(await fse.pathExists(path.join(workspace, 'skills/teamai/SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.hermes'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.openclaw/skills'))).toBe(false);
+  });
+
   it('keeps a member\'s file under a __pycache__ that is not bytecode of a shipped script', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

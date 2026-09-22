@@ -72,6 +72,12 @@ path (measured here from a 77-character one).
 - **`--full` walks `references/` and `templates/` recursively**, sorted by
   relative path. Our references nest (`references/methodology/`,
   `references/phases/`); a single-level scan would serve an incomplete skill.
+- **The stub lands where team skills land.** Deploy, the legacy prune,
+  `recall disable` and `uninstall` resolve the skills directory through
+  `skillsDirForTool`, the resolver team-skill sync uses, so OpenClaw gets it in
+  its workspace and Hermes under `HERMES_HOME` rather than under a tool root
+  that agent never reads. The link guard walks from the tool's base directory
+  when the skills directory is under it, else from that directory's parent.
 - **Nothing repairs the deployed stub.** `ensureSkillFrontmatter` is not called
   on it, so deployed and packaged bytes are identical and a diff means a bug.
 - **Recall is decided at run time**, not by withholding a directory at deploy

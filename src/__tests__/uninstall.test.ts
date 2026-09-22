@@ -1097,6 +1097,25 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(dotfiles, 'skills', 'teamai', 'SKILL.md'))).toBe(true);
   });
 
+  it('removes the stub where Hermes keeps skills, under HERMES_HOME outside the home directory', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const hermesHome = path.join(tmpDir, 'elsewhere', 'hermes');
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    const stub = path.join(hermesHome, 'skills', 'teamai', 'SKILL.md');
+    await fse.ensureDir(path.dirname(stub));
+    await fse.writeFile(stub, '# stub');
+
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    const teamConfig = makeTeamConfig();
+    teamConfig.toolPaths.hermes = { skills: '.hermes/skills' };
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(stub)).toBe(false);
+  });
+
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

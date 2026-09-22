@@ -470,7 +470,8 @@ The built-in workflows (`core`, `setup`, `wiki`, `share`) ship inside the npm pa
 and are printed by the installed binary with `teamai skill get`, so what an agent reads
 always matches the CLI version it is running — `npm i -g teamai-cli@latest` is the
 update, with no pull needed for the content to be current. Agents receive a single file
-from the CLI, `~/.<tool>/skills/teamai/SKILL.md`, a small discovery stub that points at
+from the CLI, `~/.<tool>/skills/teamai/SKILL.md` (or wherever that tool keeps team skills: OpenClaw's
+workspace, `HERMES_HOME`), a small discovery stub that points at
 those commands. Older releases copied the whole tree into every agent directory, where it
 went stale between pulls; `teamai pull` removes those leftovers, keeping a copy of every
 removed file under `~/.teamai/removed-skills/`, one directory per pull, so an edit you made

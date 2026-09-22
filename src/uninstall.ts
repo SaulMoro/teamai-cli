@@ -45,7 +45,9 @@ import {
   isCliOwnedSkillName,
   prunedWhole,
   removeOwnedFiles,
+  skillsGuardBase,
 } from './builtin-skills.js';
+import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import {
   pathExists,
@@ -363,9 +365,18 @@ async function discoverToolResources(
   if (toolPath.skills) {
     // Skills root → the base the link guard starts from.
     const skillRoots = new Map([[path.join(baseDir, toolPath.skills), baseDir]]);
+    // OpenClaw and Hermes receive skills where team sync and the stub put them
+    // (`skillsDirForTool`): the workspace, and HERMES_HOME.
     if (tool === 'openclaw') {
       const workspaceDir = await resolveOpenclawWorkspaceDir();
-      if (workspaceDir) skillRoots.set(path.join(workspaceDir, 'skills'), workspaceDir);
+      if (workspaceDir) {
+        const workspaceSkills = path.join(workspaceDir, 'skills');
+        skillRoots.set(workspaceSkills, skillsGuardBase(baseDir, workspaceSkills));
+      }
+    }
+    if (tool === 'hermes') {
+      const hermesSkills = path.join(getHermesHome(), 'skills');
+      skillRoots.set(hermesSkills, skillsGuardBase(baseDir, hermesSkills));
     }
     // `resolveSkillDestination` writes Codex's copy into the shared
     // .agents/skills root whenever that skill already lives there, so uninstall
