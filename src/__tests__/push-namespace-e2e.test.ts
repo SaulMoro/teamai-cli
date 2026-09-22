@@ -190,6 +190,15 @@ function writeLocalResources(fixture: Fixture, ruleBody = '# Rule v1\n'): void {
   fs.writeFileSync(path.join(projectRoot, `.${agent}/agents`, agentFile.name), agentFile.content);
 }
 
+/** Resolve once the wall clock has moved to the next second. */
+function nextSecond(): Promise<void> {
+  const started = Math.floor(Date.now() / 1000);
+  return new Promise((resolve) => {
+    const tick = () => (Math.floor(Date.now() / 1000) > started ? resolve() : setTimeout(tick, 50));
+    tick();
+  });
+}
+
 /** Files on the single push branch this fixture's remote received. */
 function branchFiles(fixture: Fixture): { branch: string; files: string[] } {
   const branch = git(
@@ -460,6 +469,74 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     const again = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
     expect(again.code, again.output).toBe(0);
     expect(fs.existsSync(deployed), again.output).toBe(true);
+  }, 60_000);
+
+  it('pull updates the author\'s root copy of a placed rule instead of writing a second one', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    // be-know is the backend role's knowledge namespace, so it IS active here
+    // and pull delivers the rule — which used to land at rules/be-know/ beside
+    // the author's own copy at the root, the same rule twice for a tool that
+    // loads rules recursively.
+    await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    commitOnMain(fixture, 'rules/be-know/my-rule.md', '# Rule v2, edited by a teammate\n');
+
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+
+    const rulesDir = path.join(fixture.projectRoot, '.claude/rules');
+    expect(fs.readFileSync(path.join(rulesDir, 'my-rule.md'), 'utf8')).toContain('Rule v2');
+    expect(fs.existsSync(path.join(rulesDir, 'be-know', 'my-rule.md')), pulled.output).toBe(false);
+  }, 60_000);
+
+  it('leaves a shared-root PR untouched when the next push names a namespace', async () => {
+    // No knowledge namespace on the role, so the first push goes to the shared root.
+    const fixture = track(makeFixture({
+      agent: 'claude',
+      provider: 'git',
+      rolesManifest: ROLES_MANIFEST.replace('knowledge: [be-know]', 'knowledge: []'),
+    }));
+    fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), '# Rule v1\n');
+    const first = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+    const { branch: sharedBranch, files: sharedFiles } = branchFiles(fixture);
+    expect(sharedFiles, first.output).toContain('rules/my-rule.md');
+
+    // The PR is still open. Naming a namespace now must not rebuild it. Branch
+    // names carry a one-second timestamp, so a second push inside the same
+    // second would be given the pending branch's name and land on it for that
+    // reason alone; wait the second out so the test sees the conflict check.
+    await nextSecond();
+    fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'), '# Rule v2\n');
+    const second = await runCLI(['push', '--role', 'fe-know', '--all'], fixture.projectRoot, fixture.home);
+
+    expect(second.output).toContain('awaiting review at rules/my-rule.md');
+    expect(second.output).toContain('separate PR');
+    const branches = git(
+      ['for-each-ref', '--format=%(refname:short)', `refs/heads/teamai/push/${fixture.username}/`],
+      fixture.remote,
+    ).split('\n').filter(Boolean);
+    expect(branches, second.output).toHaveLength(2);
+    const other = branches.find((name) => name !== sharedBranch) ?? '';
+    expect(git(['ls-tree', '-r', '--name-only', other], fixture.remote)).toContain('rules/fe-know/my-rule.md');
+    // The review at the shared root still holds exactly what it did.
+    expect(git(['ls-tree', '-r', '--name-only', sharedBranch], fixture.remote)).toContain('rules/my-rule.md');
+    expect(git(['show', `${sharedBranch}:rules/my-rule.md`], fixture.remote)).toContain('Rule v1');
+  }, 60_000);
+
+  it('places by the projects manifest the pull just fetched, not the one from the last pull', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    // The remote renames the project's knowledge namespace after this clone
+    // was made. Read before the pull, the manifest still says fe-know.
+    commitOnMain(fixture, 'manifest/projects.yaml', PROJECTS_MANIFEST.replace('knowledge: [fe-know]', 'knowledge: [fe-know-v2]'));
+
+    const result = await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+
+    expect(result.output).toContain('[rules] my-rule → rules/fe-know-v2/my-rule.md');
+    const { files } = branchFiles(fixture);
+    expect(files, result.output).toContain('rules/fe-know-v2/my-rule.md');
+    expect(files).not.toContain('rules/fe-know/my-rule.md');
   }, 60_000);
 
   it('removes only the published agent, through the real remove command', async () => {

@@ -634,27 +634,14 @@ export async function push(
   // until the selection proves a skill is going out.
   // Deliberately manifest-resolved, not the raw project id, so it agrees with
   // what pull syncs (issue #375 P2 lesson).
-  let projectsManifest: ProjectsManifest | null = null;
-  if (options.project) {
-    if (options.role) {
-      log.error('Use either --role or --project, not both.');
-      process.exitCode = 2;
-      return;
-    }
-    const { loadProjectsManifest, findProject, unknownProjectMessage } = await import('./projects.js');
-    projectsManifest = await loadProjectsManifest(localConfig.repo.localPath);
-    if (!projectsManifest) {
-      log.error('This team repo defines no projects (no manifest/projects.yaml).');
-      process.exitCode = 2;
-      return;
-    }
-    // The id is checked here, not with the namespaces: a typo must fail even on
-    // a push where nothing needs placing, instead of being silently ignored.
-    if (!findProject(projectsManifest, options.project)) {
-      log.error(unknownProjectMessage(projectsManifest, options.project));
-      process.exitCode = 2;
-      return;
-    }
+  // The manifest itself is read in `pushCore`, AFTER the team clone is pulled:
+  // read here it would be the previous pull's copy, and a project whose
+  // namespaces changed on the remote would place this run's new rules and
+  // agents by the stale mapping (#649 review).
+  if (options.project && options.role) {
+    log.error('Use either --role or --project, not both.');
+    process.exitCode = 2;
+    return;
   }
   try {
     const configContent = await readFileSafe(path.join(localConfig.repo.localPath, 'teamai.yaml'));
@@ -715,7 +702,7 @@ export async function push(
           if (pendingTeamConfig !== null) {
             await writeFile(path.join(wtConfig.repo.localPath, 'teamai.yaml'), pendingTeamConfig);
           }
-          await pushCore(wtConfig, teamConfig, options, projectsManifest, pendingTeamConfig, result);
+          await pushCore(wtConfig, teamConfig, options, pendingTeamConfig, result);
         });
       } catch (e) {
         if (e instanceof EmptyRepoError) {
@@ -743,7 +730,7 @@ export async function push(
     return;
   }
   try {
-    await pushCore(localConfig, teamConfig, options, projectsManifest, null, result);
+    await pushCore(localConfig, teamConfig, options, null, result);
   } finally {
     await releaseLock(syncLock);
   }
@@ -753,8 +740,6 @@ async function pushCore(
   localConfig: LocalConfig,
   teamConfig: TeamaiConfig,
   options: GlobalOptions & { all?: boolean; role?: string; project?: string },
-  /** Loaded by `push` when --project is given; the namespace source for it. */
-  projectsManifest: ProjectsManifest | null = null,
   initialPendingTeamConfig: string | null = null,
   result?: { completed: boolean },
 ): Promise<void> {
@@ -809,6 +794,36 @@ async function pushCore(
       pullSpin.succeed('Up to date');
     } catch (e) {
       pullSpin.warn(`Pull failed: ${(e as Error).message}`);
+    }
+  }
+
+  // --project is a destination override expressed as a logical project. Each
+  // resource type then resolves from its OWN axis in manifest/projects.yaml —
+  // skills from `skills`, rules from `knowledge`, agents from `agents` — because
+  // a project may declare different namespaces for each (issue #649). A missing
+  // namespace only blocks a push that actually selects that type: the skills
+  // axis resolves against the scan, because it also relocates modified skills
+  // and the listing has to show where they go, but a failure there is held
+  // until the selection proves a skill is going out.
+  // Deliberately manifest-resolved, not the raw project id, so it agrees with
+  // what pull syncs (issue #375 P2 lesson). Read from the clone the pull above
+  // just refreshed (or the fresh worktree, in self mode), never from an earlier
+  // state of it.
+  let projectsManifest: ProjectsManifest | null = null;
+  if (options.project) {
+    const { loadProjectsManifest, findProject, unknownProjectMessage } = await import('./projects.js');
+    projectsManifest = await loadProjectsManifest(localConfig.repo.localPath);
+    if (!projectsManifest) {
+      log.error('This team repo defines no projects (no manifest/projects.yaml).');
+      process.exitCode = 2;
+      return;
+    }
+    // The id is checked here, not with the namespaces: a typo must fail even on
+    // a push where nothing needs placing, instead of being silently ignored.
+    if (!findProject(projectsManifest, options.project)) {
+      log.error(unknownProjectMessage(projectsManifest, options.project));
+      process.exitCode = 2;
+      return;
     }
   }
 
@@ -883,19 +898,20 @@ async function pushCore(
     fullScan.push(...items);
   }
 
-  // A project that cannot answer for agents has to fail HERE, not at step 4:
-  // an agent with no resolvable destination is dropped by the scan itself —
-  // skipped as "no active source" — so deferring the error until the selection
-  // proves one is going out means never raising it, and the run ends "No new or
-  // modified resources" on a flag that could not be honoured.
+  // A project that cannot answer for agents fails HERE only for an agent the
+  // scan itself dropped — skipped as "no active source" with `needsDestination`
+  // set. That one never reaches the listing, so deferring its error until the
+  // selection proves it is going out means never raising it, and the run would
+  // end "No new or modified resources" on a flag that could not be honoured.
   //
-  // Only agents that actually need a destination count. One already in a
-  // namespace is being modified in place and needs no placement, so an empty
-  // agents axis is none of its business (#649 review).
-  const needsAgentsDestination = (item: ResourceItem): boolean => item.type === 'agents'
-    && (item.status === 'new'
-      || ('needsDestination' in item && item.needsDestination === true));
-  if (agentsDestinationError && fullScan.some(needsAgentsDestination)) {
+  // A NEW agent is different: it is listed, so the user can deselect it, and
+  // step 4 raises the same error if it stays selected. Failing for it here
+  // blocked a rules-only push on an agent that was never going out (#649
+  // review). An agent already in a namespace is modified in place and needs no
+  // placement, so an empty agents axis is none of its business either.
+  const skippedForWantOfDestination = (item: ResourceItem): boolean => item.type === 'agents'
+    && 'needsDestination' in item && item.needsDestination === true;
+  if (agentsDestinationError && fullScan.some(skippedForWantOfDestination)) {
     log.error(agentsDestinationError);
     process.exitCode = 2;
     return;
@@ -1154,7 +1170,10 @@ async function pushCore(
     const segments = recorded.relativePath.split('/');
     const recordedNamespace = recorded.namespace
       ?? (segments.length === 3 ? segments[1] : undefined);
-    if (!recordedNamespace) return false;
+    // A recorded path with no namespace is the shared root — as much a
+    // destination as any namespace. Letting it through would reuse that PR's
+    // branch and rebuild it with the namespaced path, moving a review the
+    // user did not name from "everyone" to one namespace (#649 review).
     const requested = requestedNamespaceFor(recorded.type as PlaceableType);
     return requested !== undefined && requested !== recordedNamespace;
   };

@@ -1095,6 +1095,66 @@ describe('push namespace routing for rules and agents', () => {
     expect(pushedItems[0]?.relativePath).toBe('rules/docs-know/my-rule.md');
   });
 
+  it('pushes a selected rule when only the unselected new agent lacks a project agents namespace', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'docs-only', name: 'Docs', description: '',
+        resources: { knowledge: ['docs-know'], skills: [], learnings: [], agents: [] },
+      }],
+    });
+    // A NEW agent reaches the listing, so the user can deselect it. Failing
+    // before the selection blocked a rules-only push on an agent that was
+    // never going out (#649 review). The scan-skipped case is different — see
+    // the test above — because that agent never reaches the listing at all.
+    mockHandlers({
+      rules: [{ ...newRule }],
+      agents: [{ ...newAgent }],
+    }, pushedItems);
+
+    // Deselect the agent, keep the rule (item order is rules then agents).
+    const { askSelection } = await import('../utils/prompt.js');
+    vi.mocked(askSelection).mockResolvedValueOnce([0]);
+
+    await push({ project: 'docs-only' });
+
+    expect(process.exitCode).toBeUndefined();
+    expect(pushedItems).toHaveLength(1);
+    expect(pushedItems[0]?.relativePath).toBe('rules/docs-know/my-rule.md');
+  });
+
+  it('still fails when the new agent lacking a project agents namespace is selected', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'docs-only', name: 'Docs', description: '',
+        resources: { knowledge: ['docs-know'], skills: [], learnings: [], agents: [] },
+      }],
+    });
+    mockHandlers({
+      rules: [{ ...newRule }],
+      agents: [{ ...newAgent }],
+    }, pushedItems);
+
+    await push({ all: true, project: 'docs-only' });
+
+    expect(process.exitCode).toBe(2);
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('agents namespace');
+  });
+
   it('still fails when the skill lacking a project namespace is selected', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({
@@ -1142,6 +1202,34 @@ describe('push namespace routing for rules and agents', () => {
       .flat().join(' ');
     expect(said).toContain('rules/my-rule.md');
     expect(said).toMatch(/everyone|whole team|shared/i);
+  });
+
+  it('reads the projects manifest only after the team clone has been pulled', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'front-app', name: 'Front', description: '',
+        resources: { knowledge: ['fe-know'], skills: ['fe-skills'], learnings: [], agents: ['fe-agents'] },
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true, project: 'front-app' });
+
+    // Read before the pull, the manifest is the previous pull's copy, and a
+    // namespace the remote has since changed places this run's new rules by
+    // the stale mapping (#649 review).
+    expect(mockPullRepo).toHaveBeenCalled();
+    expect(mockLoadProjectsManifest).toHaveBeenCalled();
+    const pullOrder = mockPullRepo.mock.invocationCallOrder[0];
+    const manifestOrder = mockLoadProjectsManifest.mock.invocationCallOrder[0];
+    expect(manifestOrder).toBeGreaterThan(pullOrder);
+    expect(pushedItems[0]?.relativePath).toBe('rules/fe-know/my-rule.md');
   });
 
   it('rejects an unknown --project even when nothing needs placing', async () => {
@@ -1338,6 +1426,40 @@ describe('push namespace routing for rules and agents', () => {
     const { log } = await import('../utils/logger.js');
     expect(vi.mocked(log.warn).mock.calls.flat().join(' '))
       .toContain('awaiting review at agents/fe-agents/vr.yaml');
+  });
+
+  it('treats a pending shared-root resource as conflicting with an explicit namespace', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    // The open PR holds this rule at the shared root. Reusing its branch would
+    // force-rebuild it with the namespaced path and silently change the scope
+    // of a review the user did not name (#649 review). A recorded path with no
+    // namespace is as much a destination as a namespaced one.
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/13',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/my-rule.md' }],
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true, role: 'fe-know' });
+
+    expect(pushedItems[0]?.relativePath).toBe('rules/fe-know/my-rule.md');
+    // A new branch, never the pending one.
+    const branches = mockPushRepoBranch.mock.calls.map((call) => call[3]);
+    expect(branches).not.toContain('teamai/push/test/20260101-000000');
+    const { log } = await import('../utils/logger.js');
+    const said = vi.mocked(log.warn).mock.calls.flat().join(' ');
+    expect(said).toContain('awaiting review at rules/my-rule.md');
+    expect(said).toContain('separate PR');
   });
 
   it('--dry-run reports the same destination the real push would use', async () => {

@@ -711,6 +711,13 @@ export interface DeliveryTarget {
   tool: string;
   dest: string;
   /**
+   * A path this delivery makes redundant, removed once `dest` is written: a
+   * rule this machine placed in a namespace is delivered onto the author's
+   * root copy, and the `<ns>/<name>` copy an earlier pull wrote is the same
+   * rule twice.
+   */
+  supersedes?: string;
+  /**
    * The exact bytes `pullItem` writes at `dest`, for a handler that renders
    * its destination rather than copying a tree there. It is what tells a copy
    * rendered from an older spec from the current one; absent means the handler

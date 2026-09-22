@@ -231,6 +231,7 @@ export class RulesHandler extends ResourceHandler {
     // missing file is. Only a comparison against the render can see that, and
     // the render belongs here rather than in a second copy inside `doctor`.
     const source = await readFileSafe(item.sourcePath);
+    const localName = await this.localNameFor(item.name, localConfig);
     const targets: DeliveryTarget[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (isAgentExcluded(localConfig, tool)) continue;
@@ -243,20 +244,42 @@ export class RulesHandler extends ResourceHandler {
       }
 
       const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
+      const ext = ruleFileExtensionForTool(tool);
       targets.push({
         tool,
-        dest: path.join(destDir, `${item.name}${ruleFileExtensionForTool(tool)}`),
+        dest: path.join(destDir, `${localName}${ext}`),
         content: source === null ? undefined : renderRuleForTool(tool, source),
+        ...(localName !== item.name
+          ? { supersedes: path.join(destDir, `${item.name}${ext}`) }
+          : {}),
       });
     }
     return targets;
   }
 
   /**
+   * The name a delivered rule has in a tool's rules directory. It is the
+   * team name — `fe-know/my-rule` lands at `rules/fe-know/my-rule.*` — except
+   * for a rule THIS machine placed: push left the author's copy at the rules
+   * root under the bare name, and that copy is the one the scanner and the
+   * pre-push sync read, so delivery updates it rather than writing a second
+   * copy beside it that a tool loading rules recursively would apply as well
+   * (#649 review).
+   */
+  private async localNameFor(teamName: string, localConfig: LocalConfig): Promise<string> {
+    const bareName = path.basename(teamName);
+    if (bareName === teamName) return teamName;
+    const placed = placedResourcePath(
+      (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
+    );
+    return placed === `rules/${teamName}.md` ? bareName : teamName;
+  }
+
+  /**
    * Pull a single rule file to all configured AI tool rules/ directories.
    */
   async pullItem(item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
-    for (const { tool, dest, content } of await this.deliveryTargets(teamConfig, localConfig, item)) {
+    for (const { tool, dest, content, supersedes } of await this.deliveryTargets(teamConfig, localConfig, item)) {
       const destDir = path.dirname(dest);
       try {
         if (content === undefined) {
@@ -267,8 +290,11 @@ export class RulesHandler extends ResourceHandler {
         await writeFile(dest, content);
         // Drop the `.md` copy left by an older layout; a tool that reads a
         // derived extension does not read it, and it would outlive the rule.
-        const legacyCopy = path.join(destDir, `${item.name}.md`);
+        const legacyCopy = path.join(destDir, `${path.basename(dest, path.extname(dest))}.md`);
         if (dest !== legacyCopy) await remove(legacyCopy);
+        // The namespaced copy an earlier pull wrote beside the author's root
+        // copy: the same rule twice, for a tool that loads rules recursively.
+        if (supersedes) await remove(supersedes);
         log.debug(`Synced rule ${item.name} → ${tool}`);
       } catch (e) {
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
