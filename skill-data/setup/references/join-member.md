@@ -145,7 +145,8 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
 3. **They can also contribute a skill — just ask in plain language.** A member does
    not need to be an admin to publish a skill. They tell TeamAI something like
    *"share this xxx skill with my team"* / *"把这个 xxx skill 分享给团队"*, and you
-   run the publish for them (see the share skill, `teamai skill get share --full`).
+   run the publish for them (see `references/contribute-member.md` in
+   `teamai skill get core --full`; it needs no recall).
 4. **How to leave — via the skill, not raw commands.** They can remove TeamAI any
    time by re-invoking the skill; you'll run it for them:
    `/teamai 卸载` / `/teamai Uninstall TeamAI`.

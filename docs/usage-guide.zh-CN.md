@@ -881,7 +881,7 @@ AI 通过 Hooks 追踪你的编码会话。当会话结束时（Stop hook），�
 
 Task: Fix duplicate project-level Hook injection
 
-Consider running /teamai to summarize what you learned and share it with your team (or run `teamai skill get share`).
+Consider running `/teamai share what this session taught me` to summarize what you learned and share it with your team (or run `teamai skill get share`).
 ```
 
 提醒会列出实际触发它的非零摩擦信号；如果能取得首个任务，还会附上脱敏、单行化后的任务摘要，便于判断本次 session 是否值得分享。使用内置 skill `/teamai`，AI 会自动总结本次 session 经验并贡献到团队知识库。每个 session 最多提示一次。

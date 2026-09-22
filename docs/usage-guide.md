@@ -912,7 +912,7 @@ The AI tracks your coding sessions via Hooks. When a session ends (the Stop hook
 
 Task: Fix duplicate project-level Hook injection
 
-Consider running /teamai to summarize what you learned and share it with your team (or run `teamai skill get share`).
+Consider running `/teamai share what this session taught me` to summarize what you learned and share it with your team (or run `teamai skill get share`).
 ```
 
 The reminder lists the non-zero friction signals that triggered it. When the first task is available, it also includes a redacted, single-line task summary so you can decide whether the session is worth sharing. Using the built-in `share` workflow (`teamai skill get share`), the AI will automatically summarize the session's learnings and contribute them to the team knowledge base. Each session is prompted at most once.

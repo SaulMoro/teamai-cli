@@ -124,7 +124,7 @@ worth sharing, TeamAI prompts the member and the dedicated
 `share` workflow (`teamai skill get share`) summarizes the session and runs
 `teamai contribute`. Nobody has to invoke it by hand.
 (Publishing a **reusable skill** someone authored is a different task — any member
-can do it, see the share skill, `teamai skill get share --full`.)
+can do it, see `references/contribute-member.md` in `teamai skill get core --full`.)
 
 ### Turn the sharing prompt on or off (admin)
 
