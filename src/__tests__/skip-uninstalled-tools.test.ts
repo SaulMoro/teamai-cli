@@ -625,6 +625,52 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     }
   });
 
+  it('parks a copy of every file it prunes, so a member who edited one can get it back', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://git.woa.com/test/repo.git',
+      provider: 'tgit' as const,
+      reviewers: [],
+      sharing: {
+        skills: {},
+        rules: { enforced: [] },
+        docs: { localDir: '' },
+        env: { injectShellProfile: true },
+      },
+      toolPaths: {
+        claude: { skills: '.claude/skills' },
+      },
+    };
+
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://git.woa.com/test/repo.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+    };
+
+    // Ownership is proven by pathname, so this file is pruned even though the
+    // member edited it. A retired release's path is never overwritten by the
+    // deployment either, which is what makes the backup the only way back.
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    await fse.ensureDir(path.join(wiki, 'references/methodology'));
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# edited by the member');
+    await fse.writeFile(path.join(wiki, 'references/methodology/phase0-collection.md'), '# my notes');
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    expect(await fse.pathExists(wiki)).toBe(false);
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const backup = path.join(homeDir, '.teamai/removed-skills', stamp, 'claude/team-wiki-codebase');
+    expect(await fse.readFile(path.join(backup, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
+    expect(await fse.readFile(path.join(backup, 'references/methodology/phase0-collection.md'), 'utf8')).toBe('# my notes');
+  });
+
   it('removes the references an earlier release deployed beside the stub', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

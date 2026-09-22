@@ -157,7 +157,11 @@ async function removeEmptyDirs(dir: string): Promise<void> {
  * rule pull does: a file a member added beside our packaged ones was never ours
  * to write and is not ours to remove, whichever command is doing the removing.
  */
-export async function removeOwnedFiles(dir: string, owned: readonly string[]): Promise<boolean> {
+export async function removeOwnedFiles(
+  dir: string,
+  owned: readonly string[],
+  backupDir?: string,
+): Promise<boolean> {
   const ownedPaths = new Set(owned);
   let foreign = 0;
 
@@ -166,11 +170,36 @@ export async function removeOwnedFiles(dir: string, owned: readonly string[]): P
       foreign++;
       continue;
     }
-    await remove(path.join(dir, relative));
+    const file = path.join(dir, relative);
+    // Ownership is proven by pathname, not by contents: a member who edited one
+    // of our files in place still has that edit in there. The old deployment
+    // overwrote it on the next pull, so nothing was preserved either way, but a
+    // path a retired release shipped and the current package no longer does was
+    // never overwritten. Park a copy before removing so no version of that is a
+    // one-way door.
+    if (backupDir) {
+      try {
+        await fse.copy(file, path.join(backupDir, relative), { overwrite: true });
+      } catch (e) {
+        log.debug(`Could not back up ${file}: ${(e as Error).message}`);
+      }
+    }
+    await remove(file);
   }
   await removeEmptyDirs(dir);
 
   return foreign === 0;
+}
+
+/** The day's backup root. One per run keeps a re-run from multiplying copies. */
+const PRUNE_STAMP = new Date().toISOString().slice(0, 10);
+
+/**
+ * Where the prune parks what it removes: outside every agent directory, so no
+ * agent reads it back as a skill, and under the member's own `~/.teamai`.
+ */
+function skillBackupDir(baseDir: string, tool: string, skillName: string): string {
+  return path.join(baseDir, '.teamai', 'removed-skills', PRUNE_STAMP, tool, skillName);
 }
 
 /**
@@ -197,11 +226,12 @@ export async function pruneLegacyBuiltinSkills(
       const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
-        const removedWhole = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? []);
+        const backupDir = skillBackupDir(baseDir, tool, legacyName);
+        const removedWhole = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], backupDir);
         if (removedWhole) {
-          log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})`);
+          log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir}); a copy is in ${backupDir}`);
         } else {
-          log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed; delete the rest yourself once you have saved what you need.`);
+          log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed (a copy is in ${backupDir}); delete the rest yourself once you have saved what you need.`);
         }
       } catch (e) {
         log.debug(`Could not remove legacy built-in skill ${legacyName} from ${tool}: ${(e as Error).message}`);
@@ -291,7 +321,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         // releases wrote go first — and only those: a file a member added here
         // is theirs, and the old deployment never deleted it either.
         if (await pathExists(destDir)) {
-          await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? []);
+          await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? [], skillBackupDir(baseDir, tool, skillName));
         }
         await fse.ensureDir(destDir);
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });

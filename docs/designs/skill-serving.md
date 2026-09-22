@@ -138,7 +138,12 @@ tag, plus `references/provider-tgit.md`, which #724 put on `main` unreleased and
 the next release therefore ships, so each path is provably the CLI's. Those files were overwritten with
 `overwrite: true` on every pull and no local edit ever survived in one; a file a
 member added beside them was never touched by the old deployment and is not ours
-to delete now. Directories left empty go; a directory still holding a member's
+to delete now. One case the overwrite never reached: a path a retired release
+shipped and the current package no longer does just sat there, so an edit to it
+did survive. Ownership is proven by pathname, not by contents, so the prune
+cannot tell that file from ours — it copies everything it removes to
+`~/.teamai/removed-skills/<date>/<tool>/<skill>/` first, and the migration stops
+being a one-way door for any of them. Directories left empty go; a directory still holding a member's
 file is kept, and `pull` says which one and why. Python bytecode of a script we
 shipped counts as ours, so a `__pycache__` left by running the wiki scripts does
 not strand the tree. The same rule governs the stub directory: the seven
