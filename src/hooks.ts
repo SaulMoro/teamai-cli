@@ -1,3 +1,4 @@
+import { CODEX_TOOL_IDS } from './resources/agent-format.js';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -172,7 +173,7 @@ type ToolFormat = 'claude' | 'cursor' | 'codex' | 'copilot' | 'zcode';
 export type HookStatus = 'installed' | 'missing';
 
 const CURSOR_TOOLS = new Set(['cursor']);
-const CODEX_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
+const CODEX_TOOLS = new Set<string>(CODEX_TOOL_IDS);
 const ZCODE_TOOLS = new Set(['zcode']);
 
 function detectFormat(tool: string): ToolFormat {

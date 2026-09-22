@@ -1229,3 +1229,17 @@ describe('post-tool-use Skill-matcher dispatch routes Cursor SKILL.md Read to th
     expect(JSON.stringify(payload)).not.toContain('secrets.ts');
   });
 });
+
+describe('buildVotesNudge', () => {
+  it('names the candidates, the marker and the empty case, in English', async () => {
+    const { buildVotesNudge } = await import('../hook-handlers.js');
+    const msg = buildVotesNudge(['auth-retry', 'k8s-oom']);
+
+    expect(msg).toContain('auth-retry, k8s-oom');
+    expect(msg).toContain('<!-- teamai:referenced-doc-ids:');
+    expect(msg).toContain('empty list');
+    // Claude Code prints the Stop payload, so this reaches the terminal. The
+    // repository rule is that user-facing CLI output is English (#719).
+    expect(msg).not.toMatch(/[\u4e00-\u9fff]/);
+  });
+});

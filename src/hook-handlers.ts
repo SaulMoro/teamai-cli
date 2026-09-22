@@ -266,8 +266,8 @@ const contributeCheckHandler: HookHandler = {
     if (!(await contributeHintAllowed())) return null;
 
     const { contributeCheckForSession } = await import('./contribute-check.js');
-    const { formatStopHookOutput } = await import('./utils/hook-output.js');
-    const { STOP_STDOUT_UNSUPPORTED_TOOLS } = await import('./utils/tool-names.js');
+    const { formatStopHookOutput, relayWhenHidden } = await import('./utils/hook-output.js');
+    const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
 
     // Match dashboard-collector's derivation so events and contribute state
     // share the same session id even when stdin.session_id is absent.
@@ -277,10 +277,12 @@ const contributeCheckHandler: HookHandler = {
     // Tools whose Stop hook cannot deliver model context: stash the hint (in the same
     // single state write inside contributeCheckForSession) for delivery on the
     // next UserPromptSubmit, so contributeCheckForSession returns null here.
-    const stash = STOP_STDOUT_UNSUPPORTED_TOOLS.has(tool);
+    const stash = stopStdoutUnsupported(tool);
     const { hint } = await contributeCheckForSession(sessionId, cwd, transcriptPath, stash);
     if (!hint) return null;
-    return formatStopHookOutput(hint, tool);
+    // The hint is addressed to the user, so a host that hides the payload needs
+    // the model to pass it on. Claude Code prints it and must not be asked (#719).
+    return formatStopHookOutput(relayWhenHidden(hint, tool), tool);
   },
 };
 
@@ -288,8 +290,8 @@ const contributeCheckHandler: HookHandler = {
 const pendingHintHandler: HookHandler = {
   name: 'pending-hint',
   async execute(stdin, tool) {
-    const { STOP_STDOUT_UNSUPPORTED_TOOLS } = await import('./utils/tool-names.js');
-    if (!STOP_STDOUT_UNSUPPORTED_TOOLS.has(tool)) return null;
+    const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
+    if (!stopStdoutUnsupported(tool)) return null;
 
     // Must match contributeCheckHandler's derivation so Stop and UserPromptSubmit
     // resolve to the same session file. This cross-process handoff relies on
@@ -438,11 +440,11 @@ const votesSyncHandler: HookHandler = {
 
       if (nudged) {
         const { formatStopHookOutput } = await import('./utils/hook-output.js');
-        const { STOP_STDOUT_UNSUPPORTED_TOOLS } = await import('./utils/tool-names.js');
+        const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
         const msg = buildVotesNudge(recalled);
         // For tools whose Stop stdout is ignored, stash the nudge for delivery
         // on the next UserPromptSubmit (same cross-process mechanism as contribute).
-        if (STOP_STDOUT_UNSUPPORTED_TOOLS.has(tool ?? '')) {
+        if (stopStdoutUnsupported(tool)) {
           const { stashVotesHint } = await import('./contribute-check.js');
           await stashVotesHint(sessionId, msg);
           return null;

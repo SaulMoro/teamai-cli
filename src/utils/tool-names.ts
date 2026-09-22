@@ -1,3 +1,5 @@
+import { CODEX_TOOL_IDS } from '../resources/agent-format.js';
+
 // -*- coding: utf-8 -*-
 /**
  * Normalize IDE-style tool names (CodeBuddy Craft Agent) to CLI-style names.
@@ -49,10 +51,19 @@ export function normalizeAgentType(name: string): string {
  * A future variant id (e.g. "codebuddy-internal") would miss this Set the same
  * way, so add such variants here explicitly.
  */
-export const STOP_STDOUT_UNSUPPORTED_TOOLS = new Set([
+export const STOP_STDOUT_UNSUPPORTED_TOOLS = new Set<string>([
   'codebuddy',
   'workbuddy',
-  'codex',
-  'codex-internal',
-  'tcodex',
+  ...CODEX_TOOL_IDS,
 ]);
+
+/**
+ * Membership test for the set above.
+ *
+ * Lowercases first: `--tool` reaches the handlers exactly as the installed hook
+ * command spelled it (`src/builtin-hooks.ts`), and a capitalised id would
+ * otherwise miss the set and take the Stop path its host rejects.
+ */
+export function stopStdoutUnsupported(tool: string | undefined): boolean {
+  return STOP_STDOUT_UNSUPPORTED_TOOLS.has((tool ?? '').toLowerCase());
+}
