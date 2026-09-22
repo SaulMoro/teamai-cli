@@ -184,6 +184,18 @@ describe('skillShow locator', () => {
     process.exitCode = 0;
   });
 
+  it('refuses a legacy share directory a pull has not pruned yet, instead of showing its path', async () => {
+    // A pre-stub release wrote this; it is the CLI's stale copy, not the
+    // member's skill, so the name must go through the packaged gate.
+    const claudeSkillsDir = path.join(fx.homeDir, '.claude', 'skills');
+    await makeSkill(claudeSkillsDir, 'teamai-share-learnings', 'old share workflow');
+
+    const lines = await runSkillShow('teamai-share-learnings', fx);
+    expect(process.exitCode).toBe(1);
+    expect(lines.join('\n')).not.toContain(path.join(claudeSkillsDir, 'teamai-share-learnings'));
+    process.exitCode = 0;
+  });
+
   it('shows share once recall is enabled', async () => {
     fx.localConfig.recallEnabled = true;
     const lines = await runSkillShow('share', fx);

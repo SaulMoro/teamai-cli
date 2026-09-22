@@ -236,16 +236,20 @@ const trackSlashHandler: HookHandler = {
  * config) without re-injecting hooks. Falls back to enabled when config can't
  * be read, preserving pre-toggle behavior for half-initialized installs.
  *
- * Recall gates it too: the hint routes to the `share` workflow, and
- * `teamai skill get share` refuses while recall is off, so a nudge towards it
- * would send the agent to a command that says no.
+ * Recall and a writable source gate it too: the hint routes to the `share`
+ * workflow, and `teamai skill get share` refuses while recall is off or the
+ * team source is read-only HTTP, so a nudge towards it would send the agent to
+ * a command that says no. The dispatcher already drops this `gitOnly` handler
+ * for HTTP teams; the check here keeps the gate the same wherever it is called.
  */
 async function contributeHintAllowed(): Promise<boolean> {
   const { isContributeHintEnabled, isRecallEnabled } = await import('./types.js');
   try {
     const { autoDetectInit } = await import('./config.js');
     const { localConfig, teamConfig } = await autoDetectInit();
-    return isContributeHintEnabled(localConfig, teamConfig) && isRecallEnabled(localConfig, teamConfig);
+    return localConfig.repo?.kind !== 'http'
+      && isContributeHintEnabled(localConfig, teamConfig)
+      && isRecallEnabled(localConfig, teamConfig);
   } catch {
     return isContributeHintEnabled({}, {});
   }

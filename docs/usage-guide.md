@@ -945,7 +945,7 @@ Teams that route knowledge sharing through their own review flow (for example, a
 
 Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai` keep working when invoked manually.
 
-The reminder is also withheld while recall is off (the default until `sharing.recall.enabled: true` in `teamai.yaml`, or `teamai recall enable` on one machine): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on.
+The reminder is also withheld while recall is off (the default until `sharing.recall.enabled: true` in `teamai.yaml`, or `teamai recall enable` on one machine): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on. It never appears on a read-only HTTP source, where `share` refuses too.
 
 ### Searching knowledge
 

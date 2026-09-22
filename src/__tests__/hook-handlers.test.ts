@@ -395,6 +395,22 @@ describe('hook-handlers registry', () => {
     expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
+  it('contribute-check handler stays silent on a read-only HTTP source even with recall on', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockAutoDetectInit.mockResolvedValueOnce({
+      localConfig: { repo: { kind: 'http', localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
+      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { recall: { enabled: true } } },
+    });
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's3c', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
+  });
+
   it('contribute-check handler keeps hinting when config cannot be loaded', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(

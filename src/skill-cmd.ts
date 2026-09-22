@@ -13,6 +13,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
+import { LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import { blockMessage, resolveServableSkill, skillCatalog, type SkillBlockReason } from './skill-content.js';
 import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
 
@@ -207,8 +208,11 @@ async function locateSkill(
   // 3. First installed agent that has the skill. Ahead of the packaged content
   //    on purpose: `codebase`, `default`, `learning` and `share` are ordinary
   //    names, and a directory a member created under one of them is the skill
-  //    they are asking about, not the built-in it happens to alias.
-  for (const agent of agents) {
+  //    they are asking about, not the built-in it happens to alias. A legacy
+  //    built-in name is the exception: that directory is a stale copy a
+  //    pre-stub release wrote, so the name goes to the packaged skill and its
+  //    gate, never to the leftover a pull has not pruned yet.
+  for (const agent of LEGACY_BUILTIN_SKILL_NAMES.has(name) ? [] : agents) {
     if (!agent.installed) continue;
     const candidate = path.join(agent.absoluteSkillsPath, name);
     if (await pathExists(path.join(candidate, 'SKILL.md'))) {
