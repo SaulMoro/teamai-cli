@@ -132,7 +132,7 @@ roles:
       'a\u0009b', 'a\u007fb', 'a\u0085b',
       '.. ', '.. .', '...', '. ', '  ',
       'frontend.', 'frontend ', 'frontend..',
-      'CON', 'nul', 'COM1', 'CON.txt',
+      'CON', 'nul', 'COM1', 'CON.txt', 'CONIN$', 'CONOUT$.txt',
     ]) {
       const repoDir = writeManifest(`
 version: 1

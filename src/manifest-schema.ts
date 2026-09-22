@@ -31,15 +31,16 @@ const TRAILING_DOT_OR_SPACE = /[ .]$/;
 // Windows reserves these names for devices in every directory, extension or not:
 // `CON`, `NUL`, `COM1`, `CON.txt` all open a device rather than a file, so a
 // namespace spelled that way cannot be the directory the manifest means. The set
-// is `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9` and `LPT1`-`LPT9`; `COM0` and
-// `LPT0` are ordinary names and keep parsing. Windows also reads the superscript
+// is `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9` and `LPT1`-`LPT9`, plus the console
+// handles `CONIN$` and `CONOUT$`; `COM0` and `LPT0` are ordinary names and keep
+// parsing. Windows also reads the superscript
 // forms of 1, 2 and 3 (U+00B9, U+00B2, U+00B3) as device numbers, so those go in
 // with the ASCII digits.
 //
 // The project id is deliberately left out of this, the way it is left out of the
 // rules above: it is a working POSIX directory name that the id rule has always
 // accepted, and narrowing it would break manifests that parse today.
-const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|(com|lpt)[1-9\u00b9\u00b2\u00b3])(\.|$)/i;
+const WINDOWS_DEVICE_NAME = /^(con|conin\$|conout\$|prn|aux|nul|(com|lpt)[1-9\u00b9\u00b2\u00b3])(\.|$)/i;
 
 /** True if `seg` is safe to use as a single path segment (no separators, no `..`). */
 export function isSafeNamespaceSegment(seg: string): boolean {

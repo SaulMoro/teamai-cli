@@ -161,6 +161,8 @@ projects:
         // Windows opens a device for these in any directory, with or without an
         // extension, so they cannot name the directory the manifest means.
         'CON', 'con', 'NUL', 'aux', 'COM1', 'lpt9', 'CON.txt',
+        // The console handles are devices too, extension or not.
+        'CONIN$', 'conout$', 'CONOUT$.txt',
         // Windows reads the superscript forms as device numbers too.
         'COM\u00b9', 'LPT\u00b3',
       ]) {
