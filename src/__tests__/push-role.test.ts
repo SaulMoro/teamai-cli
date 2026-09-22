@@ -1161,4 +1161,38 @@ describe('push namespace routing for rules and agents', () => {
     expect(pushedItems[0]?.relativePath).toBe('rules/fe-know/my-rule.md');
     expect(pushedItems[0]?.namespace).toBe('fe-know');
   });
+
+  it('records where a root-level rule was placed so the next scan recognises it', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({ rules: [{ ...newRule }], agents: [{ ...newAgent }] }, []);
+
+    await push({ all: true, role: 'pm' });
+
+    // The author's copy stays at the tool's rules root, so the scanner needs
+    // the record to map it back to rules/pm/ instead of reading it as new.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
+    expect(saved.placedRules).toEqual({ 'my-rule': 'rules/pm/my-rule.md' });
+  });
+
+  it('does not record a rule the scanner already found in a subdirectory', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({
+      rules: [{
+        name: 'fe-know/my-rule', type: 'rules', sourcePath: '/tmp/fe-know/my-rule.md',
+        relativePath: 'rules/fe-know/my-rule.md', status: 'modified', namespace: 'fe-know',
+      }],
+    }, []);
+
+    await push({ all: true });
+
+    // Its local path already carries the namespace, so full-path matching works.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
+    expect(saved.placedRules ?? {}).toEqual({});
+  });
 });

@@ -625,6 +625,16 @@ export const StateSchema = z.object({
   /** Tool targets that completed the last inherited user-resource pull. */
   lastInheritedPullTargets: z.array(z.string()).optional(),
   pushedRules: z.array(z.string()).default([]),
+  /**
+   * Where push placed each root-level local rule inside the team repo, by rule
+   * name, e.g. `{ "my-rule": "rules/fe-know/my-rule.md" }`. The author's copy
+   * stays at the tool's rules root after push, so without this record the next
+   * scan would read it as a brand-new rule. Only a rule this machine pushed is
+   * recorded: an unrelated local rule that merely shares a basename with a
+   * namespaced team rule has no entry and is never matched to it. Optional
+   * for the same reason as `coAuthorManaged`; absent reads as an empty map.
+   */
+  placedRules: z.record(z.string(), z.string()).optional(),
   pushedSkills: z.array(z.string()).default([]),
   pushedEnvVars: z.array(z.string()).default([]),
   /** Push branches whose PR is still open — see PendingPushSchema. */

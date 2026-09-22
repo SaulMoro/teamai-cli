@@ -196,6 +196,7 @@ async function removeCore(
   }
   if (type === 'rules') {
     state.pushedRules = state.pushedRules.filter((r) => !found.includes(r));
+    for (const name of found) delete state.placedRules?.[name];
   }
   // `wiki` is not tracked in pushedX state; nothing to clean here.
   await saveStateForScope(state, localConfig);

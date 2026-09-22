@@ -12,7 +12,7 @@ import {
   teamRuleToCopilotInstructions,
 } from './copilot-instructions.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
-import { resolveResourceNamespaces } from '../resource-namespaces.js';
+import { loadStateForScope } from '../config.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -45,25 +45,12 @@ export class RulesHandler extends ResourceHandler {
     // A rule placed under rules/<ns>/ on an earlier push is still authored at
     // the tool's rules root, so matching on the full path alone would read it
     // as brand new and send a second copy to the shared root — where it would
-    // reach the whole team (issue #649). Index the namespaced team rules by
-    // bare name so that local copy resolves back to the file it came from.
-    // Only namespaces the user actually has active count, mirroring the agents
-    // handler; `null` means nothing is filtering, so every namespace counts.
-    const resolved = await resolveResourceNamespaces(localConfig);
-    const activeKnowledge = resolved?.activeNamespaces.knowledge ?? null;
-    const namespacedTeamRules = new Map<string, string[]>();
-    for (const file of teamRules) {
-      const segments = file.split('/');
-      if (segments.length !== 2) continue; // only one namespace level is scoped
-      const [namespace, basename] = segments;
-      if (activeKnowledge && !activeKnowledge.includes(namespace)) continue;
-      const stem = basename.slice(0, -'.md'.length);
-      const matches = namespacedTeamRules.get(stem) ?? [];
-      matches.push(file);
-      namespacedTeamRules.set(stem, matches);
-    }
-
-    const ambiguousReported = new Set<string>();
+    // reach the whole team (issue #649). state.json records where this machine
+    // placed each root-level rule, and that record — not the basename — maps
+    // the local copy back to its team file. A namespaced team rule is pulled
+    // into a namespaced local directory, so a root-level local rule that only
+    // shares a basename with one, and has no record, is unrelated and stays new.
+    const placedRules = (await loadStateForScope(localConfig)).placedRules ?? {};
 
     // Collect the best candidate for each rule name across all tool directories
     const candidates = new Map<string, {
@@ -103,22 +90,10 @@ export class RulesHandler extends ResourceHandler {
         // Team repo always stores `.md`, keyed by rule name.
         let teamFileName = `${name}.md`;
         if (!teamRules.has(teamFileName) && !name.includes('/')) {
-          const namespaced = namespacedTeamRules.get(name) ?? [];
-          if (namespaced.length === 1) {
-            teamFileName = namespaced[0];
-          } else if (namespaced.length > 1) {
-            // Picking one would overwrite another namespace's rule with content
-            // that was never reviewed against it. Warn once per rule, not once
-            // per tool directory that happens to hold a copy.
-            if (!ambiguousReported.has(name)) {
-              ambiguousReported.add(name);
-              log.warn(
-                `[rules] Skipped ${name}: the team repo has it in more than one active namespace `
-                + `(${namespaced.join(', ')}). Rename one, or edit the namespaced copy directly.`,
-              );
-            }
-            continue;
-          }
+          // A record whose team file is gone (rule removed, namespace renamed)
+          // no longer proves anything, so the rule is new again.
+          const placed = placedRules[name]?.replace(/^rules\//, '');
+          if (placed && teamRules.has(placed)) teamFileName = placed;
         }
 
         const teamRelPath = `rules/${teamFileName}`;

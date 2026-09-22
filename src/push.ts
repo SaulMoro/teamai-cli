@@ -1051,6 +1051,13 @@ async function pushCore(
     if (item.type === 'rules' && !state.pushedRules.includes(item.name)) {
       state.pushedRules.push(item.name);
     }
+    // A root-level local rule that landed under rules/<ns>/ is still authored
+    // at the tool's rules root, so the scanner needs this record to recognise
+    // it next time (RulesHandler.scanLocalForPush). A rule the scanner already
+    // found in a subdirectory carries the namespace in its name and needs none.
+    if (item.type === 'rules' && item.namespace && !item.name.includes('/')) {
+      state.placedRules = { ...state.placedRules, [item.name]: item.relativePath };
+    }
     if (item.type === 'env' && !state.pushedEnvVars.includes(item.name)) {
       state.pushedEnvVars.push(item.name);
     }

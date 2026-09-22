@@ -9,6 +9,8 @@ vi.mock('../config.js', async (importOriginal) => ({
   requireInit: vi.fn(),
   loadState: vi.fn(),
   saveState: vi.fn(),
+  // The rules scanner reads push placements from state.json; none here.
+  loadStateForScope: vi.fn(async () => ({})),
 }));
 
 vi.mock('../utils/git.js', () => ({
