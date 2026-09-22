@@ -60,15 +60,15 @@ Generated: do not edit by hand. Regenerate with
 - `teamai skill` — List and inspect skills (default: list all skills across repo + installed agents)
   - `teamai skill list` — List all skills (alias for: teamai list skills --source all)
     - `--json` — Output the CLI-served built-in skill catalog as JSON
-  - `teamai skill get <names>` — Print built-in skill content served by the installed CLI
+  - `teamai skill get [names...]` — Print built-in skill content served by the installed CLI
     - `--full` — Append the skill's references/ and templates/ files
     - `--all` — Print every skill the CLI serves
   - `teamai skill path [name]` — Print the packaged directory of a built-in skill (for scripts and templates)
   - `teamai skill show <name>` — Show skill metadata: source / contributors / installed agents / description
   - `teamai skill exclude` — Manage per-user skill exclusion (skip sync without affecting team repo)
     - `teamai skill exclude list` — List excluded skills
-    - `teamai skill exclude add <skills>` — Add skill(s) to the exclude list
-    - `teamai skill exclude remove <skills>` — Remove skill(s) from the exclude list
+    - `teamai skill exclude add <skills...>` — Add skill(s) to the exclude list
+    - `teamai skill exclude remove <skills...>` — Remove skill(s) from the exclude list
 
 ## members
 
@@ -77,7 +77,7 @@ Generated: do not edit by hand. Regenerate with
 
 ## remove
 
-- `teamai remove <type> <names>` — Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)
+- `teamai remove <type> <names...>` — Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)
   - `--force` — Skip confirmation prompt
 
 ## packages
@@ -118,16 +118,16 @@ Generated: do not edit by hand. Regenerate with
 
 - `teamai projects` — Manage multi-project resource distribution (orthogonal to roles)
   - `teamai projects list` — List defined projects and the ones active in this directory
-  - `teamai projects set [ids]` — Set the projects active in this directory (comma-separated or repeated; empty to clear)
+  - `teamai projects set [ids...]` — Set the projects active in this directory (comma-separated or repeated; empty to clear)
   - `teamai projects members <id>` — List members registered for a project
 
 ## tags
 
 - `teamai tags` — Manage tag-based skill/rule filtering
   - `teamai tags list` — List all available tags and subscription status
-  - `teamai tags subscribe <tags>` — Subscribe to tags (only matching skills/rules will be synced)
-  - `teamai tags unsubscribe <tags>` — Unsubscribe from tags
-  - `teamai tags add <type> <name> <tags>` — Add tags to a skill or rule in tags.yaml (admin)
+  - `teamai tags subscribe <tags...>` — Subscribe to tags (only matching skills/rules will be synced)
+  - `teamai tags unsubscribe <tags...>` — Unsubscribe from tags
+  - `teamai tags add <type> <name> <tags...>` — Add tags to a skill or rule in tags.yaml (admin)
 
   <type>  Resource type: "skills" or "rules"
   <name>  Name of the skill or rule (directory name)
@@ -137,7 +137,7 @@ Generated: do not edit by hand. Regenerate with
     $ teamai tags add skills hai-deploy hai infra
     $ teamai tags add rules common-coding-style coding best-practices
 
-  - `teamai tags remove <type> <name> <tags>` — Remove tags from a skill or rule in tags.yaml (admin)
+  - `teamai tags remove <type> <name> <tags...>` — Remove tags from a skill or rule in tags.yaml (admin)
 
   <type>  Resource type: "skills" or "rules"
   <name>  Name of the skill or rule (directory name)
@@ -281,7 +281,7 @@ Generated: do not edit by hand. Regenerate with
 
 ## recall
 
-- `teamai recall [query]` — Search team learnings knowledge base
+- `teamai recall [query...]` — Search team learnings knowledge base
   - `--depth <level>` — Recall depth: route (entry-points only) | context (module-level, default) | lookup (full graph traversal)
   - `--check` — Relevance precheck only: print RELEVANT/NOT_RELEVANT + top score; no file reads, no upvote
   - `teamai recall disable` — Disable automatic knowledge-base recall

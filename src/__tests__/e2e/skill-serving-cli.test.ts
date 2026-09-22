@@ -50,6 +50,18 @@ describe('teamai skill get / path CLI (e2e)', () => {
     }
   });
 
+  it('serves every skill with --all and no name, and fails with neither', () => {
+    const all = run('skill', 'get', '--all');
+    expect(all.status, all.stderr).toBe(0);
+    // No team config in this HOME, so the recall gate fails open and all four are served.
+    expect(all.stdout.match(/^name: /gm)).toHaveLength(4);
+
+    const none = run('skill', 'get');
+    expect(none.status).toBe(1);
+    expect(none.stdout).toBe('');
+    expect(none.stderr).toContain('No skill name provided');
+  });
+
   it('runs the wiki scripts from the directory it prints', () => {
     const printed = run('skill', 'path', 'wiki');
     expect(printed.status).toBe(0);

@@ -41,12 +41,15 @@ export const BUILTIN_SKILL_NAMES = new Set(['teamai']);
  * Built-in skill directories earlier releases deployed, kept only so that pull
  * can remove them from agent skills directories. Retire this set once 0.23.x is
  * no longer in the field.
+ *
+ * Only names the CLI actually wrote belong here. `teamai-workflow` and
+ * `teamai-import` were reserved in the old BUILTIN_SKILL_NAMES guard but never
+ * packaged, so a directory by either name is a user's own skill and must not be
+ * removed.
  */
 export const LEGACY_BUILTIN_SKILL_NAMES = new Set([
   'teamai-share-learnings',
   'team-wiki-codebase',
-  'teamai-workflow',
-  'teamai-import',
 ]);
 
 /**

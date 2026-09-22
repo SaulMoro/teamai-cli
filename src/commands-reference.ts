@@ -39,7 +39,10 @@ function visibleOptions(command: Command): Option[] {
 
 function renderCommand(command: Command, parents: string[]): string[] {
   const path = [...parents, command.name()];
-  const args = command.registeredArguments.map((a) => (a.required ? `<${a.name()}>` : `[${a.name()}]`));
+  const args = command.registeredArguments.map((a) => {
+    const name = a.variadic ? `${a.name()}...` : a.name();
+    return a.required ? `<${name}>` : `[${name}]`;
+  });
   const usage = ['teamai', ...path, ...args].join(' ');
 
   const lines: string[] = [];

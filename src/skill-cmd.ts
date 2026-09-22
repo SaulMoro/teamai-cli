@@ -13,7 +13,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { blockedByRecall, resolvePackagedSkill, skillCatalog } from './skill-content.js';
+import { resolvePackagedSkill, skillCatalog } from './skill-content.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
@@ -100,8 +100,7 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
     console.log('  (none — the installed package ships no skill content)');
   } else {
     for (const entry of catalog) {
-      const blocked = await blockedByRecall(entry.name);
-      console.log(`  ${entry.name}${blocked ? '  (needs recall — teamai recall enable)' : ''}`);
+      console.log(`  ${entry.name}${entry.blockedByRecall ? '  (needs recall — teamai recall enable)' : ''}`);
       console.log(`    ${truncate(entry.description, DESCRIPTION_MAX) || '(no description)'}`);
       console.log(`    teamai skill get ${entry.name}`);
     }

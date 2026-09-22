@@ -230,6 +230,17 @@ function rootsMissing(): void {
   process.exitCode = 1;
 }
 
+/**
+ * Refuse a skill the recall gate blocks. Every path that hands out a skill's
+ * content or its directory goes through here, so the gate that replaced the
+ * old deployment restriction cannot be sidestepped by asking differently.
+ */
+function refuseBlockedByRecall(name: string): void {
+  diagnostic(`${chalk.red('✖')} ${name} needs recall, which is disabled for this team.`);
+  diagnostic('  Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
+  process.exitCode = 1;
+}
+
 export interface SkillGetOptions {
   full?: boolean;
   all?: boolean;
@@ -262,9 +273,15 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
 
   const targets: PackagedSkill[] = [];
   if (options.all) {
-    // An inventory dump is not an attempt to run a workflow, so the recall gate
-    // stays out of it; asking for the skill by name is what hits the gate.
-    targets.push(...servable);
+    // The gate holds for the inventory dump too: a blocked skill is left out
+    // and named on stderr, the rest is still served.
+    for (const skill of servable) {
+      if (await blockedByRecall(skill.name)) {
+        diagnostic(`${chalk.yellow('⚠')} Skipped ${skill.name}: needs recall, which is disabled for this team (teamai recall enable).`);
+        continue;
+      }
+      targets.push(skill);
+    }
   } else {
     for (const name of requested) {
       const skill = await resolvePackagedSkill(name, roots);
@@ -273,9 +290,7 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
         return;
       }
       if (await blockedByRecall(skill.name)) {
-        diagnostic(`${chalk.red('✖')} ${skill.name} needs recall, which is disabled for this team.`);
-        diagnostic('  Turn it on with `teamai recall enable`, or ask your team admin to enable sharing.');
-        process.exitCode = 1;
+        refuseBlockedByRecall(skill.name);
         return;
       }
       targets.push(skill);
@@ -283,7 +298,7 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
   }
 
   if (targets.length === 0) {
-    diagnostic(`${chalk.red('✖')} No skill name provided. Usage: teamai skill get <name> [--full]`);
+    diagnostic(`${chalk.red('✖')} No skill name provided. Usage: teamai skill get <name> [--full], or --all`);
     diagnostic(`  Available: ${servable.map((s) => s.name).join(', ')}`);
     process.exitCode = 1;
     return;
@@ -320,26 +335,38 @@ export async function skillPath(name?: string): Promise<void> {
     notFound(name, await listServableSkills(roots));
     return;
   }
+  if (await blockedByRecall(skill.name)) {
+    refuseBlockedByRecall(skill.name);
+    return;
+  }
   console.log(skill.dir);
 }
 
-/** One catalog entry, as `teamai skill list --json` reports it. */
+/**
+ * One catalog entry, as `teamai skill list --json` reports it.
+ *
+ * A skill the recall gate blocks is still listed, so the agent learns it exists
+ * and what to turn on, but its directory is withheld like `skill path` does.
+ */
 export interface SkillCatalogEntry {
   name: string;
   description: string;
-  path: string;
+  path: string | null;
   deployed: boolean;
+  blockedByRecall: boolean;
 }
 
 export async function skillCatalog(roots: PackagedSkillRoots = packagedSkillRoots()): Promise<SkillCatalogEntry[]> {
   const skills = await listServableSkills(roots);
   const entries: SkillCatalogEntry[] = [];
   for (const skill of skills) {
+    const blocked = await blockedByRecall(skill.name);
     entries.push({
       name: skill.name,
       description: await readSkillDescription(path.join(skill.dir, SKILL_MD)),
-      path: skill.dir,
+      path: blocked ? null : skill.dir,
       deployed: skill.deployed,
+      blockedByRecall: blocked,
     });
   }
   return entries;

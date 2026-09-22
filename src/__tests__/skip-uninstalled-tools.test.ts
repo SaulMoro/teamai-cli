@@ -604,6 +604,12 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await fse.writeFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), '# old');
     await fse.ensureDir(path.join(homeDir, '.claude/skills/teamai-share-learnings'));
     await fse.writeFile(path.join(homeDir, '.claude/skills/teamai-share-learnings/SKILL.md'), '# old');
+    // These two names were reserved in the old guard set but never packaged, so
+    // a directory by either name is the user's own skill.
+    for (const userSkill of ['teamai-workflow', 'teamai-import']) {
+      await fse.ensureDir(path.join(homeDir, `.claude/skills/${userSkill}`));
+      await fse.writeFile(path.join(homeDir, `.claude/skills/${userSkill}/SKILL.md`), '# mine');
+    }
 
     const deployed = await deployBuiltinSkills(teamConfig, localConfig);
 
@@ -614,6 +620,9 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai/SKILL.md'))).toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai-share-learnings'))).toBe(false);
+    for (const userSkill of ['teamai-workflow', 'teamai-import']) {
+      expect(await fse.readFile(path.join(homeDir, `.claude/skills/${userSkill}/SKILL.md`), 'utf8'), userSkill).toBe('# mine');
+    }
   });
 
   it('removes the references an earlier release deployed beside the stub', async () => {

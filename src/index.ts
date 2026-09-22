@@ -171,16 +171,17 @@ skillCmd
   });
 
 skillCmd
-  .command('get <names...>')
+  // Optional so that `--all` needs no name; the action fails when both are missing.
+  .command('get [names...]')
   .description('Print built-in skill content served by the installed CLI')
   .option('--full', 'Append the skill\'s references/ and templates/ files')
   .option('--all', 'Print every skill the CLI serves')
   // A hallucinated flag should cost a warning, not a failed command: unknown
   // options fall through to the action, which reports and ignores them.
   .allowUnknownOption()
-  .action(async (names: string[], cmdOpts) => {
+  .action(async (names: string[] | undefined, cmdOpts) => {
     const { skillGet } = await import('./skill-content.js');
-    await skillGet(names, { full: cmdOpts.full, all: cmdOpts.all });
+    await skillGet(names ?? [], { full: cmdOpts.full, all: cmdOpts.all });
   });
 
 skillCmd

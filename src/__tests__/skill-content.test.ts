@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SKILL_DIR_PLACEHOLDER,
+  blockedByRecall,
   listServableSkills,
   packagedSkillRoots,
   renderSkill,
@@ -177,7 +178,7 @@ describe('skillCatalog', () => {
       writeSkill(roots.dataRoot, 'core', '---\nname: core\ndescription: Daily sync\n---\n\n# core\n');
       const catalog = await skillCatalog(roots);
       expect(catalog).toEqual([
-        { name: 'core', description: 'Daily sync', path: path.join(roots.dataRoot, 'core'), deployed: false },
+        { name: 'core', description: 'Daily sync', path: path.join(roots.dataRoot, 'core'), deployed: false, blockedByRecall: false },
       ]);
     } finally {
       fs.rmSync(roots.tmp, { recursive: true, force: true });
@@ -256,7 +257,12 @@ describe('teamai skill get / path against the shipped package', () => {
   });
 
   it('separates multiple skills and serves them all with --all', async () => {
-    const servable = await listServableSkills();
+    // The recall gate applies to --all too (covered in skill-recall-gate.test);
+    // this run's team config decides whether share is in the dump.
+    const servable: PackagedSkill[] = [];
+    for (const skill of await listServableSkills()) {
+      if (!await blockedByRecall(skill.name)) servable.push(skill);
+    }
     await skillGet([], { all: true });
 
     const expected = (await Promise.all(servable.map((skill) => renderSkill(skill)))).join('\n---\n\n');

@@ -58,8 +58,12 @@ task matches             stub body                          ~0.9 KB  holds the c
   `references/phases/`); a single-level scan would serve an incomplete skill.
 - **Nothing repairs the deployed stub.** `ensureSkillFrontmatter` is not called
   on it, so deployed and packaged bytes are identical and a diff means a bug.
-- **Recall is decided at run time**, inside `skill get`, not by withholding a
-  directory at deploy time. With no team config to consult it fails open.
+- **Recall is decided at run time**, not by withholding a directory at deploy
+  time, and it holds on every path that hands out content or a location:
+  `skill get <name>` refuses, `skill get --all` leaves the skill out and says so
+  on stderr, `skill path <name>` refuses, and `skill list --json` reports
+  `blockedByRecall: true` with `path: null`. With no team config to consult it
+  fails open.
 
 ## Drift guards
 
@@ -81,8 +85,9 @@ installed.
 ## Migration
 
 `LEGACY_BUILTIN_SKILL_NAMES` (`src/builtin-skills.ts`) names the directories
-earlier releases deployed: `team-wiki-codebase`, `teamai-share-learnings`, and
-the two that were only ever guards, `teamai-workflow` and `teamai-import`.
+earlier releases deployed: `team-wiki-codebase` and `teamai-share-learnings`.
+`teamai-workflow` and `teamai-import` sat in the old guard set but were never
+packaged, so they are not in it: a directory by either name is the user's own.
 Deployment removes them from every installed agent, in the configured skills
 path and in Codex's shared `.agents/skills`. The removal is unconditional
 because those trees were overwritten with `overwrite: true` on every pull, so no
