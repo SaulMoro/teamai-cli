@@ -95,11 +95,24 @@ function validateManifestShape(raw: unknown): RolesManifest {
   return manifest;
 }
 
+/**
+ * The manifest file is absent: a team that does not use roles, not a broken one.
+ * Callers that fall back to unfiltered delivery must react to this case ONLY —
+ * doing the same for a manifest that exists but does not parse would hand out
+ * every namespace the manifest was written to gate.
+ */
+export class RolesManifestMissingError extends Error {
+  constructor(manifestPath: string) {
+    super(`Roles manifest not found: ${manifestPath}`);
+    this.name = 'RolesManifestMissingError';
+  }
+}
+
 export async function loadRolesManifest(repoPath: string): Promise<RolesManifest> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
   const content = await readFileSafe(manifestPath);
   if (!content) {
-    throw new Error(`Roles manifest not found: ${manifestPath}`);
+    throw new RolesManifestMissingError(manifestPath);
   }
 
   let raw: unknown;

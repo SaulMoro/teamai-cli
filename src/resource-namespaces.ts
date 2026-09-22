@@ -1,5 +1,10 @@
 import type { LocalConfig } from './types.js';
-import { loadRolesManifest, resolveRoleResourceNamespaces, type ResourceNamespaces } from './roles.js';
+import {
+  loadRolesManifest,
+  resolveRoleResourceNamespaces,
+  RolesManifestMissingError,
+  type ResourceNamespaces,
+} from './roles.js';
 import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces } from './projects.js';
 import { log } from './utils/logger.js';
 
@@ -34,8 +39,14 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
     let rolesManifest;
     try {
       rolesManifest = await loadRolesManifest(localConfig.repo.localPath);
-    } catch {
-      log.warn('Could not load roles manifest. Skipping role-based filtering.');
+    } catch (error) {
+      // Only an ABSENT manifest degrades to unfiltered delivery. One that exists
+      // and does not parse must not: every path below this point would treat the
+      // roles as "no filter" and deliver the namespaces the manifest was written
+      // to gate. Let it fail the scope's pull, as an invalid projects manifest
+      // already does.
+      if (!(error instanceof RolesManifestMissingError)) throw error;
+      log.warn('Roles manifest not found. Skipping role-based filtering.');
       rolesManifest = null;
     }
     if (rolesManifest) {
