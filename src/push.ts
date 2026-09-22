@@ -1197,10 +1197,20 @@ async function pushCore(
     const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
     return resolved.ok ? resolved.namespace : undefined;
   };
+  // Only what the flag actually MOVES can conflict with it: every selected
+  // skill (the override above), and a rule or agent only while it is new and at
+  // the shared root (step 4). Anything else keeps the path it was scanned with,
+  // so its open PR is still the right one to update, and treating it as a
+  // conflict opened a second PR on the same file (#649 review).
+  const scannedByKey = new Map(allItems.map((item) => [`${item.type}:${item.name}`, item]));
+  const movedByFlag = (item: ResourceItem): boolean => item.type === 'skills'
+    || (item.status === 'new' && !item.namespace && isAtSharedRoot(item));
   const conflictsWithRequest = (
-    recorded: { type: string; namespace?: string; relativePath: string },
+    recorded: { type: string; name: string; namespace?: string; relativePath: string },
   ): boolean => {
     if (!isPlaceableType(recorded.type as ResourceType)) return false;
+    const scanned = scannedByKey.get(`${recorded.type}:${recorded.name}`);
+    if (!scanned || !movedByFlag(scanned)) return false;
     // The path, not the field: a scan can record an item whose destination is
     // namespaced while leaving `namespace` unset, and trusting the field let
     // those entries slip past the check and be force-pushed into (#649 review).

@@ -59,10 +59,22 @@ async function removeCore(
 
   // Pull latest before making changes. In self mode the worktree is already a
   // fresh checkout of origin/<default>, so skip the pull.
+  // A clone that could not be refreshed is not the default branch: a placement
+  // merged since the last pull is not recorded there, so the bare name the
+  // author types falls back to the stem and removes that agent from every
+  // namespace (#649 review). Removing is a write, so stop instead of guessing.
   if (!selfMode) {
     try {
       await pullRepo(localConfig.repo.localPath);
-    } catch { /* continue even if pull fails */ }
+    } catch (e) {
+      log.error(
+        `The team repo could not be refreshed (${(e as Error).message}), so what "${names.join(', ')}" `
+        + 'names cannot be resolved against the current default branch. Nothing was removed. '
+        + 'Fix the pull (run `teamai pull` to see why) and retry.',
+      );
+      process.exitCode = 1;
+      return;
+    }
   }
 
   // `publishedNameFor` below resolves the bare name the author types through

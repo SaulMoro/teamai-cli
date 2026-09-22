@@ -1588,6 +1588,41 @@ describe('push namespace routing for rules and agents', () => {
     expect(said).toContain('separate PR');
   });
 
+  it('keeps updating the open PR of a resource the flag does not move', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    // A rule already in fe-know, modified, with its edit under review. --role
+    // relocates only NEW shared-root rules, so this one stays at its path, and
+    // a "conflict" with the flag sent the same file to a second PR (#649 review).
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/14',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'fe-know/my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
+      }],
+    });
+    mockHandlers({
+      rules: [{
+        name: 'fe-know/my-rule', type: 'rules', sourcePath: '/tmp/local/rules/fe-know/my-rule.md',
+        relativePath: 'rules/fe-know/my-rule.md', status: 'modified', namespace: 'fe-know',
+      }],
+    }, pushedItems);
+
+    await push({ all: true, role: 'other' });
+
+    expect(pushedItems[0]?.relativePath).toBe('rules/fe-know/my-rule.md');
+    const branches = mockPushRepoBranch.mock.calls.map((call) => call[3]);
+    expect(branches).toEqual(['teamai/push/test/20260101-000000']);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.warn).mock.calls.flat().join(' ')).not.toContain('separate PR');
+  });
+
   it('--dry-run reports the same destination the real push would use', async () => {
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(),

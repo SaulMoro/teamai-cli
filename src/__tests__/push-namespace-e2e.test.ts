@@ -571,6 +571,28 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(branchFiles(fixture).branch).toBe('');
   }, 60_000);
 
+  it('refuses to remove when the team clone cannot be refreshed', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    commitOnMain(fixture, 'agents/other-ns/vr.yaml',
+      'name: vr\ndescription: somebody else\'s\ninstructions: Read other-ns.\n');
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    // The placement merges, but this clone never sees it: fetching fails while
+    // pushing still works, so a removal resolved from the stale tree would land.
+    mergeBranch(fixture, branchFiles(fixture).branch);
+    git(['remote', 'set-url', 'origin', path.join(fixture.sandbox, 'nowhere.git')], fixture.teamRepo);
+    git(['remote', 'set-url', '--push', 'origin', fixture.remote], fixture.teamRepo);
+
+    const result = await runCLI(['remove', 'agents', 'vr', '--force'], fixture.projectRoot, fixture.home);
+
+    // Stale, `vr` resolves to no record and falls back to the bare stem, which
+    // would remove other-ns/vr as well.
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('could not be refreshed');
+    expect(result.output).toContain('Nothing was removed');
+    expect(branchFiles(fixture).branch).toBe('');
+  }, 60_000);
+
   it('pull drops the placement record of a rule the team has since deleted', async () => {
     const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
     writeLocalResources(fixture);

@@ -577,7 +577,7 @@ Choose namespace [1-3] (default: 1 = common):
 - 若 roles manifest 存在却无法解析（格式错误，或未包含当前配置的角色），命令会报错停止，而不会退回共享根目录：请修复 `manifest/roles.yaml`、执行 `teamai roles set <role>`，或用 `--role <ns>` 显式指定。团队仓库根本没有 `manifest/roles.yaml` 时，保持原有行为
 - `teamai push --dry-run` 会做同样的落点解析，并在同样的无法解析情况下报错，不会把真实命令会拒绝的推送报为可行
 - 已落点的资源在发布它的机器上仍可维护：PR 未合并期间，待评审 PR 记录会把作者对自己副本的修改带回该 PR；文件进入默认分支后，`state.json` 会记录 push 的落点，因此修改仍会写回同一个文件；即使 agent 落在本目录未激活的 namespace，也不会被当作“无活跃源”跳过
-- `teamai remove rules <name>` 同时接受作者副本的简名和发布名 `<namespace>/<name>`：会打印实际解析到的名字，并同时删除带 namespace 的团队文件和作者在 rules 根目录的副本
+- `teamai remove rules <name>` 同时接受作者副本的简名和发布名 `<namespace>/<name>`：会打印实际解析到的名字，并同时删除带 namespace 的团队文件和作者在 rules 根目录的副本。若无法先刷新团队仓库，`remove` 会以退出码 1 停止且不删除任何内容，因为过期的克隆可能把名字解析到错误的文件
 - 使用 `--role`/`--project` 时，指定的 namespace 同时决定本地 agent 对应哪个团队文件：同名 agent 允许存在于多个 namespace，因此其他 namespace 的同名副本不会阻止你发布；但共享根目录已有同名 agent 时会阻止，因为两者会同时生效
 - 新资源绝不会覆盖已存在的资源：若解析出的 namespace 下已有同名文件，命令会报错并指出该文件：请先 pull 并修改已有副本、重命名自己的资源，或用 `--role <ns>` 换一个 namespace
 - 本目录未激活的 namespace 下的 agent 可通过落点记录继续编辑，`pull` 也会基于同一记录下发它，使本地副本与团队文件保持同步；若已激活的 namespace 中已有同名 agent，则以它为准
