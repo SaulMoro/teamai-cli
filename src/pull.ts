@@ -686,8 +686,9 @@ async function cleanupTombstonedResources(
  * without this a variable scoped away stays exported until `--force`), and a
  * mangled env.yaml on a machine that recorded its rev before the mangling.
  *
- * Quiet by design: this runs on every session start. `pullItem` rewrites
+ * Quiet on success: this runs on every session start. `pullItem` rewrites
  * `env.sh` from the filtered set and leaves an unchanged shell profile alone.
+ * A failure is not quiet — see the catch.
  */
 async function reconcileEnvForUnchangedRepo(
   freshConfig: TeamaiConfig,
@@ -705,8 +706,18 @@ async function reconcileEnvForUnchangedRepo(
     }
     await envHandler.pullItem(envItems[0], freshConfig, localConfig);
   } catch (e) {
-    // Never let this take down the pull it is running beside.
-    log.debug(`env reconcile on unchanged repo skipped: ${(e as Error).message}`);
+    // Visible rather than debug-only, and still not rethrown. This is the path
+    // that REMOVES a variable the member is no longer scoped to, so a failed
+    // write leaves a withheld variable exported while the only thing on screen
+    // says "Already synced". The pull it runs beside has already succeeded, so
+    // the failure is reported where the member can act on it instead of taking
+    // that pull down with it.
+    const envShPath = path.join(getDataHome(localConfig), 'env.sh');
+    log.warn(
+      `[${localConfig.scope}] Could not refresh env variables: ${(e as Error).message}. `
+      + `${envShPath} may still export variables env.yaml no longer delivers to this directory. `
+      + 'Fix the cause, run `teamai pull --force`, then open a new shell.',
+    );
   }
 }
 

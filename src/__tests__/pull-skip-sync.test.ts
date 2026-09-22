@@ -215,6 +215,38 @@ describe('pull skip-sync when repo HEAD unchanged', () => {
     expect(saveStateForScope).not.toHaveBeenCalled();
   });
 
+  it('warns when the fast-path env delivery cannot write env.sh', async () => {
+    // The one failure that must not be silent: this delivery is what REMOVES a
+    // variable the member is no longer scoped to, and it runs after
+    // "Already synced" has already printed. A debug-only log would leave the
+    // withheld variable exported with nothing on screen to say so.
+    await fse.ensureDir(path.join(repoPath, 'env'));
+    await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), [
+      'variables:',
+      '  - key: SHARED_URL',
+      '    value: https://shared.example',
+      '',
+    ].join('\n'));
+    const envShPath = path.join(homeDir, '.teamai', 'env.sh');
+    // A directory where the file goes: writeFile throws, on every platform and
+    // as root, unlike a permission bit.
+    await fse.ensureDir(envShPath);
+
+    vi.mocked(getHeadRev).mockResolvedValue('abc1234');
+    vi.mocked(loadStateForScope).mockResolvedValue(emptyState({
+      lastPullRev: 'abc1234',
+      lastPullTargets: ['claude'],
+    }));
+
+    await pull({});
+
+    expect(log.success).toHaveBeenCalledWith(expect.stringContaining('Already synced at abc1234, skipping'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Could not refresh env variables'));
+    // Names the file that may still be stale, and the way out.
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(envShPath));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('teamai pull --force'));
+  });
+
   it('stops before the revision fast path when role-scoped resources cannot be resolved', async () => {
     await fse.remove(path.join(repoPath, 'skills', 'common'));
     await fse.writeFile(path.join(repoPath, 'skills', 'common'), 'not a directory\n');
