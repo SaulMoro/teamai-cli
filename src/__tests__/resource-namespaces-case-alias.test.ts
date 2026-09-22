@@ -13,12 +13,13 @@ function repoWith(roles: string, projects: string): string {
   return repoDir;
 }
 
-function localConfig(repoDir: string): LocalConfig {
+function localConfig(repoDir: string, overrides: Partial<LocalConfig> = {}): LocalConfig {
   return {
     repo: { localPath: repoDir, remote: 'https://github.com/acme/team.git' },
     username: 'e2e',
     primaryRole: 'fe',
     projects: ['p'],
+    ...overrides,
   } as LocalConfig;
 }
 
@@ -31,6 +32,28 @@ describe('resolveResourceNamespaces: roles.yaml and projects.yaml share one dire
       await expect(resolveResourceNamespaces(localConfig(repoDir))).rejects.toThrow(
         /skills namespaces "frontend" \(role fe\) and "Frontend" \(project p\) differ only by case/,
       );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects it for a member with no role too: the collision is in the repo, not in who pulls', async () => {
+    const repoDir = repoWith(ROLES, 'version: 1\nprojects:\n  - id: p\n    name: P\n    resources: { skills: [Frontend] }\n');
+    try {
+      await expect(resolveResourceNamespaces(localConfig(repoDir, { primaryRole: undefined }))).rejects.toThrow(
+        /skills namespaces "frontend" \(role fe\) and "Frontend" \(project p\) differ only by case/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a member with no role and no roles.yaml still resolves project namespaces', async () => {
+    const repoDir = repoWith('', 'version: 1\nprojects:\n  - id: p\n    name: P\n    resources: { skills: [p-only] }\n');
+    rmSync(path.join(repoDir, 'manifest', 'roles.yaml'));
+    try {
+      const resolved = await resolveResourceNamespaces(localConfig(repoDir, { primaryRole: undefined }));
+      expect(resolved?.activeNamespaces.skills).toEqual(['p-only']);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

@@ -5,6 +5,7 @@ import {
   roleNamespaceEntries,
   RolesManifestMissingError,
   type ResourceNamespaces,
+  type RolesManifest,
 } from './roles.js';
 import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces, projectNamespaceEntries } from './projects.js';
 import { assertNoCaseAliasedNamespaces } from './manifest-schema.js';
@@ -44,8 +45,12 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
   // ── Role namespaces (optional) ──
   let roleNamespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
   let allRoleSkillNamespaces = new Set<string>();
-  if (primaryRole) {
-    let rolesManifest;
+  // roles.yaml is read for a member with a role, and also for a role-less member
+  // whenever a projects manifest is in play: the two manifests share skills/,
+  // knowledge/ and agents/, so a project's `Common` collides with a role's
+  // `common` whether or not this member holds that role.
+  let rolesManifest: RolesManifest | null = null;
+  if (primaryRole || projectsManifest) {
     try {
       rolesManifest = await loadRolesManifest(localConfig.repo.localPath);
     } catch (error) {
@@ -55,18 +60,19 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
       // to gate. Let it fail the scope's pull, as an invalid projects manifest
       // already does.
       if (!(error instanceof RolesManifestMissingError)) throw error;
-      log.warn('Roles manifest not found. Skipping role-based filtering.');
-      rolesManifest = null;
+      if (primaryRole) log.warn('Roles manifest not found. Skipping role-based filtering.');
     }
-    if (rolesManifest && projectsManifest) {
-      // Each manifest is checked on its own when it loads; the two together share
-      // the same skills/, knowledge/ and agents/ directories, so a role's
-      // `frontend` and a project's `Frontend` collide just as two roles' would.
-      assertNoCaseAliasedNamespaces(
-        [...roleNamespaceEntries(rolesManifest), ...projectNamespaceEntries(projectsManifest)],
-        'manifests (roles.yaml with projects.yaml)',
-      );
-    }
+  }
+  if (rolesManifest && projectsManifest) {
+    // Each manifest is checked on its own when it loads; the two together share
+    // the same skills/, knowledge/ and agents/ directories, so a role's
+    // `frontend` and a project's `Frontend` collide just as two roles' would.
+    assertNoCaseAliasedNamespaces(
+      [...roleNamespaceEntries(rolesManifest), ...projectNamespaceEntries(projectsManifest)],
+      'manifests (roles.yaml with projects.yaml)',
+    );
+  }
+  if (primaryRole) {
     if (rolesManifest) {
       try {
         roleNamespaces = resolveRoleResourceNamespaces({
