@@ -168,22 +168,25 @@ async function locateSkill(
     }
   }
 
-  // 3. Built-in skill served by the CLI (including legacy-name aliases).
-  //    Resolved before the agent fallback: under the discovery-stub model the
-  //    agent directory holds a stub, not the content this command describes.
-  const served = await resolveServableSkill(name);
-  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name };
-  if (served.kind === 'found') {
-    return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };
-  }
-
-  // 4. First installed agent that has the skill
+  // 3. First installed agent that has the skill. Ahead of the packaged content
+  //    on purpose: `codebase`, `default`, `learning` and `share` are ordinary
+  //    names, and a directory a member created under one of them is the skill
+  //    they are asking about, not the built-in it happens to alias.
   for (const agent of agents) {
     if (!agent.installed) continue;
     const candidate = path.join(agent.absoluteSkillsPath, name);
     if (await pathExists(path.join(candidate, 'SKILL.md'))) {
       return { kind: 'found', name, primaryPath: candidate, primaryOrigin: 'agent' };
     }
+  }
+
+  // 4. Built-in skill served by the CLI, including legacy-name aliases. Last,
+  //    so it answers for the names nothing on this machine claims: `core` and
+  //    `wiki` live in the package, and the agent directory holds only the stub.
+  const served = await resolveServableSkill(name);
+  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name };
+  if (served.kind === 'found') {
+    return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };
   }
 
   return null;

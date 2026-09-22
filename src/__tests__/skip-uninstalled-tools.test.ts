@@ -694,6 +694,104 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(await fse.pathExists(path.join(homeDir, '.agents/skills/teamai'))).toBe(false);
   });
 
+  it('records every file the package still ships, so the prune keeps proving ownership', async () => {
+    const { PACKAGED_SKILL_FILES } = await import('../builtin-skills.js');
+
+    const shipped: string[] = [];
+    const walk = async (dir: string, prefix: string): Promise<void> => {
+      for (const entry of await fse.readdir(dir, { withFileTypes: true })) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) await walk(path.join(dir, entry.name), relative);
+        else shipped.push(relative);
+      }
+    };
+    await walk(path.join(PACKAGE_ROOT, 'skills'), '');
+
+    // A packaged file missing from the manifest is one a later migration would
+    // leave behind on every machine, which no other test would notice.
+    for (const relative of shipped) {
+      const [skillName, ...rest] = relative.split('/');
+      expect(PACKAGED_SKILL_FILES.get(skillName), relative).toContain(rest.join('/'));
+    }
+  });
+
+  it('removes the packaged files from a legacy directory but keeps what the member added', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://example.test/team.git',
+      provider: 'git' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { claude: { skills: '.claude/skills' } },
+    };
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://example.test/team.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+    };
+
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    // What the release packaged…
+    for (const packaged of ['SKILL.md', 'README.md', 'references/methodology/phase0-collection.md', 'scripts/scan_repo.py']) {
+      await fse.ensureDir(path.join(wiki, path.dirname(packaged)));
+      await fse.writeFile(path.join(wiki, packaged), '# packaged');
+    }
+    // …and what the member put beside it, which `overwrite: true` never deleted.
+    await fse.writeFile(path.join(wiki, 'references/methodology/my-notes.md'), '# mine');
+    await fse.ensureDir(path.join(wiki, 'scripts/__pycache__'));
+    await fse.writeFile(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'), 'bytecode');
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(wiki, 'SKILL.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(wiki, 'README.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(wiki, 'references/methodology/phase0-collection.md'))).toBe(false);
+    // Bytecode of a script we shipped is ours, so it does not keep the tree alive.
+    expect(await fse.pathExists(path.join(wiki, 'scripts'))).toBe(false);
+    // The member's file, and only it, survives.
+    expect(await fse.readFile(path.join(wiki, 'references/methodology/my-notes.md'), 'utf8')).toBe('# mine');
+  });
+
+  it('keeps a file the member added beside the deployed stub', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://example.test/team.git',
+      provider: 'git' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { claude: { skills: '.claude/skills' } },
+    };
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'repo'), remote: 'https://example.test/team.git' },
+      username: 'testuser',
+      updatePolicy: 'auto' as const,
+      additionalRoles: [],
+      scope: 'user' as const,
+    };
+
+    const stubDir = path.join(homeDir, '.claude/skills/teamai');
+    await fse.ensureDir(path.join(stubDir, 'references'));
+    await fse.writeFile(path.join(stubDir, 'SKILL.md'), '# old body');
+    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), '# old reference');
+    await fse.writeFile(path.join(stubDir, 'references/team-playbook.md'), '# mine');
+
+    await deployBuiltinSkills(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(stubDir, 'references/setup-admin.md'))).toBe(false);
+    expect(await fse.readFile(path.join(stubDir, 'references/team-playbook.md'), 'utf8')).toBe('# mine');
+    expect(await fse.readFile(path.join(stubDir, 'SKILL.md'), 'utf8')).toBe(
+      await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8'),
+    );
+  });
+
   it('leaves the Codex shared directory alone when another tool prunes and Codex is excluded', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

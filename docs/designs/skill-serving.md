@@ -78,6 +78,11 @@ task matches             stub body                          ~1.3 KB  holds the c
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
   packaged skill outside that module, and it returns `blocked` instead of the
   skill, so a command cannot print a directory it never received.
+- **A member's own skill outranks a packaged name.** `locateSkill` searches the
+  team repo, then the installed agents, then the package. `codebase`, `default`,
+  `learning` and `share` are ordinary names: a directory a member created under
+  one of them is the skill they are asking about, and the recall gate does not
+  apply to it.
 - **`skill list` needs no team.** The human-readable listing prints the packaged
   catalog even before `teamai init`, with a hint for the team half, so a fresh
   machine can discover what the installed CLI serves the way `skill get` lets it.
@@ -108,9 +113,23 @@ earlier releases deployed: `team-wiki-codebase` and `teamai-share-learnings`.
 packaged, so they are not in it: a directory by either name is the user's own.
 Deployment removes them from every installed, non-excluded agent, in its
 configured skills path; Codex's pass also covers the shared `.agents/skills`,
-which no other tool's pass touches. The removal is unconditional
-because those trees were overwritten with `overwrite: true` on every pull, so no
-local edit ever survived in them.
+which no other tool's pass touches.
+
+**It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
+lists them, built as the union of `git ls-tree -r <tag> -- skills/` over every
+tag, so each path is provably the CLI's. Those files were overwritten with
+`overwrite: true` on every pull and no local edit ever survived in one; a file a
+member added beside them was never touched by the old deployment and is not ours
+to delete now. Directories left empty go; a directory still holding a member's
+file is kept, and `pull` says which one and why. Python bytecode of a script we
+shipped counts as ours, so a `__pycache__` left by running the wiki scripts does
+not strand the tree. The same rule governs the stub directory: the six
+`teamai/references/*.md` a pre-stub release wrote are removed by name, not by
+"everything that is not SKILL.md".
+
+`teamai-wiki` (0.13.0, 0.16.x) is deliberately not in the set. It predates the
+trees this migration is about, and widening a destructive set belongs in its own
+change.
 
 Between the upgrade and that first pull the legacy trees are still on disk, so
 two other commands know the names too: `push` never offers them as new user

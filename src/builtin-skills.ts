@@ -69,11 +69,110 @@ export function isCliOwnedSkillName(name: string): boolean {
 }
 
 /**
+ * Every file a release ever packaged under `skills/`, by directory name.
+ *
+ * Built as the union of `git ls-tree -r <tag> -- skills/` over all 91 tags, so a
+ * path listed here was written by the CLI and is ours to remove. Deployment
+ * copied these trees with `overwrite: true` and never deleted anything, so a
+ * file that is *not* listed here was put there by the member and survives.
+ *
+ * `teamai-wiki` (0.13.0, 0.16.x) is deliberately absent: it predates the trees
+ * this migration is about, and widening a destructive set is its own change.
+ */
+export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new Map([
+  ['teamai', [
+    'SKILL.md',
+    'references/contribute-member.md',
+    'references/join-member.md',
+    'references/manage-admin.md',
+    'references/setup-admin.md',
+    'references/troubleshooting.md',
+    'references/uninstall.md',
+  ]],
+  ['teamai-share-learnings', ['SKILL.md']],
+  ['team-wiki-codebase', [
+    'SKILL.md',
+    'README.md',
+    'references/agents/graph-rag-agent.md',
+    'references/agents/kb-doc-generator.md',
+    'references/methodology/phase0-collection.md',
+    'references/methodology/phase1-reverse-engineering.md',
+    'references/methodology/phase2-document-types.md',
+    'references/methodology/phase3-ai-enhancement.md',
+    'references/methodology/phase4-quality.md',
+    'references/templates/project-overview.md',
+    'scripts/scan_repo.py',
+    'scripts/validate_kb.py',
+  ]],
+]);
+
+/**
+ * Python bytecode cache of a script we shipped. Compiler output of our own
+ * files, so it carries nothing a member wrote and does not make a directory
+ * theirs.
+ */
+function isDerivedArtifact(relativePath: string): boolean {
+  return relativePath.endsWith('.pyc') || relativePath.split('/').includes('__pycache__');
+}
+
+/** Every file under `dir`, as paths relative to it. Symlinks count as files. */
+async function walkFiles(dir: string, prefix = ''): Promise<string[]> {
+  const found: string[] = [];
+  for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      found.push(...await walkFiles(path.join(dir, entry.name), relative));
+    } else {
+      found.push(relative);
+    }
+  }
+  return found;
+}
+
+/** Remove `dir` and every directory under it that holds nothing. */
+async function removeEmptyDirs(dir: string): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await removeEmptyDirs(path.join(dir, entry.name));
+  }
+  // Fails when something is left, which is the point: that something is the
+  // member's, and their directory stays.
+  try { await fs.promises.rmdir(dir); } catch { /* not empty */ }
+}
+
+/**
+ * Remove from `dir` the files the CLI put there, then the directories that end
+ * up empty. Returns false when the member has files of their own in there, so
+ * the caller can say the directory was kept.
+ */
+async function removeOwnedFiles(dir: string, owned: readonly string[]): Promise<boolean> {
+  const ownedPaths = new Set(owned);
+  let foreign = 0;
+
+  for (const relative of await walkFiles(dir)) {
+    if (!ownedPaths.has(relative) && !isDerivedArtifact(relative)) {
+      foreign++;
+      continue;
+    }
+    await remove(path.join(dir, relative));
+  }
+  await removeEmptyDirs(dir);
+
+  return foreign === 0;
+}
+
+/**
  * Remove the skill directories earlier releases deployed.
  *
- * Unconditional: those trees were overwritten on every pull (`overwrite: true`),
- * so no local edit ever survived in them, and leaving them behind costs every
- * agent on the machine the context they were deployed to save.
+ * Only the files those releases packaged: each was overwritten on every pull
+ * (`overwrite: true`), so no local edit ever survived in one, while a file the
+ * member added beside them was never touched and is not ours to delete. A
+ * directory that still holds such a file is kept, and the member is told.
  */
 export async function pruneLegacyBuiltinSkills(
   tool: string,
@@ -91,8 +190,12 @@ export async function pruneLegacyBuiltinSkills(
       const dir = path.join(baseDir, root, legacyName);
       if (!await pathExists(dir)) continue;
       try {
-        await remove(dir);
-        log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})`);
+        const removedWhole = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? []);
+        if (removedWhole) {
+          log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})`);
+        } else {
+          log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed; delete the rest yourself once you have saved what you need.`);
+        }
       } catch (e) {
         log.debug(`Could not remove legacy built-in skill ${legacyName} from ${tool}: ${(e as Error).message}`);
       }
@@ -178,16 +281,15 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
       const destDir = await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, srcDir);
 
       try {
-        await fse.ensureDir(destDir);
         // Releases before the discovery stub deployed this same directory with a
         // references/ tree beside SKILL.md. Copying one file over it would leave
-        // ~39 KB of pre-stub instructions in place forever, so everything the
-        // deployed unit does not contain goes first.
-        for (const entry of await fs.promises.readdir(destDir)) {
-          if (entry === 'SKILL.md') continue;
-          await remove(path.join(destDir, entry));
-          log.debug(`Removed stale built-in skill file ${skillName}/${entry} from ${tool}`);
+        // ~39 KB of pre-stub instructions in place forever, so the files those
+        // releases wrote go first — and only those: a file a member added here
+        // is theirs, and the old deployment never deleted it either.
+        if (await pathExists(destDir)) {
+          await removeOwnedFiles(destDir, PACKAGED_SKILL_FILES.get(skillName) ?? []);
         }
+        await fse.ensureDir(destDir);
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
 
         deployed++;

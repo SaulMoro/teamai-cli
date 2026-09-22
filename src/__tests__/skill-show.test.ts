@@ -147,6 +147,24 @@ describe('skillShow locator', () => {
     expect(text).toContain('claude');
   });
 
+  it("prefers a member's own skill over a packaged name or alias", async () => {
+    // `codebase` aliases the wiki skill and `share` is served by the CLI, but a
+    // directory a member created under either name is the skill they mean.
+    const claudeSkillsDir = path.join(fx.homeDir, '.claude', 'skills');
+    await fse.ensureDir(claudeSkillsDir);
+    await makeSkill(claudeSkillsDir, 'codebase', 'my own codebase notes');
+    await makeSkill(claudeSkillsDir, 'share', 'my own sharing helper');
+
+    for (const [name, description] of [['codebase', 'my own codebase notes'], ['share', 'my own sharing helper']]) {
+      const text = (await runSkillShow(name, fx)).join('\n');
+      expect(text, name).toContain(description);
+      expect(text, name).toContain('[local-only]');
+      expect(text, name).not.toContain('skill-data');
+      // `share` is recall-gated in the package; a member's own skill is not.
+      expect(process.exitCode, name).toBe(0);
+    }
+  });
+
   it('classifies a skill served from the package as builtin', async () => {
     // Only the deployed stub is in BUILTIN_SKILL_NAMES; the served workflows
     // are built in by where they were found, not by name.
