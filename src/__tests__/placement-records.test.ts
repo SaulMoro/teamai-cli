@@ -31,7 +31,8 @@ describe('reconcilePlacementRecords', () => {
   const pending = (items: PendingPush['items'], branch = 'teamai/push/me/1'): PendingPush => ({
     branch, prUrl: null, createdAt: '2026-01-01T00:00:00.000Z', items,
   });
-  const placedRule = { type: 'rules', name: 'my-rule', relativePath: 'rules/fe/my-rule.md', namespace: 'fe', placed: true };
+  // A factory: recording consumes the mark on the item, so tests must not share one.
+  const placedRule = () => ({ type: 'rules', name: 'my-rule', relativePath: 'rules/fe/my-rule.md', namespace: 'fe', placed: true });
 
   beforeEach(async () => {
     repoPath = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-placed-'));
@@ -42,7 +43,7 @@ describe('reconcilePlacementRecords', () => {
 
   it('records a placement once its file is on the default branch', async () => {
     await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'x');
-    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule])] };
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule()])] };
 
     expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
     expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
@@ -51,7 +52,7 @@ describe('reconcilePlacementRecords', () => {
   it('records nothing while the placement is not on the default branch, whatever its branch is doing', async () => {
     // Open PR, or closed unmerged with the branch kept: the same from here,
     // and neither may leave a record.
-    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule])] };
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule()])] };
 
     expect(await reconcilePlacementRecords(repoPath, state)).toBe(false);
     expect(state.placedRules).toEqual({});
@@ -72,19 +73,39 @@ describe('reconcilePlacementRecords', () => {
     await fse.outputFile(path.join(repoPath, 'never-committed.md'), 'never pushed anywhere\n');
     const theirs = git(['hash-object', 'never-committed.md']);
 
-    const landed = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule, blob: ours }])] };
+    const landed = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule(), blob: ours }])] };
     expect(await reconcilePlacementRecords(repoPath, landed)).toBe(true);
     expect(landed.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
 
     // Same path, but what is there was never what we pushed: somebody else's file.
-    const shadow = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule, blob: theirs }])] };
+    const shadow = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule(), blob: theirs }])] };
     expect(await reconcilePlacementRecords(repoPath, shadow)).toBe(false);
     expect(shadow.placedRules).toEqual({});
   });
 
+  it('records a placement once: not again after the team deleted the file and someone recreated the path', async () => {
+    await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'ours');
+    const entry = pending([placedRule()]);
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [entry] };
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+    expect(entry.items[0]?.placed).toBe(false);
+
+    // The team deletes it: the record goes.
+    await fse.remove(path.join(repoPath, 'rules/fe/my-rule.md'));
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(state.placedRules).toEqual({});
+
+    // Another member recreates the path. The blob we pushed is still in the
+    // history, so only the consumed mark keeps this from becoming ours again.
+    await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'somebody else\'s');
+    expect(await reconcilePlacementRecords(repoPath, state)).toBe(false);
+    expect(state.placedRules).toEqual({});
+  });
+
   it('does not record a pending item that was not a placement', async () => {
     await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'x');
-    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule, placed: undefined }])] };
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule(), placed: undefined }])] };
 
     expect(await reconcilePlacementRecords(repoPath, state)).toBe(false);
     expect(state.placedRules).toEqual({});
@@ -135,7 +156,7 @@ describe('reconcilePlacementRecords', () => {
   it('does not record a landed placement that a shared-root file already shadows', async () => {
     await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'x');
     await fse.outputFile(path.join(repoPath, 'rules/my-rule.md'), 'y');
-    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule])] };
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([placedRule()])] };
 
     await reconcilePlacementRecords(repoPath, state);
 

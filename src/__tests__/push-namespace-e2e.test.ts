@@ -586,6 +586,15 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     // Left in place, the record would claim the next `rules/be-know/my-rule.md`
     // anybody creates as this author's, and their root copy would push over it.
     expect(readState(fixture).placedRules ?? {}).toEqual({});
+
+    // And when somebody does create it, the placement — already recorded once,
+    // and still on the pending entry — must not come back as a record.
+    commitOnMain(fixture, 'rules/be-know/my-rule.md', '# Somebody else\'s rule\n');
+    const again = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(again.code, again.output).toBe(0);
+    expect(readState(fixture).placedRules ?? {}).toEqual({});
+    expect(fs.readFileSync(path.join(fixture.projectRoot, '.claude/rules/be-know', 'my-rule.md'), 'utf8'))
+      .toContain("Somebody else's rule");
   }, 60_000);
 
   it('never records a placement whose PR was closed without merging, even with the branch kept', async () => {

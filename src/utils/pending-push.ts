@@ -203,6 +203,7 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  *      leaves no record whether or not its branch was deleted, and no provider
  *      has to be asked whether a PR is open. While the PR is open the pending
  *      entry itself routes the author's edits back to it (`reuseRecordedDestinations`).
+ *      Recording consumes the mark, so a placement is recorded exactly once.
  *   2. A record whose file is gone from the default branch is dropped: the
  *      team deleted the resource. Kept, it would come true again the day
  *      another member creates that path, and their unrelated resource would
@@ -231,12 +232,17 @@ export async function reconcilePlacementRecords(
       if (!item.placed) continue;
       const field = fieldFor(item.type);
       if (!field) continue;
-      if (state[field]?.[item.name] === item.relativePath) continue;
       if (!await pathExists(path.join(repoPath, item.relativePath))) continue;
       // An entry with no blob predates the check; existence is all it can offer.
       if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath) !== true) continue;
       log.debug(`Recording placement ${field}.${item.name} → ${item.relativePath}: landed on the default branch`);
       state[field] = { ...state[field], [item.name]: item.relativePath };
+      // Consumed: a placement is recorded once. Left marked, it would record
+      // again after the team deleted the file and another member recreated
+      // the path — the blob stays in history, so the check above would still
+      // pass — and hand their file to this author.
+      item.placed = false;
+      delete item.blob;
       changed = true;
     }
   }
