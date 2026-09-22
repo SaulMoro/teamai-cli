@@ -3,7 +3,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import { NamespaceSegmentSchema, parseManifest, readManifestFile } from './manifest-schema.js';
+import { NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, type NamespaceEntry } from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -91,8 +91,18 @@ function validateManifestShape(raw: unknown): RolesManifest {
     }
     ids.add(role.id);
   }
+  assertNoCaseAliasedNamespaces(roleNamespaceEntries(manifest), 'roles manifest');
 
   return manifest;
+}
+
+/** Every namespace a roles manifest puts to use, with the role that declares it. */
+export function roleNamespaceEntries(manifest: RolesManifest): NamespaceEntry[] {
+  return manifest.roles.flatMap((role) =>
+    ROLE_RESOURCE_TYPES.flatMap((type) =>
+      role.resources[type].map((namespace) => ({ type, namespace, owner: `role ${role.id}` })),
+    ),
+  );
 }
 
 /**

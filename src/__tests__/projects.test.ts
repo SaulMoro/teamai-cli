@@ -22,6 +22,28 @@ function writeManifest(content: string): string {
   return repoDir;
 }
 
+describe('loadProjectsManifest rejects namespaces that alias each other by case', () => {
+  it('across projects, for the same resource type', async () => {
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: a
+    name: A
+    resources: { skills: [hai-inference] }
+  - id: b
+    name: B
+    resources: { skills: [HAI-Inference] }
+`);
+    try {
+      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(
+        /Invalid projects manifest: skills namespaces "hai-inference" \(project a\) and "HAI-Inference" \(project b\) differ only by case/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('loadProjectsManifest', () => {
   it('returns null when the manifest is absent (projects are optional)', async () => {
     const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-noproj-'));

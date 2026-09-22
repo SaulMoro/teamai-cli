@@ -238,6 +238,10 @@ projects:
 因此 `.. ` 最终变成 `..` 越出上级目录，`frontend.` 最终变成 `frontend` 落进另一个
 namespace 的目录；该规则同时排除了 `.` 与 `..`。除此之外不受限制 —— 非 ASCII 名称、
 名称中间含空格的目录、以及只是以设备名开头的名称（如 `console`）仍然合法。
+同一资源类型下的两个 namespace 不能仅有大小写差异（如 `frontend` 与 `Frontend`）：在
+Windows 与 macOS 的默认文件系统上它们是同一个目录，限定到其中一个的 role 或 project
+会读到另一个的资源。该校验跨越两个 manifest，因为 `roles.yaml` 与 `projects.yaml` 共用
+同一套 `skills/`、`knowledge/`、`agents/` 目录。
 
 **项目 id** 沿用它原有的、更严格的规则，因为它还会在命令行中输入并按逗号切分：
 只允许字母、数字、`.`、`_` 和 `-`，且不能是 `.` 或 `..`。
@@ -1457,7 +1461,8 @@ roles:
 
 真正生效的 namespace（`knowledge`、`skills`、`agents`）都会成为目录名，因此必须是
 单个路径片段：不含 `/`、`\`、`:` 和控制字符，结尾不能是 `.` 或空格，也不能是
-Windows 设备名，`manifest/roles.yaml` 与 `manifest/projects.yaml` 规则一致。role 的
+Windows 设备名，且同一资源类型下的两个 namespace 不能仅有大小写差异；`manifest/roles.yaml`
+与 `manifest/projects.yaml` 规则一致，且两者之间也做该校验。role 的
 `learnings:` 仅为向后兼容而保留、运行时忽略（learnings 按 project 而非 role 划分
 namespace），不会成为目录名，因此不做校验。
 

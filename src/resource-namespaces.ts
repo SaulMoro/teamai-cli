@@ -2,10 +2,12 @@ import type { LocalConfig } from './types.js';
 import {
   loadRolesManifest,
   resolveRoleResourceNamespaces,
+  roleNamespaceEntries,
   RolesManifestMissingError,
   type ResourceNamespaces,
 } from './roles.js';
-import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces } from './projects.js';
+import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces, projectNamespaceEntries } from './projects.js';
+import { assertNoCaseAliasedNamespaces } from './manifest-schema.js';
 import { log } from './utils/logger.js';
 
 /** Resolve the same role/project activation policy for resource pull and push. */
@@ -55,6 +57,15 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
       if (!(error instanceof RolesManifestMissingError)) throw error;
       log.warn('Roles manifest not found. Skipping role-based filtering.');
       rolesManifest = null;
+    }
+    if (rolesManifest && projectsManifest) {
+      // Each manifest is checked on its own when it loads; the two together share
+      // the same skills/, knowledge/ and agents/ directories, so a role's
+      // `frontend` and a project's `Frontend` collide just as two roles' would.
+      assertNoCaseAliasedNamespaces(
+        [...roleNamespaceEntries(rolesManifest), ...projectNamespaceEntries(projectsManifest)],
+        'manifests (roles.yaml with projects.yaml)',
+      );
     }
     if (rolesManifest) {
       try {

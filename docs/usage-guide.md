@@ -256,6 +256,11 @@ would arrive as `..` and escape the parent while `frontend.` would arrive as
 `frontend` and land in another namespace's directory; the same rule rules out `.`
 and `..`. Anything else a filesystem accepts stays valid — a non-ASCII name, one
 holding a space inside it, or one that merely starts like a device (`console`).
+Two namespaces of the same resource type may not differ only by case (`frontend`
+and `Frontend`): on the default Windows and macOS filesystems they are one
+directory, so a role or project scoped to one would read the other's resources.
+The check spans both manifests, since `roles.yaml` and `projects.yaml` share the
+same `skills/`, `knowledge/` and `agents/` directories.
 
 A **project id** keeps its own older and narrower rule, because it is also typed
 on the command line and split on commas: letters, digits, `.`, `_` and `-`, and
@@ -1502,8 +1507,9 @@ roles:
 
 Every namespace that takes effect — `knowledge`, `skills` and `agents` — becomes a
 directory name, so it must be a single path segment: no `/`, `\`, `:` or control
-character, no trailing `.` or space, and not a Windows device name, in
-`manifest/roles.yaml` exactly as in `manifest/projects.yaml`. A role's
+character, no trailing `.` or space, and not a Windows device name, and no two
+namespaces of one resource type may differ only by case — in `manifest/roles.yaml`
+exactly as in `manifest/projects.yaml`, and across the two. A role's
 `learnings:` is accepted for backward compatibility and ignored at runtime
 (learnings are namespaced by project, not by role), so it names no directory and
 is not checked.

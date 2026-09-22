@@ -201,6 +201,50 @@ roles:
   });
 });
 
+describe('loadRolesManifest rejects namespaces that alias each other by case', () => {
+  function writeManifest(content: string): string {
+    const repoDir = mkdtempSync(path.join(os.tmpdir(), 'teamai-roles-case-'));
+    mkdirSync(path.join(repoDir, 'manifest'), { recursive: true });
+    writeFileSync(path.join(repoDir, 'manifest', 'roles.yaml'), content, 'utf-8');
+    return repoDir;
+  }
+
+  it('across roles, for the same resource type', async () => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: fe
+    resources: { knowledge: [], skills: [frontend] }
+  - id: fe2
+    resources: { knowledge: [], skills: [Frontend] }
+`);
+    try {
+      await expect(loadRolesManifest(repoDir)).rejects.toThrow(
+        /Invalid roles manifest: skills namespaces "frontend" \(role fe\) and "Frontend" \(role fe2\) differ only by case/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('but not the same spelling used twice, nor the same name under two resource types', async () => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: fe
+    resources: { knowledge: [frontend], skills: [frontend], agents: [Frontend] }
+  - id: fe2
+    resources: { knowledge: [frontend], skills: [frontend] }
+`);
+    try {
+      const manifest = await loadRolesManifest(repoDir);
+      expect(manifest.roles).toHaveLength(2);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('loadRolesManifest with a home-relative repo path', () => {
   it("expands '~' the way the helpers it replaced did, instead of reading under cwd", async () => {
     const home = mkdtempSync(path.join(os.tmpdir(), 'teamai-home-'));

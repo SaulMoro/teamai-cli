@@ -138,3 +138,33 @@ export async function readManifestFile(manifestPath: string, kind: 'projects' | 
   }
   return content;
 }
+
+/** One namespace as a manifest declares it, with the entry that declares it. */
+export interface NamespaceEntry {
+  type: string;
+  namespace: string;
+  owner: string;
+}
+
+/**
+ * Two namespaces of the same resource type that differ only by case (or by
+ * Unicode normalization) name one directory on the default Windows and macOS
+ * filesystems, so a role or project scoped to `frontend` would read `Frontend`'s
+ * resources too — the isolation the namespace exists to provide. `kind` names
+ * what was being checked, e.g. `roles manifest`.
+ */
+export function assertNoCaseAliasedNamespaces(entries: Iterable<NamespaceEntry>, kind: string): void {
+  const seen = new Map<string, NamespaceEntry>();
+  for (const entry of entries) {
+    const key = `${entry.type}/${entry.namespace.normalize('NFC').toLowerCase()}`;
+    const prior = seen.get(key);
+    if (!prior) {
+      seen.set(key, entry);
+    } else if (prior.namespace !== entry.namespace) {
+      throw new Error(
+        `Invalid ${kind}: ${entry.type} namespaces "${prior.namespace}" (${prior.owner}) and "${entry.namespace}" (${entry.owner}) `
+        + 'differ only by case or Unicode normalization and would name the same directory on a case-insensitive filesystem',
+      );
+    }
+  }
+}

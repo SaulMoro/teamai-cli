@@ -85,6 +85,9 @@ The id and every namespace are refused at the manifest boundary unless they can
 name a directory without escaping it, since each becomes a directory component. A
 namespace must be a single path segment: no `/`, `\`, `:` or control character,
 no trailing `.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …).
+Two namespaces of one resource type may not differ only by case, within a manifest
+or between `roles.yaml` and `projects.yaml`, since case-insensitive filesystems
+would give both the same directory.
 Win32 strips a trailing period or space from every component, so `.. ` would
 arrive as `..` and `frontend.` as `frontend`, escaping the parent in the first
 case and another namespace's directory in the second; `.` and `..` fall out of the

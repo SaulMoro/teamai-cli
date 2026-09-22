@@ -2,7 +2,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
-import { NamespaceSegmentSchema, parseManifest, readManifestFile } from './manifest-schema.js';
+import { NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, type NamespaceEntry } from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
 /**
@@ -100,8 +100,18 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
     }
     ids.add(project.id);
   }
+  assertNoCaseAliasedNamespaces(projectNamespaceEntries(manifest), 'projects manifest');
 
   return manifest;
+}
+
+/** Every namespace a projects manifest puts to use, with the project that declares it. */
+export function projectNamespaceEntries(manifest: ProjectsManifest): NamespaceEntry[] {
+  return manifest.projects.flatMap((project) =>
+    PROJECT_RESOURCE_TYPES.flatMap((type) =>
+      project.resources[type].map((namespace) => ({ type, namespace, owner: `project ${project.id}` })),
+    ),
+  );
 }
 
 /**
