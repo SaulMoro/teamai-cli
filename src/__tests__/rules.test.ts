@@ -608,6 +608,47 @@ scope: 'user',
     expect(await fse.pathExists(path.join(localRulesDir, 'hooks.md'))).toBe(false);
   });
 
+  /**
+   * A rule published into a namespace keeps the author's copy at the rules
+   * ROOT under its bare name, while the desired set holds `<ns>/<name>` — or
+   * nothing at all when the namespace is not active here. Sweeping by name
+   * alone therefore deleted the author's own file, local edits included
+   * (#649 review).
+   */
+  it("spares the author's root copy of a rule published into a namespace", async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.outputFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'team content');
+    await fse.writeFile(path.join(teamRulesDir, 'other.md'), 'other');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    await fse.writeFile(path.join(localRulesDir, 'my-rule.md'), 'my local edits');
+    vi.mocked(loadStateForScope).mockResolvedValue({
+      lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], pendingPushes: [], lastUpdateCheck: null, availableUpdate: null,
+      placedRules: { 'my-rule': 'rules/fe-know/my-rule.md' },
+    } as State);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(localRulesDir, 'my-rule.md'), 'utf-8'))
+      .toBe('my local edits');
+  });
+
+  it('still sweeps a root rule whose record points at a file that is gone', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRulesDir, 'other.md'), 'other');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    await fse.writeFile(path.join(localRulesDir, 'my-rule.md'), 'orphaned');
+    vi.mocked(loadStateForScope).mockResolvedValue({
+      lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], pendingPushes: [], lastUpdateCheck: null, availableUpdate: null,
+      placedRules: { 'my-rule': 'rules/fe-know/my-rule.md' },
+    } as State);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(localRulesDir, 'my-rule.md'))).toBe(false);
+  });
+
   it('should remove stale files in subdirectories', async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
 

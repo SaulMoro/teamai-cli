@@ -377,6 +377,10 @@ export class AgentsHandler extends ResourceHandler {
             relativePath: `${teamDir}/${stem}.yaml`,
             status,
             mergedSpec: mergeResult.spec,
+            // Carried explicitly: an open PR records this item, and a record
+            // with no namespace reads as "shared root" to everything that
+            // later compares destinations (#649 review).
+            ...(located?.namespace ? { namespace: located.namespace } : {}),
           });
           continue;
         }
@@ -390,6 +394,7 @@ export class AgentsHandler extends ResourceHandler {
         relativePath: `${teamDir}/${stem}.md`,
         status,
         skipReason,
+        ...(located?.namespace ? { namespace: located.namespace } : {}),
       });
     }
 

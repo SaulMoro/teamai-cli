@@ -1311,6 +1311,35 @@ describe('push namespace routing for rules and agents', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('foo/bar');
   });
 
+  it('detects a pending namespace recorded only in the path', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    // The agent scan records a namespaced destination without setting the
+    // `namespace` field, so trusting that field let the entry slip past the
+    // conflict check and be force-pushed into (#649 review).
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/12',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'agents', name: 'vr', relativePath: 'agents/fe-agents/vr.yaml' }],
+      }],
+    });
+    mockHandlers({ agents: [{ ...newAgent }] }, pushedItems);
+
+    await push({ all: true, role: 'be-agents' });
+
+    expect(pushedItems[0]?.relativePath).toBe('agents/be-agents/vr.yaml');
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.warn).mock.calls.flat().join(' '))
+      .toContain('awaiting review at agents/fe-agents/vr.yaml');
+  });
+
   it('--dry-run reports the same destination the real push would use', async () => {
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(),

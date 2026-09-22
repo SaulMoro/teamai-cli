@@ -605,6 +605,7 @@ Choose namespace [1-3] (default: 1 = common):
 - A new resource is never placed on top of one that is already there. If the resolved namespace already holds that name, the push stops and names the file: pull and edit the existing copy, rename yours, or pick another namespace with `--role <ns>`
 - An agent whose namespace is not active here stays editable through its placement record, and `pull` delivers it for the same reason, so your copy tracks the team file. An active namespace holding that name wins: that agent is the one deployed here
 - A resource awaiting review in an open PR keeps that PR's destination — unless this push names a different namespace, in which case the flag decides, the open PR is left untouched, and the collision is reported
+- Your own copy of a rule you published into a namespace stays at the rules root and `pull` leaves it alone; it is swept only once the team file it was placed at is gone
 
 **Updating an open PR instead of duplicating it:** If a resource is already waiting in an unmerged PR, re-running `teamai push` on it updates that existing PR in place (by force-pushing its branch) rather than opening a duplicate. Keep the resource selected to update its PR; deselect it to leave the PR untouched. Unrelated resources selected in the same run go into their own new PR. Once the PR merges (or its branch is removed from the remote), the record is cleared and the next push opens a fresh PR as usual.
 

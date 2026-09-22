@@ -1144,11 +1144,19 @@ async function pushCore(
     const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
     return resolved.ok ? resolved.namespace : undefined;
   };
-  const conflictsWithRequest = (recorded: { type: string; namespace?: string }): boolean => {
-    if (!recorded.namespace) return false;
+  const conflictsWithRequest = (
+    recorded: { type: string; namespace?: string; relativePath: string },
+  ): boolean => {
     if (!isPlaceableType(recorded.type as ResourceType)) return false;
+    // The path, not the field: a scan can record an item whose destination is
+    // namespaced while leaving `namespace` unset, and trusting the field let
+    // those entries slip past the check and be force-pushed into (#649 review).
+    const segments = recorded.relativePath.split('/');
+    const recordedNamespace = recorded.namespace
+      ?? (segments.length === 3 ? segments[1] : undefined);
+    if (!recordedNamespace) return false;
     const requested = requestedNamespaceFor(recorded.type as PlaceableType);
-    return requested !== undefined && requested !== recorded.namespace;
+    return requested !== undefined && requested !== recordedNamespace;
   };
   const reusablePending = pendingPushes.filter((entry) => {
     const conflicting = entry.items.filter(conflictsWithRequest);

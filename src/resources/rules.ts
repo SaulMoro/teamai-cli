@@ -403,6 +403,19 @@ export class RulesHandler extends ResourceHandler {
 
     // 1.5. Clean up stale local rule files not present in team repo
     const teamRuleNames = new Set(rules.map((r) => r.name));
+    // A rule this machine published into a namespace keeps the author's copy at
+    // the rules ROOT under its bare name. The desired set never contains that
+    // name — it is `<ns>/<name>` there, or absent when the namespace is not
+    // active here — so the sweep below would delete the author's own file,
+    // local edits and all (#649 review). The record is what marks it as ours,
+    // and only while the team file it points at still exists.
+    const placedRules = (await loadStateForScope(localConfig)).placedRules;
+    for (const name of Object.keys(placedRules ?? {})) {
+      const placed = placedResourcePath(placedRules, 'rules', name);
+      if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
+        teamRuleNames.add(name);
+      }
+    }
     const tombstones = await this.readTombstones(localConfig);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.rules) continue;
