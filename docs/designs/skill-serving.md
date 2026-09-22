@@ -1,6 +1,6 @@
 # Serving built-in skill content from the CLI
 
-Issue: [#678](https://github.com/Tencent/teamai-cli/issues/678). Shipped in 0.23.0.
+Issue: [#678](https://github.com/Tencent/teamai-cli/issues/678). Unreleased; the package is at 0.22.0.
 
 ## The problem
 
@@ -46,11 +46,13 @@ npm package
 What an agent reads, and when:
 
 ```text
-session start            stub frontmatter (description)    ~0.9 KB  always in context
-task matches             stub body                          ~1.3 KB  holds the commands
-`teamai skill get core`  daily workflow                     ~5.7 KB  on demand
-`… core --full`          + troubleshooting + commands.md     ~32 KB   on demand
-`… setup` / `wiki` / `share`                                          on demand
+session start            stub frontmatter (description)     875 B   always in context
+task matches             stub body                          1 408 B  holds the commands
+`teamai skill get core`  daily workflow                     6 383 B  on demand
+`… core --full`          + commands.md, contribute-member,
+                           troubleshooting                 36 213 B  on demand
+`… setup` / `wiki`       5 528 B / 19 102 B                          on demand
+`… setup --full` / `… wiki --full`   38 231 B / 132 754 B            on demand
 ```
 
 ## Contracts worth keeping
@@ -132,23 +134,31 @@ member added beside them, so uninstall removes those same paths through
 `removeOwnedFiles` and keeps the rest, saying which directory it kept. Deleting
 the directory there would undo, one command over, the guarantee pull makes.
 
+Pull's archive is deliberately not applied there: pull runs on an upgrade the
+member did not ask anything to be removed by, while uninstall is them asking for
+all of it to go. Leaving copies behind would be the thing they ran it to avoid.
+
 **It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
-lists them, built as the union of `git ls-tree -r <tag> -- skills/` over every
-tag, plus `references/provider-tgit.md`, which #724 put on `main` unreleased and
-the next release therefore ships, so each path is provably the CLI's. Those files were overwritten with
+lists them, built as the union of `git ls-tree -r <tag> -- skills/` over all 98
+tags, minus `teamai-wiki` (see below), plus `references/provider-tgit.md`, which
+#724 put on `main` unreleased and the next release therefore ships. Every path
+in it is provably the CLI's. Those files were overwritten with
 `overwrite: true` on every pull and no local edit ever survived in one; a file a
 member added beside them was never touched by the old deployment and is not ours
 to delete now. One case the overwrite never reached: a path a retired release
 shipped and the current package no longer does just sat there, so an edit to it
 did survive. Ownership is proven by pathname, not by contents, so the prune
 cannot tell that file from ours — it copies everything it removes to
-`~/.teamai/removed-skills/<run>/<tool>/<skill-root>/<skill>/` first, and the
+`~/.teamai/removed-skills/<run>/<base>/<tool>/<skill-root>/<skill>/` first, and the
 migration stops being a one-way door for any of them. That path is the machine's
 home, never the tool's base directory, which under project scope is the repo
 root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A
-symlinked skill root is refused outright, link and target untouched: everything
-under it matches our names, and none of it is ours. A file whose copy fails is
+link anywhere between the tool's base directory and the skill directory is
+refused outright — neither pruned nor written through, link and target
+untouched: everything under it matches our names, and none of it is ours. The
+`<base>` segment is there because `inheritUserScope` deploys the user base and
+then the project base in one process, with the same tool, root and skill name. A file whose copy fails is
 kept rather than removed: a backup that did not happen must not authorise the
 delete. The path carries the run and the skill root because neither is unique on
 its own — two pulls land on the same day, and Codex prunes the same skill name

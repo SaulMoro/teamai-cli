@@ -855,16 +855,22 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // A team-repo skill is synced whole, so the whole directory goes. A CLI-owned
   // one is not: deployment writes only the files in PACKAGED_SKILL_FILES and
   // never touched a file a member added beside them, so uninstall removes those
-  // same paths and keeps the rest — the same rule pull applies, for the same
-  // reason. Deleting the directory here would undo the guarantee one command over.
+  // same paths and keeps the rest — the same ownership rule pull applies.
+  // Deleting the directory here would undo the guarantee one command over.
+  //
+  // Pull's archive is deliberately not applied: there the member is upgrading
+  // and did not ask for anything to go, here they asked for all of it. Leaving
+  // copies behind would be the thing they ran the command to avoid.
   let removedSkillDirs = 0;
   const keptSkillDirs: string[] = [];
+  const linkedSkillDirs: string[] = [];
   for (const skillDir of plan.skillDirs) {
     try {
       const name = path.basename(skillDir);
       if (isCliOwnedSkillName(name)) {
-        const removedWhole = prunedWhole(await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []));
-        if (removedWhole) removedSkillDirs++;
+        const result = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []);
+        if (prunedWhole(result)) removedSkillDirs++;
+        else if (result.skippedSymlink) linkedSkillDirs.push(skillDir);
         else keptSkillDirs.push(skillDir);
       } else {
         await remove(skillDir);
@@ -879,6 +885,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   }
   for (const skillDir of keptSkillDirs) {
     log.warn(`Kept ${skillDir}: it holds files TeamAI did not put there. The packaged files were removed; delete the rest yourself once you have saved what you need.`);
+  }
+  // A different reason, so a different sentence: nothing here was touched, and
+  // "delete the rest yourself" would send the member into the link target.
+  for (const skillDir of linkedSkillDirs) {
+    log.warn(`Kept ${skillDir}: it is a symlink, so TeamAI left it and whatever it points at alone.`);
   }
 
   // (d) Remove synced rules

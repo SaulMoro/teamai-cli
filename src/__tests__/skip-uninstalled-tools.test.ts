@@ -42,7 +42,11 @@ async function onlyRunDir(homeDir: string): Promise<string> {
   const root = path.join(homeDir, '.teamai/removed-skills');
   const runs = await fse.readdir(root);
   expect(runs).toHaveLength(1);
-  return path.join(root, runs[0]);
+  // Below the run comes the base directory the deploy targeted, keyed by a
+  // digest so two scopes in one process cannot land on the same path.
+  const bases = await fse.readdir(path.join(root, runs[0]));
+  expect(bases).toHaveLength(1);
+  return path.join(root, runs[0], bases[0]);
 }
 
 vi.mock('../config.js', () => ({
@@ -745,6 +749,42 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     expect(await fse.readFile(path.join(shared, 'SKILL.md'), 'utf8')).toBe('# someone else\'s');
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(true);
+  });
+
+  it('stops at a link above the skill directory, not just at the skill directory', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // The common shape: the member links their whole skills root at a dotfiles
+    // checkout. Every directory under it is real, so checking the leaf alone
+    // sees nothing and the walk deletes files in the checkout.
+    const dotfiles = path.join(tmpDir, 'dotfiles/skills');
+    await fse.ensureDir(path.join(dotfiles, 'team-wiki-codebase'));
+    await fse.writeFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), '# theirs');
+
+    await fse.ensureDir(path.join(homeDir, '.claude'));
+    await fse.symlink(dotfiles, path.join(homeDir, '.claude/skills'), 'dir');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.pathExists(path.join(dotfiles, 'teamai/SKILL.md'))).toBe(false);
+  });
+
+  it('does not write the stub through a symlinked destination', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const outside = path.join(tmpDir, 'outside/teamai');
+    await fse.ensureDir(outside);
+    await fse.writeFile(path.join(outside, 'SKILL.md'), '# not ours');
+
+    await fse.ensureDir(path.join(homeDir, '.claude/skills'));
+    await fse.symlink(outside, path.join(homeDir, '.claude/skills/teamai'), 'dir');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    // The prune refuses to walk the link; the copy must refuse to write through
+    // it too, or the guarantee stops one line short of where it is claimed.
+    expect(await fse.readFile(path.join(outside, 'SKILL.md'), 'utf8')).toBe('# not ours');
   });
 
   it('archives nothing when there is nothing retired to archive', async () => {
