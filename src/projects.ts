@@ -29,9 +29,11 @@ export type ProjectResourceType = typeof PROJECT_RESOURCE_TYPES[number];
  * resolved namespace as defence in depth.
  */
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
+/** `.`, `..` and every longer run of dots: see DOTS_AND_SPACES in manifest-schema. */
+const ONLY_DOTS = /^\.+$/;
 
 function isSafeProjectId(id: string): boolean {
-  return SAFE_ID.test(id) && id !== '.' && id !== '..';
+  return SAFE_ID.test(id) && !ONLY_DOTS.test(id);
 }
 
 const ProjectResourceNamespacesSchema = z.object({

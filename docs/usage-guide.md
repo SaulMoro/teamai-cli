@@ -245,8 +245,9 @@ projects:
 
 The project id and every namespace under `resources:` become a directory name
 (`skills/<namespace>/`, `learnings/<namespace>/`, `agents/<namespace>/`), so each
-must be a single path segment: no `/`, `\`, `:` or control character, and not `.`
-or `..`. A namespace is otherwise free — a non-ASCII name or one with a space is
+must be a single path segment: no `/`, `\`, `:` or control character, and not `.`,
+`..` or any other name made only of dots and spaces (Windows strips trailing
+spaces and periods, so `.. ` would arrive as `..`). A namespace is otherwise free — a non-ASCII name or one with a space is
 still a valid directory. A project id is narrower, because it is also typed on
 the command line: letters, digits, `.`, `_` and `-`. A manifest that breaks
 either rule fails to parse, and the error names the offending entry.
@@ -1488,8 +1489,9 @@ roles:
 ```
 
 Every namespace listed under `resources:` becomes a directory name, so it must be
-a single path segment — no `/`, `\`, `:` or control character, and not `.` or
-`..` — in `manifest/roles.yaml` exactly as in `manifest/projects.yaml`.
+a single path segment — no `/`, `\`, `:` or control character, and not `.`, `..`
+or any other name made only of dots and spaces — in `manifest/roles.yaml` exactly
+as in `manifest/projects.yaml`.
 
 `teamai pull` copies these into each Tier-1 tool's `agents/` directory (e.g. `~/.claude/agents/`), flattened by file name, so two active namespaces must not define the same agent name (pull reports the collision and skips the scope). `teamai pull` writes `<name>.toml` for Codex tools, `<name>.json` for Kiro, `<name>.agent.md` for Copilot, and `<name>.md` for every other tool. When a member changes role, agents of the namespaces that stopped being active are removed on the next pull, unless the deployed copy was edited locally, in which case it is kept with a warning. Without a configured role, every agent syncs. `teamai push` resolves the source using the same active role and project namespaces as pull. It writes edits to that source and skips ambiguous destinations with a warning; an agent with only inactive sources is also skipped. Skipped agents do not block other resources in the same push. A new agent lands at the root. Cleanup checks each tool separately, respecting YAML `targets` and legacy format support. An active same-named agent protects a deployed file only when it targets that tool and output file. `teamai remove agents <name>` records a tombstone. The next pull on every other machine deletes `<name>.agent.md`, `<name>.md`, `<name>.toml` and `<name>.json` from each synced tool's agents directory. That cleanup also runs when the pull finds the team repo unchanged. The CLI's built-in `teamai-recall` profile is deployed alongside team agents but is not uploaded by `teamai push`.
 

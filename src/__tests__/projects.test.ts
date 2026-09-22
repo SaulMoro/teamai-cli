@@ -149,9 +149,12 @@ projects:
     for (const type of ['knowledge', 'skills', 'learnings', 'agents']) {
       // '\u0009' (C0), '\u007f' (DEL) and '\u0085' (C1) stand for the three control
       // ranges the message promises to reject.
+      // Win32 strips trailing spaces and periods, so '.. ', '.. .' and '...' all
+      // arrive as '..'; they have to fall with the literal ones.
       for (const badNamespace of [
         '../../evil', 'a/b', '..', '.', 'x\\y', 'C:evil',
         'a\u0009b', 'a\u007fb', 'a\u0085b',
+        '.. ', '.. .', '...', '. ', '  ',
       ]) {
         const repoDir = writeManifest(`
 version: 1

@@ -82,7 +82,9 @@ projects:
 ```
 
 The id and every namespace are refused at the manifest boundary unless they are a
-single path segment (no `/`, `\`, `:` or control character, and not `.` or `..`),
+single path segment (no `/`, `\`, `:` or control character, and not `.`, `..` or
+any other name made only of dots and spaces — Win32 strips trailing spaces and
+periods, so `.. ` would arrive as `..`),
 since each becomes a directory component. The id is narrower still — letters,
 digits, `.`, `_`, `-` — because it is also typed on the command line and split on
 commas. The same guard applies to `manifest/roles.yaml`.
