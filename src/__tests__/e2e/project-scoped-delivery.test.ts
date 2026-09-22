@@ -255,6 +255,14 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     const setBilling = await runCLI(['projects', 'set', 'billing'], projectRoot, home);
     expect(setBilling.code, setBilling.output).toBe(0);
 
+    // Between the rebind and the pull, env.sh still exports checkout's
+    // variable. doctor must say so rather than pass on "nothing owed": the
+    // previous project's secrets are live in every new shell until the pull.
+    const doctorBeforePull = await runCLI(['doctor'], projectRoot, home);
+    expect(doctorBeforePull.code, doctorBeforePull.output).toBe(1);
+    expect(doctorBeforePull.output).toContain('still exports CHECKOUT_URL');
+    expect(doctorBeforePull.output).not.toContain('still exports SHARED_URL');
+
     const pullBilling = await runCLI(['pull', '--force'], projectRoot, home);
     expect(pullBilling.code, pullBilling.output).toBe(0);
 

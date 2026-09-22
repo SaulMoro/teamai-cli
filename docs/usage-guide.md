@@ -759,7 +759,7 @@ variables:
     roles: [devops]                       # optional; default is every member
 ```
 
-`roles` and `projects` follow the same rule as on MCP servers and hooks: omitted reaches everyone, `[]` reaches nobody among members who use that axis, an axis the member has not configured filters nothing, and the two compose as **AND**. A variable that no longer matches is removed from `env.sh` on the next pull, so changing role or running `teamai projects set` takes it out of the member's shell. `teamai env add` on an existing key keeps whatever `roles:`/`projects:` it already carries.
+`roles` and `projects` follow the same rule as on MCP servers and hooks: omitted reaches everyone, `[]` reaches nobody among members who use that axis, an axis the member has not configured filters nothing, and the two compose as **AND**. A variable that no longer matches is removed from `env.sh` on the next pull, so changing role or running `teamai projects set` takes it out of the member's shell. Until that pull runs, `teamai doctor` reports a withheld variable that `env.sh` still exports, so the previous project's secrets are not left live in silence. `teamai env add` on an existing key keeps whatever `roles:`/`projects:` it already carries.
 
 `pull` reports what reached this member, naming the declared total when the two differ (`Synced 1 of 3 env variable(s)`), so a variable that was scoped away is distinguishable from one that was lost.
 
