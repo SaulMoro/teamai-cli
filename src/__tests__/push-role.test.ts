@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { push } from '../push.js';
+import { RolesManifestNotFoundError } from '../roles.js';
 
 const mockAutoDetectInit = vi.fn();
 const mockPullRepo = vi.fn();
@@ -1194,5 +1195,115 @@ describe('push namespace routing for rules and agents', () => {
     // Its local path already carries the namespace, so full-path matching works.
     const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
     expect(saved.placedRules ?? {}).toEqual({});
+  });
+  it('stops the push when the roles manifest exists but cannot be read', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: 'solo' }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadRolesManifest.mockRejectedValue(new Error('Invalid roles manifest YAML: bad indentation'));
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true });
+
+    // Falling back here would publish the rule to the whole team, which is the
+    // widening #649 is about — and nobody asked for it.
+    expect(process.exitCode).toBe(2);
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('Invalid roles manifest YAML');
+  });
+
+  it('stops the push when the configured role is missing from the manifest', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: 'ghost' }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadRolesManifest.mockResolvedValue({
+      version: 1,
+      roles: [
+        { id: 'solo', description: 'Solo', resources: { knowledge: ['solo-know'], skills: ['solo-skills'], agents: [] } },
+      ],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true });
+
+    expect(process.exitCode).toBe(2);
+    expect(pushedItems).toHaveLength(0);
+  });
+
+  it('keeps the pre-manifest fallback when the team repo has no roles manifest', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: 'solo' }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadRolesManifest.mockRejectedValue(
+      new RolesManifestNotFoundError('/tmp/team-repo/manifest/roles.yaml'),
+    );
+    mockHandlers({
+      skills: [{ name: 'skill-a', type: 'skills', sourcePath: '/tmp/skill-a', relativePath: 'skills/skill-a', status: 'new' }],
+      rules: [{ ...newRule }],
+    }, pushedItems);
+
+    await push({ all: true });
+
+    // No manifest at all is the team's actual layout, not a failure: the role id
+    // still doubles as the skills namespace and the rule stays shared, loudly.
+    expect(process.exitCode).toBeUndefined();
+    const at = (type: string) => pushedItems.find((i) => i.type === type)?.relativePath;
+    expect(at('skills')).toBe('skills/solo/skill-a');
+    expect(at('rules')).toBe('rules/my-rule.md');
+  });
+
+  it('--dry-run reports the destination and pushes nothing', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'front-app', name: 'Front App', description: '',
+        resources: { knowledge: ['fe-know'], skills: ['fe-skills'], learnings: [], agents: ['fe-agents'] },
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }], agents: [{ ...newAgent }] }, pushedItems);
+
+    await push({ dryRun: true, project: 'front-app' });
+
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    const said = vi.mocked(log.info).mock.calls.flat().join(' ');
+    expect(said).toContain('rules/fe-know/my-rule.md');
+    expect(said).toContain('agents/fe-agents/vr.yaml');
+  });
+
+  it('--dry-run fails on a project axis the real push would refuse', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'front-app', name: 'Front App', description: '',
+        resources: { knowledge: [], skills: ['fe-skills'], learnings: [], agents: [] },
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, []);
+
+    await push({ dryRun: true, project: 'front-app' });
+
+    // A dry run that called this viable would be worse than no dry run at all.
+    expect(process.exitCode).toBe(2);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('knowledge');
   });
 });

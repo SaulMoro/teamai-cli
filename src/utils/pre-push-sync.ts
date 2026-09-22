@@ -35,11 +35,19 @@ import { log } from './logger.js';
  * genuine edits — leave it alone for scanLocalForPush to pick up.
  *
  * This is a no-op when `lastPullRev` is null (first run or after re-init).
+ *
+ * `placedRules` is `state.placedRules`: where push put each root-level local
+ * rule inside the team repo. A rule authored at the tool's rules root and
+ * placed under `rules/<ns>/` has no `rules/<name>.md` to compare against, so
+ * without this map the three-way check below would skip it and the scanner —
+ * which DOES follow the map — would then read the stale root copy as a local
+ * modification and push it over a teammate's newer version.
  */
 export async function syncTeamUpdatesToLocal(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   lastPullRev: string | null,
+  placedRules: Record<string, string> = {},
 ): Promise<void> {
   if (!lastPullRev) {
     log.debug('No lastPullRev — skipping pre-push sync');
@@ -49,7 +57,7 @@ export async function syncTeamUpdatesToLocal(
   const repoPath = localConfig.repo.localPath;
   const baseDir = resolveBaseDir(localConfig);
 
-  await syncRulesToLocal(teamConfig, localConfig, repoPath, baseDir, lastPullRev);
+  await syncRulesToLocal(teamConfig, localConfig, repoPath, baseDir, lastPullRev, placedRules);
   await syncSkillsToLocal(teamConfig, localConfig, repoPath, baseDir, lastPullRev);
 }
 
@@ -63,6 +71,7 @@ async function syncRulesToLocal(
   repoPath: string,
   baseDir: string,
   lastPullRev: string,
+  placedRules: Record<string, string>,
 ): Promise<void> {
   const teamRulesDir = path.join(repoPath, 'rules');
   if (!await pathExists(teamRulesDir)) return;
@@ -89,8 +98,23 @@ async function syncRulesToLocal(
 
       const localFilePath = path.join(rulesDir, file);
       // The team repo always stores the tool-neutral `.md`.
-      const teamRelPath = `rules/${name}.md`;
-      const teamFilePath = path.join(teamRulesDir, `${name}.md`);
+      let teamRelPath = `rules/${name}.md`;
+      let teamFilePath = path.join(teamRulesDir, `${name}.md`);
+
+      // Same redirect as RulesHandler.scanLocalForPush: a root-level rule this
+      // machine pushed lives under rules/<ns>/ in the team repo, and both sides
+      // must compare against that file or the scan reverts a teammate's update.
+      if (!await pathExists(teamFilePath) && !name.includes('/')) {
+        // The record comes from state.json on disk; keep it inside rules/.
+        const placed = placedRules[name];
+        if (placed?.startsWith('rules/') && !placed.split('/').includes('..')) {
+          const placedPath = path.join(repoPath, placed);
+          if (await pathExists(placedPath)) {
+            teamRelPath = placed;
+            teamFilePath = placedPath;
+          }
+        }
+      }
 
       // Only process files that exist in both places but differ
       if (!await pathExists(teamFilePath)) continue;

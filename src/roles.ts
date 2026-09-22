@@ -91,11 +91,25 @@ function validateManifestShape(raw: unknown): RolesManifest {
   return manifest;
 }
 
+/**
+ * The team repo has no `manifest/roles.yaml` at all — a distinct case from one
+ * that exists but cannot be parsed. `push` treats them differently: an absent
+ * manifest is the pre-manifest layout, where a role id doubles as its skills
+ * namespace, while an unreadable one is a failure that must stop the push
+ * rather than let a new rule or agent fall back to the shared root (#649).
+ */
+export class RolesManifestNotFoundError extends Error {
+  constructor(manifestPath: string) {
+    super(`Roles manifest not found: ${manifestPath}`);
+    this.name = 'RolesManifestNotFoundError';
+  }
+}
+
 export async function loadRolesManifest(repoPath: string): Promise<RolesManifest> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
   const content = await readFileSafe(manifestPath);
   if (!content) {
-    throw new Error(`Roles manifest not found: ${manifestPath}`);
+    throw new RolesManifestNotFoundError(manifestPath);
   }
 
   let raw: unknown;

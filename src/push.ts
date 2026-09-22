@@ -21,7 +21,7 @@ import type {
 import { getDataHome, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafePath, assertSafeResourceName, defaultAllowedRoots } from './utils/path-safety.js';
-import { loadRolesManifest, resolveRoleResourceNamespaces } from './roles.js';
+import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError } from './roles.js';
 import type { ProjectsManifest } from './projects.js';
 import {
   isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, resolveProjectNamespace,
@@ -64,13 +64,29 @@ export async function filterExistingTopLevelPaths(
   return result;
 }
 
+/** Candidate namespaces, or why the question could not be answered. */
+type CandidateResolution =
+  | { ok: true; candidates: string[] }
+  | { ok: false; message: string };
+
 /**
  * The namespaces this user could push a new `type` into, on that type's own
  * axis: the deduplicated list from the roles manifest, or — for skills, which
  * are the only type with a detector — the namespace directories the team repo
  * already has.
+ *
+ * A manifest that EXISTS but cannot answer — unparseable, or missing the role
+ * this directory is configured with — is a failure, not an empty list. Falling
+ * back on it would place a new rule or agent at the shared root, which sends it
+ * to the whole team: the exact widening #649 is about, and one the user never
+ * asked for. A manifest that is ABSENT is the pre-manifest convention instead,
+ * where the shared root is the team's actual layout, so it keeps the legacy
+ * fallback and the loud warning that goes with it.
  */
-async function namespaceCandidates(type: PlaceableType, localConfig: LocalConfig): Promise<string[]> {
+async function namespaceCandidates(
+  type: PlaceableType,
+  localConfig: LocalConfig,
+): Promise<CandidateResolution> {
   if (localConfig.primaryRole) {
     try {
       const manifest = await loadRolesManifest(localConfig.repo.localPath);
@@ -79,22 +95,34 @@ async function namespaceCandidates(type: PlaceableType, localConfig: LocalConfig
         primaryRole: localConfig.primaryRole,
         additionalRoles: localConfig.additionalRoles ?? [],
       });
-      return namespaces[NAMESPACE_AXIS[type]];
-    } catch {
-      // Legacy fallback: with no readable manifest a role id doubles as its
+      return { ok: true, candidates: namespaces[NAMESPACE_AXIS[type]] };
+    } catch (e) {
+      if (!(e instanceof RolesManifestNotFoundError)) {
+        return {
+          ok: false,
+          message: `Cannot resolve where new ${type} should go: ${(e as Error).message}. `
+            + 'Fix manifest/roles.yaml, run `teamai roles set <role>`, or pass --role <ns> '
+            + 'to name the namespace for this push.',
+        };
+      }
+      // Legacy fallback: with no manifest at all a role id doubles as its
       // skills namespace. That convention only ever existed for skills.
-      return type === 'skills' ? [localConfig.primaryRole] : [];
+      return { ok: true, candidates: type === 'skills' ? [localConfig.primaryRole] : [] };
     }
   }
 
   // No role configured. Skills can still be placed by detecting the team repo's
   // existing namespace directories; rules and agents have no such detector, so
   // a new one stays at the shared root.
-  if (type !== 'skills') return [];
+  if (type !== 'skills') return { ok: true, candidates: [] };
   try {
-    return await scanTeamRepoNamespaces(localConfig.repo.localPath);
-  } catch {
-    return [];
+    return { ok: true, candidates: await scanTeamRepoNamespaces(localConfig.repo.localPath) };
+  } catch (e) {
+    return {
+      ok: false,
+      message: `Cannot list the team repo's skills namespaces: ${(e as Error).message}. `
+        + 'Pass --role <ns> to name the namespace for this push.',
+    };
   }
 }
 
@@ -134,7 +162,9 @@ async function resolveNamespaceForNew(
   // for path traversal before selection).
   if (options.role) return { kind: 'namespace', namespace: options.role };
 
-  const candidates = await namespaceCandidates(type, localConfig);
+  const resolution = await namespaceCandidates(type, localConfig);
+  if (!resolution.ok) return { kind: 'unresolvable', message: resolution.message };
+  const { candidates } = resolution;
   if (candidates.length === 0) return { kind: 'shared-root' };
   if (candidates.length === 1) return { kind: 'namespace', namespace: candidates[0] };
   if (options.silent) {
@@ -232,6 +262,108 @@ export { createPrWithFallback };
  * completed push — never on a no-change or PR-creation-failed run (#702 follow-up).
  */
 type PushGroupOutcome = 'pushed' | 'nochange' | 'pr-failed' | 'failed';
+
+/**
+ * Give every resource waiting in an open PR back the destination that PR
+ * recorded, rather than asking again — a different answer would silently move
+ * the resource, and the branch is force-pushed, so the old copy would not even
+ * stay behind. Runs before placement, so a resource with a recorded namespace
+ * is no longer at the shared root and placement leaves it alone.
+ */
+function reuseRecordedDestinations(groups: PushGroup[]): void {
+  for (const group of groups) {
+    if (!group.reuse) continue;
+    log.info(
+      `Updating existing PR instead of creating a new one: ${group.reuse.prUrl ?? group.reuse.branch}`,
+    );
+    for (const item of group.items) {
+      if (item.status !== 'new' || !isPlaceableType(item.type)) continue;
+      const ns = pendingNamespaceFor(group.reuse, item);
+      if (!ns) continue;
+      if (item.type === 'skills') {
+        // A skill's path is derived from its name, so the recorded namespace
+        // replaces whatever a --role/--project override wrote above.
+        item.namespace = ns;
+        item.relativePath = skillNamespacePath(ns, item.name);
+      } else if (isAtSharedRoot(item)) {
+        // A rule or agent carries its own path from the scanner, and that path
+        // is authoritative when it already names a namespace (#654).
+        item.namespace = ns;
+        item.relativePath = withNamespace(item.relativePath, ns);
+      }
+    }
+  }
+}
+
+/**
+ * Place the NEW root-level resources of `items` in a namespace, printing where
+ * each one goes. One decision per axis: skills from the `skills` namespaces,
+ * rules from `knowledge`, agents from `agents`. Before #649 only skills were
+ * placed, so a new rule or agent landed at the shared root and pull shipped it
+ * to every member. Only items that would otherwise land at the root are
+ * touched — anything the scanner already namespaced keeps the path it came with.
+ *
+ * Returns false when the push must stop; it has already reported why and set
+ * `process.exitCode`. `--dry-run` runs this too, so it shows the destinations
+ * and fails on the same unresolvable axis the real command would.
+ */
+async function placeNewResources(args: {
+  items: ResourceItem[];
+  options: { role?: string; project?: string; silent?: boolean };
+  localConfig: LocalConfig;
+  projectsManifest: ProjectsManifest | null;
+  skillsDestinationError?: string;
+}): Promise<boolean> {
+  const { items, options, localConfig, projectsManifest, skillsDestinationError } = args;
+
+  // A project that declares no skills namespace only blocks the push once a
+  // skill is actually selected, so a rule can still go out from a scan that
+  // happens to contain an unrelated skill.
+  if (skillsDestinationError && items.some((i) => i.type === 'skills')) {
+    log.error(skillsDestinationError);
+    process.exitCode = 2;
+    return false;
+  }
+
+  for (const type of PLACEABLE_TYPES) {
+    const newAtRoot = items.filter(
+      (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i),
+    );
+    if (newAtRoot.length === 0) continue;
+
+    const destination = await resolveNamespaceForNew(type, options, localConfig, projectsManifest);
+    switch (destination.kind) {
+      case 'unresolvable':
+        log.error(destination.message);
+        process.exitCode = 2;
+        return false;
+      case 'invalid-selection':
+        log.error(destination.message);
+        return false;
+      case 'shared-root':
+        // The one destination that reaches the whole team is the one worth
+        // saying out loud, so it is never the result of a silent fallback.
+        for (const item of newAtRoot) {
+          log.warn(`[${type}] ${item.name} → ${item.relativePath} (shared with everyone: no namespace resolved)`);
+        }
+        continue;
+      case 'namespace':
+        for (const item of newAtRoot) {
+          item.namespace = destination.namespace;
+          item.relativePath = withNamespace(item.relativePath, destination.namespace);
+          // The silent widening in #649 was the real damage: say where it went.
+          log.info(`[${type}] ${item.name} → ${item.relativePath}`);
+        }
+        break;
+      default: {
+        const unhandled: never = destination;
+        throw new Error(`Unhandled namespace destination: ${JSON.stringify(unhandled)}`);
+      }
+    }
+  }
+
+  return true;
+}
 
 /**
  * Push each selected resource into the team repo, commit it on a branch, and
@@ -605,7 +737,10 @@ async function pushCore(
   // This prevents files changed by teammates from being falsely flagged as "modified".
   try {
     const state = await loadStateForScope(localConfig);
-    await syncTeamUpdatesToLocal(teamConfig, localConfig, state.lastPullRev);
+    // placedRules redirects a root-authored rule to the rules/<ns>/ file push
+    // put it in, so a teammate's newer version syncs down instead of being
+    // overwritten by the stale root copy the scan would otherwise call modified.
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, state.lastPullRev, state.placedRules ?? {});
   } catch (e) {
     log.debug(`Pre-push sync skipped: ${(e as Error).message}`);
   }
@@ -902,8 +1037,19 @@ async function pushCore(
     console.log('');
   }
 
-  // ── Step 2: Dry run exits after display ────────────────────────────
+  // ── Step 2: Dry run resolves placement, then exits ──────────────
+  // Everything is treated as selected, so the run reports the destination of
+  // every new resource and fails on a project axis that cannot answer. Exiting
+  // before this would let a dry run call a push viable that the real command
+  // refuses — and say nothing about who the new resources reach.
   if (options.dryRun) {
+    // Same two steps, same order as a real run: an open PR's recorded
+    // destination first, then placement for whatever is still at the root.
+    reuseRecordedDestinations(planPushGroups(allItems, pendingPushes));
+    const placed = await placeNewResources({
+      items: allItems, options, localConfig, projectsManifest, skillsDestinationError,
+    });
+    if (!placed) return;
     log.info('Dry run — no changes made');
     return;
   }
@@ -930,31 +1076,7 @@ async function pushCore(
   // can happen in one run, so editing a resource under review updates its PR
   // without dragging unrelated resources into that review.
   const groups = planPushGroups(selectedItems, pendingPushes);
-  for (const group of groups) {
-    if (!group.reuse) continue;
-    log.info(
-      `Updating existing PR instead of creating a new one: ${group.reuse.prUrl ?? group.reuse.branch}`,
-    );
-    // Reuse the destination chosen when that PR was opened rather than asking
-    // again — a different answer would silently move the resource, and the
-    // branch is force-pushed, so the old copy would not even stay behind.
-    for (const item of group.items) {
-      if (item.status !== 'new' || !isPlaceableType(item.type)) continue;
-      const ns = pendingNamespaceFor(group.reuse, item);
-      if (!ns) continue;
-      if (item.type === 'skills') {
-        // A skill's path is derived from its name, so the recorded namespace
-        // replaces whatever a --role/--project override wrote above.
-        item.namespace = ns;
-        item.relativePath = skillNamespacePath(ns, item.name);
-      } else if (isAtSharedRoot(item)) {
-        // A rule or agent carries its own path from the scanner, and that path
-        // is authoritative when it already names a namespace (#654).
-        item.namespace = ns;
-        item.relativePath = withNamespace(item.relativePath, ns);
-      }
-    }
-  }
+  reuseRecordedDestinations(groups);
   for (const entry of partiallySelectedEntries(selectedItems, pendingPushes)) {
     log.warn(
       `Only part of ${entry.prUrl ?? entry.branch} is selected, so the selected resources go into a `
@@ -963,56 +1085,9 @@ async function pushCore(
   }
 
   // ── Step 4: Place NEW root-level resources in a namespace (after selection) ─
-  // One decision per axis: skills from the `skills` namespaces, rules from
-  // `knowledge`, agents from `agents`. Before #649 only skills were placed, so a
-  // new rule or agent landed at the shared root and pull shipped it to every
-  // member. Only items that would otherwise land at the root are touched —
-  // anything the scanner already namespaced keeps the path it came with.
-  // A project that declares no skills namespace only blocks the push once a
-  // skill is actually selected, so a rule can still go out from a scan that
-  // happens to contain an unrelated skill.
-  if (skillsDestinationError && selectedItems.some((i) => i.type === 'skills')) {
-    log.error(skillsDestinationError);
-    process.exitCode = 2;
-    return;
-  }
-
-  for (const type of PLACEABLE_TYPES) {
-    const newAtRoot = selectedItems.filter(
-      (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i),
-    );
-    if (newAtRoot.length === 0) continue;
-
-    const destination = await resolveNamespaceForNew(type, options, localConfig, projectsManifest);
-    switch (destination.kind) {
-      case 'unresolvable':
-        log.error(destination.message);
-        process.exitCode = 2;
-        return;
-      case 'invalid-selection':
-        log.error(destination.message);
-        return;
-      case 'shared-root':
-        // The one destination that reaches the whole team is the one worth
-        // saying out loud, so it is never the result of a silent fallback.
-        for (const item of newAtRoot) {
-          log.warn(`[${type}] ${item.name} → ${item.relativePath} (shared with everyone: no namespace resolved)`);
-        }
-        continue;
-      case 'namespace':
-        for (const item of newAtRoot) {
-          item.namespace = destination.namespace;
-          item.relativePath = withNamespace(item.relativePath, destination.namespace);
-          // The silent widening in #649 was the real damage: say where it went.
-          log.info(`[${type}] ${item.name} → ${item.relativePath}`);
-        }
-        break;
-      default: {
-        const unhandled: never = destination;
-        throw new Error(`Unhandled namespace destination: ${JSON.stringify(unhandled)}`);
-      }
-    }
-  }
+  if (!await placeNewResources({
+    items: selectedItems, options, localConfig, projectsManifest, skillsDestinationError,
+  })) return;
 
   // ── Step 5: Push each group — one branch/PR per group ──────────────
   // Config edits ride along with the first group so they land in a single PR.
