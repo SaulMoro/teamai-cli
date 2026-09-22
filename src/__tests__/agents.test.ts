@@ -19,6 +19,14 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
+const mockGetFileContentAtRev = vi.fn<
+  (repoPath: string, rev: string, filePath: string) => Promise<Buffer | null>
+>().mockResolvedValue(null);
+vi.mock('../utils/git.js', async () => ({
+  ...(await vi.importActual('../utils/git.js')),
+  getFileContentAtRev: (...args: [string, string, string]) => mockGetFileContentAtRev(...args),
+}));
+
 import { AgentsHandler } from '../resources/agents.js';
 import { getDataHome, type TeamaiConfig, type LocalConfig } from '../types.js';
 
@@ -84,6 +92,7 @@ describe('AgentsHandler — Phase 1 push/pull/remove', () => {
   });
 
   afterEach(async () => {
+    mockGetFileContentAtRev.mockResolvedValue(null);
     vi.unstubAllEnvs();
     await fse.remove(tmpDir);
   });
@@ -372,6 +381,51 @@ projects:
       .toBe('# some other namespace copy');
   });
 
+  /**
+   * Single-repo mode: the canonical source is the repo's own .teamai/agents/,
+   * picked up directly rather than reverse-parsed. Both the placement record
+   * and removal have to reach it (#649 review).
+   */
+  describe('single-repo mode canonical sources', () => {
+    function selfConfig(): LocalConfig {
+      return { ...localConfig, repo: { ...localConfig.repo, kind: 'self' }, projectRoot: tmpDir };
+    }
+
+    it('follows the record for a root canonical source placed in a namespace', async () => {
+      const self = selfConfig();
+      await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'),
+        'name: vr\ndescription: Published\ninstructions: Read it.\n');
+      await fse.outputFile(path.join(tmpDir, '.teamai/agents/vr.yaml'),
+        'name: vr\ndescription: Published\ninstructions: Edited locally.\n');
+      await fse.outputJson(path.join(getDataHome(self), 'state.json'), {
+        placedAgents: { vr: 'agents/fe/vr.yaml' },
+      });
+
+      const items = await handler.scanLocalForPush(teamConfig, self);
+
+      // Without the record this reads as new, and the collision check then
+      // refuses the very agent this machine published.
+      expect(items).toHaveLength(1);
+      expect(items[0]?.status).toBe('modified');
+      expect(items[0]?.relativePath).toBe('agents/fe/vr.yaml');
+    });
+
+    it('removes the canonical source so the agent cannot republish itself', async () => {
+      const self = selfConfig();
+      await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');
+      await fse.outputFile(path.join(tmpDir, '.teamai/agents/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');
+      await fse.outputJson(path.join(getDataHome(self), 'state.json'), {
+        placedAgents: { vr: 'agents/fe/vr.yaml' },
+      });
+
+      await handler.removeItem('fe/vr', teamConfig, self);
+
+      // A bare-stem tombstone cannot cover this without suppressing the same
+      // stem in every other namespace, because agents deploy flattened.
+      expect(await fse.pathExists(path.join(tmpDir, '.teamai/agents/vr.yaml'))).toBe(false);
+    });
+  });
+
   it('still removes a bare stem from every namespace', async () => {
     await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: A\ninstructions: A.\n');
     await fse.outputFile(path.join(repoPath, 'agents/other/vr.yaml'), 'name: vr\ndescription: B\ninstructions: B.\n');
@@ -423,6 +477,54 @@ projects:
 
     expect(items).toHaveLength(1);
     expect(items[0]?.skipReason).toContain('shared root');
+  });
+
+  /**
+   * The record lets the author edit an agent in a namespace this directory
+   * never activates — which also means `pull` never refreshed a copy of it, and
+   * the pre-push sync covers rules and skills but not agents. Pushing a stale
+   * rendering over a teammate's newer canonical file is the risk (#649 review).
+   */
+  it('refuses to push over a recorded agent that moved on since the last pull', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
+    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Teammate v2\ninstructions: Newer.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      lastPullRev: 'abc1234',
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
+    });
+    // At the last pull the canonical file said something else.
+    mockGetFileContentAtRev.mockResolvedValue(
+      Buffer.from('name: reviewer\ndescription: v1\ninstructions: Older.\n'),
+    );
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('since your last pull');
+  });
+
+  it('pushes a recorded agent whose canonical file has not moved', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
+    const canonical = 'name: reviewer\ndescription: Mine\ninstructions: Read it.\n';
+    await fse.outputFile(path.join(repoPath, 'agents/fe-agents/reviewer.yaml'), canonical);
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      lastPullRev: 'abc1234',
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
+    });
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from(canonical));
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
   });
 
   it('still skips an inactive agent this machine never published', async () => {

@@ -883,12 +883,19 @@ async function pushCore(
     fullScan.push(...items);
   }
 
-  // A project that cannot answer for agents has to fail HERE, not at step 4.
-  // Unlike skills, an agent with no resolvable destination is dropped by the
-  // scan itself — skipped as "no active source" — so deferring the error until
-  // the selection proves one is going out means never raising it, and the run
-  // ends "No new or modified resources" on a flag that could not be honoured.
-  if (agentsDestinationError && fullScan.some((item) => item.type === 'agents')) {
+  // A project that cannot answer for agents has to fail HERE, not at step 4:
+  // an agent with no resolvable destination is dropped by the scan itself —
+  // skipped as "no active source" — so deferring the error until the selection
+  // proves one is going out means never raising it, and the run ends "No new or
+  // modified resources" on a flag that could not be honoured.
+  //
+  // Only agents that actually need a destination count. One already in a
+  // namespace is being modified in place and needs no placement, so an empty
+  // agents axis is none of its business (#649 review).
+  const needsAgentsDestination = (item: ResourceItem): boolean => item.type === 'agents'
+    && (item.status === 'new'
+      || ('needsDestination' in item && item.needsDestination === true));
+  if (agentsDestinationError && fullScan.some(needsAgentsDestination)) {
     log.error(agentsDestinationError);
     process.exitCode = 2;
     return;

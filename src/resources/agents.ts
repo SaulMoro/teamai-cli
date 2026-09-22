@@ -10,6 +10,7 @@ import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../projects.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
+import { getFileContentAtRev } from '../utils/git.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import {
@@ -40,6 +41,14 @@ export interface AgentResourceItem extends ResourceItem {
   mergedSpec?: AgentSpec;
   /** Human-readable reason to skip this item during pushItem (merge failed). */
   skipReason?: string;
+  /**
+   * Set when the scan could not find a team source this directory may write to,
+   * so the agent needs a destination named before it can go anywhere. `push`
+   * reads it to decide whether a `--project` whose agents axis is empty is a
+   * problem for THIS run: a modified agent already in a namespace needs no
+   * placement and must not be blocked by it (#649 review).
+   */
+  needsDestination?: boolean;
   /** True when item came from a legacy .md team-repo file (older format). */
   legacy?: boolean;
 }
@@ -78,6 +87,13 @@ export class AgentsHandler extends ResourceHandler {
     // origin/<default> checkout so only genuine additions/edits surface. These win
     // over the reverse-parse path below on name conflicts (explicit canonical is
     // authoritative). Active tree = projectRoot (kept intact by withKnowledgeWorktree).
+    // An agent this machine published with --role/--project lives in a
+    // namespace this directory need not have activated. Without the record it
+    // would read as "no active source" and the author could never edit the
+    // agent they just created (#649 review).
+    const pushState = await loadStateForScope(localConfig);
+    const placedAgents = pushState.placedAgents;
+
     const directItems: AgentResourceItem[] = [];
     const directStems = new Set<string>();
     if (isSelfMode(localConfig) && localConfig.projectRoot) {
@@ -94,17 +110,33 @@ export class AgentsHandler extends ResourceHandler {
             if (BUILTIN_AGENT_NAMES.has(stem)) continue;
 
             const activePath = path.join(dir, file);
-            const basePath = path.join(localConfig.repo.localPath, relDir, file);
-            const baseExists = await pathExists(basePath);
+            let teamRelPath = `${relDir}/${file}`;
+            let basePath = path.join(localConfig.repo.localPath, teamRelPath);
+            let baseExists = await pathExists(basePath);
+            // A canonical source authored at .teamai/agents/ root and placed
+            // under agents/<ns>/ has nothing at agents/<stem>.yaml, so without
+            // the record it reads as brand new — and the collision check then
+            // refuses the very agent this machine published (#649 review).
+            if (!baseExists && !namespace) {
+              const placed = placedResourcePath(placedAgents, 'agents', stem);
+              if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
+                teamRelPath = placed;
+                basePath = path.join(localConfig.repo.localPath, placed);
+                baseExists = true;
+              }
+            }
             if (baseExists && await fileContentEqual(activePath, basePath)) continue; // unchanged
 
             directItems.push({
               name: stem,
               type: 'agents',
               sourcePath: activePath,
-              relativePath: `${relDir}/${file}`,
+              relativePath: teamRelPath,
               status: (baseExists ? 'modified' : 'new') as ResourceItemStatus,
               legacy: isMd,
+              ...(baseExists && teamRelPath !== `${relDir}/${file}`
+                ? { namespace: teamRelPath.split('/')[1] }
+                : {}),
             });
             directStems.add(stem);
           }
@@ -148,11 +180,6 @@ export class AgentsHandler extends ResourceHandler {
 
     const resolved = await resolveResourceNamespaces(localConfig);
     const activeNamespaces = resolved?.activeNamespaces.agents ?? null;
-    // An agent this machine published with --role/--project lives in a
-    // namespace this directory need not have activated. Without the record it
-    // would read as "no active source" and the author could never edit the
-    // agent they just created (#649 review).
-    const placedAgents = (await loadStateForScope(localConfig)).placedAgents;
     for (const [stem, toolFiles] of grouped) {
       // Determine if this agent is already in the team repo (root or agents/<ns>/).
       // A modified agent must be written back where it lives, so its namespace
@@ -196,10 +223,35 @@ export class AgentsHandler extends ResourceHandler {
       if (!requestedNamespace && sources.length > 0 && candidates.length === 0) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
+          needsDestination: true,
           skipReason: `Agent "${stem}" has no active source. Activate its role or project before pushing local edits.` });
         continue;
       }
       const located = candidates[0];
+
+      // Accepted only because of the placement record: this namespace is NOT
+      // active here, so `pull` never refreshed a local copy of it, and the
+      // pre-push sync covers rules and skills but not agents. If the canonical
+      // file moved on since the last pull, the local rendering is stale and
+      // pushing it would revert whoever changed it (#649 review).
+      if (located?.namespace && located.namespace === placedNamespace
+        && !(activeNamespaces ?? []).includes(located.namespace)
+        && pushState.lastPullRev) {
+        const relFromRepo = path.relative(localConfig.repo.localPath, located.path);
+        const atLastPull = await getFileContentAtRev(
+          localConfig.repo.localPath, pushState.lastPullRev, relFromRepo,
+        );
+        const current = await readFileSafe(located.path);
+        if (atLastPull !== null && current !== null && atLastPull.toString('utf-8') !== current) {
+          items.push({ name: stem, type: 'agents', sourcePath: located.path,
+            relativePath: relFromRepo, status: 'modified',
+            skipReason: `Agent "${stem}" changed in the team repo (${relFromRepo}) since your last pull, `
+              + 'and its namespace is not active here, so your copy cannot be compared against it. '
+              + 'Run `teamai pull` first, then push again.' });
+          continue;
+        }
+      }
+
       const teamYamlPath = located?.ext === '.yaml' ? located.path : path.join(teamAgentsDir, `${stem}.yaml`);
       const teamMdPath = located?.ext === '.md' ? located.path : path.join(teamAgentsDir, `${stem}.md`);
       const hasTeamYaml = located?.ext === '.yaml';
@@ -519,6 +571,24 @@ export class AgentsHandler extends ResourceHandler {
       );
       if (placed === `agents/${name}.yaml` || placed === `agents/${name}.md`) {
         localNames.add(stem);
+      }
+    }
+
+    // Single-repo mode: the canonical source lives in the repo's own
+    // .teamai/agents/, and the scan picks it up directly. Leaving it behind
+    // republishes the agent on the next push, and a bare-stem tombstone cannot
+    // stop that without suppressing the same stem in every other namespace,
+    // because agents deploy flattened (#649 review).
+    if (isSelfMode(localConfig) && localConfig.projectRoot) {
+      const activeAgentsDir = path.join(localConfig.projectRoot, '.teamai', 'agents');
+      for (const localName of localNames) {
+        for (const ext of ['.yaml', '.md'] as const) {
+          const filePath = path.join(activeAgentsDir, `${localName}${ext}`);
+          if (await pathExists(filePath)) {
+            await remove(filePath);
+            removed.push(filePath);
+          }
+        }
       }
     }
 

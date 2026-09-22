@@ -1024,7 +1024,7 @@ describe('push namespace routing for rules and agents', () => {
     mockHandlers({
       agents: [{
         name: 'vr', type: 'agents', sourcePath: '/tmp/agents',
-        relativePath: 'agents/vr.yaml', status: 'modified',
+        relativePath: 'agents/vr.yaml', status: 'modified', needsDestination: true,
         skipReason: 'Agent "vr" has no active source. Activate its role or project before pushing local edits.',
       }],
     }, pushedItems);
@@ -1036,6 +1036,34 @@ describe('push namespace routing for rules and agents', () => {
     expect(mockPushRepoBranch).not.toHaveBeenCalled();
     const { log } = await import('../utils/logger.js');
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('agents namespace');
+  });
+
+  it('lets a modified namespaced agent through a project whose agents axis is empty', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'docs-only', name: 'Docs', description: '',
+        resources: { knowledge: ['docs-know'], skills: [], learnings: [], agents: [] },
+      }],
+    });
+    // Already in a namespace, so it is modified in place and needs no
+    // placement — an empty agents axis is none of its business.
+    mockHandlers({
+      agents: [{
+        name: 'vr', type: 'agents', sourcePath: '/tmp/vr.md',
+        relativePath: 'agents/hai/vr.yaml', status: 'modified', namespace: 'hai',
+      }],
+    }, pushedItems);
+
+    await push({ all: true, project: 'docs-only' });
+
+    expect(process.exitCode).toBeUndefined();
+    expect(pushedItems[0]?.relativePath).toBe('agents/hai/vr.yaml');
   });
 
   it('pushes a selected rule when only the unselected skill lacks a project namespace', async () => {

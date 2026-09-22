@@ -580,6 +580,7 @@ Choose namespace [1-3] (default: 1 = common):
 - `teamai remove rules <name>` 同时接受作者副本的简名和发布名 `<namespace>/<name>`：会打印实际解析到的名字，并同时删除带 namespace 的团队文件和作者在 rules 根目录的副本
 - 使用 `--role`/`--project` 时，指定的 namespace 同时决定本地 agent 对应哪个团队文件：同名 agent 允许存在于多个 namespace，因此其他 namespace 的同名副本不会阻止你发布；但共享根目录已有同名 agent 时会阻止，因为两者会同时生效
 - 新资源绝不会覆盖已存在的资源：若解析出的 namespace 下已有同名文件，命令会报错并指出该文件：请先 pull 并修改已有副本、重命名自己的资源，或用 `--role <ns>` 换一个 namespace
+- 本目录未激活的 namespace 下的 agent 可通过落点记录继续编辑，但仅限于本地副本与团队保持一致：若自上次 pull 以来团队文件已变更，push 会提示先执行 pull，而不会直接覆盖
 
 **更新已存在的 PR 而非重复创建：** 如果某个资源已在一个未合并的 PR 中等待评审，再次对它执行 `teamai push` 会就地更新那个已存在的 PR（通过 force-push 其分支），而不是新开一个重复的 PR。保持该资源被选中即更新其 PR；取消勾选则不动它。同一次运行中选中的其他无关资源会进入各自新开的 PR。一旦该 PR 合并（或其分支从远端删除），记录会被清除，下次 push 照常新开 PR。
 
