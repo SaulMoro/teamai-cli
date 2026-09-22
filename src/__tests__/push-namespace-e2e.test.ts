@@ -425,6 +425,22 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
       .toContain('Read other-ns.');
   }, 60_000);
 
+  it('refuses to place a new rule onto a team rule that already holds the name', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    // The destination the author's role resolves to is already taken by
+    // somebody else's rule. Theirs is NEW here — no record maps it to anything
+    // — so placing it there would replace that file in a run nobody reviewed.
+    commitOnMain(fixture, 'rules/be-know/foo.md', '# The team rule\n');
+    fs.writeFileSync(path.join(fixture.projectRoot, '.claude/rules', 'foo.md'), '# My own foo\n');
+
+    const result = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+
+    expect(result.code, result.output).toBe(2);
+    expect(result.output).toContain('rules/be-know/foo.md already exists');
+    expect(branchFiles(fixture).branch).toBe('');
+    expect(git(['show', 'main:rules/be-know/foo.md'], fixture.remote)).toContain('The team rule');
+  }, 60_000);
+
   it('refuses a roles manifest namespace that is not a single path segment', async () => {
     const fixture = track(makeFixture({
       agent: 'claude',

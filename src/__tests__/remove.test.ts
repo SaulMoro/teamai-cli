@@ -126,6 +126,37 @@ scope: 'user',
       expect(await handler.publishedNameFor('my-rule', localConfig)).toBeNull();
     });
 
+    it('tombstones the bare name too, so a copy the sweep skipped cannot come back', async () => {
+      await fse.outputFile(
+        path.join(localConfig.repo.localPath, 'rules', 'fe-know', 'my-rule.md'), 'team content',
+      );
+      mockState.placedRules = { 'my-rule': 'rules/fe-know/my-rule.md' };
+
+      await handler.removeItem('fe-know/my-rule', teamConfig, localConfig);
+
+      // The local sweep skips excluded tools, so a root copy can outlive the
+      // removal there — and the scan calls it `my-rule`, which the published
+      // tombstone would not match.
+      const tombstones = await fse.readFile(
+        path.join(localConfig.repo.localPath, 'rules', '.removed'), 'utf-8',
+      );
+      expect(tombstones.split('\n')).toContain('fe-know/my-rule');
+      expect(tombstones.split('\n')).toContain('my-rule');
+    });
+
+    it('tombstones only the name given when no record vouches for the bare one', async () => {
+      await fse.outputFile(path.join(localConfig.repo.localPath, 'rules', 'fe', 'foo.md'), 'team');
+
+      await handler.removeItem('fe/foo', teamConfig, localConfig);
+
+      const tombstones = await fse.readFile(
+        path.join(localConfig.repo.localPath, 'rules', '.removed'), 'utf-8',
+      );
+      expect(tombstones.split('\n')).toContain('fe/foo');
+      // Tombstoning `foo` would suppress an unrelated personal rule of that name.
+      expect(tombstones.split('\n')).not.toContain('foo');
+    });
+
     it('leaves an unrelated root rule that only shares the basename', async () => {
       // `remove rules fe/foo` must not take a personal .claude/rules/foo.md
       // with it. Nothing on this machine says the two are the same rule.

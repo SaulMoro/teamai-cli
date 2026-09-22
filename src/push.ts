@@ -393,8 +393,22 @@ async function placeNewResources(args: {
         continue;
       case 'namespace':
         for (const item of newAtRoot) {
+          const placedAt = withNamespace(item.relativePath, destination.namespace);
+          // This resource is NEW here, so nothing of ours is at that path yet.
+          // Anything already there is somebody else's, and `pushItem` writes
+          // rather than merges: placing on top of it would replace their work
+          // with ours, silently, in a run they never reviewed.
+          if (await pathExists(path.join(localConfig.repo.localPath, placedAt))) {
+            log.error(
+              `[${type}] ${item.name} cannot be placed: ${placedAt} already exists in the team repo, `
+              + `and this is a new ${type.slice(0, -1)}, so pushing it there would overwrite that copy. `
+              + 'Pull and edit the existing one, rename yours, or pass --role <ns> to choose another namespace.',
+            );
+            process.exitCode = 2;
+            return false;
+          }
           item.namespace = destination.namespace;
-          item.relativePath = withNamespace(item.relativePath, destination.namespace);
+          item.relativePath = placedAt;
           // The silent widening in #649 was the real damage: say where it went.
           log.info(`[${type}] ${item.name} → ${item.relativePath}`);
         }
@@ -1031,8 +1045,20 @@ async function pushCore(
     }
     for (const item of allItems) {
       if (item.type !== 'skills') continue;
+      const placedAt = skillNamespacePath(skillsDestination, item.name);
+      // Same rule as step 4: a MODIFIED skill is meant to land on its own
+      // existing directory, a new one must never land on somebody else's.
+      if (item.status === 'new' && await pathExists(path.join(localConfig.repo.localPath, placedAt))) {
+        log.error(
+          `[skills] ${item.name} cannot be placed: ${placedAt} already exists in the team repo, `
+          + 'and this is a new skill, so pushing it there would overwrite that copy. '
+          + 'Pull and edit the existing one, rename yours, or pass --role <ns> to choose another namespace.',
+        );
+        process.exitCode = 2;
+        return;
+      }
       item.namespace = skillsDestination;
-      item.relativePath = skillNamespacePath(skillsDestination, item.name);
+      item.relativePath = placedAt;
     }
   }
 

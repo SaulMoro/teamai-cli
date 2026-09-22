@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { push } from '../push.js';
 import { RolesManifestNotFoundError } from '../roles.js';
 
@@ -1269,6 +1272,89 @@ describe('push namespace routing for rules and agents', () => {
     // root copy is reclassified once that PR merges.
     const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedRules?: Record<string, string> };
     expect(saved.placedRules).toEqual({ 'my-rule': 'rules/fe-know/my-rule.md' });
+  });
+
+  it('refuses to place a new rule onto an existing team file', async () => {
+    // The scanner correctly calls an unrelated root rule NEW — no record maps
+    // it to anything. Placing it on a namespace that already holds that name
+    // replaces somebody else's rule, silently, in a run they never reviewed.
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-collide-'));
+    fs.mkdirSync(path.join(repoDir, 'rules', 'pm'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'rules/pm', 'my-rule.md'), 'the team rule');
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({
+        repo: { localPath: repoDir, remote: 'https://git.woa.com/test/repo.git' },
+      }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    try {
+      await push({ all: true, role: 'pm' });
+
+      expect(process.exitCode).toBe(2);
+      expect(pushedItems).toHaveLength(0);
+      expect(mockPushRepoBranch).not.toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(repoDir, 'rules/pm', 'my-rule.md'), 'utf-8'))
+        .toBe('the team rule');
+      const { log } = await import('../utils/logger.js');
+      expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('rules/pm/my-rule.md');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to place a new skill onto an existing team skill', async () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-collide-'));
+    fs.mkdirSync(path.join(repoDir, 'skills', 'pm', 'skill-a'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'skills/pm/skill-a', 'SKILL.md'), 'the team skill');
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({
+        repo: { localPath: repoDir, remote: 'https://git.woa.com/test/repo.git' },
+      }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({
+      skills: [{ name: 'skill-a', type: 'skills', sourcePath: '/tmp/skill-a', relativePath: 'skills/skill-a', status: 'new' }],
+    }, pushedItems);
+
+    try {
+      await push({ all: true, role: 'pm' });
+
+      expect(process.exitCode).toBe(2);
+      expect(pushedItems).toHaveLength(0);
+      expect(fs.readFileSync(path.join(repoDir, 'skills/pm/skill-a', 'SKILL.md'), 'utf-8'))
+        .toBe('the team skill');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still lets a MODIFIED skill land on its own existing directory', async () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-collide-'));
+    fs.mkdirSync(path.join(repoDir, 'skills', 'pm', 'skill-a'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'skills/pm/skill-a', 'SKILL.md'), 'the team skill');
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({
+        repo: { localPath: repoDir, remote: 'https://git.woa.com/test/repo.git' },
+      }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({
+      skills: [{ name: 'skill-a', type: 'skills', sourcePath: '/tmp/skill-a', relativePath: 'skills/pm/skill-a', status: 'modified', namespace: 'pm' }],
+    }, pushedItems);
+
+    try {
+      await push({ all: true, role: 'pm' });
+
+      expect(process.exitCode).toBeUndefined();
+      expect(pushedItems[0]?.relativePath).toBe('skills/pm/skill-a');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it('does not record a rule the scanner already found in a subdirectory', async () => {

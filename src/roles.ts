@@ -1,7 +1,7 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { readFileSafe, readFileIfExists, ensureDir, writeFile } from './utils/fs.js';
+import { readFileSafe, readFileIfExists, ensureDir, pathExists, writeFile } from './utils/fs.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -108,7 +108,16 @@ export class RolesManifestNotFoundError extends Error {
 export async function loadRolesManifest(repoPath: string): Promise<RolesManifest> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
   const content = await readFileSafe(manifestPath);
-  if (!content) {
+  if (content === null) {
+    // `readFileSafe` answers null for EVERY failure, so "no such file" and
+    // "cannot read it" arrive identically. Only the first is the pre-manifest
+    // layout; treating a permission error as that one sends new rules and
+    // agents to the shared root, which is the whole team (#649).
+    if (await pathExists(manifestPath)) {
+      throw new Error(
+        `Roles manifest exists but could not be read: ${manifestPath}. Check its permissions.`,
+      );
+    }
     throw new RolesManifestNotFoundError(manifestPath);
   }
 

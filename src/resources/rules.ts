@@ -323,8 +323,14 @@ export class RulesHandler extends ResourceHandler {
       if (placed === `rules/${name}.md`) localNames.add(bareName);
     }
 
-    // Record tombstone so the resource won't be re-pushed
-    await this.addTombstone(name, localConfig);
+    // Record a tombstone so the resource won't be re-pushed. The bare name gets
+    // one too whenever the record above proved it is this rule: the local sweep
+    // below skips excluded tools, so a root copy can outlive the removal there,
+    // and the scan names it `<name>` — which the published tombstone would not
+    // match (#649 review).
+    for (const tombstoned of localNames) {
+      await this.addTombstone(tombstoned, localConfig);
+    }
 
     // Remove from each tool's rules directory. `.mdc` tools may have an older
     // teamai layout wrote `.md` there, so both are removed — otherwise `remove`
