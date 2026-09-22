@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getUserHome } from './utils/home.js';
+import { getUserHome, expandHome } from './utils/home.js';
 
 const DEFAULT_COPILOT_HOME = '.copilot';
 const COPILOT_USER_MCP_CONFIG = 'mcp-config.json';
@@ -491,7 +491,9 @@ export type MemberConfig = z.infer<typeof MemberConfigSchema>;
 
 export const LocalConfigSchema = z.object({
   repo: z.object({
-    localPath: z.string(),
+    // Expanded at the boundary: the path feeds simple-git, the manifest readers
+    // and every resource path, none of which understand `~`.
+    localPath: z.string().transform(expandHome),
     remote: z.string(),
     /**
      * Team repo backend. Defaults to 'git' for backward compatibility.
