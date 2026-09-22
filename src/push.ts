@@ -1134,6 +1134,38 @@ async function pushCore(
     return;
   }
 
+  // An open PR is matched by type and name alone. When the user has NAMED a
+  // destination, a pending entry that put the same-named resource somewhere
+  // else is a different resource: reusing its branch would force-push this
+  // content into that PR and move it to the wrong namespace (#649 review).
+  const requestedNamespaceFor = (type: PlaceableType): string | undefined => {
+    if (options.role) return options.role;
+    if (!options.project || !projectsManifest) return undefined;
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
+    return resolved.ok ? resolved.namespace : undefined;
+  };
+  const conflictsWithRequest = (recorded: { type: string; namespace?: string }): boolean => {
+    if (!recorded.namespace) return false;
+    if (!isPlaceableType(recorded.type as ResourceType)) return false;
+    const requested = requestedNamespaceFor(recorded.type as PlaceableType);
+    return requested !== undefined && requested !== recorded.namespace;
+  };
+  const reusablePending = pendingPushes.filter((entry) => {
+    const conflicting = entry.items.filter(conflictsWithRequest);
+    if (conflicting.length === 0) return true;
+    // Neither silent answer is safe: honouring the PR ignores the flag the user
+    // typed, and reusing the branch force-pushes this content into a review it
+    // may have nothing to do with. Say what is happening and open a new PR.
+    for (const recorded of conflicting) {
+      log.warn(
+        `[${recorded.type}] ${recorded.name} is awaiting review at ${recorded.relativePath} `
+        + `(${entry.prUrl ?? entry.branch}). This push names a different namespace, so it goes to a `
+        + 'separate PR and that one is left untouched.',
+      );
+    }
+    return false;
+  });
+
   // ── Step 1: Display ALL scanned items with numbers ─────────────────
   console.log('');
   console.log(`Found ${allItems.length} resource(s) to push:`);
@@ -1176,7 +1208,7 @@ async function pushCore(
   if (options.dryRun) {
     // Same two steps, same order as a real run: an open PR's recorded
     // destination first, then placement for whatever is still at the root.
-    reuseRecordedDestinations(planPushGroups(allItems, pendingPushes));
+    reuseRecordedDestinations(planPushGroups(allItems, reusablePending));
     const placed = await placeNewResources({
       items: allItems, options, localConfig, projectsManifest, skillsDestinationError,
     });
@@ -1206,40 +1238,12 @@ async function pushCore(
   // branch, which updates it in place; everything else goes into a new PR. Both
   // can happen in one run, so editing a resource under review updates its PR
   // without dragging unrelated resources into that review.
-  // An open PR is matched by type and name alone. When the user has NAMED a
-  // destination, a pending entry that put the same-named resource somewhere
-  // else is a different resource: reusing its branch would force-push this
-  // content into that PR and move it to the wrong namespace (#649 review).
-  const requestedNamespaceFor = (type: PlaceableType): string | undefined => {
-    if (options.role) return options.role;
-    if (!options.project || !projectsManifest) return undefined;
-    const resolved = resolveProjectNamespace(projectsManifest, options.project, type);
-    return resolved.ok ? resolved.namespace : undefined;
-  };
-  const conflictsWithRequest = (recorded: { type: string; namespace?: string }): boolean => {
-    if (!recorded.namespace) return false;
-    if (!isPlaceableType(recorded.type as ResourceType)) return false;
-    const requested = requestedNamespaceFor(recorded.type as PlaceableType);
-    return requested !== undefined && requested !== recorded.namespace;
-  };
-  const reusablePending = pendingPushes.filter((entry) => {
-    const conflicting = entry.items.filter(conflictsWithRequest);
-    if (conflicting.length === 0) return true;
-    // Neither silent answer is safe: honouring the PR ignores the flag the user
-    // typed, and reusing the branch force-pushes this content into a review it
-    // may have nothing to do with. Say what is happening and open a new PR.
-    for (const recorded of conflicting) {
-      log.warn(
-        `[${recorded.type}] ${recorded.name} is awaiting review at ${recorded.relativePath} `
-        + `(${entry.prUrl ?? entry.branch}). This push names a different namespace, so it goes to a `
-        + 'separate PR and that one is left untouched.',
-      );
-    }
-    return false;
-  });
   const groups = planPushGroups(selectedItems, reusablePending);
   reuseRecordedDestinations(groups);
-  for (const entry of partiallySelectedEntries(selectedItems, pendingPushes)) {
+  // The conflicting entries dropped above are deliberately not reused, so they
+  // are not "partly selected" either — warning about them would contradict the
+  // warning already given.
+  for (const entry of partiallySelectedEntries(selectedItems, reusablePending)) {
     log.warn(
       `Only part of ${entry.prUrl ?? entry.branch} is selected, so the selected resources go into a `
       + 'new PR and will exist in both. Select all of its resources to update it in place instead.',

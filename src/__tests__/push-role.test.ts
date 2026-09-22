@@ -1311,6 +1311,34 @@ describe('push namespace routing for rules and agents', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('foo/bar');
   });
 
+  it('--dry-run reports the same destination the real push would use', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    // An open PR holds the same name at a different namespace. The real push
+    // ignores it under --role, so the dry run must not report its destination.
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/11',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know' }],
+      }],
+    });
+    mockHandlers({ rules: [{ ...newRule }] }, []);
+
+    await push({ dryRun: true, role: 'pm' });
+
+    const { log } = await import('../utils/logger.js');
+    const said = vi.mocked(log.info).mock.calls.flat().join(' ');
+    expect(said).toContain('rules/pm/my-rule.md');
+    expect(said).not.toContain('rules/fe-know/my-rule.md');
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+  });
+
   it('keeps the placement of a group that pushed when a later group fails', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({

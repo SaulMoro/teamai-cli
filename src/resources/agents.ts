@@ -61,6 +61,40 @@ export interface AgentResourceItem extends ResourceItem {
  *
  * Tools without an `agents` path in toolPaths are silently skipped.
  */
+/**
+ * The agents this directory should hold: the ones in an active namespace, plus
+ * any this machine published into a namespace it does not activate — push lets
+ * the author keep editing those through the placement record, so pull has to
+ * deliver them or the local copy never tracks the team file (#649).
+ *
+ * A stem an ACTIVE namespace already claims is left alone: agents deploy
+ * flattened, so two would collide on one filename, and the active one is the
+ * agent deployed here.
+ *
+ * Delivery and revocation both resolve through this. They must agree — when
+ * only delivery knew about the record, `pull` wrote the agent and the
+ * revocation pass deleted it again in the same run.
+ */
+export function selectAgentsForDirectory(
+  agents: ResourceItem[],
+  activeNamespaces: string[] | null,
+  placedAgents?: Record<string, string>,
+): ResourceItem[] {
+  if (activeNamespaces === null) return agents;
+
+  const active = agents.filter(
+    (agent) => !agent.namespace || activeNamespaces.includes(agent.namespace),
+  );
+  if (!placedAgents) return active;
+
+  const claimed = new Set(active.map((agent) => agent.name));
+  const recovered = agents.filter((agent) => agent.namespace
+    && !claimed.has(agent.name)
+    && placedResourcePath(placedAgents, 'agents', agent.name)
+      === `agents/${agent.namespace}/${path.basename(agent.relativePath)}`);
+  return recovered.length > 0 ? [...active, ...recovered] : active;
+}
+
 export class AgentsHandler extends ResourceHandler {
   readonly type = 'agents' as const;
 
@@ -609,9 +643,16 @@ export class AgentsHandler extends ResourceHandler {
     activeNamespaces: string[],
   ): Promise<void> {
     const items = await this.scanTeamForPull(teamConfig, localConfig);
-    const isActive = (item: AgentResourceItem): boolean => !item.namespace || activeNamespaces.includes(item.namespace);
-    const active = items.filter(isActive);
-    const inactive = items.filter((item) => !isActive(item) && !BUILTIN_AGENT_NAMES.has(item.name));
+    // The same selection `pull` delivers with, records included: revoking an
+    // agent this machine published would delete the copy pull had just written.
+    const { placedAgents } = await loadStateForScope(localConfig);
+    const kept = new Set(
+      selectAgentsForDirectory(items, activeNamespaces, placedAgents).map((item) => item.relativePath),
+    );
+    const active = items.filter((item) => kept.has(item.relativePath));
+    const inactive = items.filter(
+      (item) => !kept.has(item.relativePath) && !BUILTIN_AGENT_NAMES.has(item.name),
+    );
     if (inactive.length === 0) return;
 
     for (const { tool, dir: destDir } of await this.agentToolDirs(teamConfig, localConfig)) {

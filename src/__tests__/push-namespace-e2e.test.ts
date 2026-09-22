@@ -441,6 +441,27 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     expect(git(['show', 'main:rules/be-know/foo.md'], fixture.remote)).toContain('The team rule');
   }, 60_000);
 
+  it('pull delivers a published agent from an inactive namespace and keeps it', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+
+    // `front-app` is never activated here: only the placement record keeps this
+    // agent. Delivery and revocation run in the SAME pull, so if only one of
+    // them knows about the record, the file is written and deleted again.
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+
+    const deployed = path.join(fixture.projectRoot, '.claude/agents', 'vr.md');
+    expect(fs.existsSync(deployed), pulled.output).toBe(true);
+
+    // And it survives a second pull, which is when a revoke would show up.
+    const again = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(again.code, again.output).toBe(0);
+    expect(fs.existsSync(deployed), again.output).toBe(true);
+  }, 60_000);
+
   it('removes only the published agent, through the real remove command', async () => {
     const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
     // A second agent of the same name in another namespace, and the author's

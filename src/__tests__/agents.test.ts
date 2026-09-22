@@ -485,6 +485,47 @@ projects:
    * the pre-push sync covers rules and skills but not agents. Pushing a stale
    * rendering over a teammate's newer canonical file is the risk (#649 review).
    */
+  /**
+   * Delivery and revocation are two halves of the same decision. When only
+   * delivery knew about the placement record, `pull` wrote the agent and the
+   * revocation pass deleted it again in the same run — so the record-based
+   * delivery was inert and the file churned on every pull.
+   */
+  it('does not revoke an agent this machine published into an inactive namespace', async () => {
+    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Mine\ninstructions: Read it.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
+    });
+    // Deploy it the way pull would.
+    await handler.pullItem(
+      { name: 'reviewer', type: 'agents', sourcePath, relativePath: 'agents/fe-agents/reviewer.yaml', namespace: 'fe-agents' },
+      teamConfig, localConfig,
+    );
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    expect(await fse.pathExists(deployed)).toBe(true);
+
+    // `fe-agents` is not active; only the record keeps this agent here.
+    await handler.cleanupInactiveNamespaces(teamConfig, localConfig, ['common']);
+
+    expect(await fse.pathExists(deployed)).toBe(true);
+  });
+
+  it('still revokes an agent whose namespace went inactive with no record', async () => {
+    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Theirs\ninstructions: Read it.\n');
+    await handler.pullItem(
+      { name: 'reviewer', type: 'agents', sourcePath, relativePath: 'agents/fe-agents/reviewer.yaml', namespace: 'fe-agents' },
+      teamConfig, localConfig,
+    );
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    expect(await fse.pathExists(deployed)).toBe(true);
+
+    await handler.cleanupInactiveNamespaces(teamConfig, localConfig, ['common']);
+
+    expect(await fse.pathExists(deployed)).toBe(false);
+  });
+
   it('prefers an active source over the placement record', async () => {
     // The record is a FALLBACK. When an active namespace holds this stem, that
     // is the agent deployed here — and the one pull delivers.
