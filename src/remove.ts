@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { assertNotReadOnly } from './read-only.js';
 import { pullRepo, pushRepoBranch, checkoutMaster, generateBranchName } from './utils/git.js';
@@ -47,6 +48,32 @@ export async function remove(
   await removeCore(type, names, options, localConfig, teamConfig);
 }
 
+/**
+ * Drop the placement record of each removed resource.
+ *
+ * `remove` accepts both spellings — the published `<ns>/<name>` and the bare
+ * `<name>` the author's own copy carries — and the record is always keyed by
+ * the bare one, so the key comes from the basename. The recorded path still has
+ * to match the resource being removed, or removing `other-ns/my-rule` would
+ * drop the record of a `my-rule` that lives somewhere else entirely.
+ *
+ * Existence is deliberately NOT the test: the removal only exists on the push
+ * branch until its PR merges, and `removeCore` checks the default branch back
+ * out before this runs, so the file is still on disk at this point.
+ */
+function dropPlacementRecords(
+  records: Record<string, string> | undefined,
+  removed: string[],
+  teamPathsFor: (publishedName: string) => string[],
+): void {
+  if (!records) return;
+  for (const name of removed) {
+    const key = path.basename(name);
+    const recorded = records[key];
+    if (recorded && teamPathsFor(name).includes(recorded)) delete records[key];
+  }
+}
+
 async function removeCore(
   type: string,
   names: string[],
@@ -76,6 +103,16 @@ async function removeCore(
   for (const name of names) {
     if (allNames.has(name)) {
       found.push(name);
+      continue;
+    }
+    // A resource this machine placed in a namespace is published as
+    // `<ns>/<name>`, while the author's local copy — and so the name they type
+    // — is the bare one. Resolve it rather than answering "not found" about a
+    // resource we know we put there (#649 review).
+    const published = await handler.publishedNameFor(name, localConfig);
+    if (published && allNames.has(published)) {
+      log.info(`${name} was published as ${published}`);
+      found.push(published);
     } else {
       notFound.push(name);
     }
@@ -196,7 +233,12 @@ async function removeCore(
   }
   if (type === 'rules') {
     state.pushedRules = state.pushedRules.filter((r) => !found.includes(r));
-    for (const name of found) delete state.placedRules?.[name];
+    // A record left behind would send the author's local copy back to a path
+    // that is about to stop existing.
+    dropPlacementRecords(state.placedRules, found, (n) => [`rules/${n}.md`]);
+  }
+  if (type === 'agents') {
+    dropPlacementRecords(state.placedAgents, found, (n) => [`agents/${n}.yaml`, `agents/${n}.md`]);
   }
   // `wiki` is not tracked in pushedX state; nothing to clean here.
   await saveStateForScope(state, localConfig);

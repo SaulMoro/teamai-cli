@@ -599,6 +599,8 @@ Choose namespace [1-3] (default: 1 = common):
 - The chosen destination is printed for each resource, e.g. `[rules] my-rule → rules/pm/my-rule.md`
 - A roles manifest that exists but cannot answer — unparseable, or missing the configured role — stops the push instead of falling back to the shared root: fix `manifest/roles.yaml`, run `teamai roles set <role>`, or pass `--role <ns>`. A team with no `manifest/roles.yaml` at all keeps the pre-manifest behavior
 - `teamai push --dry-run` resolves the same destinations and stops on the same unresolvable namespace, so it never reports a push as viable that the real command refuses
+- A placed resource stays maintainable from the machine that published it. `state.json` records where push put each one, so a later edit of the author's own copy goes back to the same file, and an agent published into a namespace this directory has not activated is still editable rather than skipped as having no active source
+- `teamai remove rules <name>` accepts the bare name the author's copy carries as well as the published `<namespace>/<name>`; it reports which one it resolved to, and removes both the namespaced team file and the author's copy at the rules root
 
 **Updating an open PR instead of duplicating it:** If a resource is already waiting in an unmerged PR, re-running `teamai push` on it updates that existing PR in place (by force-pushing its branch) rather than opening a duplicate. Keep the resource selected to update its PR; deselect it to leave the PR untouched. Unrelated resources selected in the same run go into their own new PR. Once the PR merges (or its branch is removed from the remote), the record is cleared and the next push opens a fresh PR as usual.
 

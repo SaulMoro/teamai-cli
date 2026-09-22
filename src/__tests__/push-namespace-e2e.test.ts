@@ -214,6 +214,12 @@ function mergeBranch(fixture: Fixture, branch: string): void {
   git(['push', '-q', 'origin', 'main'], clone);
   git(['push', '-q', 'origin', '--delete', branch], clone);
   fs.rmSync(clone, { recursive: true, force: true });
+  // The member's own clone keeps the branch it pushed. Once the PR is merged
+  // and the remote branch is gone, that local ref is stale — and `push`/`remove`
+  // generate branch names at one-second resolution, so a run in the same second
+  // would collide with it.
+  git(['checkout', '-q', 'main'], fixture.teamRepo);
+  git(['branch', '-q', '-D', branch], fixture.teamRepo);
 }
 
 /** Commit a file straight onto the remote's default branch, as a teammate would. */
@@ -341,6 +347,55 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     const { branch } = branchFiles(fixture);
     expect(git(['show', `${branch}:rules/fe-know/my-rule.md`], fixture.remote)).toContain('Teammate v2');
     expect(git(['show', 'main:rules/fe-know/my-rule.md'], fixture.remote)).toContain('Teammate v2');
+  }, 60_000);
+
+  it('lets the author keep editing an agent they published into an inactive namespace', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+
+    // `front-app` is never activated in this directory, so `fe-agents` is not
+    // an active namespace: without the placedAgents record the edit below is
+    // skipped as "no active source" and the agent cannot be maintained.
+    fs.writeFileSync(
+      path.join(fixture.projectRoot, '.claude/agents', 'vr.md'),
+      '---\nname: vr\ndescription: reviews code\n---\n\nYou review twice.\n',
+    );
+    const result = await runCLI(
+      ['push', '--project', 'front-app', '--all'],
+      fixture.projectRoot,
+      fixture.home,
+    );
+
+    expect(result.output).not.toContain('no active source');
+    expect(result.output).toContain('[agents] vr (modified)');
+    const { branch } = branchFiles(fixture);
+    expect(git(['show', `${branch}:agents/fe-agents/vr.yaml`], fixture.remote))
+      .toContain('You review twice.');
+  }, 60_000);
+
+  it('removes a rule by the bare name it was published under a namespace with', async () => {
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    writeLocalResources(fixture);
+    await runCLI(['push', '--project', 'front-app', '--all'], fixture.projectRoot, fixture.home);
+    mergeBranch(fixture, branchFiles(fixture).branch);
+
+    // The author's copy is at the rules root, so `my-rule` is the name they know.
+    const result = await runCLI(
+      ['remove', 'rules', 'my-rule', '--force'],
+      fixture.projectRoot,
+      fixture.home,
+    );
+
+    expect(result.output).toContain('my-rule was published as fe-know/my-rule');
+    const { branch, files } = branchFiles(fixture);
+    expect(branch, result.output).not.toBe('');
+    // The namespaced team file is gone from the branch, not just the local copy.
+    expect(files).not.toContain('rules/fe-know/my-rule.md');
+    // And the author's own copy went with it, or the next push re-publishes it.
+    expect(fs.existsSync(path.join(fixture.projectRoot, '.claude/rules', 'my-rule.md'))).toBe(false);
+    expect(readState(fixture).placedRules ?? {}).toEqual({});
   }, 60_000);
 
   it('stops the push when the roles manifest exists but cannot be parsed', async () => {

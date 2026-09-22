@@ -740,7 +740,7 @@ async function pushCore(
     // placedRules redirects a root-authored rule to the rules/<ns>/ file push
     // put it in, so a teammate's newer version syncs down instead of being
     // overwritten by the stale root copy the scan would otherwise call modified.
-    await syncTeamUpdatesToLocal(teamConfig, localConfig, state.lastPullRev, state.placedRules ?? {});
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, state.lastPullRev, state.placedRules);
   } catch (e) {
     log.debug(`Pre-push sync skipped: ${(e as Error).message}`);
   }
@@ -1132,6 +1132,12 @@ async function pushCore(
     // found in a subdirectory carries the namespace in its name and needs none.
     if (item.type === 'rules' && item.namespace && !item.name.includes('/')) {
       state.placedRules = { ...state.placedRules, [item.name]: item.relativePath };
+    }
+    // An agent placed in a namespace this directory has not activated would be
+    // skipped as "no active source" on the author's very next edit. The record
+    // is what lets them keep maintaining the agent they just published.
+    if (item.type === 'agents' && item.namespace) {
+      state.placedAgents = { ...state.placedAgents, [item.name]: item.relativePath };
     }
     if (item.type === 'env' && !state.pushedEnvVars.includes(item.name)) {
       state.pushedEnvVars.push(item.name);

@@ -123,3 +123,42 @@ export function resolveProjectNamespace(
 
   return { ok: true, namespace };
 }
+
+/**
+ * Where push put a root-level local resource, from the record it kept in
+ * `state.json` (`placedRules`, `placedAgents`). The author's copy stays at the
+ * tool's resource root after a push places it under `<root>/<ns>/`, so without
+ * this record the next scan reads it as a brand-new resource and sends a second
+ * copy to the shared root — where it reaches the whole team (#649).
+ *
+ * Returns null unless the record is one push could have written: inside `root`,
+ * namespaced, free of traversal, and named after `name`. `state.json` is a file
+ * on disk, so a record that fails any of those is treated as absent rather than
+ * followed. The caller still has to check that the file is there — a record
+ * pointing at a removed or renamed resource proves nothing.
+ *
+ * Both the push scanner and the pre-push sync resolve through this. They must
+ * agree: when only one of them followed the record, the sync skipped a
+ * teammate's newer version and the scan then pushed the stale copy over it.
+ */
+export function placedResourcePath(
+  placed: Record<string, string> | undefined,
+  root: 'rules' | 'agents',
+  name: string,
+): string | null {
+  // A name that already carries a namespace matches its team file by full path
+  // and never needs a record.
+  if (!placed || name.includes('/')) return null;
+
+  const recorded = placed[name];
+  if (!recorded) return null;
+
+  const segments = recorded.split('/');
+  if (segments.length !== 3) return null;
+  if (segments[0] !== root) return null;
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null;
+  // `<name>.md` for a rule, `<name>.yaml` (or a legacy `.md`) for an agent.
+  if (!segments[2].startsWith(`${name}.`)) return null;
+
+  return recorded;
+}

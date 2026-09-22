@@ -13,6 +13,7 @@ import {
 } from './copilot-instructions.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
+import { placedResourcePath } from '../push-namespaces.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -50,7 +51,7 @@ export class RulesHandler extends ResourceHandler {
     // the local copy back to its team file. A namespaced team rule is pulled
     // into a namespaced local directory, so a root-level local rule that only
     // shares a basename with one, and has no record, is unrelated and stays new.
-    const placedRules = (await loadStateForScope(localConfig)).placedRules ?? {};
+    const placedRules = (await loadStateForScope(localConfig)).placedRules;
 
     // Collect the best candidate for each rule name across all tool directories
     const candidates = new Map<string, {
@@ -89,12 +90,14 @@ export class RulesHandler extends ResourceHandler {
         const localFilePath = path.join(rulesDir, file);
         // Team repo always stores `.md`, keyed by rule name.
         let teamFileName = `${name}.md`;
-        if (!teamRules.has(teamFileName) && !name.includes('/')) {
-          // A record whose team file is gone (rule removed, namespace renamed)
-          // no longer proves anything, so the rule is new again.
-          const placed = placedRules[name]?.replace(/^rules\//, '');
-          if (placed && teamRules.has(placed)) teamFileName = placed;
-        }
+        // The record comes first. A shared-root rule that appears later with
+        // the same basename belongs to whoever added it, and mapping the
+        // author's copy onto it would push their content over that rule. A
+        // record whose team file is gone (rule removed, namespace renamed) no
+        // longer proves anything, so the rule is new again.
+        const placed = placedResourcePath(placedRules, 'rules', name);
+        const placedName = placed?.slice('rules/'.length);
+        if (placedName && teamRules.has(placedName)) teamFileName = placedName;
 
         const teamRelPath = `rules/${teamFileName}`;
 
@@ -274,7 +277,27 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
+   * `my-rule` when push placed it at `rules/fe-know/my-rule.md`: the author
+   * types the name their local copy has, which is the bare one.
+   */
+  async publishedNameFor(name: string, localConfig: LocalConfig): Promise<string | null> {
+    const placed = placedResourcePath(
+      (await loadStateForScope(localConfig)).placedRules, 'rules', name,
+    );
+    if (!placed) return null;
+    if (!await pathExists(path.join(localConfig.repo.localPath, placed))) return null;
+    return placed.slice('rules/'.length, -'.md'.length);
+  }
+
+  /**
    * Remove a rule from the team repo and all local AI tool rules/ directories.
+   *
+   * `name` may be the published one (`fe-know/my-rule`) or the bare one the
+   * author's own copy carries (`my-rule`) — `remove` resolves the first through
+   * `publishedNameFor`, so both reach the same team file. The local sweep below
+   * covers both spellings, because a rule placed in a namespace leaves the
+   * author's copy at the rules root while every other member receives it at
+   * `rules/<ns>/`.
    */
   async removeItem(name: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
     const removed: string[] = [];
@@ -285,6 +308,11 @@ export class RulesHandler extends ResourceHandler {
       await remove(teamFile);
       removed.push(teamFile);
     }
+
+    // The author's own copy is at the rules root under the bare name, whatever
+    // namespace the team file ended up in. Leaving it behind re-publishes the
+    // rule on the next push.
+    const localNames = new Set([name, path.basename(name)]);
 
     // Record tombstone so the resource won't be re-pushed
     await this.addTombstone(name, localConfig);
@@ -299,12 +327,14 @@ export class RulesHandler extends ResourceHandler {
       if (isAgentExcluded(localConfig, tool)) continue;
       const baseDir = resolveToolBaseDir(tool, localConfig);
       const extensions = new Set<string>([ruleFileExtensionForTool(tool), '.md']);
-      for (const extension of extensions) {
-        const filePath = path.join(baseDir, toolPath.rules, `${name}${extension}`);
-        if (await pathExists(filePath)) {
-          await remove(filePath);
-          removed.push(filePath);
-          log.debug(`Removed rule ${name} from ${tool}`);
+      for (const localName of localNames) {
+        for (const extension of extensions) {
+          const filePath = path.join(baseDir, toolPath.rules, `${localName}${extension}`);
+          if (await pathExists(filePath)) {
+            await remove(filePath);
+            removed.push(filePath);
+            log.debug(`Removed rule ${localName} from ${tool}`);
+          }
         }
       }
     }

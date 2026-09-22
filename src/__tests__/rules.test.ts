@@ -410,6 +410,24 @@ scope: 'user',
     expect(item?.namespace).toBeUndefined();
   });
 
+  it('keeps following the record when a shared-root rule with the same name appears later', async () => {
+    // Another contributor adds rules/my-rule.md after this rule was placed.
+    // Mapping the author's copy onto it would push their content over an
+    // unrelated team rule, so the record wins (#649 review round 3).
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.ensureDir(path.join(teamRulesDir, 'fe-know'));
+    await fse.writeFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'the placed rule');
+    await fse.writeFile(path.join(teamRulesDir, 'my-rule.md'), 'somebody else\'s shared rule');
+    stateWithPlacedRules({ 'my-rule': 'rules/fe-know/my-rule.md' });
+
+    await fse.writeFile(path.join(homeDir, '.claude/rules/my-rule.md'), 'edited locally');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'my-rule');
+    expect(item?.relativePath).toBe('rules/fe-know/my-rule.md');
+    expect(item?.namespace).toBe('fe-know');
+  });
+
   it('treats a root-level rule as new again once its recorded team file is gone', async () => {
     // The rule was removed from the team repo (or its namespace renamed): the
     // record no longer points at anything and must not invent a destination.

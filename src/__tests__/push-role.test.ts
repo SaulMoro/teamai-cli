@@ -1178,6 +1178,22 @@ describe('push namespace routing for rules and agents', () => {
     expect(saved.placedRules).toEqual({ 'my-rule': 'rules/pm/my-rule.md' });
   });
 
+  it('records where it placed a new agent, so the author can still edit it', async () => {
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockHandlers({ rules: [{ ...newRule }], agents: [{ ...newAgent }] }, []);
+
+    await push({ all: true, role: 'pm' });
+
+    // AgentsHandler.scanLocalForPush only accepts a source whose namespace is
+    // ACTIVE here; without the record the author's next edit is skipped as
+    // "no active source" and the agent they just published is unmaintainable.
+    const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as { placedAgents?: Record<string, string> };
+    expect(saved.placedAgents).toEqual({ vr: 'agents/pm/vr.yaml' });
+  });
+
   it('does not record a rule the scanner already found in a subdirectory', async () => {
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig({ primaryRole: undefined }),

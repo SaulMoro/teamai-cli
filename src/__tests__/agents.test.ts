@@ -20,7 +20,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { AgentsHandler } from '../resources/agents.js';
-import type { TeamaiConfig, LocalConfig } from '../types.js';
+import { getDataHome, type TeamaiConfig, type LocalConfig } from '../types.js';
 
 /**
  * Build a minimal TeamaiConfig with the given toolPaths.
@@ -280,6 +280,48 @@ projects:
     for (const item of items) await handler.pushItem(item, teamConfig, localConfig);
     expect(await fse.pathExists(path.join(repoPath, 'agents/reviewer.yaml'))).toBe(false);
     expect(await fse.readFile(path.join(repoPath, 'agents/aaa/reviewer.md'), 'utf8')).toBe('# original');
+  });
+
+  /**
+   * An agent published with `--role`/`--project` lands in a namespace the
+   * author's own directory need not have activated. Without the record push
+   * put in state.json, their very next edit is skipped as "no active source"
+   * and they can never maintain the agent they just created (#649 review).
+   */
+  it('accepts the namespace push recorded for an agent even when it is inactive', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
+    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Published\ninstructions: Read it.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Published\n---\n\nEdited locally.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
+    });
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
+  });
+
+  it('still skips an inactive agent this machine never published', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
+    await fse.outputFile(path.join(repoPath, 'agents/fe-agents/reviewer.yaml'),
+      'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read it.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Somebody else\'s\n---\n\nEdited locally.\n');
+    // A record for a DIFFERENT agent must not widen this one.
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { other: 'agents/fe-agents/other.yaml' },
+    });
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('no active source');
   });
 
   it.each(['zzz', ''])('rejects ambiguous push destinations including root: %s', async (namespace) => {

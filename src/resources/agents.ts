@@ -10,6 +10,8 @@ import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../projects.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
+import { loadStateForScope } from '../config.js';
+import { placedResourcePath } from '../push-namespaces.js';
 import {
   parseAgentYaml,
   serializeAgentYaml,
@@ -141,13 +143,21 @@ export class AgentsHandler extends ResourceHandler {
 
     const resolved = await resolveResourceNamespaces(localConfig);
     const activeNamespaces = resolved?.activeNamespaces.agents ?? null;
+    // An agent this machine published with --role/--project lives in a
+    // namespace this directory need not have activated. Without the record it
+    // would read as "no active source" and the author could never edit the
+    // agent they just created (#649 review).
+    const placedAgents = (await loadStateForScope(localConfig)).placedAgents;
     for (const [stem, toolFiles] of grouped) {
       // Determine if this agent is already in the team repo (root or agents/<ns>/).
       // A modified agent must be written back where it lives, so its namespace
       // directory is carried into `relativePath` below.
       const sources = await findTeamAgentFiles(teamAgentsDir, stem);
+      const placedNamespace = placedResourcePath(placedAgents, 'agents', stem)?.split('/')[1];
       const candidates = sources.filter(
-        (file) => activeNamespaces === null || !file.namespace || activeNamespaces.includes(file.namespace),
+        (file) => activeNamespaces === null || !file.namespace
+          || activeNamespaces.includes(file.namespace)
+          || file.namespace === placedNamespace,
       );
       if (candidates.length > 1) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,

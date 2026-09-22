@@ -635,6 +635,16 @@ export const StateSchema = z.object({
    * for the same reason as `coAuthorManaged`; absent reads as an empty map.
    */
   placedRules: z.record(z.string(), z.string()).optional(),
+  /**
+   * Where push placed each new agent inside the team repo, by agent name, e.g.
+   * `{ "vr": "agents/fe-agents/vr.yaml" }`. `AgentsHandler.scanLocalForPush`
+   * only accepts a team source whose namespace this directory has ACTIVE, so
+   * without this record an author who published an agent with `--role`/
+   * `--project` could never edit it again: the file they created reads as
+   * inactive and the push is skipped. Same shape and same caveats as
+   * `placedRules`.
+   */
+  placedAgents: z.record(z.string(), z.string()).optional(),
   pushedSkills: z.array(z.string()).default([]),
   pushedEnvVars: z.array(z.string()).default([]),
   /** Push branches whose PR is still open — see PendingPushSchema. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isAtSharedRoot, isPlaceableType, resolveProjectNamespace, withNamespace,
+  isAtSharedRoot, isPlaceableType, placedResourcePath, resolveProjectNamespace, withNamespace,
 } from '../push-namespaces.js';
 import type { ProjectsManifest } from '../projects.js';
 import type { ResourceItem } from '../types.js';
@@ -118,5 +118,48 @@ describe('resolveProjectNamespace', () => {
     const result = resolveProjectNamespace(manifest, 'nope', 'rules');
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.message).toMatch(/unknown project/i);
+  });
+});
+
+/**
+ * `state.json` is a file on disk, and both the push scanner and the pre-push
+ * sync resolve a placement record through this one function. When only one of
+ * them followed the record, the sync skipped a teammate's newer version and
+ * the scan pushed the stale local copy over it.
+ */
+describe('placedResourcePath', () => {
+  const rules = { 'my-rule': 'rules/fe-know/my-rule.md' };
+
+  it('returns the recorded destination', () => {
+    expect(placedResourcePath(rules, 'rules', 'my-rule')).toBe('rules/fe-know/my-rule.md');
+  });
+
+  it('returns null with no record at all', () => {
+    expect(placedResourcePath(undefined, 'rules', 'my-rule')).toBeNull();
+    expect(placedResourcePath({}, 'rules', 'my-rule')).toBeNull();
+  });
+
+  it('ignores a name that already carries its namespace', () => {
+    // It matches its team file by full path and never needs a record.
+    expect(placedResourcePath({ 'fe-know/my-rule': 'rules/fe-know/my-rule.md' }, 'rules', 'fe-know/my-rule'))
+      .toBeNull();
+  });
+
+  it('rejects a record that escapes the resource root', () => {
+    expect(placedResourcePath({ x: 'rules/../../etc/passwd' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ x: '../rules/ns/x.md' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ x: 'skills/ns/x.md' }, 'rules', 'x')).toBeNull();
+  });
+
+  it('rejects a record that is not namespaced or not named after the resource', () => {
+    expect(placedResourcePath({ x: 'rules/x.md' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ x: 'rules/ns/sub/x.md' }, 'rules', 'x')).toBeNull();
+    expect(placedResourcePath({ x: 'rules/ns/other.md' }, 'rules', 'x')).toBeNull();
+  });
+
+  it('resolves an agent record, whose file keeps the canonical .yaml', () => {
+    expect(placedResourcePath({ vr: 'agents/fe-agents/vr.yaml' }, 'agents', 'vr'))
+      .toBe('agents/fe-agents/vr.yaml');
+    expect(placedResourcePath({ vr: 'agents/fe-agents/vr.yaml' }, 'rules', 'vr')).toBeNull();
   });
 });

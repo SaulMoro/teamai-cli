@@ -95,6 +95,18 @@ export abstract class ResourceHandler {
   ): Promise<string[]>;
 
   /**
+   * The name this resource is published under, when the user typed a different
+   * one. `remove` matches what the user types against the team repo, where a
+   * placed resource lives at `<root>/<ns>/<name>`; the author's local copy is
+   * still at the resource root, so they know it by its bare name and `remove`
+   * would answer "not found". Handlers that keep a placement record resolve it
+   * here. Returns null when there is nothing to translate.
+   */
+  async publishedNameFor(_name: string, _localConfig: LocalConfig): Promise<string | null> {
+    return null;
+  }
+
+  /**
    * Where `item` lands for each tool that can receive it on this machine.
    *
    * Read-only by contract: resolving a destination must never write, so the
