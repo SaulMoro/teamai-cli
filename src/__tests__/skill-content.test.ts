@@ -310,7 +310,9 @@ describe('the shipped skill-data content', () => {
   it('keeps the deployed stub declaring its own name and tools', () => {
     const stub = fs.readFileSync(path.join(ROOT, 'skills/teamai/SKILL.md'), 'utf8');
     expect(stub).toMatch(/^name: teamai$/m);
-    expect(stub).toMatch(/^allowed-tools: Bash\(teamai:\*\), Bash\(npx teamai-cli:\*\)$/m);
+    // The stub is the always-loaded unit, so it pre-approves only the read-only
+    // `teamai skill …` commands it asks for; the served skills grant the rest.
+    expect(stub).toMatch(/^allowed-tools: Bash\(teamai skill:\*\), Bash\(npx teamai-cli skill:\*\)$/m);
   });
 
   it('quotes {SKILL_DIR} in every command it tells the agent to run', async () => {
@@ -367,5 +369,8 @@ describe('npm package contents', () => {
       expect(files.some((f) => f.startsWith(`skill-data/${skill}/`)), skill).toBe(true);
     }
     expect(files).toContain('skill-data/wiki/scripts/scan_repo.py');
+    // Running the wiki scripts (the e2e suite does) leaves __pycache__ beside
+    // them; "files" must not sweep interpreter bytecode into the package.
+    expect(files.filter((f) => f.endsWith('.pyc') || f.includes('__pycache__'))).toEqual([]);
   }, 60_000);
 });

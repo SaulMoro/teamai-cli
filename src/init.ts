@@ -17,7 +17,6 @@ import {
   type Scope,
   getTeamaiHome,
   getConfigPath,
-  isRecallEnabled,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
 import { describeRoles, listRoleIds, loadRolesManifest } from './roles.js';

@@ -62,7 +62,12 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
       process.exitCode = 1;
       return;
     }
-    if (packaged.kind !== 'found') throw e;
+    if (packaged.kind !== 'found') {
+      log.error(`Skill "${name}" not found among the skills the installed CLI serves.`);
+      log.dim('Run `teamai init` first to search the team repo and installed agents too.');
+      process.exitCode = 1;
+      return;
+    }
     printSkillCard({
       name: packaged.skill.name,
       source: { kind: 'builtin' },

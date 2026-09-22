@@ -12,7 +12,7 @@ description: >-
 allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*), Bash(python3:*)
 ---
 
-# team-wiki-codebase: AI cognition engineering for large codebases
+# wiki: AI cognition engineering for large codebases
 
 > Prerequisites: an accessible source directory (multiple repositories supported), Python 3, and an installed teamai CLI.
 > The methodology, sub-agent prompts, templates and scripts ship with the CLI. Run `teamai skill path wiki` to get their absolute path;
@@ -225,7 +225,7 @@ knowledge base README template: `{SKILL_DIR}/references/templates/project-overvi
 
 Human-readable overview (not for execution): `{SKILL_DIR}/references/overview.md`.
 
-`teamai skill get wiki --full` prints every reference file in one go (about 115 KB). Use it only when you need to read everything.
+`teamai skill get wiki --full` prints every reference file in one go (about 130 KB). Use it only when you need to read everything.
 
 ## Output directory layout
 

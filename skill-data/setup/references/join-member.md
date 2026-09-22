@@ -97,7 +97,7 @@ teamai hooks list      # per-tool: which AI tools actually got the hooks
 Fix anything `doctor` reports. **Don't trust the "Hooks injected into all AI tool
 settings" message alone** — it prints even for tools where nothing was written;
 `teamai doctor` / `teamai hooks list` show the real per-tool status. If it flags
-hook problems, load the troubleshooting reference (`teamai skill get core --full`),
+hook problems, load the troubleshooting reference (`$(teamai skill path core)/references/troubleshooting.md`),
 section "Which tools actually get hooks".
 
 ## Step 6 — Confirm the skills actually arrived
@@ -123,7 +123,7 @@ tool names only, on a separate branch of that same repo.)
 ## Agent-specific note
 
 If this conversation is running in **ChatGPT App** or **WorkBuddy**, the hooks
-that drive auto-sync need an extra manual step — load the troubleshooting reference (`teamai skill get core --full`), section "Agent-specific caveats" and walk the user through it before finishing.
+that drive auto-sync need an extra manual step — load the troubleshooting reference (`$(teamai skill path core)/references/troubleshooting.md`), section "Agent-specific caveats" and walk the user through it before finishing.
 
 ## If something is denied
 
@@ -140,13 +140,14 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
    session produced something worth sharing, TeamAI **prompts them on its own** (at
    the end of the session) and the `share` workflow (`teamai skill get share`) takes over to
    summarize and contribute it. They do **not** invoke `/teamai` for this. (This
-   prompt only appears if the admin left team sharing enabled — it is on by
-   default; the admin can turn it off in `teamai.yaml`.)
+   prompt only appears when recall is on for the team — it is off by default,
+   `teamai recall enable` turns it on — and the admin has not switched the
+   reminder off in `teamai.yaml`.)
 3. **They can also contribute a skill — just ask in plain language.** A member does
    not need to be an admin to publish a skill. They tell TeamAI something like
    *"share this xxx skill with my team"* / *"把这个 xxx skill 分享给团队"*, and you
-   run the publish for them (see `references/contribute-member.md` in
-   `teamai skill get core --full`; it needs no recall).
+   run the publish for them (see `$(teamai skill path core)/references/contribute-member.md`;
+   it needs no recall).
 4. **How to leave — via the skill, not raw commands.** They can remove TeamAI any
    time by re-invoking the skill; you'll run it for them:
    `/teamai 卸载` / `/teamai Uninstall TeamAI`.

@@ -119,7 +119,11 @@ function isDerivedArtifact(relativePath: string): boolean {
   return relativePath.endsWith('.pyc') || relativePath.split('/').includes('__pycache__');
 }
 
-/** Every file under `dir`, as paths relative to it. Symlinks count as files. */
+/**
+ * Every file under `dir`, as paths relative to it. Symlinks count as files.
+ * Not the shared walker in utils/fs: that one skips `__pycache__`, and the prune
+ * has to see it to decide whether a directory is empty of the member's files.
+ */
 async function walkFiles(dir: string, prefix = ''): Promise<string[]> {
   const found: string[] = [];
   for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
@@ -149,15 +153,7 @@ async function removeEmptyDirs(dir: string): Promise<void> {
   try { await fs.promises.rmdir(dir); } catch { /* not empty */ }
 }
 
-/**
- * Remove from `dir` the files the CLI put there, then the directories that end
- * up empty. Returns false when the member has files of their own in there, so
- * the caller can say the directory was kept.
- *
- * Exported because uninstall must delete a CLI-owned skill directory by the same
- * rule pull does: a file a member added beside our packaged ones was never ours
- * to write and is not ours to remove, whichever command is doing the removing.
- */
+/** What `removeOwnedFiles` did and did not do, for the caller to report. */
 export interface PruneResult {
   /** True when a link sits between the base and the root: nothing was touched. */
   skippedSymlink: boolean;
@@ -179,6 +175,15 @@ export function prunedWhole(result: PruneResult): boolean {
     && result.notRemoved.length === 0;
 }
 
+/**
+ * Remove from `dir` the files the CLI put there, then the directories that end
+ * up empty. Anything that stopped it — a member's own file, a failed backup, a
+ * failed delete, a link — is in the result, so the caller can say which.
+ *
+ * Exported because uninstall must delete a CLI-owned skill directory by the same
+ * rule pull does: a file a member added beside our packaged ones was never ours
+ * to write and is not ours to remove, whichever command is doing the removing.
+ */
 export async function removeOwnedFiles(
   dir: string,
   owned: readonly string[],
@@ -439,7 +444,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           // every session start and never reach a file worth keeping.
           const shippedNow = new Set(await walkFiles(srcDir));
           const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
-          const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, destDir), skillName);
+          const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
           const result = await removeOwnedFiles(destDir, retired, backupDir, baseDir);
           if (result.unbackedUp.length > 0) {
             log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);

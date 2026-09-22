@@ -78,7 +78,11 @@ describe('teamai skill get / path CLI (e2e)', () => {
       const scriptPath = path.join(dir, 'scripts', script);
       expect(fs.existsSync(scriptPath), scriptPath).toBe(true);
 
-      const help = spawnSync('python3', [scriptPath, '--help'], { encoding: 'utf8' });
+      const help = spawnSync('python3', [scriptPath, '--help'], {
+        encoding: 'utf8',
+        // Do not leave bytecode in the packaged tree the test just proved ships.
+        env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+      });
       // A machine without python3 cannot run them; the path is what we assert there.
       if (help.error) continue;
       expect(help.status, script).toBe(0);
@@ -100,6 +104,16 @@ describe('teamai skill get / path CLI (e2e)', () => {
     const legacyName = run('skill', 'get', 'team-wiki-codebase');
     expect(legacyName.status).toBe(0);
     expect(legacyName.stdout).toContain('name: wiki');
+
+    // Before `teamai init`, an unknown name is a not-found line, not the stack
+    // trace of the init error the team lookup would have thrown.
+    // `skill show` is a human command: the error is on stderr and the way out
+    // is a dim line on stdout, as on the initialised not-found path.
+    const shownUnknown = run('skill', 'show', 'no-such-skill');
+    expect(shownUnknown.status).toBe(1);
+    expect(shownUnknown.stderr).toContain('not found among the skills the installed CLI serves');
+    expect(shownUnknown.stdout).toContain('Run `teamai init` first');
+    expect(shownUnknown.stdout + shownUnknown.stderr).not.toContain('    at ');
   });
 
   it('appends the nested references with --full', () => {

@@ -2,9 +2,8 @@
 name: share
 description: >-
   Turn a session into a team learning: summarize what was solved, discovered or worked around,
-  and publish it to the team knowledge base with `teamai contribute`. Also publishes a reusable
-  skill or a knowledge doc on request. Loaded on demand by the teamai discovery stub, and by
-  the friction reminder that ends a session worth sharing.
+  and publish it to the team knowledge base with `teamai contribute`. Loaded on demand by the
+  teamai discovery stub, and by the friction reminder that ends a session worth sharing.
 allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
 ---
 
@@ -58,8 +57,8 @@ teamai contribute --file /tmp/session-summary.md --title "Debugging K8s pod star
 ## Publishing a reusable skill instead
 
 A member asking to publish a skill ("share this xxx skill with my team") is a
-different flow, and it does not need recall: it lives in the `core` skill, as
-`teamai skill get core --full` under `references/contribute-member.md`. This file
+different flow, and it does not need recall: it lives in the `core` skill, at
+`$(teamai skill path core)/references/contribute-member.md`. This file
 is for turning a *session* into a learning.
 
 ## References

@@ -67,7 +67,7 @@ Example (3 chunks concurrently):
 Each sub-agent receives the following prompt (replace CHUNK_COMPONENTS, CHUNK_NUM, TOTAL_CHUNKS):
 
 ```
-You are the component document generation sub-agent of team-wiki-codebase.
+You are the component document generation sub-agent of the wiki skill.
 Generate knowledge base documents for the following components (chunk CHUNK_NUM / TOTAL_CHUNKS):
 CHUNK_COMPONENTS
 

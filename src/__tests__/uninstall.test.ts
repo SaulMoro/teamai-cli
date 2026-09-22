@@ -1040,6 +1040,32 @@ describe('uninstall', () => {
     expect(await fse.pathExists(legacyShare)).toBe(false);
   });
 
+  it('names the file and the error when a packaged file cannot be deleted, instead of calling the directory kept', async () => {
+    if (process.getuid?.() === 0) return; // root ignores directory permissions
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const stubDir = path.join(homeDir, '.claude', 'skills', 'teamai');
+    await fse.chmod(stubDir, 0o555);
+
+    const localConfig = makeLocalConfig(homeDir, repoPath);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    const { log } = await import('../utils/logger.js');
+    try {
+      await uninstall({ force: true });
+    } finally {
+      await fse.chmod(stubDir, 0o755);
+    }
+
+    const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    const about = warnings.filter((w) => w.includes(stubDir));
+    expect(about).toHaveLength(1);
+    expect(about[0]).toContain('Could not delete packaged files under');
+    expect(about[0]).toContain(path.join(stubDir, 'SKILL.md'));
+    expect(about[0]).not.toContain('did not put there');
+    expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
+  });
+
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

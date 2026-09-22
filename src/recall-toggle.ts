@@ -61,7 +61,6 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
       }
     }
 
-
     // Remove recall block from CLAUDE.md
     if (toolPath.claudemd) {
       const claudeMdPath = path.join(baseDir, toolPath.claudemd);

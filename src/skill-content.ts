@@ -313,7 +313,10 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
     // and named on stderr, the rest is still served.
     for (const listed of servable) {
       const resolved = await resolveServableSkill(listed.name, roots);
-      if (resolved.kind !== 'found') {
+      // The listing and the resolver read one catalog, so `not-found` cannot
+      // happen here; it is still its own branch so the message stays truthful.
+      if (resolved.kind === 'not-found') continue;
+      if (resolved.kind === 'blocked') {
         diagnostic(`${chalk.yellow('⚠')} Skipped ${listed.name}: needs recall, which is disabled for this team (teamai recall enable).`);
         continue;
       }

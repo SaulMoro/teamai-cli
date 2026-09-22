@@ -447,7 +447,10 @@ teamai skill path wiki              # 打印打包目录，用于运行 skill �
 按需打印，因此 agent 读到的内容始终与正在运行的 CLI 版本一致——`npm i -g teamai-cli@latest` 本身就是更新，
 无需 `teamai pull` 内容就是最新的。每个 agent 只收到一个文件：`~/.<tool>/skills/teamai/SKILL.md`，
 一个指向这些命令的小型发现入口（stub）。旧版本会把整棵目录复制到每个 agent 下，两次 pull 之间内容会过时；
-`teamai pull` 会清除这些残留。旧名字仍然可用：`teamai skill get team-wiki-codebase` 等价于 `wiki`。
+`teamai pull` 会清除这些残留，并把每个被删除的文件先复制到 `~/.teamai/removed-skills/` 下（每次 pull 一个目录），
+你对其中文件的修改不会丢失；目录里若还有你自己的文件，则整个目录保留并在 pull 输出中点名。`share` 只在团队开启
+recall 后才会提供：`teamai recall enable` 之前，`teamai skill get share` 会拒绝并说明原因。旧名字仍然可用：
+`teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---
 
@@ -884,7 +887,7 @@ Task: Fix duplicate project-level Hook injection
 Consider running `/teamai share what this session taught me` to summarize what you learned and share it with your team (or run `teamai skill get share`).
 ```
 
-提醒会列出实际触发它的非零摩擦信号；如果能取得首个任务，还会附上脱敏、单行化后的任务摘要，便于判断本次 session 是否值得分享。使用内置 skill `/teamai`，AI 会自动总结本次 session 经验并贡献到团队知识库。每个 session 最多提示一次。
+提醒会列出实际触发它的非零摩擦信号；如果能取得首个任务，还会附上脱敏、单行化后的任务摘要，便于判断本次 session 是否值得分享。使用内置 `share` 工作流（`teamai skill get share`），AI 会自动总结本次 session 经验并贡献到团队知识库。每个 session 最多提示一次。
 
 在 Codex 系列（`codex`、`codex-internal`、`tcodex`）中，Stop hook 会暂存贡献和知识引用提醒，在同一会话的下一次 UserPromptSubmit 交付，不会强制开启额外一轮。贡献提醒只交付一次；若下一次输入前已经贡献，则丢弃该提醒。
 
@@ -906,6 +909,8 @@ teamai contribute --file /tmp/session.md --scope project
 | 环境变量 | shell | `TEAMAI_CONTRIBUTE_HINT_DISABLED=1` | 强制关闭提醒（紧急开关） |
 
 只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai` 不受影响。
+
+团队未开启 recall 时（默认关闭，`teamai recall enable` 开启）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。
 
 ### 搜索知识
 

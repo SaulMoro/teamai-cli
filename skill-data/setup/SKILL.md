@@ -30,8 +30,8 @@ is missing.
 | Join their team, with or without a repo URL                                  | `{SKILL_DIR}/references/join-member.md`     |
 | Publish or update skills, rules, MCP, env; invite members; manage roles      | `{SKILL_DIR}/references/manage-admin.md`    |
 | Remove TeamAI from this machine                                              | `{SKILL_DIR}/references/uninstall.md`       |
-| Publish one skill or contribute a doc                                        | `teamai skill get core --full` (contribute-member) |
-| Anything that breaks along the way                                           | `teamai skill get core --full` (troubleshooting) |
+| Publish one skill or contribute a doc                                        | `$(teamai skill path core)/references/contribute-member.md` |
+| Anything that breaks along the way                                           | `$(teamai skill path core)/references/troubleshooting.md` |
 
 Supported Git providers are Tencent TGit (工蜂), GitHub, GitLab and CNB;
 `{SKILL_DIR}/references/setup-admin.md` carries the detection probe, the sign-in

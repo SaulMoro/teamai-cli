@@ -51,8 +51,8 @@ task matches             stub body                          1 408 B  holds the c
 `teamai skill get core`  daily workflow                     6 383 B  on demand
 `… core --full`          + commands.md, contribute-member,
                            troubleshooting                 36 213 B  on demand
-`… setup` / `wiki`       5 528 B / 19 102 B                          on demand
-`… setup --full` / `… wiki --full`   38 231 B / 132 754 B            on demand
+`… setup` / `wiki`       5 553 B / 19 088 B                          on demand
+`… setup --full` / `… wiki --full`   38 571 B / 132 722 B            on demand
 ```
 
 ## Contracts worth keeping
@@ -76,7 +76,10 @@ task matches             stub body                          1 408 B  holds the c
   `skill get <name>` refuses, `skill get --all` leaves the skill out and says so
   on stderr, `skill path <name>` and `skill show <name>` refuse, and
   `skill list --json` reports `blockedByRecall: true` with `path: null`. With no
-  team config to consult it fails open. The gate lives in one place:
+  team config to consult — or one it cannot load — it fails open: a refusal the
+  member cannot act on is worse than serving the workflow. The Stop-hook share
+  reminder is gated the same way (`contributeHintAllowed`, `src/hook-handlers.ts`),
+  because it points at this command. The gate lives in one place:
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
   packaged skill outside that module, and it returns `blocked` instead of the
   skill, so a command cannot print a directory it never received.
@@ -88,7 +91,15 @@ task matches             stub body                          1 408 B  holds the c
   team repo, then the installed agents, then the package. `codebase`, `default`,
   `learning` and `share` are ordinary names: a directory a member created under
   one of them is the skill they are asking about, and the recall gate does not
-  apply to it.
+  apply to it. The two legacy directory names are the exception, by design:
+  `team-wiki-codebase` and `teamai-share-learnings` classify as `[builtin]` and
+  are skipped by the push scan by name alone (`isCliOwnedSkillName`), because a
+  tree with that name is one a pre-stub release wrote until the first pull has
+  pruned it. That rule retires with `LEGACY_BUILTIN_SKILL_NAMES`.
+- **`skill get` has no `--json`.** #678 sketched one; the content is markdown for
+  an agent to read, and the machine-readable half is `skill list --json`. An
+  unknown flag on `skill get`, `--json` included, is warned about on stderr and
+  ignored, so the content still arrives.
 - **`skill list` needs no team.** The human-readable listing prints the packaged
   catalog even before `teamai init`, with a hint for the team half, so a fresh
   machine can discover what the installed CLI serves the way `skill get` lets it.
@@ -156,7 +167,9 @@ root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A
 link anywhere between the tool's base directory and the skill directory is
 refused outright — neither pruned nor written through, link and target
-untouched: everything under it matches our names, and none of it is ours. The
+untouched: everything under it matches our names, and none of it is ours. That
+walk-up check is pull's; `uninstall` has only the skill directory in hand and
+checks that one, which is enough for the member who asked for the removal. The
 `<base>` segment is there because `inheritUserScope` deploys the user base and
 then the project base in one process, with the same tool, root and skill name. A file whose copy fails is
 kept rather than removed: a backup that did not happen must not authorise the
@@ -185,5 +198,8 @@ and can be dropped on the same schedule.
 
 `/teamai-share-learnings` was never a deployed slash command in its own right —
 it existed because the directory was installed. The Stop-hook nudge now names
-`/teamai` and carries `teamai skill get share` literally, so an agent can act on
-it even without inferring the intent.
+`/teamai share what this session taught me`, an invocation the core skill routes
+to `share` (bare `/teamai` prints the menu and stops), and carries
+`teamai skill get share` literally, so an agent can act on it even without
+inferring the intent. It is withheld while recall is off, because that command
+refuses then.

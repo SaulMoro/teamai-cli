@@ -77,7 +77,9 @@ vi.mock('../update.js', () => ({
 
 const mockAutoDetectInit = vi.fn().mockResolvedValue({
   localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
-  teamConfig: { team: 'test', repo: '', toolPaths: {} },
+  // Recall on: the contribute hint routes to the share workflow, which is
+  // refused while recall is off, so the hint is withheld there too.
+  teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { recall: { enabled: true } } },
 });
 
 vi.mock('../config.js', async (importOriginal) => ({
@@ -369,12 +371,28 @@ describe('hook-handlers registry', () => {
     )!.handler;
     mockAutoDetectInit.mockResolvedValueOnce({
       localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user', contributeHintEnabled: true },
-      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { contributeHint: { enabled: false } } },
+      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { contributeHint: { enabled: false }, recall: { enabled: true } } },
     });
     mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
 
     const result = await handler.execute({ session_id: 's4', cwd: '/x' }, 'claude');
     expect(result).toContain('do share');
+  });
+
+  it('contribute-check handler stays silent while recall is off, since `teamai skill get share` would refuse', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockAutoDetectInit.mockResolvedValueOnce({
+      localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
+      teamConfig: { team: 'test', repo: '', toolPaths: {} },
+    });
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's3b', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
   it('contribute-check handler keeps hinting when config cannot be loaded', async () => {

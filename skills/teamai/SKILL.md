@@ -10,7 +10,7 @@ description: >-
   after a friction reminder. Triggers include "set up teamai", "join the team repo", "sync team
   skills", "team wiki", "share what I learned", and running /teamai. Talking about a team needs no
   skill; operating on what the team shares does.
-allowed-tools: Bash(teamai:*), Bash(npx teamai-cli:*)
+allowed-tools: Bash(teamai skill:*), Bash(npx teamai-cli skill:*)
 ---
 
 # teamai

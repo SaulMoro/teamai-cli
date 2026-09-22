@@ -864,6 +864,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   let removedSkillDirs = 0;
   const keptSkillDirs: string[] = [];
   const linkedSkillDirs: string[] = [];
+  const failedSkillDirs: { skillDir: string; first: { file: string; error: string } }[] = [];
   for (const skillDir of plan.skillDirs) {
     try {
       const name = path.basename(skillDir);
@@ -871,6 +872,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
         const result = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? []);
         if (prunedWhole(result)) removedSkillDirs++;
         else if (result.skippedSymlink) linkedSkillDirs.push(skillDir);
+        // A delete that failed is not a member's file: say what happened, not
+        // "the packaged files were removed".
+        else if (result.notRemoved.length > 0) failedSkillDirs.push({ skillDir, first: result.notRemoved[0] });
         else keptSkillDirs.push(skillDir);
       } else {
         await remove(skillDir);
@@ -890,6 +894,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // "delete the rest yourself" would send the member into the link target.
   for (const skillDir of linkedSkillDirs) {
     log.warn(`Kept ${skillDir}: it is a symlink, so TeamAI left it and whatever it points at alone.`);
+  }
+  for (const { skillDir, first } of failedSkillDirs) {
+    log.warn(`Could not delete packaged files under ${skillDir}. First: ${first.file} — ${first.error}. Fix the permissions and run \`teamai uninstall\` again, or delete the directory yourself.`);
   }
 
   // (d) Remove synced rules

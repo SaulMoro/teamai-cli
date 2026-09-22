@@ -472,7 +472,11 @@ always matches the CLI version it is running — `npm i -g teamai-cli@latest` is
 update, with no pull needed for the content to be current. Agents receive a single file
 from the CLI, `~/.<tool>/skills/teamai/SKILL.md`, a small discovery stub that points at
 those commands. Older releases copied the whole tree into every agent directory, where it
-went stale between pulls; `teamai pull` removes those leftovers. The legacy names still
+went stale between pulls; `teamai pull` removes those leftovers, keeping a copy of every
+removed file under `~/.teamai/removed-skills/`, one directory per pull, so an edit you made
+to one of them is not lost. A directory that also holds a file of your own is kept and named
+in the pull output. `share` is served only while recall is on for the team: until
+`teamai recall enable`, `teamai skill get share` refuses and says so. The legacy names still
 resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ---
@@ -937,6 +941,8 @@ Teams that route knowledge sharing through their own review flow (for example, a
 | Environment variable | shell | `TEAMAI_CONTRIBUTE_HINT_DISABLED=1` | Force-disables the hint (emergency kill switch) |
 
 Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai` keep working when invoked manually.
+
+The reminder is also withheld while recall is off for the team (the default until `teamai recall enable`): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on.
 
 ### Searching knowledge
 
