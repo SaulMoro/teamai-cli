@@ -15,7 +15,11 @@ do not skip, reorder, or invent commands.
 
 Look at what the user typed after `/teamai`.
 
-**If they gave NO scenario** (bare `/teamai`, or only greetings/no task):
+**If they gave NO scenario right after a TeamAI friction reminder** (the
+`[teamai]` line that suggests `/teamai share what this session taught me`),
+that reminder is the scenario: load `teamai skill get share` and follow it.
+
+**If they gave NO scenario otherwise** (bare `/teamai`, or only greetings/no task):
 print the menu below **exactly**, then **STOP and wait**. Take no other action —
 do not run any command, do not load another skill yet.
 

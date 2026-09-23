@@ -46,6 +46,17 @@ describe('requireInit: missing config versus unreadable config', () => {
     expect(String(error)).toContain(configPath);
   });
 
+  it('says an empty config is empty, since no loader logged anything for it', async () => {
+    const configPath = path.join(home, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, '');
+
+    const error = await requireInit().catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(NotInitializedError);
+    expect(String(error)).toContain(`${configPath} could not be read: it is empty`);
+    expect(String(error)).not.toContain('above');
+  });
+
   it('is not NotInitializedError when the config parses but fails validation', async () => {
     const configPath = path.join(home, '.teamai', 'config.yaml');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });

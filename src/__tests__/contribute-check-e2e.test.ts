@@ -64,6 +64,8 @@ function runContributeCheck(
       'node',
       [CLI_PATH, 'contribute-check', '--stdin', '--tool', tool],
       {
+        // cwd too: the share gate reads a project config under it.
+        cwd: homeDir,
         env: { ...process.env, HOME: homeDir, TEAMAI_LOG_LEVEL: 'silent' },
         timeout: 10000,
       },
@@ -194,13 +196,25 @@ describe('contribute-check E2E', () => {
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain(RAW_GITHUB_TOKEN);
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain('50 tool calls');
     expect(parsed.hookSpecificOutput.additionalContext).not.toContain('7 different tools');
-    expect(parsed.hookSpecificOutput.additionalContext).toContain('/teamai');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('/teamai share what this session taught me');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('teamai skill get share');
     expect(parsed.stopReason).toBeUndefined();
 
     // The real CLI persists hinted=true, so a repeated Stop hook is silent.
     const repeated = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID));
     expect(repeated.code).toBe(0);
     expect(repeated.stdout).toBe('');
+  });
+
+  it('withholds the reminder where `teamai skill get share` refuses: a config that cannot be loaded', async () => {
+    // Hooks written before the dispatcher still call this command directly; it
+    // must ask the same gate, or it nudges towards a command that says no.
+    writeEventsFile(tmpHome, buildRichSessionEvents(SESSION_ID));
+    fs.writeFileSync(path.join(tmpHome, '.teamai', 'config.yaml'), '');
+
+    const result = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID));
+
+    expect(result.stdout).toBe('');
   });
 
   it('produces no output for a trivial session below threshold', async () => {

@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { autoDetectInit, logDim, NotInitializedError } = vi.hoisted(() => ({
+const { autoDetectInit, findUnreadableProjectConfig, logDim, NotInitializedError } = vi.hoisted(() => ({
   autoDetectInit: vi.fn(),
+  // No project config under the test's cwd: the share gate goes on to autoDetectInit.
+  findUnreadableProjectConfig: vi.fn(async () => null),
   logDim: vi.fn(),
   NotInitializedError: class NotInitializedError extends Error {},
 }));
-vi.mock('../config.js', () => ({ autoDetectInit, NotInitializedError }));
+vi.mock('../config.js', () => ({
+  autoDetectInit,
+  findUnreadableProjectConfig,
+  NotInitializedError,
+  BROKEN_CONFIG_ADVICE: 'Fix the file, or move it aside and run `teamai init` to write a new one.',
+}));
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: logDim },
   setStderrOnly: vi.fn(() => false),

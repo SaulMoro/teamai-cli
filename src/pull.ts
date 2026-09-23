@@ -1015,7 +1015,13 @@ async function pullForScope(
           const skipRecall = !isRecallEnabled(localConfig, freshConfig);
           try { const { deployBuiltinAgents } = await import('./builtin-agents.js'); await deployBuiltinAgents(freshConfig, localConfig, { skipRecall }); } catch {}
           try { const { deployBuiltinRules } = await import('./builtin-rules.js'); await deployBuiltinRules(freshConfig, localConfig, { skipRecall }); } catch {}
-          try { const { deployBuiltinSkills } = await import('./builtin-skills.js'); await deployBuiltinSkills(freshConfig, localConfig); } catch {}
+          try {
+            const { deployBuiltinSkills } = await import('./builtin-skills.js');
+            await deployBuiltinSkills(freshConfig, localConfig);
+          } catch (e) {
+            // The stub is the agent's only way into TeamAI, so this one is not silent.
+            log.warn(`[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`);
+          }
           // Refresh managed culture/shared-instruction blocks as well. A CLI
           // upgrade may add a new target file while the team repo SHA and tool
           // target set remain unchanged.
@@ -1294,7 +1300,7 @@ async function pullForScope(
         log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
       }
     } catch (e) {
-      log.debug(`[${scopeLabel}] Built-in skills deployment skipped: ${(e as Error).message}`);
+      log.warn(`[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

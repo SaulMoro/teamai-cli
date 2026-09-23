@@ -168,11 +168,17 @@ describe('recall gate on served skills', () => {
   it('blocks share when a config exists but cannot be loaded, since recall and the source are then unknown', async () => {
     autoDetectInit.mockRejectedValue(new Error('Team config (teamai.yaml) not found. Check your repo path.'));
 
-    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'config' });
+    expect(await resolveServableSkill('share')).toEqual({
+      kind: 'blocked', name: 'share', reason: 'config',
+      detail: 'Team config (teamai.yaml) not found. Check your repo path.',
+    });
     await skillGet(['share']);
     expect(process.exitCode).toBe(1);
     expect(stdout).toBe('');
     expect(stderr).toContain('config on this machine could not be loaded');
+    // The refusal names what failed: `teamai doctor` cannot see a broken config.
+    expect(stderr).toContain('Team config (teamai.yaml) not found. Check your repo path.');
+    expect(stderr).not.toContain('teamai doctor');
     expect((await skillCatalog()).find((entry) => entry.name === 'share')).toMatchObject({ blockedBy: 'config', path: null });
     // Only share depends on the config; the rest is still served.
     expect((await resolveServableSkill('core')).kind).toBe('found');
@@ -184,7 +190,42 @@ describe('recall gate on served skills', () => {
     findUnreadableProjectConfig.mockResolvedValue('/work/proj/.teamai/config.yaml: bad indentation');
     withRecall(true);
 
-    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'config' });
+    expect(await resolveServableSkill('share')).toEqual({
+      kind: 'blocked', name: 'share', reason: 'config',
+      detail: '/work/proj/.teamai/config.yaml: bad indentation. '
+        + 'Fix the file, or move it aside and run `teamai init` to write a new one.',
+    });
     expect(autoDetectInit).not.toHaveBeenCalled();
+
+    await skillGet(['share']);
+    expect(process.exitCode).toBe(1);
+    expect(stderr).toContain('/work/proj/.teamai/config.yaml: bad indentation');
+    expect(stderr).toContain('move it aside');
+  });
+
+  it('keeps only the first line of a multi-line parse error, which names the file and the position', async () => {
+    // YAML errors end in a code frame and a newline; appended as-is, the
+    // advice would start a line of its own with a stray ". ".
+    findUnreadableProjectConfig.mockResolvedValue(
+      '/work/proj/.teamai/config.yaml: Unexpected flow-seq-end at line 1, column 7:\n\nrepo: [unclosed\n      ^\n',
+    );
+
+    expect(await resolveServableSkill('share')).toMatchObject({
+      reason: 'config',
+      detail: '/work/proj/.teamai/config.yaml: Unexpected flow-seq-end at line 1, column 7. '
+        + 'Fix the file, or move it aside and run `teamai init` to write a new one.',
+    });
+  });
+
+  it('lets a fault in the gate itself propagate instead of reporting it as a broken config', async () => {
+    // Only loading the config means "cannot be loaded"; anything else would
+    // print "the teamai config could not be loaded" over an unrelated bug.
+    const fault = new TypeError('a bug past the config load');
+    autoDetectInit.mockResolvedValue({
+      localConfig: { get repo(): never { throw fault; } },
+      teamConfig: { sharing: { recall: { enabled: true } } },
+    });
+
+    await expect(resolveServableSkill('share')).rejects.toBe(fault);
   });
 });

@@ -561,19 +561,14 @@ describe('init', () => {
   });
 
   describe('deploys built-in skills after init', () => {
-    it('calls deployBuiltinSkills with teamConfig when loadTeamConfig returns non-null', async () => {
+    /** Init against a clone whose teamai.yaml loads, so the stub deploy runs. */
+    async function initWithTeamConfig(): Promise<void> {
       let cloneDone = false;
-      pathExistsFn = (p: string) => {
-        if (p === localPath) return cloneDone;
-        return false;
-      };
-
+      pathExistsFn = (p: string) => (p === localPath ? cloneDone : false);
       mockGfRepoClone.mockImplementation(() => {
         cloneDone = true;
       });
-
-      const mockedLoadTeamConfig = vi.mocked(await import('../config.js')).loadTeamConfig;
-      mockedLoadTeamConfig.mockResolvedValue({
+      vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
         team: 'my-team',
         repo: 'https://git.woa.com/HyperAI/teamai-test.git',
         provider: 'tgit',
@@ -586,10 +581,12 @@ describe('init', () => {
         },
         toolPaths: {},
       } as never);
-
       questionAnswers = ['n', '1'];
-
       await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user' });
+    }
+
+    it('calls deployBuiltinSkills with teamConfig when loadTeamConfig returns non-null', async () => {
+      await initWithTeamConfig();
 
       expect(mockDeployBuiltinSkills).toHaveBeenCalled();
       // No recall option: one stub deploys for everyone, and `teamai skill get
@@ -598,6 +595,33 @@ describe('init', () => {
         expect.objectContaining({ team: expect.any(String) }),
         expect.anything(),
       );
+    });
+
+    it('announces the stub as ready only when it landed', async () => {
+      const { log } = await import('../utils/logger.js');
+      mockDeployBuiltinSkills.mockResolvedValueOnce(1);
+
+      await initWithTeamConfig();
+
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill is ready in your IDE'));
+      expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining('not deployed'));
+    });
+
+    it('says the stub reached no tool without pointing at output that may not exist', async () => {
+      // No installed tool logs at debug only, so "see the lines above" alone
+      // would be false, and `teamai doctor` has no check for the stub.
+      const { log } = await import('../utils/logger.js');
+      mockDeployBuiltinSkills.mockResolvedValueOnce(0);
+
+      await initWithTeamConfig();
+
+      const warned = vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
+      expect(warned).toContain('The built-in teamai skill was not deployed to any AI tool');
+      expect(warned).toContain('teamai pull');
+      expect(warned).toContain('~/.teamai/debug.log');
+      expect(warned).not.toContain('see the lines above');
+      expect(warned).not.toContain('teamai doctor');
+      expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining('is ready in your IDE'));
     });
   });
 

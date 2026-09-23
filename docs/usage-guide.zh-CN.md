@@ -453,7 +453,8 @@ teamai skill path wiki              # 打印打包目录，用于运行 skill �
 只删除其中的打包文件，保留该目录和你的文件，并在 pull 输出中点名。`share` 只在开启 recall 后才会提供（默认关闭；
 团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）：在此之前，
 `teamai skill get share` 会拒绝并说明原因。
-只读 HTTP 源上它同样会拒绝，因为 `teamai contribute` 无法写入。旧名字仍然可用：
+只读 HTTP 源上它同样会拒绝，因为 `teamai contribute` 无法写入；teamai 配置文件存在但无法加载时也会拒绝
+（提示会说明失败原因；若是文件无法解析，还会指出是哪个文件、哪一行），因为此时无法确定 recall 与来源。旧名字仍然可用：
 `teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---
@@ -914,7 +915,7 @@ teamai contribute --file /tmp/session.md --scope project
 
 只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai` 不受影响。
 
-未开启 recall 时（默认关闭；团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。只读 HTTP 源上这条提醒也从不出现，因为 `share` 同样会拒绝。
+未开启 recall 时（默认关闭；团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。只读 HTTP 源上，或 teamai 配置文件存在但无法加载时，这条提醒也从不出现，因为 `share` 同样会拒绝。
 
 ### 搜索知识
 

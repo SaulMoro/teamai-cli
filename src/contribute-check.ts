@@ -710,6 +710,11 @@ export async function contributeCheck(toolArg?: string): Promise<void> {
     return;
   }
 
+  // The same gate as the dispatcher's handler: hooks written before it still
+  // call this command, and must not nudge towards a `share` that refuses.
+  const { contributeHintAllowed } = await import('./skill-content.js');
+  if (!(await contributeHintAllowed())) return;
+
   const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
   const tool = toolArg?.toLowerCase() ?? 'claude';
   const { hint } = await contributeCheckForSession(

@@ -230,32 +230,6 @@ const trackSlashHandler: HookHandler = {
   },
 };
 
-/**
- * Whether the share-learnings hint may be emitted at all. Resolved lazily per
- * hook run so a team can switch it off via teamai.yaml (or a member via local
- * config) without re-injecting hooks. Falls back to enabled when there is no
- * config at all, preserving pre-toggle behavior for half-initialized installs,
- * where `teamai skill get share` serves too. A config that exists but cannot be
- * loaded withholds it: `share` refuses there, so the nudge would lead nowhere.
- *
- * Recall and a writable source gate it too: the hint routes to the `share`
- * workflow, and `teamai skill get share` refuses while recall is off or the
- * team source is read-only HTTP, so a nudge towards it would send the agent to
- * a command that says no. The dispatcher already drops this `gitOnly` handler
- * for HTTP teams; the check here keeps the gate the same wherever it is called.
- */
-async function contributeHintAllowed(): Promise<boolean> {
-  const { isContributeHintEnabled, isRecallEnabled } = await import('./types.js');
-  const { autoDetectInit, NotInitializedError } = await import('./config.js');
-  try {
-    const { localConfig, teamConfig } = await autoDetectInit();
-    return localConfig.repo?.kind !== 'http'
-      && isContributeHintEnabled(localConfig, teamConfig)
-      && isRecallEnabled(localConfig, teamConfig);
-  } catch (e) {
-    return e instanceof NotInitializedError ? isContributeHintEnabled({}, {}) : false;
-  }
-}
 
 /**
  * Ask the model to declare which recalled documents it actually used.
@@ -276,6 +250,7 @@ export function buildVotesNudge(recalledDocIds: readonly string[]): string {
 const contributeCheckHandler: HookHandler = {
   name: 'contribute-check',
   async execute(stdin, tool) {
+    const { contributeHintAllowed } = await import('./skill-content.js');
     if (!(await contributeHintAllowed())) return null;
 
     const { contributeCheckForSession } = await import('./contribute-check.js');
@@ -318,6 +293,7 @@ const pendingHintHandler: HookHandler = {
     // Always consume the stash so a hint stashed before the team turned the
     // feature off is not delivered later when it is turned back on.
     const stashed = await pending.takePendingHint(sessionId);
+    const { contributeHintAllowed } = await import('./skill-content.js');
     const hint = (await contributeHintAllowed()) ? stashed : null;
     const votesHint = await pending.takePendingVotesHint(sessionId);
 

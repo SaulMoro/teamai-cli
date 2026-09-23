@@ -1637,7 +1637,7 @@ export async function init(options: GlobalOptions & {
   if (stubDeployed > 0) {
     log.info('The built-in teamai skill is ready in your IDE; it loads its workflows with `teamai skill get`.');
   } else {
-    log.warn('The built-in teamai skill was not deployed to any AI tool (see the lines above); run `teamai pull` once the cause is fixed, or `teamai doctor` to see it.');
+    log.warn('The built-in teamai skill was not deployed to any AI tool, so agents cannot find TeamAI yet. The reason is printed above or recorded in ~/.teamai/debug.log; the usual one is that none of the selected tools is installed. Run `teamai pull` once it is fixed.');
   }
   log.info('Skills, rules, env and docs auto-sync on each session start when the selected agent has active TeamAI hooks.');
   log.info('Run `teamai status` to check current config.');

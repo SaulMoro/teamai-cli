@@ -481,7 +481,9 @@ yours and stays. A directory that also holds a file of your own is kept, with on
 packaged files removed, and named in the pull output. `share` is served only while recall is
 on (off by default; `sharing.recall.enabled: true` in `teamai.yaml` for the team, or
 `teamai recall enable` for one machine): until then `teamai skill get share` refuses and says so.
-It also refuses on a read-only HTTP source, where `teamai contribute` cannot write. The legacy names still
+It also refuses on a read-only HTTP source, where `teamai contribute` cannot write, and when a
+teamai config exists but cannot be loaded (the refusal says what failed, and for a file that does not parse, which file and where),
+since recall and the source are then unknown. The legacy names still
 resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ---
@@ -947,7 +949,7 @@ Teams that route knowledge sharing through their own review flow (for example, a
 
 Only the nudge is affected: friction scoring, `teamai contribute --file`, and `/teamai` keep working when invoked manually.
 
-The reminder is also withheld while recall is off (the default until `sharing.recall.enabled: true` in `teamai.yaml`, or `teamai recall enable` on one machine): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on. It never appears on a read-only HTTP source, where `share` refuses too.
+The reminder is also withheld while recall is off (the default until `sharing.recall.enabled: true` in `teamai.yaml`, or `teamai recall enable` on one machine): it points at the `share` workflow, and `teamai skill get share` refuses until recall is on. It never appears on a read-only HTTP source, or while a teamai config exists but cannot be loaded, where `share` refuses too.
 
 ### Searching knowledge
 

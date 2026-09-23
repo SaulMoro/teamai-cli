@@ -14,7 +14,13 @@ import {
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
 import { LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
-import { blockMessage, resolveServableSkill, skillCatalog, type SkillBlockReason } from './skill-content.js';
+import {
+  BLOCK_NOTES,
+  refuseBlocked,
+  resolveServableSkill,
+  skillCatalog,
+  type BlockedSkill,
+} from './skill-content.js';
 import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
@@ -28,13 +34,6 @@ interface ResolvedSkill {
   primaryOrigin: 'team' | 'agent' | 'builtin';
   /** Optional namespace if found in the team repo. */
   namespace?: string;
-}
-
-/** A packaged skill the serving gate withholds; there is no path to print. */
-interface BlockedSkill {
-  kind: 'blocked';
-  name: string;
-  reason: SkillBlockReason;
 }
 
 type LocatedSkill = ResolvedSkill | BlockedSkill;
@@ -59,10 +58,7 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
     if (!(e instanceof NotInitializedError)) throw e;
     const packaged = await resolveServableSkill(name);
     if (packaged.kind === 'blocked') {
-      const { headline, hint } = blockMessage(packaged.name, packaged.reason);
-      log.error(headline);
-      log.dim(hint);
-      process.exitCode = 1;
+      refuseBlocked(packaged);
       return;
     }
     if (packaged.kind !== 'found') {
@@ -97,10 +93,7 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   // The resolver never hands out a blocked skill, so there is no directory to
   // print here even by accident; only the refusal is left to do.
   if (located.kind === 'blocked') {
-    const { headline, hint } = blockMessage(located.name, located.reason);
-    log.error(headline);
-    log.dim(hint);
-    process.exitCode = 1;
+    refuseBlocked(located);
     return;
   }
   const resolved: ResolvedSkill = located;
@@ -174,10 +167,7 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
     console.log('  (none — the installed package ships no skill content)');
   } else {
     for (const entry of catalog) {
-      const note = entry.blockedBy === 'recall' ? '  (needs recall — teamai recall enable)'
-        : entry.blockedBy === 'read-only' ? '  (not available on a read-only HTTP source)'
-        : entry.blockedBy === 'config' ? '  (not available: the teamai config could not be loaded)' : '';
-      console.log(`  ${entry.name}${note}`);
+      console.log(`  ${entry.name}${entry.blockedBy ? `  (${BLOCK_NOTES[entry.blockedBy]})` : ''}`);
       console.log(`    ${truncate(entry.description, DESCRIPTION_MAX) || '(no description)'}`);
       console.log(`    teamai skill get ${entry.name}`);
     }
@@ -228,7 +218,7 @@ async function locateSkill(
   //    so it answers for the names nothing on this machine claims: `core` and
   //    `wiki` live in the package, and the agent directory holds only the stub.
   const served = await resolveServableSkill(name);
-  if (served.kind === 'blocked') return { kind: 'blocked', name: served.name, reason: served.reason };
+  if (served.kind === 'blocked') return served;
   if (served.kind === 'found') {
     return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };
   }

@@ -129,10 +129,16 @@ export class NotInitializedError extends Error {
   readonly name = 'NotInitializedError';
 }
 
+/** The local config and the team config it points at, as the init checks return them. */
+export type TeamaiInit = { localConfig: LocalConfig; teamConfig: TeamaiConfig };
+
+/** What to do about a config file that exists but cannot be used. */
+export const BROKEN_CONFIG_ADVICE = 'Fix the file, or move it aside and run `teamai init` to write a new one.';
+
 /**
  * Require that teamai is initialized (local config exists)
  */
-export async function requireInit(): Promise<{ localConfig: LocalConfig; teamConfig: TeamaiConfig }> {
+export async function requireInit(): Promise<TeamaiInit> {
   const localConfig = await loadLocalConfig();
   if (!localConfig) return throwMissingOrInvalid(expandHome(getUserConfigPath()));
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
@@ -144,14 +150,20 @@ export async function requireInit(): Promise<{ localConfig: LocalConfig; teamCon
 
 /**
  * The loaders return null both when the config file is absent and when it could
- * not be used (they log the reason). Only the first is "not initialized";
- * telling a member with a broken config to re-init sends them over a real setup.
+ * not be used. Only the first is "not initialized"; telling a member with a
+ * broken config to re-init sends them over a real setup. The loaders log a
+ * parse or validation error, but not a file that is empty or cannot be opened,
+ * so those two are named here.
  */
-async function throwMissingOrInvalid(configPath: string, notInitializedMessage = 'teamai is not initialized. Run `teamai init` first.'): Promise<never> {
-  if (await pathExists(configPath)) {
-    throw new Error(`The teamai config at ${configPath} could not be read (the reason is logged above). Fix the file, or move it aside and run \`teamai init\` to write a new one.`);
+async function throwMissingOrInvalid(configPath: string): Promise<never> {
+  if (!(await pathExists(configPath))) {
+    throw new NotInitializedError('teamai is not initialized. Run `teamai init` first.');
   }
-  throw new NotInitializedError(notInitializedMessage);
+  const content = await readFileSafe(configPath);
+  const why = content === null ? 'the file could not be opened'
+    : content.trim() === '' ? 'it is empty'
+    : 'it is not a valid teamai config (the error is printed above)';
+  throw new Error(`The teamai config at ${configPath} could not be read: ${why}. ${BROKEN_CONFIG_ADVICE}`);
 }
 
 // ─── Scope-aware config loading ─────────────────────────
@@ -475,7 +487,7 @@ export async function requireInitForScope(
  * If cwd has a project-scope config, uses that; otherwise falls back to user scope.
  * This is the recommended entry point for commands that support both scopes.
  */
-export async function autoDetectInit(): Promise<{ localConfig: LocalConfig; teamConfig: TeamaiConfig }> {
+export async function autoDetectInit(): Promise<TeamaiInit> {
   const projectConfig = await detectProjectConfig();
   if (projectConfig) {
     const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);

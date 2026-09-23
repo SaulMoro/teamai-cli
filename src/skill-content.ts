@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { listFilesRecursive, pathExists } from './utils/fs.js';
 import { readSkillDescription } from './agent-skills.js';
-import { setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from './utils/logger.js';
+import type { TeamaiInit } from './config.js';
 
 // ─── CLI-served skill content ────────────────────────────
 //
@@ -62,46 +63,108 @@ const SKILL_ALIASES: Readonly<Record<string, string>> = {
  */
 const RECALL_DEPENDENT_SKILLS = new Set(['share']);
 
-/** Why a served skill is withheld right now. */
-export type SkillBlockReason = 'recall' | 'read-only' | 'config';
+/**
+ * Why a served skill is withheld right now. A config that cannot be loaded
+ * carries what failed: nothing else reports it, because detection skips a
+ * broken project file and `teamai doctor` reads the one it falls back to.
+ */
+export type SkillBlock =
+  | { reason: 'recall' }
+  | { reason: 'read-only' }
+  | { reason: 'config'; detail: string };
+
+export type SkillBlockReason = SkillBlock['reason'];
 
 /**
- * What makes this skill unusable right now, or null.
+ * The share gate's answer. A blocked answer carries no config: nothing past the
+ * gate may act on it. An open one carries the config it was decided on, or
+ * null when there is none on the machine.
+ */
+export type ShareGate =
+  | { block: SkillBlock; config: null }
+  | { block: null; config: TeamaiInit | null };
+
+/**
+ * Whether `share` can be served here. The Stop-hook reminder asks this too, so
+ * the nudge and `teamai skill get share` cannot disagree, and it reads its own
+ * on/off switch from the config returned instead of loading it a second time.
  *
  * Fails open only where there is no config at all: a fresh install reading
  * the docs gets the content rather than a refusal it cannot act on. A config
  * that exists but cannot be loaded blocks: whether recall is on, or the source
  * writable, is then unknown, and the workflow would fail at `teamai contribute`.
+ * Only loading the config is read as "cannot be loaded"; any other failure is
+ * a fault here and propagates.
  */
-async function blockReason(name: string): Promise<SkillBlockReason | null> {
-  if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
-  const { NotInitializedError } = await import('./config.js');
+export async function shareGate(): Promise<ShareGate> {
+  const [{ autoDetectInit, findUnreadableProjectConfig, NotInitializedError, BROKEN_CONFIG_ADVICE }, { isRecallEnabled }] =
+    await Promise.all([import('./config.js'), import('./types.js')]);
+  // Loading the config can migrate it and say so with `log.info`. That line
+  // must not land in the skill content, the JSON these commands print on
+  // stdout, or a hook's reply, so config loading reports on stderr here.
+  const previous = setStderrOnly(true);
+  let loaded: TeamaiInit;
   try {
-    const [{ autoDetectInit, findUnreadableProjectConfig }, { isRecallEnabled }] = await Promise.all([
-      import('./config.js'),
-      import('./types.js'),
-    ]);
-    // Loading the config can migrate it and say so with `log.info`. That line
-    // must not land in the skill content or the JSON these commands print on
-    // stdout, so config loading reports on stderr for this one call.
-    const previous = setStderrOnly(true);
-    let loaded: Awaited<ReturnType<typeof autoDetectInit>>;
-    try {
-      // A broken project config is skipped by detection, which would then
-      // answer with the user config: another team's recall and source.
-      if (await findUnreadableProjectConfig()) return 'config';
-      loaded = await autoDetectInit();
-    } finally {
-      setStderrOnly(previous);
+    // A broken project config is skipped by detection, which would then
+    // answer with the user config: another team's recall and source.
+    const unreadable = await findUnreadableProjectConfig();
+    if (unreadable) {
+      // A parse error spans several lines (a code frame); its first names the
+      // file, the line and the column, which is what the member acts on.
+      const detail = `${firstLine(unreadable)}. ${BROKEN_CONFIG_ADVICE}`;
+      return { block: { reason: 'config', detail }, config: null };
     }
-    const { localConfig, teamConfig } = loaded;
-    // `teamai contribute` refuses a read-only source (read-only.ts), so the
-    // workflow would fail at its last step after the agent did all the work.
-    if (localConfig.repo?.kind === 'http') return 'read-only';
-    return isRecallEnabled(localConfig, teamConfig) ? null : 'recall';
+    loaded = await autoDetectInit();
   } catch (e) {
-    return e instanceof NotInitializedError ? null : 'config';
+    if (e instanceof NotInitializedError) return { block: null, config: null };
+    return { block: { reason: 'config', detail: firstLine(e instanceof Error ? e.message : String(e)) }, config: null };
+  } finally {
+    setStderrOnly(previous);
   }
+  const { localConfig, teamConfig } = loaded;
+  // `teamai contribute` refuses a read-only source (read-only.ts), so the
+  // workflow would fail at its last step after the agent did all the work.
+  if (localConfig.repo?.kind === 'http') return { block: { reason: 'read-only' }, config: null };
+  if (!isRecallEnabled(localConfig, teamConfig)) return { block: { reason: 'recall' }, config: null };
+  return { block: null, config: loaded };
+}
+
+/** The first line of an error, without the colon that introduces its code frame. */
+function firstLine(text: string): string {
+  return text.trim().split('\n')[0].trim().replace(/:$/, '');
+}
+
+/**
+ * Whether the Stop-hook share reminder may be shown. Resolved per hook run so
+ * a team can switch it off in teamai.yaml (or a member in local config) without
+ * re-injecting hooks; on by default, and with no config at all, where
+ * `teamai skill get share` serves too.
+ *
+ * The reminder routes to `share`, so it is withheld wherever `shareGate`
+ * blocks it: a nudge there would send the agent to a command that says no.
+ * Both the hook dispatcher and the legacy `teamai contribute-check` ask this.
+ */
+export async function contributeHintAllowed(): Promise<boolean> {
+  const { isContributeHintEnabled } = await import('./types.js');
+  let gate: ShareGate;
+  try {
+    gate = await shareGate();
+  } catch (e) {
+    // A fault in the gate itself, not a config it could not load (the gate
+    // answers that): a Stop hook must not fail the turn over a reminder.
+    log.debug(`share gate failed, reminder withheld: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+  if (gate.block) return false;
+  return gate.config
+    ? isContributeHintEnabled(gate.config.localConfig, gate.config.teamConfig)
+    : isContributeHintEnabled({}, {});
+}
+
+/** What makes this skill unusable right now, or null. */
+async function blockReason(name: string): Promise<SkillBlock | null> {
+  if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
+  return (await shareGate()).block;
 }
 
 /** A skill directory that ships inside the npm package. */
@@ -196,8 +259,11 @@ async function resolvePackagedSkill(
  */
 export type ServableSkillResolution =
   | { kind: 'found'; skill: PackagedSkill }
-  | { kind: 'blocked'; name: string; reason: SkillBlockReason }
+  | BlockedSkill
   | { kind: 'not-found'; name: string };
+
+/** A packaged skill the gate withholds: its canonical name and why. */
+export type BlockedSkill = { kind: 'blocked'; name: string } & SkillBlock;
 
 /**
  * The only way to obtain a packaged skill outside this module.
@@ -212,14 +278,21 @@ export async function resolveServableSkill(
 ): Promise<ServableSkillResolution> {
   const skill = await resolvePackagedSkill(name, roots);
   if (!skill) return { kind: 'not-found', name };
-  const reason = await blockReason(skill.name);
-  if (reason) return { kind: 'blocked', name: skill.name, reason };
+  const block = await blockReason(skill.name);
+  if (block) return { kind: 'blocked', name: skill.name, ...block };
   return { kind: 'found', skill };
 }
 
+/** The short note `skill list` prints beside a blocked skill, per reason. */
+export const BLOCK_NOTES: Record<SkillBlockReason, string> = {
+  recall: 'needs recall — teamai recall enable',
+  'read-only': 'not available on a read-only HTTP source',
+  config: 'not available: the teamai config could not be loaded',
+};
+
 /** The two lines every command prints for a blocked skill. */
-export function blockMessage(name: string, reason: SkillBlockReason): { headline: string; hint: string } {
-  switch (reason) {
+export function blockMessage(name: string, block: SkillBlock): { headline: string; hint: string } {
+  switch (block.reason) {
     case 'recall':
       return {
         headline: `${name} needs recall, which is disabled for this team.`,
@@ -233,10 +306,10 @@ export function blockMessage(name: string, reason: SkillBlockReason): { headline
     case 'config':
       return {
         headline: `${name} is not available: the teamai config on this machine could not be loaded, so whether it can contribute is unknown.`,
-        hint: 'Run `teamai doctor` to see what is wrong with it, then try again.',
+        hint: block.detail,
       };
     default: {
-      const exhaustive: never = reason;
+      const exhaustive: never = block;
       throw new Error(`Unhandled block reason ${String(exhaustive)}`);
     }
   }
@@ -313,8 +386,8 @@ function rootsMissing(): void {
  * cannot finish whichever way it asks. A routing aid, not access control: the
  * files ship in the npm package either way.
  */
-function refuseBlocked(name: string, reason: SkillBlockReason): void {
-  const { headline, hint } = blockMessage(name, reason);
+export function refuseBlocked(blocked: BlockedSkill): void {
+  const { headline, hint } = blockMessage(blocked.name, blocked);
   diagnostic(`${chalk.red('✖')} ${headline}`);
   diagnostic(`  ${hint}`);
   process.exitCode = 1;
@@ -360,7 +433,7 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
       // either found or blocked.
       if (resolved.kind !== 'found') {
         if (resolved.kind === 'blocked') {
-          const { headline, hint } = blockMessage(listed.name, resolved.reason);
+          const { headline, hint } = blockMessage(listed.name, resolved);
           diagnostic(`${chalk.yellow('⚠')} Skipped ${listed.name}. ${headline} ${hint}`);
         }
         continue;
@@ -375,7 +448,7 @@ export async function skillGet(names: string[], options: SkillGetOptions = {}): 
         return;
       }
       if (resolved.kind === 'blocked') {
-        refuseBlocked(resolved.name, resolved.reason);
+        refuseBlocked(resolved);
         return;
       }
       targets.push(resolved.skill);
@@ -412,7 +485,7 @@ export async function skillPath(name: string): Promise<void> {
       notFound(name, await listServableSkills(roots));
       return;
     case 'blocked':
-      refuseBlocked(resolved.name, resolved.reason);
+      refuseBlocked(resolved);
       return;
     case 'found':
       console.log(resolved.skill.dir);

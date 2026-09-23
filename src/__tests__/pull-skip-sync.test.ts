@@ -81,6 +81,12 @@ vi.mock('../update.js', () => ({
   releaseLock: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The real deploy by default; a test makes it fail once to see what pull reports.
+vi.mock('../builtin-skills.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../builtin-skills.js')>();
+  return { ...actual, deployBuiltinSkills: vi.fn(actual.deployBuiltinSkills) };
+});
+
 import { pull, compileRecallRulesBlock, cleanupInactiveNamespaceSkills } from '../pull.js';
 import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig, loadStateForScope, saveStateForScope } from '../config.js';
 import { getHeadRev, createGit, pullRepo } from '../utils/git.js';
@@ -298,6 +304,33 @@ describe('pull skip-sync when repo HEAD unchanged', () => {
     );
     expect(saveStateForScope).toHaveBeenCalled();
     expect(vi.mocked(saveStateForScope).mock.calls[0][0].lastPullTargets).toEqual(['claude']);
+  });
+
+  it('warns when the built-in stub cannot be deployed on the revision fast path', async () => {
+    // The stub is the agent's only way into TeamAI: a failure to write it must
+    // reach the member, not vanish after "Already synced" has printed.
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+    vi.mocked(deployBuiltinSkills).mockRejectedValueOnce(new Error('EACCES: permission denied'));
+    vi.mocked(getHeadRev).mockResolvedValue('abc1234');
+    vi.mocked(loadStateForScope).mockResolvedValue(emptyState({ lastPullRev: 'abc1234', lastPullTargets: ['claude'] }));
+
+    await pull({});
+
+    expect(log.success).toHaveBeenCalledWith(expect.stringContaining('Already synced at abc1234, skipping'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('EACCES: permission denied'));
+  });
+
+  it('warns when the built-in stub cannot be deployed on a full sync', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+    vi.mocked(deployBuiltinSkills).mockRejectedValueOnce(new Error('EACCES: permission denied'));
+    vi.mocked(getHeadRev).mockResolvedValue('def5678');
+    vi.mocked(loadStateForScope).mockResolvedValue(emptyState({ lastPullRev: 'abc1234' }));
+
+    await pull({});
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('EACCES: permission denied'));
   });
 
   it('should do full sync when HEAD rev differs from lastPullRev', async () => {

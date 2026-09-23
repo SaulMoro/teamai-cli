@@ -92,6 +92,18 @@ function validate(program: Command, invocations: Invocation[]): string[] {
       continue;
     }
 
+    // A group with subcommands and no argument of its own can only be followed
+    // by one of them (or a flag), so any other word is a subcommand that does
+    // not exist. Placeholders such as `<name>` stand for one and are skipped.
+    const next = rest[0];
+    if (
+      next !== undefined && command.commands.length > 0 && command.registeredArguments.length === 0
+      && !next.startsWith('-') && !/[<>[\]{}"'…]/.test(next)
+    ) {
+      problems.push(`${where}  → unknown subcommand "${next}" for \`teamai ${command.name()}\``);
+      continue;
+    }
+
     const flags = knownFlags(command, program);
     for (const token of rest) {
       if (!token.startsWith('-') || token === '-') continue;
@@ -125,10 +137,16 @@ describe('commands named by the served skill content', () => {
     const problems = validate(program, [
       { file: 'synthetic.md', line: 1, text: 'teamai extract graph' },
       { file: 'synthetic.md', line: 2, text: 'teamai codebase --no-such-flag' },
+      // A misspelled or renamed subcommand inside a group: the group matches, so
+      // without its own check the typo is read as an argument.
+      { file: 'synthetic.md', line: 3, text: 'teamai skill gett core' },
+      // A group that takes an argument of its own is left alone: `enabel` is a query.
+      { file: 'synthetic.md', line: 4, text: 'teamai recall enabel' },
     ]);
 
-    expect(problems).toHaveLength(2);
+    expect(problems).toHaveLength(3);
     expect(problems[0]).toContain('unknown command "extract"');
     expect(problems[1]).toContain('unknown flag "--no-such-flag"');
+    expect(problems[2]).toContain('unknown subcommand "gett" for `teamai skill`');
   });
 });
