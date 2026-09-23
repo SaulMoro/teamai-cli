@@ -37,6 +37,15 @@ function visibleOptions(command: Command): Option[] {
   return command.options.filter((option) => option.long !== '--help');
 }
 
+/**
+ * Subcommands `--help` lists. Hidden ones (`track`, `contribute-check`, …) are
+ * hook plumbing the CLI calls itself; listing them would advertise them to the
+ * agent as supported commands. The implicit `help` entry says nothing.
+ */
+function visibleSubcommands(command: Command): Command[] {
+  return command.createHelp().visibleCommands(command).filter((sub) => sub.name() !== 'help');
+}
+
 function renderCommand(command: Command, parents: string[]): string[] {
   const path = [...parents, command.name()];
   const args = command.registeredArguments.map((a) => {
@@ -51,7 +60,7 @@ function renderCommand(command: Command, parents: string[]): string[] {
   for (const option of visibleOptions(command)) {
     lines.push(renderOption(option));
   }
-  for (const sub of command.commands) {
+  for (const sub of visibleSubcommands(command)) {
     lines.push(...renderCommand(sub, path).map((line) => `  ${line}`));
   }
   return lines;
@@ -66,7 +75,7 @@ export function renderCommandsReference(program: Command): string {
     sections.push(['## Global options', '', ...globalOptions.map(renderOption).map((l) => l.slice(2))].join('\n'));
   }
 
-  for (const command of program.commands) {
+  for (const command of visibleSubcommands(program)) {
     sections.push([`## ${command.name()}`, '', ...renderCommand(command, [])].join('\n'));
   }
 

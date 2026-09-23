@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const autoDetectInit = vi.fn();
-vi.mock('../config.js', () => ({ autoDetectInit }));
+vi.mock('../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../config.js')>()),
+  autoDetectInit,
+}));
 
 import { resolveServableSkill, skillCatalog, skillGet, skillPath } from '../skill-content.js';
 
@@ -150,10 +153,24 @@ describe('recall gate on served skills', () => {
   });
 
   it('fails open when there is no team config to consult', async () => {
-    autoDetectInit.mockRejectedValue(new Error('not initialized'));
+    const { NotInitializedError } = await import('../config.js');
+    autoDetectInit.mockRejectedValue(new NotInitializedError('teamai is not initialized. Run `teamai init` first.'));
 
     // A fresh machine reading the docs gets the content, not a refusal it
     // cannot act on.
     expect((await resolveServableSkill('share')).kind).toBe('found');
+  });
+
+  it('blocks share when a config exists but cannot be loaded, since recall and the source are then unknown', async () => {
+    autoDetectInit.mockRejectedValue(new Error('Team config (teamai.yaml) not found. Check your repo path.'));
+
+    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'config' });
+    await skillGet(['share']);
+    expect(process.exitCode).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('config on this machine could not be loaded');
+    expect((await skillCatalog()).find((entry) => entry.name === 'share')).toMatchObject({ blockedBy: 'config', path: null });
+    // Only share depends on the config; the rest is still served.
+    expect((await resolveServableSkill('core')).kind).toBe('found');
   });
 });

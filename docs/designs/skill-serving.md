@@ -89,8 +89,10 @@ path (measured here from a 77-character one).
   `skill get <name>` refuses, `skill get --all` leaves the skill out and says so
   on stderr, `skill path <name>` and `skill show <name>` refuse, and
   `skill list --json` reports `blockedBy: "recall"` with `path: null`. With no
-  team config to consult — or one it cannot load — it fails open: a refusal the
-  member cannot act on is worse than serving the workflow. The Stop-hook share
+  config on the machine at all it fails open: a refusal a fresh install cannot act
+  on is worse than serving the workflow. A config that exists but cannot be loaded
+  blocks instead (`blockedBy: "config"`), since recall and the source are then
+  unknown and the workflow would fail at `teamai contribute`. The Stop-hook share
   reminder is gated the same way (`contributeHintAllowed`, `src/hook-handlers.ts`),
   because it points at this command. The gate lives in one place:
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
@@ -176,7 +178,7 @@ member's own skill that uses a legacy name, a root TeamAI never managed because
 directory. Checking the path alone would have deleted those. What is removed is
 still copied first to
 `~/.teamai/removed-skills/<run>/<base>/<tool>/<skill-root>/<skill>/`, so no
-removal is a one-way door. Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
+removal is a one-way door. The legacy trees go only after the stub deployed for that agent: pruning first and then failing to write the stub (a link, a read-only directory) would leave nothing to discover. Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
 stub goes to the shared one when a copy already lives there; the copy an earlier
 release left in the other root is retired by the same rule
 (`retireOtherCodexCopy`), so Codex never sees a stale `teamai` beside the current

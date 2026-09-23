@@ -160,20 +160,36 @@ async function walkFiles(dir: string, prefix = ''): Promise<string[]> {
   return found;
 }
 
-/** Remove `dir` and every directory under it that holds nothing. */
-async function removeEmptyDirs(dir: string): Promise<void> {
+/**
+ * Remove `dir` and every directory under it that holds nothing. A directory
+ * that still has something in it stays, which is the point: that something is
+ * the member's. Any other failure (permissions, a busy mount) is returned, so
+ * the prune does not report a directory gone that is still there.
+ */
+async function removeEmptyDirs(dir: string): Promise<{ file: string; error: string }[]> {
+  const failures: { file: string; error: string }[] = [];
   let entries;
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') failures.push({ file: dir, error: (e as Error).message });
+    return failures;
   }
   for (const entry of entries) {
-    if (entry.isDirectory()) await removeEmptyDirs(path.join(dir, entry.name));
+    if (entry.isDirectory()) failures.push(...await removeEmptyDirs(path.join(dir, entry.name)));
   }
-  // Fails when something is left, which is the point: that something is the
-  // member's, and their directory stays.
-  try { await fs.promises.rmdir(dir); } catch { /* not empty */ }
+  try {
+    await fs.promises.rmdir(dir);
+  } catch (e) {
+    // Not empty is the expected outcome for a directory holding the member's
+    // files — and some platforms say EACCES for that under a read-only parent,
+    // so the directory's contents, not the error code, decide.
+    const code = (e as NodeJS.ErrnoException).code;
+    const stillHolds = code === 'ENOTEMPTY' || code === 'EEXIST'
+      || (await fs.promises.readdir(dir).catch(() => [])).length > 0;
+    if (!stillHolds) failures.push({ file: dir, error: (e as Error).message });
+  }
+  return failures;
 }
 
 /** What `removeOwnedFiles` did and did not do, for the caller to report. */
@@ -279,7 +295,7 @@ export async function removeOwnedFiles(
       result.notRemoved.push({ file, error: (e as Error).message });
     }
   }
-  await removeEmptyDirs(dir);
+  result.notRemoved.push(...await removeEmptyDirs(dir));
 
   return result;
 }
@@ -525,8 +541,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
     // legacy directories are left alone too.
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
 
-    await pruneLegacyBuiltinSkills(tool, target);
-
+    let deployedHere = 0;
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);
       const destDir = localConfig
@@ -566,9 +581,19 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
 
         deployed++;
+        deployedHere++;
       } catch (e) {
         log.error(`Failed to deploy built-in skill ${skillName} to ${toolPath.skills}: ${(e as Error).message}`);
       }
+    }
+
+    // The legacy trees go only once their replacement is in place: pruning first
+    // and then failing to write the stub (a link, a read-only directory) would
+    // leave the agent with no discoverable TeamAI skill at all.
+    if (deployedHere === skillNames.length) {
+      await pruneLegacyBuiltinSkills(tool, target);
+    } else {
+      log.warn(`Kept the pre-stub skills for ${tool}: the new stub was not deployed there, so removing them would leave nothing to discover.`);
     }
   }
 

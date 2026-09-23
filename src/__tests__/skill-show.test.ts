@@ -87,7 +87,8 @@ function captureLogs() {
 }
 
 async function runSkillShow(name: string, fx: Fixture): Promise<string[]> {
-  vi.doMock('../config.js', () => ({
+  vi.doMock('../config.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../config.js')>()),
     autoDetectInit: async () => ({ localConfig: fx.localConfig, teamConfig: fx.teamConfig }),
   }));
   const { skillShow } = await import('../skill-cmd.js');

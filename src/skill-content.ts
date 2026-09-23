@@ -63,16 +63,19 @@ const SKILL_ALIASES: Readonly<Record<string, string>> = {
 const RECALL_DEPENDENT_SKILLS = new Set(['share']);
 
 /** Why a served skill is withheld right now. */
-export type SkillBlockReason = 'recall' | 'read-only';
+export type SkillBlockReason = 'recall' | 'read-only' | 'config';
 
 /**
  * What makes this skill unusable right now, or null.
  *
- * Fails open: a machine with no team config (a fresh install reading the docs)
- * gets the content rather than a refusal it cannot act on.
+ * Fails open only where there is no config at all: a fresh install reading
+ * the docs gets the content rather than a refusal it cannot act on. A config
+ * that exists but cannot be loaded blocks: whether recall is on, or the source
+ * writable, is then unknown, and the workflow would fail at `teamai contribute`.
  */
 async function blockReason(name: string): Promise<SkillBlockReason | null> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
+  const { NotInitializedError } = await import('./config.js');
   try {
     const [{ autoDetectInit }, { isRecallEnabled }] = await Promise.all([
       import('./config.js'),
@@ -93,8 +96,8 @@ async function blockReason(name: string): Promise<SkillBlockReason | null> {
     // workflow would fail at its last step after the agent did all the work.
     if (localConfig.repo?.kind === 'http') return 'read-only';
     return isRecallEnabled(localConfig, teamConfig) ? null : 'recall';
-  } catch {
-    return null;
+  } catch (e) {
+    return e instanceof NotInitializedError ? null : 'config';
   }
 }
 
@@ -223,6 +226,11 @@ export function blockMessage(name: string, reason: SkillBlockReason): { headline
       return {
         headline: `${name} is not available: this team uses a read-only HTTP source, so nothing can be contributed from here.`,
         hint: 'Ask a team admin to add the learning to the team repo.',
+      };
+    case 'config':
+      return {
+        headline: `${name} is not available: the teamai config on this machine could not be loaded, so whether it can contribute is unknown.`,
+        hint: 'Run `teamai doctor` to see what is wrong with it, then try again.',
       };
     default: {
       const exhaustive: never = reason;

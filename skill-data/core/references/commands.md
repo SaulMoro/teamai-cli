@@ -158,7 +158,6 @@ Generated: do not edit by hand. Regenerate with
     - `--token <key>` — API token for the HTTP endpoint (stored 0600, never committed)
     - `--force` — Overwrite an existing HTTP source config
   - `teamai source remove-http` — Remove the HTTP source and clean up its resources
-  - `teamai source reconcile-plugins` — Run plugin reconcile worker (called internally by session_start hook)
   - `teamai source list` — List all configured sources
   - `teamai source browse <name>` — Browse public skills from a source
 
@@ -207,18 +206,6 @@ Generated: do not edit by hand. Regenerate with
   - `teamai webhook test` — Send test event to webhook endpoints
     - `--url <url>` — Test specific endpoint URL
 
-## track
-
-- `teamai track [toolName] [toolInput]` — Track a tool usage event (called by PostToolUse hook)
-  - `--stdin` — Read hook data from STDIN (Claude Code hook format)
-  - `--tool <name>` — Tool identifier for usage attribution (e.g. claude, claude-internal)
-
-## track-slash
-
-- `teamai track-slash` — Track a slash command usage (called by UserPromptSubmit hook)
-  - `--stdin` — Read hook data from STDIN
-  - `--tool <name>` — Tool identifier for usage attribution (e.g. claude, claude-internal)
-
 ## stats
 
 - `teamai stats` — Show local skill usage statistics
@@ -244,12 +231,6 @@ Generated: do not edit by hand. Regenerate with
 - `teamai dashboard` — Start the AI coding session dashboard (Web UI)
   - `-p, --port <port>` — Port number
 
-## dashboard-report
-
-- `teamai dashboard-report` — Report session state to dashboard (called by hooks)
-  - `--stdin` — Read hook data from STDIN
-  - `--tool <name>` — Tool identifier (e.g. claude, claude-internal)
-
 ## hook-dispatch
 
 - `teamai hook-dispatch <event>` — Unified hook dispatcher — handles all teamai hooks for a given event in one process
@@ -264,12 +245,6 @@ Generated: do not edit by hand. Regenerate with
 - `teamai bind-project` — Bind the current workspace to a ClawPro project for HTTP local-agent sync
   - `--project-id <id>` — Project ID from /projects/mine
   - `--skip` — Mark current workspace as skipped (never prompt again)
-
-## contribute-check
-
-- `teamai contribute-check` — Check if session qualifies for contribution (called by PostToolUse hook)
-  - `--stdin` — Read hook data from STDIN
-  - `--tool <name>` — Tool identifier (e.g. claude, claude-internal)
 
 ## contribute
 
@@ -301,12 +276,6 @@ Generated: do not edit by hand. Regenerate with
     - `--category <cat>` — Target category: skills | rules | docs
     - `--dry-run` — Show what would be done without making changes
 
-## todowrite-hint
-
-- `teamai todowrite-hint` — Remind the agent to invoke teamai-recall when TodoWrite is used (PostToolUse hook)
-  - `--stdin` — Read hook data from STDIN
-  - `--tool <name>` — Source AI tool (claude / codebuddy / cursor)
-
 ## import
 
 - `teamai import` — Import knowledge from local directories, remote repos, organizations, MRs, or iWiki
@@ -337,12 +306,6 @@ Generated: do not edit by hand. Regenerate with
   - `--json` — Output cache status or GC result as JSON
   - `--max-bytes <n>` (hidden) — Override capacity cap for --cache-gc
   - `--stale-days <n>` (hidden) — Threshold for stale-eviction in days (default 30)
-
-## mr-hint
-
-- `teamai mr-hint` — Hint AI about recently merged but un-imported MRs (SessionStart hook)
-  - `--stdin` — Read hook data from STDIN
-  - `--tool <name>` — Source AI tool (claude / codebuddy / cursor)
 
 ## codebase
 
@@ -382,10 +345,3 @@ Generated: do not edit by hand. Regenerate with
     - `--write-mode <mode>` — Write strategy: direct | pending-review
     - `--output <dir>` — Write artifacts to directory
     - `--individual-comments` — Post each suggestion as separate comment with reaction/resolve support
-
-## deep-enrich
-
-- `teamai deep-enrich` — Run deep AI knowledge generation for an imported repo
-  - `--project <slug>` — Project slug (directory name in evidence/code/)
-  - `--wiki-root <path>` — Teamwiki root path
-  - `--max-modules <n>` — Max modules to process (cost control)

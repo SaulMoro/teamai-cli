@@ -979,6 +979,50 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(bodies.sort()).toEqual([wikiSkillTagged('project'), wikiSkillTagged('user')]);
   });
 
+  it('keeps the legacy skills when the stub could not be deployed, so the agent keeps one to discover', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // The stub destination is a link, so the stub is refused; pruning first
+    // would leave the agent with neither the old skills nor the new one.
+    const outside = path.join(tmpDir, 'outside/teamai');
+    await fse.ensureDir(outside);
+    await fse.ensureDir(path.join(homeDir, '.claude/skills/team-wiki-codebase'));
+    await fse.writeFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
+    await fse.symlink(outside, path.join(homeDir, '.claude/skills/teamai'), 'dir');
+
+    const deployed = await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(deployed).toBe(0);
+    expect(await fse.readFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
+  });
+
+  it('reports a legacy directory it emptied but could not remove, instead of calling it removed', async () => {
+    if (process.getuid?.() === 0) return; // root ignores directory permissions
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+    const { log } = await import('../utils/logger.js');
+
+    // A locked skills root: the files inside the legacy directory can go, the
+    // directory itself cannot. The stub directory already exists, so the stub
+    // still deploys and the prune runs.
+    const skills = path.join(homeDir, '.claude/skills');
+    await fse.ensureDir(path.join(skills, 'team-wiki-codebase'));
+    await fse.writeFile(path.join(skills, 'team-wiki-codebase/SKILL.md'), WIKI_SKILL);
+    await fse.ensureDir(path.join(skills, 'teamai'));
+    await fse.writeFile(path.join(skills, 'teamai/SKILL.md'), shipped('teamai', 'SKILL.md'));
+    (log.warn as ReturnType<typeof vi.fn>).mockClear();
+    await fse.chmod(skills, 0o555);
+    try {
+      await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+    } finally {
+      await fse.chmod(skills, 0o755);
+    }
+
+    const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => w.includes('team-wiki-codebase') && w.includes('could not be deleted'))).toHaveLength(1);
+    // The stub's own directory is not empty, so it is not reported.
+    expect(warnings.filter((w) => w.includes(path.join(skills, 'teamai')))).toEqual([]);
+  });
+
   it('archives nothing when there is nothing retired to archive', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 

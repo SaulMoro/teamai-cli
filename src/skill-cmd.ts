@@ -175,7 +175,8 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
   } else {
     for (const entry of catalog) {
       const note = entry.blockedBy === 'recall' ? '  (needs recall — teamai recall enable)'
-        : entry.blockedBy === 'read-only' ? '  (not available on a read-only HTTP source)' : '';
+        : entry.blockedBy === 'read-only' ? '  (not available on a read-only HTTP source)'
+        : entry.blockedBy === 'config' ? '  (not available: the teamai config could not be loaded)' : '';
       console.log(`  ${entry.name}${note}`);
       console.log(`    ${truncate(entry.description, DESCRIPTION_MAX) || '(no description)'}`);
       console.log(`    teamai skill get ${entry.name}`);
