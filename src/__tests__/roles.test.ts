@@ -227,6 +227,28 @@ roles:
     }
   });
 
+  // Lowercasing alone keeps these apart; the filesystems' case folding does not.
+  it.each([
+    ['final sigma', 'ας', 'ασ'],
+    ['long s', 'ſkills', 'skills'],
+  ])('across roles, when only Unicode case folding joins them (%s)', async (_label, first, second) => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: fe
+    resources: { knowledge: [], skills: [${first}] }
+  - id: fe2
+    resources: { knowledge: [], skills: [${second}] }
+`);
+    try {
+      await expect(loadRolesManifest(repoDir)).rejects.toThrow(
+        `Invalid roles manifest: skills namespaces "${first}" (role fe) and "${second}" (role fe2) differ only by case`,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('but not the same spelling used twice, nor the same name under two resource types', async () => {
     const repoDir = writeManifest(`
 version: 1

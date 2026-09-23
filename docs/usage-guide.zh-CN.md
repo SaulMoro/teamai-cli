@@ -238,7 +238,7 @@ projects:
 因此 `.. ` 最终变成 `..` 越出上级目录，`frontend.` 最终变成 `frontend` 落进另一个
 namespace 的目录；该规则同时排除了 `.` 与 `..`。除此之外不受限制 —— 非 ASCII 名称、
 名称中间含空格的目录、以及只是以设备名开头的名称（如 `console`）仍然合法。
-同一资源类型下的两个 namespace 不能仅有大小写差异（如 `frontend` 与 `Frontend`）：在
+同一资源类型下的两个 namespace 不能仅有大小写差异（如 `frontend` 与 `Frontend`，按 Unicode 大小写折叠 `σ` 与 `ς` 也算）：在
 Windows 与 macOS 的默认文件系统上它们是同一个目录，限定到其中一个的 role 或 project
 会读到另一个的资源。该校验跨越两个 manifest，因为 `roles.yaml` 与 `projects.yaml` 共用
 同一套 `skills/`、`knowledge/`、`agents/` 目录。

@@ -48,6 +48,20 @@ describe('resolveResourceNamespaces: roles.yaml and projects.yaml share one dire
     }
   });
 
+  it('rejects a project namespace that aliases a role namespace only under Unicode case folding', async () => {
+    const repoDir = repoWith(
+      'version: 1\nroles:\n  - id: fe\n    resources: { knowledge: [], skills: [ΟΔΟΣ] }\n',
+      'version: 1\nprojects:\n  - id: p\n    name: P\n    resources: { skills: [οδοσ] }\n',
+    );
+    try {
+      await expect(resolveResourceNamespaces(localConfig(repoDir))).rejects.toThrow(
+        'skills namespaces "ΟΔΟΣ" (role fe) and "οδοσ" (project p) differ only by case',
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('a member with no role and no roles.yaml still resolves project namespaces', async () => {
     const repoDir = repoWith('', 'version: 1\nprojects:\n  - id: p\n    name: P\n    resources: { skills: [p-only] }\n');
     rmSync(path.join(repoDir, 'manifest', 'roles.yaml'));

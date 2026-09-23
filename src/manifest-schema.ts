@@ -147,6 +147,19 @@ export interface NamespaceEntry {
 }
 
 /**
+ * Approximates Unicode case folding, which JavaScript does not expose.
+ * `toLowerCase()` alone is not folding: it keeps `σ`/`ς` and `s`/`ſ` apart,
+ * which case-insensitive filesystems treat as one name. Upper- then lowercasing
+ * each code point on its own folds those, and stays clear of the final-sigma
+ * rule, which only applies when a cased letter precedes the sigma. It errs
+ * toward joining (`ß`/`ss` and `ı`/`i` count as one name), which can only
+ * reject a pair, never let an alias through.
+ */
+function caseFoldKey(name: string): string {
+  return Array.from(name.normalize('NFC'), (ch) => ch.toUpperCase().toLowerCase()).join('').normalize('NFC');
+}
+
+/**
  * Two namespaces of the same resource type that differ only by case (or by
  * Unicode normalization) name one directory on the default Windows and macOS
  * filesystems, so a role or project scoped to `frontend` would read `Frontend`'s
@@ -156,7 +169,7 @@ export interface NamespaceEntry {
 export function assertNoCaseAliasedNamespaces(entries: Iterable<NamespaceEntry>, kind: string): void {
   const seen = new Map<string, NamespaceEntry>();
   for (const entry of entries) {
-    const key = `${entry.type}/${entry.namespace.normalize('NFC').toLowerCase()}`;
+    const key = `${entry.type}/${caseFoldKey(entry.namespace)}`;
     const prior = seen.get(key);
     if (!prior) {
       seen.set(key, entry);

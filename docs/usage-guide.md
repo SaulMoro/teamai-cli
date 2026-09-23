@@ -257,7 +257,7 @@ would arrive as `..` and escape the parent while `frontend.` would arrive as
 and `..`. Anything else a filesystem accepts stays valid — a non-ASCII name, one
 holding a space inside it, or one that merely starts like a device (`console`).
 Two namespaces of the same resource type may not differ only by case (`frontend`
-and `Frontend`): on the default Windows and macOS filesystems they are one
+and `Frontend`, or under Unicode case folding `σ` and `ς`): on the default Windows and macOS filesystems they are one
 directory, so a role or project scoped to one would read the other's resources.
 The check spans both manifests, since `roles.yaml` and `projects.yaml` share the
 same `skills/`, `knowledge/` and `agents/` directories.
