@@ -730,6 +730,17 @@ async function reconcileEnvForUnchangedRepo(
   }
 }
 
+/**
+ * The stub is the agent's only way into TeamAI, so a failure to deploy it is
+ * not silent. A SessionStart pull runs detached with its output discarded, and
+ * `log.warn` is muted there, so debug.log keeps the record.
+ */
+function warnStubNotDeployed(scopeLabel: string, e: unknown): void {
+  const message = `[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`;
+  log.warn(message);
+  log.debug(message);
+}
+
 async function pullForScope(
   localConfig: LocalConfig,
   options: GlobalOptions,
@@ -1019,8 +1030,7 @@ async function pullForScope(
             const { deployBuiltinSkills } = await import('./builtin-skills.js');
             await deployBuiltinSkills(freshConfig, localConfig);
           } catch (e) {
-            // The stub is the agent's only way into TeamAI, so this one is not silent.
-            log.warn(`[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`);
+            warnStubNotDeployed(scopeLabel, e);
           }
           // Refresh managed culture/shared-instruction blocks as well. A CLI
           // upgrade may add a new target file while the team repo SHA and tool
@@ -1300,7 +1310,7 @@ async function pullForScope(
         log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
       }
     } catch (e) {
-      log.warn(`[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`);
+      warnStubNotDeployed(scopeLabel, e);
     }
   }
 
