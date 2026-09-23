@@ -223,11 +223,14 @@ describe('readUsageEvents', () => {
 
   it('handles empty file', async () => {
     const usagePath = path.join(tmpDir, '.teamai', 'usage.jsonl');
-    await fse.ensureDir(path.dirname(usagePath));
+    // A first read settles the file as this scope's own, so the empty file
+    // below is parsed rather than discarded as pre-upgrade usage.
+    await readUsageEvents(userScope());
     await fs.promises.writeFile(usagePath, '');
 
     const events = await readUsageEvents(userScope());
     expect(events).toEqual([]);
+    expect(fs.existsSync(usagePath)).toBe(true);
   });
 });
 
