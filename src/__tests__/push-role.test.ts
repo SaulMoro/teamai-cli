@@ -1318,6 +1318,49 @@ describe('push namespace routing for rules and agents', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('could not be refreshed');
   });
 
+  it('stops placing a new resource on a stale clone even when that clone has no roles manifest', async () => {
+    // Its absence is repo state too: a manifest added remotely since the last
+    // pull would move this rule off the shared root (#649 review).
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    mockPullRepo.mockRejectedValueOnce(new Error('could not resolve host'));
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true });
+
+    expect(process.exitCode).toBe(1);
+    expect(pushedItems).toHaveLength(0);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('could not be refreshed');
+  });
+
+  it('stops the push when the reconciled placement records cannot be saved', async () => {
+    // The sync and the scan read the records back from disk: one that could
+    // not be withdrawn would still redirect the author's copy (#649 review).
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    // No records left, so reconcile clears the checkpoint: the state changed.
+    mockLoadStateForScope.mockImplementation(async () => ({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [], pushedEnvVars: [],
+      lastUpdateCheck: null, availableUpdate: null, pendingPushes: [], placementsCheckedAt: 'abc',
+    }));
+    mockSaveStateForScope.mockRejectedValueOnce(new Error('EACCES: permission denied'));
+    mockHandlers({ rules: [{ ...newRule }] }, pushedItems);
+
+    await push({ all: true, role: 'pm' });
+
+    expect(process.exitCode).toBe(1);
+    expect(pushedItems).toHaveLength(0);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('Nothing was pushed');
+  });
+
   it('turns a placement into a record only once its file is on the default branch, before scanning', async () => {
     // Pushed and awaiting review: nothing on the default branch yet, so no
     // record — a PR closed unmerged, branch kept or not, looks exactly like

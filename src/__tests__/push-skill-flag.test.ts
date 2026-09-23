@@ -51,6 +51,12 @@ vi.mock('../utils/git.js', () => ({
   checkoutMaster: (...args: unknown[]) => mockCheckoutMaster(...args),
   generateBranchName: (...args: unknown[]) => mockGenerateBranchName(...args),
   resetToCleanMaster: vi.fn(),
+  // Without these the refresh throws inside push, which then treats the clone
+  // as stale — and a stale clone may not place a new resource without --role.
+  isDedicatedRepoRoot: vi.fn().mockResolvedValue(true),
+  getDefaultBranch: vi.fn().mockResolvedValue('main'),
+  getFileContentAtRev: vi.fn().mockResolvedValue(null),
+  getHeadCommit: vi.fn().mockResolvedValue('base000'),
 }));
 
 vi.mock('../roles.js', async () => {

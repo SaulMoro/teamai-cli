@@ -155,6 +155,10 @@ describe('reconcilePlacementRecords', () => {
 
     expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
     expect(state.placedAgents).toEqual({});
+    // Retired just like a record whose file is simply gone: the author's
+    // flattened copy was the removed agent's, whatever sits there now.
+    expect((state as { retiredPlacedAgents?: Record<string, string> }).retiredPlacedAgents)
+      .toEqual({ vr: 'agents/fe/vr.yaml' });
   });
 
   describe('the checkpoint and the ref it is read from', () => {

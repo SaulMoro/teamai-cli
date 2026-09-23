@@ -333,6 +333,10 @@ export async function reconcilePlacementRecords(
       if (valid && checkedAt && !recordedNow.has(`${field}:${name}`)
         && await pathDeletedSince(repoPath, checkedAt, valid, history) === true) {
         log.debug(`Dropping placement record ${field}.${name} → ${recorded}: deleted from the default branch since the last check`);
+        // The file this record named was deleted, exactly as in the branch
+        // above; what is there now is somebody else's, but the author's copy
+        // still stood for the removed agent (#649 review).
+        if (field === 'placedAgents') state.retiredPlacedAgents = { ...state.retiredPlacedAgents, [name]: valid };
         changed = true;
         continue;
       }

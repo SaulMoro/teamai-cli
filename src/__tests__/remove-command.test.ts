@@ -61,3 +61,50 @@ describe('teamai remove when the placement records cannot be saved', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('Nothing was removed');
   });
 });
+
+/**
+ * Agents deploy flattened, so the team scan names them by bare stem. A machine
+ * with no placement record could only type that stem, which removes the agent
+ * from every namespace (#649 review). `<ns>/<stem>` names one of them, and a
+ * bare stem that means several is refused rather than guessed.
+ */
+describe('teamai remove agents names one agent, not a stem every namespace shares', () => {
+  const vrIn = (namespace: string) => ({ name: 'vr', type: 'agents', namespace, relativePath: `agents/${namespace}/vr.yaml` });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.exitCode = undefined;
+    mockSaveStateForScope.mockResolvedValue(undefined);
+    handler.publishedNameFor.mockResolvedValue(null);
+    handler.removeItem.mockResolvedValue(['agents/fe/vr.yaml']);
+  });
+  afterEach(() => { process.exitCode = undefined; });
+
+  it('refuses a bare stem that names agents in several namespaces', async () => {
+    handler.scanTeamForPull.mockResolvedValue([vrIn('fe'), vrIn('be')]);
+
+    await remove('agents', ['vr'], { force: true });
+
+    expect(handler.removeItem).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('fe/vr, be/vr');
+  });
+
+  it('removes exactly the agent a namespaced name gives', async () => {
+    handler.scanTeamForPull.mockResolvedValue([vrIn('fe'), vrIn('be')]);
+
+    await remove('agents', ['fe/vr'], { force: true });
+
+    expect(handler.removeItem).toHaveBeenCalledTimes(1);
+    expect(handler.removeItem.mock.calls[0]?.[0]).toBe('fe/vr');
+  });
+
+  it('resolves a bare stem that only one namespace has to that namespaced agent', async () => {
+    handler.scanTeamForPull.mockResolvedValue([vrIn('fe')]);
+
+    await remove('agents', ['vr'], { force: true });
+
+    // Named exactly, so the tombstone is `fe/vr`, not a stem other namespaces share.
+    expect(handler.removeItem.mock.calls[0]?.[0]).toBe('fe/vr');
+  });
+});

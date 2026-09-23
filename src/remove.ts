@@ -103,10 +103,18 @@ async function removeCore(
   // Verify which resources exist
   const teamItems = await handler.scanTeamForPull(teamConfig, localConfig);
   const localItems = await handler.scanLocalForPush(teamConfig, localConfig);
-  const allNames = new Set([...teamItems.map((i) => i.name), ...localItems.map((i) => i.name)]);
+  // Agents deploy flattened, so the team scan names them by bare stem. Their
+  // `<ns>/<stem>` is what names ONE of them: without it a machine holding no
+  // placement record could only type the stem, which removes that agent from
+  // every namespace (#649 review).
+  const qualified = (item: { name: string; namespace?: string }): string => (
+    type === 'agents' && item.namespace ? `${item.namespace}/${item.name}` : item.name
+  );
+  const allNames = new Set([...teamItems.map(qualified), ...localItems.map((i) => i.name)]);
 
   const found: string[] = [];
   const notFound: string[] = [];
+  let ambiguous = false;
   for (const name of names) {
     // The placement record is consulted FIRST. A resource this machine placed
     // in a namespace is published as `<ns>/<name>`, while the author's local
@@ -125,6 +133,25 @@ async function removeCore(
       found.push(published);
       continue;
     }
+    if (type === 'agents' && !name.includes('/')) {
+      const sameStem = teamItems.filter((item) => item.name === name).map(qualified);
+      if (sameStem.length > 1) {
+        log.error(
+          `"${name}" names agents in several places (${sameStem.join(', ')}), and removing it would take `
+          + `all of them. Name the one to remove, e.g. \`teamai remove agents ${sameStem[0]}\`.`,
+        );
+        ambiguous = true;
+        continue;
+      }
+      // The one team agent of that stem, named exactly, so the tombstone names
+      // it and not the stem every other namespace shares.
+      const only = sameStem[0];
+      if (only && only !== name) {
+        log.info(`${name} is ${only}`);
+        found.push(only);
+        continue;
+      }
+    }
     if (allNames.has(name)) {
       found.push(name);
     } else {
@@ -134,6 +161,14 @@ async function removeCore(
 
   if (notFound.length > 0) {
     log.warn(`Not found (skipping): ${notFound.join(', ')}`);
+  }
+
+  // Stop the whole run rather than remove the other names alone: the user
+  // asked for all of them, and has to say which of the ambiguous ones.
+  if (ambiguous) {
+    log.error('Nothing was removed.');
+    process.exitCode = 1;
+    return;
   }
 
   if (found.length === 0) {

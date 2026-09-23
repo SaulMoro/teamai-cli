@@ -368,17 +368,17 @@ async function placeNewResources(args: {
     );
     if (newAtRoot.length === 0) continue;
 
-    // Same reasoning as --project in pushCore, for the roles manifest: a
-    // namespace resolved from an unrefreshed clone may name the wrong members.
-    // A team with no roles manifest at all resolves from nothing that can go
-    // stale, and keeps its pre-manifest behaviour.
-    if (
-      teamRepoStale && !options.role
-      && await pathExists(path.join(localConfig.repo.localPath, 'manifest', 'roles.yaml'))
-    ) {
+    // Same reasoning as --project in pushCore: a namespace resolved from an
+    // unrefreshed clone may name the wrong members. Every unflagged answer
+    // reads that clone — the roles manifest, its ABSENCE (one added remotely
+    // since the last pull would move new rules and agents off the shared
+    // root), and the skills namespaces detected from its tree — so only an
+    // explicit --role is safe here (#649 review).
+    if (teamRepoStale && !options.role) {
       log.error(
-        `Cannot place new ${type}: the team repo could not be refreshed, so manifest/roles.yaml may be `
-        + 'stale. Fix the pull and retry, or name the namespace with --role <ns>.',
+        `Cannot place new ${type}: the team repo could not be refreshed, so where new ${type} belong `
+        + '(manifest/roles.yaml, or the namespaces the repo already has) may be out of date. '
+        + 'Fix the pull and retry, or name the namespace with --role <ns>.',
       );
       process.exitCode = 1;
       return false;
@@ -854,6 +854,10 @@ async function pushCore(
   // whose file the team deleted stops being one, and one shadowed by a new
   // shared-root file of the same name is withdrawn (#649 review). Not when the
   // clone is stale itself — a file missing from an unrefreshed tree proves nothing.
+  // Not best-effort: the pre-push sync and the scan read the records back from
+  // disk, so a record that could not be withdrawn (a shared-root file now
+  // shadows it) would still redirect the author's root copy onto the
+  // namespaced file and push that shared content over it (#649 review).
   if (!teamRepoStale) {
     try {
       const recordsState = await loadStateForScope(localConfig);
@@ -861,7 +865,13 @@ async function pushCore(
         await saveStateForScope(recordsState, localConfig);
       }
     } catch (e) {
-      log.debug(`Placement record cleanup skipped: ${(e as Error).message}`);
+      log.error(
+        `Could not bring this machine's placement records up to date (${(e as Error).message}), `
+        + 'so where your resources belong cannot be worked out safely. Nothing was pushed. '
+        + 'Check that the teamai state file is writable, then retry.',
+      );
+      process.exitCode = 1;
+      return;
     }
   }
 
