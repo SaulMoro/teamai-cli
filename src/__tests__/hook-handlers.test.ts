@@ -87,6 +87,9 @@ const mockFindUnreadableProjectConfig = vi.fn().mockResolvedValue(null);
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
   autoDetectInit: mockAutoDetectInit,
+  // A payload cwd that no longer exists (these tests use '/x') holds no
+  // project config, so the gate asks the user config: the same mocked one.
+  requireInit: mockAutoDetectInit,
   findUnreadableProjectConfig: mockFindUnreadableProjectConfig,
 }));
 
@@ -440,9 +443,29 @@ describe('hook-handlers registry', () => {
     mockFindUnreadableProjectConfig.mockResolvedValueOnce('/x/.teamai/config.yaml: bad indentation');
     mockContributeCheckForSession.mockClear();
 
-    const result = await handler.execute({ session_id: 's5c', cwd: '/x' }, 'claude');
+    // An existing directory: a deleted one holds no project config to be unreadable.
+    const result = await handler.execute({ session_id: 's5c', cwd: process.cwd() }, 'claude');
     expect(result).toBeNull();
     expect(mockContributeCheckForSession).not.toHaveBeenCalled();
+  });
+
+  it('contribute-check handler asks the gate about the payload cwd, not the directory the process is in', async () => {
+    // hook-dispatch changes into the payload cwd, but that can fail; the gate
+    // must not then read wherever the process started.
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockFindUnreadableProjectConfig.mockImplementation(async (cwd?: string) =>
+      cwd === undefined ? '/launcher/.teamai/config.yaml: bad indentation' : null);
+    mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
+    try {
+      const result = await handler.execute({ session_id: 's5e', cwd: process.cwd() }, 'claude');
+      expect(result).toContain('do share');
+    } finally {
+      mockFindUnreadableProjectConfig.mockReset();
+      mockFindUnreadableProjectConfig.mockResolvedValue(null);
+    }
   });
 
   it('contribute-check handler withholds the reminder, without failing the turn, when the gate itself faults', async () => {

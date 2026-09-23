@@ -174,6 +174,26 @@ describe('findUnreadableProjectConfig', () => {
     vi.unstubAllEnvs();
   });
 
+  it('names a project config that is a symlink to the user config', async () => {
+    // The HOME exception is about where the project is, not where the file points.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-symlink-home-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    const userConfig = path.join(home, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(userConfig), { recursive: true });
+    fs.writeFileSync(userConfig, 'repo:\n  localPath: /x\n  remote: https://example.test/a.git\nusername: t\nscope: user\n');
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.symlinkSync(userConfig, configPath);
+
+    try {
+      expect(await findUnreadableProjectConfig(dir)).toContain(configPath);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('names a broken partition config even when the legacy .teamai/ config behind it loads', async () => {
     // The partition is authoritative; detection skips it when broken and lands
     // on the legacy config, which may belong to another team.

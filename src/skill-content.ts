@@ -161,9 +161,9 @@ function firstLine(text: string): string {
  *
  * The reminder routes to `share`, so it is withheld wherever `shareGate`
  * blocks it: a nudge there would send the agent to a command that says no.
- * Both the hook dispatcher and the legacy `teamai contribute-check` ask this:
- * the dispatcher has changed into the session's cwd already, the legacy
- * command passes it, since its process may start anywhere.
+ * Both the hook dispatcher and the legacy `teamai contribute-check` ask this,
+ * passing the session's cwd: the process may run anywhere, and a `chdir` into
+ * the cwd can fail.
  */
 export async function contributeHintAllowed(cwd?: string): Promise<boolean> {
   const { isContributeHintEnabled } = await import('./types.js');

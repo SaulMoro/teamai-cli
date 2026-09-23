@@ -19,6 +19,7 @@ import {
 } from './types.js';
 import { readFileSafe, readJson, writeFile, writeJson, expandHome, pathExists } from './utils/fs.js';
 import { resolveAnchors } from './utils/git.js';
+import { getUserHome } from './utils/home.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';
 import { loadRolesManifest } from './roles.js';
@@ -437,7 +438,7 @@ export async function readConfigFrom(
       // Run from HOME, `<cwd>/.teamai/config.yaml` is the user config itself.
       // Anywhere else a config here that is not scope: project cannot say which
       // project it serves, and detection would read past it to the user config.
-      if (!isUserConfigFile(configPath)) {
+      if (!isUserTeamaiDir(dataHomeDir, projectRoot)) {
         onUnreadable?.(configPath, `it is scope: ${config.scope}, but a config inside a project must be scope: project`);
       }
       return null;
@@ -471,8 +472,13 @@ export async function readConfigFrom(
   }
 }
 
-/** Whether `configPath` is the user config, comparing real paths (a tmp HOME and the cwd can differ by a symlink). */
-function isUserConfigFile(configPath: string): boolean {
+/**
+ * Whether `dataHomeDir` is `<HOME>/.teamai`, decided by where the project is:
+ * its root is HOME. Real paths, since a tmp HOME and the cwd can differ by a
+ * symlink; but never the file's target, or a project config symlinked to the
+ * user config would pass for it.
+ */
+function isUserTeamaiDir(dataHomeDir: string, projectRoot: string): boolean {
   const real = (p: string): string => {
     try {
       return fs.realpathSync(p);
@@ -480,7 +486,8 @@ function isUserConfigFile(configPath: string): boolean {
       return path.resolve(p);
     }
   };
-  return real(configPath) === real(expandHome(getUserConfigPath()));
+  return path.resolve(dataHomeDir) === path.join(path.resolve(projectRoot), '.teamai')
+    && real(projectRoot) === real(getUserHome());
 }
 
 /**
