@@ -22,18 +22,13 @@ import { resolveConfigForDir } from './config.js';
  *
  * The user scope records in `~/.teamai/user-usage.jsonl` instead: every scope
  * used to record in `~/.teamai/usage.jsonl`, and an earlier release still does
- * after a rollback, so what that file holds names no project. It is removed,
- * never read, so the user scope cannot report it to its team; a removal that
- * fails leaves it unread and does not stop the user scope's own file.
+ * after a rollback, so what that file holds names no project. It is never
+ * read, so the user scope cannot report it to its team.
  */
-async function getUsagePath(config: LocalConfig): Promise<string> {
+function getUsagePath(config: LocalConfig): string {
   const dataHome = getDataHome(config);
   const sharedDir = getTeamaiHomeDir();
   if (path.resolve(dataHome) !== path.resolve(sharedDir)) return path.join(dataHome, 'usage.jsonl');
-  const shared = path.join(sharedDir, 'usage.jsonl');
-  await fs.promises.rm(shared, { force: true }).catch((e: unknown) => {
-    log.debug(`Could not remove ${shared}, it stays unread: ${e instanceof Error ? e.message : String(e)}`);
-  });
   return path.join(sharedDir, 'user-usage.jsonl');
 }
 
@@ -229,7 +224,7 @@ export async function skillExistsOnDisk(skillName: string): Promise<boolean> {
  */
 export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): Promise<void> {
   try {
-    const usagePath = await getUsagePath(config);
+    const usagePath = getUsagePath(config);
     await ensureDir(path.dirname(usagePath));
     const line = JSON.stringify(event) + '\n';
     await fs.promises.appendFile(usagePath, line, 'utf-8');
@@ -245,7 +240,7 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
  */
 export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]> {
   try {
-    const content = await fs.promises.readFile(await getUsagePath(config), 'utf-8');
+    const content = await fs.promises.readFile(getUsagePath(config), 'utf-8');
     const events: UsageEvent[] = [];
     for (const line of content.split('\n')) {
       const trimmed = line.trim();
@@ -271,7 +266,7 @@ export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]
  */
 export async function truncateUsageAfterReport(reportedCount: number, config: LocalConfig): Promise<void> {
   try {
-    const usagePath = await getUsagePath(config);
+    const usagePath = getUsagePath(config);
     const content = await fs.promises.readFile(usagePath, 'utf-8');
     const lines = content.split('\n').filter((l) => l.trim());
     if (reportedCount >= lines.length) {

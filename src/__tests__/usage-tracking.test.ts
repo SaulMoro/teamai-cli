@@ -266,7 +266,8 @@ describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)',
     await fs.promises.writeFile(sharedPath(), legacy);
 
     expect(await readUsageEvents(userScope())).toEqual([]);
-    expect(fs.existsSync(sharedPath())).toBe(false);
+    // Reading usage (as `teamai stats` does) leaves the file alone.
+    expect(fs.readFileSync(sharedPath(), 'utf-8')).toBe(legacy);
   });
 
   it('is not read back when an earlier release writes it again after a rollback', async () => {
@@ -275,14 +276,6 @@ describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)',
     await fs.promises.appendFile(sharedPath(), legacy);
 
     expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['after-upgrade']);
-  });
-
-  it('does not stop the user scope from recording when it cannot be removed', async () => {
-    // Stands in for a file another program holds open on Windows (EPERM/EBUSY).
-    await fs.promises.mkdir(sharedPath());
-    await appendUsageEvent({ skill: 'kept', timestamp: '2026-02-01T00:00:00Z', tool: 'claude' }, userScope());
-
-    expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['kept']);
   });
 });
 
