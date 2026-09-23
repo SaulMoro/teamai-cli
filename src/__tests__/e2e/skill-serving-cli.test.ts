@@ -116,6 +116,29 @@ describe('teamai skill get / path CLI (e2e)', () => {
     expect(shownUnknown.stdout + shownUnknown.stderr).not.toContain('    at ');
   });
 
+  it('reports an unreadable config instead of calling the machine uninitialized', () => {
+    // A config that exists but does not parse is not "no team": the packaged
+    // fallback and its `teamai init` hint are for a machine with no config.
+    const brokenHome = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-skill-broken-config-'));
+    try {
+      fs.mkdirSync(path.join(brokenHome, '.teamai'), { recursive: true });
+      fs.writeFileSync(path.join(brokenHome, '.teamai', 'config.yaml'), 'repo: [unclosed\n');
+      for (const args of [['skill', 'list'], ['skill', 'show', 'core']]) {
+        const result = spawnSync(process.execPath, [CLI, ...args], {
+          cwd: brokenHome,
+          env: { ...process.env, HOME: brokenHome, USERPROFILE: brokenHome, FORCE_COLOR: '0' },
+          encoding: 'utf8',
+        });
+        expect(result.status, args.join(' ')).not.toBe(0);
+        expect(result.stderr, args.join(' ')).toContain('could not be read');
+        expect(result.stdout + result.stderr, args.join(' ')).not.toContain('Not initialized');
+        expect(result.stdout + result.stderr, args.join(' ')).not.toContain('No team is set up');
+      }
+    } finally {
+      fs.rmSync(brokenHome, { recursive: true, force: true });
+    }
+  });
+
   it('appends the nested references with --full', () => {
     const full = run('skill', 'get', 'wiki', '--full');
     expect(full.status).toBe(0);
