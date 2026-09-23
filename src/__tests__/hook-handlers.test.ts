@@ -415,17 +415,19 @@ describe('hook-handlers registry', () => {
     expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
-  it('contribute-check handler keeps hinting when there is no config at all', async () => {
+  it('contribute-check handler stays silent when there is no config at all', async () => {
+    // A project that never set up teamai has no team to share with (#748).
     const { NotInitializedError } = await import('../config.js');
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
     )!.handler;
     mockAutoDetectInit.mockRejectedValueOnce(new NotInitializedError('teamai is not initialized. Run `teamai init` first.'));
-    mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
+    mockContributeCheckForSession.mockClear();
 
     const result = await handler.execute({ session_id: 's5', cwd: '/x' }, 'claude');
-    expect(result).toContain('do share');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
   it('contribute-check handler stays silent when the project config is unreadable, even if the user config loads', async () => {

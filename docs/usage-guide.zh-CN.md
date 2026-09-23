@@ -915,7 +915,7 @@ teamai contribute --file /tmp/session.md --scope project
 
 只影响提醒本身：摩擦评分、`teamai contribute --file` 和手动调用 `/teamai` 不受影响。
 
-未开启 recall 时（默认关闭；团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。只读 HTTP 源上，或 teamai 配置文件存在但无法加载时，这条提醒也从不出现，因为 `share` 同样会拒绝。
+未开启 recall 时（默认关闭；团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）也不会显示这条提醒：提醒指向 `share` 工作流，而 recall 关闭时 `teamai skill get share` 会拒绝执行。只读 HTTP 源上，或 teamai 配置文件存在但无法加载时，这条提醒也从不出现，因为 `share` 同样会拒绝；在未配置 teamai 的目录中也不会出现，尽管 `teamai skill get share` 在那里仍会提供。
 
 ### 搜索知识
 

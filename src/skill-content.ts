@@ -137,8 +137,9 @@ function firstLine(text: string): string {
 /**
  * Whether the Stop-hook share reminder may be shown. Resolved per hook run so
  * a team can switch it off in teamai.yaml (or a member in local config) without
- * re-injecting hooks; on by default, and with no config at all, where
- * `teamai skill get share` serves too.
+ * re-injecting hooks; on by default. Never with no config at all: a project
+ * that never set up teamai has no team to share with, although
+ * `teamai skill get share` still serves there.
  *
  * The reminder routes to `share`, so it is withheld wherever `shareGate`
  * blocks it: a nudge there would send the agent to a command that says no.
@@ -158,7 +159,7 @@ export async function contributeHintAllowed(): Promise<boolean> {
   if (gate.block) return false;
   return gate.config
     ? isContributeHintEnabled(gate.config.localConfig, gate.config.teamConfig)
-    : isContributeHintEnabled({}, {});
+    : false;
 }
 
 /** What makes this skill unusable right now, or null. */

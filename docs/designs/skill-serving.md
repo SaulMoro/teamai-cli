@@ -99,7 +99,9 @@ path (measured here from a 77-character one).
   which field and why), since nothing else reports it. The
   Stop-hook share reminder asks the same gate (`contributeHintAllowed`, called
   by the hook dispatcher and by the legacy `teamai contribute-check`), because it
-  points at this command. The gate lives in one place: `shareGate`
+  points at this command, with one difference: with no config at all it stays
+  silent. The hook fires in every project on the machine, and a directory without
+  teamai has no team to share with (#748). The gate lives in one place: `shareGate`
   (`src/skill-content.ts`) decides it, and `resolveServableSkill` is the only
   way to obtain a packaged skill outside that module; it returns `blocked`
   instead of the skill, so a command cannot print a directory it never received.
