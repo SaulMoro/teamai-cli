@@ -41,7 +41,7 @@ import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import {
   BUILTIN_SKILL_NAMES,
   LEGACY_BUILTIN_SKILL_NAMES,
-  PACKAGED_SKILL_FILES,
+  ownedSkillFiles,
   isCliOwnedSkillName,
   prunedWhole,
   removeOwnedFiles,
@@ -897,7 +897,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
     try {
       const name = path.basename(skillDir);
       if (isCliOwnedSkillName(name)) {
-        const result = await removeOwnedFiles(skillDir, PACKAGED_SKILL_FILES.get(name) ?? [], baseDir);
+        const result = await removeOwnedFiles(skillDir, await ownedSkillFiles(name), baseDir);
         if (prunedWhole(result)) removedSkillDirs++;
         else if (result.skippedSymlink) linkedSkillDirs.push(skillDir);
         // A delete that failed is not a member's file: say what happened, not

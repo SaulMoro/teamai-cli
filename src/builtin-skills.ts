@@ -10,6 +10,7 @@ import { ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDirForTool, skillTargetForTool } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
+import { PACKAGED_SKILL_DIGESTS } from './packaged-skill-digests.js';
 
 // ─── Built-in skills deployment ──────────────────────────
 //
@@ -70,44 +71,63 @@ export function isCliOwnedSkillName(name: string): boolean {
 }
 
 /**
- * Every file a release ever packaged under `skills/`, by directory name.
- *
- * Built as the union of `git ls-tree -r <tag> -- skills/` over all 99 tags
- * through v0.25.0, minus `teamai-wiki` (below). Every path listed
- * here is written by the CLI and is ours to remove. Deployment
- * copied these trees with `overwrite: true` and never deleted anything, so a
- * file that is *not* listed here was put there by the member and survives.
+ * Every file a release ever packaged under `skills/`, by directory name: the
+ * paths of PACKAGED_SKILL_DIGESTS. A path alone does not make a file ours —
+ * `removeOwnedFiles` also needs its content to match a shipped version — but
+ * the list is what the deploy prune reads to find paths the current package no
+ * longer ships.
  *
  * `teamai-wiki` (0.13.0, 0.16.x) is deliberately absent: it predates the trees
  * this migration is about, and widening a destructive set is its own change.
  */
-export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new Map([
-  ['teamai', [
-    'SKILL.md',
-    'references/contribute-member.md',
-    'references/join-member.md',
-    'references/manage-admin.md',
-    'references/provider-tgit.md',
-    'references/setup-admin.md',
-    'references/troubleshooting.md',
-    'references/uninstall.md',
-  ]],
-  ['teamai-share-learnings', ['SKILL.md']],
-  ['team-wiki-codebase', [
-    'SKILL.md',
-    'README.md',
-    'references/agents/graph-rag-agent.md',
-    'references/agents/kb-doc-generator.md',
-    'references/methodology/phase0-collection.md',
-    'references/methodology/phase1-reverse-engineering.md',
-    'references/methodology/phase2-document-types.md',
-    'references/methodology/phase3-ai-enhancement.md',
-    'references/methodology/phase4-quality.md',
-    'references/templates/project-overview.md',
-    'scripts/scan_repo.py',
-    'scripts/validate_kb.py',
-  ]],
-]);
+export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new Map(
+  [...PACKAGED_SKILL_DIGESTS].map(([skill, files]) => [skill, [...files.keys()]]),
+);
+
+const FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
+
+/**
+ * The digest PACKAGED_SKILL_DIGESTS records for a file: sha256 of its bytes, or,
+ * for a skill-root `SKILL.md`, of its body without the frontmatter block, which
+ * the deploy of earlier releases rewrote on disk when a field was missing.
+ */
+export function packagedSkillDigest(relativePath: string, content: Buffer): string {
+  const hashed = relativePath === 'SKILL.md'
+    ? Buffer.from(content.toString('utf8').replace(FRONTMATTER_BLOCK, '').replace(/^[\r\n]+/, ''), 'utf8')
+    : content;
+  return createHash('sha256').update(hashed).digest('hex');
+}
+
+/** Digests by path: what `removeOwnedFiles` may remove, and only at that content. */
+export type OwnedSkillFiles = ReadonlyMap<string, ReadonlySet<string>>;
+
+/**
+ * The files of `skillName` the CLI provably wrote — every version a release
+ * shipped, plus, for the stub, the one this package ships now — optionally
+ * narrowed to `paths`.
+ */
+export async function ownedSkillFiles(skillName: string, paths?: readonly string[]): Promise<OwnedSkillFiles> {
+  const owned = new Map<string, Set<string>>();
+  for (const [relative, digests] of PACKAGED_SKILL_DIGESTS.get(skillName) ?? []) {
+    if (!paths || paths.includes(relative)) owned.set(relative, new Set(digests));
+  }
+  if (BUILTIN_SKILL_NAMES.has(skillName) && (!paths || paths.includes('SKILL.md'))) {
+    const stubPath = path.join(packagedSkillRoots().deployRoot, skillName, 'SKILL.md');
+    if (await pathExists(stubPath)) {
+      const digests = owned.get('SKILL.md') ?? new Set<string>();
+      digests.add(packagedSkillDigest('SKILL.md', await fs.promises.readFile(stubPath)));
+      owned.set('SKILL.md', digests);
+    }
+  }
+  return owned;
+}
+
+/** True when `file` sits at an owned path with content a release shipped there. */
+async function isOwnedFile(file: string, relative: string, owned: OwnedSkillFiles): Promise<boolean> {
+  const digests = owned.get(relative);
+  if (!digests) return false;
+  return digests.has(packagedSkillDigest(relative, await fs.promises.readFile(file)));
+}
 
 /**
  * Python bytecode cache of a script we shipped: `a/__pycache__/x.cpython-311.pyc`
@@ -189,11 +209,11 @@ export function prunedWhole(result: PruneResult): boolean {
  */
 export async function removeOwnedFiles(
   dir: string,
-  owned: readonly string[],
+  owned: OwnedSkillFiles,
   baseDir: string,
   backupDir?: string,
 ): Promise<PruneResult> {
-  const ownedPaths = new Set(owned);
+  const ownedPaths = new Set(owned.keys());
   const result: PruneResult = {
     skippedSymlink: false, foreign: 0, unbackedUp: [], notRemoved: [], backedUp: 0,
   };
@@ -218,17 +238,25 @@ export async function removeOwnedFiles(
   }
 
   for (const relative of entries) {
-    if (!ownedPaths.has(relative) && !isDerivedArtifact(relative, ownedPaths)) {
+    const file = path.join(dir, relative);
+    // Ours only at a path a release shipped *and* with content one of them
+    // shipped there. A member's edit, or a skill of their own that uses a
+    // packaged name under a root TeamAI never managed, fails the second test
+    // and stays, with its directory.
+    let owns: boolean;
+    try {
+      owns = await isOwnedFile(file, relative, owned) || isDerivedArtifact(relative, ownedPaths);
+    } catch (e) {
+      // Unreadable, so unprovable: kept, and said so.
+      result.notRemoved.push({ file, error: (e as Error).message });
+      continue;
+    }
+    if (!owns) {
       result.foreign++;
       continue;
     }
-    const file = path.join(dir, relative);
-    // Ownership is proven by pathname, not by contents: a member who edited one
-    // of our files in place still has that edit in there. The old deployment
-    // overwrote it on the next pull, so nothing was preserved either way, but a
-    // path a retired release shipped and the current package no longer does was
-    // never overwritten. Park a copy before removing so no version of that is a
-    // one-way door.
+    // Content proves the CLI wrote the file; a copy still goes to the archive
+    // before the delete, so no removal is a one-way door.
     if (backupDir) {
       try {
         // `errorOnExist` turns a colliding path into a failure rather than a
@@ -381,7 +409,7 @@ export async function pruneLegacyBuiltinSkills(
       if (!await pathExists(dir)) continue;
       try {
         const backupDir = skillBackupDir(guardBase, tool, path.relative(guardBase, root), legacyName);
-        const result = await removeOwnedFiles(dir, PACKAGED_SKILL_FILES.get(legacyName) ?? [], guardBase, backupDir);
+        const result = await removeOwnedFiles(dir, await ownedSkillFiles(legacyName), guardBase, backupDir);
         const saved = result.backedUp > 0 ? `; a copy is in ${backupDir}` : '';
         if (prunedWhole(result)) {
           log.debug(`Removed legacy built-in skill ${legacyName} from ${tool} (${dir})${saved}`);
@@ -399,6 +427,35 @@ export async function pruneLegacyBuiltinSkills(
       } catch (e) {
         log.debug(`Could not remove legacy built-in skill ${legacyName} from ${tool}: ${(e as Error).message}`);
       }
+    }
+  }
+}
+
+/**
+ * Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
+ * destination resolver picks the shared copy whenever one exists. The stub has
+ * just been written to one of them; a copy an earlier release left in the other
+ * would keep its old SKILL.md and references beside it, so Codex would see two
+ * `teamai` skills and one of them stale. That copy goes, by the same ownership
+ * rule as the rest: only files whose content a release shipped, archived first.
+ */
+async function retireOtherCodexCopy(
+  tool: string,
+  skillName: string,
+  deployedDir: string,
+  { skillsDir, guardBase }: BuiltinSkillsTarget,
+): Promise<void> {
+  const candidates = [path.join(skillsDir, skillName), path.join(guardBase, SHARED_AGENT_SKILLS_PATH, skillName)];
+  for (const other of candidates) {
+    if (path.resolve(other) === path.resolve(deployedDir) || !await pathExists(other)) continue;
+    const backupDir = skillBackupDir(guardBase, tool, path.relative(guardBase, path.dirname(other)), skillName);
+    const result = await removeOwnedFiles(other, await ownedSkillFiles(skillName), guardBase, backupDir);
+    if (prunedWhole(result)) {
+      log.debug(`Removed the second Codex copy of ${skillName} at ${other}; the stub is at ${deployedDir}`);
+    } else if (result.skippedSymlink) {
+      log.warn(`Kept ${other}: it is reached through a symlink, so TeamAI left it alone. Codex also reads the stub at ${deployedDir}.`);
+    } else {
+      log.warn(`Kept ${other}: it holds files TeamAI did not write, so Codex sees it beside the stub at ${deployedDir}. Remove it once you have saved what you need.`);
     }
   }
 }
@@ -496,7 +553,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           const shippedNow = new Set(await walkFiles(srcDir));
           const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
           const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
-          const result = await removeOwnedFiles(destDir, retired, baseDir, backupDir);
+          const result = await removeOwnedFiles(destDir, await ownedSkillFiles(skillName, retired), baseDir, backupDir);
           if (result.unbackedUp.length > 0) {
             log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
           }
@@ -506,6 +563,7 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
         }
         await fse.ensureDir(destDir);
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
+        if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
 
         deployed++;
       } catch (e) {

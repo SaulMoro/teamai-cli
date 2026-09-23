@@ -162,19 +162,25 @@ Pull's archive is deliberately not applied there: pull runs on an upgrade the
 member did not ask anything to be removed by, while uninstall is them asking for
 all of it to go. Leaving copies behind would be the thing they ran it to avoid.
 
-**It removes only the files those releases packaged.** `PACKAGED_SKILL_FILES`
-lists them, built as the union of `git ls-tree -r <tag> -- skills/` over all 99
-tags through v0.25.0, minus `teamai-wiki` (see below); `references/provider-tgit.md`
-first shipped in 0.25.0. Every path
-in it is provably the CLI's. Those files were overwritten with
-`overwrite: true` on every pull and no local edit ever survived in one; a file a
-member added beside them was never touched by the old deployment and is not ours
-to delete now. One case the overwrite never reached: a path a retired release
-shipped and the current package no longer does just sat there, so an edit to it
-did survive. Ownership is proven by pathname, not by contents, so the prune
-cannot tell that file from ours — it copies everything it removes to
-`~/.teamai/removed-skills/<run>/<base>/<tool>/<skill-root>/<skill>/` first, and the
-migration stops being a one-way door for any of them. That path is the machine's
+**It removes only the files those releases packaged, at the content they
+packaged.** `PACKAGED_SKILL_DIGESTS` (`src/packaged-skill-digests.ts`) records the
+sha256 of every blob `git ls-tree -r <ref> -- skills/` shows over all 99 tags
+through v0.25.0 and `main` before the stub, minus `teamai-wiki` (see below): 37
+versions across 21 paths. A file is ours only at one of those paths *and* with one
+of those digests; a skill-root `SKILL.md` is compared by its body without the
+frontmatter block, because releases before 0.17 shipped none and the deploy of
+the day repaired it on disk. The copies came from the npm tarball byte for byte,
+so an unedited one matches. Anything else at a packaged path — an edit, a
+member's own skill that uses a legacy name, a root TeamAI never managed because
+`toolPaths` or `HERMES_HOME` moved — is the member's and stays, with its
+directory. Checking the path alone would have deleted those. What is removed is
+still copied first to
+`~/.teamai/removed-skills/<run>/<base>/<tool>/<skill-root>/<skill>/`, so no
+removal is a one-way door. Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
+stub goes to the shared one when a copy already lives there; the copy an earlier
+release left in the other root is retired by the same rule
+(`retireOtherCodexCopy`), so Codex never sees a stale `teamai` beside the current
+one. That path is the machine's
 home, never the tool's base directory, which under project scope is the repo
 root. Only *retired* paths are archived: the stub is rewritten on every session
 start, so archiving it would file an identical copy per session forever. A

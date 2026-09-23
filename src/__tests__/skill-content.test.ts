@@ -364,6 +364,16 @@ describe('the shipped skill-data content', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('keeps the tests\' stand-in for shipped content on the paths the real digests record', async () => {
+    // The prune tests mock the digest table; a path they know and the real
+    // table does not (or the reverse) would test a prune that never runs.
+    const { PACKAGED_SKILL_DIGESTS } = await import('../packaged-skill-digests.js');
+    const { shippedSkillDigestsMock } = await import('./helpers/shipped-skills.js');
+    const paths = (table: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>) =>
+      Object.fromEntries([...table].map(([skill, files]) => [skill, [...files.keys()].sort()]));
+    expect(paths(shippedSkillDigestsMock().PACKAGED_SKILL_DIGESTS)).toEqual(paths(PACKAGED_SKILL_DIGESTS));
+  });
+
   it('keeps the stub description within the 1024-character budget agents load it under', async () => {
     // With one deployed skill, this description is the only text an agent sees
     // at selection time, and hosts cap it at 1024 characters.

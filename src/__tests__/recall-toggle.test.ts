@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
+
+// A CLI-owned file is one whose content a release shipped; `shipped()` is it here.
+vi.mock('../packaged-skill-digests.js', () => shippedSkillDigestsMock());
 
 const mockAutoDetectInit = vi.fn();
 const mockSaveLocalConfigForScope = vi.fn();
@@ -94,7 +98,7 @@ describe('recall toggle native agent cleanup', () => {
     const skillsDir = path.join(homeDir, '.codex', 'skills');
     for (const name of ['teamai-share-learnings', 'team-wiki-codebase', 'teamai', 'my-own']) {
       await fse.ensureDir(path.join(skillsDir, name));
-      await fse.writeFile(path.join(skillsDir, name, 'SKILL.md'), `# ${name}`);
+      await fse.writeFile(path.join(skillsDir, name, 'SKILL.md'), name === 'my-own' ? '# mine' : shipped(name, 'SKILL.md'));
     }
 
     await recallDisable({});

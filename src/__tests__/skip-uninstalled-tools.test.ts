@@ -4,6 +4,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { listFilesRecursive } from '../utils/fs.js';
+import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -51,6 +52,14 @@ async function onlyRunDir(homeDir: string): Promise<string> {
   expect(bases).toHaveLength(1);
   return path.join(root, runs[0], bases[0]);
 }
+
+// A file is the CLI's only at content a release shipped; `shipped()` stands in
+// for that content, anything else at the same path is the member's.
+vi.mock('../packaged-skill-digests.js', () => shippedSkillDigestsMock());
+
+const WIKI_SKILL = shipped('team-wiki-codebase', 'SKILL.md');
+/** Shipped body under a distinguishing frontmatter block: still ours, told apart. */
+const wikiSkillTagged = (tag: string): string => `---\nname: ${tag}\n---\n${WIKI_SKILL}`;
 
 vi.mock('../config.js', () => ({
   requireInit: vi.fn(),
@@ -647,9 +656,9 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     // Pre-stub releases left these behind in every agent directory.
     await fse.ensureDir(path.join(homeDir, '.claude/skills/team-wiki-codebase/references'));
-    await fse.writeFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), '# old');
+    await fse.writeFile(path.join(homeDir, '.claude/skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
     await fse.ensureDir(path.join(homeDir, '.claude/skills/teamai-share-learnings'));
-    await fse.writeFile(path.join(homeDir, '.claude/skills/teamai-share-learnings/SKILL.md'), '# old');
+    await fse.writeFile(path.join(homeDir, '.claude/skills/teamai-share-learnings/SKILL.md'), shipped('teamai-share-learnings', 'SKILL.md'));
     // These two names were reserved in the old guard set but never packaged, so
     // a directory by either name is the user's own skill.
     for (const userSkill of ['teamai-workflow', 'teamai-import']) {
@@ -671,7 +680,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     }
   });
 
-  it('parks a copy of every file it prunes, so a member who edited one can get it back', async () => {
+  it('archives what it prunes, and keeps a packaged path whose content the member changed', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
     const teamConfig = {
@@ -699,21 +708,22 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
       scope: 'user' as const,
     };
 
-    // Ownership is proven by pathname, so this file is pruned even though the
-    // member edited it. A retired release's path is never overwritten by the
-    // deployment either, which is what makes the backup the only way back.
+    // A path a release shipped is ours only at content a release shipped there.
+    // The unedited SKILL.md goes, a copy archived first; the reference the
+    // member rewrote is theirs now and stays, and so does its directory.
     const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
     await fse.ensureDir(path.join(wiki, 'references/methodology'));
-    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# edited by the member');
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), WIKI_SKILL);
     await fse.writeFile(path.join(wiki, 'references/methodology/phase0-collection.md'), '# my notes');
 
     await deployBuiltinSkills(teamConfig, localConfig);
 
-    expect(await fse.pathExists(wiki)).toBe(false);
+    expect(await fse.pathExists(path.join(wiki, 'SKILL.md'))).toBe(false);
+    expect(await fse.readFile(path.join(wiki, 'references/methodology/phase0-collection.md'), 'utf8')).toBe('# my notes');
 
     const backup = path.join(await onlyRunDir(homeDir), 'claude/.claude-skills/team-wiki-codebase');
-    expect(await fse.readFile(path.join(backup, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
-    expect(await fse.readFile(path.join(backup, 'references/methodology/phase0-collection.md'), 'utf8')).toBe('# my notes');
+    expect(await fse.readFile(path.join(backup, 'SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
+    expect(await fse.pathExists(path.join(backup, 'references/methodology/phase0-collection.md'))).toBe(false);
   });
 
   it('keeps a file it could not back up, instead of deleting it anyway', async () => {
@@ -724,7 +734,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
     await fse.ensureDir(wiki);
-    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# edited by the member');
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), WIKI_SKILL);
 
     // A file where the backup tree has to start: every copy under it fails, the
     // way a full disk or a read-only home would.
@@ -733,7 +743,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     await deployBuiltinSkills(teamConfig, localConfig);
 
-    expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toBe('# edited by the member');
+    expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
   });
 
   it('never walks through a symlinked skill root, so it cannot delete the link target', async () => {
@@ -743,14 +753,14 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // by name, so following the link would delete files we never wrote.
     const shared = path.join(tmpDir, 'shared-skills/team-wiki-codebase');
     await fse.ensureDir(shared);
-    await fse.writeFile(path.join(shared, 'SKILL.md'), '# someone else\'s');
+    await fse.writeFile(path.join(shared, 'SKILL.md'), WIKI_SKILL);
 
     await fse.ensureDir(path.join(homeDir, '.claude/skills'));
     await fse.symlink(shared, path.join(homeDir, '.claude/skills/team-wiki-codebase'), 'dir');
 
     await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
 
-    expect(await fse.readFile(path.join(shared, 'SKILL.md'), 'utf8')).toBe('# someone else\'s');
+    expect(await fse.readFile(path.join(shared, 'SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/team-wiki-codebase'))).toBe(true);
   });
 
@@ -762,14 +772,14 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // sees nothing and the walk deletes files in the checkout.
     const dotfiles = path.join(tmpDir, 'dotfiles/skills');
     await fse.ensureDir(path.join(dotfiles, 'team-wiki-codebase'));
-    await fse.writeFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.writeFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), WIKI_SKILL);
 
     await fse.ensureDir(path.join(homeDir, '.claude'));
     await fse.symlink(dotfiles, path.join(homeDir, '.claude/skills'), 'dir');
 
     await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
 
-    expect(await fse.readFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.readFile(path.join(dotfiles, 'team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
     expect(await fse.pathExists(path.join(dotfiles, 'teamai/SKILL.md'))).toBe(false);
   });
 
@@ -797,7 +807,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // the skill directory under it are real directories, the link is higher up.
     const dotfiles = path.join(tmpDir, 'dotfiles/opencode');
     await fse.ensureDir(path.join(dotfiles, 'skills/team-wiki-codebase'));
-    await fse.writeFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.writeFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
     await fse.ensureDir(path.join(homeDir, '.config'));
     await fse.symlink(dotfiles, path.join(homeDir, '.config/opencode'), 'dir');
 
@@ -807,7 +817,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     );
 
     expect(deployed).toBe(0);
-    expect(await fse.readFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.readFile(path.join(dotfiles, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
     expect(await fse.pathExists(path.join(dotfiles, 'skills/teamai'))).toBe(false);
   });
 
@@ -819,7 +829,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const hermesHome = path.join(tmpDir, 'elsewhere/hermes');
     vi.stubEnv('HERMES_HOME', hermesHome);
     await fse.ensureDir(path.join(hermesHome, 'skills/team-wiki-codebase'));
-    await fse.writeFile(path.join(hermesHome, 'skills/team-wiki-codebase/SKILL.md'), '# pre-stub');
+    await fse.writeFile(path.join(hermesHome, 'skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
     const workspace = path.join(homeDir, '.openclaw/workspace');
     await fse.ensureDir(workspace);
 
@@ -841,7 +851,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     const target = path.join(tmpDir, 'dotfiles/hermes');
     await fse.ensureDir(path.join(target, 'skills/team-wiki-codebase'));
-    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
     const hermesHome = path.join(tmpDir, 'elsewhere/hermes');
     await fse.ensureDir(path.dirname(hermesHome));
     await fse.symlink(target, hermesHome, 'dir');
@@ -853,7 +863,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     );
 
     expect(deployed).toBe(0);
-    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
     expect(await fse.pathExists(path.join(target, 'skills/teamai'))).toBe(false);
   });
 
@@ -862,7 +872,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     const target = path.join(tmpDir, 'dotfiles/copilot');
     await fse.ensureDir(path.join(target, 'skills/team-wiki-codebase'));
-    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), '# theirs');
+    await fse.writeFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), WIKI_SKILL);
     await fse.symlink(target, path.join(homeDir, '.copilot'), 'dir');
 
     const deployed = await deployBuiltinSkills(
@@ -871,8 +881,64 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     );
 
     expect(deployed).toBe(0);
-    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# theirs');
+    expect(await fse.readFile(path.join(target, 'skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
     expect(await fse.pathExists(path.join(target, 'skills/teamai'))).toBe(false);
+  });
+
+  it('keeps a skill of the member\'s that only shares a packaged name, whatever its paths', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // A root TeamAI never managed, or a skill the member wrote under the old
+    // name: every path matches a packaged one, no content matches a release.
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    await fse.ensureDir(path.join(wiki, 'scripts'));
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), '---\nname: team-wiki-codebase\n---\n# my own wiki skill\n');
+    await fse.writeFile(path.join(wiki, 'scripts/scan_repo.py'), 'print("mine")\n');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toContain('# my own wiki skill');
+    expect(await fse.readFile(path.join(wiki, 'scripts/scan_repo.py'), 'utf8')).toBe('print("mine")\n');
+    expect(await fse.pathExists(path.join(homeDir, '.teamai/removed-skills'))).toBe(false);
+  });
+
+  it('retires the second Codex copy of the stub, so Codex does not read a stale one beside it', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // The resolver picks .agents/skills/teamai because it exists; the copy an
+    // earlier release left in .codex/skills would otherwise keep its old body.
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    const shared = path.join(homeDir, '.agents/skills/teamai');
+    const configured = path.join(homeDir, '.codex/skills/teamai');
+    await fse.ensureDir(shared);
+    await fse.writeFile(path.join(shared, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.ensureDir(path.join(configured, 'references'));
+    await fse.writeFile(path.join(configured, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.writeFile(path.join(configured, 'references/setup-admin.md'), shipped('teamai', 'references/setup-admin.md'));
+
+    await deployBuiltinSkills(legacyPruneTeamConfig({ codex: { skills: '.codex/skills' } }), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(shared, 'SKILL.md'), 'utf8')).toBe(
+      await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8'),
+    );
+    expect(await fse.pathExists(configured)).toBe(false);
+  });
+
+  it('keeps the second Codex copy when it holds a file TeamAI did not write', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    const shared = path.join(homeDir, '.agents/skills/teamai');
+    const configured = path.join(homeDir, '.codex/skills/teamai');
+    await fse.ensureDir(shared);
+    await fse.ensureDir(path.join(configured, 'references'));
+    await fse.writeFile(path.join(configured, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.writeFile(path.join(configured, 'references/team-playbook.md'), '# mine');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig({ codex: { skills: '.codex/skills' } }), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.pathExists(path.join(configured, 'SKILL.md'))).toBe(false);
+    expect(await fse.readFile(path.join(configured, 'references/team-playbook.md'), 'utf8')).toBe('# mine');
   });
 
   it('keeps a member\'s file under a __pycache__ that is not bytecode of a shipped script', async () => {
@@ -881,7 +947,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
     await fse.ensureDir(path.join(wiki, 'scripts/__pycache__'));
     await fse.ensureDir(path.join(wiki, 'notes/__pycache__'));
-    await fse.writeFile(path.join(wiki, 'SKILL.md'), '# packaged');
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), WIKI_SKILL);
     await fse.writeFile(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'), 'bytecode');
     await fse.writeFile(path.join(wiki, 'notes/__pycache__/keep.txt'), '# mine');
 
@@ -897,7 +963,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // `inheritUserScope`: user base, then project base, same tool, root and name.
     const projectRoot = path.join(tmpDir, 'work/proj');
     const projectConfig = { ...legacyPruneLocalConfig(tmpDir), scope: 'project' as const, projectRoot };
-    for (const [base, body] of [[homeDir, '# user copy'], [projectRoot, '# project copy']]) {
+    for (const [base, body] of [[homeDir, wikiSkillTagged('user')], [projectRoot, wikiSkillTagged('project')]]) {
       await fse.ensureDir(path.join(base, '.claude/skills/team-wiki-codebase'));
       await fse.writeFile(path.join(base, '.claude/skills/team-wiki-codebase/SKILL.md'), body);
     }
@@ -909,7 +975,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const archived = (await listFilesRecursive(path.join(homeDir, '.teamai/removed-skills')))
       .filter((f) => f.endsWith('team-wiki-codebase/SKILL.md'));
     const bodies = await Promise.all(archived.map((f) => fse.readFile(path.join(homeDir, '.teamai/removed-skills', f), 'utf8')));
-    expect(bodies.sort()).toEqual(['# project copy', '# user copy']);
+    expect(bodies.sort()).toEqual([wikiSkillTagged('project'), wikiSkillTagged('user')]);
   });
 
   it('archives nothing when there is nothing retired to archive', async () => {
@@ -931,7 +997,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const localConfig = legacyPruneLocalConfig(tmpDir);
 
     // Codex prunes its own root and the shared one; same skill name, different files.
-    for (const [root, body] of [['.codex/skills', '# from codex'], ['.agents/skills', '# from shared']]) {
+    for (const [root, body] of [['.codex/skills', wikiSkillTagged('codex')], ['.agents/skills', wikiSkillTagged('shared')]]) {
       await fse.ensureDir(path.join(homeDir, root, 'team-wiki-codebase'));
       await fse.writeFile(path.join(homeDir, root, 'team-wiki-codebase/SKILL.md'), body);
     }
@@ -939,8 +1005,8 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await deployBuiltinSkills(teamConfig, localConfig);
 
     const run = await onlyRunDir(homeDir);
-    expect(await fse.readFile(path.join(run, 'codex/.codex-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# from codex');
-    expect(await fse.readFile(path.join(run, 'codex/.agents-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe('# from shared');
+    expect(await fse.readFile(path.join(run, 'codex/.codex-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(wikiSkillTagged('codex'));
+    expect(await fse.readFile(path.join(run, 'codex/.agents-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(wikiSkillTagged('shared'));
   });
 
   it('removes the references an earlier release deployed beside the stub', async () => {
@@ -967,8 +1033,8 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // references tree the new deployment does not ship.
     const stubDir = path.join(homeDir, '.claude/skills/teamai');
     await fse.ensureDir(path.join(stubDir, 'references'));
-    await fse.writeFile(path.join(stubDir, 'SKILL.md'), '# old body');
-    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), '# old reference');
+    await fse.writeFile(path.join(stubDir, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), shipped('teamai', 'references/setup-admin.md'));
 
     await deployBuiltinSkills(teamConfig, localConfig);
 
@@ -984,7 +1050,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await fse.ensureDir(path.join(homeDir, '.codex'));
     const sharedLegacy = path.join(homeDir, '.agents/skills/team-wiki-codebase');
     await fse.ensureDir(sharedLegacy);
-    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), '# old');
+    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), WIKI_SKILL);
 
     const teamConfig = {
       team: 'test',
@@ -1059,7 +1125,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // What the release packaged…
     for (const packaged of ['SKILL.md', 'README.md', 'references/methodology/phase0-collection.md', 'scripts/scan_repo.py']) {
       await fse.ensureDir(path.join(wiki, path.dirname(packaged)));
-      await fse.writeFile(path.join(wiki, packaged), '# packaged');
+      await fse.writeFile(path.join(wiki, packaged), shipped('team-wiki-codebase', packaged));
     }
     // …and what the member put beside it, which `overwrite: true` never deleted.
     await fse.writeFile(path.join(wiki, 'references/methodology/my-notes.md'), '# mine');
@@ -1099,8 +1165,8 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
 
     const stubDir = path.join(homeDir, '.claude/skills/teamai');
     await fse.ensureDir(path.join(stubDir, 'references'));
-    await fse.writeFile(path.join(stubDir, 'SKILL.md'), '# old body');
-    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), '# old reference');
+    await fse.writeFile(path.join(stubDir, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), shipped('teamai', 'references/setup-admin.md'));
     await fse.writeFile(path.join(stubDir, 'references/team-playbook.md'), '# mine');
 
     await deployBuiltinSkills(teamConfig, localConfig);
@@ -1119,7 +1185,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await fse.ensureDir(path.join(homeDir, '.codex'));
     const sharedLegacy = path.join(homeDir, '.agents/skills/team-wiki-codebase');
     await fse.ensureDir(sharedLegacy);
-    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), '# codex copy');
+    await fse.writeFile(path.join(sharedLegacy, 'SKILL.md'), WIKI_SKILL);
 
     const teamConfig = {
       team: 'test',
@@ -1145,7 +1211,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // nor deleted from, and Claude's pass must not reach it on Codex's behalf.
     expect(deployed).toBe(1);
     expect(await fse.pathExists(path.join(homeDir, '.claude/skills/teamai/SKILL.md'))).toBe(true);
-    expect(await fse.readFile(path.join(sharedLegacy, 'SKILL.md'), 'utf8')).toBe('# codex copy');
+    expect(await fse.readFile(path.join(sharedLegacy, 'SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
   });
 
   it('deploys a built-in Codex skill to its existing shared location', async () => {

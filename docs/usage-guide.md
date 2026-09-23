@@ -474,9 +474,10 @@ from the CLI, `~/.<tool>/skills/teamai/SKILL.md` (or wherever that tool keeps te
 workspace, `HERMES_HOME`), a small discovery stub that points at
 those commands. Older releases copied the whole tree into every agent directory, where it
 went stale between pulls; `teamai pull` removes those leftovers, keeping a copy of every
-removed file under `~/.teamai/removed-skills/`, one directory per pull, so an edit you made
-to one of them is not lost (until `teamai uninstall`, which removes `~/.teamai/` and this
-archive with it). A directory that also holds a file of your own is kept, with only the
+removed file under `~/.teamai/removed-skills/`, one directory per pull (until `teamai uninstall`,
+which removes `~/.teamai/` and this archive with it). Only files whose content a release shipped
+are removed: a packaged file you edited, or a skill of your own under one of the old names, is
+yours and stays. A directory that also holds a file of your own is kept, with only the
 packaged files removed, and named in the pull output. `share` is served only while recall is
 on (off by default; `sharing.recall.enabled: true` in `teamai.yaml` for the team, or
 `teamai recall enable` for one machine): until then `teamai skill get share` refuses and says so.

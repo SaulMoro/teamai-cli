@@ -2,8 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { fileURLToPath } from 'node:url';
+import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // ─── Mocks ─────────────────────────────────────────────
+
+// A CLI-owned file is one whose content a release shipped; `shipped()` is it here.
+vi.mock('../packaged-skill-digests.js', () => shippedSkillDigestsMock());
 
 const mockAutoDetectInit = vi.fn();
 const mockSaveLocalConfig = vi.fn();
@@ -121,11 +128,11 @@ async function setupFixture(tmpDir: string) {
   await fse.ensureDir(path.join(homeDir, '.claude', 'agents'));
   await fse.writeFile(path.join(homeDir, '.claude', 'agents', 'teamai-recall.md'), '# Recall Agent');
   await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'teamai'));
-  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai', 'SKILL.md'), '# teamai stub');
+  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai', 'SKILL.md'), shipped('teamai', 'SKILL.md'));
   await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings'));
-  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings', 'SKILL.md'), '# Share Learnings');
+  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'teamai-share-learnings', 'SKILL.md'), shipped('teamai-share-learnings', 'SKILL.md'));
   await fse.ensureDir(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase'));
-  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase', 'SKILL.md'), '# Wiki Codebase');
+  await fse.writeFile(path.join(homeDir, '.claude', 'skills', 'team-wiki-codebase', 'SKILL.md'), shipped('team-wiki-codebase', 'SKILL.md'));
 
   // Settings.json with hooks
   await fse.writeJson(path.join(homeDir, '.claude', 'settings.json'), {
@@ -999,18 +1006,18 @@ describe('uninstall', () => {
     // files and never deleted them, so uninstall must not either.
     const skills = path.join(homeDir, '.claude', 'skills');
     const stub = path.join(skills, 'teamai');
-    await fse.outputFile(path.join(stub, 'SKILL.md'), '# stub\n');
-    await fse.outputFile(path.join(stub, 'references', 'setup-admin.md'), '# packaged\n');
+    await fse.outputFile(path.join(stub, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
+    await fse.outputFile(path.join(stub, 'references', 'setup-admin.md'), shipped('teamai', 'references/setup-admin.md'));
     await fse.outputFile(path.join(stub, 'references', 'team-playbook.md'), '# mine\n');
 
     const legacy = path.join(skills, 'team-wiki-codebase');
-    await fse.outputFile(path.join(legacy, 'SKILL.md'), '# packaged\n');
-    await fse.outputFile(path.join(legacy, 'scripts', 'scan_repo.py'), '# packaged\n');
+    await fse.outputFile(path.join(legacy, 'SKILL.md'), shipped('team-wiki-codebase', 'SKILL.md'));
+    await fse.outputFile(path.join(legacy, 'scripts', 'scan_repo.py'), shipped('team-wiki-codebase', 'scripts/scan_repo.py'));
     await fse.outputFile(path.join(legacy, 'references', 'methodology', 'my-notes.md'), '# mine\n');
 
     // Nothing of the member's in this one, so it goes whole.
     const legacyShare = path.join(skills, 'teamai-share-learnings');
-    await fse.outputFile(path.join(legacyShare, 'SKILL.md'), '# packaged\n');
+    await fse.outputFile(path.join(legacyShare, 'SKILL.md'), shipped('teamai-share-learnings', 'SKILL.md'));
 
     const teamConfig = makeTeamConfig({
       toolPaths: {
@@ -1066,6 +1073,23 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
   });
 
+  it('removes the stub the installed CLI deployed, byte for byte, and keeps a same-named skill of the member\'s', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const skills = path.join(homeDir, '.claude', 'skills');
+    // What `teamai pull` writes now: the packaged stub, verbatim.
+    await fse.copy(path.join(PACKAGE_ROOT, 'skills', 'teamai', 'SKILL.md'), path.join(skills, 'teamai', 'SKILL.md'));
+    // A skill the member wrote under a legacy name: no content a release shipped.
+    await fse.outputFile(path.join(skills, 'team-wiki-codebase', 'SKILL.md'), '---\nname: team-wiki-codebase\n---\n# mine\n');
+
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(skills, 'teamai'))).toBe(false);
+    expect(await fse.readFile(path.join(skills, 'team-wiki-codebase', 'SKILL.md'), 'utf8')).toContain('# mine');
+  });
+
   it('does not delete through a linked skills root, the same line pull stops at', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
@@ -1103,7 +1127,7 @@ describe('uninstall', () => {
     vi.stubEnv('SHELL', '/bin/zsh');
     const target = path.join(tmpDir, 'dotfiles-copilot');
     await fse.ensureDir(path.join(target, 'skills', 'teamai'));
-    await fse.writeFile(path.join(target, 'skills', 'teamai', 'SKILL.md'), '# stub in the checkout');
+    await fse.writeFile(path.join(target, 'skills', 'teamai', 'SKILL.md'), shipped('teamai', 'SKILL.md'));
     await fse.symlink(target, path.join(homeDir, '.copilot'), 'dir');
 
     const localConfig = makeLocalConfig(homeDir, repoPath);
@@ -1123,7 +1147,7 @@ describe('uninstall', () => {
     vi.stubEnv('HERMES_HOME', hermesHome);
     const stub = path.join(hermesHome, 'skills', 'teamai', 'SKILL.md');
     await fse.ensureDir(path.dirname(stub));
-    await fse.writeFile(stub, '# stub');
+    await fse.writeFile(stub, shipped('teamai', 'SKILL.md'));
 
     const localConfig = makeLocalConfig(homeDir, repoPath);
     const teamConfig = makeTeamConfig();
@@ -1144,7 +1168,7 @@ describe('uninstall', () => {
     // machine that has ever had one.
     const sharedStub = path.join(homeDir, '.agents', 'skills', 'teamai');
     await fse.ensureDir(sharedStub);
-    await fse.writeFile(path.join(sharedStub, 'SKILL.md'), '# TeamAI\n');
+    await fse.writeFile(path.join(sharedStub, 'SKILL.md'), shipped('teamai', 'SKILL.md'));
     const sharedUserSkill = path.join(homeDir, '.agents', 'skills', 'my-own-skill');
     await fse.ensureDir(sharedUserSkill);
     await fse.writeFile(path.join(sharedUserSkill, 'SKILL.md'), '# Mine\n');
