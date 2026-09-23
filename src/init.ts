@@ -17,12 +17,11 @@ import {
   type Scope,
   getTeamaiHome,
   getConfigPath,
-  isRecallEnabled,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestMissingError } from './roles.js';
+import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadProjectsManifest, listProjectIds } from './projects.js';
-import { getMemberConfig, mergeMemberConfig } from './members.js';
+import { memberReadRoots, readMemberConfig, mergeMemberConfig } from './members.js';
 import { askQuestion, askConfirmation, askSelection, closePrompt, isInteractive } from './utils/prompt.js';
 import {
   normalizeAgentList,
@@ -445,7 +444,7 @@ export async function initHttp(
     // not parse, an unknown `--role` — must not be swallowed: a role-less config
     // matches every role when hooks are reconciled, so it would install exactly
     // the hooks the manifest restricts.
-    const lenient = error instanceof RolesManifestMissingError || error instanceof NoRoleSelectedError;
+    const lenient = error instanceof RolesManifestNotFoundError || error instanceof NoRoleSelectedError;
     if (!lenient) throw error;
   }
   Object.assign(localConfig, await resolveActiveProjects(localPath, options.project));
@@ -891,7 +890,7 @@ export async function initSelfRepo(options: GlobalOptions & {
     // not parse, an unknown `--role` — must not be swallowed: a role-less config
     // matches every role when hooks are reconciled, so it would install exactly
     // the hooks the manifest restricts.
-    const lenient = error instanceof RolesManifestMissingError || error instanceof NoRoleSelectedError;
+    const lenient = error instanceof RolesManifestNotFoundError || error instanceof NoRoleSelectedError;
     if (!lenient) throw error;
   }
   Object.assign(localConfig, await resolveActiveProjects(localPath, options.project));
@@ -998,7 +997,7 @@ export async function initSelfRepo(options: GlobalOptions & {
         await ensureDir(memberDir);
         const memberPath = path.join(memberDir, `${username}.yaml`);
         isNewSelfMember = !await pathExists(memberPath);
-        const existingSelfMember = await getMemberConfig(wt, username);
+        const existingSelfMember = await readMemberConfig(memberReadRoots(wt, localConfig), username);
         const merged = mergeMemberConfig(existingSelfMember, {
           username,
           projects: localConfig.projects,
@@ -1455,7 +1454,8 @@ export async function init(options: GlobalOptions & {
   }
 
   // Step 5: member roster on the teamai-reports orphan branch (never the
-  // default branch). Leftover members/ on the clone is ignored.
+  // default branch). The clone's leftover members/ is a read-only inherited
+  // root: the merge below absorbs the member's pre-switch file.
   let isNewMember = true;
   if (!options.dryRun) {
     try {
@@ -1467,7 +1467,7 @@ export async function init(options: GlobalOptions & {
         await ensureDir(memberDir);
         const memberPath = path.join(memberDir, `${username}.yaml`);
         isNewMember = !await pathExists(memberPath);
-        const existingMember = await getMemberConfig(wt, username);
+        const existingMember = await readMemberConfig(memberReadRoots(wt, reportsConfig), username);
         const merged = mergeMemberConfig(existingMember, {
           username,
           projects: resolvedProjects,
@@ -1626,27 +1626,33 @@ export async function init(options: GlobalOptions & {
 
   // Step 7: Inject built-in + team hooks into AI tools
   const reloadedTeamConfig = await loadTeamConfig(localPath);
+  // Only a stub that actually landed is announced as ready in the IDE.
+  let stubDeployed = 0;
   if (reloadedTeamConfig) {
     const filterAgents = requestedAgents.length > 0 ? requestedAgents : undefined;
     await reconcileTeamHooksForConfig(reloadedTeamConfig, localConfig, { filterAgents });
 
-    // Step 7.5: Deploy CLI built-in skills immediately so team-wiki-codebase
-    // is available in the IDE right after init, without waiting for first pull.
+    // Step 7.5: Deploy the built-in discovery stub immediately so the teamai
+    // skill is available in the IDE right after init, without waiting for the
+    // first pull. Its workflows are served by `teamai skill get`.
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const skipRecall = !isRecallEnabled(localConfig, reloadedTeamConfig);
-      const deployed = await deployBuiltinSkills(reloadedTeamConfig, localConfig, { skipRecall });
-      if (deployed > 0) {
-        log.debug(`Deployed ${deployed} built-in skill(s)`);
+      stubDeployed = await deployBuiltinSkills(reloadedTeamConfig, localConfig);
+      if (stubDeployed > 0) {
+        log.debug(`Deployed ${stubDeployed} built-in skill(s)`);
       }
     } catch (e) {
-      log.debug(`Built-in skills deployment skipped: ${(e as Error).message}`);
+      log.warn(`The built-in teamai skill was not deployed: ${(e as Error).message}`);
     }
   }
 
   log.success('teamai initialized successfully!');
-  log.info('Built-in skills (e.g. team-wiki-codebase) are ready to use in your IDE now.');
-  log.info('Skills, rules, env and docs will auto-sync on each session start (via hooks).');
+  if (stubDeployed > 0) {
+    log.info('The built-in teamai skill is ready in your IDE; it loads its workflows with `teamai skill get`.');
+  } else {
+    log.warn('The built-in teamai skill was not deployed to any AI tool (see the lines above); run `teamai pull` once the cause is fixed, or `teamai doctor` to see it.');
+  }
+  log.info('Skills, rules, env and docs auto-sync on each session start when the selected agent has active TeamAI hooks.');
   log.info('Run `teamai status` to check current config.');
 
   // Close the readline singleton so the process can exit cleanly.

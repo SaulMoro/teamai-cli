@@ -493,8 +493,8 @@ function buildHint({ friction, promptSummary, isKnowledgeGap }: HintContext): st
   }
   const task = promptSummary ? `\n\nTask: ${promptSummary}` : '';
   const action = isKnowledgeGap
-    ? 'Consider running /teamai-share-learnings to summarize what you learned, share it with your team, and fill the knowledge gap.'
-    : 'Consider running /teamai-share-learnings to summarize what you learned and share it with your team.';
+    ? 'Consider running `/teamai share what this session taught me` to summarize what you learned, share it with your team, and fill the knowledge gap (or run `teamai skill get share`).'
+    : 'Consider running `/teamai share what this session taught me` to summarize what you learned and share it with your team (or run `teamai skill get share`).';
   return `${headline}${task}\n\n${action}`;
 }
 

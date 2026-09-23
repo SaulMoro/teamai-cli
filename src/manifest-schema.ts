@@ -50,10 +50,16 @@ export function isSafeNamespaceSegment(seg: string): boolean {
     && !WINDOWS_DEVICE_NAME.test(seg);
 }
 
-const NAMESPACE_RULE = "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, no trailing '.' or space, which also rules out '.' and '..', and not a Windows device name such as 'CON' or 'COM1')";
+export const NAMESPACE_RULE = "resource namespace must be a single path segment (no '/', '\\', ':' or control characters, no trailing '.' or space, which also rules out '.' and '..', and not a Windows device name such as 'CON' or 'COM1')";
 
-/** A resource namespace: one path segment that cannot escape its parent. */
-export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, { message: NAMESPACE_RULE });
+/**
+ * A resource namespace: one path segment that cannot escape its parent. The
+ * message quotes the value (JSON-escaped, so a control character shows): the
+ * issue path names the entry, but an admin fixing it looks for the text.
+ */
+export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, (value) => ({
+  message: `${NAMESPACE_RULE}; got ${JSON.stringify(value)}`,
+}));
 
 /**
  * A role id that stands in for a namespace when `roles.yaml` is absent. The
@@ -62,11 +68,20 @@ export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSe
  * joined onto the team repo.
  */
 export function assertSafeFallbackNamespaces(ids: string[], source: string): string[] {
-  const unsafe = ids.find((id) => !isSafeNamespaceSegment(id));
-  if (unsafe !== undefined) {
-    throw new Error(`Invalid ${source} "${unsafe}": ${NAMESPACE_RULE}`);
-  }
+  const error = fallbackNamespaceError(ids, source);
+  if (error !== null) throw new Error(error);
   return ids;
+}
+
+/**
+ * The error `assertSafeFallbackNamespaces` would throw, or null when every id is
+ * safe, for a caller that reports failures as values.
+ */
+export function fallbackNamespaceError(ids: string[], source: string): string | null {
+  const unsafe = ids.find((id) => !isSafeNamespaceSegment(id));
+  return unsafe === undefined
+    ? null
+    : `Invalid ${source} "${unsafe}": ${NAMESPACE_RULE}. Switch to a role whose id is a valid namespace with \`teamai roles set <role>\`, or add manifest/roles.yaml to map the role to its namespaces.`;
 }
 
 
@@ -129,12 +144,12 @@ export async function readManifestFile(manifestPath: string, kind: 'projects' | 
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       const dangling = await danglingLinkOnPath(resolvedPath);
       if (!dangling) return null;
-      throw new Error(`Could not read ${kind} manifest ${resolvedPath}: ${dangling} is a symbolic link with no target.`);
+      throw new Error(`The ${kind} manifest ${resolvedPath} could not be read: ${dangling} is a symbolic link with no target. Point the link at the manifest file, or replace the link with the file itself.`);
     }
-    throw new Error(`Could not read ${kind} manifest ${resolvedPath}: ${(error as Error).message}`);
+    throw new Error(`The ${kind} manifest ${resolvedPath} could not be read: ${(error as Error).message}. Make it a readable file, then retry.`);
   }
   if (content.trim() === '') {
-    throw new Error(`Invalid ${kind} manifest: ${resolvedPath} is empty. Delete it, or give it a version and a ${kind} list.`);
+    throw new Error(`Invalid ${kind} manifest: ${resolvedPath} is empty. Give it a version and a ${kind} list; deleting it instead turns ${kind} filtering off for the whole team.`);
   }
   return content;
 }
@@ -176,7 +191,8 @@ export function assertNoCaseAliasedNamespaces(entries: Iterable<NamespaceEntry>,
     } else if (prior.namespace !== entry.namespace) {
       throw new Error(
         `Invalid ${kind}: ${entry.type} namespaces "${prior.namespace}" (${prior.owner}) and "${entry.namespace}" (${entry.owner}) `
-        + 'differ only by case or Unicode normalization and would name the same directory on a case-insensitive filesystem',
+        + 'differ only by case or Unicode normalization and would name the same directory on a case-insensitive filesystem. '
+        + 'Rename one of them, together with its directory in the team repo',
       );
     }
   }

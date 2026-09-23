@@ -165,7 +165,7 @@ vi.mock('../roles.js', () => ({
   ),
   // The real class: init swallows ONLY this one, so the mock must carry the
   // same identity for the distinction to be exercised.
-  RolesManifestMissingError: class RolesManifestMissingError extends Error {},
+  RolesManifestNotFoundError: class RolesManifestNotFoundError extends Error {},
 }));
 
 // Track pathExists calls to simulate directory states
@@ -564,7 +564,7 @@ describe('init', () => {
   });
 
   describe('deploys built-in skills after init', () => {
-    it('calls deployBuiltinSkills with teamConfig and skipRecall when loadTeamConfig returns non-null', async () => {
+    it('calls deployBuiltinSkills with teamConfig when loadTeamConfig returns non-null', async () => {
       let cloneDone = false;
       pathExistsFn = (p: string) => {
         if (p === localPath) return cloneDone;
@@ -595,10 +595,11 @@ describe('init', () => {
       await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user' });
 
       expect(mockDeployBuiltinSkills).toHaveBeenCalled();
+      // No recall option: one stub deploys for everyone, and `teamai skill get
+      // share` is where recall is checked (#678).
       expect(mockDeployBuiltinSkills).toHaveBeenCalledWith(
         expect.objectContaining({ team: expect.any(String) }),
         expect.anything(),
-        expect.objectContaining({ skipRecall: expect.any(Boolean) }),
       );
     });
   });
@@ -788,9 +789,9 @@ describe('init', () => {
       pathExistsFn = (p: string) => p.endsWith(`${path.sep}.git`) || p.endsWith('/.git');
       mockGit.raw.mockResolvedValue('https://git.example.com/group/repo.git\n');
 
-      const { loadRolesManifest, RolesManifestMissingError } = await import('../roles.js');
+      const { loadRolesManifest, RolesManifestNotFoundError } = await import('../roles.js');
       vi.mocked(loadRolesManifest).mockRejectedValueOnce(
-        new RolesManifestMissingError('/repo/.teamai/manifest/roles.yaml'),
+        new RolesManifestNotFoundError('/repo/.teamai/manifest/roles.yaml'),
       );
 
       const { saveLocalConfigForScope } = await import('../config.js');

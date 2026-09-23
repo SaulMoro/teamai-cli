@@ -95,7 +95,7 @@ vi.mock('../roles.js', () => ({
   }),
   // The real class: resource-namespaces distinguishes an absent manifest from a
   // malformed one by its type, so the mock has to carry the same identity.
-  RolesManifestMissingError: class RolesManifestMissingError extends Error {},
+  RolesManifestNotFoundError: class RolesManifestNotFoundError extends Error {},
 }));
 
 // Isolation: pull() takes a real ~/.teamai/.sync-lock. Parallel vitest workers
@@ -528,9 +528,9 @@ describe('pull role-aware sync and cleanup', () => {
   });
 
   it('gracefully degrades when the roles manifest is absent', async () => {
-    const { loadRolesManifest, RolesManifestMissingError } = await import('../roles.js');
+    const { loadRolesManifest, RolesManifestNotFoundError } = await import('../roles.js');
     vi.mocked(loadRolesManifest).mockRejectedValueOnce(
-      new RolesManifestMissingError('/repo/manifest/roles.yaml'),
+      new RolesManifestNotFoundError('/repo/manifest/roles.yaml'),
     );
 
     await pull({});

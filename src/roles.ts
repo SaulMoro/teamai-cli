@@ -2,7 +2,6 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
-import { log } from './utils/logger.js';
 import { NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, type NamespaceEntry } from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
@@ -106,26 +105,27 @@ export function roleNamespaceEntries(manifest: RolesManifest): NamespaceEntry[] 
 }
 
 /**
- * The manifest file is absent: a team that does not use roles, not a broken one.
- * Callers that fall back to unfiltered delivery must react to this case ONLY —
- * doing the same for a manifest that exists but does not parse would hand out
- * every namespace the manifest was written to gate.
+ * The team repo has no `manifest/roles.yaml` at all — a team that does not use
+ * roles, not a broken one. Callers that relax filtering must react to this case
+ * ONLY: doing the same for a manifest that exists but cannot be read or parsed
+ * would hand out every namespace the manifest was written to gate on pull, and
+ * send a new rule or agent to the shared root on push (#649).
  */
-export class RolesManifestMissingError extends Error {
+export class RolesManifestNotFoundError extends Error {
   constructor(manifestPath: string) {
     super(`Roles manifest not found: ${manifestPath}`);
-    this.name = 'RolesManifestMissingError';
+    this.name = 'RolesManifestNotFoundError';
   }
 }
 
 export async function loadRolesManifest(repoPath: string): Promise<RolesManifest> {
   const manifestPath = path.join(repoPath, 'manifest', 'roles.yaml');
   // Absence is the only case that may relax filtering downstream, so it is the
-  // only one that becomes RolesManifestMissingError: an unreadable or empty file
-  // throws a plain error and fails the pull.
+  // only one that becomes RolesManifestNotFoundError: an unreadable or empty file
+  // throws a plain error and fails the pull or push.
   const content = await readManifestFile(manifestPath, 'roles');
   if (content === null) {
-    throw new RolesManifestMissingError(manifestPath);
+    throw new RolesManifestNotFoundError(manifestPath);
   }
 
   let raw: unknown;
@@ -152,7 +152,7 @@ export async function loadRolesManifestIfPresent(repoPath: string): Promise<Role
   try {
     return await loadRolesManifest(repoPath);
   } catch (error) {
-    if (error instanceof RolesManifestMissingError) return null;
+    if (error instanceof RolesManifestNotFoundError) return null;
     throw error;
   }
 }

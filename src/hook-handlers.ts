@@ -214,8 +214,11 @@ const trackSlashHandler: HookHandler = {
     const prompt = stdin.prompt;
     if (typeof prompt !== 'string' || !prompt.startsWith('/')) return null;
 
-    // Extract skill name: first word after "/"
-    const match = prompt.match(/^\/([\w-]+)/);
+    // Extract skill name: first word after "/". Character class must match
+    // SKILL_NAME_REGEX (types.ts) — the CLI path (trackSlashCommand) already
+    // uses the full set; this handler was narrower, silently truncating names
+    // that contain dots or colons (both valid per the schema).
+    const match = prompt.match(/^\/([a-zA-Z0-9_\-:.]+)/);
     if (!match) return null;
 
     const skillName = match[1];
@@ -230,17 +233,27 @@ const trackSlashHandler: HookHandler = {
 /**
  * Whether the share-learnings hint may be emitted at all. Resolved lazily per
  * hook run so a team can switch it off via teamai.yaml (or a member via local
- * config) without re-injecting hooks. Falls back to enabled when config can't
- * be read, preserving pre-toggle behavior for half-initialized installs.
+ * config) without re-injecting hooks. Falls back to enabled when there is no
+ * config at all, preserving pre-toggle behavior for half-initialized installs,
+ * where `teamai skill get share` serves too. A config that exists but cannot be
+ * loaded withholds it: `share` refuses there, so the nudge would lead nowhere.
+ *
+ * Recall and a writable source gate it too: the hint routes to the `share`
+ * workflow, and `teamai skill get share` refuses while recall is off or the
+ * team source is read-only HTTP, so a nudge towards it would send the agent to
+ * a command that says no. The dispatcher already drops this `gitOnly` handler
+ * for HTTP teams; the check here keeps the gate the same wherever it is called.
  */
 async function contributeHintAllowed(): Promise<boolean> {
-  const { isContributeHintEnabled } = await import('./types.js');
+  const { isContributeHintEnabled, isRecallEnabled } = await import('./types.js');
+  const { autoDetectInit, NotInitializedError } = await import('./config.js');
   try {
-    const { autoDetectInit } = await import('./config.js');
     const { localConfig, teamConfig } = await autoDetectInit();
-    return isContributeHintEnabled(localConfig, teamConfig);
-  } catch {
-    return isContributeHintEnabled({}, {});
+    return localConfig.repo?.kind !== 'http'
+      && isContributeHintEnabled(localConfig, teamConfig)
+      && isRecallEnabled(localConfig, teamConfig);
+  } catch (e) {
+    return e instanceof NotInitializedError ? isContributeHintEnabled({}, {}) : false;
   }
 }
 

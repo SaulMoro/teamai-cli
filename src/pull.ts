@@ -1,13 +1,15 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import matter from 'gray-matter';
+import { selectAgentsForDirectory } from './resources/agents.js';
 import { requireInit, loadState, saveState, detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { learningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
+import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
@@ -68,8 +70,7 @@ export interface RolePullContext {
  *
  * - git:  `git pull` into localPath; version = current HEAD rev.
  * - http: nothing to clone — skills/rules/CLAUDE.md are delivered per-session via
- *         report/sync/ack (the local-agent bypass), not a repo snapshot. The
- *         `reportingOnly` flag tells the deploy step to skip git-tree sync.
+ *         report/sync/ack (the local-agent bypass), not a repo snapshot.
  *
  * Returns a display label and the opaque version string used as the
  * incremental-sync cache key (state.lastPullRev). `version` is null only when
@@ -83,7 +84,7 @@ export interface RolePullContext {
  */
 async function refreshTeamRepo(
   localConfig: LocalConfig,
-): Promise<{ label: string; version: string | null; reportingOnly: boolean; submodulesFailed: boolean; submodulesChanged: boolean }> {
+): Promise<{ label: string; version: string | null; submodulesFailed: boolean; submodulesChanged: boolean }> {
   if (localConfig.repo.kind === 'http') {
     const { resolveApiKey } = await import('./api-key.js');
     const apiKey = resolveApiKey();
@@ -92,7 +93,7 @@ async function refreshTeamRepo(
     }
     // HTTP backends deliver resources through report/sync (own hook handler),
     // so there is no repo tree to pull here.
-    return { label: 'HTTP (report/sync delivery)', version: null, reportingOnly: true, submodulesFailed: false, submodulesChanged: false };
+    return { label: 'HTTP (report/sync delivery)', version: null, submodulesFailed: false, submodulesChanged: false };
   }
 
   if (localConfig.repo.kind === 'self') {
@@ -116,7 +117,7 @@ async function refreshTeamRepo(
     } catch {
       version = null;
     }
-    return { label: 'single-repo (knowledge on main)', version, reportingOnly: false, submodulesFailed: false, submodulesChanged: false };
+    return { label: 'single-repo (knowledge on main)', version, submodulesFailed: false, submodulesChanged: false };
   }
 
   // The shared team clone is mutated here (git pull + flushPendingLearnings'
@@ -191,7 +192,7 @@ async function refreshTeamRepo(
     log.warn(`Submodule update failed for ${localConfig.repo.localPath}: ${(e as Error).message}`);
   }
 
-  return { label: result, version, reportingOnly: false, submodulesFailed, submodulesChanged };
+  return { label: result, version, submodulesFailed, submodulesChanged };
 }
 
 /** teamai.yaml `usageReport: false` — per-repo opt-out of stat commits. */
@@ -272,10 +273,9 @@ export function filterRulesByKnowledgeNamespaces(
 export function filterAgentsByNamespaces(
   agents: ResourceItem[],
   agentNamespaces: string[] | null,
+  placedAgents?: Record<string, string>,
 ): ResourceItem[] {
-  const kept = agentNamespaces
-    ? agents.filter((agent) => !agent.namespace || agentNamespaces.includes(agent.namespace))
-    : agents;
+  const kept = selectAgentsForDirectory(agents, agentNamespaces, placedAgents);
 
   const seen = new Map<string, ResourceItem>();
   for (const agent of kept) {
@@ -422,7 +422,12 @@ export async function resolveDesiredAgents(
   roleContext: RolePullContext | null,
 ): Promise<ResourceItem[]> {
   const items = await getHandler('agents').scanTeamForPull(teamConfig, localConfig);
-  return filterAgentsByNamespaces(items, roleContext ? roleContext.activeNamespaces.agents : null);
+  const { placedAgents } = await loadStateForScope(localConfig);
+  return filterAgentsByNamespaces(
+    items,
+    roleContext ? roleContext.activeNamespaces.agents : null,
+    placedAgents,
+  );
 }
 
 // Deployment adds a CONTRIBUTORS file that the team source may not have; ignore it
@@ -639,7 +644,11 @@ async function cleanupTombstonedResources(
 
   for (const { type, toolPathField } of tombstoneTypes) {
     const handler = getHandler(type);
-    const tombstones = await handler.readTombstones(localConfig);
+    // Agents deploy flattened, so a namespaced agent tombstone has to be read
+    // as the stem the local copy carries (`AgentsHandler.removedStems`).
+    const tombstones = type === 'agents'
+      ? await (handler as AgentsHandler).removedStems(freshConfig, localConfig)
+      : await handler.readTombstones(localConfig);
     if (tombstones.size === 0) continue;
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(freshConfig, localConfig))) {
@@ -747,10 +756,6 @@ async function pullForScope(
   // Step 1: refresh team repo (git pull, or HTTP /repo materialization)
   const pullSpin = spinner(`[${scopeLabel}] Pulling team repo...`).start();
   let currentRev: string | null = null;
-  // Reporting-only HTTP endpoints have no team repo to write to, so the
-  // team-repo-dependent built-in skill (teamai-share-learnings) is useless
-  // there and must not be injected.
-  let reportingOnly = false;
   // A failed submodule update holds the rev back below so the next pull
   // retries (see refreshTeamRepo).
   let submodulesFailed = false;
@@ -760,13 +765,34 @@ async function pullForScope(
   try {
     const refresh = await refreshTeamRepo(localConfig);
     currentRev = refresh.version;
-    reportingOnly = refresh.reportingOnly;
     submodulesFailed = refresh.submodulesFailed;
     submodulesChanged = refresh.submodulesChanged;
     pullSpin.succeed(`[${scopeLabel}] Team repo: ${refresh.label}`);
   } catch (e) {
     pullSpin.fail(`[${scopeLabel}] Pull failed: ${(e as Error).message}`);
     return;
+  }
+
+  // Settle the placement records against the tree just refreshed, before
+  // delivery reads them: a placement whose PR has merged becomes a record, one
+  // whose file the team deleted stops being one, and one shadowed by a new
+  // shared-root file of the same name is withdrawn (#649 review).
+  // In single-repo mode the refresh leaves the member's own checkout as it is —
+  // a feature branch, or a main not pulled yet — so the records are settled
+  // against origin/<default> as a ref instead: a record dropped against that
+  // checkout would never come back (#649 review).
+  if (!options.dryRun) {
+    try {
+      const tip = localConfig.repo.kind === 'self'
+        ? `origin/${await getDefaultBranch(localConfig.repo.localPath)}`
+        : undefined;
+      const recordsState = await loadStateForScope(localConfig);
+      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState, tip)) {
+        await saveStateForScope(recordsState, localConfig);
+      }
+    } catch (e) {
+      log.debug(`[${scopeLabel}] Placement record cleanup skipped: ${(e as Error).message}`);
+    }
   }
 
   // Publish what contribute queued. Here rather than inside the refresh, which
@@ -989,7 +1015,7 @@ async function pullForScope(
           const skipRecall = !isRecallEnabled(localConfig, freshConfig);
           try { const { deployBuiltinAgents } = await import('./builtin-agents.js'); await deployBuiltinAgents(freshConfig, localConfig, { skipRecall }); } catch {}
           try { const { deployBuiltinRules } = await import('./builtin-rules.js'); await deployBuiltinRules(freshConfig, localConfig, { skipRecall }); } catch {}
-          try { const { deployBuiltinSkills } = await import('./builtin-skills.js'); await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly, skipRecall }); } catch {}
+          try { const { deployBuiltinSkills } = await import('./builtin-skills.js'); await deployBuiltinSkills(freshConfig, localConfig); } catch {}
           // Refresh managed culture/shared-instruction blocks as well. A CLI
           // upgrade may add a new target file while the team repo SHA and tool
           // target set remain unchanged.
@@ -1263,8 +1289,7 @@ async function pullForScope(
   if (!options.dryRun) {
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const skipRecallForSkills = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinSkills(freshConfig, localConfig, { reportingOnly, skipRecall: skipRecallForSkills });
+      const deployed = await deployBuiltinSkills(freshConfig, localConfig);
       if (deployed > 0) {
         log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
       }

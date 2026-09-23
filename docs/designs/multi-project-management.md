@@ -102,7 +102,7 @@ The namespace guard applies to `manifest/roles.yaml`'s active namespaces
 (`knowledge`, `skills`, `agents`); its `learnings:` is kept for backward
 compatibility, ignored at runtime, and therefore unchecked.
 
-Agent push uses the same role/project namespace resolution as pull and skips ambiguous source destinations. On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
+Agent push uses the same role/project namespace resolution as pull and skips ambiguous source destinations. Placement follows it: a new agent pushed with `--role`/`--project` lands under `agents/<namespace>/` (the project's `agents` axis), the same way a new rule resolves from `knowledge` and a new skill from `skills` (issue #649). On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
 
 Directory layout reuses the existing namespace convention, adding one learnings layer:
 

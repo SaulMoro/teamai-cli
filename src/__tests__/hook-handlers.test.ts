@@ -44,6 +44,8 @@ vi.mock('../usage-tracker.js', async () => {
     trackFromStdin: mockTrackFromParsed,
     trackSlashCommand: mockTrackSlashFromParsed,
     resolveSkillUse: actual.resolveSkillUse,
+    extractSkillName: actual.extractSkillName,
+    isValidSkillName: actual.isValidSkillName,
     appendUsageEvent: vi.fn().mockResolvedValue(undefined),
     updateKnownSkills: vi.fn().mockResolvedValue(undefined),
   };
@@ -75,7 +77,9 @@ vi.mock('../update.js', () => ({
 
 const mockAutoDetectInit = vi.fn().mockResolvedValue({
   localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
-  teamConfig: { team: 'test', repo: '', toolPaths: {} },
+  // Recall on: the contribute hint routes to the share workflow, which is
+  // refused while recall is off, so the hint is withheld there too.
+  teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { recall: { enabled: true } } },
 });
 
 vi.mock('../config.js', async (importOriginal) => ({
@@ -367,7 +371,7 @@ describe('hook-handlers registry', () => {
     )!.handler;
     mockAutoDetectInit.mockResolvedValueOnce({
       localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user', contributeHintEnabled: true },
-      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { contributeHint: { enabled: false } } },
+      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { contributeHint: { enabled: false }, recall: { enabled: true } } },
     });
     mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
 
@@ -375,16 +379,63 @@ describe('hook-handlers registry', () => {
     expect(result).toContain('do share');
   });
 
-  it('contribute-check handler keeps hinting when config cannot be loaded', async () => {
+  it('contribute-check handler stays silent while recall is off, since `teamai skill get share` would refuse', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
     )!.handler;
-    mockAutoDetectInit.mockRejectedValueOnce(new Error('not initialized'));
+    mockAutoDetectInit.mockResolvedValueOnce({
+      localConfig: { repo: { localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
+      teamConfig: { team: 'test', repo: '', toolPaths: {} },
+    });
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's3b', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
+  });
+
+  it('contribute-check handler stays silent on a read-only HTTP source even with recall on', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockAutoDetectInit.mockResolvedValueOnce({
+      localConfig: { repo: { kind: 'http', localPath: '/tmp', remote: '' }, username: 'test', scope: 'user' },
+      teamConfig: { team: 'test', repo: '', toolPaths: {}, sharing: { recall: { enabled: true } } },
+    });
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's3c', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
+  });
+
+  it('contribute-check handler keeps hinting when there is no config at all', async () => {
+    const { NotInitializedError } = await import('../config.js');
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockAutoDetectInit.mockRejectedValueOnce(new NotInitializedError('teamai is not initialized. Run `teamai init` first.'));
     mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
 
     const result = await handler.execute({ session_id: 's5', cwd: '/x' }, 'claude');
     expect(result).toContain('do share');
+  });
+
+  it('contribute-check handler stays silent when a config exists but cannot be loaded', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    // `teamai skill get share` refuses on such a config, so the nudge would lead nowhere.
+    mockAutoDetectInit.mockRejectedValueOnce(new Error('Team config (teamai.yaml) not found. Check your repo path.'));
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's5b', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
   it('contribute-check handler obeys TEAMAI_CONTRIBUTE_HINT_DISABLED=1', async () => {
@@ -1228,6 +1279,48 @@ describe('post-tool-use Skill-matcher dispatch routes Cursor SKILL.md Read to th
     expect(payload.data).toEqual({});
     expect(JSON.stringify(payload)).not.toContain('SYNTHETIC_SECRET_NOT_REAL');
     expect(JSON.stringify(payload)).not.toContain('secrets.ts');
+  });
+});
+
+describe('track-slash handler: dotted and colon skill names', () => {
+  it('tracks a skill name that contains a dot', async () => {
+    const { appendUsageEvent, updateKnownSkills } = await import('../usage-tracker.js');
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'prompt-submit' && r.handler.name === 'track-slash',
+    )!.handler;
+
+    vi.mocked(appendUsageEvent).mockClear();
+    vi.mocked(updateKnownSkills).mockClear();
+
+    await handler.execute(
+      { prompt: '/org.setup some args', hook_event_name: 'UserPromptSubmit' },
+      'claude',
+    );
+
+    expect(appendUsageEvent).toHaveBeenCalledOnce();
+    expect(vi.mocked(appendUsageEvent).mock.calls[0][0].skill).toBe('org.setup');
+    expect(updateKnownSkills).toHaveBeenCalledWith('org.setup');
+  });
+
+  it('tracks a skill name that contains a colon', async () => {
+    const { appendUsageEvent, updateKnownSkills } = await import('../usage-tracker.js');
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'prompt-submit' && r.handler.name === 'track-slash',
+    )!.handler;
+
+    vi.mocked(appendUsageEvent).mockClear();
+    vi.mocked(updateKnownSkills).mockClear();
+
+    await handler.execute(
+      { prompt: '/ns:deploy some args', hook_event_name: 'UserPromptSubmit' },
+      'claude',
+    );
+
+    expect(appendUsageEvent).toHaveBeenCalledOnce();
+    expect(vi.mocked(appendUsageEvent).mock.calls[0][0].skill).toBe('ns:deploy');
+    expect(updateKnownSkills).toHaveBeenCalledWith('ns:deploy');
   });
 });
 

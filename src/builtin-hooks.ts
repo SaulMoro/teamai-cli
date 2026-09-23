@@ -430,6 +430,19 @@ const ADAPTER_BUILTIN_HOOKS: Record<string, { keys: string[]; suffix?: string }>
   // opencode-hooks.ts covers the same four events plus the matcher-scoped
   // post-tool-use passes (TOOL_MATCHER), i.e. the whole built-in set.
   opencode: { keys: BUILTIN_HOOK_SPECS.map((spec) => spec.key) },
+  // pi-hooks.ts maps the same four lifecycle events as OMP (session_start,
+  // agent_settled, tool_execution_end, before_agent_start); Pi has no
+  // Skill/TodoWrite matcher concept, so post-tool-use is wildcard-only there
+  // too. tool_execution_start only caches the tool input for the later
+  // post-tool-use dispatch — it never calls hook-dispatch itself.
+  pi: {
+    keys: [
+      'Hook dispatch session-start',
+      'Hook dispatch stop',
+      'Hook dispatch post-tool-use wildcard',
+      'Hook dispatch prompt-submit',
+    ],
+  },
   // openclaw-hooks.ts EVENT_MAP maps session:start and command:new only, and
   // its generated handler spawns the dispatcher with argv. Only `openclaw`:
   // the other claw variants share its workspace resolver, so reconciliation

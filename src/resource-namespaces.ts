@@ -3,7 +3,7 @@ import {
   loadRolesManifest,
   resolveRoleResourceNamespaces,
   roleNamespaceEntries,
-  RolesManifestMissingError,
+  RolesManifestNotFoundError,
   type ResourceNamespaces,
   type RolesManifest,
 } from './roles.js';
@@ -38,7 +38,7 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
     // roles as "no filter" and deliver the namespaces the manifest was written
     // to gate. Let it fail the scope's pull, as an invalid projects manifest
     // already does.
-    if (!(error instanceof RolesManifestMissingError)) throw error;
+    if (!(error instanceof RolesManifestNotFoundError)) throw error;
     if (primaryRole) log.warn('Roles manifest not found. Skipping role-based filtering.');
   }
 

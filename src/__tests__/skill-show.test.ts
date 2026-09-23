@@ -12,6 +12,7 @@ vi.mock('../utils/logger.js', () => ({
     debug: vi.fn(),
     dim: vi.fn(),
   },
+  setStderrOnly: vi.fn(() => false),
 }));
 
 import type { LocalConfig, TeamaiConfig } from '../types.js';
@@ -86,7 +87,8 @@ function captureLogs() {
 }
 
 async function runSkillShow(name: string, fx: Fixture): Promise<string[]> {
-  vi.doMock('../config.js', () => ({
+  vi.doMock('../config.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../config.js')>()),
     autoDetectInit: async () => ({ localConfig: fx.localConfig, teamConfig: fx.teamConfig }),
   }));
   const { skillShow } = await import('../skill-cmd.js');
@@ -145,6 +147,64 @@ describe('skillShow locator', () => {
     expect(text).toContain('[local-only]');
     expect(text).toContain('agent-side desc');
     expect(text).toContain('claude');
+  });
+
+  it("prefers a member's own skill over a packaged name or alias", async () => {
+    // `codebase` aliases the wiki skill and `share` is served by the CLI, but a
+    // directory a member created under either name is the skill they mean.
+    const claudeSkillsDir = path.join(fx.homeDir, '.claude', 'skills');
+    await fse.ensureDir(claudeSkillsDir);
+    await makeSkill(claudeSkillsDir, 'codebase', 'my own codebase notes');
+    await makeSkill(claudeSkillsDir, 'share', 'my own sharing helper');
+
+    for (const [name, description] of [['codebase', 'my own codebase notes'], ['share', 'my own sharing helper']]) {
+      const text = (await runSkillShow(name, fx)).join('\n');
+      expect(text, name).toContain(description);
+      expect(text, name).toContain('[local-only]');
+      expect(text, name).not.toContain('skill-data');
+      // `share` is recall-gated in the package; a member's own skill is not.
+      expect(process.exitCode, name).toBe(0);
+    }
+  });
+
+  it('classifies a skill served from the package as builtin', async () => {
+    // Only the deployed stub is in BUILTIN_SKILL_NAMES; the served workflows
+    // are built in by where they were found, not by name.
+    const lines = await runSkillShow('core', fx);
+    const text = lines.join('\n');
+    expect(text).toContain('Source       : [builtin]');
+    expect(text).toContain('Read it with : teamai skill get core');
+    expect(text).not.toContain('[local-only]');
+  });
+
+  it('refuses share while recall is disabled, like skill get and skill path do', async () => {
+    // The fixture's team has no recall setting, so it is off by default.
+    const lines = await runSkillShow('share', fx);
+    expect(process.exitCode).toBe(1);
+    expect(lines.find((l) => l.includes('skill: share'))).toBeUndefined();
+    expect(lines.join('\n')).not.toContain('skill-data');
+    process.exitCode = 0;
+  });
+
+  it('refuses a legacy share directory a pull has not pruned yet, instead of showing its path', async () => {
+    // A pre-stub release wrote this; it is the CLI's stale copy, not the
+    // member's skill, so the name must go through the packaged gate.
+    const claudeSkillsDir = path.join(fx.homeDir, '.claude', 'skills');
+    await makeSkill(claudeSkillsDir, 'teamai-share-learnings', 'old share workflow');
+
+    const lines = await runSkillShow('teamai-share-learnings', fx);
+    expect(process.exitCode).toBe(1);
+    expect(lines.join('\n')).not.toContain(path.join(claudeSkillsDir, 'teamai-share-learnings'));
+    process.exitCode = 0;
+  });
+
+  it('shows share once recall is enabled', async () => {
+    fx.localConfig.recallEnabled = true;
+    const lines = await runSkillShow('share', fx);
+    const text = lines.join('\n');
+    expect(process.exitCode).toBe(0);
+    expect(text).toContain('skill: share');
+    expect(text).toContain('Source       : [builtin]');
   });
 
   it('exits with non-zero code when skill not found', async () => {
