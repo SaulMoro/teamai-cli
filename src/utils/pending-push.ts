@@ -14,7 +14,7 @@
  */
 import path from 'node:path';
 import { pathExists } from './fs.js';
-import { remoteBranchExists, hashObject, blobInHistory, pathDeletedSince, getHeadCommit, getFileContentAtRev } from './git.js';
+import { remoteBranchExists, hashObject, blobInHistory, pathAddedSince, pathDeletedSince, getHeadCommit, getFileContentAtRev } from './git.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { log } from './logger.js';
 import type { PendingPush, ResourceItem, State } from '../types.js';
@@ -146,15 +146,19 @@ export function recordPendingPush(state: State, entry: PendingPush): void {
 export async function toPendingItems(items: ResourceItem[], repoPath: string): Promise<PendingPush['items']> {
   const out: PendingPush['items'] = [];
   for (const i of items) {
-    const placed = isPlacement(i);
-    const blob = placed ? await hashObject(repoPath, i.relativePath) : null;
+    // A placement is marked only with the blob that can prove it landed:
+    // without one, reconcile would have nothing but the path existing, which
+    // another member's later file at that path also satisfies (#649 review).
+    const blob = isPlacement(i) ? await hashObject(repoPath, i.relativePath) : null;
+    if (isPlacement(i) && !blob) {
+      log.warn(`[${i.type}] ${i.name}: could not hash ${i.relativePath}, so this machine will not treat it as its placement once merged.`);
+    }
     out.push({
       type: i.type,
       name: i.name,
       relativePath: i.relativePath,
       namespace: i.namespace,
-      ...(placed ? { placed: true } : {}),
-      ...(blob ? { blob } : {}),
+      ...(blob ? { placed: true, blob } : {}),
     });
   }
   return out;
@@ -227,7 +231,7 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  */
 export async function reconcilePlacementRecords(
   repoPath: string,
-  state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes' | 'placementsCheckedAt'>,
+  state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes' | 'placementsCheckedAt' | 'retiredPlacedAgents'>,
   tip?: string,
 ): Promise<boolean> {
   // A ref that cannot be resolved says nothing about any file: reading every
@@ -255,11 +259,37 @@ export async function reconcilePlacementRecords(
       if (!item.placed) continue;
       const field = fieldFor(item.type);
       if (!field) continue;
+      // Without the blob push wrote, landing cannot be told from another
+      // member creating the same path after this PR closed unmerged, so the
+      // mark is spent rather than recorded on the path existing (#649 review).
+      if (!item.blob) {
+        log.debug(`Not recording placement ${field}.${item.name}: no blob to prove it landed`);
+        item.placed = false;
+        changed = true;
+        continue;
+      }
       if (!await exists(item.relativePath)) continue;
-      // An entry with no blob predates the check; existence is all it can offer.
       // Bounded by `base`: the same bytes may have sat at this path before the
       // push, and a PR closed unmerged must not borrow that history.
-      if (item.blob && await blobInHistory(repoPath, item.blob, item.relativePath, entry.base, history) !== true) continue;
+      if (await blobInHistory(repoPath, item.blob, item.relativePath, entry.base, history) !== true) {
+        // The path arrived after this push, but never with what it pushed: a
+        // reviewer changed the PR before a squash merge, or somebody else
+        // created the path. The two cannot be told apart, so nothing is
+        // recorded — but say so once, or the author's next push meets a
+        // collision on what may well be their own file.
+        if (entry.base && await pathAddedSince(repoPath, entry.base, item.relativePath, history) === true) {
+          log.warn(
+            `[${item.type}] ${item.name}: ${item.relativePath} reached the default branch after your push, but not `
+            + 'with the content you pushed, so it is not treated as yours. If a reviewer changed your PR before it '
+            + `merged, run \`teamai pull\` and edit ${item.relativePath} as the team file it now is; your root copy `
+            + 'would otherwise be pushed as a new resource.',
+          );
+          item.placed = false;
+          delete item.blob;
+          changed = true;
+        }
+        continue;
+      }
       // Placement refuses an occupied path, so a deletion since `base` came
       // after this placement landed: what is there now was recreated by
       // someone else, and the placement is spent without a record.
@@ -292,6 +322,9 @@ export async function reconcilePlacementRecords(
       const valid = placedResourcePath(records, root, name);
       if (valid && !await exists(valid)) {
         log.debug(`Dropping placement record ${field}.${name} → ${recorded}: gone from the default branch`);
+        // The author's flattened copy stood for this agent; once the removal
+        // is tombstoned, that is still what the copy is (`removedStems`).
+        if (field === 'placedAgents') state.retiredPlacedAgents = { ...state.retiredPlacedAgents, [name]: valid };
         changed = true;
         continue;
       }

@@ -842,11 +842,6 @@ export async function resetToCleanMaster(git: SimpleGit, localPath?: string): Pr
   }
 }
 
-/**
- * Get the raw content of a file at a specific git revision.
- * Uses `git show <rev>:<path>` to retrieve historical file content.
- * Returns null if the file doesn't exist at that revision or if the rev is invalid.
- */
 /** The git blob id of a working-tree file, as `git hash-object` reports it; null if unreadable. */
 export async function hashObject(repoPath: string, filePath: string): Promise<string | null> {
   try {
@@ -891,11 +886,31 @@ export async function pathDeletedSince(
   filePath: string,
   tip = 'HEAD',
 ): Promise<boolean | null> {
+  return pathChangedSince(repoPath, since, filePath, tip, 'D');
+}
+
+/** Whether a commit reachable from `tip` after `since` added `filePath`. Null when git cannot say. */
+export async function pathAddedSince(
+  repoPath: string,
+  since: string,
+  filePath: string,
+  tip = 'HEAD',
+): Promise<boolean | null> {
+  return pathChangedSince(repoPath, since, filePath, tip, 'A');
+}
+
+async function pathChangedSince(
+  repoPath: string,
+  since: string,
+  filePath: string,
+  tip: string,
+  filter: 'A' | 'D',
+): Promise<boolean | null> {
   try {
-    const out = await createGit(repoPath).raw(['log', `${since}..${tip}`, '--diff-filter=D', '--format=%H', '--', filePath]);
+    const out = await createGit(repoPath).raw(['log', `${since}..${tip}`, `--diff-filter=${filter}`, '--format=%H', '--', filePath]);
     return out.trim().length > 0;
   } catch (e) {
-    log.debug(`git log --diff-filter=D failed for ${filePath}: ${(e as Error).message}`);
+    log.debug(`git log --diff-filter=${filter} failed for ${filePath}: ${(e as Error).message}`);
     return null;
   }
 }
@@ -924,6 +939,21 @@ export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<st
   }
 }
 
+/**
+ * Whether `absFile`'s content was, at some point on the current branch, the
+ * content of `relPath`. A local copy that matches an OLDER team version and
+ * not the current one is a stale copy nobody edited, not a local change.
+ */
+export async function isPastVersionOf(repoPath: string, absFile: string, relPath: string): Promise<boolean> {
+  const blob = await hashObject(repoPath, absFile);
+  return blob !== null && await blobInHistory(repoPath, blob, relPath) === true;
+}
+
+/**
+ * Get the raw content of a file at a specific git revision.
+ * Uses `git show <rev>:<path>` to retrieve historical file content.
+ * Returns null if the file doesn't exist at that revision or if the rev is invalid.
+ */
 export async function getFileContentAtRev(
   repoPath: string,
   rev: string,

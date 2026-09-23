@@ -673,6 +673,13 @@ export const StateSchema = z.object({
    * that path again: whatever is there now is somebody else's.
    */
   placementsCheckedAt: z.string().optional(),
+  /**
+   * `placedAgents` records dropped because the team deleted their file, by
+   * agent name. The author's flattened copy stood for that namespaced agent, so
+   * once it is tombstoned the copy is the removed agent's, even though no
+   * record or active namespace says so any longer (`AgentsHandler.removedStems`).
+   */
+  retiredPlacedAgents: z.record(z.string(), z.string()).optional(),
   pushedSkills: z.array(z.string()).default([]),
   pushedEnvVars: z.array(z.string()).default([]),
   /** Push branches whose PR is still open — see PendingPushSchema. */
@@ -1704,6 +1711,14 @@ export function isAgentDisabled(localConfig: { disabledAgents?: string[] }, tool
  * the team scoped its opt-in with `--agent` (undefined whitelist = all
  * installed tools).
  */
+/**
+ * Synthetic toolPaths key used only to make `teamai push` scan the active tree's
+ * .teamai/{skills,rules} in single-repo mode (see pushCore). It is never written
+ * to disk and never used by pull — the leading marker keeps it from colliding
+ * with any real agent id. It is not a tool, so tool exclusions never apply to it.
+ */
+export const SELF_KNOWLEDGE_SCAN_KEY = '__teamai_self_knowledge__';
+
 export function isAgentExcluded(
   localConfig: { disabledAgents?: string[]; enabledAgents?: string[] },
   tool: string,

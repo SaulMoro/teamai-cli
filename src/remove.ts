@@ -80,13 +80,22 @@ async function removeCore(
   // `publishedNameFor` below resolves the bare name the author types through
   // the placement record, and a placement becomes a record only once it has
   // landed on the default branch — which this may be the first command to see.
+  // Not best-effort here: `publishedNameFor` reads the records back from disk,
+  // so a placement that merged but could not be saved as a record resolves to
+  // the bare stem — and that removes the agent from every namespace.
   try {
     const recordsState = await loadStateForScope(localConfig);
     if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
       await saveStateForScope(recordsState, localConfig);
     }
   } catch (e) {
-    log.debug(`Placement record cleanup skipped: ${(e as Error).message}`);
+    log.error(
+      `Could not bring this machine's placement records up to date (${(e as Error).message}), `
+      + 'so the names given cannot be resolved safely. Nothing was removed. '
+      + 'Check that the teamai state file is writable, then retry.',
+    );
+    process.exitCode = 1;
+    return;
   }
 
   const handler = getHandler(type as ResourceType);

@@ -14,6 +14,7 @@ const mockPathExists = vi.fn();
 const mockListDirs = vi.fn();
 
 vi.mock('../utils/prompt.js', () => ({
+  isInteractive: vi.fn(() => true),
   askQuestion: vi.fn(() => Promise.resolve('1')),
   askConfirmation: vi.fn(() => Promise.resolve(true)),
   askSelection: vi.fn((_prompt: string, itemCount: number, defaultAll?: boolean) => {

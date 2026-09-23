@@ -18,7 +18,7 @@ import { scanTeamRepoNamespaces } from './resources/skills.js';
 import type {
   GlobalOptions, ResourceItem, ResourceType, LocalConfig, TeamaiConfig, State,
 } from './types.js';
-import { getDataHome, SYNC_LOCK_FILENAME } from './types.js';
+import { getDataHome, SELF_KNOWLEDGE_SCAN_KEY, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafePath, assertSafeResourceName, defaultAllowedRoots } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError } from './roles.js';
@@ -28,16 +28,8 @@ import {
   isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, resolveProjectNamespace,
   skillNamespacePath, withNamespace, type PlaceableType,
 } from './push-namespaces.js';
-import { askQuestion, askSelection } from './utils/prompt.js';
+import { askQuestion, askSelection, isInteractive } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
-
-/**
- * Synthetic toolPaths key used only to make `teamai push` scan the active tree's
- * .teamai/{skills,rules} in single-repo mode (see pushCore). It is never written
- * to disk and never used by pull — the leading marker keeps it from colliding
- * with any real agent id.
- */
-const SELF_KNOWLEDGE_SCAN_KEY = '__teamai_self_knowledge__';
 
 /**
  * Filter a list of repo-root-relative paths (e.g. "rules/", "env/") down to
@@ -188,6 +180,15 @@ async function resolveNamespaceForNew(
     // other axis ever had that convention, so they take the first candidate.
     const skillsDefault = type === 'skills' ? localConfig.primaryRole : undefined;
     return { kind: 'namespace', namespace: skillsDefault ?? candidates[0] };
+  }
+  // No terminal to ask on (CI, a hook, TEAMAI_NONINTERACTIVE): say what the
+  // choice is and how to make it, instead of failing inside the prompt.
+  if (!isInteractive()) {
+    return {
+      kind: 'unresolvable',
+      message: `Several ${NAMESPACE_AXIS[type]} namespaces could take new ${type} (${candidates.join(', ')}), `
+        + 'and there is no terminal to ask on. Pass --role <ns> to name one.',
+    };
   }
 
   console.log('');
@@ -935,11 +936,10 @@ async function pushCore(
     fullScan.push(...items);
   }
 
-  // A project that cannot answer for agents fails HERE only for an agent the
+  // A project that cannot answer for agents is reported below for an agent the
   // scan itself dropped — skipped as "no active source" with `needsDestination`
   // set. That one never reaches the listing, so deferring its error until the
-  // selection proves it is going out means never raising it, and the run would
-  // end "No new or modified resources" on a flag that could not be honoured.
+  // selection proves it is going out means never raising it.
   //
   // A NEW agent is different: it is listed, so the user can deselect it, and
   // step 4 raises the same error if it stays selected. Failing for it here
@@ -948,11 +948,6 @@ async function pushCore(
   // placement, so an empty agents axis is none of its business either.
   const skippedForWantOfDestination = (item: ResourceItem): boolean => item.type === 'agents'
     && 'needsDestination' in item && item.needsDestination === true;
-  if (agentsDestinationError && fullScan.some(skippedForWantOfDestination)) {
-    log.error(agentsDestinationError);
-    process.exitCode = 2;
-    return;
-  }
 
   // Preserve blocked items in the full scan so their pending PR records survive.
   // Exclude them before selection and grouping: pushItem cannot write their paths.
@@ -964,6 +959,20 @@ async function pushCore(
     }
     return true;
   });
+
+  // Such an agent is skipped like any other, and a skipped agent does not
+  // block the rest of the push: a stale copy of an agent from a dropped role
+  // must not stop an unrelated rule going out (#649 review). The error is the
+  // outcome only when nothing else is left, which is when the run would end
+  // "No new or modified resources" on a flag it could not honour.
+  if (agentsDestinationError && fullScan.some(skippedForWantOfDestination)) {
+    if (allItems.length === 0) {
+      log.error(agentsDestinationError);
+      process.exitCode = 2;
+      return;
+    }
+    log.warn(`${agentsDestinationError} The agents skipped above are left out; everything else in this push goes on.`);
+  }
 
   // Keep the full scan before --skill/--role narrow allItems. prunePendingPushes
   // must see every pending resource that is still locally present, or narrowing to
@@ -1174,6 +1183,43 @@ async function pushCore(
     await saveStateForScope(pushState, localConfig);
   }
   const pendingPushes = pushState.pendingPushes;
+
+  // A rule or agent awaiting review in a namespace whose name a shared-root
+  // file now takes: the scan maps the author's root copy onto that shared file
+  // and calls it modified. Reusing the open PR — matched by type and name —
+  // would rebuild it with the author's content over the shared file and drop
+  // the namespaced change from review (#649 review). The shared root owns the
+  // name in every tool dir, as reconcile already rules for a record, so this
+  // copy is left out: the open PR stays as it is.
+  for (let i = allItems.length - 1; i >= 0; i--) {
+    const item = allItems[i];
+    if (!item || (item.type !== 'rules' && item.type !== 'agents')) continue;
+    if (item.status !== 'modified' || !isAtSharedRoot(item)) continue;
+    const awaiting = pendingPushes.flatMap((entry) => entry.items.map((recorded) => ({ entry, recorded })))
+      .find(({ recorded }) => recorded.type === item.type && recorded.name === item.name
+        && recorded.relativePath.split('/').length === 3);
+    if (!awaiting) continue;
+    log.warn(
+      `[${item.type}] ${item.name}: ${item.relativePath} now exists at the shared root, so your local ${item.name} `
+      + `follows that file and is left out of this push. ${awaiting.recorded.relativePath} stays as it is in `
+      + `${awaiting.entry.prUrl ?? `branch ${awaiting.entry.branch}`}.`,
+    );
+    allItems.splice(i, 1);
+  }
+
+  // The flag places new resources only. An edit of a shared-root rule or agent
+  // stays at the shared root, which reaches every member — say so rather than
+  // let the flag look as if it had scoped it.
+  if (options.role || options.project) {
+    for (const item of allItems) {
+      if ((item.type === 'rules' || item.type === 'agents') && item.status === 'modified' && isAtSharedRoot(item)) {
+        log.warn(
+          `[${item.type}] ${item.name} is an edit of the shared-root ${item.relativePath}, which every member receives; `
+          + `${options.role ? '--role' : '--project'} only places new resources, so it stays there.`,
+        );
+      }
+    }
+  }
 
   if (allItems.length === 0) {
     // No resource changes, but the user may have edited teamai.yaml (sources /

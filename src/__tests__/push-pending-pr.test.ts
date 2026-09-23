@@ -30,6 +30,7 @@ const mockCreatePullRequest = vi.fn();
 const mockAskSelection = vi.fn();
 
 vi.mock('../utils/prompt.js', () => ({
+  isInteractive: vi.fn(() => true),
   askQuestion: vi.fn(() => Promise.resolve('1')),
   askConfirmation: vi.fn(() => Promise.resolve(true)),
   askSelection: (...args: unknown[]) => mockAskSelection(...args),

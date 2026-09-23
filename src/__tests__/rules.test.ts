@@ -728,6 +728,28 @@ scope: 'user',
     expect(await fse.readFile(path.join(localRulesDir, 'my-rule.md'), 'utf-8')).toBe('awaiting review');
   });
 
+  it("spares the author's root copy while its PR is pending, even once the placement mark is spent", async () => {
+    // Reconcile spends the mark on a placement it cannot prove (no blob, or
+    // the path arrived with other content), while the PR may still be open:
+    // the copy is still the author's work (#649 review).
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRulesDir, 'other.md'), 'other');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    await fse.writeFile(path.join(localRulesDir, 'my-rule.md'), 'awaiting review');
+    vi.mocked(loadStateForScope).mockResolvedValue({
+      lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null, placedRules: {},
+      pendingPushes: [{
+        branch: 'teamai/push/me/1', prUrl: null, createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know', placed: false }],
+      }],
+    } as State);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(localRulesDir, 'my-rule.md'), 'utf-8')).toBe('awaiting review');
+  });
+
   it('still sweeps a root rule whose record points at a file that is gone', async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
     await fse.writeFile(path.join(teamRulesDir, 'other.md'), 'other');

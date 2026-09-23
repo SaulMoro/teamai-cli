@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -320,6 +321,22 @@ projects:
   const nothingActive = () => fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
     'version: 1\nprojects:\n  - id: elsewhere\n    resources:\n      agents: [zzz]\n');
 
+  it('does not hold a recorded agent whose local copy already matches the team file', async () => {
+    // The author's own edit merged after their last pull: the team file moved
+    // past the baseline, but to exactly what they have, so nothing is pushed.
+    await nothingActive();
+    const current = { name: 'reviewer', type: 'agents' as const,
+      sourcePath: path.join(repoPath, 'agents/fe-agents/reviewer.yaml'), relativePath: 'agents/fe-agents/reviewer.yaml' };
+    await fse.outputFile(current.sourcePath, 'name: reviewer\ndescription: Published\ninstructions: My merged edit.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' }, lastPullRev: 'abc1234',
+    });
+    await handler.pullItem(current, teamConfig, localConfig);
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('name: reviewer\ndescription: Published\ninstructions: Read it.\n'));
+
+    expect(await handler.scanLocalForPush(teamConfig, localConfig)).toEqual([]);
+  });
+
   it('holds a recorded agent that changed on the team since this machine last synced it', async () => {
     // Agents have no pre-push sync: a teammate's edit made before the author's
     // next pull would be overwritten by the stale local copy (#649 review).
@@ -435,6 +452,30 @@ projects:
       expect(items[0]?.relativePath).toBe('agents/fe/vr.yaml');
     });
 
+    it('holds a root canonical source that is an older version of the placed file', async () => {
+      // Nothing refreshes .teamai/agents/vr.yaml after placement: a teammate's
+      // later edit leaves it an old copy nobody edited, and pushing it would
+      // revert that edit (#649 review).
+      const self = selfConfig();
+      const run = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
+        ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',
+      } });
+      const placedFile = path.join(repoPath, 'agents/fe/vr.yaml');
+      const asPlaced = 'name: vr\ndescription: Published\ninstructions: As placed.\n';
+      run(['init', '-q', '-b', 'main']);
+      await fse.outputFile(placedFile, asPlaced);
+      run(['add', '-A']); run(['commit', '-q', '-m', 'placement merged']);
+      await fse.outputFile(placedFile, 'name: vr\ndescription: Published\ninstructions: A teammate improved this.\n');
+      run(['add', '-A']); run(['commit', '-q', '-m', 'teammate edit']);
+      await fse.outputFile(path.join(tmpDir, '.teamai/agents/vr.yaml'), asPlaced);
+      await fse.outputJson(path.join(getDataHome(self), 'state.json'), { placedAgents: { vr: 'agents/fe/vr.yaml' } });
+
+      const items = await handler.scanLocalForPush(teamConfig, self);
+
+      expect(items).toHaveLength(1);
+      expect(items[0]?.skipReason).toContain('is an older version of agents/fe/vr.yaml');
+    });
+
     it('follows a renamed canonical source to its new extension and retires the recorded file', async () => {
       const self = selfConfig();
       // Recorded and published as legacy .md; the author has since rewritten it as .yaml.
@@ -501,20 +542,60 @@ projects:
     expect(items[0]?.status).toBe('new');
   });
 
-  it('edits the copy in the requested namespace rather than treating it as new', async () => {
+  it('refuses to place onto a requested namespace\'s agent that was never delivered here', async () => {
+    // Neither active nor recorded, so this local file is not a copy of
+    // fe-agents/reviewer: it is new, and pushing it there would overwrite
+    // somebody else's agent — which rules already refuse (#649 review).
     await nothingActive();
     await fse.outputFile(path.join(repoPath, 'agents/other-ns/reviewer.yaml'),
       'name: reviewer\ndescription: Somebody else\'s\ninstructions: Read other-ns.\n');
     const requested = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
-    await fse.outputFile(requested, 'name: reviewer\ndescription: Mine\ninstructions: Read it.\n');
+    const theirs = 'name: reviewer\ndescription: Theirs\ninstructions: Read it.\n';
+    await fse.outputFile(requested, theirs);
     await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
-      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+      '---\nname: reviewer\ndescription: Mine\n---\n\nMy own agent.\n');
 
     const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe-agents' });
 
     expect(items).toHaveLength(1);
-    expect(items[0]?.status).toBe('modified');
-    expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
+    expect(items[0]?.skipReason).toContain('agents/fe-agents/reviewer.yaml already exists');
+    for (const item of items) await handler.pushItem(item, teamConfig, localConfig);
+    expect(await fse.readFile(requested, 'utf8')).toBe(theirs);
+  });
+
+  it('keeps two active same-stem agents ambiguous even when a flag names one of them', async () => {
+    // pull reports the collision and leaves `vr` as common's copy; under
+    // --role fe that copy must not be read as an edit of fe/vr (#649 review).
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: base\n    resources:\n      agents: [common, fe]\n');
+    localConfig.projects = ['base'];
+    const common = { name: 'vr', type: 'agents' as const, sourcePath: path.join(repoPath, 'agents/common/vr.yaml'), relativePath: 'agents/common/vr.yaml' };
+    await fse.outputFile(common.sourcePath, 'name: vr\ndescription: Common\ninstructions: Read common.\n');
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: Front\ninstructions: Read fe.\n');
+    await handler.pullItem(common, teamConfig, localConfig);
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig, { namespace: 'fe' });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toContain('Ambiguous agent "vr"');
+  });
+
+  it('sends an agent awaiting review as a placement back to its PR, despite a same stem elsewhere', async () => {
+    // Without a flag, a stem existing only in an inactive namespace is "no
+    // active source" — but this one is this machine's, placed and under review.
+    await nothingActive();
+    await fse.outputFile(path.join(repoPath, 'agents/other-ns/vr.yaml'), 'name: vr\ndescription: Other\ninstructions: x\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/vr.md'), '---\nname: vr\ndescription: Mine\n---\n\nEdited.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      pendingPushes: [{ branch: 'teamai/push/me/1', prUrl: null, createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'agents', name: 'vr', relativePath: 'agents/fe/vr.yaml', namespace: 'fe', placed: true, blob: 'b10b' }] }],
+    });
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.status).toBe('new');
   });
 
   it('edits the shared-root agent it was deployed from, never a namespaced second copy', async () => {
@@ -865,6 +946,32 @@ projects:
     // No roles or projects here, so be/vr is delivered, and `vr` is its copy:
     // suppressing it would block editing be/vr.
     expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr']));
+  });
+
+  it('leaves a same-named agent alone on a member who never had the removed agent\'s namespace', async () => {
+    // An ops member's own `vr` was never fe/vr's copy: removing fe/vr must not
+    // delete it on pull or stop them pushing it (#649 review).
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: ops\n    resources:\n      agents: [ops]\n  - id: front\n    resources:\n      agents: [fe]\n');
+    localConfig.projects = ['ops'];
+    await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
+    await fse.writeFile(path.join(homeDir, '.claude/agents', 'vr.md'), '---\nname: vr\ndescription: mine\n---\n\nMine.\n');
+
+    expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr']));
+    expect((await handler.scanLocalForPush(teamConfig, localConfig)).map((i) => i.name)).toContain('vr');
+  });
+
+  it('retires the flattened stem of an agent this machine placed, after its record was dropped', async () => {
+    // The author's fe was never active; the record said their `vr` was fe/vr.
+    // Once the removal merged, reconcile dropped the record and retired it.
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: front\n    resources:\n      agents: [fe]\n');
+    await fse.writeFile(path.join(repoPath, 'agents', '.removed'), 'fe/vr\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      retiredPlacedAgents: { vr: 'agents/fe/vr.yaml' },
+    });
+
+    expect(await handler.removedStems(teamConfig, localConfig)).toEqual(new Set(['fe/vr', 'vr']));
   });
 
   it('retires the flattened stem when the surviving same-stem agent is not active here', async () => {

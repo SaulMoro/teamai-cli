@@ -17,6 +17,7 @@ const mockGetHandler = vi.fn();
 
 let readlineAnswer = '1';
 vi.mock('../utils/prompt.js', () => ({
+  isInteractive: vi.fn(() => true),
   askQuestion: vi.fn((_prompt: string, defaultValue?: string) => {
     return Promise.resolve(readlineAnswer || defaultValue || '');
   }),
@@ -71,8 +72,8 @@ vi.mock('../utils/git.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
   remoteBranchExists: vi.fn().mockResolvedValue(true),
   getFileContentAtRev: vi.fn().mockResolvedValue(null),
-  hashObject: vi.fn().mockResolvedValue(null),
-  blobInHistory: vi.fn().mockResolvedValue(null),
+  hashObject: vi.fn().mockResolvedValue('b10b'),
+  blobInHistory: vi.fn().mockResolvedValue(true),
   getHeadCommit: vi.fn().mockResolvedValue('base000'),
 }));
 
@@ -240,6 +241,28 @@ describe('push namespace routing', () => {
 
     expect(pushedItems[0].namespace).toBe('common');
     expect(pushedItems[0].relativePath).toBe('skills/common/skill-a');
+  });
+
+  it('names the choice and --role instead of prompting when there is no terminal', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),  // primaryRole=hai → skills: [common, hai]
+      teamConfig: makeTeamConfig(),
+    });
+    mockSkillHandler(pushedItems);
+    const { isInteractive, askQuestion } = await import('../utils/prompt.js');
+    vi.mocked(isInteractive).mockReturnValueOnce(false);
+    vi.mocked(askQuestion).mockClear();
+
+    await push({ all: true });
+
+    expect(askQuestion).not.toHaveBeenCalled();
+    expect(pushedItems).toHaveLength(0);
+    expect(process.exitCode).toBe(2);
+    const { log } = await import('../utils/logger.js');
+    const said = vi.mocked(log.error).mock.calls.flat().join(' ');
+    expect(said).toContain('common, hai');
+    expect(said).toContain('--role <ns>');
   });
 
   it('allows selecting a non-default namespace', async () => {
@@ -1041,6 +1064,38 @@ describe('push namespace routing for rules and agents', () => {
     expect(vi.mocked(log.error).mock.calls.flat().join(' ')).toContain('agents namespace');
   });
 
+  it('still pushes an unrelated rule when the only skipped agent needs a destination the project lacks', async () => {
+    // A stale edited copy of an agent from a dropped role must not stop a
+    // rule going out: skipped agents do not block the rest (#649 review).
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(),
+      teamConfig: makeTeamConfig(),
+    });
+    mockLoadProjectsManifest.mockResolvedValue({
+      version: 1,
+      projects: [{
+        id: 'docs-only', name: 'Docs', description: '',
+        resources: { knowledge: ['docs-know'], skills: [], learnings: [], agents: [] },
+      }],
+    });
+    mockHandlers({
+      rules: [{ ...newRule }],
+      agents: [{
+        name: 'vr', type: 'agents', sourcePath: '/tmp/agents',
+        relativePath: 'agents/vr.yaml', status: 'modified', needsDestination: true,
+        skipReason: 'Agent "vr" has no active source. Activate its role or project before pushing local edits.',
+      }],
+    }, pushedItems);
+
+    await push({ all: true, project: 'docs-only' });
+
+    expect(process.exitCode).not.toBe(2);
+    expect(pushedItems.map((i) => i.relativePath)).toEqual(['rules/docs-know/my-rule.md']);
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.warn).mock.calls.flat().join(' ')).toContain('agents namespace');
+  });
+
   it('lets a modified namespaced agent through a project whose agents axis is empty', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({
@@ -1282,7 +1337,7 @@ describe('push namespace routing for rules and agents', () => {
           branch: 'teamai/push/test/20260101-000000',
           prUrl: 'https://git.woa.com/mr/14',
           createdAt: '2026-01-01T00:00:00.000Z',
-          items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know', placed: true }],
+          items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know', placed: true, blob: 'b10b' }],
         }],
       };
       mockLoadStateForScope.mockImplementation(async () => structuredClone(awaiting));
@@ -1586,6 +1641,37 @@ describe('push namespace routing for rules and agents', () => {
     const said = vi.mocked(log.warn).mock.calls.flat().join(' ');
     expect(said).toContain('awaiting review at rules/my-rule.md');
     expect(said).toContain('separate PR');
+  });
+
+  it('leaves an open placement PR alone once a shared-root file takes the name', async () => {
+    const pushedItems: Array<Record<string, unknown>> = [];
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig({ primaryRole: undefined }),
+      teamConfig: makeTeamConfig(),
+    });
+    // my-rule is awaiting review at rules/fe-know/; a teammate has since merged
+    // an unrelated rules/my-rule.md. Reusing the PR by type and name rebuilt it
+    // with the author's copy over that shared rule (#649 review).
+    mockLoadStateForScope.mockResolvedValue({
+      lastPush: null, lastPull: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], lastUpdateCheck: null, availableUpdate: null,
+      pendingPushes: [{
+        branch: 'teamai/push/test/20260101-000000',
+        prUrl: 'https://git.woa.com/mr/15',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        items: [{ type: 'rules', name: 'my-rule', relativePath: 'rules/fe-know/my-rule.md', namespace: 'fe-know', placed: true, blob: 'b10b' }],
+      }],
+    });
+    mockHandlers({
+      rules: [{ name: 'my-rule', type: 'rules', sourcePath: '/tmp/local/rules/my-rule.md', relativePath: 'rules/my-rule.md', status: 'modified' }],
+    }, pushedItems);
+
+    await push({ all: true });
+
+    expect(pushedItems).toHaveLength(0);
+    expect(mockPushRepoBranch).not.toHaveBeenCalled();
+    const { log } = await import('../utils/logger.js');
+    expect(vi.mocked(log.warn).mock.calls.flat().join(' ')).toContain('rules/my-rule.md now exists at the shared root');
   });
 
   it('keeps updating the open PR of a resource the flag does not move', async () => {

@@ -3,7 +3,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
@@ -14,6 +14,7 @@ import {
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
+import { isPastVersionOf } from '../utils/git.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -73,8 +74,10 @@ export class RulesHandler extends ResourceHandler {
       if (!rulesPath) continue;
       // Not written or cleaned by teamai, so not a source either: `removeItem`
       // leaves an excluded tool's copy behind, and read here it would republish
-      // the rule just removed (#649 review).
-      if (isAgentExcluded(localConfig, tool)) continue;
+      // the rule just removed (#649 review). The single-repo scan source is not
+      // a tool, and `enabledAgents` — which single-repo init always writes —
+      // never lists it.
+      if (tool !== SELF_KNOWLEDGE_SCAN_KEY && isAgentExcluded(localConfig, tool)) continue;
       const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), rulesPath);
       if (!await pathExists(rulesDir)) continue;
 
@@ -121,6 +124,20 @@ export class RulesHandler extends ResourceHandler {
               ? copilotInstructionsBodyEqualsTeamMd(localRule, teamRule)
             : await fileContentEqual(localFilePath, teamFilePath);
           if (equal) continue; // This tool dir's copy is identical, skip
+          // Single-repo mode: nothing refreshes the author's `.teamai/rules`
+          // copy of a rule placed under a namespace — pull deploys to tool
+          // dirs and the pre-push sync covers those — so a copy equal to an
+          // OLDER version of the team file is one nobody edited, and pushing
+          // it would revert whoever changed the rule since (#649 review).
+          if (tool === SELF_KNOWLEDGE_SCAN_KEY && teamFileName === placedName
+            && await isPastVersionOf(localConfig.repo.localPath, localFilePath, teamRelPath)) {
+            log.warn(
+              `[rules] Skipped ${name}: ${path.relative(resolveToolBaseDir(tool, localConfig), localFilePath)} is an `
+              + `older version of ${teamRelPath}, which has changed on the team since. `
+              + 'Copy the current file over it (or delete it) before editing.',
+            );
+            continue;
+          }
 
           // Content differs — candidate for "modified"
           const mtime = await getFileMtime(localFilePath);
@@ -453,9 +470,15 @@ export class RulesHandler extends ResourceHandler {
         teamRuleNames.add(name);
       }
     }
+    // Any pending entry that carries a root-authored rule at a namespaced path,
+    // not only one still marked `placed`: reconcile spends the mark on a
+    // placement it cannot prove, while the PR may still be open and the copy
+    // is still the author's work (#649 review).
     for (const entry of pendingPushes ?? []) {
       for (const item of entry.items) {
-        if (item.placed && item.type === 'rules') teamRuleNames.add(item.name);
+        if (item.type === 'rules' && !item.name.includes('/') && item.relativePath.split('/').length === 3) {
+          teamRuleNames.add(item.name);
+        }
       }
     }
     const tombstones = await this.readTombstones(localConfig);
