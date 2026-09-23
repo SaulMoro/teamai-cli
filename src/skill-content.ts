@@ -105,9 +105,20 @@ export async function detectTeam(cwd?: string): Promise<TeamDetection> {
   // stdout, or a hook's reply, so config loading reports on stderr here.
   const previous = setStderrOnly(true);
   try {
-    // A directory that no longer exists (a hook payload naming a deleted
-    // worktree) holds no project config, and git refuses to open it.
-    if (cwd !== undefined && !(await pathExists(cwd))) return { kind: 'team', init: await requireInit() };
+    if (cwd !== undefined) {
+      try {
+        await fs.promises.stat(cwd);
+      } catch (e) {
+        // A directory that no longer exists (a hook payload naming a deleted
+        // worktree) holds no project config, and git refuses to open it. Any
+        // other failure (no permission, a path through a file) leaves the
+        // project unknown, not absent.
+        if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') {
+          return { kind: 'team', init: await requireInit() };
+        }
+        return { kind: 'unusable', detail: `${cwd} cannot be checked: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
     const unreadable = await findUnreadableProjectConfig(cwd);
     if (unreadable) {
       // A parse error spans several lines (a code frame); its first names the
@@ -135,8 +146,12 @@ export async function detectTeam(cwd?: string): Promise<TeamDetection> {
  * Any failure past loading the config is a fault here and propagates.
  */
 export async function shareGate(cwd?: string): Promise<ShareGate> {
+  return gateFor(await detectTeam(cwd));
+}
+
+/** The share gate on a team already detected, for a command that needs the team too. */
+async function gateFor(team: TeamDetection): Promise<ShareGate> {
   const { isRecallEnabled } = await import('./types.js');
-  const team = await detectTeam(cwd);
   if (team.kind === 'none') return { block: null, config: null };
   if (team.kind === 'unusable') return { block: { reason: 'config', detail: team.detail }, config: null };
   const { localConfig, teamConfig } = team.init;
@@ -183,9 +198,9 @@ export async function contributeHintAllowed(cwd?: string): Promise<boolean> {
 }
 
 /** What makes this skill unusable right now, or null. */
-async function blockReason(name: string): Promise<SkillBlock | null> {
+async function blockReason(name: string, team?: TeamDetection): Promise<SkillBlock | null> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
-  return (await shareGate()).block;
+  return (team ? await gateFor(team) : await shareGate()).block;
 }
 
 /** A skill directory that ships inside the npm package. */
@@ -296,10 +311,11 @@ export type BlockedSkill = { kind: 'blocked'; name: string } & SkillBlock;
 export async function resolveServableSkill(
   name: string,
   roots: PackagedSkillRoots = packagedSkillRoots(),
+  team?: TeamDetection,
 ): Promise<ServableSkillResolution> {
   const skill = await resolvePackagedSkill(name, roots);
   if (!skill) return { kind: 'not-found', name };
-  const block = await blockReason(skill.name);
+  const block = await blockReason(skill.name, team);
   if (block) return { kind: 'blocked', name: skill.name, ...block };
   return { kind: 'found', skill };
 }
@@ -539,11 +555,14 @@ export type SkillCatalogEntry =
   | (SkillCatalogEntryFields & { blockedBy: null; path: string })
   | (SkillCatalogEntryFields & { blockedBy: SkillBlockReason; path: null });
 
-export async function skillCatalog(roots: PackagedSkillRoots = packagedSkillRoots()): Promise<SkillCatalogEntry[]> {
+export async function skillCatalog(
+  roots: PackagedSkillRoots = packagedSkillRoots(),
+  team?: TeamDetection,
+): Promise<SkillCatalogEntry[]> {
   const skills = await listServableSkills(roots);
   const entries: SkillCatalogEntry[] = [];
   for (const skill of skills) {
-    const resolved = await resolveServableSkill(skill.name, roots);
+    const resolved = await resolveServableSkill(skill.name, roots, team);
     const fields: SkillCatalogEntryFields = {
       name: skill.name,
       description: await readSkillDescription(path.join(skill.dir, SKILL_MD)),

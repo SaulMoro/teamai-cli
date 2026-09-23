@@ -75,6 +75,14 @@ describe('teamai skill list before init', () => {
     expect(stdout).toContain('teamai skill get core');
   });
 
+  it('loads the config once, so a broken one is reported once', async () => {
+    autoDetectInit.mockRejectedValue(new Error('The teamai config at /h/.teamai/config.yaml could not be read: it is empty.'));
+
+    await skillList({});
+
+    expect(autoDetectInit).toHaveBeenCalledTimes(1);
+  });
+
   it('does not list the team the user config names while the project config is unreadable', async () => {
     // Detection skips the broken project file and would answer with the user
     // config: another team's repo.

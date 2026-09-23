@@ -89,11 +89,12 @@ function captureLogs() {
 async function runSkillShow(
   name: string,
   fx: Fixture,
-  config: { unreadableProjectConfig?: string; loadError?: Error } = {},
+  config: { unreadableProjectConfig?: string; loadError?: Error; loads?: { count: number } } = {},
 ): Promise<string[]> {
   vi.doMock('../config.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../config.js')>()),
     autoDetectInit: async () => {
+      if (config.loads) config.loads.count += 1;
       if (config.loadError) throw config.loadError;
       return { localConfig: fx.localConfig, teamConfig: fx.teamConfig };
     },
@@ -251,6 +252,13 @@ describe('skillShow locator', () => {
     expect(vi.mocked(log.error)).toHaveBeenCalledWith(expect.stringContaining('could not be read: it is empty'));
     expect(process.exitCode).toBe(1);
     process.exitCode = 0;
+  });
+
+  it('loads the config once for share, so a broken one is reported once', async () => {
+    fx.localConfig.recallEnabled = true;
+    const loads = { count: 0 };
+    await runSkillShow('share', fx, { loads });
+    expect(loads.count).toBe(1);
   });
 
   it('shows share once recall is enabled', async () => {

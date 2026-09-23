@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // ── Mocks ────────────────────────────────────────────────
 // Mock the underlying modules so handlers don't do real I/O
@@ -469,6 +472,26 @@ describe('hook-handlers registry', () => {
     } finally {
       mockFindUnreadableProjectConfig.mockReset();
       mockFindUnreadableProjectConfig.mockResolvedValue(null);
+    }
+  });
+
+  it('contribute-check handler withholds the reminder when the payload cwd exists but cannot be checked', async () => {
+    // Only a cwd that is gone (ENOENT) falls back to the user config; one that
+    // cannot be opened, here a path through a file (ENOTDIR), is unknown.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-hook-cwd-'));
+    const file = path.join(dir, 'a-file');
+    fs.writeFileSync(file, '');
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    mockContributeCheckForSession.mockClear();
+    try {
+      const result = await handler.execute({ session_id: 's5f', cwd: path.join(file, 'sub') }, 'claude');
+      expect(result).toBeNull();
+      expect(mockContributeCheckForSession).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

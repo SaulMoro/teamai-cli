@@ -49,8 +49,10 @@ type LocatedSkill = ResolvedSkill | BlockedSkill;
  * we print under "Repo path" or "Installed in".
  */
 export async function skillShow(name: string, options: GlobalOptions): Promise<void> {
-  const served = await resolveServableSkill(name);
+  // One config load for both the gate and the lookup, so a broken config is
+  // reported once.
   const team = await detectTeam();
+  const served = await resolveServableSkill(name, undefined, team);
   if (team.kind !== 'team') {
     // Only the package can answer without a team: it ships with the CLI, so
     // `teamai skill show core` still works on a machine that has never run
@@ -144,7 +146,10 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
  * plus the catalog the installed CLI serves on demand.
  */
 export async function skillList(options: GlobalOptions & { json?: boolean }): Promise<void> {
-  const catalog = await skillCatalog();
+  // One config load for the catalog's gate and the team listing, so a broken
+  // config is reported once.
+  const team = await detectTeam();
+  const catalog = await skillCatalog(undefined, team);
 
   if (options.json) {
     console.log(JSON.stringify({ skills: catalog }, null, 2));
@@ -155,7 +160,6 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
   // still gets to discover what the installed CLI serves, like `skill get` does.
   // A config that cannot be loaded lists no team either, rather than the one
   // detection would fall back to, and says what failed.
-  const team = await detectTeam();
   if (team.kind === 'team') {
     const { list } = await import('./status.js');
     await list('skills', { ...options, source: 'all' });
