@@ -23,6 +23,25 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
   const projectsManifest = await loadProjectsManifest(localConfig.repo.localPath);
   const teamHasProjects = !!projectsManifest && projectsManifest.projects.length > 0;
 
+  // roles.yaml is read for every member, before any early return. A member with
+  // a role is filtered by it; a role-less one is still gated by it twice over:
+  // the legacy migration assigns a manifest-declared `hai` role (and skips, with
+  // a warning, when the manifest does not parse), and the manifest shares
+  // skills/, knowledge/ and agents/ with projects.yaml, so a project's `Common`
+  // collides with a role's `common` whether or not this member holds that role.
+  let rolesManifest: RolesManifest | null = null;
+  try {
+    rolesManifest = await loadRolesManifest(localConfig.repo.localPath);
+  } catch (error) {
+    // Only an ABSENT manifest degrades to unfiltered delivery. One that exists
+    // and does not parse must not: every path below this point would treat the
+    // roles as "no filter" and deliver the namespaces the manifest was written
+    // to gate. Let it fail the scope's pull, as an invalid projects manifest
+    // already does.
+    if (!(error instanceof RolesManifestMissingError)) throw error;
+    if (primaryRole) log.warn('Roles manifest not found. Skipping role-based filtering.');
+  }
+
   // When there is nothing to filter by AND the team does not use project
   // partitioning, keep the legacy unfiltered behavior (null = sync everything).
   //
@@ -33,36 +52,11 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
   // through to an unfiltered sync that reinstalls every project's skills/rules.
   // So we return a real (possibly empty-active) context and let the cleanup path
   // below prune the now-inactive project namespaces.
-  //
-  // This returns before roles.yaml is read, and deliberately so: the branch is
-  // reached only when the member HAS NO ROLE, and a role-less member resolves to
-  // the same unfiltered sync when roles.yaml is perfectly valid — every role
-  // namespace below is gated on `primaryRole`. The manifest gates nothing for
-  // them, so reading it here could only add a new way for their pull to fail,
-  // never close a gap. A member WITH a role never reaches this line.
   if (!hasRole && !hasProjects && !teamHasProjects) return null;
 
   // ── Role namespaces (optional) ──
   let roleNamespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
   let allRoleSkillNamespaces = new Set<string>();
-  // roles.yaml is read for a member with a role, and also for a role-less member
-  // whenever a projects manifest is in play: the two manifests share skills/,
-  // knowledge/ and agents/, so a project's `Common` collides with a role's
-  // `common` whether or not this member holds that role.
-  let rolesManifest: RolesManifest | null = null;
-  if (primaryRole || projectsManifest) {
-    try {
-      rolesManifest = await loadRolesManifest(localConfig.repo.localPath);
-    } catch (error) {
-      // Only an ABSENT manifest degrades to unfiltered delivery. One that exists
-      // and does not parse must not: every path below this point would treat the
-      // roles as "no filter" and deliver the namespaces the manifest was written
-      // to gate. Let it fail the scope's pull, as an invalid projects manifest
-      // already does.
-      if (!(error instanceof RolesManifestMissingError)) throw error;
-      if (primaryRole) log.warn('Roles manifest not found. Skipping role-based filtering.');
-    }
-  }
   if (rolesManifest && projectsManifest) {
     // Each manifest is checked on its own when it loads; the two together share
     // the same skills/, knowledge/ and agents/ directories, so a role's

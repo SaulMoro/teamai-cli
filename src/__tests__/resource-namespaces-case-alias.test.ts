@@ -62,6 +62,34 @@ describe('resolveResourceNamespaces: roles.yaml and projects.yaml share one dire
     }
   });
 
+  // A role-less config is migrated to a manifest-declared `hai` role when the
+  // manifest parses, so a broken one does gate this member: it must fail the
+  // pull rather than let it fall through to an unfiltered sync.
+  it('fails the pull of a member with no role, no project and no projects.yaml when roles.yaml does not parse', async () => {
+    const repoDir = repoWith("version: 1\nroles:\n  - id: hai\n    resources: { knowledge: [], skills: ['../../evil'] }\n", '');
+    rmSync(path.join(repoDir, 'manifest', 'projects.yaml'));
+    try {
+      await expect(
+        resolveResourceNamespaces(localConfig(repoDir, { primaryRole: undefined, projects: [] })),
+      ).rejects.toThrow(/Invalid roles manifest/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the unfiltered sync for that member when roles.yaml is absent', async () => {
+    const repoDir = repoWith('', '');
+    rmSync(path.join(repoDir, 'manifest', 'roles.yaml'));
+    rmSync(path.join(repoDir, 'manifest', 'projects.yaml'));
+    try {
+      await expect(
+        resolveResourceNamespaces(localConfig(repoDir, { primaryRole: undefined, projects: [] })),
+      ).resolves.toBeNull();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('a member with no role and no roles.yaml still resolves project namespaces', async () => {
     const repoDir = repoWith('', 'version: 1\nprojects:\n  - id: p\n    name: P\n    resources: { skills: [p-only] }\n');
     rmSync(path.join(repoDir, 'manifest', 'roles.yaml'));

@@ -30,9 +30,14 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
   try {
     manifest = await loadRolesManifest(config.repo.localPath);
   } catch (error) {
-    // A repo with no manifest has nothing to migrate. A broken one leaves the
-    // config role-less, which downstream reads as "no filter", so it surfaces.
-    if (!(error instanceof RolesManifestMissingError)) throw error;
+    // A repo with no manifest has nothing to migrate. A broken one must not
+    // fail the load: every command loads the config, `pull` included, so the
+    // member could never pull the fix. The config stays role-less for this run,
+    // and the pull refuses the broken manifest itself (resolveResourceNamespaces),
+    // so delivery does not widen.
+    if (!(error instanceof RolesManifestMissingError)) {
+      log.warn(`Legacy role migration skipped: ${(error as Error).message}`);
+    }
     return config;
   }
 
