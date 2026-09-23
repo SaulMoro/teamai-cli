@@ -39,7 +39,7 @@ import type { LocalConfig, UsageEvent, UserStats } from '../types.js';
 let tmpDir: string;
 const origHome = process.env.HOME;
 
-/** The user scope seeded below; its usage file is `~/.teamai/usage.jsonl`. */
+/** The user scope seeded below; its usage file is `~/.teamai/user-usage.jsonl`. */
 function userScope(): LocalConfig {
   return {
     repo: { localPath: path.join(tmpDir, '.teamai', 'team-repo'), remote: 'https://example.test/acme/team.git' },
@@ -185,7 +185,7 @@ describe('appendUsageEvent', () => {
     };
     await appendUsageEvent(event, userScope());
 
-    const usagePath = path.join(tmpDir, '.teamai', 'usage.jsonl');
+    const usagePath = path.join(tmpDir, '.teamai', 'user-usage.jsonl');
     const content = await fs.promises.readFile(usagePath, 'utf-8');
     const parsed = JSON.parse(content.trim());
     expect(parsed.skill).toBe('code-review');
@@ -210,10 +210,12 @@ describe('readUsageEvents', () => {
   });
 
   it('skips corrupted JSONL lines', async () => {
-    const usagePath = path.join(tmpDir, '.teamai', 'usage.jsonl');
-    await appendUsageEvent({ skill: 'good', timestamp: '2026-01-01T00:00:00Z', tool: 'claude' }, userScope());
-    await fs.promises.appendFile(usagePath, 'NOT_JSON\n');
-    await appendUsageEvent({ skill: 'also-good', timestamp: '2026-01-02T00:00:00Z', tool: 'claude' }, userScope());
+    const usagePath = path.join(tmpDir, '.teamai', 'user-usage.jsonl');
+    await fse.ensureDir(path.dirname(usagePath));
+    await fs.promises.writeFile(
+      usagePath,
+      '{"skill":"good","timestamp":"2026-01-01T00:00:00Z","tool":"claude"}\nNOT_JSON\n{"skill":"also-good","timestamp":"2026-01-02T00:00:00Z","tool":"claude"}\n',
+    );
 
     const events = await readUsageEvents(userScope());
     expect(events).toHaveLength(2);
@@ -222,15 +224,12 @@ describe('readUsageEvents', () => {
   });
 
   it('handles empty file', async () => {
-    const usagePath = path.join(tmpDir, '.teamai', 'usage.jsonl');
-    // A first read settles the file as this scope's own, so the empty file
-    // below is parsed rather than discarded as pre-upgrade usage.
-    await readUsageEvents(userScope());
+    const usagePath = path.join(tmpDir, '.teamai', 'user-usage.jsonl');
+    await fse.ensureDir(path.dirname(usagePath));
     await fs.promises.writeFile(usagePath, '');
 
     const events = await readUsageEvents(userScope());
     expect(events).toEqual([]);
-    expect(fs.existsSync(usagePath)).toBe(true);
   });
 });
 
@@ -259,46 +258,23 @@ describe('truncateUsageAfterReport', () => {
 });
 
 describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)', () => {
-  const usagePath = () => path.join(tmpDir, '.teamai', 'usage.jsonl');
+  const sharedPath = () => path.join(tmpDir, '.teamai', 'usage.jsonl');
   const legacy = '{"skill":"from-another-project","timestamp":"2026-01-01T00:00:00Z","tool":"claude"}\n';
 
   it('is not read back as the user scope\'s own usage after an upgrade', async () => {
     // Written by an earlier release on a machine that already had a user scope.
-    await fs.promises.writeFile(usagePath(), legacy);
+    await fs.promises.writeFile(sharedPath(), legacy);
 
     expect(await readUsageEvents(userScope())).toEqual([]);
-    expect(fs.existsSync(usagePath())).toBe(false);
+    expect(fs.existsSync(sharedPath())).toBe(false);
   });
 
-  it('is discarded once: usage recorded after the upgrade is kept', async () => {
-    await fs.promises.writeFile(usagePath(), legacy);
+  it('is not read back when an earlier release writes it again after a rollback', async () => {
     await appendUsageEvent({ skill: 'after-upgrade', timestamp: '2026-02-01T00:00:00Z', tool: 'claude' }, userScope());
+    // Rolled back: the earlier release records every project's usage here again.
+    await fs.promises.appendFile(sharedPath(), legacy);
 
     expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['after-upgrade']);
-    expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['after-upgrade']);
-  });
-
-  it('is discarded by one process: a hook racing it keeps what the other recorded', async () => {
-    await fs.promises.writeFile(usagePath(), legacy);
-    const { acquireLock, releaseLock } = await import('../update.js');
-    const lock = path.join(tmpDir, '.teamai', 'usage-per-scope.lock');
-    expect(await acquireLock(lock)).toBe(true);
-
-    let settled = false;
-    const racing = appendUsageEvent({ skill: 'second', timestamp: '2026-02-01T00:00:01Z', tool: 'claude' }, userScope())
-      .then(() => { settled = true; });
-    // It found no marker and is waiting on the lock, not writing.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(settled).toBe(false);
-    expect(fs.readFileSync(usagePath(), 'utf-8')).toBe(legacy);
-    // Meanwhile the lock holder finishes the discard and records its own event.
-    fs.rmSync(usagePath());
-    fs.writeFileSync(path.join(tmpDir, '.teamai', 'usage-per-scope'), '');
-    fs.appendFileSync(usagePath(), '{"skill":"first","timestamp":"2026-02-01T00:00:00Z","tool":"claude"}\n');
-    await releaseLock(lock);
-    await racing;
-
-    expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['first', 'second']);
   });
 });
 
@@ -347,7 +323,7 @@ describe('skill tracking where teamai is not set up (#748)', () => {
   });
 
   async function expectNothingRecorded(): Promise<void> {
-    expect(fs.existsSync(path.join(tmpDir, '.teamai', 'usage.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, '.teamai', 'user-usage.jsonl'))).toBe(false);
     expect((await readKnownSkills()).size).toBe(0);
   }
 

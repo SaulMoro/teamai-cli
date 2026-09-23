@@ -15,10 +15,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawn: vi.fn(() => ({ on: vi.fn(), stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) }, unref: vi.fn() })),
 }));
 vi.mock('../pull.js', () => ({ pull: vi.fn(async () => undefined) }));
-vi.mock('../update.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../update.js')>()),
-  doUpdate: vi.fn(async () => undefined),
-}));
+vi.mock('../update.js', () => ({ doUpdate: vi.fn(async () => undefined) }));
 vi.mock('../local-agent.js', () => ({ reportAndSyncFromHook: vi.fn(async () => null) }));
 vi.mock('../utils/reports-branch.js', () => ({ updateReports: vi.fn(async () => undefined) }));
 
@@ -80,7 +77,7 @@ describe('hook runs and the scope they belong to (#748)', () => {
     await hook('stop', '*', { ...base, hook_event_name: 'Stop' });
 
     expect(fs.existsSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'))).toBe(false);
-    expect(fs.existsSync(path.join(teamaiHome(), 'usage.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(teamaiHome(), 'user-usage.jsonl'))).toBe(false);
     expect(fs.existsSync(path.join(teamaiHome(), 'sessions', 'sid-b.json'))).toBe(false);
   });
 
@@ -105,7 +102,7 @@ describe('hook runs and the scope they belong to (#748)', () => {
 
     await hook('post-tool-use', 'Skill', { session_id: 'sid-g', cwd: gone, hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'skill-g' } });
 
-    expect(fs.readFileSync(path.join(teamaiHome(), 'usage.jsonl'), 'utf-8')).toContain('skill-g');
+    expect(fs.readFileSync(path.join(teamaiHome(), 'user-usage.jsonl'), 'utf-8')).toContain('skill-g');
   });
 
   it('handlers follow the scope the dispatcher resolved, not the directory the hook process runs in (#752)', async () => {
@@ -166,7 +163,7 @@ describe('hook runs and the scope they belong to (#748)', () => {
 
     await hook('post-tool-use', 'Skill', { session_id: 'sid-a', cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'skill-a' } });
 
-    expect(fs.existsSync(path.join(teamaiHome(), 'usage.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(teamaiHome(), 'user-usage.jsonl'))).toBe(false);
   });
 
   it('an unreadable partition config does not hand the project to its legacy .teamai config', async () => {

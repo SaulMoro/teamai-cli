@@ -15,52 +15,22 @@ import { getUserHome } from './utils/home.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { resolveConfigForDir } from './config.js';
 
-/** Present once `~/.teamai/usage.jsonl` holds only the user scope's own usage. */
-const USAGE_PER_SCOPE_MARKER = 'usage-per-scope';
-/** How long a hook waits for another process to finish that one-time discard. */
-const USAGE_DISCARD_WAIT = { attempts: 40, delayMs: 25 };
-
 /**
  * The usage JSONL of one scope: `<dataHome>/usage.jsonl`, so each scope reports
  * only the skills used where it is set up (#748). Evaluated at call time to
  * respect HOME changes in tests.
  *
- * The user scope's file is where every scope used to record, so what an
- * earlier release left there names no project. The first access after the
- * upgrade discards it, before the user scope can report it to its team, and
- * leaves a marker so later usage is kept. One process discards, under a lock;
- * the others wait for the marker, so none deletes what another just recorded.
- * Throws when the discard does not finish in time; every caller treats that
- * as an I/O failure.
+ * The user scope records in `~/.teamai/user-usage.jsonl` instead: every scope
+ * used to record in `~/.teamai/usage.jsonl`, and an earlier release still does
+ * after a rollback, so what that file holds names no project. It is removed,
+ * never read, so the user scope cannot report it to its team.
  */
 async function getUsagePath(config: LocalConfig): Promise<string> {
-  const usagePath = path.join(getDataHome(config), 'usage.jsonl');
+  const dataHome = getDataHome(config);
   const sharedDir = getTeamaiHomeDir();
-  if (path.resolve(path.dirname(usagePath)) !== path.resolve(sharedDir)) return usagePath;
-  const marker = path.join(sharedDir, USAGE_PER_SCOPE_MARKER);
-  if (await pathExists(marker)) return usagePath;
-
-  const { acquireLock, releaseLock } = await import('./update.js');
-  const lock = `${marker}.lock`;
-  for (let attempt = 0; attempt < USAGE_DISCARD_WAIT.attempts; attempt++) {
-    if (await acquireLock(lock)) {
-      try {
-        if (!(await pathExists(marker))) {
-          // Remove before marking: a run cut short in between discards again
-          // rather than keeping unattributed events.
-          await fs.promises.rm(usagePath, { force: true });
-          await fs.promises.writeFile(marker, '', 'utf-8');
-          log.debug(`Discarded ${usagePath}: recorded before usage was kept per scope, it names no project (#748)`);
-        }
-      } finally {
-        await releaseLock(lock);
-      }
-      return usagePath;
-    }
-    await new Promise((resolve) => setTimeout(resolve, USAGE_DISCARD_WAIT.delayMs));
-    if (await pathExists(marker)) return usagePath;
-  }
-  throw new Error(`${lock} is held by another process; skill usage from before the upgrade is still being discarded`);
+  if (path.resolve(dataHome) !== path.resolve(sharedDir)) return path.join(dataHome, 'usage.jsonl');
+  await fs.promises.rm(path.join(sharedDir, 'usage.jsonl'), { force: true });
+  return path.join(sharedDir, 'user-usage.jsonl');
 }
 
 /** Get the known-skills.json path (evaluated at call time to respect HOME changes in tests). */

@@ -309,9 +309,10 @@ were removed.
 the getters still return `~/.teamai/...`, unchanged. The project-scoped equivalents
 already route through `getDataHome()`. Skill usage moved there too (#748):
 `usage.jsonl` lives in each scope's `getDataHome()`, because one shared file let a
-project's report carry every project's skills. The user scope's file is that old
-shared path, so its first access discards what an earlier release left there and
-writes `~/.teamai/usage-per-scope` to mark the file as the user scope's own. The dashboard is likewise an A2 singleton
+project's report carry every project's skills. The user scope records in
+`~/.teamai/user-usage.jsonl`, not that old shared `~/.teamai/usage.jsonl`, which
+an earlier release still writes after a rollback; the shared file is removed,
+never read. The dashboard is likewise an A2 singleton
 (events carry `cwd`/`sessionId`); "two projects' events don't mix" is satisfied by
 `getEventsPath()` reading `HOME` at call time, not by per-project dirs.
 
