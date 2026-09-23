@@ -85,6 +85,42 @@ export type ShareGate =
   | { block: null; config: TeamaiInit | null };
 
 /**
+ * Which team this directory belongs to, or why that is unknown. `share`, and
+ * the `skill show` / `skill list` lookups, ask this so none of them answers for
+ * the wrong team: detection skips a broken project config and falls back to
+ * the user config, another team's repo, recall and source. A config that
+ * cannot be loaded carries what failed, since nothing else reports it. Only
+ * loading the config is read as "cannot be loaded".
+ */
+export type TeamDetection =
+  | { kind: 'team'; init: TeamaiInit }
+  | { kind: 'none' }
+  | { kind: 'unusable'; detail: string };
+
+export async function detectTeam(): Promise<TeamDetection> {
+  const { autoDetectInit, findUnreadableProjectConfig, NotInitializedError, BROKEN_CONFIG_ADVICE } =
+    await import('./config.js');
+  // Loading the config can migrate it and say so with `log.info`. That line
+  // must not land in the skill content, the JSON these commands print on
+  // stdout, or a hook's reply, so config loading reports on stderr here.
+  const previous = setStderrOnly(true);
+  try {
+    const unreadable = await findUnreadableProjectConfig();
+    if (unreadable) {
+      // A parse error spans several lines (a code frame); its first names the
+      // file, the line and the column, which is what the member acts on.
+      return { kind: 'unusable', detail: `${firstLine(unreadable)}. ${BROKEN_CONFIG_ADVICE}` };
+    }
+    return { kind: 'team', init: await autoDetectInit() };
+  } catch (e) {
+    if (e instanceof NotInitializedError) return { kind: 'none' };
+    return { kind: 'unusable', detail: firstLine(e instanceof Error ? e.message : String(e)) };
+  } finally {
+    setStderrOnly(previous);
+  }
+}
+
+/**
  * Whether `share` can be served here. The Stop-hook reminder asks this too, so
  * the nudge and `teamai skill get share` cannot disagree, and it reads its own
  * on/off switch from the config returned instead of loading it a second time.
@@ -93,40 +129,19 @@ export type ShareGate =
  * the docs gets the content rather than a refusal it cannot act on. A config
  * that exists but cannot be loaded blocks: whether recall is on, or the source
  * writable, is then unknown, and the workflow would fail at `teamai contribute`.
- * Only loading the config is read as "cannot be loaded"; any other failure is
- * a fault here and propagates.
+ * Any failure past loading the config is a fault here and propagates.
  */
 export async function shareGate(): Promise<ShareGate> {
-  const [{ autoDetectInit, findUnreadableProjectConfig, NotInitializedError, BROKEN_CONFIG_ADVICE }, { isRecallEnabled }] =
-    await Promise.all([import('./config.js'), import('./types.js')]);
-  // Loading the config can migrate it and say so with `log.info`. That line
-  // must not land in the skill content, the JSON these commands print on
-  // stdout, or a hook's reply, so config loading reports on stderr here.
-  const previous = setStderrOnly(true);
-  let loaded: TeamaiInit;
-  try {
-    // A broken project config is skipped by detection, which would then
-    // answer with the user config: another team's recall and source.
-    const unreadable = await findUnreadableProjectConfig();
-    if (unreadable) {
-      // A parse error spans several lines (a code frame); its first names the
-      // file, the line and the column, which is what the member acts on.
-      const detail = `${firstLine(unreadable)}. ${BROKEN_CONFIG_ADVICE}`;
-      return { block: { reason: 'config', detail }, config: null };
-    }
-    loaded = await autoDetectInit();
-  } catch (e) {
-    if (e instanceof NotInitializedError) return { block: null, config: null };
-    return { block: { reason: 'config', detail: firstLine(e instanceof Error ? e.message : String(e)) }, config: null };
-  } finally {
-    setStderrOnly(previous);
-  }
-  const { localConfig, teamConfig } = loaded;
+  const { isRecallEnabled } = await import('./types.js');
+  const team = await detectTeam();
+  if (team.kind === 'none') return { block: null, config: null };
+  if (team.kind === 'unusable') return { block: { reason: 'config', detail: team.detail }, config: null };
+  const { localConfig, teamConfig } = team.init;
   // `teamai contribute` refuses a read-only source (read-only.ts), so the
   // workflow would fail at its last step after the agent did all the work.
   if (localConfig.repo?.kind === 'http') return { block: { reason: 'read-only' }, config: null };
   if (!isRecallEnabled(localConfig, teamConfig)) return { block: { reason: 'recall' }, config: null };
-  return { block: null, config: loaded };
+  return { block: null, config: team.init };
 }
 
 /** The first line of an error, without the colon that introduces its code frame. */

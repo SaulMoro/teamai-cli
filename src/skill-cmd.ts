@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { autoDetectInit, NotInitializedError } from './config.js';
 import { log } from './utils/logger.js';
 import { listDirs, pathExists } from './utils/fs.js';
 import { SkillsHandler } from './resources/skills.js';
@@ -16,13 +15,14 @@ import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
 import { LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import {
   BLOCK_NOTES,
+  detectTeam,
   refuseBlocked,
   resolveServableSkill,
   skillCatalog,
   type BlockedSkill,
   type ServableSkillResolution,
 } from './skill-content.js';
-import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
+import type { GlobalOptions, LocalConfig } from './types.js';
 
 const DESCRIPTION_MAX = 160;
 
@@ -50,28 +50,22 @@ type LocatedSkill = ResolvedSkill | BlockedSkill;
  */
 export async function skillShow(name: string, options: GlobalOptions): Promise<void> {
   const served = await resolveServableSkill(name);
-  // A config the gate cannot load leaves the team unknown: detection skips a
-  // broken project file and falls back to the user config, whose repo and
-  // agents belong to another team. Refuse before searching them.
-  if (served.kind === 'blocked' && served.reason === 'config') {
-    refuseBlocked(served);
-    return;
-  }
-  let init: { localConfig: LocalConfig; teamConfig: TeamaiConfig };
-  try {
-    init = await autoDetectInit();
-  } catch (e) {
-    // A packaged skill needs no team: it ships with the CLI, so `teamai skill
-    // show core` still works on a machine that has never run `teamai init`.
-    // Only that case: a broken config is reported, not read as "no team".
-    if (!(e instanceof NotInitializedError)) throw e;
+  const team = await detectTeam();
+  if (team.kind !== 'team') {
+    // Only the package can answer without a team: it ships with the CLI, so
+    // `teamai skill show core` still works on a machine that has never run
+    // `teamai init`. A config that cannot be loaded leaves the team unknown
+    // too, so the repo and agents detection would fall back to (another
+    // team's) are not searched, and the member is told what failed.
     if (served.kind === 'blocked') {
       refuseBlocked(served);
       return;
     }
     if (served.kind !== 'found') {
       log.error(`Skill "${name}" not found among the skills the installed CLI serves.`);
-      log.dim('Run `teamai init` first to search the team repo and installed agents too.');
+      log.dim(team.kind === 'none'
+        ? 'Run `teamai init` first to search the team repo and installed agents too.'
+        : `The team repo and installed agents were not searched: the teamai config could not be loaded. ${team.detail}`);
       process.exitCode = 1;
       return;
     }
@@ -85,10 +79,15 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
       primaryOrigin: 'builtin',
       installedIn: [],
     });
-    log.dim('No team is set up on this machine, so contributors, tags and installed agents are not shown.');
+    if (team.kind === 'none') {
+      log.dim('No team is set up on this machine, so contributors, tags and installed agents are not shown.');
+    } else {
+      log.error(`The teamai config could not be loaded, so contributors, tags and installed agents are not shown. ${team.detail}`);
+      process.exitCode = 1;
+    }
     return;
   }
-  const { localConfig, teamConfig } = init;
+  const { localConfig, teamConfig } = team.init;
 
   const agents = await detectInstalledAgents(localConfig, teamConfig);
   const located = await locateSkill(name, localConfig, agents, served);
@@ -154,19 +153,19 @@ export async function skillList(options: GlobalOptions & { json?: boolean }): Pr
 
   // The packaged catalog needs no team: a machine that has not run `teamai init`
   // still gets to discover what the installed CLI serves, like `skill get` does.
-  let initialized = true;
-  try {
-    await autoDetectInit();
-  } catch (e) {
-    if (!(e instanceof NotInitializedError)) throw e;
-    initialized = false;
-  }
-  if (initialized) {
+  // A config that cannot be loaded lists no team either, rather than the one
+  // detection would fall back to, and says what failed.
+  const team = await detectTeam();
+  if (team.kind === 'team') {
     const { list } = await import('./status.js');
     await list('skills', { ...options, source: 'all' });
-  } else {
+  } else if (team.kind === 'none') {
     log.dim('Not initialized: run `teamai init` to list team and installed skills.');
     console.log('');
+  } else {
+    log.error(`Team and installed skills are not listed: the teamai config could not be loaded. ${team.detail}`);
+    console.log('');
+    process.exitCode = 1;
   }
 
   console.log('=== BUILT-IN SKILLS (served by the CLI) ===');

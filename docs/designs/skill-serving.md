@@ -112,9 +112,10 @@ path (measured here from a 77-character one).
   team repo, then the installed agents, then the package. `codebase`, `default`,
   `learning` and `share` are ordinary names: a directory a member created under
   one of them is the skill they are asking about, and the recall gate does not
-  apply to it. A config the gate cannot load does apply: which team repo and
-  agents are meant is then unknown, so `skill show share` refuses before
-  searching them. The two legacy directory names are the exception, by design:
+  apply to it. A config that cannot be loaded does apply: which team repo and
+  agents are meant is then unknown (`detectTeam`), so `skill show` searches
+  neither, refuses `share`, and answers any other name from the package alone,
+  saying what failed. The two legacy directory names are the exception, by design:
   `team-wiki-codebase` and `teamai-share-learnings` classify as `[builtin]` and
   are skipped by the push scan by name alone (`isCliOwnedSkillName`), because a
   tree with that name is one a pre-stub release wrote until the first pull has
@@ -126,6 +127,8 @@ path (measured here from a 77-character one).
 - **`skill list` needs no team.** The human-readable listing prints the packaged
   catalog even before `teamai init`, with a hint for the team half, so a fresh
   machine can discover what the installed CLI serves the way `skill get` lets it.
+  With a config that cannot be loaded it prints the catalog too, but no team
+  listing, says what failed on stderr, and exits 1.
 
 
 ## Drift guards

@@ -66,6 +66,32 @@ describe('requireInit: missing config versus unreadable config', () => {
     await expect(requireInit()).rejects.not.toBeInstanceOf(NotInitializedError);
   });
 
+  it('says a team config that exists but fails validation is invalid, not missing', async () => {
+    // "not found. Check your repo path" sends the member after a path that is right.
+    const teamRepo = path.join(home, '.teamai', 'team-repo');
+    fs.mkdirSync(teamRepo, { recursive: true });
+    fs.writeFileSync(path.join(teamRepo, 'teamai.yaml'), 'team: 42\n');
+    fs.writeFileSync(
+      path.join(home, '.teamai', 'config.yaml'),
+      `repo:\n  localPath: ${teamRepo}\n  remote: https://example.test/acme/team.git\nusername: tester\nscope: user\n`,
+    );
+
+    const error = String(await requireInit().catch((e: unknown) => e));
+    expect(error).toContain(`${path.join(teamRepo, 'teamai.yaml')} could not be read: it is not a valid team config`);
+    expect(error).not.toContain('not found');
+  });
+
+  it('still says a missing team config is not found', async () => {
+    const teamRepo = path.join(home, '.teamai', 'team-repo');
+    fs.mkdirSync(teamRepo, { recursive: true });
+    fs.writeFileSync(
+      path.join(home, '.teamai', 'config.yaml'),
+      `repo:\n  localPath: ${teamRepo}\n  remote: https://example.test/acme/team.git\nusername: tester\nscope: user\n`,
+    );
+
+    await expect(requireInit()).rejects.toThrow('Team config (teamai.yaml) not found');
+  });
+
   it('logs the failing field of a config that fails validation, which the refusal points at', async () => {
     // The refusal says "the error is printed above"; a Zod JSON dump there
     // would bury the field under a line of `[`.

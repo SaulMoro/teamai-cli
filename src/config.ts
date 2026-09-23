@@ -143,9 +143,7 @@ export async function requireInit(): Promise<TeamaiInit> {
   const localConfig = await loadLocalConfig();
   if (!localConfig) return throwMissingOrInvalid(expandHome(getUserConfigPath()));
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  if (!teamConfig) {
-    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
-  }
+  if (!teamConfig) return throwTeamConfigMissingOrInvalid(localConfig.repo.localPath);
   return { localConfig, teamConfig };
 }
 
@@ -165,6 +163,24 @@ async function throwMissingOrInvalid(configPath: string): Promise<never> {
     : content.trim() === '' ? 'it is empty'
     : 'it is not a valid teamai config (the error is printed above)';
   throw new Error(`The teamai config at ${configPath} could not be read: ${why}. ${BROKEN_CONFIG_ADVICE}`);
+}
+
+/**
+ * `loadTeamConfig` returns null both when teamai.yaml is absent and when it
+ * could not be used (it logs a parse or validation error). Only the first is
+ * "not found": "check your repo path" sends the member after a path that is
+ * right.
+ */
+async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never> {
+  const teamConfigPath = path.join(repoPath, 'teamai.yaml');
+  if (!(await pathExists(teamConfigPath))) {
+    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
+  }
+  const content = await readFileSafe(teamConfigPath);
+  const why = content === null ? 'the file could not be opened'
+    : content.trim() === '' ? 'it is empty'
+    : 'it is not a valid team config (the error is printed above)';
+  throw new Error(`The team config at ${teamConfigPath} could not be read: ${why}. Fix it in the team repo, or ask a team admin to.`);
 }
 
 // ─── Scope-aware config loading ─────────────────────────
@@ -488,9 +504,7 @@ export async function requireInitForScope(
     return throwMissingOrInvalid(expandHome(getConfigPath(scope, projectRoot)));
   }
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  if (!teamConfig) {
-    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
-  }
+  if (!teamConfig) return throwTeamConfigMissingOrInvalid(localConfig.repo.localPath);
   return { localConfig, teamConfig };
 }
 
@@ -503,9 +517,7 @@ export async function autoDetectInit(): Promise<TeamaiInit> {
   const projectConfig = await detectProjectConfig();
   if (projectConfig) {
     const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
-    if (!teamConfig) {
-      throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
-    }
+    if (!teamConfig) return throwTeamConfigMissingOrInvalid(projectConfig.repo.localPath);
     return { localConfig: projectConfig, teamConfig };
   }
   return requireInit();

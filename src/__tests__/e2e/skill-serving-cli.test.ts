@@ -130,7 +130,8 @@ describe('teamai skill get / path CLI (e2e)', () => {
           encoding: 'utf8',
         });
         expect(result.status, args.join(' ')).not.toBe(0);
-        expect(result.stderr, args.join(' ')).toContain('could not be read');
+        // It names the file and where it breaks, which is what the member fixes.
+        expect(result.stderr, args.join(' ')).toMatch(/\.teamai[\\/]config\.yaml: .* at line \d+, column \d+/);
         expect(result.stdout + result.stderr, args.join(' ')).not.toContain('Not initialized');
         expect(result.stdout + result.stderr, args.join(' ')).not.toContain('No team is set up');
       }
