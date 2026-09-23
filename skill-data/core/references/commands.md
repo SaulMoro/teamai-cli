@@ -1,8 +1,9 @@
 # teamai command reference
 
-Every command the installed CLI accepts, rendered from its own command table.
-Flags marked `(hidden)` work but are absent from `--help`, so treat this file —
-not `--help` — as the complete list.
+Every public command the installed CLI accepts, rendered from its own command
+table. Hidden commands are left out: they are hook plumbing the CLI runs itself,
+never something to type. Flags marked `(hidden)` work but are absent from
+`--help`, so treat this file — not `--help` — as the complete list of flags.
 
 Generated: do not edit by hand. Regenerate with
 `npx vitest run commands-reference -u` after changing a command or a flag.
@@ -230,15 +231,6 @@ Generated: do not edit by hand. Regenerate with
 
 - `teamai dashboard` — Start the AI coding session dashboard (Web UI)
   - `-p, --port <port>` — Port number
-
-## hook-dispatch
-
-- `teamai hook-dispatch <event>` — Unified hook dispatcher — handles all teamai hooks for a given event in one process
-  - `--stdin` — Read hook data from STDIN (accepted for forward compat, always reads STDIN)
-  - `--tool <name>` — Tool identifier (e.g. codebuddy, workbuddy, claude)
-  - `--matcher <matcher>` — Hook matcher for PostToolUse (e.g. Skill, Bash)
-  - `--bg-only` — Internal: run only fire-and-forget background handlers (used by the detached child)
-  - `--stdin-file <path>` — Internal: read the hook payload from this file instead of STDIN
 
 ## bind-project
 

@@ -58,8 +58,8 @@ async function onlyRunDir(homeDir: string): Promise<string> {
 vi.mock('../packaged-skill-digests.js', () => shippedSkillDigestsMock());
 
 const WIKI_SKILL = shipped('team-wiki-codebase', 'SKILL.md');
-/** Shipped body under a distinguishing frontmatter block: still ours, told apart. */
-const wikiSkillTagged = (tag: string): string => `---\nname: ${tag}\n---\n${WIKI_SKILL}`;
+/** Two releases' SKILL.md: both ours, and told apart. */
+const WIKI_SKILL_OTHER_RELEASE = shipped('team-wiki-codebase', 'SKILL.md', 2);
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -949,6 +949,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await fse.ensureDir(path.join(wiki, 'scripts/__pycache__'));
     await fse.ensureDir(path.join(wiki, 'notes/__pycache__'));
     await fse.writeFile(path.join(wiki, 'SKILL.md'), WIKI_SKILL);
+    await fse.writeFile(path.join(wiki, 'scripts/scan_repo.py'), shipped('team-wiki-codebase', 'scripts/scan_repo.py'));
     await fse.writeFile(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'), 'bytecode');
     await fse.writeFile(path.join(wiki, 'notes/__pycache__/keep.txt'), '# mine');
 
@@ -964,7 +965,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     // `inheritUserScope`: user base, then project base, same tool, root and name.
     const projectRoot = path.join(tmpDir, 'work/proj');
     const projectConfig = { ...legacyPruneLocalConfig(tmpDir), scope: 'project' as const, projectRoot };
-    for (const [base, body] of [[homeDir, wikiSkillTagged('user')], [projectRoot, wikiSkillTagged('project')]]) {
+    for (const [base, body] of [[homeDir, WIKI_SKILL], [projectRoot, WIKI_SKILL_OTHER_RELEASE]]) {
       await fse.ensureDir(path.join(base, '.claude/skills/team-wiki-codebase'));
       await fse.writeFile(path.join(base, '.claude/skills/team-wiki-codebase/SKILL.md'), body);
     }
@@ -976,7 +977,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const archived = (await listFilesRecursive(path.join(homeDir, '.teamai/removed-skills')))
       .filter((f) => f.endsWith('team-wiki-codebase/SKILL.md'));
     const bodies = await Promise.all(archived.map((f) => fse.readFile(path.join(homeDir, '.teamai/removed-skills', f), 'utf8')));
-    expect(bodies.sort()).toEqual([wikiSkillTagged('project'), wikiSkillTagged('user')]);
+    expect(bodies.sort()).toEqual([WIKI_SKILL, WIKI_SKILL_OTHER_RELEASE].sort());
   });
 
   it('keeps the legacy skills when the stub could not be deployed, so the agent keeps one to discover', async () => {
@@ -1023,6 +1024,71 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     expect(warnings.filter((w) => w.includes(path.join(skills, 'teamai')))).toEqual([]);
   });
 
+  it('keeps a SKILL.md whose member changed only the frontmatter', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // Same body a release shipped, a description of the member's: the skill is
+    // theirs now, so the whole file is what ownership is proven on.
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    const edited = `---\nname: team-wiki-codebase\ndescription: my wording\n---\n${WIKI_SKILL}`;
+    await fse.ensureDir(wiki);
+    await fse.writeFile(path.join(wiki, 'SKILL.md'), edited);
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(wiki, 'SKILL.md'), 'utf8')).toBe(edited);
+  });
+
+  it('keeps bytecode beside a script the member edited', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    const wiki = path.join(homeDir, '.claude/skills/team-wiki-codebase');
+    await fse.ensureDir(path.join(wiki, 'scripts/__pycache__'));
+    await fse.writeFile(path.join(wiki, 'scripts/scan_repo.py'), 'print("my version")\n');
+    await fse.writeFile(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'), 'bytecode of my version');
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.pathExists(path.join(wiki, 'scripts/__pycache__/scan_repo.cpython-311.pyc'))).toBe(true);
+  });
+
+  it('keeps the old references when the stub cannot be written over the old SKILL.md', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // Something the copy cannot replace sits where SKILL.md goes, so the stub
+    // is not written. Pruning the references first would leave the old skill
+    // pointing at files that are gone.
+    const stubDir = path.join(homeDir, '.claude/skills/teamai');
+    await fse.ensureDir(path.join(stubDir, 'references'));
+    await fse.ensureDir(path.join(stubDir, 'SKILL.md'));
+    await fse.writeFile(path.join(stubDir, 'SKILL.md', 'keep'), '# blocks the copy');
+    await fse.writeFile(path.join(stubDir, 'references/setup-admin.md'), shipped('teamai', 'references/setup-admin.md'));
+
+    await deployBuiltinSkills(legacyPruneTeamConfig(), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(stubDir, 'references/setup-admin.md'), 'utf8')).toBe(shipped('teamai', 'references/setup-admin.md'));
+  });
+
+  it('deletes nothing through a linked Codex skills root while resolving where the stub goes', async () => {
+    const { deployBuiltinSkills } = await import('../builtin-skills.js');
+
+    // `.codex/skills` linked at a dotfiles checkout, holding a copy identical to
+    // the shared one and to the package: the resolver's reconciliation would
+    // delete it through the link before the guard ever ran.
+    const stub = await fse.readFile(path.join(PACKAGE_ROOT, 'skills/teamai/SKILL.md'), 'utf8');
+    const dotfiles = path.join(tmpDir, 'dotfiles/codex-skills');
+    await fse.ensureDir(path.join(dotfiles, 'teamai'));
+    await fse.writeFile(path.join(dotfiles, 'teamai/SKILL.md'), stub);
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await fse.symlink(dotfiles, path.join(homeDir, '.codex/skills'), 'dir');
+    await fse.ensureDir(path.join(homeDir, '.agents/skills/teamai'));
+    await fse.writeFile(path.join(homeDir, '.agents/skills/teamai/SKILL.md'), stub);
+
+    await deployBuiltinSkills(legacyPruneTeamConfig({ codex: { skills: '.codex/skills' } }), legacyPruneLocalConfig(tmpDir));
+
+    expect(await fse.readFile(path.join(dotfiles, 'teamai/SKILL.md'), 'utf8')).toBe(stub);
+  });
+
   it('archives nothing when there is nothing retired to archive', async () => {
     const { deployBuiltinSkills } = await import('../builtin-skills.js');
 
@@ -1042,7 +1108,7 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     const localConfig = legacyPruneLocalConfig(tmpDir);
 
     // Codex prunes its own root and the shared one; same skill name, different files.
-    for (const [root, body] of [['.codex/skills', wikiSkillTagged('codex')], ['.agents/skills', wikiSkillTagged('shared')]]) {
+    for (const [root, body] of [['.codex/skills', WIKI_SKILL], ['.agents/skills', WIKI_SKILL_OTHER_RELEASE]]) {
       await fse.ensureDir(path.join(homeDir, root, 'team-wiki-codebase'));
       await fse.writeFile(path.join(homeDir, root, 'team-wiki-codebase/SKILL.md'), body);
     }
@@ -1050,8 +1116,8 @@ describe('deployBuiltinSkills — skip uninstalled tools', () => {
     await deployBuiltinSkills(teamConfig, localConfig);
 
     const run = await onlyRunDir(homeDir);
-    expect(await fse.readFile(path.join(run, 'codex/.codex-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(wikiSkillTagged('codex'));
-    expect(await fse.readFile(path.join(run, 'codex/.agents-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(wikiSkillTagged('shared'));
+    expect(await fse.readFile(path.join(run, 'codex/.codex-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL);
+    expect(await fse.readFile(path.join(run, 'codex/.agents-skills/team-wiki-codebase/SKILL.md'), 'utf8')).toBe(WIKI_SKILL_OTHER_RELEASE);
   });
 
   it('removes the references an earlier release deployed beside the stub', async () => {

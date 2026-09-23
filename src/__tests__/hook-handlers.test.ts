@@ -411,16 +411,31 @@ describe('hook-handlers registry', () => {
     expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
-  it('contribute-check handler keeps hinting when config cannot be loaded', async () => {
+  it('contribute-check handler keeps hinting when there is no config at all', async () => {
+    const { NotInitializedError } = await import('../config.js');
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
     )!.handler;
-    mockAutoDetectInit.mockRejectedValueOnce(new Error('not initialized'));
+    mockAutoDetectInit.mockRejectedValueOnce(new NotInitializedError('teamai is not initialized. Run `teamai init` first.'));
     mockContributeCheckForSession.mockResolvedValueOnce({ hint: '[teamai] do share' });
 
     const result = await handler.execute({ session_id: 's5', cwd: '/x' }, 'claude');
     expect(result).toContain('do share');
+  });
+
+  it('contribute-check handler stays silent when a config exists but cannot be loaded', async () => {
+    const registry = buildHandlerRegistry();
+    const handler = registry.find(
+      (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
+    )!.handler;
+    // `teamai skill get share` refuses on such a config, so the nudge would lead nowhere.
+    mockAutoDetectInit.mockRejectedValueOnce(new Error('Team config (teamai.yaml) not found. Check your repo path.'));
+    mockContributeCheckForSession.mockClear();
+
+    const result = await handler.execute({ session_id: 's5b', cwd: '/x' }, 'claude');
+    expect(result).toBeNull();
+    expect(mockContributeCheckForSession).not.toHaveBeenCalled();
   });
 
   it('contribute-check handler obeys TEAMAI_CONTRIBUTE_HINT_DISABLED=1', async () => {

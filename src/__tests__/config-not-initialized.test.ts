@@ -8,7 +8,7 @@ vi.mock('../utils/logger.js', () => ({
   setStderrOnly: vi.fn(() => false),
 }));
 
-import { NotInitializedError, requireInit } from '../config.js';
+import { NotInitializedError, findUnreadableProjectConfig, requireInit } from '../config.js';
 
 /**
  * `loadLocalConfig` returns null both for a missing file and for one it could
@@ -52,3 +52,28 @@ describe('requireInit: missing config versus unreadable config', () => {
     await expect(requireInit()).rejects.not.toBeInstanceOf(NotInitializedError);
   });
 });
+
+describe('findUnreadableProjectConfig', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-project-config-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names a project config that exists but does not parse, which detection alone skips', async () => {
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'repo: [unclosed\n');
+
+    expect(await findUnreadableProjectConfig(dir)).toContain(configPath);
+  });
+
+  it('is null when there is no project config at all', async () => {
+    expect(await findUnreadableProjectConfig(dir)).toBeNull();
+  });
+});
+

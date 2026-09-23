@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const autoDetectInit = vi.fn();
+const findUnreadableProjectConfig = vi.fn();
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
   autoDetectInit,
+  findUnreadableProjectConfig,
 }));
 
 import { resolveServableSkill, skillCatalog, skillGet, skillPath } from '../skill-content.js';
@@ -23,6 +25,8 @@ describe('recall gate on served skills', () => {
     stdout = '';
     process.exitCode = undefined;
     autoDetectInit.mockReset();
+    findUnreadableProjectConfig.mockReset();
+    findUnreadableProjectConfig.mockResolvedValue(null);
 
     const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
       stdout += String(chunk);
@@ -172,5 +176,15 @@ describe('recall gate on served skills', () => {
     expect((await skillCatalog()).find((entry) => entry.name === 'share')).toMatchObject({ blockedBy: 'config', path: null });
     // Only share depends on the config; the rest is still served.
     expect((await resolveServableSkill('core')).kind).toBe('found');
+  });
+
+  it('blocks share when the project config is unreadable, instead of answering with the user config', async () => {
+    // Detection skips the broken project config; the user config it falls back
+    // to belongs to another team, with its own recall and source.
+    findUnreadableProjectConfig.mockResolvedValue('/work/proj/.teamai/config.yaml: bad indentation');
+    withRecall(true);
+
+    expect(await resolveServableSkill('share')).toEqual({ kind: 'blocked', name: 'share', reason: 'config' });
+    expect(autoDetectInit).not.toHaveBeenCalled();
   });
 });

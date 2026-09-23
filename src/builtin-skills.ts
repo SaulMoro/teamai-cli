@@ -84,18 +84,13 @@ export const PACKAGED_SKILL_FILES: ReadonlyMap<string, readonly string[]> = new 
   [...PACKAGED_SKILL_DIGESTS].map(([skill, files]) => [skill, [...files.keys()]]),
 );
 
-const FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
-
 /**
- * The digest PACKAGED_SKILL_DIGESTS records for a file: sha256 of its bytes, or,
- * for a skill-root `SKILL.md`, of its body without the frontmatter block, which
- * the deploy of earlier releases rewrote on disk when a field was missing.
+ * The digest PACKAGED_SKILL_DIGESTS records for a file: sha256 of its bytes.
+ * The whole file, frontmatter included: a member who changed only a skill's
+ * name, description or allowed-tools changed the skill, and it is theirs.
  */
-export function packagedSkillDigest(relativePath: string, content: Buffer): string {
-  const hashed = relativePath === 'SKILL.md'
-    ? Buffer.from(content.toString('utf8').replace(FRONTMATTER_BLOCK, '').replace(/^[\r\n]+/, ''), 'utf8')
-    : content;
-  return createHash('sha256').update(hashed).digest('hex');
+export function packagedSkillDigest(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 /** Digests by path: what `removeOwnedFiles` may remove, and only at that content. */
@@ -115,7 +110,7 @@ export async function ownedSkillFiles(skillName: string, paths?: readonly string
     const stubPath = path.join(packagedSkillRoots().deployRoot, skillName, 'SKILL.md');
     if (await pathExists(stubPath)) {
       const digests = owned.get('SKILL.md') ?? new Set<string>();
-      digests.add(packagedSkillDigest('SKILL.md', await fs.promises.readFile(stubPath)));
+      digests.add(packagedSkillDigest(await fs.promises.readFile(stubPath)));
       owned.set('SKILL.md', digests);
     }
   }
@@ -126,20 +121,21 @@ export async function ownedSkillFiles(skillName: string, paths?: readonly string
 async function isOwnedFile(file: string, relative: string, owned: OwnedSkillFiles): Promise<boolean> {
   const digests = owned.get(relative);
   if (!digests) return false;
-  return digests.has(packagedSkillDigest(relative, await fs.promises.readFile(file)));
+  return digests.has(packagedSkillDigest(await fs.promises.readFile(file)));
 }
 
 /**
  * Python bytecode cache of a script we shipped: `a/__pycache__/x.cpython-311.pyc`
- * for an owned `a/x.py`. Compiler output of our own file, so it carries nothing
- * a member wrote and does not make a directory theirs. Anything else under a
- * `__pycache__` is not ours to remove.
+ * for an `a/x.py` present and proven ours by content. Compiler output of our
+ * own file, so it carries nothing a member wrote and does not make a directory
+ * theirs. Bytecode beside a member's edit of the script, or with no script at
+ * all, is theirs.
  */
-function isDerivedArtifact(relativePath: string, owned: ReadonlySet<string>): boolean {
+function isDerivedArtifact(relativePath: string, provenScripts: ReadonlySet<string>): boolean {
   const parts = relativePath.split('/');
   if (parts.length < 2 || parts[parts.length - 2] !== '__pycache__' || !relativePath.endsWith('.pyc')) return false;
   const stem = parts[parts.length - 1].split('.')[0];
-  return owned.has([...parts.slice(0, -2), `${stem}.py`].join('/'));
+  return provenScripts.has([...parts.slice(0, -2), `${stem}.py`].join('/'));
 }
 
 /**
@@ -229,7 +225,6 @@ export async function removeOwnedFiles(
   baseDir: string,
   backupDir?: string,
 ): Promise<PruneResult> {
-  const ownedPaths = new Set(owned.keys());
   const result: PruneResult = {
     skippedSymlink: false, foreign: 0, unbackedUp: [], notRemoved: [], backedUp: 0,
   };
@@ -253,20 +248,29 @@ export async function removeOwnedFiles(
     return result;
   }
 
+  // Decide ownership before removing anything: bytecode is ours only beside a
+  // script proven ours, and that proof has to be taken while the script is
+  // still there.
+  const proven = new Set<string>();
   for (const relative of entries) {
     const file = path.join(dir, relative);
-    // Ours only at a path a release shipped *and* with content one of them
-    // shipped there. A member's edit, or a skill of their own that uses a
-    // packaged name under a root TeamAI never managed, fails the second test
-    // and stays, with its directory.
-    let owns: boolean;
     try {
-      owns = await isOwnedFile(file, relative, owned) || isDerivedArtifact(relative, ownedPaths);
+      // Ours only at a path a release shipped *and* with content one of them
+      // shipped there. A member's edit, or a skill of their own that uses a
+      // packaged name under a root TeamAI never managed, fails the second test
+      // and stays, with its directory. No release shipped a symlink.
+      if (!(await fs.promises.lstat(file)).isSymbolicLink() && await isOwnedFile(file, relative, owned)) proven.add(relative);
     } catch (e) {
       // Unreadable, so unprovable: kept, and said so.
       result.notRemoved.push({ file, error: (e as Error).message });
-      continue;
     }
+  }
+
+  for (const relative of entries) {
+    const file = path.join(dir, relative);
+    if (result.notRemoved.some((failure) => failure.file === file)) continue;
+    const owns = proven.has(relative)
+      || (isDerivedArtifact(relative, proven) && !(await fs.promises.lstat(file)).isSymbolicLink());
     if (!owns) {
       result.foreign++;
       continue;
@@ -470,6 +474,10 @@ async function retireOtherCodexCopy(
       log.debug(`Removed the second Codex copy of ${skillName} at ${other}; the stub is at ${deployedDir}`);
     } else if (result.skippedSymlink) {
       log.warn(`Kept ${other}: it is reached through a symlink, so TeamAI left it alone. Codex also reads the stub at ${deployedDir}.`);
+    } else if (result.unbackedUp.length > 0) {
+      log.warn(`Kept ${result.unbackedUp.length} file(s) in ${other}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
+    } else if (result.notRemoved.length > 0) {
+      log.warn(`Could not finish removing ${other}: ${result.notRemoved.length} file(s) or directories stayed. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
     } else {
       log.warn(`Kept ${other}: it holds files TeamAI did not write, so Codex sees it beside the stub at ${deployedDir}. Remove it once you have saved what you need.`);
     }
@@ -544,9 +552,13 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
     let deployedHere = 0;
     for (const skillName of skillNames) {
       const srcDir = path.join(builtinDir, skillName);
+      // Resolved without a source path, so the resolver only answers where the
+      // skill lives and touches nothing: its Codex reconciliation deletes a
+      // duplicate, and nothing may be deleted before the link guard has run.
+      // The other Codex copy is dealt with below, under the guard.
       const destDir = localConfig
-        ? await skillTargetForTool(tool, toolPath.skills, localConfig, skillName, srcDir) ?? path.join(target.skillsDir, skillName)
-        : await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, srcDir);
+        ? await skillTargetForTool(tool, toolPath.skills, localConfig, skillName) ?? path.join(target.skillsDir, skillName)
+        : await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName);
 
       try {
         // A symlinked destination points somewhere we do not own. Writing
@@ -556,28 +568,26 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           log.warn(`Skipped ${skillName} (${tool}): ${destDir} is reached through a symlink, and TeamAI does not write through one. Remove the link to let the skill deploy.`);
           continue;
         }
-        // Releases before the discovery stub deployed this same directory with a
-        // references/ tree beside SKILL.md. Copying one file over it would leave
-        // ~39 KB of pre-stub instructions in place forever, so the files those
-        // releases wrote go first — and only those: a file a member added here
-        // is theirs, and the old deployment never deleted it either.
-        if (await pathExists(destDir)) {
-          // Only the paths this release no longer ships. `SKILL.md` is written
-          // one line below, so pruning it would archive an identical copy on
-          // every session start and never reach a file worth keeping.
-          const shippedNow = new Set(await walkFiles(srcDir));
-          const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
-          const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
-          const result = await removeOwnedFiles(destDir, await ownedSkillFiles(skillName, retired), baseDir, backupDir);
-          if (result.unbackedUp.length > 0) {
-            log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
-          }
-          if (result.notRemoved.length > 0) {
-            log.warn(`Archived but could not delete ${result.notRemoved.length} file(s) under ${destDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
-          }
-        }
+        // The stub first: if it cannot be written, the pre-stub SKILL.md and the
+        // references it points at stay together, a working old skill rather
+        // than an old skill whose references are gone.
         await fse.ensureDir(destDir);
         await fse.copy(path.join(srcDir, 'SKILL.md'), path.join(destDir, 'SKILL.md'), { overwrite: true });
+        // Releases before the discovery stub deployed this same directory with a
+        // references/ tree beside SKILL.md, ~39 KB of pre-stub instructions the
+        // new SKILL.md no longer points at. The files those releases wrote go —
+        // only the paths this release no longer ships, and only at content a
+        // release shipped: a file a member added or edited here is theirs.
+        const shippedNow = new Set(await walkFiles(srcDir));
+        const retired = (PACKAGED_SKILL_FILES.get(skillName) ?? []).filter((p) => !shippedNow.has(p));
+        const backupDir = skillBackupDir(baseDir, tool, path.relative(baseDir, path.dirname(destDir)), skillName);
+        const result = await removeOwnedFiles(destDir, await ownedSkillFiles(skillName, retired), baseDir, backupDir);
+        if (result.unbackedUp.length > 0) {
+          log.warn(`Kept ${result.unbackedUp.length} file(s) under ${destDir}: their backup could not be written, so they were not removed. First: ${result.unbackedUp[0].file} — ${result.unbackedUp[0].error}`);
+        }
+        if (result.notRemoved.length > 0) {
+          log.warn(`Archived but could not delete ${result.notRemoved.length} file(s) under ${destDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
+        }
         if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
 
         deployed++;

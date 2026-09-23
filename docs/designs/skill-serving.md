@@ -92,7 +92,9 @@ path (measured here from a 77-character one).
   config on the machine at all it fails open: a refusal a fresh install cannot act
   on is worse than serving the workflow. A config that exists but cannot be loaded
   blocks instead (`blockedBy: "config"`), since recall and the source are then
-  unknown and the workflow would fail at `teamai contribute`. The Stop-hook share
+  unknown and the workflow would fail at `teamai contribute` — a project config
+  too, which detection alone would skip in favour of the user config
+  (`findUnreadableProjectConfig`). The Stop-hook reminder follows the same rule. The Stop-hook share
   reminder is gated the same way (`contributeHintAllowed`, `src/hook-handlers.ts`),
   because it points at this command. The gate lives in one place:
   `resolveServableSkill` (`src/skill-content.ts`) is the only way to obtain a
@@ -141,11 +143,12 @@ both reach the agent as CLI output, which the repo keeps English.
 
 `LEGACY_BUILTIN_SKILL_NAMES` (`src/builtin-skills.ts`) names the directories
 earlier releases deployed: `team-wiki-codebase` and `teamai-share-learnings`.
-`teamai-workflow` and `teamai-import` sat in the old guard set but were never
-packaged, so they are not in it: a directory by either name is the user's own.
-Deployment removes them from every installed, non-excluded agent, in its
-configured skills path; Codex's pass also covers the shared `.agents/skills`,
-which no other tool's pass touches.
+Deployment removes those two, after the stub is in place, from every installed,
+non-excluded agent, in its configured skills path; Codex's pass also covers the
+shared `.agents/skills`, which no other tool's pass touches. `teamai-workflow`
+and `teamai-import` sat in the old guard set but were never packaged, so they
+are not in it: a directory by either name is the user's own and is never
+touched.
 
 Codex's shared root is on the removal side of three commands now, because
 `resolveSkillDestination` puts the stub there whenever the skill already lives
@@ -166,19 +169,25 @@ all of it to go. Leaving copies behind would be the thing they ran it to avoid.
 
 **It removes only the files those releases packaged, at the content they
 packaged.** `PACKAGED_SKILL_DIGESTS` (`src/packaged-skill-digests.ts`) records the
-sha256 of every blob `git ls-tree -r <ref> -- skills/` shows over all 99 tags
-through v0.25.0 and `main` before the stub, minus `teamai-wiki` (see below): 37
+sha256 of every blob `git ls-tree -r <ref> -- skills/` shows over all 100 tags
+through v0.25.0 and `main` before the stub, minus `teamai-wiki` (see below): 42
 versions across 21 paths. A file is ours only at one of those paths *and* with one
-of those digests; a skill-root `SKILL.md` is compared by its body without the
-frontmatter block, because releases before 0.17 shipped none and the deploy of
-the day repaired it on disk. The copies came from the npm tarball byte for byte,
-so an unedited one matches. Anything else at a packaged path — an edit, a
+of those digests, whole file, frontmatter included: a member who changed only a
+skill's description changed the skill. The deploy repaired frontmatter from
+0.16.1 on, but every `SKILL.md` those releases shipped was already complete, and
+the copies came from the npm tarball byte for byte, so an unedited one matches.
+No release shipped a symlink, so a link is never ours, and bytecode is ours only
+beside a script proven ours by content. Anything else at a packaged path — an edit, a
 member's own skill that uses a legacy name, a root TeamAI never managed because
 `toolPaths` or `HERMES_HOME` moved — is the member's and stays, with its
 directory. Checking the path alone would have deleted those. What is removed is
 still copied first to
 `~/.teamai/removed-skills/<run>/<base>/<tool>/<skill-root>/<skill>/`, so no
-removal is a one-way door. The legacy trees go only after the stub deployed for that agent: pruning first and then failing to write the stub (a link, a read-only directory) would leave nothing to discover. Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
+removal is a one-way door. Order matters as much as ownership: the stub is
+written first, then the references it no longer points at are pruned, and the
+legacy trees go only once the stub deployed for that agent, so a stub that cannot
+be written leaves a working old skill rather than a broken one. The destination
+is resolved without side effects before the link guard runs. Codex reads both `.codex/skills` and the shared `.agents/skills`, and the
 stub goes to the shared one when a copy already lives there; the copy an earlier
 release left in the other root is retired by the same rule
 (`retireOtherCodexCopy`), so Codex never sees a stale `teamai` beside the current

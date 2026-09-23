@@ -807,7 +807,7 @@ program
   });
 
 program
-  .command('hook-dispatch <event>')
+  .command('hook-dispatch <event>', { hidden: true })
   .description('Unified hook dispatcher — handles all teamai hooks for a given event in one process')
   .option('--stdin', 'Read hook data from STDIN (accepted for forward compat, always reads STDIN)')
   .option('--tool <name>', 'Tool identifier (e.g. codebuddy, workbuddy, claude)')

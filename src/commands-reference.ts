@@ -18,9 +18,10 @@ export const COMMANDS_REFERENCE_PATH = 'skill-data/core/references/commands.md';
 
 const HEADER = `# teamai command reference
 
-Every command the installed CLI accepts, rendered from its own command table.
-Flags marked \`(hidden)\` work but are absent from \`--help\`, so treat this file —
-not \`--help\` — as the complete list.
+Every public command the installed CLI accepts, rendered from its own command
+table. Hidden commands are left out: they are hook plumbing the CLI runs itself,
+never something to type. Flags marked \`(hidden)\` work but are absent from
+\`--help\`, so treat this file — not \`--help\` — as the complete list of flags.
 
 Generated: do not edit by hand. Regenerate with
 \`npx vitest run commands-reference -u\` after changing a command or a flag.

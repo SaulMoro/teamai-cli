@@ -77,7 +77,7 @@ async function blockReason(name: string): Promise<SkillBlockReason | null> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
   const { NotInitializedError } = await import('./config.js');
   try {
-    const [{ autoDetectInit }, { isRecallEnabled }] = await Promise.all([
+    const [{ autoDetectInit, findUnreadableProjectConfig }, { isRecallEnabled }] = await Promise.all([
       import('./config.js'),
       import('./types.js'),
     ]);
@@ -87,6 +87,9 @@ async function blockReason(name: string): Promise<SkillBlockReason | null> {
     const previous = setStderrOnly(true);
     let loaded: Awaited<ReturnType<typeof autoDetectInit>>;
     try {
+      // A broken project config is skipped by detection, which would then
+      // answer with the user config: another team's recall and source.
+      if (await findUnreadableProjectConfig()) return 'config';
       loaded = await autoDetectInit();
     } finally {
       setStderrOnly(previous);

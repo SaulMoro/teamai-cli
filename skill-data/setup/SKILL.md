@@ -56,7 +56,7 @@ and create-repo URLs, and the per-provider caveats, and points at
 4. **Finish with `teamai doctor`.** Every setup or onboarding flow ends by running
    it and resolving what it reports before you call the job done.
 
-Every command and flag, including the ones `--help` hides, is listed in
+Every public command and every flag, including the flags `--help` hides, is listed in
 `teamai skill get core --full` under `references/commands.md`. Do not guess a flag:
 there is no member-invite flag, for instance — inviting happens on the Git
 platform's website, as `manage-admin.md` describes.
