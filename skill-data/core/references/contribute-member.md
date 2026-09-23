@@ -8,7 +8,7 @@ team"*, in whatever language they work in — then you run the publish for them.
 ## Which kind of contribution?
 
 - **A learning** (a lesson, a gotcha, how you solved something) → this is
-  **automatic** once recall is on (off by default): TeamAI prompts at the end of a session worth sharing and the
+  **automatic** once recall is on (off by default) and the teamai config loads: TeamAI prompts at the end of a session worth sharing and the
   dedicated `share` workflow (`teamai skill get share`) takes over (it summarizes the
   session and runs `teamai contribute`). The user does not come through this flow
   for it. (Step A below is only a manual fallback for while recall is off.)

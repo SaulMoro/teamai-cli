@@ -20,6 +20,7 @@ import {
   resolveServableSkill,
   skillCatalog,
   type BlockedSkill,
+  type ServableSkillResolution,
 } from './skill-content.js';
 import type { GlobalOptions, LocalConfig, TeamaiConfig } from './types.js';
 
@@ -48,6 +49,14 @@ type LocatedSkill = ResolvedSkill | BlockedSkill;
  * we print under "Repo path" or "Installed in".
  */
 export async function skillShow(name: string, options: GlobalOptions): Promise<void> {
+  const served = await resolveServableSkill(name);
+  // A config the gate cannot load leaves the team unknown: detection skips a
+  // broken project file and falls back to the user config, whose repo and
+  // agents belong to another team. Refuse before searching them.
+  if (served.kind === 'blocked' && served.reason === 'config') {
+    refuseBlocked(served);
+    return;
+  }
   let init: { localConfig: LocalConfig; teamConfig: TeamaiConfig };
   try {
     init = await autoDetectInit();
@@ -56,24 +65,23 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
     // show core` still works on a machine that has never run `teamai init`.
     // Only that case: a broken config is reported, not read as "no team".
     if (!(e instanceof NotInitializedError)) throw e;
-    const packaged = await resolveServableSkill(name);
-    if (packaged.kind === 'blocked') {
-      refuseBlocked(packaged);
+    if (served.kind === 'blocked') {
+      refuseBlocked(served);
       return;
     }
-    if (packaged.kind !== 'found') {
+    if (served.kind !== 'found') {
       log.error(`Skill "${name}" not found among the skills the installed CLI serves.`);
       log.dim('Run `teamai init` first to search the team repo and installed agents too.');
       process.exitCode = 1;
       return;
     }
     printSkillCard({
-      name: packaged.skill.name,
+      name: served.skill.name,
       source: { kind: 'builtin' },
-      description: truncate(await readSkillDescription(path.join(packaged.skill.dir, 'SKILL.md')), DESCRIPTION_MAX),
+      description: truncate(await readSkillDescription(path.join(served.skill.dir, 'SKILL.md')), DESCRIPTION_MAX),
       contributors: [],
       tags: [],
-      primaryPath: packaged.skill.dir,
+      primaryPath: served.skill.dir,
       primaryOrigin: 'builtin',
       installedIn: [],
     });
@@ -83,7 +91,7 @@ export async function skillShow(name: string, options: GlobalOptions): Promise<v
   const { localConfig, teamConfig } = init;
 
   const agents = await detectInstalledAgents(localConfig, teamConfig);
-  const located = await locateSkill(name, localConfig, agents);
+  const located = await locateSkill(name, localConfig, agents, served);
   if (!located) {
     log.error(`Skill "${name}" not found in team repo or any installed agent.`);
     log.dim('Try `teamai list --source all` to see available skills.');
@@ -179,6 +187,7 @@ async function locateSkill(
   name: string,
   localConfig: LocalConfig,
   agents: ResolvedAgent[],
+  served: ServableSkillResolution,
 ): Promise<LocatedSkill | null> {
   const teamSkillsDir = path.join(localConfig.repo.localPath, 'skills');
 
@@ -217,7 +226,6 @@ async function locateSkill(
   // 4. Built-in skill served by the CLI, including legacy-name aliases. Last,
   //    so it answers for the names nothing on this machine claims: `core` and
   //    `wiki` live in the package, and the agent directory holds only the stub.
-  const served = await resolveServableSkill(name);
   if (served.kind === 'blocked') return served;
   if (served.kind === 'found') {
     return { kind: 'found', name: served.skill.name, primaryPath: served.skill.dir, primaryOrigin: 'builtin' };

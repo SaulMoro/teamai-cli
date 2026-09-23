@@ -143,7 +143,8 @@ Summarize the outcome **in the user's own language** (global rule 1). Cover:
    summarize and contribute it. They do **not** invoke `/teamai` for this. (This
    prompt only appears when recall is on — it is off by default; the admin turns it
    on in `teamai.yaml` (`sharing.recall.enabled`), a member with `teamai recall enable` — and the admin has not switched the
-   reminder off in `teamai.yaml`.)
+   reminder off in `teamai.yaml`. It also stays silent while their teamai config
+   cannot be loaded; `teamai skill get share` then names the file and the error.)
 3. **They can also contribute a skill — just ask in plain language.** A member does
    not need to be an admin to publish a skill. They tell TeamAI something like
    *"share this xxx skill with my team"*, in their own language, and you

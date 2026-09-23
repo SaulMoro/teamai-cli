@@ -66,7 +66,8 @@ Sharing a session's learnings needs no menu choice: TeamAI prompts on its own at
 the end of a session that produced something worth sharing, and that prompt means
 `teamai skill get share`. (Only when recall is on; it is off by default. The team turns it on with
 `sharing.recall.enabled: true` in `teamai.yaml`, a member with `teamai recall enable`;
-while it is off, `teamai skill get share` says so.)
+while it is off, or while the teamai config cannot be loaded, `teamai skill get share`
+says so and why.)
 
 ## Global rules
 

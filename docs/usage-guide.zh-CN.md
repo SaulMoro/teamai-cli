@@ -454,7 +454,7 @@ teamai skill path wiki              # 打印打包目录，用于运行 skill �
 团队在 `teamai.yaml` 设置 `sharing.recall.enabled: true`，或单台机器运行 `teamai recall enable`）：在此之前，
 `teamai skill get share` 会拒绝并说明原因。
 只读 HTTP 源上它同样会拒绝，因为 `teamai contribute` 无法写入；teamai 配置文件存在但无法加载时也会拒绝
-（提示会说明失败原因；若是文件无法解析，还会指出是哪个文件、哪一行），因为此时无法确定 recall 与来源。旧名字仍然可用：
+（提示会说明失败原因；若是文件无法解析，还会指出是哪个文件、哪一行；若是校验失败，还会指出是哪个字段、为何不合法），因为此时无法确定 recall 与来源。旧名字仍然可用：
 `teamai skill get team-wiki-codebase` 等价于 `wiki`。
 
 ---

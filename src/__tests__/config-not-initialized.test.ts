@@ -11,6 +11,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { NotInitializedError, detectProjectConfig, findUnreadableProjectConfig, requireInit } from '../config.js';
 import { projectDataHome } from '../utils/partition.js';
+import { log } from '../utils/logger.js';
 
 /**
  * `loadLocalConfig` returns null both for a missing file and for one it could
@@ -64,6 +65,19 @@ describe('requireInit: missing config versus unreadable config', () => {
 
     await expect(requireInit()).rejects.not.toBeInstanceOf(NotInitializedError);
   });
+
+  it('logs the failing field of a config that fails validation, which the refusal points at', async () => {
+    // The refusal says "the error is printed above"; a Zod JSON dump there
+    // would bury the field under a line of `[`.
+    const configPath = path.join(home, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'username: 42\n');
+    vi.mocked(log.error).mockClear();
+
+    await expect(requireInit()).rejects.toThrow('the error is printed above');
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(expect.stringMatching(/username: Expected string, received number/));
+    expect(vi.mocked(log.error).mock.calls.flat().join('')).not.toContain('\n');
+  });
 });
 
 describe('findUnreadableProjectConfig', () => {
@@ -95,6 +109,19 @@ describe('findUnreadableProjectConfig', () => {
     fs.writeFileSync(configPath, '');
 
     expect(await findUnreadableProjectConfig(dir)).toContain(configPath);
+  });
+
+  it('names the failing field of a project config that parses but fails validation, on one line', async () => {
+    // A Zod message is a JSON dump whose first line is `[`; the refusal keeps
+    // only the first line, so the field and the reason must lead.
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'scope: project\nrepo: 42\n');
+
+    const problem = await findUnreadableProjectConfig(dir);
+    expect(problem).toContain(configPath);
+    expect(problem).toMatch(/repo: Expected object, received number/);
+    expect(problem).not.toContain('\n');
   });
 
   it('names a broken partition config even when the legacy .teamai/ config behind it loads', async () => {

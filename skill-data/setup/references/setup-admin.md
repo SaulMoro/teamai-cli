@@ -275,7 +275,8 @@ day-to-day work — they can keep letting the AI run things for them:
   its own at the end of a session worth sharing, and the `share` workflow
   (`teamai skill get share`) takes over. (Only once recall is on — off by default;
   turn it on team-wide with `sharing.recall.enabled: true` in `teamai.yaml`, then
-  `teamai push`.)
+  `teamai push`. Never on a read-only HTTP source, or while a member's teamai
+  config cannot be loaded.)
 
 Mention the underlying commands (`teamai push`, `teamai roles`, …) only as a note
 for users who *do* want them — the primary path is re-invoking `/teamai`.

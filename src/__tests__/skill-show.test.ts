@@ -86,10 +86,11 @@ function captureLogs() {
   };
 }
 
-async function runSkillShow(name: string, fx: Fixture): Promise<string[]> {
+async function runSkillShow(name: string, fx: Fixture, unreadableProjectConfig: string | null = null): Promise<string[]> {
   vi.doMock('../config.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../config.js')>()),
     autoDetectInit: async () => ({ localConfig: fx.localConfig, teamConfig: fx.teamConfig }),
+    findUnreadableProjectConfig: async () => unreadableProjectConfig,
   }));
   const { skillShow } = await import('../skill-cmd.js');
   const cap = captureLogs();
@@ -195,6 +196,31 @@ describe('skillShow locator', () => {
     const lines = await runSkillShow('teamai-share-learnings', fx);
     expect(process.exitCode).toBe(1);
     expect(lines.join('\n')).not.toContain(path.join(claudeSkillsDir, 'teamai-share-learnings'));
+    process.exitCode = 0;
+  });
+
+  it('refuses share under a broken project config before searching the user config it falls back to', async () => {
+    // Detection skips the broken project file and answers with the user config:
+    // another team's repo and agents, where a `share` directory is not the one
+    // this project would mean.
+    fx.localConfig.recallEnabled = true;
+    await makeSkill(path.join(fx.repoPath, 'skills'), 'share', 'the other team share skill');
+    await makeSkill(path.join(fx.homeDir, '.claude', 'skills'), 'share', 'a user-scope share skill');
+
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.join(' '));
+    });
+    let text: string;
+    try {
+      text = (await runSkillShow('share', fx, '/work/proj/.teamai/config.yaml: bad indentation')).join('\n');
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(process.exitCode).toBe(1);
+    expect(text).not.toContain('skill: share');
+    expect(text).not.toContain(fx.repoPath);
+    expect(stderr.join('\n')).toContain('/work/proj/.teamai/config.yaml: bad indentation');
     process.exitCode = 0;
   });
 

@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { ZodError } from 'zod';
 import path from 'node:path';
 import {
   TeamaiConfigSchema,
@@ -63,7 +64,7 @@ export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | n
     const raw = YAML.parse(content);
     return TeamaiConfigSchema.parse(raw);
   } catch (e) {
-    log.error(`Invalid teamai.yaml: ${(e as Error).message}`);
+    log.error(`Invalid teamai.yaml: ${describeConfigError(e)}`);
     return null;
   }
 }
@@ -80,7 +81,7 @@ export async function loadLocalConfig(): Promise<LocalConfig | null> {
     const parsed = LocalConfigSchema.parse(raw);
     return await migrateLegacyRoleConfig(parsed, configPath);
   } catch (e) {
-    log.error(`Invalid local config: ${(e as Error).message}`);
+    log.error(`Invalid local config: ${describeConfigError(e)}`);
     return null;
   }
 }
@@ -195,7 +196,7 @@ export async function loadLocalConfigForScope(
     const parsed = LocalConfigSchema.parse(raw);
     return await migrateLegacyRoleConfig(parsed, configPath);
   } catch (e) {
-    log.error(`Invalid ${scope} config at ${configPath}: ${(e as Error).message}`);
+    log.error(`Invalid ${scope} config at ${configPath}: ${describeConfigError(e)}`);
     return null;
   }
 }
@@ -440,9 +441,20 @@ export async function readConfigFrom(
     }
     return resolved;
   } catch (e) {
-    onUnreadable?.(configPath, (e as Error).message);
+    onUnreadable?.(configPath, describeConfigError(e));
     return null;
   }
+}
+
+/**
+ * One line naming what is wrong. A Zod message is a JSON dump of its issues,
+ * whose first line is `[`; each issue's field and reason is what a member fixes.
+ */
+function describeConfigError(e: unknown): string {
+  if (e instanceof ZodError) {
+    return e.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+  }
+  return e instanceof Error ? e.message : String(e);
 }
 
 /**

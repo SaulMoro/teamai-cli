@@ -95,7 +95,8 @@ path (measured here from a 77-character one).
   unknown and the workflow would fail at `teamai contribute` — a project config
   too, which detection alone would skip in favour of the user config
   (`findUnreadableProjectConfig`). The refusal then says what failed (for a file
-  that does not parse, which file and where), since nothing else reports it. The
+  that does not parse, which file and where; for one that fails validation,
+  which field and why), since nothing else reports it. The
   Stop-hook share reminder asks the same gate (`contributeHintAllowed`, called
   by the hook dispatcher and by the legacy `teamai contribute-check`), because it
   points at this command. The gate lives in one place: `shareGate`
@@ -109,7 +110,9 @@ path (measured here from a 77-character one).
   team repo, then the installed agents, then the package. `codebase`, `default`,
   `learning` and `share` are ordinary names: a directory a member created under
   one of them is the skill they are asking about, and the recall gate does not
-  apply to it. The two legacy directory names are the exception, by design:
+  apply to it. A config the gate cannot load does apply: which team repo and
+  agents are meant is then unknown, so `skill show share` refuses before
+  searching them. The two legacy directory names are the exception, by design:
   `team-wiki-codebase` and `teamai-share-learnings` classify as `[builtin]` and
   are skipped by the push scan by name alone (`isCliOwnedSkillName`), because a
   tree with that name is one a pre-stub release wrote until the first pull has

@@ -124,13 +124,15 @@ the team (`sharing.recall.enabled: true` in `teamai.yaml`, then `teamai push`; i
 off by default, and `teamai recall enable` turns it on for one machine only): at the end of a session
 worth sharing, TeamAI prompts the member and the dedicated
 `share` workflow (`teamai skill get share`) summarizes the session and runs
-`teamai contribute`. Nobody has to invoke it by hand.
+`teamai contribute`. Nobody has to invoke it by hand. (A member whose teamai config
+cannot be loaded gets no prompt; `teamai skill get share` names the file and the error.)
 (Publishing a **reusable skill** someone authored is a different task — any member
 can do it, see `"$(teamai skill path core)/references/contribute-member.md"`.)
 
 ### Turn the sharing prompt on or off (admin)
 
-The auto-share prompt is **on by default once recall is on**. To disable it team-wide, set this in
+The auto-share prompt is **on by default once recall is on** (never on a read-only
+HTTP source, or while a member's teamai config cannot be loaded). To disable it team-wide, set this in
 `teamai.yaml` and `teamai push`:
 
 ```yaml

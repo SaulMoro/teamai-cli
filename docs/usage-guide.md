@@ -482,7 +482,7 @@ packaged files removed, and named in the pull output. `share` is served only whi
 on (off by default; `sharing.recall.enabled: true` in `teamai.yaml` for the team, or
 `teamai recall enable` for one machine): until then `teamai skill get share` refuses and says so.
 It also refuses on a read-only HTTP source, where `teamai contribute` cannot write, and when a
-teamai config exists but cannot be loaded (the refusal says what failed, and for a file that does not parse, which file and where),
+teamai config exists but cannot be loaded (the refusal says what failed: for a file that does not parse, which file and where; for one that fails validation, which field and why),
 since recall and the source are then unknown. The legacy names still
 resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
