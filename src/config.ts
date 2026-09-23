@@ -1,5 +1,6 @@
 import YAML from 'yaml';
 import { ZodError } from 'zod';
+import fs from 'node:fs';
 import path from 'node:path';
 import {
   TeamaiConfigSchema,
@@ -432,7 +433,15 @@ export async function readConfigFrom(
   try {
     const raw = YAML.parse(content);
     const config = LocalConfigSchema.parse(raw);
-    if (config.scope !== 'project') return null;
+    if (config.scope !== 'project') {
+      // Run from HOME, `<cwd>/.teamai/config.yaml` is the user config itself.
+      // Anywhere else a config here that is not scope: project cannot say which
+      // project it serves, and detection would read past it to the user config.
+      if (!isUserConfigFile(configPath)) {
+        onUnreadable?.(configPath, `it is scope: ${config.scope}, but a config inside a project must be scope: project`);
+      }
+      return null;
+    }
     // Anchor projectRoot to the workspace root (resource landing) and dataHome to
     // the directory this config lives in (machine-data location). A persisted
     // projectRoot can be wrong (e.g. a `.teamai/` copied from the main checkout
@@ -460,6 +469,18 @@ export async function readConfigFrom(
     onUnreadable?.(configPath, describeConfigError(e));
     return null;
   }
+}
+
+/** Whether `configPath` is the user config, comparing real paths (a tmp HOME and the cwd can differ by a symlink). */
+function isUserConfigFile(configPath: string): boolean {
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return real(configPath) === real(expandHome(getUserConfigPath()));
 }
 
 /**
@@ -513,8 +534,8 @@ export async function requireInitForScope(
  * If cwd has a project-scope config, uses that; otherwise falls back to user scope.
  * This is the recommended entry point for commands that support both scopes.
  */
-export async function autoDetectInit(): Promise<TeamaiInit> {
-  const projectConfig = await detectProjectConfig();
+export async function autoDetectInit(cwd?: string): Promise<TeamaiInit> {
+  const projectConfig = await detectProjectConfig(cwd);
   if (projectConfig) {
     const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
     if (!teamConfig) return throwTeamConfigMissingOrInvalid(projectConfig.repo.localPath);

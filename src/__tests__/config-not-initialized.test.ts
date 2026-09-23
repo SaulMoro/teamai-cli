@@ -150,6 +150,30 @@ describe('findUnreadableProjectConfig', () => {
     expect(problem).not.toContain('\n');
   });
 
+  it('names a project config that is not scope: project, which detection alone skips', async () => {
+    // `scope` omitted defaults to user: detection would read past the file to
+    // the user config, another team's.
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'repo:\n  localPath: /x\n  remote: https://example.test/a.git\nusername: t\n');
+
+    const problem = await findUnreadableProjectConfig(dir);
+    expect(problem).toContain(configPath);
+    expect(problem).toContain('scope: project');
+  });
+
+  it('does not name the user config when the directory is HOME itself', async () => {
+    // Run from HOME, `<cwd>/.teamai/config.yaml` is the user config, not a project's.
+    vi.stubEnv('HOME', dir);
+    vi.stubEnv('USERPROFILE', dir);
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'repo:\n  localPath: /x\n  remote: https://example.test/a.git\nusername: t\nscope: user\n');
+
+    expect(await findUnreadableProjectConfig(dir)).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
   it('names a broken partition config even when the legacy .teamai/ config behind it loads', async () => {
     // The partition is authoritative; detection skips it when broken and lands
     // on the legacy config, which may belong to another team.

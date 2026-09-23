@@ -10,6 +10,7 @@ const { autoDetectInit, findUnreadableProjectConfig, logDim, logError, NotInitia
 vi.mock('../config.js', () => ({
   autoDetectInit,
   findUnreadableProjectConfig,
+  requireInit: vi.fn(),
   NotInitializedError,
   BROKEN_CONFIG_ADVICE: 'Fix the file, or move it aside and run `teamai init` to write a new one.',
 }));

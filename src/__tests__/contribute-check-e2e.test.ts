@@ -67,14 +67,15 @@ function runContributeCheck(
   homeDir: string,
   stdinPayload: string,
   tool = 'claude',
+  processCwd = homeDir,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const child = execFile(
       'node',
       [CLI_PATH, 'contribute-check', '--stdin', '--tool', tool],
       {
-        // cwd too: the share gate reads a project config under it.
-        cwd: homeDir,
+        // The directory the hook process starts in, which the gate must not read.
+        cwd: processCwd,
         env: { ...process.env, HOME: homeDir, TEAMAI_LOG_LEVEL: 'silent' },
         timeout: 10000,
       },
@@ -248,6 +249,20 @@ describe('contribute-check E2E', () => {
     const result = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID, project));
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
+  });
+
+  it('never asks the gate about the launcher directory, even when the payload cwd no longer exists', async () => {
+    // The hook process starts in a project whose config does not parse; the
+    // session ran in a worktree since deleted, which holds no project config,
+    // so the user config (recall on) decides.
+    const launcher = path.join(tmpHome, 'launcher');
+    fs.mkdirSync(path.join(launcher, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(launcher, '.teamai', 'config.yaml'), 'repo: [unclosed\n');
+    writeEventsFile(tmpHome, buildRichSessionEvents(SESSION_ID));
+
+    const result = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID, path.join(tmpHome, 'deleted-worktree')), 'claude', launcher);
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toBe('');
   });
 
   it('produces no output for a trivial session below threshold', async () => {

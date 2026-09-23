@@ -97,21 +97,24 @@ export type TeamDetection =
   | { kind: 'none' }
   | { kind: 'unusable'; detail: string };
 
-export async function detectTeam(): Promise<TeamDetection> {
-  const { autoDetectInit, findUnreadableProjectConfig, NotInitializedError, BROKEN_CONFIG_ADVICE } =
+export async function detectTeam(cwd?: string): Promise<TeamDetection> {
+  const { autoDetectInit, findUnreadableProjectConfig, requireInit, NotInitializedError, BROKEN_CONFIG_ADVICE } =
     await import('./config.js');
   // Loading the config can migrate it and say so with `log.info`. That line
   // must not land in the skill content, the JSON these commands print on
   // stdout, or a hook's reply, so config loading reports on stderr here.
   const previous = setStderrOnly(true);
   try {
-    const unreadable = await findUnreadableProjectConfig();
+    // A directory that no longer exists (a hook payload naming a deleted
+    // worktree) holds no project config, and git refuses to open it.
+    if (cwd !== undefined && !(await pathExists(cwd))) return { kind: 'team', init: await requireInit() };
+    const unreadable = await findUnreadableProjectConfig(cwd);
     if (unreadable) {
       // A parse error spans several lines (a code frame); its first names the
       // file, the line and the column, which is what the member acts on.
       return { kind: 'unusable', detail: `${firstLine(unreadable)}. ${BROKEN_CONFIG_ADVICE}` };
     }
-    return { kind: 'team', init: await autoDetectInit() };
+    return { kind: 'team', init: await autoDetectInit(cwd) };
   } catch (e) {
     if (e instanceof NotInitializedError) return { kind: 'none' };
     return { kind: 'unusable', detail: firstLine(e instanceof Error ? e.message : String(e)) };
@@ -131,9 +134,9 @@ export async function detectTeam(): Promise<TeamDetection> {
  * writable, is then unknown, and the workflow would fail at `teamai contribute`.
  * Any failure past loading the config is a fault here and propagates.
  */
-export async function shareGate(): Promise<ShareGate> {
+export async function shareGate(cwd?: string): Promise<ShareGate> {
   const { isRecallEnabled } = await import('./types.js');
-  const team = await detectTeam();
+  const team = await detectTeam(cwd);
   if (team.kind === 'none') return { block: null, config: null };
   if (team.kind === 'unusable') return { block: { reason: 'config', detail: team.detail }, config: null };
   const { localConfig, teamConfig } = team.init;
@@ -158,13 +161,15 @@ function firstLine(text: string): string {
  *
  * The reminder routes to `share`, so it is withheld wherever `shareGate`
  * blocks it: a nudge there would send the agent to a command that says no.
- * Both the hook dispatcher and the legacy `teamai contribute-check` ask this.
+ * Both the hook dispatcher and the legacy `teamai contribute-check` ask this:
+ * the dispatcher has changed into the session's cwd already, the legacy
+ * command passes it, since its process may start anywhere.
  */
-export async function contributeHintAllowed(): Promise<boolean> {
+export async function contributeHintAllowed(cwd?: string): Promise<boolean> {
   const { isContributeHintEnabled } = await import('./types.js');
   let gate: ShareGate;
   try {
-    gate = await shareGate();
+    gate = await shareGate(cwd);
   } catch (e) {
     // A fault in the gate itself, not a config it could not load (the gate
     // answers that): a Stop hook must not fail the turn over a reminder.

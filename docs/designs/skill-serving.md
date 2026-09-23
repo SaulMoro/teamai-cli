@@ -94,7 +94,7 @@ path (measured here from a 77-character one).
   blocks instead (`blockedBy: "config"`), since recall and the source are then
   unknown and the workflow would fail at `teamai contribute` — a project config
   too, which detection alone would skip in favour of the user config
-  (`findUnreadableProjectConfig`). The refusal then says what failed (for a file
+  (`findUnreadableProjectConfig`), including one that is not `scope: project`. The refusal then says what failed (for a file
   that does not parse, which file and where; for one that fails validation,
   which field and why), since nothing else reports it. The
   Stop-hook share reminder asks the same gate (`contributeHintAllowed`, called
