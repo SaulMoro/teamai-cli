@@ -17,7 +17,6 @@ import {
   toolRootRejection,
   type TeamaiConfig,
   getTeamaiHomeDir,
-  getUserConfigPath,
   REPORTS_BRANCH,
   type GlobalOptions,
   type LocalConfig,
@@ -26,7 +25,6 @@ import {
   getConfigPath,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { discardUnattributedUsage } from './usage-tracker.js';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadProjectsManifest, listProjectIds } from './projects.js';
 import { memberReadRoots, readMemberConfig, mergeMemberConfig } from './members.js';
@@ -416,18 +414,6 @@ async function isInsideGitRepo(dir: string): Promise<boolean> {
 }
 
 /**
- * Save the user-scope config. A machine's first user scope starts with no skill
- * usage: what `~/.teamai/usage.jsonl` holds by then cannot be attributed to it
- * (#748).
- */
-async function saveUserScopeConfig(localConfig: LocalConfig): Promise<void> {
-  const firstUserScope = !(await pathExists(getUserConfigPath()));
-  await ensureDir(getTeamaiHomeDir());
-  await saveLocalConfig(localConfig);
-  if (firstUserScope) await discardUnattributedUsage(localConfig);
-}
-
-/**
  * Git-free HTTP onboarding (issue #1). A read-only consumer only needs an API
  * key: no git auth, no clone, no member/reviewer push. Skills/rules/CLAUDE.md are
  * delivered on each session via the report/sync/ack lifecycle (the local-agent
@@ -568,7 +554,8 @@ export async function initHttp(
   if (scope === 'project') {
     await saveLocalConfigForScope(localConfig, scope, projectRoot);
   } else {
-    await saveUserScopeConfig(localConfig);
+    await ensureDir(getTeamaiHomeDir());
+    await saveLocalConfig(localConfig);
   }
   log.success(`Local config saved to ${teamaiHome}/config.yaml`);
 
@@ -1735,7 +1722,8 @@ export async function init(options: GlobalOptions & {
       log.debug('Generated .teamai/.gitignore for project scope');
     }
   } else {
-    await saveUserScopeConfig(localConfig);
+    await ensureDir(getTeamaiHomeDir());
+    await saveLocalConfig(localConfig);
     log.success(`Local config saved to ${getTeamaiHomeDir()}/config.yaml`);
   }
 

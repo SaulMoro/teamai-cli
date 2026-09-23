@@ -162,12 +162,14 @@ reports worktree → git add → git commit → git push (teamai-reports)
                      │ recommend.ts   │            │
 ┌──────────────┐     │ digest.ts      │     push --stats
 │ Local        │     │ stats.ts       │     push --sessions
-│ <dataHome>/  │◀───│ team-push.ts ──┼────▶(直接 commit, 无 MR)
-│  usage.jsonl │     │                │
+│ ~/.teamai/   │◀───│ team-push.ts ──┼────▶(直接 commit, 无 MR)
+│  usage.jsonl*│     │                │
 │  sessions/   │     └────────────────┘
 │   <Y-M>.md   │
 └──────────────┘
 ```
+
+\* `usage.jsonl` 按 scope 存放在 `<dataHome>/`（项目分区或 user scope 的 `~/.teamai/`，#748）；`sessions/` 仍是机器级别的 `~/.teamai/`。
 
 ## New Files
 

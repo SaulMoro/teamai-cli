@@ -36,6 +36,7 @@ vi.mock('../utils/fs.js', async (importActual) => {
 
 import { reportUsageToTeam } from '../team-push.js';
 import { withTimeout } from '../utils/async.js';
+import { appendUsageEvent } from '../usage-tracker.js';
 
 let tmpDir: string;
 let repoDir: string;
@@ -82,7 +83,7 @@ function writeDashboardEvents(lines: object[]): void {
 }
 
 describe('reportUsageToTeam — intervention reporting', () => {
-  function seedReport(): string {
+  async function seedReport(): Promise<string> {
     const timestamp = new Date().toISOString();
     writeDashboardEvents([
       { type: 'session_start', timestamp, sessionId: 'slow', tool: 'claude', cwd: '/p' },
@@ -91,14 +92,13 @@ describe('reportUsageToTeam — intervention reporting', () => {
         interventions: { interrupt: 1, toolReject: 0 },
         tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 } },
     ]);
-    const usagePath = path.join(tmpDir, '.teamai', 'usage.jsonl');
-    fs.writeFileSync(usagePath, JSON.stringify({ skill: 'review', timestamp, tool: 'claude' }) + '\n');
-    return usagePath;
+    await appendUsageEvent({ skill: 'review', timestamp, tool: 'claude' }, gitConfig());
+    return path.join(tmpDir, '.teamai', 'usage.jsonl');
   }
 
   it.each(['reports', 'legacy'])('finishes acknowledgement after the caller times out (%s)', async (backend) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const usagePath = seedReport();
+    const usagePath = await seedReport();
     const seeded = fs.readFileSync(usagePath, 'utf-8');
     let finish!: (value: boolean) => void;
     let started!: () => void;
@@ -140,7 +140,7 @@ describe('reportUsageToTeam — intervention reporting', () => {
   });
 
   it.each(['false', 'rejection'])('retains events and snapshots when push returns %s', async (failure) => {
-    const usagePath = seedReport();
+    const usagePath = await seedReport();
     const before = fs.readFileSync(usagePath, 'utf-8');
     if (failure === 'false') reportsMocks.updateReports.mockResolvedValueOnce(false);
     else reportsMocks.updateReports.mockRejectedValueOnce(new Error('offline'));

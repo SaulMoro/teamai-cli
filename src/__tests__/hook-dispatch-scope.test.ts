@@ -15,7 +15,10 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawn: vi.fn(() => ({ on: vi.fn(), stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) }, unref: vi.fn() })),
 }));
 vi.mock('../pull.js', () => ({ pull: vi.fn(async () => undefined) }));
-vi.mock('../update.js', () => ({ doUpdate: vi.fn(async () => undefined) }));
+vi.mock('../update.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../update.js')>()),
+  doUpdate: vi.fn(async () => undefined),
+}));
 vi.mock('../local-agent.js', () => ({ reportAndSyncFromHook: vi.fn(async () => null) }));
 vi.mock('../utils/reports-branch.js', () => ({ updateReports: vi.fn(async () => undefined) }));
 
@@ -164,5 +167,21 @@ describe('hook runs and the scope they belong to (#748)', () => {
     await hook('post-tool-use', 'Skill', { session_id: 'sid-a', cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'skill-a' } });
 
     expect(fs.existsSync(path.join(teamaiHome(), 'usage.jsonl'))).toBe(false);
+  });
+
+  it('an unreadable partition config does not hand the project to its legacy .teamai config', async () => {
+    const root = gitRepo('project-a');
+    const partition = await resolveProjectDataHome(root);
+    fs.mkdirSync(partition, { recursive: true });
+    fs.writeFileSync(path.join(partition, 'config.yaml'), 'repo: [not: a, valid config\n');
+    // A lower-priority legacy config that names another team.
+    const legacy = path.join(root, '.teamai');
+    fs.mkdirSync(legacy);
+    fs.writeFileSync(path.join(legacy, 'config.yaml'),
+      `repo:\n  localPath: ${path.join(legacy, 'team-repo')}\n  remote: https://example.test/acme/other-team.git\nusername: tester\nscope: project\n`);
+
+    await hook('post-tool-use', 'Skill', { session_id: 'sid-a', cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'skill-a' } });
+
+    expect(fs.existsSync(path.join(legacy, 'usage.jsonl'))).toBe(false);
   });
 });

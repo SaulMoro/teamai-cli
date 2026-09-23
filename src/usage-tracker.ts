@@ -5,6 +5,7 @@ import { normalizeToolName } from './utils/tool-names.js';
 import {
   getCopilotHome,
   getDataHome,
+  getTeamaiHomeDir,
   SKILL_NAME_REGEX,
   type LocalConfig,
   type UsageEvent,
@@ -14,13 +15,52 @@ import { getUserHome } from './utils/home.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { resolveConfigForDir } from './config.js';
 
+/** Present once `~/.teamai/usage.jsonl` holds only the user scope's own usage. */
+const USAGE_PER_SCOPE_MARKER = 'usage-per-scope';
+/** How long a hook waits for another process to finish that one-time discard. */
+const USAGE_DISCARD_WAIT = { attempts: 40, delayMs: 25 };
+
 /**
  * The usage JSONL of one scope: `<dataHome>/usage.jsonl`, so each scope reports
  * only the skills used where it is set up (#748). Evaluated at call time to
  * respect HOME changes in tests.
+ *
+ * The user scope's file is where every scope used to record, so what an
+ * earlier release left there names no project. The first access after the
+ * upgrade discards it, before the user scope can report it to its team, and
+ * leaves a marker so later usage is kept. One process discards, under a lock;
+ * the others wait for the marker, so none deletes what another just recorded.
+ * Throws when the discard does not finish in time; every caller treats that
+ * as an I/O failure.
  */
-function getUsagePath(config: LocalConfig): string {
-  return path.join(getDataHome(config), 'usage.jsonl');
+async function getUsagePath(config: LocalConfig): Promise<string> {
+  const usagePath = path.join(getDataHome(config), 'usage.jsonl');
+  const sharedDir = getTeamaiHomeDir();
+  if (path.resolve(path.dirname(usagePath)) !== path.resolve(sharedDir)) return usagePath;
+  const marker = path.join(sharedDir, USAGE_PER_SCOPE_MARKER);
+  if (await pathExists(marker)) return usagePath;
+
+  const { acquireLock, releaseLock } = await import('./update.js');
+  const lock = `${marker}.lock`;
+  for (let attempt = 0; attempt < USAGE_DISCARD_WAIT.attempts; attempt++) {
+    if (await acquireLock(lock)) {
+      try {
+        if (!(await pathExists(marker))) {
+          // Remove before marking: a run cut short in between discards again
+          // rather than keeping unattributed events.
+          await fs.promises.rm(usagePath, { force: true });
+          await fs.promises.writeFile(marker, '', 'utf-8');
+          log.debug(`Discarded ${usagePath}: recorded before usage was kept per scope, it names no project (#748)`);
+        }
+      } finally {
+        await releaseLock(lock);
+      }
+      return usagePath;
+    }
+    await new Promise((resolve) => setTimeout(resolve, USAGE_DISCARD_WAIT.delayMs));
+    if (await pathExists(marker)) return usagePath;
+  }
+  throw new Error(`${lock} is held by another process; skill usage from before the upgrade is still being discarded`);
 }
 
 /** Get the known-skills.json path (evaluated at call time to respect HOME changes in tests). */
@@ -215,7 +255,7 @@ export async function skillExistsOnDisk(skillName: string): Promise<boolean> {
  */
 export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): Promise<void> {
   try {
-    const usagePath = getUsagePath(config);
+    const usagePath = await getUsagePath(config);
     await ensureDir(path.dirname(usagePath));
     const line = JSON.stringify(event) + '\n';
     await fs.promises.appendFile(usagePath, line, 'utf-8');
@@ -226,25 +266,12 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
 }
 
 /**
- * Drop the user-scope usage file when a machine first gets a user scope. What
- * it holds was recorded while every scope shared that file, so nothing says
- * which project each event came from; the new user scope must not report it
- * to its team (#748).
- */
-export async function discardUnattributedUsage(userConfig: LocalConfig): Promise<void> {
-  const usagePath = getUsagePath(userConfig);
-  if (!(await pathExists(usagePath))) return;
-  await fs.promises.rm(usagePath, { force: true });
-  log.debug(`Discarded ${usagePath}: its events predate this user scope and name no project (#748)`);
-}
-
-/**
  * Read all usage events from a scope's JSONL file.
  * Skips corrupted lines gracefully.
  */
 export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]> {
   try {
-    const content = await fs.promises.readFile(getUsagePath(config), 'utf-8');
+    const content = await fs.promises.readFile(await getUsagePath(config), 'utf-8');
     const events: UsageEvent[] = [];
     for (const line of content.split('\n')) {
       const trimmed = line.trim();
@@ -270,7 +297,7 @@ export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]
  */
 export async function truncateUsageAfterReport(reportedCount: number, config: LocalConfig): Promise<void> {
   try {
-    const usagePath = getUsagePath(config);
+    const usagePath = await getUsagePath(config);
     const content = await fs.promises.readFile(usagePath, 'utf-8');
     const lines = content.split('\n').filter((l) => l.trim());
     if (reportedCount >= lines.length) {
