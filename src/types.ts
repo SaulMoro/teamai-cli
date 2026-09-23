@@ -578,8 +578,13 @@ export const LocalConfigSchema = z.object({
  *  - on SAVE, `serializeLocalConfig` also drops it (belt-and-braces) — the
  *    value is anchor-derived at runtime and the config file lives INSIDE it, so
  *    persisting an absolute path would be both redundant and machine-specific.
+ *
+ * `roleUnresolved` is runtime-only the same way. It is set when the legacy role
+ * migration could not read the roles manifest, so whether this role-less config
+ * holds a role is unknown for this run; `activeRoleIds` then matches no
+ * role-scoped entry instead of every one. The next load re-decides it.
  */
-export type LocalConfig = z.infer<typeof LocalConfigSchema> & { dataHome?: string };
+export type LocalConfig = z.infer<typeof LocalConfigSchema> & { dataHome?: string; roleUnresolved?: true };
 export type LocalConfigInput = z.input<typeof LocalConfigSchema>;
 
 // ─── Local state (~/.teamai/state.json) ────────────────────

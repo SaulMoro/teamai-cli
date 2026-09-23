@@ -229,8 +229,13 @@ export function resolveRoleResourceNamespaces(input: {
  * Role ids this member holds, primary first, or null when no primary role is
  * configured. Null means "no role filter": a member without a role keeps
  * receiving every resource, the same fallback pull applies to skills and rules.
+ * A config whose role could not be resolved (`roleUnresolved`) holds none:
+ * `[]` matches no role-scoped entry.
  */
-export function activeRoleIds(localConfig: { primaryRole?: string; additionalRoles?: string[] }): string[] | null {
+export function activeRoleIds(
+  localConfig: { primaryRole?: string; additionalRoles?: string[]; roleUnresolved?: true },
+): string[] | null {
+  if (localConfig.roleUnresolved) return [];
   if (!localConfig.primaryRole) return null;
   return [...new Set([localConfig.primaryRole, ...(localConfig.additionalRoles ?? [])])];
 }

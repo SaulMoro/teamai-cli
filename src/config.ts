@@ -32,13 +32,13 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
   } catch (error) {
     // A repo with no manifest has nothing to migrate. A broken one must not
     // fail the load: every command loads the config, `pull` included, so the
-    // member could never pull the fix. The config stays role-less for this run,
-    // and the pull refuses the broken manifest itself (resolveResourceNamespaces),
-    // so delivery does not widen.
-    if (!(error instanceof RolesManifestMissingError)) {
-      log.warn(`Legacy role migration skipped: ${(error as Error).message}`);
-    }
-    return config;
+    // member could never pull the fix. Nor may it leave the config plainly
+    // role-less, which matches every role-scoped hook, MCP server and env
+    // variable. The role is unknown for this run: skills fail closed in
+    // resolveResourceNamespaces, and role-scoped entries reach nobody.
+    if (error instanceof RolesManifestMissingError) return config;
+    log.warn(`Legacy role migration skipped: ${(error as Error).message}`);
+    return { ...config, roleUnresolved: true };
   }
 
   const haiRole = manifest.roles.find((role) => role.id === 'hai');
@@ -98,9 +98,10 @@ export async function loadLocalConfig(): Promise<LocalConfig | null> {
  * `dataHome` is derived from the projectAnchor at runtime and the config file
  * lives inside that directory, so it must never be persisted (a stale absolute
  * path would defeat the anchor-derived design and break on another machine).
+ * `roleUnresolved` describes one load of the roles manifest, not the member.
  */
 function serializeLocalConfig(config: LocalConfig): string {
-  const { dataHome: _dataHome, ...persisted } = config;
+  const { dataHome: _dataHome, roleUnresolved: _roleUnresolved, ...persisted } = config;
   return YAML.stringify(persisted);
 }
 

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadLocalConfig } from '../config.js';
+import { loadLocalConfig, saveLocalConfig } from '../config.js';
+import { matchesMembership, resolveMembership } from '../membership.js';
 import { log } from '../utils/logger.js';
 
 describe('loadLocalConfig: legacy role migration against the team repo roles manifest', () => {
@@ -50,5 +51,34 @@ describe('loadLocalConfig: legacy role migration against the team repo roles man
     expect(config).not.toBeNull();
     expect(config?.primaryRole).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Invalid roles manifest'));
+  });
+
+  // Role-less normally means "no role filter". Here the manifest decides the
+  // role and cannot be read, so the member must not receive role-scoped hooks,
+  // MCP servers or env variables — only what is scoped to nobody in particular.
+  it('leaves a member whose role could not be resolved outside every role-scoped entry', async () => {
+    writeRoles("version: 1\nroles:\n  - id: hai\n    resources: { knowledge: [], skills: ['../../evil'] }\n");
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const config = await loadLocalConfig();
+    if (!config) throw new Error('expected a config');
+    const membership = resolveMembership(config);
+    expect(matchesMembership({ roles: ['hai'] }, membership)).toBe(false);
+    expect(matchesMembership({}, membership)).toBe(true);
+  });
+
+  it('does not persist that unresolved state', async () => {
+    writeRoles("version: 1\nroles:\n  - id: hai\n    resources: { knowledge: [], skills: ['../../evil'] }\n");
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const config = await loadLocalConfig();
+    if (!config) throw new Error('expected a config');
+    await saveLocalConfig(config);
+    expect(readFileSync(path.join(home, '.teamai', 'config.yaml'), 'utf-8')).not.toMatch(/roleUnresolved/);
+  });
+
+  it('keeps the unfiltered match for a role-less member when the manifest parses', async () => {
+    writeRoles('version: 1\nroles:\n  - id: frontend\n    resources: { knowledge: [], skills: [frontend] }\n');
+    const config = await loadLocalConfig();
+    if (!config) throw new Error('expected a config');
+    expect(matchesMembership({ roles: ['frontend'] }, resolveMembership(config))).toBe(true);
   });
 });
