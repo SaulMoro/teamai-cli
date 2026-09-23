@@ -268,9 +268,14 @@ day-to-day work — they can keep letting the AI run things for them:
   `/teamai I already have TeamAI set up, help me manage it` — this loads
   the daily-management flow (`{SKILL_DIR}/references/manage-admin.md`): publishing skills, inviting
   members, roles / packages / env.
-- To share something they learned, once recall is on (off by default; turn it on
-  team-wide with `sharing.recall.enabled: true` in `teamai.yaml`, then `teamai push`):
-  `/teamai I want to contribute what I learned to my team`.
+- To share a reusable skill with the team, they run (in their language):
+  `/teamai Share this <skill-name> skill with my team` — see
+  `"$(teamai skill path core)/references/contribute-member.md"`.
+- Sharing a **session's learnings** needs no command from them: TeamAI prompts on
+  its own at the end of a session worth sharing, and the `share` workflow
+  (`teamai skill get share`) takes over. (Only once recall is on — off by default;
+  turn it on team-wide with `sharing.recall.enabled: true` in `teamai.yaml`, then
+  `teamai push`.)
 
 Mention the underlying commands (`teamai push`, `teamai roles`, …) only as a note
 for users who *do* want them — the primary path is re-invoking `/teamai`.

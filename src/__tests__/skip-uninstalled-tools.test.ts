@@ -61,7 +61,8 @@ const WIKI_SKILL = shipped('team-wiki-codebase', 'SKILL.md');
 /** Shipped body under a distinguishing frontmatter block: still ours, told apart. */
 const wikiSkillTagged = (tag: string): string => `---\nname: ${tag}\n---\n${WIKI_SKILL}`;
 
-vi.mock('../config.js', () => ({
+vi.mock('../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../config.js')>()),
   requireInit: vi.fn(),
   loadState: vi.fn(),
   saveState: vi.fn(),
