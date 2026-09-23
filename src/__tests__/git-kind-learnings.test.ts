@@ -26,7 +26,9 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env.HOME = originalHome;
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // A push into the bare origin can leave a detached `git gc --auto` writing to
+  // objects/pack after the test returns, so a single rmdir races it (ENOTEMPTY).
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function configureGit(dir: string): Promise<void> {
