@@ -45,6 +45,14 @@ describe('file transport', () => {
     expect(fs.readFileSync(logFile, 'utf-8')).toContain('[ERROR] something broke');
   });
 
+  it('writes warn to file, even when silent', () => {
+    // A detached SessionStart pull runs silent with its output discarded; its
+    // warnings must still leave a record.
+    setSilent(true);
+    log.warn('stub not deployed');
+    expect(fs.readFileSync(logFile, 'utf-8')).toContain('[WARN] stub not deployed');
+  });
+
   it('includes timestamp', () => {
     log.debug('ts');
     expect(fs.readFileSync(logFile, 'utf-8').trim()).toMatch(/^\d{4}-\d{2}-\d{2}T/);

@@ -732,13 +732,11 @@ async function reconcileEnvForUnchangedRepo(
 
 /**
  * The stub is the agent's only way into TeamAI, so a failure to deploy it is
- * not silent. A SessionStart pull runs detached with its output discarded, and
- * `log.warn` is muted there, so debug.log keeps the record.
+ * not silent. A SessionStart pull runs detached with its output discarded;
+ * `log.warn` also records to debug.log, which keeps the trace there.
  */
 function warnStubNotDeployed(scopeLabel: string, e: unknown): void {
-  const message = `[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`;
-  log.warn(message);
-  log.debug(message);
+  log.warn(`[${scopeLabel}] The built-in teamai skill was not deployed: ${e instanceof Error ? e.message : String(e)}`);
 }
 
 async function pullForScope(

@@ -10,7 +10,7 @@ let stderrMode = false;
 
 // ─── File transport ─────────────────────────────────────
 //
-//  All log.debug() and log.error() calls are persisted to
+//  All log.debug(), log.warn() and log.error() calls are persisted to
 //  ~/.teamai/debug.log via synchronous append.  This ensures
 //  hook processes (short-lived, stdout swallowed by Claude Code)
 //  leave a durable trace for troubleshooting.
@@ -143,6 +143,7 @@ export const log = {
     writeInfoLine(`${chalk.green('✔')} ${msg}`);
   },
   warn(msg: string): void {
+    writeToFile('WARN', msg);
     if (silentMode) return;
     writeInfoLine(`${chalk.yellow('⚠')} ${msg}`);
   },
