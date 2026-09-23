@@ -395,7 +395,11 @@ export async function readConfigFrom(
     if (!(await pathExists(configPath))) return null;
   }
   const content = await readFileSafe(configPath);
-  if (!content) return null;
+  if (!content) {
+    // The file exists (checked above) but gave nothing: unreadable or empty.
+    onUnreadable?.(configPath, 'the file is empty or could not be read');
+    return null;
+  }
   try {
     const raw = YAML.parse(content);
     const config = LocalConfigSchema.parse(raw);
@@ -430,15 +434,17 @@ export async function readConfigFrom(
 }
 
 /**
- * The project-scope config under `cwd` that exists but cannot be parsed or
- * validated, with the reason, or null. Detection skips such a file and falls
- * back to the user config, which for a command that must know which team it
- * serves means answering for the wrong one.
+ * The project-scope config under `cwd` that exists but cannot be read, parsed
+ * or validated, with the reason, or null. Detection skips such a file and falls
+ * back to the next candidate — a legacy `.teamai/`, then the user config —
+ * which for a command that must know which team it serves means answering for
+ * the wrong one. So a broken higher-priority file is reported even when a later
+ * candidate loads.
  */
 export async function findUnreadableProjectConfig(cwd?: string): Promise<string | null> {
   let problem: string | null = null;
-  const found = await detectProjectConfig(cwd, (configPath, error) => { problem ??= `${configPath}: ${error}`; });
-  return found ? null : problem;
+  await detectProjectConfig(cwd, (configPath, error) => { problem ??= `${configPath}: ${error}`; });
+  return problem;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import fs, { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -8,7 +9,8 @@ vi.mock('../utils/logger.js', () => ({
   setStderrOnly: vi.fn(() => false),
 }));
 
-import { NotInitializedError, findUnreadableProjectConfig, requireInit } from '../config.js';
+import { NotInitializedError, detectProjectConfig, findUnreadableProjectConfig, requireInit } from '../config.js';
+import { projectDataHome } from '../utils/partition.js';
 
 /**
  * `loadLocalConfig` returns null both for a missing file and for one it could
@@ -74,6 +76,42 @@ describe('findUnreadableProjectConfig', () => {
 
   it('is null when there is no project config at all', async () => {
     expect(await findUnreadableProjectConfig(dir)).toBeNull();
+  });
+
+  it('names an empty project config, which detection alone also skips', async () => {
+    const configPath = path.join(dir, '.teamai', 'config.yaml');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, '');
+
+    expect(await findUnreadableProjectConfig(dir)).toContain(configPath);
+  });
+
+  it('names a broken partition config even when the legacy .teamai/ config behind it loads', async () => {
+    // The partition is authoritative; detection skips it when broken and lands
+    // on the legacy config, which may belong to another team.
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(home);
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    try {
+      const repo = path.join(dir, 'repo');
+      fs.mkdirSync(repo);
+      for (const args of [['init', '-q'], ['config', 'user.email', 't@e'], ['config', 'user.name', 'T'], ['commit', '--allow-empty', '-q', '-m', 'init']]) {
+        execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+      }
+      const anchor = realpathSync(repo);
+      const partitionConfig = path.join(projectDataHome(anchor), 'config.yaml');
+      fs.mkdirSync(path.dirname(partitionConfig), { recursive: true });
+      fs.writeFileSync(partitionConfig, 'repo: [unclosed\n');
+      fs.mkdirSync(path.join(repo, '.teamai'));
+      fs.writeFileSync(path.join(repo, '.teamai', 'config.yaml'),
+        `repo:\n  localPath: ${path.join(repo, '.teamai', 'team-repo')}\n  remote: https://example.com/other.git\nusername: t\nscope: project\n`);
+
+      expect(await detectProjectConfig(repo)).not.toBeNull();
+      expect(await findUnreadableProjectConfig(repo)).toContain(partitionConfig);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
