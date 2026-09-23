@@ -711,7 +711,15 @@ export async function contributeCheck(toolArg?: string): Promise<void> {
   }
 
   // The same gate as the dispatcher's handler: hooks written before it still
-  // call this command, and must not nudge towards a `share` that refuses.
+  // call this command, and must not nudge towards a `share` that refuses. The
+  // gate reads the cwd, so move to the session's, as hook-dispatch does.
+  if (stdinData.cwd) {
+    try {
+      process.chdir(stdinData.cwd);
+    } catch (e) {
+      log.debug(`contribute-check: chdir to ${stdinData.cwd} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   const { contributeHintAllowed } = await import('./skill-content.js');
   if (!(await contributeHintAllowed())) return;
 

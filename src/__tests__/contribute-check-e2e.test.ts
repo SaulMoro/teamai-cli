@@ -32,11 +32,11 @@ function makeTmpHome(): string {
 }
 
 /** Build a hook STDIN JSON payload with a session_id. */
-function makeStdinPayload(sessionId: string): string {
+function makeStdinPayload(sessionId: string, cwd = '/tmp/fake-project'): string {
   return JSON.stringify({
     session_id: sessionId,
     hook_event_name: 'Stop',
-    cwd: '/tmp/fake-project',
+    cwd,
   });
 }
 
@@ -233,6 +233,20 @@ describe('contribute-check E2E', () => {
 
     const result = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID));
 
+    expect(result.stdout).toBe('');
+  });
+
+  it('asks the gate about the payload cwd, not the directory the hook process started in', async () => {
+    // The process starts in HOME, where the user config (recall on) would allow
+    // the nudge; the session ran in a project whose config does not parse, where
+    // `teamai skill get share` refuses.
+    const project = path.join(tmpHome, 'project');
+    fs.mkdirSync(path.join(project, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.teamai', 'config.yaml'), 'repo: [unclosed\n');
+    writeEventsFile(tmpHome, buildRichSessionEvents(SESSION_ID));
+
+    const result = await runContributeCheck(tmpHome, makeStdinPayload(SESSION_ID, project));
+    expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
   });
 
