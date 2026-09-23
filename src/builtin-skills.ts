@@ -445,7 +445,10 @@ export async function pruneLegacyBuiltinSkills(
           log.warn(`Kept "${legacyName}" (${tool}): ${dir} holds files TeamAI did not put there. The packaged files were removed${saved}; delete the rest yourself once you have saved what you need.`);
         }
       } catch (e) {
-        log.warn(`Could not finish removing "${legacyName}" (${tool}) from ${dir}: ${e instanceof Error ? e.message : String(e)}. Whatever is left there stays until the next pull, which tries again.`);
+        const message = `Could not finish removing "${legacyName}" (${tool}) from ${dir}: ${e instanceof Error ? e.message : String(e)}. Whatever is left there stays until the next pull, which tries again.`;
+        log.warn(message);
+        // A detached SessionStart pull discards its output; debug.log keeps the record.
+        log.persist(message);
       }
     }
   }

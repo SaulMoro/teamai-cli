@@ -10,7 +10,7 @@ let stderrMode = false;
 
 // ─── File transport ─────────────────────────────────────
 //
-//  All log.debug(), log.warn() and log.error() calls are persisted to
+//  All log.debug(), log.error() and log.persist() calls are persisted to
 //  ~/.teamai/debug.log via synchronous append.  This ensures
 //  hook processes (short-lived, stdout swallowed by Claude Code)
 //  leave a durable trace for troubleshooting.
@@ -143,9 +143,16 @@ export const log = {
     writeInfoLine(`${chalk.green('✔')} ${msg}`);
   },
   warn(msg: string): void {
-    writeToFile('WARN', msg);
     if (silentMode) return;
     writeInfoLine(`${chalk.yellow('⚠')} ${msg}`);
+  },
+  /**
+   * Record a failure in debug.log only, never on the console: for a warning
+   * already shown where a detached hook process (stdout and stderr discarded,
+   * silent) would lose it, without printing it twice under --verbose.
+   */
+  persist(msg: string): void {
+    writeToFile('WARN', msg);
   },
   error(msg: string): void {
     console.error(chalk.red('✖'), msg);

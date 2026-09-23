@@ -24,6 +24,7 @@ vi.mock('../utils/git.js', () => ({
 
 vi.mock('../utils/logger.js', () => ({
   log: {
+    persist: vi.fn(),
     info: vi.fn(),
     success: vi.fn(),
     warn: vi.fn(),
@@ -319,8 +320,8 @@ describe('pull skip-sync when repo HEAD unchanged', () => {
     expect(log.success).toHaveBeenCalledWith(expect.stringContaining('Already synced at abc1234, skipping'));
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('EACCES: permission denied'));
-    // `log.warn` also records to debug.log; a second `log.debug` would print it twice under --verbose.
-    expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
+    // A detached SessionStart pull discards its output: debug.log keeps the record.
+    expect(log.persist).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed: EACCES'));
   });
 
   it('warns when the built-in stub cannot be deployed on a full sync', async () => {
@@ -333,8 +334,8 @@ describe('pull skip-sync when repo HEAD unchanged', () => {
 
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('EACCES: permission denied'));
-    // `log.warn` also records to debug.log; a second `log.debug` would print it twice under --verbose.
-    expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed'));
+    // A detached SessionStart pull discards its output: debug.log keeps the record.
+    expect(log.persist).toHaveBeenCalledWith(expect.stringContaining('The built-in teamai skill was not deployed: EACCES'));
   });
 
   it('should do full sync when HEAD rev differs from lastPullRev', async () => {

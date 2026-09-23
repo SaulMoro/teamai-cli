@@ -45,12 +45,26 @@ describe('file transport', () => {
     expect(fs.readFileSync(logFile, 'utf-8')).toContain('[ERROR] something broke');
   });
 
-  it('writes warn to file, even when silent', () => {
-    // A detached SessionStart pull runs silent with its output discarded; its
-    // warnings must still leave a record.
+  it('persists to file only, never the console, even when silent', () => {
+    // A detached SessionStart pull runs silent with its output discarded; the
+    // failures it cannot show still leave a record, printed nowhere twice.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setVerbose(true);
     setSilent(true);
-    log.warn('stub not deployed');
+    log.persist('stub not deployed');
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
     expect(fs.readFileSync(logFile, 'utf-8')).toContain('[WARN] stub not deployed');
+  });
+
+  it('keeps warn on the console only', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    log.warn('shown, not stored');
+    logSpy.mockRestore();
+    expect(fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf-8') : '').not.toContain('shown, not stored');
   });
 
   it('includes timestamp', () => {
