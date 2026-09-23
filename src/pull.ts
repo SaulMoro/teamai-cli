@@ -2011,7 +2011,8 @@ export async function pull(
   await reconcileCoAuthorAllScopes(reconcileUser, reconcileProject, options);
 
   // 4. Auto-report usage data to all active scopes. Skill usage lives in each
-  //    scope's own `<dataHome>/usage.jsonl`, so each target reports and then
+  //    scope's own file (`<dataHome>/usage.jsonl`, the user scope's
+  //    `~/.teamai/user-usage.jsonl`), so each target reports and then
   //    truncates only its own file. Dashboard sessions live in one shared file
   //    and are filtered instead: project scope only gets sessions whose cwd is
   //    under projectRoot; user scope excludes those sessions.

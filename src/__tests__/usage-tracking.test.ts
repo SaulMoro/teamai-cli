@@ -276,6 +276,14 @@ describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)',
 
     expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['after-upgrade']);
   });
+
+  it('does not stop the user scope from recording when it cannot be removed', async () => {
+    // Stands in for a file another program holds open on Windows (EPERM/EBUSY).
+    await fs.promises.mkdir(sharedPath());
+    await appendUsageEvent({ skill: 'kept', timestamp: '2026-02-01T00:00:00Z', tool: 'claude' }, userScope());
+
+    expect((await readUsageEvents(userScope())).map((e) => e.skill)).toEqual(['kept']);
+  });
 });
 
 describe('track', () => {

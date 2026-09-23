@@ -95,7 +95,7 @@ Skill Usage Statistics:
 teamai pull
     │
     ▼
-聚合 <dataHome>/usage.jsonl → stats/<user>.yaml
+聚合该 scope 的 usage 文件 → stats/<user>.yaml
     │
     ▼
 reports worktree → git add → git commit → git push (teamai-reports)
@@ -163,13 +163,13 @@ reports worktree → git add → git commit → git push (teamai-reports)
 ┌──────────────┐     │ digest.ts      │     push --stats
 │ Local        │     │ stats.ts       │     push --sessions
 │ ~/.teamai/   │◀───│ team-push.ts ──┼────▶(直接 commit, 无 MR)
-│  usage.jsonl*│     │                │
+│  usage*      │     │                │
 │  sessions/   │     └────────────────┘
 │   <Y-M>.md   │
 └──────────────┘
 ```
 
-\* `usage.jsonl` 按 scope 存放在 `<dataHome>/`（项目分区；user scope 为 `~/.teamai/user-usage.jsonl`，#748）；`sessions/` 仍是机器级别的 `~/.teamai/`。
+\* skill 使用记录按 scope 存放：项目为 `<dataHome>/usage.jsonl`（项目分区），user scope 为 `~/.teamai/user-usage.jsonl`（#748）；`sessions/` 仍是机器级别的 `~/.teamai/`。
 
 ## New Files
 

@@ -23,13 +23,17 @@ import { resolveConfigForDir } from './config.js';
  * The user scope records in `~/.teamai/user-usage.jsonl` instead: every scope
  * used to record in `~/.teamai/usage.jsonl`, and an earlier release still does
  * after a rollback, so what that file holds names no project. It is removed,
- * never read, so the user scope cannot report it to its team.
+ * never read, so the user scope cannot report it to its team; a removal that
+ * fails leaves it unread and does not stop the user scope's own file.
  */
 async function getUsagePath(config: LocalConfig): Promise<string> {
   const dataHome = getDataHome(config);
   const sharedDir = getTeamaiHomeDir();
   if (path.resolve(dataHome) !== path.resolve(sharedDir)) return path.join(dataHome, 'usage.jsonl');
-  await fs.promises.rm(path.join(sharedDir, 'usage.jsonl'), { force: true });
+  const shared = path.join(sharedDir, 'usage.jsonl');
+  await fs.promises.rm(shared, { force: true }).catch((e: unknown) => {
+    log.debug(`Could not remove ${shared}, it stays unread: ${e instanceof Error ? e.message : String(e)}`);
+  });
   return path.join(sharedDir, 'user-usage.jsonl');
 }
 
@@ -60,7 +64,7 @@ function getKnownSkillsPath(): string {
 //               [resolveConfigForDir(cwd)] ─null─▶ skip (#748)
 //                       │
 //                       ▼
-//               appendFile(<dataHome>/usage.jsonl, JSON line)
+//               appendFile(<scope usage file>, JSON line)
 //                       │
 //                       ▼
 //               updateKnownSkills(skill) → known-skills.json
@@ -82,7 +86,7 @@ function getKnownSkillsPath(): string {
 //  [extract & validate skill name after "/"]
 //      │
 //      ▼
-//  appendFile(<dataHome>/usage.jsonl) + updateKnownSkills()
+//  appendFile(<scope usage file>) + updateKnownSkills()
 //
 
 /**

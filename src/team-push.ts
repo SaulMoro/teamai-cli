@@ -49,7 +49,7 @@ interface PromptTokenDelta {
 //  [git pull latest] ── get freshest remote state ──
 //      │
 //      ▼
-//  [read <dataHome>/usage.jsonl] ─has events?─▶ merge stats
+//  [read scope usage file] ─has events?─▶ merge stats
 //      │                                           │
 //      ▼                                           ▼
 //  [stage pending votes from ~/.teamai/votes/]  [write stats/<user>.yaml]
