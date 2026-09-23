@@ -81,6 +81,15 @@ teamai projects members <id> # who is registered on a project
 A member gets the union of their role resources and their active project's
 resources. Admins declare projects in `manifest/projects.yaml`, then `teamai push`.
 
+Every namespace that names a directory — `knowledge`, `skills` and `agents` in
+either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
+ignored and unchecked) — must be a single path segment: no `/`, `\`, `:` or control character, no trailing
+`.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …). Two
+namespaces of one resource type may not differ only by case, across both
+manifests. A manifest that breaks this, does not parse, or is empty stops
+members' pull for that scope until it is fixed; the error names the entry. Fix
+it rather than deleting it — with no `roles.yaml`, delivery is unfiltered.
+
 ## Team dashboard (web UI)
 
 ```bash
@@ -131,8 +140,9 @@ can do it, see `"$(teamai skill path core)/references/contribute-member.md"`.)
 
 ### Turn the sharing prompt on or off (admin)
 
-The auto-share prompt is **on by default once recall is on** (never on a read-only
-HTTP source, or while a member's teamai config cannot be loaded). To disable it team-wide, set this in
+The auto-share prompt is **on by default once recall is on**, and only shows in directories set up
+with teamai (never on a read-only HTTP source, or while a member's teamai config cannot be loaded).
+To disable it team-wide, set this in
 `teamai.yaml` and `teamai push`:
 
 ```yaml

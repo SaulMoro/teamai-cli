@@ -22,7 +22,7 @@ import { resolveAnchors } from './utils/git.js';
 import { getUserHome } from './utils/home.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';
-import { loadRolesManifest } from './roles.js';
+import { loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 
 async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string): Promise<LocalConfig> {
   if (config.primaryRole) {
@@ -32,8 +32,16 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
   let manifest;
   try {
     manifest = await loadRolesManifest(config.repo.localPath);
-  } catch {
-    return config;
+  } catch (error) {
+    // A repo with no manifest has nothing to migrate. A broken one must not
+    // fail the load: every command loads the config, `pull` included, so the
+    // member could never pull the fix. Nor may it leave the config plainly
+    // role-less, which matches every role-scoped hook, MCP server and env
+    // variable. The role is unknown for this run: skills fail closed in
+    // resolveResourceNamespaces, and role-scoped entries reach nobody.
+    if (error instanceof RolesManifestNotFoundError) return config;
+    log.warn(`Legacy role migration skipped: ${(error as Error).message}`);
+    return { ...config, roleUnresolved: true };
   }
 
   const haiRole = manifest.roles.find((role) => role.id === 'hai');
@@ -93,9 +101,10 @@ export async function loadLocalConfig(): Promise<LocalConfig | null> {
  * `dataHome` is derived from the projectAnchor at runtime and the config file
  * lives inside that directory, so it must never be persisted (a stale absolute
  * path would defeat the anchor-derived design and break on another machine).
+ * `roleUnresolved` describes one load of the roles manifest, not the member.
  */
 function serializeLocalConfig(config: LocalConfig): string {
-  const { dataHome: _dataHome, ...persisted } = config;
+  const { dataHome: _dataHome, roleUnresolved: _roleUnresolved, ...persisted } = config;
   return YAML.stringify(persisted);
 }
 
@@ -321,6 +330,25 @@ export async function resolveDataHomeForScope(scope: Scope, projectRoot?: string
   const detected = await detectProjectConfig(projectRoot);
   if (detected) return getDataHome(detected);
   return path.join(projectRoot, '.teamai');
+}
+
+/**
+ * The config that governs a directory (default: the process cwd): the project
+ * teamai is set up for there, else the user scope, else null — teamai is not
+ * set up here. A project config that exists but cannot be read is null too,
+ * never the user scope: that project's hooks and usage must not reach the
+ * user-scope team (#748). The hook dispatcher and every usage reader and writer
+ * resolve through this, so they always agree on the scope. A directory that no
+ * longer exists (a hook payload naming a deleted worktree) holds no project
+ * config; git refuses to open it, so it is not asked.
+ */
+export async function resolveConfigForDir(dir?: string): Promise<LocalConfig | null> {
+  const target = dir ?? process.cwd();
+  if (!(await pathExists(target))) return loadLocalConfig();
+  let unreadable = false;
+  const project = await detectProjectConfig(target, () => { unreadable = true; });
+  if (project) return project;
+  return unreadable ? null : loadLocalConfig();
 }
 
 /**
