@@ -33,6 +33,8 @@ const { hookDispatchCli } = await import('../hook-dispatch-cli.js');
 const { resolveProjectDataHome, saveLocalConfigForScope, resolveConfigForDir, loadLocalConfig } = await import('../config.js');
 const { reportUsageToTeam } = await import('../team-push.js');
 const { getDataHome } = await import('../types.js');
+const { dataHomeKey } = await import('../dashboard-collector.js');
+const dataHomeKeyOf = (config: LocalConfig) => dataHomeKey(getDataHome(config));
 
 let tmp: string;
 let originalHome: string | undefined;
@@ -641,6 +643,27 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedSessions(project)).toBe(1);
     expect(await reportedInterventionSessions(project)).toBe(1);
     expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('a pre-upgrade exit reported before the next run\'s first prompt does not count that run twice', async () => {
+    const { project } = await setup();
+    const p = await dataHomeKeyOf(project);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    const at = (type: string, s: number) =>
+      JSON.stringify({ type, timestamp: new Date(Date.now() - 600_000 + s * 1000).toISOString(), sessionId: 'pid-9', tool: 'copilot', dataHomeKey: p });
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    // Run 1 ends; run 2 starts; a dashboard from before processExitAfter appends
+    // the exit it observed for run 1. A pull runs before run 2's first prompt.
+    fs.writeFileSync(log, [at('session_start', 0), at('prompt_submit', 1), at('stop', 2), at('session_end', 3),
+      at('session_start', 10), at('process_exit', 11)].join('\n') + '\n');
+    expect(await reportedInterventionSessions(project)).toBe(2);
+    // Run 2 goes on: the exit is now followed by its activity, so it was run 1's,
+    // and run 2 keeps its ID, compared against what the first pull reported.
+    fs.appendFileSync(log, [at('prompt_submit', 20), at('stop', 21)].join('\n') + '\n');
+
+    expect(await reportedInterventionSessions(project)).toBe(2);
+    expect(await reportedSessions(project)).toBe(2);
+    expect(await reportedPrompts(project)).toBe(2);
   });
 
   it('a fallback ID reused in a project after a user-scope run that never ended is the project\'s', async () => {
