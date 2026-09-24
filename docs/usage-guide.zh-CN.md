@@ -981,6 +981,7 @@ teamai recall "GPU 内存不足"
 - 当前工作目录包含 project scope 配置时搜索该项目；配置 `inheritUserScope: true` 后先搜索 project、再搜索 user，并标注 `[project]`/`[user]` 来源；否则搜索 user scope
 - 资源类型和文件名都相同时由 project 条目优先；不同资源类型即使文件名相同也分别保留
 - 当前 scope 中被查阅的知识自动 upvote；项目运行期间继承的 user 命中保持只读
+- 当 project 配置存在但无法读取时，recall 不检索也不记录任何内容，既不退回 user scope，也不退回其后优先级更低的 project 配置（如旧的 `.teamai/config.yaml`）：输出 ``Nothing was searched: <file>: <reason>. Fix the file, or move it aside and run `teamai init` to write a new one.`` 并以 exit 1 退出；`--check` 同样如此，不输出任何判定。recall subagent 会原样转述这一行，而不是报告没有团队知识。完全没有配置时，recall 仍提示没有可用的 learnings 并以 exit 0 退出
 - 提供轻量相关性预检 `teamai recall --check "<关键词>"`，输出 `RELEVANT score=<n> threshold=<n>` 或 `NOT_RELEVANT score=<n> threshold=<n>`，不读取文件、不 upvote —— recall subagent 用它在任务与团队知识无关时跳过检索。当 top 命中为 `RELEVANT` 时，还会输出 `matched=`/`missing=`，即命中/未命中其 title 与 tag 的查询词
 - `RELEVANT` 表示分数越过阈值、值得花成本读文件，**不代表**知识库覆盖了你要找的主题。请用 `matched=`/`missing=`（以及完整结果里的 `Matched:`/`Missing:` 行）自行判断：若关键区分词全部落在 missing 里，那条只是主题相邻，并非答案
 
