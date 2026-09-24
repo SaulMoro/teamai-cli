@@ -864,7 +864,7 @@ projects:
 |---|---|---|
 | `projects:` | env、hooks、MCP | 已移除：该条目不再下发给任何人，每次 pull 都会警告并给出应迁往的文件 |
 | `roles:` | env | 已移除，处理方式相同 |
-| `roles:` | hooks、MCP | 已弃用：在一个次版本内仍按角色过滤；pull 会警告，`teamai doctor` 有一项检查，两者都会列出每个目标文件 |
+| `roles:` | hooks、MCP | 已弃用：在一个次版本内仍像 0.25.0 一样按角色过滤，根文件中以不同 `roles:` 重复的名字也照旧生效；pull 会警告，`teamai doctor` 有一项检查，两者都会列出每个目标文件 |
 
 没有自动迁移：把每个条目移到警告给出的 namespace 文件中，并删掉该 key。
 

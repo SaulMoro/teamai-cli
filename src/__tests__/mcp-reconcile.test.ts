@@ -492,6 +492,26 @@ servers:
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('mcp/mcp.yaml defines server "shared" more than once'));
     });
 
+    it('keeps a 0.25 file that repeats one server under different roles: working as 0.25 did', async () => {
+      // 0.25.0 kept the last copy that passed the role filter; a member with no
+      // role passes every copy.
+      await writeMcpYaml(`
+servers:
+  - name: db
+    transport: http
+    url: https://example.com/frontend-db
+    roles: [frontend]
+  - name: db
+    transport: http
+    url: https://example.com/devops-db
+    roles: [devops]
+`);
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['billing'] });
+
+      expect((await claudeServers()).db?.url).toBe('https://example.com/devops-db');
+    });
+
     it('installs no server that carries the removed projects key', async () => {
       await writeMcpYaml(`
 servers:

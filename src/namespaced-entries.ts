@@ -12,6 +12,8 @@
  * Failure policy: a file in the active set that does not parse, a name twice in
  * one file, or a name in two active namespaces stops the type for this run.
  * The caller keeps what is installed rather than reconciling to an empty set.
+ * While `roles:` is deprecated, a name repeated with `roles:` on every copy is
+ * delivered as 0.25.0 did.
  *
  * Legacy mode (no roles, no projects) reads the root file only, as before, and
  * keeps its old handling of a repeated name; doctor lists those as info.
@@ -174,6 +176,8 @@ export async function resolveEntries<E>(
   const targets = new TargetFiles(repoPath, type);
 
   const candidates: NamespaceCandidate<E>[] = [];
+  // Entries still scoped by the deprecated per-entry `roles:`.
+  const roleScoped = new Set<NamespaceCandidate<E>>();
   for (const namespace of places) {
     const source = entryFilePath(type, namespace);
     const read = await reader.read(entryFileAbsolutePath(repoPath, type, namespace), source);
@@ -185,7 +189,9 @@ export async function resolveEntries<E>(
       const name = reader.nameOf(entry);
       const scope = reader.scopeOf(entry);
       if (!await keepScopedEntry(type, name, source, scope, localConfig, targets, notices)) continue;
-      candidates.push({ name, source, namespace, value: entry });
+      const candidate = { name, source, namespace, value: entry };
+      candidates.push(candidate);
+      if (scope.roles !== undefined) roleScoped.add(candidate);
     }
   }
 
@@ -207,7 +213,26 @@ export async function resolveEntries<E>(
     };
   }
 
-  const resolution = resolveNamespacedItems(candidates, active);
+  // During the `roles:` deprecation window a file may repeat a name under
+  // different `roles:`, as 0.25.0 allowed: every copy that passes the role
+  // filter is delivered, as then (MCP keeps the last one). The resolver sees
+  // one copy of such a name; a name repeated without `roles:` on every copy
+  // is a duplicate.
+  const copies = new Map<string, NamespaceCandidate<E>[]>();
+  for (const candidate of candidates) {
+    const key = `${candidate.source}\0${candidate.name}`;
+    copies.set(key, [...(copies.get(key) ?? []), candidate]);
+  }
+  const repeatedUnderRoles = new Map<E, NamespaceCandidate<E>[]>();
+  const laterCopies = new Set<NamespaceCandidate<E>>();
+  for (const group of copies.values()) {
+    const [first, ...rest] = group;
+    if (!first || rest.length === 0 || !group.every((copy) => roleScoped.has(copy))) continue;
+    repeatedUnderRoles.set(first.value, group);
+    for (const copy of rest) laterCopies.add(copy);
+  }
+
+  const resolution = resolveNamespacedItems(candidates.filter((candidate) => !laterCopies.has(candidate)), active);
   if (resolution.kind === 'conflict') {
     const failure: EntryFailure = resolution.reason === 'duplicate'
       ? { kind: 'duplicate', type, name: resolution.name, source: resolution.first.source }
@@ -227,14 +252,14 @@ export async function resolveEntries<E>(
 
   return {
     kind: 'resolved',
-    entries: items.map((item) => ({
-      entry: item.value,
+    entries: items.flatMap((item) => (repeatedUnderRoles.get(item.value) ?? [item]).map((copy) => ({
+      entry: copy.value,
       name: item.name,
       namespace: item.namespace,
       source: item.source,
       replaces: item.replaces?.source ?? null,
       replacedEntry: item.replaces?.value ?? null,
-    })),
+    }))),
     active,
     notices,
     repeated,

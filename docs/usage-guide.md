@@ -921,7 +921,7 @@ The per-entry keys these files replace:
 |---|---|---|
 | `projects:` | env, hooks, MCP | removed: the entry reaches nobody, and each pull warns with the file to move it to |
 | `roles:` | env | removed, the same way |
-| `roles:` | hooks, MCP | deprecated: still filters for one minor release; pull warns and `teamai doctor` has a check, both naming every target file |
+| `roles:` | hooks, MCP | deprecated: still filters for one minor release, as in 0.25.0, including a name the root file repeats under different `roles:`; pull warns and `teamai doctor` has a check, both naming every target file |
 
 There is no automatic migration: move each entry into the namespace file the
 warning names, and drop the key.

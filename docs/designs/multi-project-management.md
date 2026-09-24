@@ -298,7 +298,10 @@ conflict: root plus two namespaces is reported as the two namespaces.
 
 A conflict, a duplicate name inside one file, or a file in the active set that
 does not parse stops that type for the run and keeps what is installed; the rest
-of the pull goes on. The warning names the file or files and the fix.
+of the pull goes on. The warning names the file or files and the fix. During the
+`roles:` deprecation window a name repeated in one file with `roles:` on every
+copy is not a duplicate: each copy that passes the role filter is delivered, as
+0.25.0 did (MCP keeps the last).
 
 | Type | Effect of a failure |
 |---|---|
