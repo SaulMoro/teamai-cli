@@ -75,10 +75,12 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+/** Sessions the user scope recorded (#785), the scope `gitConfig()` reports. */
 function writeDashboardEvents(lines: object[]): void {
   const p = path.join(tmpDir, '.teamai', 'dashboard', 'events.jsonl');
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const dataHome = path.join(tmpDir, '.teamai');
+  fs.writeFileSync(p, lines.map((l) => JSON.stringify({ ...l, dataHome })).join('\n') + '\n');
 }
 
 describe('reportUsageToTeam — intervention reporting', () => {

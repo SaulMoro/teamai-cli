@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import fs from 'node:fs';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
@@ -14,7 +15,7 @@ import {
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
-import { getUserVotesDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
+import { getUserVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
   aggregateDailySessions,
@@ -352,28 +353,46 @@ function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
 }
 
 /**
- * Filter dashboard events by scope:
- * - projectRoot set: keep only events whose cwd is under that root.
- * - excludeProjectRoots set: exclude events whose cwd is under any listed root.
- * - Neither: return all events (backward-compatible).
+ * The dashboard events a scope reports (#785): those recorded in it, keyed by
+ * its data home. A project also owns the key of its in-repo `.teamai`, where a
+ * hook recorded until migration moved the project to a partition. An event
+ * written before events carried a data home belongs to the project whose root holds
+ * its cwd, never to the user scope. `projectRoot` is realpath'd, but a cwd is
+ * raw as the host sent it (a symlinked checkout, macOS `/tmp` vs
+ * `/private/tmp`) and so is a non-git project's data home, so both are
+ * realpath'd while they still exist. A caller without a scope config reads the
+ * whole log.
  */
-export function filterEventsByScope(
+export async function filterEventsByScope(
   events: DashboardEvent[],
-  opts?: { projectRoot?: string; excludeProjectRoots?: string[] },
-): DashboardEvent[] {
-  if (!opts) return events;
-  if (opts.projectRoot) {
-    const root = scopeRoot(opts.projectRoot);
-    return events.filter((e) => !!e.cwd && isUnderScopeRoot(e.cwd, root));
+  config?: LocalConfig,
+): Promise<DashboardEvent[]> {
+  if (!config) return events;
+  const realPaths = new Map<string, Promise<string>>();
+  const realPath = (dir: string): Promise<string> => {
+    let real = realPaths.get(dir);
+    if (!real) {
+      real = fs.promises.realpath(dir).catch(() => dir);
+      realPaths.set(dir, real);
+    }
+    return real;
+  };
+  const keyOf = async (home: string): Promise<ScopeRoot> => scopeRoot(await realPath(home));
+  const homeRoots = [await keyOf(getDataHome(config))];
+  if (config.projectRoot) {
+    // Unless the project is rooted at HOME, where that is the user scope's.
+    const legacy = await keyOf(path.join(config.projectRoot, '.teamai'));
+    if (legacy.key !== (await keyOf(path.join(getUserHome(), '.teamai'))).key) homeRoots.push(legacy);
   }
-  if (opts.excludeProjectRoots && opts.excludeProjectRoots.length > 0) {
-    const roots = opts.excludeProjectRoots.map(scopeRoot);
-    return events.filter((e) => {
-      if (!e.cwd) return true;
-      return !roots.some((root) => isUnderScopeRoot(e.cwd!, root));
-    });
-  }
-  return events;
+  const root = config.projectRoot ? scopeRoot(config.projectRoot) : undefined;
+  const kept = await Promise.all(events.map(async (e) => {
+    if (e.dataHome !== undefined) {
+      const dataHome = await realPath(e.dataHome);
+      return homeRoots.some((home) => scopeKey(dataHome, home.windows) === home.key);
+    }
+    return !!root && !!e.cwd && isUnderScopeRoot(await realPath(e.cwd), root);
+  }));
+  return events.filter((_, i) => kept[i]);
 }
 
 /**
@@ -388,7 +407,7 @@ export function filterEventsByScope(
 export async function reportUsageToTeam(
   repoPath: string,
   username: string,
-  options?: { skipTruncate?: boolean; projectRoot?: string; excludeProjectRoots?: string[]; selfConfig?: LocalConfig },
+  options?: { skipTruncate?: boolean; selfConfig?: LocalConfig },
 ): Promise<boolean> {
   // Non-HTTP repos: stats + votes are report data → the teamai-reports orphan
   // branch (isolated worktree). We must NOT resetToCleanMaster / pullRepo /
@@ -409,9 +428,8 @@ export async function reportUsageToTeam(
 
     // Fold the local dashboard event log into per-session metrics once, then derive
     // both the intervention delta and the prompt-count/token delta from it.
-    // Filter by scope so project repos only receive project sessions and vice versa.
-    const allDashboardEvents = await readEvents();
-    const dashboardEvents = filterEventsByScope(allDashboardEvents, options);
+    // Only the sessions recorded in this scope (#785).
+    const dashboardEvents = await filterEventsByScope(await readEvents(), reportsConfig);
     const metrics = aggregateSessionMetrics(dashboardEvents);
 
     const currentInterventions = new Map(

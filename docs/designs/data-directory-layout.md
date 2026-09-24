@@ -312,9 +312,12 @@ already route through `getDataHome()`. Skill usage moved there too (#748):
 project's report carry every project's skills. The user scope records in
 `~/.teamai/user-usage.jsonl`, not that old shared `~/.teamai/usage.jsonl`, which
 an earlier release still writes after a rollback; the shared file is never
-read. The dashboard is likewise an A2 singleton
-(events carry `cwd`/`sessionId`); "two projects' events don't mix" is satisfied by
-`getEventsPath()` reading `HOME` at call time, not by per-project dirs.
+read. The dashboard stays an A2 singleton: `teamai dashboard`, `stats --by-repo`,
+`session save` and the contribute check read across scopes. Each event instead
+carries `dataHome`, the `getDataHome()` of the scope the hook resolved (#785), and a
+scope's report keeps only its own. An event written before that field existed is
+attributed by its `cwd`, realpath'd, to the project whose root holds it, never to
+the user scope.
 
 **`anchor` on save.** Previously only migration wrote a partition's `anchor`
 reverse-lookup file, so freshly-init'd partitions had none. `saveLocalConfigForScope`

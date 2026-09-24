@@ -41,14 +41,16 @@ function fixture(agent: keyof typeof agents, provider: string) {
   const dashboard = path.join(home, '.teamai/dashboard');
   const timestamp = new Date().toISOString();
   const usageLine = JSON.stringify({ skill: 'review', tool: agent, timestamp }) + '\n';
+  // A session the user scope recorded (#785).
+  const dataHome = path.join(home, '.teamai');
   function seedEvents() {
     fs.mkdirSync(dashboard, { recursive: true });
     fs.writeFileSync(usage, usageLine);
     fs.writeFileSync(path.join(dashboard, 'events.jsonl'), [
-      { type: 'session_start', timestamp, sessionId: 's1', tool: agent, cwd: sandbox },
-      { type: 'prompt_submit', timestamp, sessionId: 's1', tool: agent, promptSummary: 'review' },
+      { type: 'session_start', timestamp, sessionId: 's1', tool: agent, cwd: sandbox, dataHome },
+      { type: 'prompt_submit', timestamp, sessionId: 's1', tool: agent, promptSummary: 'review', dataHome },
       { type: 'stop', timestamp, sessionId: 's1', tool: agent, interventions: { interrupt: 1, toolReject: 0 },
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 } },
+        tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 }, dataHome },
     ].map((e) => JSON.stringify(e)).join('\n') + '\n');
   }
   function receiver(mode: 'slow' | 'reject' | 'normal') {
