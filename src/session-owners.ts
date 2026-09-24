@@ -162,8 +162,8 @@ export interface OwnerCredit {
  * from their snapshots alone (its events are gone). A part whose daily entry
  * shows it ended in a Stop carries the transcript's cumulative total, so the
  * greatest such part counts once; a part with no Stop counted its own prompts,
- * so those add. Intervention counts, per event, add; tokens, from Stops, take
- * the greatest. A part without a Stop that came before another's Stop is
+ * so those add. Interruptions, rejections and tokens, from Stops, take the
+ * greatest; corrections, counted per prompt, add. A part without a Stop that came before another's Stop is
  * credited twice: that undercounts, once, but never sends a prompt again.
  */
 function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
@@ -178,9 +178,11 @@ function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
     for (const field of ['input', 'output', 'cacheRead', 'cacheCreation'] as const) {
       tokens[field] = Math.max(tokens[field], entry.tokens[field]);
     }
+    // Interruptions and rejections come from Stops, cumulative; corrections
+    // are counted per prompt in each part's own events.
     const iv = interventionsEntry(part.interventions?.[id]);
-    interventions.interrupt += iv.interrupt;
-    interventions.toolReject += iv.toolReject;
+    interventions.interrupt = Math.max(interventions.interrupt, iv.interrupt);
+    interventions.toolReject = Math.max(interventions.toolReject, iv.toolReject);
     interventions.correction += iv.correction;
   }
   const days = stops.flatMap((part) => {

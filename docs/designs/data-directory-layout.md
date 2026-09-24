@@ -388,7 +388,8 @@ reported it (a session that release split per event), the owner's line also
 carries the credit of their parts, applied once as its baseline: a part whose
 daily entry shows it ended in a Stop holds the transcript's cumulative total, so
 the greatest such part counts once, while a part with no Stop counted its own
-prompts, which add; intervention counts add, tokens take the greatest. A part
+prompts, which add; interruptions, rejections and tokens, from Stops, take the
+greatest, and corrections, counted per prompt, add. A part
 with no Stop that came before another's Stop is then credited twice, which
 undercounts once but never sends a prompt again. The scopes read are the
 user scope, every partition, and a project whose data home is in its workspace

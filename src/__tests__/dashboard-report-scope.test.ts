@@ -600,6 +600,34 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(1);
   });
 
+  it('a compacted split session credits the cumulative Stop interventions once', async () => {
+    const { user, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const today = new Date().toISOString().slice(0, 10);
+    // P's Stop reported 3 prompts and 1 interruption; Q's later, cumulative Stop
+    // 5 prompts and 2; the user scope 1 prompt before any Stop (no daily entry).
+    writeSharedSnapshots({ split: 3 }, today, project);
+    writeSharedSnapshots({ split: 5 }, today, projectQ);
+    writeSharedSnapshots({ split: 1 }, today, user);
+    fs.rmSync(path.join(teamaiHome(), 'dashboard', 'user-reported-daily-sessions.json'));
+    const interrupts = (config: LocalConfig, file: string, interrupt: number) => fs.writeFileSync(
+      path.join(getDataHome(config), 'dashboard', file),
+      JSON.stringify({ split: { interrupt, toolReject: 0, correction: 0 } }));
+    interrupts(project, 'reported-interventions.json', 1);
+    interrupts(projectQ, 'reported-interventions.json', 2);
+    // Resumed in Q: its next cumulative Stop carries 7 prompts and 3 interruptions.
+    await resume('split', rootQ, 7);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.writeFileSync(log, fs.readFileSync(log, 'utf-8').split('\n').filter(Boolean).map((line) => {
+      const event = JSON.parse(line);
+      return JSON.stringify(event.type === 'stop' ? { ...event, interventions: { interrupt: 3, toolReject: 0 } } : event);
+    }).join('\n') + '\n');
+    const stats = await report(projectQ);
+    const interventions = stats && typeof stats === 'object' && 'interventions' in stats ? stats.interventions : undefined;
+
+    expect(interventions).toMatchObject({ interrupt: 1 });
+  });
+
   it('a project that reported a session past the shared snapshot\'s total owns it', async () => {
     const { project } = await setup();
     const { rootQ, projectQ } = await setupQ();
