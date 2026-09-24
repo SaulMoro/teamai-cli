@@ -2,6 +2,7 @@ import path from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import matter from 'gray-matter';
 import { selectAgentsForDirectory } from './resources/agents.js';
+import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { requireInit, loadState, saveState, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
 import { pullRepo, getHeadRev, createGit, getDefaultBranch } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
@@ -278,33 +279,41 @@ export function filterAgentsByNamespaces(
 ): ResourceItem[] {
   const kept = selectAgentsForDirectory(agents, agentNamespaces, placedAgents);
 
-  const seen = new Map<string, ResourceItem>();
-  for (const agent of kept) {
-    const existing = seen.get(agent.name);
-    if (existing) {
-      throw new Error(
-        `Duplicate agent "${agent.name}" found in active namespaces "${existing.namespace ?? '(root)'}" and "${agent.namespace ?? '(root)'}"`,
-      );
-    }
-    seen.set(agent.name, agent);
+  // Every kept agent ships, so each kept namespace counts as active here, ranked
+  // in scan order so the message names the pair the way the scan meets it. A
+  // root agent a namespace agent replaces is still an error for agents (#707
+  // switches it to an override).
+  const shipped = [...new Set(kept.flatMap((agent) => (agent.namespace ? [agent.namespace] : [])))];
+  const resolution = resolveNamespacedItems(kept.map(namespaceCandidate), shipped);
+  const [override] = resolution.kind === 'resolved'
+    ? resolution.items.flatMap((item) => (item.replaces ? [{ name: item.name, first: item.replaces, second: item }] : []))
+    : [];
+  const collision = resolution.kind === 'conflict' ? resolution : override;
+  if (collision) {
+    throw new Error(
+      `Duplicate agent "${collision.name}" found in active namespaces "${namespaceLabel(collision.first)}" and "${namespaceLabel(collision.second)}"`,
+    );
   }
 
   return kept;
 }
 
+function namespaceCandidate(item: ResourceItem): NamespaceCandidate<ResourceItem> {
+  return { name: item.name, source: item.relativePath, namespace: item.namespace ?? null, value: item };
+}
+
+function namespaceLabel(candidate: NamespaceCandidate<ResourceItem>): string {
+  return candidate.namespace ?? '(root)';
+}
+
 export async function scanRoleAwareSkills(localConfig: LocalConfig, namespaces: ResourceNamespaces): Promise<ResourceItem[]> {
-  const items = new Map<string, ResourceItem>();
+  const items: ResourceItem[] = [];
 
   for (const namespace of namespaces.skills) {
     const namespaceDir = path.join(localConfig.repo.localPath, 'skills', namespace);
     const dirs = await listDirs(namespaceDir);
     for (const dir of dirs) {
-      const existing = items.get(dir);
-      if (existing) {
-        throw new Error(`Duplicate skill "${dir}" found in active namespaces "${existing.namespace}" and "${namespace}"`);
-      }
-
-      items.set(dir, {
+      items.push({
         name: dir,
         type: 'skills',
         sourcePath: path.join(namespaceDir, dir),
@@ -314,7 +323,14 @@ export async function scanRoleAwareSkills(localConfig: LocalConfig, namespaces: 
     }
   }
 
-  return [...items.values()];
+  const resolution = resolveNamespacedItems(items.map(namespaceCandidate), namespaces.skills);
+  if (resolution.kind === 'conflict') {
+    throw new Error(
+      `Duplicate skill "${resolution.name}" found in active namespaces "${namespaceLabel(resolution.first)}" and "${namespaceLabel(resolution.second)}"`,
+    );
+  }
+
+  return resolution.items.map((item) => item.value);
 }
 
 /** What a member should have on disk, and what the team repo holds. */
