@@ -9,7 +9,7 @@ vi.mock('../utils/logger.js', () => ({
   },
 }));
 
-import { buildEntryScopeKeyCheck, entryNamespaceNotes } from '../doctor-delivery.js';
+import { buildEntryResolutionChecks, buildEntryScopeKeyCheck, entryNamespaceNotes } from '../doctor-delivery.js';
 import type { DoctorContext } from '../doctor.js';
 import type { LocalConfig } from '../types.js';
 
@@ -106,5 +106,37 @@ describe('doctor — env, hooks and MCP namespaces', () => {
   it('adds no check when no entry carries a per-entry key', async () => {
     await fse.outputFile(path.join(repoPath, 'hooks', 'hooks.yaml'), 'hooks:\n  - { id: lint, description: x, event: Stop, command: echo }\n');
     expect(await buildEntryScopeKeyCheck(ctx())).toEqual([]);
+  });
+
+  // `teamai status` sends a member to doctor when hooks or model profiles do
+  // not resolve; doctor must then say why, as it does for env and MCP.
+  it('fails a check naming both files when two active namespaces define one hook', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: checkout\n    resources: { hooks: [a, b] }\n');
+    const hook = 'hooks:\n  - { id: lint, description: x, event: Stop, command: echo }\n';
+    await fse.outputFile(path.join(repoPath, 'hooks', 'a', 'hooks.yaml'), hook);
+    await fse.outputFile(path.join(repoPath, 'hooks', 'b', 'hooks.yaml'), hook);
+
+    const checks = await buildEntryResolutionChecks(ctx({ projects: ['checkout'] }));
+
+    expect(checks.map((check) => check.name)).toEqual(['Team hooks can be resolved']);
+    const [check] = checks;
+    if (!check) throw new Error('expected the hooks check');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('hooks/a/hooks.yaml and hooks/b/hooks.yaml');
+  });
+
+  it('fails a check when a model profiles file does not parse', async () => {
+    await fse.outputFile(path.join(repoPath, 'models', 'models.yaml'), 'profiles: [unclosed\n');
+
+    const checks = await buildEntryResolutionChecks(ctx());
+
+    expect(checks.map((check) => check.name)).toEqual(['Team model profiles can be resolved']);
+    expect(checks[0]?.fix).toContain('models/models.yaml');
+  });
+
+  it('adds no resolution check when hooks and model profiles resolve', async () => {
+    await fse.outputFile(path.join(repoPath, 'hooks', 'hooks.yaml'), 'hooks:\n  - { id: lint, description: x, event: Stop, command: echo }\n');
+    expect(await buildEntryResolutionChecks(ctx())).toEqual([]);
   });
 });

@@ -122,10 +122,14 @@ beforeEach(() => {
     mockedLoadTeamConfig.mockResolvedValue(mockTeamConfig);
     mockedPathExists.mockResolvedValue(true);
     // One blob answers every read, except the role/project manifests the
-    // delivery check resolves the desired skill set from: parsing hook JSON as a
-    // manifest throws. Absent manifests are the shape this fixture wants anyway.
+    // delivery check resolves the desired skill set from, and the team hooks
+    // and model profile files: parsing hook JSON as either one fails. Absent
+    // files are the shape this fixture wants anyway.
+    const teamEntryDirs = ['hooks', 'models'].map((dir) => path.join(mockLocalConfig.repo.localPath, dir) + path.sep);
     mockedReadFileSafe.mockImplementation(async (filePath: string) => (
-        filePath.includes(`${path.sep}manifest${path.sep}`) ? null : buildFullHooksContent()
+        filePath.includes(`${path.sep}manifest${path.sep}`) || teamEntryDirs.some((dir) => filePath.startsWith(dir))
+            ? null
+            : buildFullHooksContent()
     ));
 });
 

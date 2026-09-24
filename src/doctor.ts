@@ -27,6 +27,7 @@ import {
   buildNamespaceNotes,
   buildMcpDeliveryChecks,
   buildEnvDeliveryCheck,
+  buildEntryResolutionChecks,
   buildEntryScopeKeyCheck,
   entryNamespaceNotes,
   buildDocsCheck,
@@ -457,6 +458,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),
+    ...await buildEntryResolutionChecks(ctx),
     ...await buildEntryScopeKeyCheck(ctx),
   );
 

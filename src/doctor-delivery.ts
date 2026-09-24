@@ -522,6 +522,27 @@ export async function buildEntryScopeKeyCheck(ctx: DoctorContext): Promise<Check
 }
 
 /**
+ * A failing check for hooks and model profiles that do not resolve: pull keeps
+ * what is installed and says why once, then every later run is silent, and
+ * `teamai status` sends the member here. Env and MCP report the same failure
+ * in their own delivery checks.
+ */
+export async function buildEntryResolutionChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { describeEntryFailure } = await import('./namespaced-entries.js');
+  const names: Partial<Record<EntryType, string>> = {
+    hooks: 'Team hooks can be resolved',
+    models: 'Team model profiles can be resolved',
+  };
+  const checks: Check[] = [];
+  for (const { type, resolution } of await resolveEntryTypes(ctx.localConfig)) {
+    const name = names[type];
+    if (name === undefined || resolution.kind !== 'failed') continue;
+    checks.push({ name, source: 'local', check: async () => false, fix: describeEntryFailure(resolution.failure) });
+  }
+  return checks;
+}
+
+/**
  * Info lines for `doctor`: which namespace entry replaces which root entry,
  * and in legacy mode each name the root file repeats. They answer "why do I
  * have this value?" and are not problems, so they are notes, not checks.
