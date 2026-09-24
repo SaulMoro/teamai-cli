@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { spawnSync } from 'node:child_process';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -20,6 +21,8 @@ import {
   appendUsageEvent,
   readUsageEvents,
   truncateUsageAfterReport,
+  capUsageEvents,
+  USAGE_EVENT_CAP,
   track,
   trackFromStdin,
   trackSlashCommand,
@@ -263,6 +266,212 @@ describe('truncateUsageAfterReport', () => {
     const events = await readUsageEvents(userScope());
     expect(events).toHaveLength(1);
     expect(events[0].skill).toBe('c');
+  });
+});
+
+describe('capUsageEvents (#788)', () => {
+  const usagePath = () => path.join(tmpDir, '.teamai', 'user-usage.jsonl');
+  const line = (i: number) => JSON.stringify({ skill: `s${i}`, timestamp: '2026-01-01T00:00:00Z', tool: 'claude' });
+  const seed = async (count: number) => {
+    await fse.outputFile(usagePath(), Array.from({ length: count }, (_, i) => line(i)).join('\n') + '\n');
+  };
+
+  it('keeps only the newest events of a file over the cap', async () => {
+    await seed(USAGE_EVENT_CAP + 7);
+
+    await capUsageEvents(userScope());
+
+    const events = await readUsageEvents(userScope());
+    expect(events).toHaveLength(USAGE_EVENT_CAP);
+    expect(events[0].skill).toBe('s7');
+    expect(events[events.length - 1].skill).toBe(`s${USAGE_EVENT_CAP + 6}`);
+  });
+
+  it('does not rewrite a file at the cap', async () => {
+    await seed(USAGE_EVENT_CAP);
+    const past = new Date('2026-01-01T00:00:00Z');
+    await fs.promises.utimes(usagePath(), past, past);
+
+    await capUsageEvents(userScope());
+
+    expect((await fs.promises.stat(usagePath())).mtimeMs).toBe(past.getTime());
+    expect(await readUsageEvents(userScope())).toHaveLength(USAGE_EVENT_CAP);
+  });
+
+  it('creates no file where the scope has recorded nothing', async () => {
+    await capUsageEvents(userScope());
+
+    expect(fs.existsSync(usagePath())).toBe(false);
+  });
+
+  const late: UsageEvent = { skill: 'late', timestamp: '2026-01-02T00:00:00Z', tool: 'claude' };
+  const skills = async () => (await readUsageEvents(userScope())).map((e) => e.skill);
+  const lockPath = () => `${usagePath()}.lock`;
+
+  it('holds an append issued mid-cap until the capped file is in place', async () => {
+    await seed(USAGE_EVENT_CAP + 2);
+    const before = await fs.promises.readFile(usagePath(), 'utf-8');
+    const realWrite = fs.promises.writeFile;
+    let append: Promise<void> | undefined;
+    let landedMidCap = false;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      append = appendUsageEvent(late, userScope());
+      await new Promise((r) => setTimeout(r, 100));
+      landedMidCap = (await fs.promises.readFile(usagePath(), 'utf-8')) !== before;
+      return realWrite(file, data, options);
+    });
+    try {
+      await capUsageEvents(userScope());
+    } finally {
+      spy.mockRestore();
+    }
+    await append;
+
+    expect(landedMidCap).toBe(false);
+    const kept = await skills();
+    expect(kept).toHaveLength(USAGE_EVENT_CAP + 1);
+    expect(kept[0]).toBe('s2');
+    expect(kept[kept.length - 1]).toBe('late');
+  });
+
+  it('loses no append when two caps run at once', async () => {
+    await seed(USAGE_EVENT_CAP + 100);
+    const appends = Array.from({ length: 5 }, (_, i) =>
+      new Promise((r) => setTimeout(r, i * 5)).then(() =>
+        appendUsageEvent({ skill: `late${i}`, timestamp: '2026-01-02T00:00:00Z', tool: 'claude' }, userScope()),
+      ),
+    );
+
+    await Promise.all([capUsageEvents(userScope()), capUsageEvents(userScope()), ...appends]);
+
+    const kept = await skills();
+    expect(kept.filter((s) => s.startsWith('late')).sort()).toEqual(['late0', 'late1', 'late2', 'late3', 'late4']);
+    expect(kept).toContain(`s${USAGE_EVENT_CAP + 99}`);
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('keeps the mode of the file it replaces', async () => {
+    await seed(USAGE_EVENT_CAP + 2);
+    await fs.promises.chmod(usagePath(), 0o600);
+
+    await capUsageEvents(userScope());
+
+    expect((await fs.promises.stat(usagePath())).mode & 0o777).toBe(0o600);
+    expect(await readUsageEvents(userScope())).toHaveLength(USAGE_EVENT_CAP);
+  });
+
+  it('removes temp files a killed rewrite left behind', async () => {
+    await seed(USAGE_EVENT_CAP + 2);
+    const orphan = `${usagePath()}.4242.0123456789ab.tmp`;
+    await fs.promises.writeFile(orphan, 'partial');
+
+    await capUsageEvents(userScope());
+
+    expect(fs.existsSync(orphan)).toBe(false);
+  });
+
+  it('leaves the file intact and no temp file behind when the write fails', async () => {
+    await seed(USAGE_EVENT_CAP + 2);
+    const before = await fs.promises.readFile(usagePath(), 'utf-8');
+    const realWrite = fs.promises.writeFile;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      await realWrite(file, String(data).slice(0, 100), options);
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    });
+    try {
+      await capUsageEvents(userScope());
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await fs.promises.readFile(usagePath(), 'utf-8')).toBe(before);
+    expect((await fs.promises.readdir(path.dirname(usagePath()))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('caps the target of a symlinked usage file and keeps the link', async () => {
+    const target = path.join(tmpDir, 'synced', 'usage.jsonl');
+    await fse.outputFile(target, Array.from({ length: USAGE_EVENT_CAP + 2 }, (_, i) => line(i)).join('\n') + '\n');
+    await fs.promises.symlink(target, usagePath());
+
+    await capUsageEvents(userScope());
+
+    expect((await fs.promises.lstat(usagePath())).isSymbolicLink()).toBe(true);
+    expect(await readUsageEvents(userScope())).toHaveLength(USAGE_EVENT_CAP);
+  });
+
+  it('caps a project scope in its own data home and leaves the user scope alone', async () => {
+    const workspace = path.join(tmpDir, 'workspace');
+    const project: LocalConfig = { ...userScope(), scope: 'project', projectRoot: workspace, dataHome: path.join(workspace, '.teamai') };
+    await fse.outputFile(path.join(workspace, '.teamai', 'usage.jsonl'), Array.from({ length: USAGE_EVENT_CAP + 3 }, (_, i) => line(i)).join('\n') + '\n');
+    await seed(USAGE_EVENT_CAP + 3);
+
+    await capUsageEvents(project);
+
+    const events = await readUsageEvents(project);
+    expect(events).toHaveLength(USAGE_EVENT_CAP);
+    expect(events[0].skill).toBe('s3');
+    expect(await readUsageEvents(userScope())).toHaveLength(USAGE_EVENT_CAP + 3);
+  });
+});
+
+describe('usage file lock (#788)', () => {
+  const usagePath = () => path.join(tmpDir, '.teamai', 'user-usage.jsonl');
+  const event = (skill: string): UsageEvent => ({ skill, timestamp: '2026-01-01T00:00:00Z', tool: 'claude' });
+  const skills = async () => (await readUsageEvents(userScope())).map((e) => e.skill);
+  const writeLock = (pid: number) =>
+    fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+
+  it('reclaims a lock whose owner is gone', async () => {
+    await writeLock(spawnSync(process.execPath, ['-e', '']).pid ?? 0);
+
+    await appendUsageEvent(event('a'), userScope());
+
+    expect(await skills()).toEqual(['a']);
+    expect(fs.existsSync(`${usagePath()}.lock`)).toBe(false);
+  });
+
+  it('appends within the hook budget while the lock stays held', async () => {
+    await writeLock(process.pid);
+
+    const started = Date.now();
+    await appendUsageEvent(event('a'), userScope());
+
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(await skills()).toEqual(['a']);
+  });
+
+  it('holds an append issued mid-truncate until the truncated file is in place', async () => {
+    for (const s of ['a', 'b', 'c']) await appendUsageEvent(event(s), userScope());
+    const realWrite = fs.promises.writeFile;
+    let append: Promise<void> | undefined;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      append = appendUsageEvent(event('late'), userScope());
+      await new Promise((r) => setTimeout(r, 100));
+      return realWrite(file, data, options);
+    });
+    try {
+      await truncateUsageAfterReport(2, userScope());
+    } finally {
+      spy.mockRestore();
+    }
+    await append;
+
+    expect(await skills()).toEqual(['c', 'late']);
+  });
+
+  it('leaves the file intact when the truncated copy cannot be written', async () => {
+    for (const s of ['a', 'b', 'c']) await appendUsageEvent(event(s), userScope());
+    const before = await fs.promises.readFile(usagePath(), 'utf-8');
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockRejectedValue(
+      Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }),
+    );
+    try {
+      await truncateUsageAfterReport(2, userScope());
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await fs.promises.readFile(usagePath(), 'utf-8')).toBe(before);
   });
 });
 

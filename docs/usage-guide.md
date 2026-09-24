@@ -1777,7 +1777,7 @@ reported, so a session that moved into another project mid-session reaches both
 teams with the part recorded in each; the first report after upgrading starts
 from the snapshot every scope used to share, so nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes
-preserve them. The affected sync locks remain
+preserve them, up to the newest 5,000 (see below). The affected sync locks remain
 held until reporting finishes, preventing another pull from racing the report.
 
 This is best-effort reporting, not crash-safe delivery: termination between a
@@ -1792,6 +1792,15 @@ can turn this off in `teamai.yaml`:
 ```yaml
 usageReport: false
 ```
+
+Pull keeps each scope's usage file to its newest 5,000 events, dropping the
+oldest after the report step. For an http source or a `usageReport: false`
+team, that file is the only record `teamai stats` has, so it stays bounded
+without going empty; a reporting scope whose report does not complete while
+it holds more than 5,000 drops its oldest unreported events the same way. The
+cap runs only after a report has removed the events it sent. Hook appends, the
+report's truncate and the cap take one lock beside the usage file, so a rewrite
+does not lose an event recorded while it runs.
 
 ### Git submodules
 

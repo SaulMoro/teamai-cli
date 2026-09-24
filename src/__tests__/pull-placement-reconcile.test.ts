@@ -56,6 +56,7 @@ vi.mock('../team-push.js', () => ({ reportUsageToTeam: vi.fn().mockResolvedValue
 vi.mock('../usage-tracker.js', () => ({
   readUsageEvents: vi.fn().mockResolvedValue([]),
   truncateUsageAfterReport: vi.fn().mockResolvedValue(undefined),
+  capUsageEvents: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../roles.js', () => ({
   loadRolesManifest: vi.fn().mockResolvedValue({ version: 1, roles: [], defaults: { shareTarget: 'primary-role' } }),

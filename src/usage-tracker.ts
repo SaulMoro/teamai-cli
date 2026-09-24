@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './utils/logger.js';
@@ -17,6 +18,7 @@ import { ensureDir, readJson, writeJson, pathExists } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { resolveConfigForDir, resolveMemberToolRoots } from './config.js';
+import { acquireLock, releaseLock } from './update.js';
 
 /**
  * The usage JSONL of one scope: `<dataHome>/usage.jsonl`, so each scope reports
@@ -235,7 +237,7 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
     const usagePath = getUsagePath(config);
     await ensureDir(path.dirname(usagePath));
     const line = JSON.stringify(event) + '\n';
-    await fs.promises.appendFile(usagePath, line, 'utf-8');
+    await withUsageLock(usagePath, APPEND_LOCK_WAIT, () => fs.promises.appendFile(usagePath, line, 'utf-8'));
     log.debug(`Tracked skill: ${event.skill}`);
   } catch (e) {
     log.error(`Failed to write usage event: ${(e as Error).message}`);
@@ -274,20 +276,108 @@ export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]
  */
 export async function truncateUsageAfterReport(reportedCount: number, config: LocalConfig): Promise<void> {
   try {
-    const usagePath = getUsagePath(config);
-    const content = await fs.promises.readFile(usagePath, 'utf-8');
-    const lines = content.split('\n').filter((l) => l.trim());
-    if (reportedCount >= lines.length) {
-      // All lines were reported — clear file
-      await fs.promises.writeFile(usagePath, '', 'utf-8');
-    } else {
-      // Keep unreported lines
-      const remaining = lines.slice(reportedCount).join('\n') + '\n';
-      await fs.promises.writeFile(usagePath, remaining, 'utf-8');
-    }
+    // All lines reported → an empty file; otherwise keep the unreported lines.
+    await rewriteUsageFile(config, (lines) => lines.slice(reportedCount));
     log.debug(`Truncated usage.jsonl: removed ${reportedCount} reported events`);
   } catch (e) {
     log.error(`Failed to truncate usage.jsonl: ${(e as Error).message}`);
+  }
+}
+
+/** Most events a scope's usage file keeps; `pull` drops the oldest beyond it (#788). */
+export const USAGE_EVENT_CAP = 5_000;
+
+/**
+ * Keep only the newest {@link USAGE_EVENT_CAP} events of a scope's usage file,
+ * so a scope that never reports (http, `usageReport: false`, a rejecting
+ * remote) stops growing without emptying `teamai stats`. The report truncates
+ * the first N lines it read, so this must run after that truncate, never
+ * between the report's read and its truncate. Counts non-empty lines, as the
+ * truncate does. A file at or below the cap is not rewritten.
+ */
+export async function capUsageEvents(config: LocalConfig): Promise<void> {
+  let dropped = 0;
+  try {
+    await rewriteUsageFile(config, (lines) => {
+      if (lines.length <= USAGE_EVENT_CAP) return null;
+      dropped = lines.length - USAGE_EVENT_CAP;
+      return lines.slice(-USAGE_EVENT_CAP);
+    });
+    if (dropped) log.debug(`Capped usage.jsonl: dropped ${dropped} oldest events`);
+  } catch (e) {
+    if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') return;
+    log.error(`Could not cap ${getUsagePath(config)} to ${USAGE_EVENT_CAP} events: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** A hook append waits at most ~250 ms for the usage lock, inside its foreground budget. */
+const APPEND_LOCK_WAIT = { attempts: 10, delayMs: 25 };
+/** A rewrite waits up to ~5 s for a peer's rewrite to finish. */
+const REWRITE_LOCK_WAIT = { attempts: 100, delayMs: 50 };
+
+/**
+ * Run `fn` holding the lock every writer of this usage file takes (#788): hook
+ * appends, the report's truncate and the cap. A rewrite then cannot drop an
+ * append made while it runs, and two pulls cannot interleave their rewrites.
+ * A lock whose owner is gone is reclaimed; one still held after the wait is
+ * written through anyway rather than dropping the event or the rewrite.
+ */
+async function withUsageLock<T>(
+  usagePath: string,
+  wait: { attempts: number; delayMs: number },
+  fn: (locked: boolean) => Promise<T>,
+): Promise<T> {
+  const lockPath = `${usagePath}.lock`;
+  let locked = false;
+  for (let i = 0; i < wait.attempts && !locked; i++) {
+    locked = await acquireLock(lockPath);
+    if (!locked) await new Promise((r) => setTimeout(r, wait.delayMs));
+  }
+  if (!locked) log.debug(`${lockPath} still held after ${wait.attempts * wait.delayMs} ms; writing without it`);
+  try {
+    return await fn(locked);
+  } finally {
+    if (locked) await releaseLock(lockPath);
+  }
+}
+
+/**
+ * Replace a scope's usage file with the non-empty lines `keep` returns, or
+ * leave it untouched when `keep` returns null. The copy is written to a temp
+ * file beside the file, with its mode, and renamed over it, so a kill or a full
+ * disk leaves the old file whole. A symlinked file is replaced at its target.
+ */
+async function rewriteUsageFile(config: LocalConfig, keep: (lines: string[]) => string[] | null): Promise<void> {
+  const usagePath = getUsagePath(config);
+  await withUsageLock(usagePath, REWRITE_LOCK_WAIT, async (locked) => {
+    // Replace the file itself, not a symlink to it.
+    const target = await fs.promises.realpath(usagePath);
+    if (locked) await removeOrphanTemps(target);
+    const lines = (await fs.promises.readFile(target, 'utf-8')).split('\n').filter((l) => l.trim());
+    const kept = keep(lines);
+    if (!kept) return;
+    const mode = (await fs.promises.stat(target)).mode & 0o7777;
+    const tmpPath = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await fs.promises.writeFile(tmpPath, kept.length ? kept.join('\n') + '\n' : '', { encoding: 'utf-8', mode });
+      // The create mode passes through the umask.
+      await fs.promises.chmod(tmpPath, mode);
+      await fs.promises.rename(tmpPath, target);
+    } catch (e) {
+      await fs.promises.rm(tmpPath, { force: true }).catch(() => undefined);
+      throw e;
+    }
+  });
+}
+
+/** Remove the temp copies a killed rewrite left beside `target`; only the lock holder writes one. */
+async function removeOrphanTemps(target: string): Promise<void> {
+  const dir = path.dirname(target);
+  const prefix = `${path.basename(target)}.`;
+  const names = await fs.promises.readdir(dir).catch(() => []);
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !/^\d+\.[0-9a-f]{12}\.tmp$/.test(name.slice(prefix.length))) continue;
+    await fs.promises.rm(path.join(dir, name), { force: true }).catch(() => undefined);
   }
 }
 
