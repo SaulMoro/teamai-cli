@@ -388,9 +388,16 @@ the copy, and each scope already holds that baseline. The scopes read are the
 user scope, every partition, and a project whose data home is in its workspace
 that a session still in the log leads to; each report also records the IDs of
 its own snapshots that have no owner yet and show it reported them (absent from
-the shared snapshot, or past its total there). A session of a workspace-data project
-that neither reached gets no owner, and if resumed in another scope is decided
-by its first retained event, as before. A
+the shared snapshot, or past its total there). A session none of these reach
+(a project whose data home is in its workspace, with no event left in the log)
+is found by its transcript: hooks record `transcriptPath` on UserPromptSubmit,
+Stop and SessionEnd (not SessionStart, whose path on a resume from another
+project names a file that never exists; never Copilot's), and a Claude
+transcript keeps its first `cwd` when resumed elsewhere, as a Codex rollout
+keeps its `session_meta`. So a tool's own session with no owner is the scope's
+that directory resolves to, when that scope's snapshots already hold it; else
+it is decided as before (a fork under a new ID, a tool whose transcript records
+no start, Copilot). A
 fallback run is reported and snapshotted as `<id>@<first event's timestamp>`,
 which does not change when compaction drops earlier runs. A snapshot entry keyed
 by a bare fallback ID (written before) is the sum of the runs of that ID in the

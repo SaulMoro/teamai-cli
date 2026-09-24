@@ -478,10 +478,16 @@ export async function filterEventsByScope(
   const eventKeys = await keysOf(events);
   const { runOf, runIds, deciding } = splitRuns(events, eventKeys);
   const owners = await readSessionOwners();
+  const transcripts = new Map<number, string[]>();
+  events.forEach((e, i) => {
+    const run = runOf[i];
+    if (run !== undefined && typeof e.transcriptPath === 'string') transcripts.set(run, [...(transcripts.get(run) ?? []), e.transcriptPath]);
+  });
   const owned = await Promise.all(deciding.map(async (i, run) => {
     // Recorded by the scope that first reported it, so a session resumed
     // elsewhere after compaction dropped its events stays that scope's.
-    const owner = owners.get(runIds[run]);
+    const owner = owners.get(runIds[run]) ?? (runIds[run].startsWith('pid-') ? undefined
+      : await transcriptOwner(runIds[run], transcripts.get(run) ?? [], resolveConfigForDir));
     if (owner !== undefined) return keys.has(owner);
     if (i === undefined) return false;
     const key = eventKeys[i];
@@ -492,6 +498,70 @@ export async function filterEventsByScope(
     const run = runOf[i];
     return run !== undefined && owned[run] ? [{ ...e, sessionId: runIds[run] }] : [];
   });
+}
+
+/**
+ * The key of the scope a tool's own session started in, by its transcript,
+ * when that scope's snapshots already hold it: an earlier release reported it
+ * there, and compaction has since dropped the events that would say so. The
+ * latest transcript path first, since a tool may relocate the file. Undefined
+ * when there is no such transcript, origin, scope or snapshot entry (a fork
+ * under a new ID, a scope that never reported it).
+ */
+async function transcriptOwner(
+  sessionId: string,
+  paths: string[],
+  resolveConfigForDir: (dir: string) => Promise<LocalConfig | null>,
+): Promise<string | undefined> {
+  for (const transcript of [...paths].reverse()) {
+    const origin = await transcriptOrigin(transcript);
+    if (origin === undefined) continue;
+    const config = (await pathExists(origin)) ? await resolveConfigForDir(origin) : null;
+    if (!config) return undefined;
+    const dataHome = getDataHome(config);
+    const snapshots = await Promise.all(REPORTED_SNAPSHOTS.map((name) =>
+      readJson<Record<string, unknown>>(snapshotPathIn(dataHome, name))));
+    const held = snapshots.some((snapshot) => !!snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, sessionId));
+    return held ? dataHomeKey(dataHome) : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The directory a transcript's session started in: the first `cwd` a Claude
+ * transcript records (a resume from another project appends to the same file),
+ * or a Codex rollout's `session_meta`. Reads a bounded head of the file; the
+ * format is the tool's own, so anything else is undefined.
+ */
+async function transcriptOrigin(transcript: string): Promise<string | undefined> {
+  let head: string;
+  try {
+    const fh = await fs.promises.open(transcript, 'r');
+    try {
+      const buffer = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
+      head = buffer.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return undefined;
+  }
+  for (const line of head.split('\n')) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    if ('cwd' in entry && typeof entry.cwd === 'string') return entry.cwd;
+    if ('type' in entry && entry.type === 'session_meta' && 'payload' in entry && entry.payload
+      && typeof entry.payload === 'object' && 'cwd' in entry.payload && typeof entry.payload.cwd === 'string') {
+      return entry.payload.cwd;
+    }
+  }
+  return undefined;
 }
 
 /**

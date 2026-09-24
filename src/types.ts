@@ -1267,7 +1267,7 @@ export interface DashboardEvent {
   status?: DashboardSessionStatus;
   /** AI output captured from transcript at session stop (truncated to 500 chars) */
   stoppedOutput?: string;
-  /** Path to Claude Code transcript file (from Stop hook STDIN) */
+  /** The session's transcript (from the Stop, UserPromptSubmit and SessionEnd hook STDIN; never Copilot's) */
   transcriptPath?: string;
   /** Resolved PID of the AI tool main process (for liveness monitoring) */
   monitorPid?: number;

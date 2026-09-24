@@ -580,7 +580,18 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
   it('a session of a project whose data home is in its workspace stays that project\'s', async () => {
     await setup();
     const { rootQ, projectQ } = await setupQ();
-    // Not a git repo: its data home is `<root>/.teamai`, under no partition.
+    const { rootW, projectW } = await setupWorkspaceProject();
+    expect(getDataHome(projectW)).toBe(path.join(rootW, '.teamai'));
+    writeSharedSnapshots({ resumed: 1 }, new Date().toISOString().slice(0, 10), projectW);
+    // Another of W's sessions is still in the log.
+    await session('claude', { session_id: 'other-w', cwd: rootW });
+    await resume('resumed', rootQ, 2);
+
+    expect(await report(projectQ)).toBeNull();
+  });
+
+  /** A project with no git repo, so its data home is `<root>/.teamai`, under no partition. */
+  async function setupWorkspaceProject(): Promise<{ rootW: string; projectW: LocalConfig }> {
     const rootW = path.join(tmp, 'plain-dir');
     fs.mkdirSync(rootW);
     const dataHomeW = await resolveProjectDataHome(rootW);
@@ -591,13 +602,36 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     });
     const projectW = await resolveConfigForDir(rootW);
     if (!projectW) throw new Error('fixture config W did not resolve');
-    expect(getDataHome(projectW)).toBe(path.join(rootW, '.teamai'));
+    return { rootW, projectW };
+  }
+
+  it.each([
+    ['claude', (cwd: string) => ({ type: 'user', sessionId: 'resumed', cwd, message: { role: 'user', content: 'start' } })],
+    ['codex', (cwd: string) => ({ type: 'session_meta', payload: { id: 'resumed', cwd } })],
+  ])('a %s session resumed elsewhere after compaction goes to the project its transcript started in', async (tool, first) => {
+    await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const { rootW, projectW } = await setupWorkspaceProject();
+    // An earlier release reported it in W; compaction dropped every W event.
     writeSharedSnapshots({ resumed: 1 }, new Date().toISOString().slice(0, 10), projectW);
-    // Another of W's sessions is still in the log.
-    await session('claude', { session_id: 'other-w', cwd: rootW });
-    await resume('resumed', rootQ, 2);
+    // The resume appends to the transcript the session started, whose first cwd is W.
+    const transcript = path.join(tmp, `${tool}-resumed.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify(first(rootW)) + '\n');
+    await session(tool, { session_id: 'resumed', cwd: rootQ, transcript_path: transcript });
 
     expect(await report(projectQ)).toBeNull();
+  });
+
+  it('a transcript that started in a project whose snapshot lacks the session does not hand it there', async () => {
+    await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const { rootW } = await setupWorkspaceProject();
+    const transcript = path.join(tmp, 'forked.jsonl');
+    // A fork copies W's history under a new ID W never reported: Q's as usual.
+    fs.writeFileSync(transcript, JSON.stringify({ type: 'user', sessionId: 'forked', cwd: rootW }) + '\n');
+    await session('claude', { session_id: 'forked', cwd: rootQ, transcript_path: transcript });
+
+    expect(await reportedSessions(projectQ)).toBe(1);
   });
 
   it('the session owners a report keeps hold no path (#666)', async () => {

@@ -1225,6 +1225,15 @@ export async function parseHookEvent(
     if (!isCopilot) event.promptSummary = redactWithEnv(human).slice(0, 200);
   }
 
+  // The transcript a session runs in records where it started, which a report
+  // needs once compaction dropped the session's earlier events (#785). A
+  // SessionStart on a resume from another project names a file that never
+  // exists, so it is not kept there.
+  if ((eventType === 'prompt_submit' || eventType === 'session_end') && !isCopilot
+    && typeof hookData.transcript_path === 'string') {
+    event.transcriptPath = hookData.transcript_path;
+  }
+
   // Extract transcript path, AI output and intervention counts from Stop event
   if (eventType === 'stop' && !isCopilot && typeof hookData.transcript_path === 'string') {
     event.transcriptPath = hookData.transcript_path;
