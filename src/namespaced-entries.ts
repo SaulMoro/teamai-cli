@@ -23,7 +23,7 @@ import { describeOverride, repeatedNames, resolveNamespacedItems, type Namespace
 import { resolveResourceNamespaces } from './resource-namespaces.js';
 import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js';
 import { findProject, loadProjectsManifest, unknownProjectMessage } from './projects.js';
-import { isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
+import { caseFoldKey, isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import type { LocalConfig } from './types.js';
 import { listDirs, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
@@ -371,6 +371,22 @@ class TargetFiles {
   }
 }
 
+/**
+ * Whether a role or project lists `namespace` under `resources.<type>`, compared
+ * case-folded as the namespace directories are. Null when a manifest does not
+ * load: the command that uses the answer reports nothing it cannot know.
+ */
+async function isDeclaredNamespace(repoPath: string, type: EntryType, namespace: string): Promise<boolean | null> {
+  try {
+    const [roles, projects] = await Promise.all([loadRolesManifestIfPresent(repoPath), loadProjectsManifest(repoPath)]);
+    const key = caseFoldKey(namespace);
+    return [...(roles?.roles ?? []), ...(projects?.projects ?? [])]
+      .some((owner) => (owner.resources[type] ?? []).some((declared) => caseFoldKey(declared) === key));
+  } catch {
+    return null;
+  }
+}
+
 /** The failure as one actionable line: what happened, what it left alone, what to do. */
 export function describeEntryFailure(failure: EntryFailure): string {
   const kept = `${failure.type} was not applied this run, so your ${INSTALLED[failure.type]} are unchanged.`;
@@ -454,7 +470,8 @@ export function describeEntryNotes(type: EntryType, resolution: EntryResolution<
  * The namespace `--role <ns>` or `--project <id>` points a write at, or null
  * for the root file when neither is given. `--role` names the namespace itself,
  * as it does for `push`; `--project` is looked up in that project's own
- * `resources.<type>`. Phrased for the CLI user on failure.
+ * `resources.<type>`. Phrased for the CLI user on failure. `--role` warns when
+ * no role or project declares the namespace: its file would reach nobody.
  */
 export async function entryNamespaceFromFlags(
   repoPath: string,
@@ -465,9 +482,17 @@ export async function entryNamespaceFromFlags(
     return { ok: false, message: 'Use either --role or --project, not both.' };
   }
   if (flags.role !== undefined) {
-    return isSafeNamespaceSegment(flags.role)
-      ? { ok: true, namespace: flags.role }
-      : { ok: false, message: `Invalid --role "${flags.role}": ${NAMESPACE_RULE}.` };
+    if (!isSafeNamespaceSegment(flags.role)) {
+      return { ok: false, message: `Invalid --role "${flags.role}": ${NAMESPACE_RULE}.` };
+    }
+    if (await isDeclaredNamespace(repoPath, type, flags.role) === false) {
+      log.warn(
+        `No role or project declares ${type} namespace "${flags.role}", so ${entryFilePath(type, flags.role)} reaches nobody. `
+        + `Add \`${type}: [${flags.role}]\` to the resources of a role in manifest/roles.yaml or of a project in `
+        + 'manifest/projects.yaml.',
+      );
+    }
+    return { ok: true, namespace: flags.role };
   }
   if (flags.project === undefined) return { ok: true, namespace: null };
 

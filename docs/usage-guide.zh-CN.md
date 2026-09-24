@@ -883,7 +883,8 @@ teamai push
 变量定义在团队仓库的 `env/env.yaml` 中，按 namespace 划分的写在 `env/<ns>/env.yaml`
 （见 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)）。`teamai env add` 与
 `teamai env remove` 编辑根文件，加上 `--role <ns>` / `--project <id>` 时编辑对应
-namespace 的文件；`--project` 使用该项目声明的唯一 env namespace。`teamai push` 会带上
+namespace 的文件；`--project` 使用该项目声明的唯一 env namespace；`--role` 指定的 namespace
+若没有任何角色或项目声明，会给出警告，因为该文件不会送达任何人。`teamai push` 会带上
 其中任何一个文件的改动。
 
 ```yaml

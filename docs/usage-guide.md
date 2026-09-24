@@ -944,8 +944,9 @@ Variables live in the team repo's `env/env.yaml`, and per namespace in
 `env/<ns>/env.yaml` (see [Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)).
 `teamai env add` and `teamai env remove` edit the root file, or with
 `--role <ns>` / `--project <id>` that namespace's file; `--project` uses the one
-env namespace the project declares. `teamai push` picks up a change to any of
-them.
+env namespace the project declares, and `--role` warns when no role or project
+declares that namespace, since its file then reaches nobody. `teamai push` picks
+up a change to any of them.
 
 ```yaml
 variables:

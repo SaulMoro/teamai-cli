@@ -333,6 +333,29 @@ scope: 'user',
       expect(log.success).toHaveBeenCalledWith('Added env variable in env/checkout/env.yaml: API_BASE=checkout');
     });
 
+    // A namespace file nobody declares reaches nobody, and doctor cannot tell.
+    it('env add --role warns when no role or project declares the namespace, and still writes', async () => {
+      await writeProjects();
+
+      await envAdd('API_BASE', 'x', { role: 'checkout' });
+
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(
+        'No role or project declares env namespace "checkout", so env/checkout/env.yaml reaches nobody',
+      ));
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('manifest/roles.yaml'));
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('manifest/projects.yaml'));
+      expect(await fse.pathExists(nsFile('checkout'))).toBe(true);
+    });
+
+    it('env add --role says nothing more when a project declares the namespace', async () => {
+      await writeProjects();
+      vi.mocked(log.warn).mockClear();
+
+      await envAdd('API_BASE', 'x', { role: 'checkout-env' });
+
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
     it("env add --project writes the project's declared env namespace", async () => {
       await writeProjects();
 

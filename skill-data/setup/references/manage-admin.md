@@ -150,7 +150,7 @@ teamai push                                 # share the updated teamai.yaml
 teamai env list              # what reaches this directory, each with its namespace (values masked)
 teamai env list --reveal     # show values in plaintext
 teamai env add <KEY> <VALUE> # add or update in env/env.yaml
-teamai env add <KEY> <VALUE> --project <id>   # or --role <ns>: in that namespace's env/<ns>/env.yaml
+teamai env add <KEY> <VALUE> --project <id>   # or --role <ns>: in that namespace's env/<ns>/env.yaml (warns if nothing declares <ns>)
 teamai env remove <KEY>      # remove (same --role / --project)
 teamai remove mcp <name>     # root mcp/mcp.yaml if it has the name, else the one namespace file; --role / --project pick a namespace
 ```
