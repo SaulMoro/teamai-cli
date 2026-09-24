@@ -22,7 +22,7 @@ Transform TeamAI from a simple skill-sharing CLI into a **Team Intelligence Plat
 | 7 | Session 内容来源 | AI 对话和工具使用（非 git diff） | 核心目的是记录 AI 用错工具的情况 |
 | 8 | Session 过滤 | 有价值才推送（包含工具错误/重试→有价值） | 避免团队仓库充斥无用信息 |
 | 9 | Hook 追踪范围 | 只追踪 Skill 工具调用 | 追踪所有工具会产生大量噪音数据，核心需求是 skill 使用统计 |
-| 10 | JSONL 生命周期 | 全部选中目标确认成功后截断已上报数据 | 失败保留事件；推送期间新增事件保留到下一批 |
+| 10 | JSONL 生命周期 | 全部选中目标确认成功后截断已上报数据 | 失败保留事件（最多最新 5,000 条）；推送期间新增事件保留到下一批 |
 | 11 | 错误处理策略 | 所有 I/O 操作 try-catch + graceful degrade | 零静默失败原则 |
 | 12 | Feature 3 推送方式 | 删除 `push --stats`，只用 auto-report | Decision 5 已决定自动上报，手动命令冗余 |
 | 13 | Hook 命令实现 | `teamai track` TypeScript CLI 命令 | 类型安全 + 输入验证，比 bash one-liner 稳健 |
@@ -107,6 +107,16 @@ reports worktree → git add → git commit → git push (teamai-reports)
 5 秒限制放在完整上报操作外层；超时后 Pull 继续其他工作，后台操作仍完成
 推送和本地确认，并在完成后释放相关同步锁。失败重试即使重建出与上次提交
 相同的文件，也会重新推送已有提交，无需创建空提交。
+
+所有目标处理完后，Pull 把每个活跃 scope 的 usage 文件截为最新 5,000 条（含
+HTTP 与 `usageReport: false` 这些从不上报的 scope，#788）。截断必须在清理之后：
+清理按上报读到的条数删除文件开头的行，中间插入截断会把删除挪到未上报的事件上。
+Hook 追加、清理与截断共用 usage 文件旁的一把锁（`<usage 文件>.lock`），改写经临时文件
+再 rename，保留原文件权限。Hook 约 250 ms 拿不到锁时写入 `*.pending-<id>.jsonl`（O_EXCL），
+由下一个持锁者并入；改写约 5 秒拿不到锁时不改文件。pending 文件权限不宽于 usage 文件
+（尚无 usage 文件时为 0600）。工作区内 `.teamai/.gitignore` 忽略 `usage.jsonl.*` 与
+`usage.pending-*.jsonl`，单仓库模式的已有文件由 `migrateSelfModeGitignoreContent` 补齐，
+项目级的已有文件在写 pending 文件或改写前由 `ignoreUsageSideFiles` 补齐。
 
 此修复不提供持久化批次或远端去重：进程在推送与确认之间终止、多仓库部分
 成功后的重试仍可能产生重复统计。等待超时不等于取消 Git 或强制退出进程。

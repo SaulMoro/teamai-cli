@@ -2073,7 +2073,7 @@ export async function pull(
     pendingUsageReport = (async () => {
       try {
         const { reportUsageToTeam } = await import('./team-push.js');
-        const { truncateUsageAfterReport, readUsageEvents } = await import('./usage-tracker.js');
+        const { truncateUsageAfterReport, readUsageEvents, capUsageEvents } = await import('./usage-tracker.js');
         const targets: Array<{ repoPath: string; username: string; opts: { skipTruncate: true; selfConfig: LocalConfig } }> = [];
         // Per-target opt-out (teamai.yaml `usageReport: false`): a repo that
         // disables stat commits is dropped from the targets — e.g. teams
@@ -2116,6 +2116,16 @@ export async function pull(
           } catch (e) {
             log.error(`Auto-report to ${t.repoPath} skipped: ${(e as Error).message}`);
           }
+        }
+
+        // Cap every active scope, reporting or not (#788): http and
+        // `usageReport: false` scopes, or a remote rejecting every push, would
+        // otherwise grow forever. Only after the truncates above — a cap between
+        // a report's read and its truncate would shift the lines it deletes onto
+        // events never sent (#750). The usage file's own lock serializes the cap
+        // with hook appends and with another pull's cap, http scopes included.
+        for (const scope of [reconcileProject, reconcileUser]) {
+          if (scope) await capUsageEvents(scope);
         }
       } catch (e) {
         log.debug(`Auto-report skipped: ${(e as Error).message}`);

@@ -1769,7 +1769,7 @@ whichever scope reported the earlier one; the first
 report after upgrading starts from the snapshot every scope used to share, so
 nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes
-preserve them. The affected sync locks remain
+preserve them, up to the newest 5,000 (see below). The affected sync locks remain
 held until reporting finishes, preventing another pull from racing the report.
 
 This is best-effort reporting, not crash-safe delivery: termination between a
@@ -1784,6 +1784,23 @@ can turn this off in `teamai.yaml`:
 ```yaml
 usageReport: false
 ```
+
+Pull keeps each scope's usage file to its newest 5,000 events, dropping the
+oldest after the report step. For an http source or a `usageReport: false`
+team, that file is the only record `teamai stats` has, so it stays bounded
+without going empty; a reporting scope whose report does not complete while
+it holds more than 5,000 drops its oldest unreported events the same way. The
+cap runs only after a report has removed the events it sent. Hook appends, the
+report's truncate and the cap take one lock beside the usage file, so a rewrite
+does not lose an event recorded while it runs. A hook that cannot take the lock
+within ~250 ms records its event in a `*.pending-<id>.jsonl` file next to it,
+which the next lock holder appends to the usage file; a rewrite that cannot take
+it within ~5 s leaves the file as it is. A pending file gets no wider mode than
+the usage file (owner-only while there is none). An in-workspace
+`.teamai/.gitignore` ignores the lock, a rewrite's temp copy and the pending
+files; `pull` and `push` add those entries to an existing single-repo one, and
+the usage file's first pending file or rewrite adds them to an existing
+project-scope one.
 
 **Removing a skill another project reported into your `stats/`.** Before skill
 usage was kept per scope, whichever project pulled next reported every
