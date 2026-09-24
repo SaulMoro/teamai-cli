@@ -47,7 +47,7 @@ profiles:
 
 - 只有当前 origin 存有密钥时，`pull` 才会重新应用配置。如果该 `id` 只存有其他 origin 的密钥，`pull` 不修改 Agent，并提示运行 `teamai models switch team:<id>`，由它询问新网关的密钥。根配置被改到另一个主机时同样如此。
 - 同一个 `id` 可以同时保存多个 origin 的密钥，因此离开 namespace 后 Agent 会用已保存的密钥回到根配置，无需再次输入。
-- 此规则之前保存在 `team:<id>` 下的密钥属于根配置的 origin：只在解析出的配置使用该 origin 时使用，下次为该 origin 保存密钥时改为绑定形式。
+- 此规则之前保存在 `team:<id>` 下的密钥，会在第一次读取它的 pull 或 `models` 命令中绑定一次：绑定到 TeamAI 最近为切换到该配置的 Agent 写入的 origin（若其中包含根配置当前的 origin，则绑定到该 origin）；若没有 Agent 切换到该配置，则绑定到根配置当前的 origin。之后它不会跟随根配置迁移到新的主机，因此在 beta 与升级之间被迁移的根配置不会收到它。若该 `id` 没有根配置，密钥保持未绑定状态且不会被使用。
 - 只存在于成员已离开的 namespace 中的配置不会被撤销：Agent 保留设置，`pull` 提示该配置 `is no longer active in your namespaces`；可用 `teamai models restore` 撤销。
 
 ## Agent 写入

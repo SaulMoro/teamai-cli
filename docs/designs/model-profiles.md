@@ -47,7 +47,7 @@ An override can move a profile to another gateway, so a team key is bound to the
 
 - `pull` re-applies a profile only when a key is stored for its current origin. When one is stored for the `id` but another origin, it leaves the agents alone and prints `teamai models switch team:<id>`, which asks for the new gateway's key. This covers a root profile moved to another host as well as an override.
 - Keys for several origins of one `id` coexist, so leaving a namespace returns agents to the root profile with the key stored for it, without a prompt.
-- A key stored before this rule, under `team:<id>`, belongs to the root profile's origin: it is used while the resolved profile has that origin, and replaced by the bound form the next time a key is stored for that origin.
+- A key stored before this rule, under `team:<id>`, is bound once, by the first pull or `models` command that reads it: to the origin TeamAI last wrote into the agents switched to that profile (the root profile's current origin when it is among them), or to the root profile's current origin when no agent was switched to it. It never follows the root profile to a later host, so a root profile moved between the beta and the upgrade does not receive it. Without a root profile of that `id` it stays unbound and is not used.
 - A profile that exists only in a namespace the member left is not undone: the agents keep their settings and `pull` says the profile `is no longer active in your namespaces`; `teamai models restore` undoes it.
 
 ## Agent writes

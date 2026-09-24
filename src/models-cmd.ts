@@ -14,6 +14,7 @@ import {
   gatewaySuffix,
   getTeamIdentity,
   getTeamValuesPath,
+  bindLegacyTeamKeys,
   hasApiKeyForAnotherGateway,
   inactiveNamespaceDefines,
   isApiKeyConfigured,
@@ -43,6 +44,7 @@ import {
 import {
   ALL_MODEL_AGENTS,
   activeModelProfiles,
+  switchedGatewayOrigins,
   restoreModelProfiles,
   switchModelProfile,
   type ActiveModelProfile,
@@ -54,7 +56,12 @@ interface TeamModelsContext {
   localConfig?: LocalConfig;
 }
 
-async function teamContext(): Promise<TeamModelsContext> {
+/**
+ * The team profiles this directory receives, or null when they do not resolve
+ * (a broken file, one id in two active namespaces): that is reported here as
+ * the command's error, and the command stops.
+ */
+async function teamContext(): Promise<TeamModelsContext | null> {
   let initialized: Awaited<ReturnType<typeof autoDetectInit>>;
   try {
     initialized = await autoDetectInit();
@@ -62,8 +69,30 @@ async function teamContext(): Promise<TeamModelsContext> {
     return { team: { version: 1, profiles: [] } };
   }
   const resolution = await resolveEntriesFor(modelsEntryReader, initialized.localConfig);
-  if (resolution.kind === 'failed') throw new Error(describeEntryFailure(resolution.failure));
+  if (resolution.kind === 'failed') {
+    log.error(describeEntryFailure(resolution.failure));
+    process.exitCode = 1;
+    return null;
+  }
   return { team: teamProfilesFrom(resolution.entries), localConfig: initialized.localConfig };
+}
+
+/**
+ * This team's stored keys, with any key a 0.26.0 beta stored bound to its
+ * gateway first (`bindLegacyTeamKeys`) and saved that way, unless `dryRun`.
+ */
+async function loadTeamValues(
+  localConfig: LocalConfig,
+  team: TeamModelProfiles,
+  options: { dryRun?: boolean } = {},
+): Promise<StoredModelInputs> {
+  const file = getTeamValuesPath(localConfig);
+  const values = await loadModelInputs(file);
+  const sentTo = await switchedGatewayOrigins(getTeamIdentity(localConfig));
+  if (bindLegacyTeamKeys(values, team, (id) => sentTo.get(`team:${id}`) ?? []) && !options.dryRun) {
+    await saveModelInputs(file, values);
+  }
+  return values;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -106,8 +135,9 @@ async function findProfile(reference: string): Promise<{
   ref: ProfileRef;
   local: ModelProfilesFile;
   context: TeamModelsContext;
-}> {
+} | null> {
   const [context, local] = await Promise.all([teamContext(), loadLocalProfiles()]);
+  if (!context) return null;
   const ref = resolveProfileRef(reference, context.team, local);
   if (ref.source === 'team' && context.localConfig) ref.team = getTeamIdentity(context.localConfig);
   return { ref, local, context };
@@ -117,6 +147,12 @@ function valuesPathFor(ref: ProfileRef, context: TeamModelsContext): string {
   if (ref.source === 'local') return getLocalValuesPath();
   if (!context.localConfig) throw new Error('Team model profiles require an initialized TeamAI repository');
   return getTeamValuesPath(context.localConfig);
+}
+
+/** The stored keys `ref` reads its key from; `loadTeamValues` for a team profile. */
+async function loadValuesFor(ref: ProfileRef, context: TeamModelsContext): Promise<StoredModelInputs> {
+  if (ref.source === 'team' && context.localConfig) return loadTeamValues(context.localConfig, context.team);
+  return loadModelInputs(valuesPathFor(ref, context));
 }
 
 function activeAgentsFor(
@@ -146,6 +182,7 @@ function printResults(results: ModelSwitchResult[], explicitAgents: boolean): vo
  */
 export async function modelsList(reference?: string): Promise<void> {
   const [context, local, active] = await Promise.all([teamContext(), loadLocalProfiles(), activeModelProfiles()]);
+  if (!context) return;
   const team = context.localConfig ? getTeamIdentity(context.localConfig) : undefined;
   let refs: ProfileRef[];
   if (reference) {
@@ -163,7 +200,7 @@ export async function modelsList(reference?: string): Promise<void> {
     return;
   }
   const values: Record<ProfileRef['source'], StoredModelInputs> = {
-    team: context.localConfig && refs.some((ref) => ref.source === 'team') ? await loadModelInputs(getTeamValuesPath(context.localConfig)) : {},
+    team: context.localConfig && refs.some((ref) => ref.source === 'team') ? await loadTeamValues(context.localConfig, context.team) : {},
     local: refs.some((ref) => ref.source === 'local') ? await loadModelInputs(getLocalValuesPath()) : {},
   };
   refs.forEach((ref, index) => {
@@ -233,6 +270,7 @@ function addModelProtocol(groups: ModelGroup[], models: string[], protocol: Mode
 
 export async function modelsAdd(id: string, options: AddOptions): Promise<void> {
   const [local, context] = await Promise.all([loadLocalProfiles(), teamContext()]);
+  if (!context) return;
   if (local.profiles.some((profile) => profile.id === id)) {
     throw new Error(`Local model profile already exists: ${id}`);
   }
@@ -266,7 +304,9 @@ interface ConfigureOptions extends ApiKeyOptions {
 }
 
 export async function modelsConfigure(reference: string, options: ConfigureOptions): Promise<void> {
-  const { ref, local, context } = await findProfile(reference);
+  const found = await findProfile(reference);
+  if (!found) return;
+  const { ref, local, context } = found;
   const key = profileRefName(ref);
   let edited: ProfileRef['profile'] | undefined;
   if (options.name || options.protocol || options.baseUrl || options.model) {
@@ -290,7 +330,7 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
   }
 
   const file = valuesPathFor(ref, context);
-  const values = await loadModelInputs(file);
+  const values = await loadValuesFor(ref, context);
   const configured = storedApiKey(ref, values);
   let secret = await apiKeyFromOptions(options);
   if (!edited && !secret) {
@@ -322,10 +362,12 @@ interface SwitchOptions {
 }
 
 export async function modelsSwitch(reference: string, options: SwitchOptions): Promise<void> {
-  const { ref, context } = await findProfile(reference);
+  const found = await findProfile(reference);
+  if (!found) return;
+  const { ref, context } = found;
   const key = profileRefName(ref);
   const file = valuesPathFor(ref, context);
-  const values = await loadModelInputs(file);
+  const values = await loadValuesFor(ref, context);
   const stored = storedApiKey(ref, values);
   // First use of a profile, or of its current gateway: ask for the key here
   // instead of requiring a separate `configure` step.
@@ -369,6 +411,16 @@ export async function modelsRemove(reference: string): Promise<void> {
 }
 
 /**
+ * A line that tells the member to act. Also written to debug.log: most pulls
+ * run silent from the SessionStart hook, and nothing else on disk would say
+ * why an agent stayed on its old settings.
+ */
+function warnAndPersist(message: string): void {
+  log.warn(message);
+  log.persist(message);
+}
+
+/**
  * Re-apply this team's profiles to the agents a user already switched to
  * them, so catalog updates arrive with `teamai pull`. Agents the user never
  * switched are left alone. Returns a hint when the team offers profiles that
@@ -397,28 +449,30 @@ export async function syncTeamModelProfiles(localConfig: LocalConfig, options: {
     return undefined;
   }
   const team = teamProfilesFrom(resolution.entries);
+  // Before anything reads a key: a key a beta stored is bound at the first pull.
+  const values = await loadTeamValues(localConfig, team, options);
   if (groups.size === 0) {
     return team.profiles.length > 0
       ? `${team.profiles.length} team model profile(s) available; run \`teamai models list\` to see them.`
       : undefined;
   }
 
-  const values = await loadModelInputs(getTeamValuesPath(localConfig));
   for (const { profile: name, model, agents } of groups.values()) {
     const id = name.slice('team:'.length);
     const profile = team.profiles.find((candidate) => candidate.id === id);
     const keep = `${agents.join(', ')} keep${agents.length === 1 ? 's' : ''} ${agents.length === 1 ? 'its' : 'their'} settings`;
     if (!profile) {
-      const why = await inactiveNamespaceDefines(localConfig.repo.localPath, resolution.active ?? [], id)
+      // Legacy mode reads no namespace, so there a profile only ever goes away.
+      const why = resolution.active !== null && await inactiveNamespaceDefines(localConfig.repo.localPath, resolution.active, id)
         ? 'is no longer active in your namespaces'
         : 'was removed';
-      log.warn(`Team model profile ${name} ${why}; ${keep}. Run \`teamai models restore\` to undo them.`);
+      warnAndPersist(`Team model profile ${name} ${why}; ${keep}. Run \`teamai models restore\` to undo them.`);
       continue;
     }
     const ref = resolveProfileRef(name, team, { version: 1, profiles: [] });
     ref.team = identity;
     if (hasApiKeyForAnotherGateway(ref, values)) {
-      log.warn(`Team model profile ${name} now uses ${profileOrigin(profile)}${ref.from ? ` (${ref.from.source})` : ''}, `
+      warnAndPersist(`Team model profile ${name} now uses ${profileOrigin(profile)}${ref.from ? ` (${ref.from.source})` : ''}, `
         + `not the gateway your API key is configured for; ${keep}. Run \`teamai models switch ${name}\` to set a key for it.`);
       continue;
     }

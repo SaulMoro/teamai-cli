@@ -75,6 +75,7 @@ projects:
 
 const COMPANY = 'https://gw.company.test';
 const CHECKOUT = 'https://gw.checkout.test';
+const ELSEWHERE = 'https://gw.elsewhere.test';
 
 function catalog(...profiles: Array<{ id?: string; base_url: string; models: string[] }>): string {
   return YAML.stringify({
@@ -120,7 +121,7 @@ describe('pull: team model profiles by namespace', () => {
     vi.mocked(autoDetectInit).mockResolvedValue({ localConfig, teamConfig });
   };
   const team = (rel: string, content: string): Promise<void> => fse.outputFile(path.join(repoPath, rel), content);
-  const logged = (level: 'warn' | 'info', pattern: RegExp): boolean => (
+  const logged = (level: 'warn' | 'info' | 'error' | 'persist', pattern: RegExp): boolean => (
     vi.mocked(log[level]).mock.calls.some((args) => pattern.test(args.map(String).join(' ')))
   );
   async function claude(): Promise<ClaudeModelSettings> {
@@ -189,6 +190,8 @@ describe('pull: team model profiles by namespace', () => {
     inProjects();
     vi.mocked(log.warn).mockClear();
     vi.mocked(log.info).mockClear();
+    vi.mocked(log.error).mockClear();
+    vi.mocked(log.persist).mockClear();
   });
 
   afterEach(async () => {
@@ -220,6 +223,8 @@ describe('pull: team model profiles by namespace', () => {
     // The agent is left alone and the member is told how to set the other key.
     expect(await claude()).toEqual({ url: COMPANY, token: 'company-secret', model: 'company-model' });
     expect(logged('warn', /team:gw now uses https:\/\/gw\.checkout\.test.*claude keeps? its settings.*teamai models switch team:gw/)).toBe(true);
+    // A SessionStart pull runs silent: the line is in debug.log too.
+    expect(logged('persist', /team:gw now uses https:\/\/gw\.checkout\.test.*teamai models switch team:gw/)).toBe(true);
 
     // `switch` does not reuse the company key for the checkout gateway either.
     await expect(modelsSwitch('team:gw', { agent: ['claude'] })).rejects.toThrow(/no API key for https:\/\/gw\.checkout\.test/);
@@ -249,6 +254,7 @@ describe('pull: team model profiles by namespace', () => {
     await pull({});
     expect(await claude()).toEqual({ url: COMPANY, token: 'company-secret', model: 'proj-model' });
     expect(logged('warn', /team:proj is no longer active in your namespaces; claude keeps? (its|their) settings/)).toBe(true);
+    expect(logged('persist', /team:proj is no longer active in your namespaces/)).toBe(true);
   });
 
   it('still says a profile was removed when no namespace defines it', async () => {
@@ -258,6 +264,27 @@ describe('pull: team model profiles by namespace', () => {
     await pull({});
     expect((await claude()).model).toBe('company-model');
     expect(logged('warn', /team:gw was removed/)).toBe(true);
+  });
+
+  it('says a profile was removed in legacy mode, even when some namespace file defines it', async () => {
+    await fse.remove(path.join(repoPath, 'manifest'));
+    await switchTo('gw');
+    await team('models/models.yaml', catalog({ id: 'other', base_url: COMPANY, models: ['other-model'] }));
+    await team('models/checkout/models.yaml', catalog({ base_url: COMPANY, models: ['checkout-model'] }));
+
+    await pull({});
+    expect(logged('warn', /team:gw was removed/)).toBe(true);
+    expect(logged('warn', /no longer active in your namespaces/)).toBe(false);
+  });
+
+  it('reports profiles that cannot be resolved as an error of the command, not a crash', async () => {
+    await team('models/checkout/models.yaml', catalog({ base_url: COMPANY, models: ['checkout-model'] }));
+    await team('models/billing/models.yaml', catalog({ base_url: COMPANY, models: ['billing-model'] }));
+    inProjects('checkout', 'billing');
+
+    await captureOutput(() => modelsList());
+    expect(logged('error', /"gw" is defined in both models\/(checkout|billing)\/models\.yaml and models\/(billing|checkout)\/models\.yaml/)).toBe(true);
+    expect(process.exitCode).toBe(1);
   });
 
   it('stops only models when two active namespaces define one profile id', async () => {
@@ -303,6 +330,33 @@ describe('pull: team model profiles by namespace', () => {
     await team('models/checkout/models.yaml', catalog({ base_url: `${COMPANY}/checkout`, models: ['checkout-model'] }));
     await pull({});
     expect(await claude()).toEqual({ url: `${COMPANY}/checkout`, token: 'company-secret', model: 'checkout-model' });
+  });
+
+  it('binds a beta key to the gateway its agent was switched to, so a root profile that moved since never gets it', async () => {
+    const beta = { 'team:gw': { API_KEY: { env: 'COMPANY_KEY' } } };
+    await saveModelInputs(getTeamValuesPath(configFor([])), beta);
+    await captureOutput(() => modelsSwitch('team:gw', { agent: ['claude'] }));
+    expect(await claude()).toEqual({ url: COMPANY, token: 'company-secret', model: 'company-model' });
+    // What a beta leaves behind: the agent on the company gateway, the key under the profile id alone.
+    await saveModelInputs(getTeamValuesPath(configFor([])), beta);
+
+    await team('models/models.yaml', catalog({ base_url: ELSEWHERE, models: ['elsewhere-model'] }));
+    await pull({});
+
+    expect(await claude()).toEqual({ url: COMPANY, token: 'company-secret', model: 'company-model' });
+    expect(logged('warn', /team:gw now uses https:\/\/gw\.elsewhere\.test.*teamai models switch team:gw/)).toBe(true);
+    await expect(modelsSwitch('team:gw', { agent: ['claude'] })).rejects.toThrow(/no API key for https:\/\/gw\.elsewhere\.test/);
+    await expectNoKeyOnAnotherGateway();
+  });
+
+  it('binds a beta key no agent used to the root gateway at the first pull, and does not follow a later move', async () => {
+    await saveModelInputs(getTeamValuesPath(configFor([])), { 'team:gw': { API_KEY: { env: 'COMPANY_KEY' } } });
+    await pull({});
+
+    await team('models/models.yaml', catalog({ base_url: ELSEWHERE, models: ['elsewhere-model'] }));
+    await expect(modelsSwitch('team:gw', { agent: ['claude'] })).rejects.toThrow(/no API key for https:\/\/gw\.elsewhere\.test/);
+    const output = await captureOutput(() => modelsList('team:gw'));
+    expect(output).toContain('  API key: not configured for https://gw.elsewhere.test (one is stored for another gateway)');
   });
 
   it('reads the root catalog only in legacy mode', async () => {

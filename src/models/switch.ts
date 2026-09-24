@@ -935,6 +935,54 @@ export async function activeModelProfiles(): Promise<Partial<Record<ModelAgent, 
   ]));
 }
 
+/**
+ * For each `team:` profile of team `team` an agent is switched to, the gateway
+ * origins TeamAI last wrote into those agents' settings: where the API key of
+ * that profile has actually been sent.
+ */
+export async function switchedGatewayOrigins(team: string): Promise<Map<string, string[]>> {
+  const manifest = await loadManifest();
+  const byProfile = new Map<string, string[]>();
+  for (const [agent, state] of Object.entries(manifest?.agents ?? {}) as Array<[ModelAgent, AgentState]>) {
+    if (!state.profile.startsWith('team:') || state.team !== team) continue;
+    const origins = writtenGatewayUrls(agent, state.lastWritten).flatMap((url) => {
+      try {
+        return [new URL(url).origin];
+      } catch {
+        return [];
+      }
+    });
+    byProfile.set(state.profile, [...new Set([...(byProfile.get(state.profile) ?? []), ...origins])]);
+  }
+  return byProfile;
+}
+
+/** The gateway URLs in one agent's written snapshot, as `desiredSnapshot` lays them out. */
+function writtenGatewayUrls(agent: ModelAgent, snapshot: unknown): string[] {
+  if (!isRecord(snapshot)) return [];
+  if (agent === 'claude') return typeof snapshot.ANTHROPIC_BASE_URL === 'string' ? [snapshot.ANTHROPIC_BASE_URL] : [];
+  if (agent === 'codex') {
+    const line = typeof snapshot.providerBlock === 'string' ? /^base_url = (".*")$/m.exec(snapshot.providerBlock) : null;
+    if (!line?.[1]) return [];
+    try {
+      const url: unknown = JSON.parse(line[1]);
+      return typeof url === 'string' ? [url] : [];
+    } catch {
+      return [];
+    }
+  }
+  if (agent === 'opencode') {
+    const providers = isRecord(snapshot.providers) ? Object.values(snapshot.providers) : [];
+    return providers.flatMap((provider) => (
+      isRecord(provider) && isRecord(provider.options) && typeof provider.options.baseURL === 'string'
+        ? [provider.options.baseURL]
+        : []
+    ));
+  }
+  const entries = isRecord(snapshot.entries) ? Object.values(snapshot.entries) : [];
+  return entries.flatMap((entry) => (isRecord(entry) && typeof entry.url === 'string' ? [entry.url] : []));
+}
+
 export async function isModelProfileManaged(agent: ModelAgent): Promise<boolean> {
   return (await loadManifest())?.agents[agent] !== undefined;
 }

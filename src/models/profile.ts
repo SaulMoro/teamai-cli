@@ -361,27 +361,49 @@ function apiKeyName(ref: ProfileRef): string {
   return ref.source === 'team' ? `${profileRefName(ref)}@${profileOrigin(ref.profile)}` : profileRefName(ref);
 }
 
-/**
- * Keys stored before #707 are named by profile id alone. Only root profiles
- * existed then, so such a key belongs to the root profile's gateway, and to
- * no other. Without the root profile it belongs to nothing.
- */
-function legacyKeyApplies(ref: ProfileRef): boolean {
-  const root = ref.from ? ref.from.replacedEntry ?? (ref.from.namespace === null ? ref.from.entry : null) : null;
-  return root !== null && profileOrigin(root) === profileOrigin(ref.profile);
-}
-
 /** The API key stored for this profile and its gateway. */
 export function storedApiKey(ref: ProfileRef, values: StoredModelInputs): StoredModelInput | undefined {
-  const bound = values[apiKeyName(ref)]?.API_KEY;
-  if (bound || ref.source === 'local') return bound;
-  return legacyKeyApplies(ref) ? values[profileRefName(ref)]?.API_KEY : undefined;
+  return values[apiKeyName(ref)]?.API_KEY;
 }
 
-/** Store the API key for this profile and its gateway, replacing a legacy key it supersedes. */
+/** Store the API key for this profile and its gateway. */
 export function setStoredApiKey(ref: ProfileRef, values: StoredModelInputs, input: StoredModelInput): void {
   values[apiKeyName(ref)] = { API_KEY: input };
-  if (ref.source === 'team' && legacyKeyApplies(ref)) delete values[profileRefName(ref)];
+}
+
+/**
+ * Bind each team key stored before #707 to one gateway, once. Those keys are
+ * named by profile id alone (`team:<id>`), and only root profiles existed
+ * then. Such a key is bound to the gateway it was sent to, which `sentTo`
+ * reads from the agents switched to that profile: the root profile's current
+ * gateway when it is among them, else one of those. A key no agent used is
+ * bound to the root profile's current gateway. Either way it never follows
+ * the profile to a later host. A key whose profile has no root version now is
+ * left as it is: it belongs to no gateway, and nothing reads it.
+ *
+ * Returns whether `values` changed.
+ */
+export function bindLegacyTeamKeys(
+  values: StoredModelInputs,
+  team: TeamModelProfiles,
+  sentTo: (id: string) => readonly string[],
+): boolean {
+  let changed = false;
+  for (const [name, input] of Object.entries(values)) {
+    const id = /^team:([^@]+)$/.exec(name)?.[1];
+    const entry = id === undefined ? undefined : team.origins?.get(id);
+    const root = entry ? entry.replacedEntry ?? (entry.namespace === null ? entry.entry : null) : null;
+    if (id === undefined || !root) continue;
+    const rootOrigin = profileOrigin(root);
+    const used = sentTo(id);
+    const origin = used.length === 0 || used.includes(rootOrigin) ? rootOrigin : [...used].sort()[0] ?? rootOrigin;
+    const bound = `${name}@${origin}`;
+    // A key configured on this version wins over the one a beta left.
+    values[bound] ??= input;
+    delete values[name];
+    changed = true;
+  }
+  return changed;
 }
 
 /** True when a key is stored for this team profile id, but for another gateway. */
