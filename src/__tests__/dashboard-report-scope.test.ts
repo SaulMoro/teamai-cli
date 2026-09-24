@@ -552,6 +552,54 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(project)).toBe(1);
   });
 
+  it('a sole copy of a shared entry names no owner: a resume in the scope that reported it counts there', async () => {
+    const { user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const today = new Date().toISOString().slice(0, 10);
+    // Only P pulled on main, so only P's snapshot holds a copy of the user-scope session.
+    writeSharedSnapshots({ 'user-session': 1 }, today);
+    writeSharedSnapshots({ 'user-session': 1 }, today, project);
+    await resume('user-session', elsewhere, 2);
+
+    expect(await report(project)).toBeNull();
+    expect(await reportedPrompts(user)).toBe(1);
+  });
+
+  it('a copy the shared intervention snapshot alone holds does not let a report claim it', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const today = new Date().toISOString().slice(0, 10);
+    // A session reported with no prompts: only intervention entries, copied into P.
+    writeSharedSnapshots({ quiet: 0 }, today);
+    writeSharedSnapshots({ quiet: 0 }, today, project);
+    for (const dir of [path.join(teamaiHome(), 'dashboard'), path.join(getDataHome(project), 'dashboard')]) {
+      for (const name of ['prompt-tokens', 'daily-sessions']) fs.rmSync(path.join(dir, `reported-${name}.json`));
+    }
+    // P reports another session first, and records owners from its snapshots.
+    await session('claude', { session_id: 'p-other', cwd: root });
+    const reportedByP = await report(project);
+    await resume('quiet', elsewhere, 1);
+
+    expect(await report(project)).toEqual(reportedByP);
+    expect(await reportedPrompts(user)).toBe(1);
+  });
+
+  it('main split a session before any Stop and compaction dropped it: the owner credits both parts', async () => {
+    const { root, project } = await setup();
+    const { projectQ } = await setupQ();
+    const today = new Date().toISOString().slice(0, 10);
+    // 3 prompts reported in P and 2 in Q, as submit counts: no Stop, so no daily entry.
+    writeSharedSnapshots({ split: 3 }, today, project);
+    writeSharedSnapshots({ split: 2 }, today, projectQ);
+    for (const config of [project, projectQ]) fs.rmSync(path.join(getDataHome(config), 'dashboard', 'reported-daily-sessions.json'));
+    // Resumed in P; its cumulative Stop carries 6.
+    await resume('split', root, 6);
+
+    expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(1);
+  });
+
   it('a project that reported a session past the shared snapshot\'s total owns it', async () => {
     const { project } = await setup();
     const { rootQ, projectQ } = await setupQ();

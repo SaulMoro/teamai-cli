@@ -97,6 +97,38 @@ function positiveDelta(current: number, previous: number | undefined): number {
   return Math.max(0, current - (previous ?? 0));
 }
 
+/** A daily snapshot entry read from a file, or undefined when it is not one. */
+export function parseDailySnapshot(value: unknown): DailySessionSnapshot | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (!('date' in value) || typeof value.date !== 'string' || !('prompts' in value) || typeof value.prompts !== 'number'
+    || !('durationMs' in value) || typeof value.durationMs !== 'number') return undefined;
+  const requestDaily: Record<string, RequestCostMetrics> = {};
+  if ('requestDaily' in value && value.requestDaily && typeof value.requestDaily === 'object') {
+    for (const [date, request] of Object.entries(value.requestDaily)) {
+      if (!request || typeof request !== 'object') continue;
+      const num = (field: string) => {
+        const n: unknown = Object.entries(request).find(([k]) => k === field)?.[1];
+        return typeof n === 'number' ? n : 0;
+      };
+      const version: unknown = Object.entries(request).find(([k]) => k === 'priceVersion')?.[1];
+      requestDaily[date] = {
+        pricedRequests: num('pricedRequests'), costMicros: num('costMicros'), cacheReadTokens: num('cacheReadTokens'),
+        cacheEligibleInputTokens: num('cacheEligibleInputTokens'), priceVersion: typeof version === 'string' ? version : '',
+      };
+    }
+  }
+  return {
+    date: value.date, prompts: value.prompts, durationMs: value.durationMs,
+    succeeded: 'succeeded' in value && value.succeeded === 1 ? 1 : 0,
+    corrected: 'corrected' in value && value.corrected === 1 ? 1 : 0,
+    requestDaily,
+    ...('sessionCacheReadTokens' in value && typeof value.sessionCacheReadTokens === 'number'
+      ? { sessionCacheReadTokens: value.sessionCacheReadTokens } : {}),
+    ...('sessionCacheEligibleTokens' in value && typeof value.sessionCacheEligibleTokens === 'number'
+      ? { sessionCacheEligibleTokens: value.sessionCacheEligibleTokens } : {}),
+  };
+}
+
 /** A reported snapshot's request costs per day, from its session-level fields if it predates them. */
 function reportedRequestDaily(previous: DailySessionSnapshot | undefined): Record<string, RequestCostMetrics> {
   return previous?.requestDaily ?? (

@@ -23,6 +23,7 @@ import {
   computeDailyStatsDelta,
   mergeDailyStats,
   takeDailySession,
+  parseDailySnapshot,
   type DailySessionSnapshot,
   type ReportedDailySessions,
 } from './session-trends.js';
@@ -740,32 +741,171 @@ function reportedSize(entry: unknown): { prompts: number; tokens: number } {
   return { prompts, tokens };
 }
 
-/** The owners the per-scope snapshots of an earlier release imply, as the file's first lines. */
+/** A scope's three snapshots (the shared ones for no data home), as a file holds them. */
+interface ScopeSnapshots {
+  interventions: Record<string, unknown> | null;
+  promptTokens: Record<string, unknown> | null;
+  daily: Record<string, unknown> | null;
+}
+
+async function readSnapshotsIn(dataHome: string | undefined): Promise<ScopeSnapshots> {
+  const read = (name: ReportedSnapshotName) =>
+    readJson<Record<string, unknown>>(dataHome === undefined ? sharedSnapshotPath(name) : snapshotPathIn(dataHome, name));
+  const [interventions, promptTokens, daily] = await Promise.all(REPORTED_SNAPSHOTS.map(read));
+  return { interventions, promptTokens, daily };
+}
+
+/** An intervention entry read from a file, zero for what it does not hold. */
+function interventionsEntry(value: unknown): ReportedInterventions[string] {
+  const count = (field: 'interrupt' | 'toolReject' | 'correction') =>
+    (value && typeof value === 'object' && field in value && typeof Object.entries(value).find(([k]) => k === field)?.[1] === 'number'
+      ? Number(Object.entries(value).find(([k]) => k === field)?.[1]) : 0);
+  return { interrupt: count('interrupt'), toolReject: count('toolReject'), correction: count('correction') };
+}
+
+/** A prompt-token entry read from a file, zero for what it does not hold. */
+function promptTokensEntry(value: unknown): ReportedPromptTokens[string] {
+  const tokens = emptyTokenUsage();
+  if (value && typeof value === 'object' && 'tokens' in value && value.tokens && typeof value.tokens === 'object') {
+    for (const [field, n] of Object.entries(value.tokens)) {
+      if (typeof n !== 'number') continue;
+      if (field === 'input' || field === 'output' || field === 'cacheRead' || field === 'cacheCreation') tokens[field] = n;
+    }
+  }
+  return { prompts: reportedSize(value).prompts, tokens };
+}
+
+/** What a scope's snapshots hold of `id`: prompts, tokens and intervention counts. */
+function heldIn(snapshots: ScopeSnapshots, id: string): { prompts: number; tokens: number; interventions: number } {
+  const fromTokens = reportedSize(snapshots.promptTokens?.[id]);
+  const iv = interventionsEntry(snapshots.interventions?.[id]);
+  return {
+    prompts: Math.max(fromTokens.prompts, reportedSize(snapshots.daily?.[id]).prompts),
+    tokens: fromTokens.tokens,
+    interventions: iv.interrupt + iv.toolReject + iv.correction,
+  };
+}
+
+/**
+ * Whether a scope's snapshots show it reported `id`: the shared snapshots hold
+ * none of it, or the scope is past their total. An earlier release copied the
+ * shared snapshots into every scope it ran in, so a copy shows nothing.
+ */
+function showsReported(own: ScopeSnapshots, shared: ScopeSnapshots, id: string): boolean {
+  const inShared = [shared.interventions, shared.promptTokens, shared.daily].some((snapshot) =>
+    !!snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, id));
+  if (!inShared) return true;
+  const a = heldIn(own, id);
+  const b = heldIn(shared, id);
+  return a.prompts !== b.prompts ? a.prompts > b.prompts
+    : a.tokens !== b.tokens ? a.tokens > b.tokens : a.interventions > b.interventions;
+}
+
+/** What several scopes had reported of one session, credited to its owner (numbers only). */
+interface OwnerCredit {
+  interventions: ReportedInterventions[string];
+  promptTokens: ReportedPromptTokens[string];
+  daily?: DailySessionSnapshot;
+}
+
+/**
+ * The credit for a session an earlier release split across scopes per event,
+ * from their snapshots alone (its events are gone). A part whose daily entry
+ * shows it ended in a Stop carries the transcript's cumulative total, so the
+ * greatest such part counts once; a part with no Stop counted its own prompts,
+ * so those add. Intervention counts, per event, add; tokens, from Stops, take
+ * the greatest. A part without a Stop that came before another's Stop is
+ * credited twice: that undercounts, once, but never sends a prompt again.
+ */
+function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
+  const stops = parts.filter((part) => parseDailySnapshot(part.daily?.[id]) !== undefined);
+  const loose = parts.filter((part) => !stops.includes(part));
+  const prompts = Math.max(0, ...stops.map((part) => heldIn(part, id).prompts))
+    + loose.reduce((sum, part) => sum + heldIn(part, id).prompts, 0);
+  const tokens = emptyTokenUsage();
+  const interventions = { interrupt: 0, toolReject: 0, correction: 0 };
+  for (const part of parts) {
+    const entry = promptTokensEntry(part.promptTokens?.[id]);
+    for (const field of ['input', 'output', 'cacheRead', 'cacheCreation'] as const) {
+      tokens[field] = Math.max(tokens[field], entry.tokens[field]);
+    }
+    const iv = interventionsEntry(part.interventions?.[id]);
+    interventions.interrupt += iv.interrupt;
+    interventions.toolReject += iv.toolReject;
+    interventions.correction += iv.correction;
+  }
+  const days = stops.flatMap((part) => {
+    const day = parseDailySnapshot(part.daily?.[id]);
+    return day ? [day] : [];
+  });
+  const latest = days.reduce<DailySessionSnapshot | undefined>((a, b) => (!a || b.prompts > a.prompts ? b : a), undefined);
+  return {
+    interventions,
+    promptTokens: { prompts, tokens },
+    ...(latest ? { daily: { ...latest, prompts, durationMs: days.reduce((sum, day) => sum + day.durationMs, 0) } } : {}),
+  };
+}
+
+/**
+ * The owners the per-scope snapshots of an earlier release imply, as the file's
+ * first lines: for each tool's own ID, the scope whose snapshots show it reported
+ * it with the greatest total, and, when several did, the credit of their parts.
+ * A tie names no owner.
+ */
 async function ownersFromSnapshots(): Promise<string> {
-  const best = new Map<string, { key: string; prompts: number; tokens: number; tied: boolean }>();
+  const shared = await readSnapshotsIn(undefined);
+  const parts = new Map<string, Array<{ key: string; snapshots: ScopeSnapshots }>>();
   for (const dataHome of await knownDataHomes()) {
-    const [interventions, promptTokens, daily] = await Promise.all(
-      REPORTED_SNAPSHOTS.map((name) => readJson<Record<string, unknown>>(snapshotPathIn(dataHome, name))),
-    );
-    const ids = new Set([interventions, promptTokens, daily].flatMap((snapshot) =>
+    const snapshots = await readSnapshotsIn(dataHome);
+    const ids = new Set([snapshots.interventions, snapshots.promptTokens, snapshots.daily].flatMap((snapshot) =>
       (snapshot && typeof snapshot === 'object' ? Object.keys(snapshot) : [])));
     const key = await dataHomeKey(dataHome);
     for (const sessionId of ids) {
-      if (sessionId.startsWith('pid-')) continue;
-      const fromTokens = reportedSize(promptTokens?.[sessionId]);
-      const size = { prompts: Math.max(fromTokens.prompts, reportedSize(daily?.[sessionId]).prompts), tokens: fromTokens.tokens };
-      const held = best.get(sessionId);
-      if (!held || size.prompts > held.prompts || (size.prompts === held.prompts && size.tokens > held.tokens)) {
-        best.set(sessionId, { key, ...size, tied: false });
-      } else if (size.prompts === held.prompts && size.tokens === held.tokens && key !== held.key) {
-        held.tied = true;
-      }
+      if (sessionId.startsWith('pid-') || !showsReported(snapshots, shared, sessionId)) continue;
+      parts.set(sessionId, [...(parts.get(sessionId) ?? []), { key, snapshots }]);
     }
   }
-  // A tie is a copy of one shared entry that release made in every scope: it
-  // names no owner, and each scope already holds that baseline.
-  return [...best].flatMap(([sessionId, { key, tied }]) =>
-    (tied ? [] : [`${JSON.stringify({ sessionId, dataHomeKey: key })}\n`])).join('');
+  const lines: string[] = [];
+  for (const [sessionId, held] of parts) {
+    const size = (part: { snapshots: ScopeSnapshots }) => heldIn(part.snapshots, sessionId);
+    const best = held.reduce((a, b) => {
+      const x = size(a);
+      const y = size(b);
+      return y.prompts > x.prompts || (y.prompts === x.prompts && y.tokens > x.tokens) ? b : a;
+    });
+    const tied = held.some((part) => part.key !== best.key
+      && size(part).prompts === size(best).prompts && size(part).tokens === size(best).tokens);
+    if (tied) continue;
+    const credit = held.length > 1 ? creditOf(held.map((part) => part.snapshots), sessionId) : undefined;
+    lines.push(JSON.stringify({ sessionId, dataHomeKey: best.key, ...(credit ? { credit } : {}) }));
+  }
+  return lines.map((line) => `${line}\n`).join('');
+}
+
+/** The credits the file's first line for each ID carries (see {@link creditOf}). */
+async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
+  const credits = new Map<string, OwnerCredit>();
+  const seen = new Set<string>();
+  for (const line of ((await readFileSafe(sessionOwnersPath())) ?? '').split('\n')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || !('sessionId' in parsed) || typeof parsed.sessionId !== 'string') continue;
+    if (seen.has(parsed.sessionId)) continue;
+    seen.add(parsed.sessionId);
+    if (!('credit' in parsed) || !parsed.credit || typeof parsed.credit !== 'object') continue;
+    const credit = parsed.credit;
+    const daily = 'daily' in credit ? parseDailySnapshot(credit.daily) : undefined;
+    credits.set(parsed.sessionId, {
+      interventions: interventionsEntry('interventions' in credit ? credit.interventions : undefined),
+      promptTokens: promptTokensEntry('promptTokens' in credit ? credit.promptTokens : undefined),
+      ...(daily ? { daily } : {}),
+    });
+  }
+  return credits;
 }
 
 async function readSessionOwners(): Promise<Map<string, string>> {
@@ -794,31 +934,16 @@ async function readSessionOwners(): Promise<Map<string, string>> {
   return owners;
 }
 
-/**
- * The IDs of a scope's snapshots that show it reported them: absent from the
- * shared snapshot, or past its total there. A copy of a shared entry, which
- * an earlier release made in every scope, shows nothing.
- */
+/** The IDs of a scope's snapshots that show it reported them (see {@link showsReported}). */
 async function reportedBeyondShared(
   promptTokens: Record<string, unknown>,
   interventions: Record<string, unknown>,
   daily: Record<string, unknown>,
 ): Promise<string[]> {
-  const [sharedTokens, sharedDaily] = await Promise.all([
-    readJson<Record<string, unknown>>(sharedSnapshotPath('prompt-tokens')),
-    readJson<Record<string, unknown>>(sharedSnapshotPath('daily-sessions')),
-  ]);
-  const size = (tokens: Record<string, unknown> | null, days: Record<string, unknown> | null, id: string) => {
-    const fromTokens = reportedSize(tokens?.[id]);
-    return { prompts: Math.max(fromTokens.prompts, reportedSize(days?.[id]).prompts), tokens: fromTokens.tokens };
-  };
+  const shared = await readSnapshotsIn(undefined);
+  const own: ScopeSnapshots = { interventions, promptTokens, daily };
   const ids = new Set([...Object.keys(promptTokens), ...Object.keys(interventions), ...Object.keys(daily)]);
-  return [...ids].filter((id) => {
-    if (!Object.hasOwn(sharedTokens ?? {}, id) && !Object.hasOwn(sharedDaily ?? {}, id)) return true;
-    const own = size(promptTokens, daily, id);
-    const shared = size(sharedTokens, sharedDaily, id);
-    return own.prompts > shared.prompts || (own.prompts === shared.prompts && own.tokens > shared.tokens);
-  });
+  return [...ids].filter((id) => showsReported(own, shared, id));
 }
 
 /** Records `key` as the owner of the tool-own session IDs among `sessionIds` that have none yet. */
@@ -858,8 +983,19 @@ export async function creditSplitRuns(
     interventions: { ...reported.interventions }, promptTokens: { ...reported.promptTokens }, daily: { ...reported.daily },
     changed: false,
   };
+  const credits = await readOwnerCredits();
   for (const [runId, runEvents] of byRun) {
     const homes = new Set(runEvents.flatMap((e) => (typeof e.dataHome === 'string' ? [e.dataHome] : [])));
+    // Its parts' events are gone: the credit the owners file seeded from their snapshots.
+    const credit = homes.size < 2 ? credits.get(runId) : undefined;
+    if (credit) {
+      if (reportedSize(result.promptTokens[runId]).prompts >= credit.promptTokens.prompts) continue;
+      result.promptTokens[runId] = credit.promptTokens;
+      result.interventions[runId] = credit.interventions;
+      if (credit.daily) result.daily[runId] = credit.daily;
+      result.changed = true;
+      continue;
+    }
     if (homes.size < 2) continue;
     // Main keyed its snapshots by the session ID, before runs had their own.
     const id = runId.startsWith('pid-') ? runId.slice(0, runId.lastIndexOf('@')) : runId;

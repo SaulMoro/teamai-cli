@@ -379,12 +379,18 @@ recorded there is that scope's wherever it is resumed later, whatever the log
 still holds, so another scope never reports its transcript again; the first
 line for an ID wins, and the file grows by one line per such session, like the
 snapshots. An earlier release kept only per-scope snapshots, so the file is
-first written from them: a tool's own ID in any of a scope's snapshots is the
-scope's that holds its greatest total (prompts, then tokens), since a session
-that release split per event holds only part of it elsewhere, and a scope may
-have reported past the shared total it was seeded with. A tie names no owner:
-that release copied the shared file into every scope, so equal totals show only
-the copy, and each scope already holds that baseline. The scopes read are the
+first written from them: a tool's own ID is the scope's whose snapshots show it
+reported it with the greatest total (prompts, then tokens). They show it when the
+shared snapshots (all three) hold none of it, or the scope is past their total:
+that release copied the shared file into every scope it ran in, so a copy, even
+the only one, shows nothing, and a tie names no owner. When several scopes
+reported it (a session that release split per event), the owner's line also
+carries the credit of their parts, applied once as its baseline: a part whose
+daily entry shows it ended in a Stop holds the transcript's cumulative total, so
+the greatest such part counts once, while a part with no Stop counted its own
+prompts, which add; intervention counts add, tokens take the greatest. A part
+with no Stop that came before another's Stop is then credited twice, which
+undercounts once but never sends a prompt again. The scopes read are the
 user scope, every partition, and a project whose data home is in its workspace
 that a session still in the log leads to; each report also records the IDs of
 its own snapshots that have no owner yet and show it reported them (absent from
