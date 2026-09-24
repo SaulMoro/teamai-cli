@@ -716,6 +716,39 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect((await stats()).day).toMatchObject({ sessionsSucceeded: 0 });
   });
 
+  it('a Codex session with a session-scoped token counter still keeps its other metrics per rollout', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const day = new Date().toISOString().slice(0, 10);
+    // The thread-level token counter spans rollouts; prompts and costs restart with each.
+    const stop = (rollout: string, minute: number, prompts: number, costMicros: number, input: number) => event(rollout, 'stop', minute, {
+      prompts, tokenScope: 'session', tokens: { input, output: 0, cacheRead: 0, cacheCreation: 0 },
+      requestDaily: { [day]: { pricedRequests: 1, costMicros, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1' } },
+    });
+    write([stop('rollout-a.jsonl', 0, 5, 100, 500)]);
+    await stats();
+    write([stop('rollout-b.jsonl', 30, 2, 20, 530)]);
+    const after = await stats();
+    const reported = await report(project);
+    const tokens = reported && typeof reported === 'object' && 'tokens' in reported ? reported.tokens : undefined;
+
+    expect(after.prompts).toBe(7);
+    expect(after.day).toMatchObject({ costMicros: 120 });
+    expect(tokens).toMatchObject({ input: 530 });
+  });
+
+  it('a dropped Codex rollout keeps the prompts its submits counted', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    // Codex Stops carry no prompt count: the submits of each rollout count its prompts.
+    write([event('rollout-a.jsonl', 'prompt_submit', 0), event('rollout-a.jsonl', 'prompt_submit', 1),
+      event('rollout-a.jsonl', 'prompt_submit', 2), event('rollout-a.jsonl', 'stop', 3)]);
+    await stats();
+    write([event('rollout-b.jsonl', 'prompt_submit', 30), event('rollout-b.jsonl', 'stop', 31)]);
+
+    expect((await stats()).prompts).toBe(4);
+  });
+
   it('a rollout\'s intervention change alone still updates its kept totals', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);

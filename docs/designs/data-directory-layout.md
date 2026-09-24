@@ -414,7 +414,10 @@ credited once with every part reported: for each scope, the shortest prefix of
 its events whose metrics reach its snapshot, and the owner takes the metrics of
 their union as reported when they exceed its own entry, so parts counted before
 any Stop carried the transcript's total are neither lost nor sent twice.
-A Codex session is kept per rollout, with or without a token record: a
+A Codex session is kept per rollout, with or without a token record, and when
+its tokens come from a thread-level counter that already spans rollouts (then
+no rollout holds tokens of its own); a rollout's prompts are its Stop's count or
+else its submits. A
 rollout's counters restart, and compaction drops its events, so its prompt-token
 entry holds each rollout's reported prompts, tokens, interruptions, rejections,
 corrections, active time and request costs under a hash of the rollout's path,

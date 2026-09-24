@@ -1845,6 +1845,7 @@ export function aggregateSessionMetrics(
   const transcriptRequests = new Map<string, Map<string, Record<string, RequestCostMetrics>>>();
   const transcriptCorrections = new Map<string, Map<string, number>>();
   const transcriptErrors = new Map<string, Set<string>>();
+  const transcriptSubmits = new Map<string, Map<string, number>>();
   const transcriptSince = new Map<string, Map<string, string>>();
   const lastTranscript = new Map<string, string>();
   const timeline = new Map<string, Array<{ at: number; transcript: string | undefined }>>();
@@ -1871,6 +1872,11 @@ export function aggregateSessionMetrics(
     timeline.set(event.sessionId, events);
     if (event.status === 'error' && rolloutOf !== undefined) {
       transcriptErrors.set(event.sessionId, (transcriptErrors.get(event.sessionId) ?? new Set<string>()).add(rolloutOf));
+    }
+    if (event.type === 'prompt_submit' && rolloutOf !== undefined) {
+      const submits = transcriptSubmits.get(event.sessionId) ?? new Map<string, number>();
+      submits.set(rolloutOf, (submits.get(rolloutOf) ?? 0) + 1);
+      transcriptSubmits.set(event.sessionId, submits);
     }
     if (event.type === 'stop' && typeof event.transcriptPath === 'string') {
       const rollout = event.transcriptPath;
@@ -1953,7 +1959,7 @@ export function aggregateSessionMetrics(
       const unscoped = unscopedTokens.get(sid);
       if (unscoped) m.tokens = { ...unscoped.tokens };
     }
-    if (rolloutSessions.has(sid) && !sessionSnapshot) {
+    if (rolloutSessions.has(sid)) {
       // Active time per rollout: each gap goes to the rollout of the event it ends at.
       const durations = new Map<string, number>();
       const own = [...(timeline.get(sid) ?? [])].sort((a, b) => a.at - b.at);
@@ -1966,8 +1972,10 @@ export function aggregateSessionMetrics(
       }
       const since = transcriptSince.get(sid) ?? new Map<string, string>();
       m.segments = Object.fromEntries([...since].map(([transcript, first]) => [transcript, {
-        prompts: transcriptPrompts.get(sid)?.get(transcript) ?? 0,
-        tokens: { ...(segments?.get(transcript)?.tokens ?? emptyTokenUsage()) },
+        // A Codex Stop may count no prompts: the rollout's submits then do.
+        prompts: Math.max(transcriptPrompts.get(sid)?.get(transcript) ?? 0, transcriptSubmits.get(sid)?.get(transcript) ?? 0),
+        // A session-scoped counter already spans the rollouts: none holds tokens of its own.
+        tokens: { ...(sessionSnapshot ? emptyTokenUsage() : segments?.get(transcript)?.tokens ?? emptyTokenUsage()) },
         interrupt: transcriptInterventions.get(sid)?.get(transcript)?.interrupt ?? 0,
         toolReject: transcriptInterventions.get(sid)?.get(transcript)?.toolReject ?? 0,
         correction: transcriptCorrections.get(sid)?.get(transcript) ?? 0,
