@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvents, dataHomeKey } from './dashboard-collector.js';
+import { readEvents, dataHomeKey, isHumanPromptEntry } from './dashboard-collector.js';
 import { readFileSafe, ensureDir, pathExists, readJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TokenUsage } from './types.js';
@@ -155,7 +155,11 @@ export interface OwnerCredit {
   interventions: ReportedInterventions[string];
   promptTokens: ReportedPromptTokens[string];
   daily?: DailySessionSnapshot;
+  /** Each part's scope key, reported prompts, and whether it ended in a Stop, for {@link creditedPrompts}. */
+  parts?: CreditPart[];
 }
+
+interface CreditPart { key: string; prompts: number; stop: boolean }
 
 /**
  * The credit for a session an earlier release split across scopes per event,
@@ -164,9 +168,11 @@ export interface OwnerCredit {
  * greatest such part counts once; a part with no Stop counted its own prompts,
  * so those add. Interruptions, rejections and tokens, from Stops, take the
  * greatest; corrections, counted per prompt, add. A part without a Stop that came before another's Stop is
- * credited twice: that undercounts, once, but never sends a prompt again.
+ * credited twice: that undercounts, once, but never sends a prompt again,
+ * unless the session's transcript can place it (see {@link creditedPrompts}).
  */
-function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
+function creditOf(held: Array<{ key: string; snapshots: ScopeSnapshots }>, id: string): OwnerCredit {
+  const parts = held.map((part) => part.snapshots);
   const stops = parts.filter((part) => parseDailySnapshot(part.daily?.[id]) !== undefined);
   const loose = parts.filter((part) => !stops.includes(part));
   const prompts = Math.max(0, ...stops.map((part) => heldIn(part, id).prompts))
@@ -193,6 +199,9 @@ function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
   return {
     interventions,
     promptTokens: { prompts, tokens },
+    parts: held.map((part) => ({
+      key: part.key, prompts: heldIn(part.snapshots, id).prompts, stop: stops.includes(part.snapshots),
+    })),
     ...(latest ? { daily: { ...latest, prompts, durationMs: days.reduce((sum, day) => sum + day.durationMs, 0) } } : {}),
   };
 }
@@ -227,7 +236,7 @@ async function ownersFromSnapshots(): Promise<string> {
     const tied = held.some((part) => part.key !== best.key
       && size(part).prompts === size(best).prompts && size(part).tokens === size(best).tokens);
     if (tied) continue;
-    const credit = held.length > 1 ? creditOf(held.map((part) => part.snapshots), sessionId) : undefined;
+    const credit = held.length > 1 ? creditOf(held, sessionId) : undefined;
     lines.push(JSON.stringify({ sessionId, dataHomeKey: best.key, ...(credit ? { credit } : {}) }));
   }
   return lines.map((line) => `${line}\n`).join('');
@@ -250,10 +259,18 @@ export async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
     if (!('credit' in parsed) || !parsed.credit || typeof parsed.credit !== 'object') continue;
     const credit = parsed.credit;
     const daily = 'daily' in credit ? parseDailySnapshot(credit.daily) : undefined;
+    const parts: CreditPart[] = [];
+    if ('parts' in credit && Array.isArray(credit.parts)) {
+      for (const part of credit.parts) {
+        if (!part || typeof part !== 'object' || !('key' in part) || typeof part.key !== 'string') continue;
+        parts.push({ key: part.key, prompts: reportedSize(part).prompts, stop: 'stop' in part && part.stop === true });
+      }
+    }
     credits.set(parsed.sessionId, {
       interventions: interventionsEntry('interventions' in credit ? credit.interventions : undefined),
       promptTokens: promptTokensEntry('promptTokens' in credit ? credit.promptTokens : undefined),
       ...(daily ? { daily } : {}),
+      ...(parts.length > 0 ? { parts } : {}),
     });
   }
   return credits;
@@ -311,3 +328,57 @@ export async function recordSessionOwners(sessionIds: Iterable<string>, key: str
   }
 }
 
+
+/**
+ * The prompts a credit covers, placed by the session's transcript, which keeps
+ * every prompt in order with the directory it was typed in (Claude). A part
+ * that ended in a Stop counted the transcript's first prompts, cumulatively,
+ * so the greatest such part covers that many; a part with no Stop counted its
+ * own scope's first prompts, which add only where they come after those.
+ * Undefined when the credit mixes no such parts, or no transcript places them.
+ */
+export async function creditedPrompts(credit: OwnerCredit, transcripts: string[]): Promise<number | undefined> {
+  const parts = credit.parts ?? [];
+  const stopped = parts.filter((part) => part.stop);
+  const loose = parts.filter((part) => !part.stop);
+  if (stopped.length === 0 || loose.length === 0) return undefined;
+  const covered = Math.max(...stopped.map((part) => part.prompts));
+  const { resolveConfigForDir } = await import('./config.js');
+  const keys = new Map<string, Promise<string | undefined>>();
+  const keyOf = (cwd: string) => {
+    let key = keys.get(cwd);
+    if (!key) {
+      key = pathExists(cwd).then(async (exists) => {
+        const config = exists ? await resolveConfigForDir(cwd) : null;
+        return config ? dataHomeKey(getDataHome(config)) : undefined;
+      });
+      keys.set(cwd, key);
+    }
+    return key;
+  };
+  for (const transcript of [...transcripts].reverse()) {
+    const content = await readFileSafe(transcript);
+    if (content === null) continue;
+    const prompts: string[] = [];
+    for (const line of content.split('\n')) {
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isHumanPromptEntry(entry) || !entry || typeof entry !== 'object' || !('cwd' in entry)) continue;
+      if (typeof entry.cwd === 'string') prompts.push(entry.cwd);
+    }
+    if (prompts.length < covered) continue;
+    const scopes = await Promise.all(prompts.map(keyOf));
+    let total = covered;
+    for (const part of loose) {
+      const own = scopes.flatMap((key, i) => (key === part.key ? [i] : [])).slice(0, part.prompts);
+      if (own.length < part.prompts) return undefined;
+      total += own.filter((i) => i >= covered).length;
+    }
+    return total;
+  }
+  return undefined;
+}

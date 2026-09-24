@@ -600,6 +600,31 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(1);
   });
 
+  it.each([
+    // P's 3 prompts came before Q's cumulative Stop of 5, which counts them already.
+    ['before', ['p', 'p', 'p', 'q', 'q'], 3, 5, 1],
+    // Q's Stop counted 2; P's 3 prompts came after it.
+    ['after', ['q', 'q', 'p', 'p', 'p'], 3, 2, 1],
+  ])('a compacted split session whose part with no Stop came %s the other part\'s Stop is credited by its transcript',
+    async (_, order, loose, stop, expected) => {
+      const { root, project } = await setup();
+      const { rootQ, projectQ } = await setupQ();
+      const today = new Date().toISOString().slice(0, 10);
+      writeSharedSnapshots({ split: loose }, today, project);
+      fs.rmSync(path.join(getDataHome(project), 'dashboard', 'reported-daily-sessions.json'));
+      writeSharedSnapshots({ split: stop }, today, projectQ);
+      // The transcript holds every prompt in order, each with the directory it was typed in.
+      const transcript = path.join(tmp, 'split.jsonl');
+      const cwdOf = (at: string) => (at === 'p' ? root : rootQ);
+      fs.writeFileSync(transcript, [...order, 'q'].map((at, i) => JSON.stringify({
+        type: 'user', sessionId: 'split', uuid: `u${i}`, cwd: cwdOf(at), message: { role: 'user', content: `turn ${i}` },
+      })).join('\n') + '\n');
+      // Resumed in Q, one new prompt: the Stop's transcript total is 6.
+      await session('claude', { session_id: 'split', cwd: rootQ, transcript_path: transcript });
+
+      expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(expected);
+    });
+
   it('a compacted split session credits the cumulative Stop interventions once', async () => {
     const { user, project } = await setup();
     const { rootQ, projectQ } = await setupQ();

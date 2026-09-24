@@ -18,7 +18,7 @@ import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, Dash
 import { getVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { filterEventsByScope, runsOfLog } from './dashboard-scope.js';
 import {
-  interventionsEntry, promptTokensEntry, readOwnerCredits, recordSessionOwners, reportedBeyondShared, reportedSize,
+  creditedPrompts, interventionsEntry, promptTokensEntry, readOwnerCredits, recordSessionOwners, reportedBeyondShared, reportedSize,
   sharedSnapshotPath, snapshotPathIn,
   type ReportedInterventions, type ReportedPromptTokens, type ReportedSegments, type ReportedSnapshotName,
 } from './session-owners.js';
@@ -488,10 +488,13 @@ async function creditSplitRuns(
     // Its parts' events are gone: the credit the owners file seeded from their snapshots.
     const credit = homes.size < 2 ? credits.get(runId) : undefined;
     if (credit) {
-      if (reportedSize(result.promptTokens[runId]).prompts >= credit.promptTokens.prompts) continue;
-      result.promptTokens[runId] = credit.promptTokens;
+      // Placed by the transcript where it can tell what the parts overlapped.
+      const transcripts = runEvents.flatMap((e) => (typeof e.transcriptPath === 'string' ? [e.transcriptPath] : []));
+      const prompts = (await creditedPrompts(credit, transcripts)) ?? credit.promptTokens.prompts;
+      if (reportedSize(result.promptTokens[runId]).prompts >= prompts) continue;
+      result.promptTokens[runId] = { ...credit.promptTokens, prompts };
       result.interventions[runId] = credit.interventions;
-      if (credit.daily) result.daily[runId] = credit.daily;
+      if (credit.daily) result.daily[runId] = { ...credit.daily, prompts };
       result.changed = true;
       continue;
     }

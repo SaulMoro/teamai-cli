@@ -224,6 +224,30 @@ interface JsonlTranscriptScan {
 }
 
 /** Scan the Claude/Codex JSONL transcript once. */
+/**
+ * Whether a Claude transcript entry is a human turn, what the Stop scan counts
+ * as a prompt: plain-string user content, or user content with text that is
+ * neither an interrupt marker nor a system injection; never meta or sidechain.
+ * One human turn per user entry (tool_result-only entries have no human text).
+ */
+export function isHumanPromptEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object' || !('type' in entry) || entry.type !== 'user') return false;
+  if (('isMeta' in entry && entry.isMeta === true) || ('isSidechain' in entry && entry.isSidechain === true)) return false;
+  const message = 'message' in entry && entry.message && typeof entry.message === 'object' ? entry.message : undefined;
+  const content: unknown = message && 'content' in message ? message.content : undefined;
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return !!text && !text.startsWith(TRANSCRIPT_INTERRUPT_PREFIX) && !TRANSCRIPT_SYSTEM_PREFIXES.some((p) => text.startsWith(p));
+  }
+  if (!Array.isArray(content)) return false;
+  return content.some((item: unknown) => {
+    if (!item || typeof item !== 'object' || !('type' in item) || item.type !== 'text' || !('text' in item)) return false;
+    if (typeof item.text !== 'string' || item.text.startsWith(TRANSCRIPT_INTERRUPT_PREFIX)) return false;
+    const text = item.text.trim();
+    return !!text && !TRANSCRIPT_SYSTEM_PREFIXES.some((p) => text.startsWith(p));
+  });
+}
+
 async function scanJsonlTranscriptOnce(transcriptPath: string, modelAliases?: Record<string, string>): Promise<JsonlTranscriptScan> {
   let interrupt = 0;
   let toolReject = 0;
@@ -352,33 +376,13 @@ async function scanJsonlTranscriptOnce(transcriptPath: string, modelAliases?: Re
 
       if (entry.type !== 'user') continue;
 
-      const isMeta = entry.isMeta === true || entry.isSidechain === true;
+      if (isHumanPromptEntry(entry)) prompts++;
       const content = entry.message?.content;
-
-      // Plain-string user content = a genuine human prompt (older transcript shape).
-      if (typeof content === 'string') {
-        const trimContent = content.trim();
-        if (
-          !isMeta &&
-          trimContent &&
-          !trimContent.startsWith(TRANSCRIPT_INTERRUPT_PREFIX) &&
-          !TRANSCRIPT_SYSTEM_PREFIXES.some((p) => trimContent.startsWith(p))
-        ) {
-          prompts++;
-        }
-        continue;
-      }
       if (!Array.isArray(content)) continue;
 
-      let hasHumanText = false;
       for (const item of content as Array<Record<string, unknown>>) {
         if (item?.type === 'text' && typeof item.text === 'string') {
-          const txt = item.text.trim();
-          if (item.text.startsWith(TRANSCRIPT_INTERRUPT_PREFIX)) {
-            interrupt++;
-          } else if (txt && !TRANSCRIPT_SYSTEM_PREFIXES.some((p) => txt.startsWith(p))) {
-            hasHumanText = true;
-          }
+          if (item.text.startsWith(TRANSCRIPT_INTERRUPT_PREFIX)) interrupt++;
         } else if (item?.type === 'tool_result' && item.is_error === true) {
           const text = typeof item.content === 'string'
             ? item.content
@@ -395,8 +399,6 @@ async function scanJsonlTranscriptOnce(transcriptPath: string, modelAliases?: Re
           }
         }
       }
-      // One human turn per user entry (tool_result-only entries have no human text).
-      if (hasHumanText && !isMeta) prompts++;
     }
   } catch (e) {
     log.warn(`dashboard: failed to scan transcript: ${(e as Error).message}`);

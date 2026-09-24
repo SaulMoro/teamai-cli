@@ -389,9 +389,12 @@ carries the credit of their parts, applied once as its baseline: a part whose
 daily entry shows it ended in a Stop holds the transcript's cumulative total, so
 the greatest such part counts once, while a part with no Stop counted its own
 prompts, which add; interruptions, rejections and tokens, from Stops, take the
-greatest, and corrections, counted per prompt, add. A part
-with no Stop that came before another's Stop is then credited twice, which
-undercounts once but never sends a prompt again. The scopes read are the
+greatest, and corrections, counted per prompt, add. Whether a part with no
+Stop came before another's cumulative Stop, which already counts it, is read
+from the session's transcript when it has one (Claude): it keeps every prompt
+in order with the directory it was typed in, so the Stop covers the first
+prompts and only the part's prompts after those add. With no transcript to
+place them they all add, which undercounts once but never sends a prompt again. The scopes read are the
 user scope, every partition, and a project whose data home is in its workspace
 that a session still in the log leads to; each report also records the IDs of
 its own snapshots that have no owner yet and show it reported them (absent from
