@@ -593,6 +593,35 @@ describe('usage files in a legacy in-workspace .teamai/ (#788)', () => {
     const ignored = git('check-ignore', '--no-index', '.teamai/usage.jsonl.lock', '.teamai/usage.jsonl.123.0123456789ab.tmp');
     expect(ignored.stdout.split('\n').filter(Boolean)).toHaveLength(2);
   });
+
+  it('leaves the .gitignore whole when the disk fills while it is healed', async () => {
+    // The disk fills after the first bytes of the healed .gitignore, wherever it is written.
+    const fillDisk = (file: unknown, data: unknown) => {
+      if (!path.basename(String(file)).startsWith('.gitignore')) return false;
+      fs.writeFileSync(String(file), String(data).slice(0, 40));
+      return true;
+    };
+    const enospc = () => Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    const writeFile = fs.promises.writeFile;
+    vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (fillDisk(file, data)) throw enospc();
+      return writeFile(file, data, options);
+    });
+    const outputWrite = fse.writeFile;
+    vi.spyOn(fse, 'writeFile').mockImplementation(async (file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions | fs.NoParamCallback) => {
+      if (fillDisk(file, data)) throw enospc();
+      if (typeof options === 'function') return outputWrite(file, data, options);
+      return outputWrite(file, data, options);
+    });
+    await fse.outputFile(usagePath(), Array.from({ length: USAGE_EVENT_CAP + 1 }, (_, i) => JSON.stringify(event(`s${i}`))).join('\n') + '\n');
+
+    await capUsageEvents(project());
+    vi.restoreAllMocks();
+
+    expect(fs.readFileSync(path.join(workspace(), '.teamai', '.gitignore'), 'utf-8')).toBe(legacyGitignore);
+    expect((await fs.promises.readdir(path.join(workspace(), '.teamai'))).filter((n) => n.startsWith('.gitignore'))).toEqual(['.gitignore']);
+    expect(await readUsageEvents(project())).toHaveLength(USAGE_EVENT_CAP);
+  });
 });
 
 describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)', () => {

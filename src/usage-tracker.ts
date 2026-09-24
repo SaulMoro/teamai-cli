@@ -14,7 +14,7 @@ import {
   CLAUDE_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
 } from './types.js';
-import { ensureDir, readJson, writeJson, pathExists } from './utils/fs.js';
+import { ensureDir, readJson, writeJson, writeFileAtomic, pathExists } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { resolveConfigForDir, resolveMemberToolRoots } from './config.js';
@@ -437,7 +437,8 @@ async function ignoreUsageSideFiles(config: LocalConfig, usagePath: string): Pro
     const anchor = lines.findIndex((l) => l.trim() === 'usage.jsonl');
     const at = anchor >= 0 ? anchor + 1 : lines.length - (lines[lines.length - 1] === '' ? 1 : 0);
     lines.splice(at, 0, ...missing);
-    await fs.promises.writeFile(gitignorePath, lines.join('\n'), 'utf-8');
+    // A full disk or a kill mid-write must not leave it empty: it also ignores `token` and `env`.
+    await writeFileAtomic(gitignorePath, lines.join('\n'));
   } catch (e) {
     if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') return;
     log.debug(`Could not add the usage side files to ${gitignorePath}: ${e instanceof Error ? e.message : String(e)}`);
