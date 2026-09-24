@@ -850,6 +850,8 @@ projects:
 - **停用** namespace（`teamai projects set`、`teamai roles set`）后，下一次 pull（包括
   `Already synced`）会恢复被覆盖的根条目并移除仅属于该 namespace 的条目。即使
   `env/env.yaml` 不存在或为空，`env.sh` 也会被重写。
+- **目录名**与声明的 namespace 按忽略大小写的方式匹配，与 docs 相同：`env: [checkout]`
+  在任何文件系统上都会读取 `env/Checkout/env.yaml`。
 - **MCP 的 `${VAR}`** 从同一份解析后的环境变量集合取值。
 - **旧模式**（成员没有角色，且团队没有 `projects.yaml`）只读取根目录文件，行为不变；
   `teamai doctor` 会列出根文件中重复的名字。

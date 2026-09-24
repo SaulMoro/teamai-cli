@@ -192,12 +192,21 @@ export async function resolveEntries<E>(
   const notices: EntryNotice[] = [];
   const targets = new TargetFiles(repoPath, type);
 
+  // A declared namespace names its directory case-folded, as docs does, so a
+  // `<type>/Checkout/` is `checkout` on every filesystem, not only the
+  // case-insensitive ones. An exact match wins on one that has both.
+  const dirs = active && active.length > 0 ? await listDirs(path.join(repoPath, type)) : [];
+  const dirOf = (namespace: string): string => (dirs.includes(namespace)
+    ? namespace
+    : dirs.find((dir) => caseFoldKey(dir) === caseFoldKey(namespace)) ?? namespace);
+
   const candidates: NamespaceCandidate<E>[] = [];
   // Entries still scoped by the deprecated per-entry `roles:`.
   const roleScoped = new Set<NamespaceCandidate<E>>();
   for (const namespace of places) {
-    const source = entryFilePath(type, namespace);
-    const read = await reader.read(entryFileAbsolutePath(repoPath, type, namespace), source);
+    const dir = namespace === null ? null : dirOf(namespace);
+    const source = entryFilePath(type, dir);
+    const read = await reader.read(entryFileAbsolutePath(repoPath, type, dir), source);
     if (read === null) continue;
     if (!read.ok) return { kind: 'failed', failure: { kind: 'broken-file', type, source, reason: read.reason }, notices };
     for (const note of read.notes ?? []) notices.push({ kind: 'file-note', message: note });

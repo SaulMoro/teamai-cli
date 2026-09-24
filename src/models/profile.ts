@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import { getTeamaiHomeDir } from '../types.js';
 import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { caseFoldKey } from '../manifest-schema.js';
 import {
   listEntryFiles,
   readEntryFileText,
@@ -249,7 +250,8 @@ export function teamProfilesFrom(entries: readonly ResolvedEntry<ModelProfile>[]
 /** Whether a namespace outside `active` defines profile `id`; a file that does not parse defines nothing. */
 export async function inactiveNamespaceDefines(repoPath: string, active: readonly string[], id: string): Promise<boolean> {
   for (const { namespace, relativePath, absolutePath } of await listEntryFiles(repoPath, 'models')) {
-    if (namespace === null || active.includes(namespace)) continue;
+    // Compared case-folded, as the resolver matches a namespace to its directory.
+    if (namespace === null || active.some((ns) => caseFoldKey(ns) === caseFoldKey(namespace))) continue;
     const read = await readProfilesFile(absolutePath, relativePath);
     if (read?.ok && read.entries.some((profile) => profile.id === id)) return true;
   }

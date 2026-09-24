@@ -906,6 +906,8 @@ projects:
   restores the overridden root entries and removes the namespace-only ones on
   the next pull, `Already synced` included. `env.sh` is rewritten even when
   `env/env.yaml` is missing or empty.
+- **Directory names** match a declared namespace case-folded, as for docs:
+  `env: [checkout]` reads `env/Checkout/env.yaml` on every filesystem.
 - **MCP `${VAR}`** resolves from the same resolved env set.
 - **Legacy mode** (a member with no role and a team without `projects.yaml`)
   reads the root files only, as before; `teamai doctor` lists a name the root file
