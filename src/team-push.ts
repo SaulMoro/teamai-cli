@@ -1,10 +1,9 @@
 import YAML from 'yaml';
-import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
-import { readEvents, aggregateSessionMetrics, dataHomeKey, resolveCopilotUsageTranscript } from './dashboard-collector.js';
+import { readEvents, aggregateSessionMetrics, dataHomeKey } from './dashboard-collector.js';
 import {
   createGit,
   pushRepoDirectly,
@@ -16,27 +15,21 @@ import {
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
-import { getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
-import { getUserHome } from './utils/home.js';
-import { projectsRootDir } from './utils/partition.js';
+import { getVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
+import { filterEventsByScope, runsOfLog } from './dashboard-scope.js';
+import {
+  interventionsEntry, promptTokensEntry, readOwnerCredits, recordSessionOwners, reportedBeyondShared, reportedSize,
+  sharedSnapshotPath, snapshotPathIn,
+  type ReportedInterventions, type ReportedPromptTokens, type ReportedSegments, type ReportedSnapshotName,
+} from './session-owners.js';
 import {
   aggregateDailySessions,
   computeDailyStatsDelta,
   mergeDailyStats,
   takeDailySession,
-  parseDailySnapshot,
   type DailySessionSnapshot,
   type ReportedDailySessions,
 } from './session-trends.js';
-
-/** Snapshot of already-reported per-session intervention counts (idempotency basis). */
-type ReportedInterventions = Record<string, { interrupt: number; toolReject: number; correction: number }>;
-
-/** A rollout's reported totals, keyed by a hash of its transcript path (no path is stored). */
-type ReportedSegments = Record<string, { prompts: number; tokens: TokenUsage }>;
-
-/** Snapshot of already-reported per-session prompt counts + token usage (idempotency basis). */
-type ReportedPromptTokens = Record<string, { prompts: number; tokens: TokenUsage; segments?: ReportedSegments }>;
 
 /** Cumulative delta for conversation-turn count + token usage (Issue #75). */
 interface PromptTokenDelta {
@@ -160,25 +153,11 @@ export function mergeStats(
 //  the whole log and reports into it).
 //
 
-const REPORTED_SNAPSHOTS = ['interventions', 'prompt-tokens', 'daily-sessions'] as const;
-type ReportedSnapshotName = typeof REPORTED_SNAPSHOTS[number];
-
-/** The machine-level snapshot every scope shared before #786 (evaluated at call time for tests). */
-function sharedSnapshotPath(name: ReportedSnapshotName): string {
-  return path.join(getTeamaiHomeDir(), 'dashboard', `reported-${name}.json`);
-}
-
 /** A scope's own snapshot. The user scope's data home holds the shared one, hence its prefix. */
 function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | undefined): string {
   return config ? snapshotPathIn(getDataHome(config), name) : sharedSnapshotPath(name);
 }
 
-/** The snapshot of the scope whose data home is `dataHome`. */
-function snapshotPathIn(dataHome: string, name: ReportedSnapshotName): string {
-  const file = `reported-${name}.json`;
-  if (path.resolve(dataHome) !== path.resolve(getTeamaiHomeDir())) return path.join(dataHome, 'dashboard', file);
-  return path.join(dataHome, 'dashboard', `user-${file}`);
-}
 
 /**
  * A scope's snapshot, seeded from the shared one when the scope has none yet.
@@ -235,7 +214,7 @@ async function writeReportedInterventions(data: ReportedInterventions, config: L
 }
 
 /** Each session's intervention counts, the shape its snapshot entry holds. */
-function interventionCounts(metrics: Map<string, SessionMetrics>): Map<string, ReportedInterventions[string]> {
+export function interventionCounts(metrics: Map<string, SessionMetrics>): Map<string, ReportedInterventions[string]> {
   return new Map([...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]));
 }
 
@@ -248,7 +227,7 @@ function upTo(own: number, left: number): number {
  * A run's prompt and token share of a bare entry. This snapshot decides which
  * runs of the ID that release reported: the ones its prompts and tokens reach.
  */
-export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run, entry) => {
+const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run, entry) => {
   // Read from a snapshot file an earlier release wrote, so parsed, not trusted.
   const left = promptTokensEntry(entry);
   if (left.prompts <= 0 && !hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })) return undefined;
@@ -268,7 +247,7 @@ export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run
  * A run's intervention share, for the runs `covered`, the prompt-token
  * snapshot's: these counts are mostly zero, so running out says nothing.
  */
-export function takeInterventions(covered: (runId: string) => boolean): TakeReported<ReportedInterventions[string]> {
+function takeInterventions(covered: (runId: string) => boolean): TakeReported<ReportedInterventions[string]> {
   return (run, entry, runId) => {
     if (!covered(runId)) return undefined;
     const left = interventionsEntry(entry);
@@ -481,533 +460,6 @@ function hasDailyDelta(delta: ReturnType<typeof computeDailyStatsDelta>['delta']
 }
 
 /**
- * The dashboard events a scope reports (#785): every event of the sessions
- * recorded in it. A session is the run of one ID up to its session_end or
- * process_exit, since a PID-fallback ID comes back for a later run; each run
- * is returned under its own ID (see {@link adoptBareKeys}). It is
- * decided once, whole, by its first event keyed with a data home
- * (`dataHomeKey`, or the path an unreleased build of #795 wrote), because a
- * Stop carries the whole transcript's totals: split per event, a session that
- * moved into another scope would count there again the part recorded before
- * the move. A project also owns the key of its in-repo `.teamai`, where a
- * hook recorded until migration moved the project to a partition. A session
- * written before events carried a key is decided by its first cwd, by the
- * dispatcher's rule: the scope that directory resolves to now, so a nested
- * clone under a project is not the project's; one with no cwd, or a cwd gone
- * since, is no scope's. A tool's own session ID a scope has recorded as its
- * own (see `session-owners.jsonl`) is that scope's, whatever the log still
- * holds. A caller without a scope config reads the whole log.
- */
-export async function filterEventsByScope(
-  events: DashboardEvent[],
-  config?: LocalConfig,
-): Promise<DashboardEvent[]> {
-  if (!config) return events;
-  const ownKey = await dataHomeKey(getDataHome(config));
-  const keys = new Set([ownKey]);
-  if (config.projectRoot) {
-    // Unless the project is rooted at HOME, where that is the user scope's.
-    const legacy = await dataHomeKey(path.join(config.projectRoot, '.teamai'));
-    if (legacy !== (await dataHomeKey(path.join(getUserHome(), '.teamai')))) keys.add(legacy);
-  }
-  const { resolveConfigForDir } = await import('./config.js');
-  const resolvesHere = new Map<string, Promise<boolean>>();
-  const ownsCwd = (cwd: string): Promise<boolean> => {
-    let owns = resolvesHere.get(cwd);
-    if (!owns) {
-      owns = pathExists(cwd).then(async (exists) => {
-        const resolved = exists ? await resolveConfigForDir(cwd) : null;
-        return !!resolved && keys.has(await dataHomeKey(getDataHome(resolved)));
-      });
-      resolvesHere.set(cwd, owns);
-    }
-    return owns;
-  };
-  const eventKeys = await keysOf(events);
-  const { runOf, runIds, deciding } = splitRuns(events, eventKeys);
-  const owners = await readSessionOwners();
-  const transcripts = new Map<number, string[]>();
-  events.forEach((e, i) => {
-    const run = runOf[i];
-    if (run === undefined) return;
-    // Copilot's session log is found by its ID; the event holds no path (#666).
-    const transcript = typeof e.transcriptPath === 'string' ? e.transcriptPath
-      : e.tool === 'copilot' ? resolveCopilotUsageTranscript(e.sessionId) : null;
-    const known = transcripts.get(run) ?? [];
-    if (transcript && !known.includes(transcript)) transcripts.set(run, [...known, transcript]);
-  });
-  const owned = await Promise.all(deciding.map(async (i, run) => {
-    // Recorded by the scope that first reported it, so a session resumed
-    // elsewhere after compaction dropped its events stays that scope's.
-    const owner = owners.get(runIds[run]) ?? (runIds[run].startsWith('pid-') ? undefined
-      : await transcriptOwner(runIds[run], transcripts.get(run) ?? [], resolveConfigForDir));
-    if (owner !== undefined) return keys.has(owner);
-    if (i === undefined) return false;
-    const key = eventKeys[i];
-    const cwd = events[i].cwd;
-    return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
-  }));
-  return events.flatMap((e, i) => {
-    const run = runOf[i];
-    return run !== undefined && owned[run] ? [{ ...e, sessionId: runIds[run] }] : [];
-  });
-}
-
-/**
- * The key of the scope a tool's own session started in, by its transcript,
- * when that scope's snapshots already hold it: an earlier release reported it
- * there, and compaction has since dropped the events that would say so. The
- * latest transcript path first, since a tool may relocate the file. Undefined
- * when there is no such transcript, origin, scope or snapshot entry (a fork
- * under a new ID, a scope that never reported it).
- */
-async function transcriptOwner(
-  sessionId: string,
-  paths: string[],
-  resolveConfigForDir: (dir: string) => Promise<LocalConfig | null>,
-): Promise<string | undefined> {
-  for (const transcript of [...paths].reverse()) {
-    const origin = await transcriptOrigin(transcript);
-    if (origin === undefined) continue;
-    const config = (await pathExists(origin)) ? await resolveConfigForDir(origin) : null;
-    if (!config) return undefined;
-    const dataHome = getDataHome(config);
-    const snapshots = await Promise.all(REPORTED_SNAPSHOTS.map((name) =>
-      readJson<Record<string, unknown>>(snapshotPathIn(dataHome, name))));
-    const held = snapshots.some((snapshot) => !!snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, sessionId));
-    return held ? dataHomeKey(dataHome) : undefined;
-  }
-  return undefined;
-}
-
-/**
- * The directory a transcript's session started in: the first `cwd` a Claude
- * transcript records (a resume from another project appends to the same file),
- * a Codex rollout's `session_meta`, or a Copilot session log's `session.start`.
- * Reads a bounded head of the file; the format is the tool's own, so anything
- * else is undefined.
- */
-async function transcriptOrigin(transcript: string): Promise<string | undefined> {
-  let head: string;
-  try {
-    const fh = await fs.promises.open(transcript, 'r');
-    try {
-      const buffer = Buffer.alloc(64 * 1024);
-      const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
-      head = buffer.subarray(0, bytesRead).toString('utf8');
-    } finally {
-      await fh.close();
-    }
-  } catch {
-    return undefined;
-  }
-  for (const line of head.split('\n')) {
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!entry || typeof entry !== 'object') continue;
-    if ('cwd' in entry && typeof entry.cwd === 'string') return entry.cwd;
-    if ('type' in entry && entry.type === 'session_meta' && 'payload' in entry && entry.payload
-      && typeof entry.payload === 'object' && 'cwd' in entry.payload && typeof entry.payload.cwd === 'string') {
-      return entry.payload.cwd;
-    }
-    if ('type' in entry && entry.type === 'session.start' && 'data' in entry && entry.data && typeof entry.data === 'object'
-      && 'context' in entry.data && entry.data.context && typeof entry.data.context === 'object'
-      && 'cwd' in entry.data.context && typeof entry.data.context.cwd === 'string') {
-      return entry.data.context.cwd;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Each event's data home key. The log is hand-editable: a key that is not a
- * string counts as absent. An unreleased build of #795 recorded the data home
- * path in place of its key.
- */
-async function keysOf(events: DashboardEvent[]): Promise<Array<string | undefined>> {
-  const hashes = new Map<string, Promise<string>>();
-  return Promise.all(events.map((e) => {
-    if (typeof e.dataHomeKey === 'string') return e.dataHomeKey;
-    if (typeof e.dataHome !== 'string') return undefined;
-    let key = hashes.get(e.dataHome);
-    if (!key) {
-      key = dataHomeKey(e.dataHome);
-      hashes.set(e.dataHome, key);
-    }
-    return key;
-  }));
-}
-
-/**
- * The runs of a log: each event's run (none for an exit whose run is gone),
- * each run's ID, and the event that decides its scope.
- *
- * A tool's own session ID is one run, whatever ends it records: `claude
- * --resume` continues it, in a new process, and its Stop carries the whole
- * transcript. It is returned under the ID itself, so it stays the session
- * already reported after compaction drops its events. A PID-fallback ID
- * (`pid-…`) names one run until it ends, then comes back for a later one,
- * maybe in another scope, so each run is decided on its own and returned under
- * the ID plus its first event's timestamp, which stays the same whichever
- * earlier runs compaction has dropped. A second end with nothing recorded since
- * the first (the dashboard monitor's process_exit after SessionEnd) belongs to
- * the run just closed. A start from another process than its open run's begins
- * a new run, though nothing ended that one (a crash with no dashboard running).
- * The monitor's exit names the last event it observed (`processExitAfter`).
- * A dashboard started before that field existed wrote none; since a dead
- * process records nothing more, such an exit followed by more events of its
- * fallback ID before the next start did not end the open run: it was observed
- * before that run began, and belongs to the run closed before it.
- */
-function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined>): {
-  runOf: Array<number | undefined>;
-  runIds: string[];
-  deciding: Array<number | undefined>;
-} {
-  const runOf: Array<number | undefined> = [];
-  const runPid: Array<number | undefined> = [];
-  const observedRuns = new Map<string, number>();
-  const openRun = new Map<string, number>();
-  const closedRun = new Map<string, number>();
-  const deciding: Array<number | undefined> = [];
-  const runIds: string[] = [];
-  // Whether each event is followed by activity of its ID (anything but a start
-  // or a monitor exit) before that ID's next start.
-  const continues: boolean[] = [];
-  const active = new Map<string, boolean>();
-  for (let i = events.length - 1; i >= 0; i--) {
-    const { sessionId, type } = events[i];
-    continues[i] = active.get(sessionId) ?? false;
-    if (type === 'session_start') active.set(sessionId, false);
-    else if (type !== 'process_exit') active.set(sessionId, true);
-  }
-  events.forEach((e, i) => {
-    const fallback = e.sessionId.startsWith('pid-');
-    const ends = e.type === 'session_end' || e.type === 'process_exit';
-    const observed = e.type === 'process_exit' && typeof e.processExitAfter === 'string';
-    const starts = e.type === 'session_start' && typeof e.monitorPid === 'number';
-    const open = openRun.get(e.sessionId);
-    if (starts && open !== undefined && fallback
-      && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) {
-      // Nothing ended it (a crash), but a late exit of it must still find it.
-      openRun.delete(e.sessionId);
-      closedRun.set(e.sessionId, open);
-    }
-    const closed = closedRun.get(e.sessionId);
-    const stale = e.type === 'process_exit' && !observed && fallback && open !== undefined && closed !== undefined
-      && continues[i];
-    let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
-      : stale ? closed : openRun.get(e.sessionId) ?? (ends ? closed : undefined);
-    // The observed run may have been compacted. Its delayed exit must not
-    // manufacture a new session or close a later reuse of the same ID.
-    if (observed && run === undefined) {
-      runOf.push(undefined);
-      return;
-    }
-    if (run === undefined) {
-      run = deciding.push(undefined) - 1;
-      runIds.push(fallback ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
-    }
-    if (ends && fallback && !stale && (!observed || openRun.get(e.sessionId) === run)) {
-      openRun.delete(e.sessionId);
-      closedRun.set(e.sessionId, run);
-    } else if (!ends || !fallback) {
-      openRun.set(e.sessionId, run);
-    }
-    if (starts) runPid[run] ??= e.monitorPid;
-    runOf.push(run);
-    observedRuns.set(`${e.sessionId}@${e.timestamp}`, run);
-    const current = deciding[run];
-    if (eventKeys[i] !== undefined ? current === undefined || eventKeys[current] === undefined
-      : current === undefined && !!e.cwd) deciding[run] = i;
-  });
-  return { runOf, runIds, deciding };
-}
-
-/** Every event of the log under its run ID, whichever scope it belongs to. */
-async function runsOfLog(events: DashboardEvent[]): Promise<DashboardEvent[]> {
-  const { runOf, runIds } = splitRuns(events, await keysOf(events));
-  return events.flatMap((e, i) => {
-    const run = runOf[i];
-    return run !== undefined ? [{ ...e, sessionId: runIds[run] }] : [];
-  });
-}
-
-// ─── Session owners ─────────────────────────────────────
-//
-//  ~/.teamai/dashboard/session-owners.jsonl   {"sessionId":"<tool's own ID>","dataHomeKey":"<key>"} per line
-//
-//  A tool's own session ID can be resumed anywhere, long after compaction
-//  dropped its events, and its Stop carries the whole transcript. So the scope
-//  that first reports it records itself here, append-only, and the session
-//  stays that scope's. Only the ID and the key, never a path (#666). The first
-//  line for an ID wins.
-//
-//  A release before this file kept per-scope snapshots only, so the file is
-//  first written from them: each tool's own ID in any snapshot of a scope is
-//  the scope's that holds its greatest total (prompts, then tokens), since a
-//  session that release split per event holds only part of it elsewhere. A tie
-//  names no owner: that release copied the shared file into every scope. The
-//  scopes read are the user scope, every partition, and a project whose data
-//  home is in its workspace that a session still in the log leads to. Each
-//  report also records the IDs of its own snapshots that have no owner yet,
-//  for such a project the log no longer leads to, when they show it reported
-//  them: absent from the shared snapshot, or past its total there.
-//
-
-function sessionOwnersPath(): string {
-  return path.join(getTeamaiHomeDir(), 'dashboard', 'session-owners.jsonl');
-}
-
-/** The data homes whose snapshots an earlier release may have written. */
-async function knownDataHomes(): Promise<string[]> {
-  const slugs = await fs.promises.readdir(projectsRootDir()).catch(() => []);
-  const homes = [getTeamaiHomeDir(), ...[...slugs].sort().map((slug) => path.join(projectsRootDir(), slug))];
-  // A project whose data home is in its workspace is under no partition; a
-  // session of it still in the log leads to it.
-  const { resolveConfigForDir } = await import('./config.js');
-  const cwds = new Set((await readEvents()).flatMap((e) => (typeof e.cwd === 'string' ? [e.cwd] : [])));
-  for (const cwd of cwds) {
-    const config = (await pathExists(cwd)) ? await resolveConfigForDir(cwd) : null;
-    if (config) homes.push(getDataHome(config));
-  }
-  return [...new Set(homes.map((home) => path.resolve(home)))];
-}
-
-/** A snapshot entry's reported prompts and tokens, 0 for what it does not hold. */
-function reportedSize(entry: unknown): { prompts: number; tokens: number } {
-  if (!entry || typeof entry !== 'object') return { prompts: 0, tokens: 0 };
-  const prompts = 'prompts' in entry && typeof entry.prompts === 'number' ? entry.prompts : 0;
-  const tokens = 'tokens' in entry && entry.tokens && typeof entry.tokens === 'object'
-    ? Object.values(entry.tokens).reduce((sum: number, n: unknown) => sum + (typeof n === 'number' ? n : 0), 0)
-    : 0;
-  return { prompts, tokens };
-}
-
-/** A scope's three snapshots (the shared ones for no data home), as a file holds them. */
-interface ScopeSnapshots {
-  interventions: Record<string, unknown> | null;
-  promptTokens: Record<string, unknown> | null;
-  daily: Record<string, unknown> | null;
-}
-
-async function readSnapshotsIn(dataHome: string | undefined): Promise<ScopeSnapshots> {
-  const read = (name: ReportedSnapshotName) =>
-    readJson<Record<string, unknown>>(dataHome === undefined ? sharedSnapshotPath(name) : snapshotPathIn(dataHome, name));
-  const [interventions, promptTokens, daily] = await Promise.all(REPORTED_SNAPSHOTS.map(read));
-  return { interventions, promptTokens, daily };
-}
-
-/** An intervention entry read from a file, zero for what it does not hold. */
-function interventionsEntry(value: unknown): ReportedInterventions[string] {
-  const count = (field: 'interrupt' | 'toolReject' | 'correction') =>
-    (value && typeof value === 'object' && field in value && typeof Object.entries(value).find(([k]) => k === field)?.[1] === 'number'
-      ? Number(Object.entries(value).find(([k]) => k === field)?.[1]) : 0);
-  return { interrupt: count('interrupt'), toolReject: count('toolReject'), correction: count('correction') };
-}
-
-/** A prompt-token entry read from a file, zero for what it does not hold. */
-function promptTokensEntry(value: unknown): ReportedPromptTokens[string] {
-  const tokens = emptyTokenUsage();
-  if (value && typeof value === 'object' && 'tokens' in value && value.tokens && typeof value.tokens === 'object') {
-    for (const [field, n] of Object.entries(value.tokens)) {
-      if (typeof n !== 'number') continue;
-      if (field === 'input' || field === 'output' || field === 'cacheRead' || field === 'cacheCreation') tokens[field] = n;
-    }
-  }
-  return { prompts: reportedSize(value).prompts, tokens };
-}
-
-/** What a scope's snapshots hold of `id`: prompts, tokens and intervention counts. */
-function heldIn(snapshots: ScopeSnapshots, id: string): { prompts: number; tokens: number; interventions: number } {
-  const fromTokens = reportedSize(snapshots.promptTokens?.[id]);
-  const iv = interventionsEntry(snapshots.interventions?.[id]);
-  return {
-    prompts: Math.max(fromTokens.prompts, reportedSize(snapshots.daily?.[id]).prompts),
-    tokens: fromTokens.tokens,
-    interventions: iv.interrupt + iv.toolReject + iv.correction,
-  };
-}
-
-/**
- * Whether a scope's snapshots show it reported `id`: the shared snapshots hold
- * none of it, or the scope is past their total. An earlier release copied the
- * shared snapshots into every scope it ran in, so a copy shows nothing.
- */
-function showsReported(own: ScopeSnapshots, shared: ScopeSnapshots, id: string): boolean {
-  const inShared = [shared.interventions, shared.promptTokens, shared.daily].some((snapshot) =>
-    !!snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, id));
-  if (!inShared) return true;
-  const a = heldIn(own, id);
-  const b = heldIn(shared, id);
-  return a.prompts !== b.prompts ? a.prompts > b.prompts
-    : a.tokens !== b.tokens ? a.tokens > b.tokens : a.interventions > b.interventions;
-}
-
-/** What several scopes had reported of one session, credited to its owner (numbers only). */
-interface OwnerCredit {
-  interventions: ReportedInterventions[string];
-  promptTokens: ReportedPromptTokens[string];
-  daily?: DailySessionSnapshot;
-}
-
-/**
- * The credit for a session an earlier release split across scopes per event,
- * from their snapshots alone (its events are gone). A part whose daily entry
- * shows it ended in a Stop carries the transcript's cumulative total, so the
- * greatest such part counts once; a part with no Stop counted its own prompts,
- * so those add. Intervention counts, per event, add; tokens, from Stops, take
- * the greatest. A part without a Stop that came before another's Stop is
- * credited twice: that undercounts, once, but never sends a prompt again.
- */
-function creditOf(parts: ScopeSnapshots[], id: string): OwnerCredit {
-  const stops = parts.filter((part) => parseDailySnapshot(part.daily?.[id]) !== undefined);
-  const loose = parts.filter((part) => !stops.includes(part));
-  const prompts = Math.max(0, ...stops.map((part) => heldIn(part, id).prompts))
-    + loose.reduce((sum, part) => sum + heldIn(part, id).prompts, 0);
-  const tokens = emptyTokenUsage();
-  const interventions = { interrupt: 0, toolReject: 0, correction: 0 };
-  for (const part of parts) {
-    const entry = promptTokensEntry(part.promptTokens?.[id]);
-    for (const field of ['input', 'output', 'cacheRead', 'cacheCreation'] as const) {
-      tokens[field] = Math.max(tokens[field], entry.tokens[field]);
-    }
-    const iv = interventionsEntry(part.interventions?.[id]);
-    interventions.interrupt += iv.interrupt;
-    interventions.toolReject += iv.toolReject;
-    interventions.correction += iv.correction;
-  }
-  const days = stops.flatMap((part) => {
-    const day = parseDailySnapshot(part.daily?.[id]);
-    return day ? [day] : [];
-  });
-  const latest = days.reduce<DailySessionSnapshot | undefined>((a, b) => (!a || b.prompts > a.prompts ? b : a), undefined);
-  return {
-    interventions,
-    promptTokens: { prompts, tokens },
-    ...(latest ? { daily: { ...latest, prompts, durationMs: days.reduce((sum, day) => sum + day.durationMs, 0) } } : {}),
-  };
-}
-
-/**
- * The owners the per-scope snapshots of an earlier release imply, as the file's
- * first lines: for each tool's own ID, the scope whose snapshots show it reported
- * it with the greatest total, and, when several did, the credit of their parts.
- * A tie names no owner.
- */
-async function ownersFromSnapshots(): Promise<string> {
-  const shared = await readSnapshotsIn(undefined);
-  const parts = new Map<string, Array<{ key: string; snapshots: ScopeSnapshots }>>();
-  for (const dataHome of await knownDataHomes()) {
-    const snapshots = await readSnapshotsIn(dataHome);
-    const ids = new Set([snapshots.interventions, snapshots.promptTokens, snapshots.daily].flatMap((snapshot) =>
-      (snapshot && typeof snapshot === 'object' ? Object.keys(snapshot) : [])));
-    const key = await dataHomeKey(dataHome);
-    for (const sessionId of ids) {
-      if (sessionId.startsWith('pid-') || !showsReported(snapshots, shared, sessionId)) continue;
-      parts.set(sessionId, [...(parts.get(sessionId) ?? []), { key, snapshots }]);
-    }
-  }
-  const lines: string[] = [];
-  for (const [sessionId, held] of parts) {
-    const size = (part: { snapshots: ScopeSnapshots }) => heldIn(part.snapshots, sessionId);
-    const best = held.reduce((a, b) => {
-      const x = size(a);
-      const y = size(b);
-      return y.prompts > x.prompts || (y.prompts === x.prompts && y.tokens > x.tokens) ? b : a;
-    });
-    const tied = held.some((part) => part.key !== best.key
-      && size(part).prompts === size(best).prompts && size(part).tokens === size(best).tokens);
-    if (tied) continue;
-    const credit = held.length > 1 ? creditOf(held.map((part) => part.snapshots), sessionId) : undefined;
-    lines.push(JSON.stringify({ sessionId, dataHomeKey: best.key, ...(credit ? { credit } : {}) }));
-  }
-  return lines.map((line) => `${line}\n`).join('');
-}
-
-/** The credits the file's first line for each ID carries (see {@link creditOf}). */
-async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
-  const credits = new Map<string, OwnerCredit>();
-  const seen = new Set<string>();
-  for (const line of ((await readFileSafe(sessionOwnersPath())) ?? '').split('\n')) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== 'object' || !('sessionId' in parsed) || typeof parsed.sessionId !== 'string') continue;
-    if (seen.has(parsed.sessionId)) continue;
-    seen.add(parsed.sessionId);
-    if (!('credit' in parsed) || !parsed.credit || typeof parsed.credit !== 'object') continue;
-    const credit = parsed.credit;
-    const daily = 'daily' in credit ? parseDailySnapshot(credit.daily) : undefined;
-    credits.set(parsed.sessionId, {
-      interventions: interventionsEntry('interventions' in credit ? credit.interventions : undefined),
-      promptTokens: promptTokensEntry('promptTokens' in credit ? credit.promptTokens : undefined),
-      ...(daily ? { daily } : {}),
-    });
-  }
-  return credits;
-}
-
-async function readSessionOwners(): Promise<Map<string, string>> {
-  const owners = new Map<string, string>();
-  if (!(await pathExists(sessionOwnersPath()))) {
-    try {
-      await ensureDir(path.dirname(sessionOwnersPath()));
-      // Exclusive: a report in another scope may be writing it too.
-      await fs.promises.writeFile(sessionOwnersPath(), await ownersFromSnapshots(), { flag: 'wx' });
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') log.debug(`Could not seed session owners: ${(e as Error).message}`);
-    }
-  }
-  const content = await readFileSafe(sessionOwnersPath());
-  for (const line of (content ?? '').split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (parsed && typeof parsed === 'object' && 'sessionId' in parsed && 'dataHomeKey' in parsed
-        && typeof parsed.sessionId === 'string' && typeof parsed.dataHomeKey === 'string'
-        && !owners.has(parsed.sessionId)) owners.set(parsed.sessionId, parsed.dataHomeKey);
-    } catch {
-      // A torn or hand-edited line records no owner.
-    }
-  }
-  return owners;
-}
-
-/** The IDs of a scope's snapshots that show it reported them (see {@link showsReported}). */
-async function reportedBeyondShared(
-  promptTokens: Record<string, unknown>,
-  interventions: Record<string, unknown>,
-  daily: Record<string, unknown>,
-): Promise<string[]> {
-  const shared = await readSnapshotsIn(undefined);
-  const own: ScopeSnapshots = { interventions, promptTokens, daily };
-  const ids = new Set([...Object.keys(promptTokens), ...Object.keys(interventions), ...Object.keys(daily)]);
-  return [...ids].filter((id) => showsReported(own, shared, id));
-}
-
-/** Records `key` as the owner of the tool-own session IDs among `sessionIds` that have none yet. */
-async function recordSessionOwners(sessionIds: Iterable<string>, key: string): Promise<void> {
-  const owners = await readSessionOwners();
-  const ids = new Set([...sessionIds].filter((id) => !id.startsWith('pid-') && !owners.has(id)));
-  if (ids.size === 0) return;
-  try {
-    await ensureDir(path.dirname(sessionOwnersPath()));
-    await fs.promises.appendFile(sessionOwnersPath(),
-      [...ids].map((sessionId) => JSON.stringify({ sessionId, dataHomeKey: key })).join('\n') + '\n');
-  } catch (e) {
-    log.debug(`Could not record session owners: ${(e as Error).message}`);
-  }
-}
-
-/**
  * A session main split across scopes, crediting every part it reported. Main
  * (#795) gave each event to the scope its `dataHome` names and reported each
  * part against that scope's own snapshot, so a scope's entry may hold only its
@@ -1018,7 +470,7 @@ async function recordSessionOwners(sessionIds: Iterable<string>, key: string): P
  * run already reported past it is left alone; runs whose events name at most
  * one data home are untouched.
  */
-export async function creditSplitRuns(
+async function creditSplitRuns(
   events: DashboardEvent[],
   reported: { interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions },
 ): Promise<{
@@ -1074,6 +526,53 @@ export async function creditSplitRuns(
     result.changed = true;
   }
   return result;
+}
+
+/**
+ * A scope's reported snapshots as its report and `teamai stats` compare them:
+ * bare entries adopted by the runs of `events` (prompt tokens first, since they
+ * decide which runs of a bare ID were reported), and a session an earlier
+ * release split across scopes credited with every part. With `persist`, what
+ * changed is written out at once, even with nothing to report, so the report's
+ * success writes, which merge into the files, cannot bring a retired entry back.
+ */
+export async function reportedBaselines(
+  events: DashboardEvent[],
+  metrics: Map<string, SessionMetrics>,
+  currentDaily: Map<string, DailySessionSnapshot>,
+  config: LocalConfig | undefined,
+  persist: boolean,
+): Promise<{ interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions }> {
+  const adopt = async <T>(
+    read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
+    write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
+    current: Record<string, T>,
+    take: TakeReported<T>,
+  ): Promise<Record<string, T>> => {
+    const stored = await read(config);
+    const adopted = adoptBareKeys(stored, events, current, take);
+    if (persist && adopted !== stored) await write(adopted, config);
+    return adopted;
+  };
+  const promptTokens = await adopt(
+    readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported, takePromptTokens,
+  );
+  const covered = (runId: string) => Object.hasOwn(promptTokens, runId);
+  const interventions = await adopt(
+    readReportedInterventions, writeReportedInterventions, Object.fromEntries(interventionCounts(metrics)),
+    takeInterventions(covered),
+  );
+  const daily = await adopt(
+    readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
+    takeDaily(covered),
+  );
+  const credited = await creditSplitRuns(events, { interventions, promptTokens, daily });
+  if (persist && credited.changed) {
+    await writeReportedInterventions(credited.interventions, config);
+    await writeReportedPromptTokens(credited.promptTokens, config);
+    await writeReportedDailySessions(credited.daily, config);
+  }
+  return { interventions: credited.interventions, promptTokens: credited.promptTokens, daily: credited.daily };
 }
 
 /**
@@ -1184,46 +683,9 @@ export async function reportUsageToTeam(
 
     const currentInterventions = interventionCounts(metrics);
     const currentDaily = aggregateDailySessions(dashboardEvents);
-    // A retired bare entry is written out now, even with nothing to report, so
-    // the success writes below, which merge into the file, cannot bring it back.
-    const adopt = async <T>(
-      read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
-      write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
-      current: Record<string, T>,
-      take: TakeReported<T>,
-    ): Promise<Record<string, T>> => {
-      const stored = await read(reportsConfig);
-      const adopted = adoptBareKeys(stored, dashboardEvents, current, take);
-      if (adopted !== stored) await write(adopted, reportsConfig);
-      return adopted;
-    };
-    // Prompt tokens first: they decide which runs of a bare ID were reported.
-    const adoptedPromptTokens = await adopt(
-      readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported,
-      takePromptTokens,
-    );
-    const covered = (runId: string) => Object.hasOwn(adoptedPromptTokens, runId);
-    const adoptedInterventions = await adopt(
-      readReportedInterventions, writeReportedInterventions, Object.fromEntries(currentInterventions),
-      takeInterventions(covered),
-    );
-    const adoptedDailySessions = await adopt(
-      readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
-      takeDaily(covered),
-    );
-    // A session main split across scopes is credited with every part reported,
-    // once, before any delta: written out now, like a retired bare entry.
-    const credited = await creditSplitRuns(dashboardEvents, {
-      interventions: adoptedInterventions, promptTokens: adoptedPromptTokens, daily: adoptedDailySessions,
-    });
-    if (credited.changed) {
-      await writeReportedInterventions(credited.interventions, reportsConfig);
-      await writeReportedPromptTokens(credited.promptTokens, reportsConfig);
-      await writeReportedDailySessions(credited.daily, reportsConfig);
-    }
-    const reportedPromptTokens = credited.promptTokens;
-    const reportedInterventions = credited.interventions;
-    const reportedDailySessions = credited.daily;
+    const {
+      interventions: reportedInterventions, promptTokens: reportedPromptTokens, daily: reportedDailySessions,
+    } = await reportedBaselines(dashboardEvents, metrics, currentDaily, reportsConfig, true);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,

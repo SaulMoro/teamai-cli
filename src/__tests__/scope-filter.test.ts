@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { adoptBareKeys, filterEventsByScope } from '../team-push.js';
+import { adoptBareKeys } from '../team-push.js';
+import { filterEventsByScope } from '../dashboard-scope.js';
 import { dataHomeKey } from '../dashboard-collector.js';
 import type { DashboardEvent, LocalConfig } from '../types.js';
 

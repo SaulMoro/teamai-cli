@@ -156,26 +156,11 @@ async function unreportedDashboardStats(
   metrics: Map<string, SessionMetrics>,
   config: LocalConfig,
 ): Promise<AggregatedDashboardStats> {
-  const {
-    adoptBareKeys, computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens,
-    takeInterventions, takePromptTokens, creditSplitRuns,
-  } = await import('./team-push.js');
-  // The scope's own snapshots, the ones its report compares against (#786).
-  const currentInterventions = new Map(
-    [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
-  );
-  // Prompt tokens first: they decide which runs of a bare ID were reported.
-  const adoptedPromptTokens = adoptBareKeys(
-    await readReportedPromptTokens(config), events, computePromptTokenDelta(metrics, {}).nextReported, takePromptTokens,
-  );
-  const adoptedInterventions = adoptBareKeys(
-    await readReportedInterventions(config), events, Object.fromEntries(currentInterventions),
-    takeInterventions((runId) => Object.hasOwn(adoptedPromptTokens, runId)),
-  );
-  // As the report credits a session main split across scopes.
-  const { promptTokens, interventions } = await creditSplitRuns(events, {
-    interventions: adoptedInterventions, promptTokens: adoptedPromptTokens, daily: {},
-  });
+  const { computeInterventionDelta, computePromptTokenDelta, interventionCounts, reportedBaselines } = await import('./team-push.js');
+  const { aggregateDailySessions } = await import('./session-trends.js');
+  // The scope's own snapshots, compared as its report compares them (#786).
+  const { promptTokens, interventions } = await reportedBaselines(events, metrics, aggregateDailySessions(events), config, false);
+  const currentInterventions = interventionCounts(metrics);
 
   const interventionDelta = computeInterventionDelta(currentInterventions, interventions);
   const promptTokenDelta = computePromptTokenDelta(metrics, promptTokens);
@@ -241,7 +226,7 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // events.jsonl until compaction, so counting the full local aggregate would
   // count each one twice and pull in other projects' sessions). Same filter,
   // same scope config as the report path (#785).
-  const { filterEventsByScope } = await import('./team-push.js');
+  const { filterEventsByScope } = await import('./dashboard-scope.js');
   const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined);
   const metricsMap = aggregateSessionMetrics(scopedEvents);
   // Only subtract what the team already holds. Two guards, because a scope's
