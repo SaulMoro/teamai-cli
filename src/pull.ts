@@ -280,7 +280,7 @@ export function filterAgentsByNamespaces(
   agents: ResourceItem[],
   agentNamespaces: string[] | null,
   placedAgents?: Record<string, string>,
-): ResourceItem[] {
+): { kind: 'resolved'; items: ResourceItem[] } | NamespaceConflictReport {
   if (agentNamespaces === null) {
     // Every agent ships, so each namespace counts as active here, ranked in
     // scan order so the message names the pair the way the scan meets it.
@@ -290,31 +290,46 @@ export function filterAgentsByNamespaces(
       ? resolution.items.flatMap((item) => (item.replaces ? [{ name: item.name, first: item.replaces, second: item }] : []))
       : [];
     const collision = resolution.kind === 'conflict' ? resolution : override;
-    if (collision) throw duplicateAgentError(collision);
-    return agents;
+    if (collision) return duplicateConflict('agent', collision);
+    return { kind: 'resolved', items: agents };
   }
 
   const resolution = resolveAgentsForDirectory(agents, agentNamespaces, placedAgents);
-  if (resolution.kind === 'conflict') throw duplicateAgentError(resolution);
+  if (resolution.kind === 'conflict') return duplicateConflict('agent', resolution);
   const delivered = new Set(resolution.items.map((item) => item.value));
-  return agents.filter((agent) => delivered.has(agent));
+  return { kind: 'resolved', items: agents.filter((agent) => delivered.has(agent)) };
 }
 
-function duplicateAgentError(collision: {
+/**
+ * Two items of one skill or agent name would be delivered here, and both land
+ * at one installed path: nothing says which one this member receives. `pull`
+ * stops that type for the run and keeps what is installed (#707); `message`
+ * names both namespaces.
+ */
+export interface NamespaceConflictReport {
+  readonly kind: 'conflict';
+  readonly message: string;
+}
+
+function duplicateConflict(type: 'skill' | 'agent', collision: {
   name: string;
   first: NamespaceCandidate<ResourceItem>;
   second: NamespaceCandidate<ResourceItem>;
-}): Error {
-  return new Error(
-    `Duplicate agent "${collision.name}" found in active namespaces "${namespaceLabel(collision.first)}" and "${namespaceLabel(collision.second)}"`,
-  );
+}): NamespaceConflictReport {
+  return {
+    kind: 'conflict',
+    message: `Duplicate ${type} "${collision.name}" found in active namespaces "${namespaceLabel(collision.first)}" and "${namespaceLabel(collision.second)}"`,
+  };
 }
 
 function namespaceLabel(candidate: NamespaceCandidate<ResourceItem>): string {
   return candidate.namespace ?? '(root)';
 }
 
-export async function scanRoleAwareSkills(localConfig: LocalConfig, namespaces: ResourceNamespaces): Promise<ResourceItem[]> {
+export async function scanRoleAwareSkills(
+  localConfig: LocalConfig,
+  namespaces: ResourceNamespaces,
+): Promise<{ kind: 'resolved'; items: ResourceItem[] } | NamespaceConflictReport> {
   const items: ResourceItem[] = [];
 
   for (const namespace of namespaces.skills) {
@@ -332,30 +347,26 @@ export async function scanRoleAwareSkills(localConfig: LocalConfig, namespaces: 
   }
 
   const resolution = resolveNamespacedItems(items.map(itemCandidate), namespaces.skills);
-  if (resolution.kind === 'conflict') {
-    throw new Error(
-      `Duplicate skill "${resolution.name}" found in active namespaces "${namespaceLabel(resolution.first)}" and "${namespaceLabel(resolution.second)}"`,
-    );
-  }
-
-  return resolution.items.map((item) => item.value);
+  if (resolution.kind === 'conflict') return duplicateConflict('skill', resolution);
+  return { kind: 'resolved', items: resolution.items.map((item) => item.value) };
 }
 
 /**
  * The skill directories recall indexes outside `pull`: the same set pull
- * delivers (#707). Throws when the scope's manifests cannot be read or its
- * active namespaces collide, as `pull` stops the scope then.
+ * delivers (#707). None when two active namespaces collide, as in `pull`.
+ * Throws when the scope's manifests cannot be read, as `pull` stops the scope then.
  */
 export async function resolveIndexedSkillDirs(localConfig: LocalConfig): Promise<string[]> {
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
   // pull delivers nothing to a scope without teamai.yaml.
   if (!teamConfig) return [];
-  const { items } = await resolveDesiredSkills(teamConfig, localConfig, await buildRolePullContext(localConfig));
-  return items.map((item) => item.sourcePath);
+  const desired = await resolveDesiredSkills(teamConfig, localConfig, await buildRolePullContext(localConfig));
+  return desired.kind === 'resolved' ? desired.items.map((item) => item.sourcePath) : [];
 }
 
 /** What a member should have on disk, and what the team repo holds. */
 export interface DesiredSkills {
+  readonly kind: 'resolved';
   /** The skills this member should have: role namespaces ∪ subscribed tags − exclusions. */
   items: ResourceItem[];
   /** Every skill in the team repo — the set cleanup is allowed to prune from. */
@@ -379,15 +390,20 @@ export async function resolveDesiredSkills(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   roleContext: RolePullContext | null,
-): Promise<DesiredSkills> {
+): Promise<DesiredSkills | NamespaceConflictReport> {
   const handler = getHandler('skills');
   const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
   const subscribedTags = localConfig.subscribedTags;
   const excludedSkills = new Set(localConfig.excludedSkills ?? []);
 
-  const directoryItems = roleContext
-    ? await scanRoleAwareSkills(localConfig, roleContext.activeNamespaces)
-    : await handler.scanTeamForPull(teamConfig, localConfig);
+  let directoryItems: ResourceItem[];
+  if (roleContext) {
+    const scanned = await scanRoleAwareSkills(localConfig, roleContext.activeNamespaces);
+    if (scanned.kind === 'conflict') return scanned;
+    directoryItems = scanned.items;
+  } else {
+    directoryItems = await handler.scanTeamForPull(teamConfig, localConfig);
+  }
 
   const teamItems = await handler.scanTeamForPull(teamConfig, localConfig);
 
@@ -423,7 +439,7 @@ export async function resolveDesiredSkills(
     ? [...merged.values()].filter((item) => !excludedSkills.has(item.name))
     : [...merged.values()];
 
-  return { items, teamItems, skippedByTags };
+  return { kind: 'resolved', items, teamItems, skippedByTags };
 }
 
 /** A namespace item delivered in place of a root item: its name, and both files repo-relative. */
@@ -529,15 +545,15 @@ async function overrideRootRules(
 }
 
 /**
- * Resolve the agents this member should have. Throws on a stem collision
- * between two active namespaces, the same way `pull` aborts the scope: a
+ * Resolve the agents this member should have, or the stem collision between
+ * two active namespaces that stops `pull` from delivering agents this run: a
  * caller that cannot say what should be delivered must not guess.
  */
 export async function resolveDesiredAgents(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   roleContext: RolePullContext | null,
-): Promise<ResourceItem[]> {
+): Promise<{ kind: 'resolved'; items: ResourceItem[] } | NamespaceConflictReport> {
   const items = await getHandler('agents').scanTeamForPull(teamConfig, localConfig);
   const { placedAgents } = await loadStateForScope(localConfig);
   return filterAgentsByNamespaces(
@@ -1038,8 +1054,8 @@ async function pullForScope(
   // then offers no skills rather than ones the member may not have.
   const indexedSkillDirs = async (): Promise<string[]> => {
     try {
-      const { items } = await resolveDesiredSkills(freshConfig, localConfig, roleContext);
-      return items.map((item) => item.sourcePath);
+      const desired = await resolveDesiredSkills(freshConfig, localConfig, roleContext);
+      return desired.kind === 'resolved' ? desired.items.map((item) => item.sourcePath) : [];
     } catch (e) {
       log.debug(`[${scopeLabel}] Skills left out of the search index: ${(e as Error).message}`);
       return [];
@@ -1257,6 +1273,9 @@ async function pullForScope(
   // Step 2: Sync each resource type
   let totalSynced = 0;
   let desiredSkillNames: Set<string> | null = null;
+  // Set when two active namespaces collide on a skill: skills are neither
+  // installed nor cleaned up this run.
+  let skillsHeld = false;
   let knownRepoSkillNames: Set<string> | null = null;
   // name → team-repo source dir, for the data-safety check in Step 3b cleanup.
   let knownRepoSkillSources: Map<string, string> | null = null;
@@ -1290,15 +1309,26 @@ async function pullForScope(
     let skippedByTags = 0;
     if (type === 'skills') {
       const desired = await resolveDesiredSkills(freshConfig, localConfig, roleContext);
+      if (desired.kind === 'conflict') {
+        // Only skills stop: nothing is installed or swept for them this run.
+        log.warn(`[${scopeLabel}] ${desired.message}. Skills were not updated this run; the installed ones are kept.`);
+        skillsHeld = true;
+        continue;
+      }
       items = desired.items;
       skippedByTags = desired.skippedByTags;
       desiredSkillNames = new Set(items.map((i) => i.name));
       knownRepoSkillNames = new Set(desired.teamItems.map((i) => i.name));
       knownRepoSkillSources = new Map(desired.teamItems.map((i) => [i.name, i.sourcePath]));
     } else if (type === 'agents') {
-      // Throws on a stem collision; the caller's try/catch logs it and aborts
-      // the scope.
-      items = await resolveDesiredAgents(freshConfig, localConfig, roleContext);
+      const desired = await resolveDesiredAgents(freshConfig, localConfig, roleContext);
+      if (desired.kind === 'conflict') {
+        // Only agents stop; the revocation pass below sees the same collision
+        // and leaves them alone too.
+        log.warn(`[${scopeLabel}] ${desired.message}. Agents were not updated this run; the installed ones are kept.`);
+        continue;
+      }
+      items = desired.items;
     } else {
       items = await handler.scanTeamForPull(freshConfig, localConfig);
     }
@@ -1416,13 +1446,15 @@ async function pullForScope(
     await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel);
 
     if (roleContext) {
-      await cleanupInactiveNamespaceSkills(
-        freshConfig,
-        localConfig,
-        desiredSkillNames ?? roleContext.activeSkillNames,
-        roleContext.inactiveSkillNames,
-        roleContext.inactiveSkillSources,
-      );
+      if (!skillsHeld) {
+        await cleanupInactiveNamespaceSkills(
+          freshConfig,
+          localConfig,
+          desiredSkillNames ?? roleContext.activeSkillNames,
+          roleContext.inactiveSkillNames,
+          roleContext.inactiveSkillSources,
+        );
+      }
       // Same revocation for agents: a role change must remove the previous
       // role's agents, not just stop deploying them.
       await (getHandler('agents') as AgentsHandler).cleanupInactiveNamespaces(

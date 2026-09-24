@@ -2,6 +2,18 @@ import { describe, it, expect } from 'vitest';
 import type { ResourceItem } from '../types.js';
 import { filterAgentsByNamespaces } from '../pull.js';
 
+/** The delivered agents, failing the test on a collision. */
+function delivered(result: ReturnType<typeof filterAgentsByNamespaces>): ResourceItem[] {
+  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${result.message}`);
+  return result.items;
+}
+
+/** The collision message, failing the test when the agents resolved. */
+function collision(result: ReturnType<typeof filterAgentsByNamespaces>): string {
+  if (result.kind !== 'conflict') throw new Error('expected a collision');
+  return result.message;
+}
+
 describe('filterAgentsByNamespaces', () => {
   function makeAgent(name: string, namespace?: string): ResourceItem {
     const dir = namespace ? `agents/${namespace}` : 'agents';
@@ -21,7 +33,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('release-notes', 'pm'),
     ];
 
-    const result = filterAgentsByNamespaces(agents, ['common', 'frontend', 'pm']);
+    const result = delivered(filterAgentsByNamespaces(agents, ['common', 'frontend', 'pm']));
 
     expect(result.map((a) => a.name)).toEqual(['vr-reviewer', 'release-notes']);
   });
@@ -32,7 +44,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('tf-reviewer', 'devops'),
     ];
 
-    const result = filterAgentsByNamespaces(agents, ['frontend']);
+    const result = delivered(filterAgentsByNamespaces(agents, ['frontend']));
 
     expect(result.map((a) => a.name)).toEqual(['teamai-helper']);
   });
@@ -44,7 +56,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('tf-reviewer', 'devops'),
     ];
 
-    expect(filterAgentsByNamespaces(agents, null)).toEqual(agents);
+    expect(delivered(filterAgentsByNamespaces(agents, null))).toEqual(agents);
   });
 
   it('throws when two active namespaces deploy the same agent name', () => {
@@ -53,8 +65,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'devops'),
     ];
 
-    expect(() => filterAgentsByNamespaces(agents, ['frontend', 'devops']))
-      .toThrow(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
+    expect(collision(filterAgentsByNamespaces(agents, ['frontend', 'devops']))).toMatch(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
   });
 
   it('delivers the active namespace agent in place of a root agent of the same stem', () => {
@@ -64,7 +75,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('helper'),
     ];
 
-    const result = filterAgentsByNamespaces(agents, ['frontend']);
+    const result = delivered(filterAgentsByNamespaces(agents, ['frontend']));
 
     expect(result.map((a) => a.relativePath)).toEqual(['agents/frontend/reviewer.yaml', 'agents/helper.yaml']);
   });
@@ -75,7 +86,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'frontend'),
     ];
 
-    const result = filterAgentsByNamespaces(agents, ['common']);
+    const result = delivered(filterAgentsByNamespaces(agents, ['common']));
 
     expect(result.map((a) => a.relativePath)).toEqual(['agents/reviewer.yaml']);
   });
@@ -87,8 +98,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'frontend'),
     ];
 
-    expect(() => filterAgentsByNamespaces(agents, ['frontend', 'devops']))
-      .toThrow(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
+    expect(collision(filterAgentsByNamespaces(agents, ['frontend', 'devops']))).toMatch(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
   });
 
   it('still rejects a root agent and a namespace agent of one stem when no role is configured', () => {
@@ -98,8 +108,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'frontend'),
     ];
 
-    expect(() => filterAgentsByNamespaces(agents, null))
-      .toThrow(/Duplicate agent "reviewer" found in active namespaces "\(root\)" and "frontend"/);
+    expect(collision(filterAgentsByNamespaces(agents, null))).toMatch(/Duplicate agent "reviewer" found in active namespaces "\(root\)" and "frontend"/);
   });
 
   it('does not report a duplicate when the colliding namespace is inactive', () => {
@@ -108,7 +117,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'devops'),
     ];
 
-    const result = filterAgentsByNamespaces(agents, ['frontend']);
+    const result = delivered(filterAgentsByNamespaces(agents, ['frontend']));
 
     expect(result.map((a) => a.namespace)).toEqual(['frontend']);
   });
@@ -119,7 +128,7 @@ describe('filterAgentsByNamespaces', () => {
       makeAgent('reviewer', 'devops'),
     ];
 
-    expect(() => filterAgentsByNamespaces(agents, null)).toThrow(/Duplicate agent "reviewer"/);
+    expect(collision(filterAgentsByNamespaces(agents, null))).toMatch(/Duplicate agent "reviewer"/);
   });
 
   /**
@@ -132,9 +141,9 @@ describe('filterAgentsByNamespaces', () => {
   it('delivers an agent this machine published into an inactive namespace', () => {
     const agents = [makeAgent('vr', 'fe-agents'), makeAgent('other', 'devops')];
 
-    const result = filterAgentsByNamespaces(agents, ['common'], {
+    const result = delivered(filterAgentsByNamespaces(agents, ['common'], {
       vr: 'agents/fe-agents/vr.yaml',
-    });
+    }));
 
     expect(result.map((a) => a.name)).toEqual(['vr']);
   });
@@ -144,9 +153,9 @@ describe('filterAgentsByNamespaces', () => {
     // filename — and the active one is the agent deployed here.
     const agents = [makeAgent('vr', 'common'), makeAgent('vr', 'fe-agents')];
 
-    const result = filterAgentsByNamespaces(agents, ['common'], {
+    const result = delivered(filterAgentsByNamespaces(agents, ['common'], {
       vr: 'agents/fe-agents/vr.yaml',
-    });
+    }));
 
     expect(result).toHaveLength(1);
     expect(result[0]?.namespace).toBe('common');
@@ -157,9 +166,9 @@ describe('filterAgentsByNamespaces', () => {
     // agent of that stem no longer withdraws the record (#707).
     const agents = [makeAgent('vr'), makeAgent('vr', 'fe-agents')];
 
-    const result = filterAgentsByNamespaces(agents, ['common'], {
+    const result = delivered(filterAgentsByNamespaces(agents, ['common'], {
       vr: 'agents/fe-agents/vr.yaml',
-    });
+    }));
 
     expect(result.map((a) => a.relativePath)).toEqual(['agents/fe-agents/vr.yaml']);
   });
@@ -167,7 +176,7 @@ describe('filterAgentsByNamespaces', () => {
   it('ignores a record that does not match the agent it names', () => {
     const agents = [makeAgent('vr', 'fe-agents')];
 
-    expect(filterAgentsByNamespaces(agents, ['common'], { vr: 'agents/other/vr.yaml' }))
+    expect(delivered(filterAgentsByNamespaces(agents, ['common'], { vr: 'agents/other/vr.yaml' })))
       .toEqual([]);
   });
 });

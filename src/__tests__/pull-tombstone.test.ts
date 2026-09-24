@@ -555,7 +555,7 @@ describe('pull role-aware sync and cleanup', () => {
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('Invalid roles manifest'));
   });
 
-  it('aborts pull when the same skill exists in multiple active namespaces', async () => {
+  it('reports a collision when the same skill exists in multiple active namespaces', async () => {
     await fse.ensureDir(path.join(repoPath, 'skills', 'common', 'shared-skill'));
     await fse.writeFile(path.join(repoPath, 'skills', 'common', 'shared-skill', 'SKILL.md'), '# Common');
     await fse.ensureDir(path.join(repoPath, 'skills', 'hai', 'shared-skill'));
@@ -573,10 +573,12 @@ describe('pull role-aware sync and cleanup', () => {
     };
     const { scanRoleAwareSkills } = await import('../pull.js');
 
-    await expect(scanRoleAwareSkills(
+    // pull stops skills for the run on this (#707); the other types still sync.
+    const result = await scanRoleAwareSkills(
       localConfig,
       { knowledge: ['common', 'hai'], skills: ['common', 'hai'], learnings: [], agents: [] },
-    )).rejects.toThrow(/Duplicate skill "shared-skill"/);
+    );
+    expect(result.kind === 'conflict' ? result.message : '').toMatch(/Duplicate skill "shared-skill"/);
   });
 
   it('cleans up stale skills after role change (full pull cycle)', async () => {

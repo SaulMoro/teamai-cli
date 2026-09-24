@@ -3,7 +3,13 @@ import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveDesiredSkills } from '../pull.js';
+import { resolveDesiredSkills, type DesiredSkills } from '../pull.js';
+
+/** The resolved skills, failing the test on a namespace collision. */
+function resolved(result: Awaited<ReturnType<typeof resolveDesiredSkills>>): DesiredSkills {
+  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${result.message}`);
+  return result;
+}
 import type { RolePullContext } from '../pull.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -72,7 +78,7 @@ describe('resolveDesiredSkills', () => {
   it('takes the union of the active role namespaces and the subscribed tags', async () => {
     localConfig.subscribedTags = ['ui'];
 
-    const { items } = await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common']));
+    const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common'])));
 
     expect(items.map((i) => i.name).sort()).toEqual(['frontend-skill', 'shared-skill']);
   });
@@ -81,24 +87,24 @@ describe('resolveDesiredSkills', () => {
     localConfig.subscribedTags = ['ui'];
     localConfig.excludedSkills = ['frontend-skill'];
 
-    const { items } = await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common']));
+    const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common'])));
 
     expect(items.map((i) => i.name)).toEqual(['shared-skill']);
   });
 
   it('without a role context, every skill in the repo is desired', async () => {
-    const { items } = await resolveDesiredSkills(teamConfig, localConfig, null);
+    const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
 
     expect(items.map((i) => i.name).sort())
       .toEqual(['backend-skill', 'frontend-skill', 'shared-skill']);
   });
 
   it('reports the whole team repo separately, so cleanup knows what it may prune', async () => {
-    const { items, teamItems, skippedByTags } = await resolveDesiredSkills(
+    const { items, teamItems, skippedByTags } = resolved(await resolveDesiredSkills(
       teamConfig,
       localConfig,
       rolesOver(['common']),
-    );
+    ));
 
     expect(items.map((i) => i.name)).toEqual(['shared-skill']);
     expect(teamItems.map((i) => i.name).sort())
@@ -111,7 +117,7 @@ describe('resolveDesiredSkills', () => {
   it('counts what the tag filter left out', async () => {
     localConfig.subscribedTags = ['ui'];
 
-    const { skippedByTags } = await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common']));
+    const { skippedByTags } = resolved(await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common'])));
 
     // backend-skill carries a tag the user is not subscribed to.
     expect(skippedByTags).toBe(1);

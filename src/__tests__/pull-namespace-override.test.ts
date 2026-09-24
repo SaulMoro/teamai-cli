@@ -159,6 +159,24 @@ describe('pull: an active namespace item replaces the root item of the same name
       await pull({});
       expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
     });
+
+    it('stops only agents when two active namespaces define one stem', async () => {
+      await team('agents/frontend/reviewer.yaml', 'name: reviewer\ndescription: Front\ninstructions: Review the front end.\n');
+      await pull({});
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review the front end.');
+
+      await team('agents/devops/reviewer.yaml', 'name: reviewer\ndescription: Ops\ninstructions: Review ops.\n');
+      await team('skills/frontend/lint/SKILL.md', skillMd('lint', 'Lint things'));
+      as(['frontend', 'devops']);
+      await pull({});
+
+      expect(logged('warn', /Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/)).toBe(true);
+      // The installed agent is kept as it was, and the rest of the pull, which
+      // runs after agents, still happens: the search index is rebuilt.
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review the front end.');
+      const index = await fse.readJson(path.join(homeDir, '.teamai', 'search-index.json')) as { entries: Array<{ filename: string }> };
+      expect(index.entries.map((entry) => entry.filename)).toContain('lint.md');
+    });
   });
 
   describe('rules', () => {
@@ -294,6 +312,25 @@ describe('pull: an active namespace item replaces the root item of the same name
       const skills = index.entries.filter((entry) => entry.type === 'skills');
       expect(skills.map((entry) => entry.filename)).toEqual(['review.md']);
       expect(skills[0]?.path).toBe(path.join(repoPath, 'skills/frontend/review/SKILL.md'));
+    });
+
+    it('stops only skills when two active namespaces define one skill: other types still sync and installed skills stay', async () => {
+      await pull({});
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
+
+      await team('skills/devops/review/SKILL.md', skillMd('review', 'Ops review'));
+      await team('agents/helper.yaml', 'name: helper\ndescription: Helps\ninstructions: Help.\n');
+      await team('rules/style.md', '# Shared style\n');
+      await team('env/env.yaml', 'variables:\n  - key: API_BASE\n    value: https://api.example.com\n');
+      as(['frontend', 'devops']);
+      await pull({});
+
+      expect(logged('warn', /Duplicate skill "review" found in active namespaces "frontend" and "devops"/)).toBe(true);
+      // The installed skill is kept as it was: not replaced, not swept.
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
+      expect(await exists('.claude/agents/helper.md')).toBe(true);
+      expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
+      expect(await read('.teamai/env.sh')).toContain('API_BASE');
     });
 
     it('still does not deliver root skills by default in role mode', async () => {

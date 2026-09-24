@@ -152,21 +152,23 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
   const { buildRolePullContext, resolveDesiredSkills } = await import('./pull.js');
   const { getHandler } = await import('./resources/index.js');
 
+  // A team repo whose active namespaces collide, or whose manifests cannot be
+  // read, cannot say what should be delivered — `pull` reports the same
+  // message. The command whose job is explaining bad state must report it,
+  // not stack-trace on it.
+  const unresolvable = (message: string): Check[] => [{
+    name: 'Skills to deliver can be resolved',
+    source: 'local',
+    check: async () => false,
+    fix: `${message}. Until the team repo is fixed, pull cannot sync skills for this role.`,
+  }];
   let items: ResourceItem[];
   try {
-    const roleContext = await buildRolePullContext(localConfig);
-    ({ items } = await resolveDesiredSkills(teamConfig, localConfig, roleContext));
+    const desired = await resolveDesiredSkills(teamConfig, localConfig, await buildRolePullContext(localConfig));
+    if (desired.kind === 'conflict') return unresolvable(desired.message);
+    ({ items } = desired);
   } catch (e) {
-    // A team repo whose active namespaces collide cannot say what should be
-    // delivered — `pull` aborts the scope with this same message. The command
-    // whose job is explaining bad state must report it, not stack-trace on it.
-    return [{
-      name: 'Skills to deliver can be resolved',
-      source: 'local',
-      check: async () => false,
-      fix: `${(e as Error).message}. Until the team repo is fixed, `
-        + 'pull cannot sync skills for this role.',
-    }];
+    return unresolvable((e as Error).message);
   }
   if (items.length === 0) return [];
 
@@ -339,20 +341,22 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
   const { AgentsHandler } = await import('./resources/agents.js');
   const handler = new AgentsHandler();
 
+  // Two active namespaces claiming one agent name: `pull` stops agents with
+  // this message rather than picking one, so `doctor` reports it; likewise a
+  // manifest that cannot be read.
+  const unresolvable = (message: string): Check[] => [{
+    name: 'Agents to deliver can be resolved',
+    source: 'local',
+    check: async () => false,
+    fix: `${message}. Until the team repo is fixed, pull cannot sync agents for this role.`,
+  }];
   let items: ResourceItem[];
   try {
-    const roleContext = await buildRolePullContext(localConfig);
-    items = await resolveDesiredAgents(teamConfig, localConfig, roleContext);
+    const desired = await resolveDesiredAgents(teamConfig, localConfig, await buildRolePullContext(localConfig));
+    if (desired.kind === 'conflict') return unresolvable(desired.message);
+    ({ items } = desired);
   } catch (e) {
-    // Two active namespaces claiming one agent name: `pull` aborts the scope
-    // with this message rather than picking one, so `doctor` reports it.
-    return [{
-      name: 'Agents to deliver can be resolved',
-      source: 'local',
-      check: async () => false,
-      fix: `${(e as Error).message}. Until the team repo is fixed, `
-        + 'pull cannot sync agents for this role.',
-    }];
+    return unresolvable((e as Error).message);
   }
   if (items.length === 0) return [];
 
@@ -731,9 +735,9 @@ export async function buildNamespaceNotes(ctx: DoctorContext): Promise<string[]>
     }
 
     const notes: string[] = [];
-    const { items: desiredSkills } = await pull.resolveDesiredSkills(teamConfig, localConfig, roleContext);
+    const desiredSkills = await pull.resolveDesiredSkills(teamConfig, localConfig, roleContext);
     const rootSkills = new Map(skills.filter((item) => !item.namespace).map((item) => [item.name, item.relativePath]));
-    for (const item of desiredSkills) {
+    for (const item of desiredSkills.kind === 'resolved' ? desiredSkills.items : []) {
       const root = item.namespace ? rootSkills.get(item.name) : undefined;
       if (root) notes.push(overrideNote('skills', { name: item.name, source: item.relativePath, replaces: root }));
     }
