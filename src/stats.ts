@@ -7,7 +7,7 @@ import { readEvents, aggregateSessionMetrics } from './dashboard-collector.js';
 import { totalTokens, addTokenUsage, emptyTokenUsage } from './types.js';
 import { attributeByRepo, timeAnalytics, renderHourSparkline } from './session-analytics.js';
 import { formatTokenCount } from './digest.js';
-import type { UsageEvent, UserStats, TokenUsage, SessionMetrics, LocalConfig } from './types.js';
+import type { UsageEvent, UserStats, TokenUsage, SessionMetrics, LocalConfig, DashboardEvent } from './types.js';
 
 interface SkillStats {
   name: string;
@@ -148,10 +148,11 @@ function aggregateDashboardStats(metrics: Map<string, SessionMetrics>): Aggregat
  * per-session delta `teamai pull` pushes, so the displayed total is
  * reported + unreported rather than reported + everything.
  *
- * The caller passes the scope's own metrics, already filtered the way the
- * report path filters them.
+ * The caller passes the scope's own events and their metrics, already
+ * filtered the way the report path filters them.
  */
 async function unreportedDashboardStats(
+  events: DashboardEvent[],
   metrics: Map<string, SessionMetrics>,
   config: LocalConfig,
 ): Promise<AggregatedDashboardStats> {
@@ -159,8 +160,8 @@ async function unreportedDashboardStats(
     adoptBareKeys, computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens,
   } = await import('./team-push.js');
   // The scope's own snapshots, the ones its report compares against (#786).
-  const interventions = adoptBareKeys(await readReportedInterventions(config), metrics.keys());
-  const promptTokens = adoptBareKeys(await readReportedPromptTokens(config), metrics.keys());
+  const interventions = adoptBareKeys(await readReportedInterventions(config), events);
+  const promptTokens = adoptBareKeys(await readReportedPromptTokens(config), events);
 
   const interventionDelta = computeInterventionDelta(
     new Map([...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }])),
@@ -251,7 +252,7 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
     || totalTokens(reported.tokens ?? emptyTokenUsage()) > 0
   );
   const localDashboard = config && teamHasReported
-    ? await unreportedDashboardStats(metricsMap, config)
+    ? await unreportedDashboardStats(scopedEvents, metricsMap, config)
     : aggregateDashboardStats(metricsMap);
   const dashboard = mergeDashboardAndReported(localDashboard, reported);
   const hasDashboardData =

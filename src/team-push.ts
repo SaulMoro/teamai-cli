@@ -388,18 +388,26 @@ export async function filterEventsByScope(
   // a later run, maybe in another scope, so each run is decided on its own and
   // returned under the ID plus its first event's timestamp, which stays the
   // same whichever earlier runs compaction has dropped.
+  // A second end with nothing recorded since the first (the dashboard
+  // monitor's process_exit after SessionEnd) belongs to the run just closed.
   const runOf: number[] = [];
   const openRun = new Map<string, number>();
+  const closedRun = new Map<string, number>();
   const deciding: Array<number | undefined> = [];
   const runIds: string[] = [];
   events.forEach((e, i) => {
-    let run = openRun.get(e.sessionId);
+    const ends = e.type === 'session_end' || e.type === 'process_exit';
+    let run = openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
       runIds.push(`${e.sessionId}@${e.timestamp}`);
     }
-    openRun.set(e.sessionId, run);
-    if (e.type === 'session_end' || e.type === 'process_exit') openRun.delete(e.sessionId);
+    if (ends) {
+      openRun.delete(e.sessionId);
+      closedRun.set(e.sessionId, run);
+    } else {
+      openRun.set(e.sessionId, run);
+    }
     runOf.push(run);
     const current = deciding[run];
     if (eventKeys[i] !== undefined ? current === undefined || eventKeys[current] === undefined
@@ -417,22 +425,25 @@ export async function filterEventsByScope(
 /**
  * A reported snapshot as the run IDs of {@link filterEventsByScope} read it.
  * Snapshots written before runs had their own IDs are keyed by the bare
- * session ID; the first run of that ID in the log (`current` is in log order)
- * takes that entry when it has none of its own, and the bare entry is retired
- * either way, so no later run of that ID reads it. Returns `reported` itself
- * when there is nothing to retire; otherwise the caller persists the result.
+ * session ID; the first run of that ID in `events` (the scope's, as that
+ * filter returns them) takes that entry when it has none of its own, and the
+ * bare entry is retired either way, so no later run of that ID reads it. Only
+ * an earlier release wrote bare entries, and only for runs it recorded, so a
+ * run whose first event carries a `dataHomeKey` takes none: the entry may be
+ * another scope's run under a reused PID-fallback ID. Returns `reported`
+ * itself when there is nothing to retire; otherwise the caller persists the result.
  */
-export function adoptBareKeys<T>(reported: Record<string, T>, current: Iterable<string>): Record<string, T> {
+export function adoptBareKeys<T>(reported: Record<string, T>, events: Iterable<DashboardEvent>): Record<string, T> {
   const adopted = { ...reported };
   const seen = new Set<string>();
   let retired = false;
-  for (const runId of current) {
+  for (const { sessionId: runId, dataHomeKey } of events) {
     const at = runId.lastIndexOf('@');
     if (at < 0) continue;
     const id = runId.slice(0, at);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (!Object.hasOwn(reported, id)) continue;
+    if (typeof dataHomeKey === 'string' || !Object.hasOwn(reported, id)) continue;
     if (!Object.hasOwn(adopted, runId)) adopted[runId] = reported[id];
     delete adopted[id];
     retired = true;
@@ -489,7 +500,7 @@ export async function reportUsageToTeam(
       write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
     ): Promise<Record<string, T>> => {
       const stored = await read(reportsConfig);
-      const adopted = adoptBareKeys(stored, metrics.keys());
+      const adopted = adoptBareKeys(stored, dashboardEvents);
       if (adopted !== stored) await write(adopted, reportsConfig);
       return adopted;
     };

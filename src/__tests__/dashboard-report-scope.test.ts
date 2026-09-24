@@ -200,6 +200,14 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     return stats && typeof stats === 'object' && 'prompts' in stats && typeof stats.prompts === 'number' ? stats.prompts : 0;
   }
 
+  /** The sessions a scope's intervention stats hold, 0 before its first push. */
+  async function reportedInterventionSessions(config: LocalConfig): Promise<number> {
+    const stats = await report(config);
+    const interventions = stats && typeof stats === 'object' && 'interventions' in stats ? stats.interventions : undefined;
+    return interventions && typeof interventions === 'object' && 'sessions' in interventions
+      && typeof interventions.sessions === 'number' ? interventions.sessions : 0;
+  }
+
   const shared = (name: string) => path.join(teamaiHome(), 'dashboard', `reported-${name}.json`);
   const SNAPSHOTS = ['interventions', 'prompt-tokens', 'daily-sessions'];
 
@@ -221,6 +229,21 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     for (let i = 0; i < count; i++) {
       await hook('prompt-submit', 'claude', { session_id: sessionId, cwd, hook_event_name: 'UserPromptSubmit', prompt: `p${i}` });
     }
+  }
+
+  /**
+   * Run `record` as an earlier release would have: before #785 its events carry
+   * no data home, and main since #795 wrote the data home path, `dataHome`.
+   */
+  async function asEarlierRelease(record: () => Promise<void>, dataHome?: string): Promise<void> {
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    const before = fs.existsSync(log) ? fs.readFileSync(log, 'utf-8') : '';
+    await record();
+    const added = fs.readFileSync(log, 'utf-8').slice(before.length).split('\n').filter(Boolean).map((line) => {
+      const event = Object.fromEntries(Object.entries(JSON.parse(line)).filter(([field]) => field !== 'dataHomeKey'));
+      return `${JSON.stringify(dataHome === undefined ? event : { ...event, dataHome })}\n`;
+    });
+    fs.writeFileSync(log, before + added.join(''));
   }
 
   // A Stop carries the whole transcript's totals, so a session is reported once,
@@ -314,12 +337,63 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(project)).toBe(2);
   });
 
+  it('a session that ends twice, SessionEnd then the dashboard monitor\'s process_exit, is one session', async () => {
+    const { root, project } = await setup();
+    await session('copilot', { cwd: root });
+    await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+    // The monitor read the session as still running while SessionEnd was appended.
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    const last = Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(log, 'utf-8').trim().split('\n').at(-1) ?? '{}')));
+    fs.appendFileSync(log, `${JSON.stringify({ ...last, type: 'process_exit', timestamp: new Date(Date.now() + 1000).toISOString() })}\n`);
+
+    expect(await reportedInterventionSessions(project)).toBe(1);
+    expect(await reportedSessions(project)).toBe(1);
+  });
+
+  it.each([
+    ['after the project first reported', true],
+    ['before the project first reported', false],
+  ])('a session ID an earlier release reported for the user scope is a new session when this build records it in a project, %s', async (_, reportFirst) => {
+    const { root, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const pid = `pid-${process.ppid}`;
+    // The ended user-scope run stays in the log, below the compaction threshold.
+    await asEarlierRelease(async () => {
+      await session('copilot', { cwd: elsewhere });
+      await hook('session-end', 'copilot', { cwd: elsewhere, hook_event_name: 'SessionEnd' });
+    });
+    writeSharedSnapshots({ [pid]: 1 }, new Date().toISOString().slice(0, 10));
+    if (reportFirst) expect(await report(project)).toBeNull();
+    await session('copilot', { cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('a run in progress across the upgrade is not reported again for what the earlier release reported', async () => {
+    const { root, project } = await setup();
+    const pid = `pid-${process.ppid}`;
+    await asEarlierRelease(async () => {
+      await hook('session-start', 'copilot', { cwd: root, hook_event_name: 'SessionStart' });
+      await prompts(pid, root, 1);
+    });
+    writeSharedSnapshots({ [pid]: 1 }, new Date().toISOString().slice(0, 10));
+    await hook('prompt-submit', 'copilot', { cwd: root, hook_event_name: 'UserPromptSubmit', prompt: 'after the upgrade' });
+    await hook('stop', 'copilot', { cwd: root, hook_event_name: 'Stop' });
+
+    expect(await reportedPrompts(project)).toBe(1);
+    expect(await reportedInterventionSessions(project)).toBe(0);
+  });
+
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');
     fs.mkdirSync(elsewhere);
-    await session('claude', { session_id: 'old-p', cwd: root });
-    await session('claude', { session_id: 'old-u', cwd: elsewhere });
+    await asEarlierRelease(async () => {
+      await session('claude', { session_id: 'old-p', cwd: root });
+      await session('claude', { session_id: 'old-u', cwd: elsewhere });
+    });
     writeSharedSnapshots({ 'old-p': 1, 'old-u': 1 }, new Date().toISOString().slice(0, 10));
 
     expect(await report(user)).toBeNull();
@@ -358,8 +432,8 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
   ])('a bare snapshot entry a run adopts is written back under the run ID only, with %s to report', async (_, reported) => {
     const { root, project } = await setup();
     const pid = `pid-${process.ppid}`;
-    await session('copilot', { cwd: root });
-    // An earlier release reported this run under its bare session ID.
+    // Main since #795 recorded and reported this run under its bare session ID.
+    await asEarlierRelease(() => session('copilot', { cwd: root }), getDataHome(project));
     writeSharedSnapshots({ [pid]: reported }, new Date().toISOString().slice(0, 10));
     await report(project);
 
@@ -376,7 +450,7 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
 
   it('a scope first seeded after a rollback skips what the earlier release reported', async () => {
     const { root, project } = await setup();
-    await session('claude', { session_id: 'rollback-p', cwd: root });
+    await asEarlierRelease(() => session('claude', { session_id: 'rollback-p', cwd: root }));
     writeSharedSnapshots({ 'rollback-p': 1 }, new Date().toISOString().slice(0, 10));
 
     expect(await report(project)).toBeNull();
