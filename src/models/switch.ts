@@ -943,8 +943,9 @@ export async function activeModelProfiles(): Promise<Partial<Record<ModelAgent, 
 export async function switchedGatewayOrigins(team: string): Promise<Map<string, string[]>> {
   const manifest = await loadManifest();
   const byProfile = new Map<string, string[]>();
-  for (const [agent, state] of Object.entries(manifest?.agents ?? {}) as Array<[ModelAgent, AgentState]>) {
-    if (!state.profile.startsWith('team:') || state.team !== team) continue;
+  for (const agent of ALL_MODEL_AGENTS) {
+    const state = manifest?.agents[agent];
+    if (!state || !state.profile.startsWith('team:') || state.team !== team) continue;
     const origins = writtenGatewayUrls(agent, state.lastWritten).flatMap((url) => {
       try {
         return [new URL(url).origin];
