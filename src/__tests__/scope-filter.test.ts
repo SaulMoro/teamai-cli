@@ -117,6 +117,25 @@ describe('filterEventsByScope', () => {
       expect(before[2].sessionId).toBe(after[0].sessionId);
     });
 
+    it('a delayed observed exit targets the earlier run across scopes and is ignored after that run is compacted', async () => {
+      const old = { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai')), timestamp: '2026-01-01T00:00:00Z' };
+      const ended = { ...old, type: 'session_end' as const, timestamp: '2026-01-01T00:01:00Z' };
+      const next = { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai/projects/p')), timestamp: '2026-01-01T00:02:00Z' };
+      const delayed = { ...old, type: 'process_exit' as const, timestamp: '2026-01-01T00:03:00Z', processExitAfter: old.timestamp };
+      const prompt = { ...next, timestamp: '2026-01-01T00:04:00Z' };
+      const exit = { ...next, type: 'process_exit' as const, timestamp: '2026-01-01T00:05:00Z', processExitAfter: prompt.timestamp };
+      const later = { ...next, timestamp: '2026-01-01T00:06:00Z' };
+      for (const history of [[old, ended], []]) {
+        const log = [...history, next, delayed, prompt, exit, later];
+        const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
+        expect(project.map(e => e.sessionId)).toEqual([
+          `pid-1@${next.timestamp}`, `pid-1@${next.timestamp}`, `pid-1@${next.timestamp}`, `pid-1@${later.timestamp}`,
+        ]);
+        const user = await filterEventsByScope(log, userScope());
+        expect(user).toHaveLength(history.length ? 3 : 0);
+      }
+    });
+
     it('an event that records its data home as a path, before keys were hashed, is keyed by it', async () => {
       const unhashed: DashboardEvent[] = [
         { ...makeEvent(undefined, 'c1'), tool: 'copilot', dataHome: '/home/jeff/.teamai/projects/p' },
@@ -230,6 +249,13 @@ describe('adoptBareKeys', () => {
 
   it('a run recorded by main since #795, which wrote the data home path, is an earlier release\'s', () => {
     expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1', { dataHome: '/home/jeff/.teamai' })])).toEqual({ 'pid-1@t1': 3 });
+  });
+
+  it('does not give a path-keyed run a shared bare entry, but still adopts its own scope entry', () => {
+    const reported = { 'pid-1': 3 };
+    const events = [run('pid-1@t1', { dataHome: '/home/jeff/.teamai/projects/p' })];
+    expect(adoptBareKeys(reported, events, 'shared')).toBe(reported);
+    expect(adoptBareKeys(reported, events, 'scope')).toEqual({ 'pid-1@t1': 3 });
   });
 
   it('a run in progress across the upgrade is an earlier release\'s, by its first event', () => {

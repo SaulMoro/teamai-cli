@@ -212,7 +212,7 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
   const SNAPSHOTS = ['interventions', 'prompt-tokens', 'daily-sessions'];
 
   /** The shared snapshots as a release before #786 left them, with `prompts` reported per session. */
-  function writeSharedSnapshots(prompts: Record<string, number>, date: string): void {
+  function writeSharedSnapshots(prompts: Record<string, number>, date: string, config?: LocalConfig): void {
     const entries = (value: (n: number) => unknown) =>
       Object.fromEntries(Object.entries(prompts).map(([sid, n]) => [sid, value(n)]));
     const values: Record<string, unknown> = {
@@ -221,8 +221,9 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
       // Longer than any fixture session, so no duration is left to report.
       'daily-sessions': entries((n) => ({ date, prompts: n, durationMs: 3_600_000, succeeded: 1, corrected: 0 })),
     };
-    fs.mkdirSync(path.join(teamaiHome(), 'dashboard'), { recursive: true });
-    for (const name of SNAPSHOTS) fs.writeFileSync(shared(name), JSON.stringify(values[name]));
+    const dir = path.join(config ? getDataHome(config) : teamaiHome(), 'dashboard');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of SNAPSHOTS) fs.writeFileSync(path.join(dir, `reported-${name}.json`), JSON.stringify(values[name]));
   }
 
   async function prompts(sessionId: string, cwd: string, count: number): Promise<void> {
@@ -386,6 +387,47 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedInterventionSessions(project)).toBe(0);
   });
 
+  it.each([
+    ['retained', false, false],
+    ['compacted', true, false],
+    ['seeded before reuse', false, true],
+  ])('a path-keyed project run does not inherit a shared user snapshot (%s)', async (_, compact, seedFirst) => {
+    const { root, project } = await setup();
+    const pid = `pid-${process.ppid}`;
+    await asEarlierRelease(async () => {
+      await session('copilot', { cwd: tmp });
+      await hook('session-end', 'copilot', { cwd: tmp, hook_event_name: 'SessionEnd' });
+    });
+    writeSharedSnapshots({ [pid]: 1 }, new Date().toISOString().slice(0, 10));
+    if (seedFirst) expect(await report(project)).toBeNull();
+    if (compact) fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    await asEarlierRelease(() => session('copilot', { cwd: root }), getDataHome(project));
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedInterventionSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('a delayed monitor exit does not split the next invocation with the same ID', async () => {
+    const { root, project } = await setup();
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    await session('copilot', { cwd: root });
+    const observed = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n').at(-1) ?? '{}');
+    await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+    await hook('session-start', 'copilot', { cwd: root, hook_event_name: 'SessionStart' });
+    fs.appendFileSync(log, JSON.stringify({
+      type: 'process_exit', sessionId: observed.sessionId, tool: 'copilot',
+      timestamp: new Date().toISOString(), dataHomeKey: observed.dataHomeKey,
+      processExitAfter: observed.timestamp,
+    }) + '\n');
+    await hook('prompt-submit', 'copilot', { cwd: root, hook_event_name: 'UserPromptSubmit', prompt: 'second run' });
+    await hook('stop', 'copilot', { cwd: root, hook_event_name: 'Stop' });
+
+    expect(await reportedInterventionSessions(project)).toBe(2);
+    expect(await reportedSessions(project)).toBe(2);
+    expect(await reportedPrompts(project)).toBe(2);
+  });
+
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');
@@ -434,7 +476,8 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     const pid = `pid-${process.ppid}`;
     // Main since #795 recorded and reported this run under its bare session ID.
     await asEarlierRelease(() => session('copilot', { cwd: root }), getDataHome(project));
-    writeSharedSnapshots({ [pid]: reported }, new Date().toISOString().slice(0, 10));
+    // Main writes this acknowledgement to P's own snapshot, not the shared file.
+    writeSharedSnapshots({ [pid]: reported }, new Date().toISOString().slice(0, 10), project);
     await report(project);
 
     for (const name of SNAPSHOTS) {

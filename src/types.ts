@@ -1262,6 +1262,8 @@ export interface DashboardEvent {
   transcriptPath?: string;
   /** Resolved PID of the AI tool main process (for liveness monitoring) */
   monitorPid?: number;
+  /** Last event timestamp the PID monitor observed, so a delayed exit targets that run. */
+  processExitAfter?: string;
   /** Byte boundary captured at Copilot SessionStart; private log path is never stored. */
   copilotRunStartOffset?: number;
   /** Opaque marker metadata retained for events written by older collector versions. */

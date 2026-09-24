@@ -145,10 +145,11 @@ export function mergeStats(
 //
 //  A session can record events in two scopes (a `cd` mid-session), so each
 //  scope compares against what it reported itself. The first time a scope needs
-//  a snapshot, it copies the shared one, so nothing an earlier release reported
-//  is sent again; after that only its own file is read. No scope writes the
-//  shared file any more, only an earlier release after a rollback (and a caller
-//  without a scope config, which reads the whole log and reports into it).
+//  a snapshot, it migrates the shared entries for its retained unkeyed runs;
+//  path-keyed releases already wrote scope snapshots. After that only its own
+//  file is read. No scope writes the shared file any more, only an earlier
+//  release after a rollback (and a caller without a scope config, which reads
+//  the whole log and reports into it).
 //
 
 type ReportedSnapshotName = 'interventions' | 'prompt-tokens' | 'daily-sessions';
@@ -168,12 +169,20 @@ function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | und
 }
 
 /** A scope's snapshot, seeded from the shared one when the scope has none yet. */
-async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig | undefined): Promise<T | null> {
+async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig | undefined): Promise<Record<string, T> | null> {
   const own = scopeSnapshotPath(name, config);
-  if (!config || await pathExists(own)) return readJson<T>(own);
-  const seed = await readJson<T>(sharedSnapshotPath(name));
+  if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
+  const shared = await readJson<Record<string, T>>(sharedSnapshotPath(name));
+  const events = await filterEventsByScope(await readEvents(), config);
+  const adopted = adoptBareKeys(shared ?? {}, events, 'shared');
+  // Copy only resolved run IDs. An unmatched bare entry cannot be allowed to
+  // attach to a future reuse after the source of the snapshot has been lost.
+  const seed: Record<string, T> = {};
+  for (const { sessionId } of events) {
+    if (Object.hasOwn(adopted, sessionId)) seed[sessionId] = adopted[sessionId];
+  }
   try {
-    await writeJson(own, seed ?? {});
+    await writeJson(own, seed);
   } catch (e) {
     // Seeded again next time: the shared file is not written any more.
     log.debug(`Could not seed ${own}: ${(e as Error).message}`);
@@ -182,7 +191,7 @@ async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig |
 }
 
 export async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
-  const parsed = await readSnapshot<ReportedInterventions>('interventions', config);
+  const parsed = await readSnapshot<ReportedInterventions[string]>('interventions', config);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -248,7 +257,7 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //
 
 export async function readReportedPromptTokens(config: LocalConfig | undefined): Promise<ReportedPromptTokens> {
-  const parsed = await readSnapshot<ReportedPromptTokens>('prompt-tokens', config);
+  const parsed = await readSnapshot<ReportedPromptTokens[string]>('prompt-tokens', config);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -312,7 +321,7 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
 }
 
 async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
-  return (await readSnapshot<ReportedDailySessions>('daily-sessions', config)) ?? {};
+  return (await readSnapshot<ReportedDailySessions[string]>('daily-sessions', config)) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -390,25 +399,35 @@ export async function filterEventsByScope(
   // same whichever earlier runs compaction has dropped.
   // A second end with nothing recorded since the first (the dashboard
   // monitor's process_exit after SessionEnd) belongs to the run just closed.
-  const runOf: number[] = [];
+  const runOf: Array<number | undefined> = [];
+  const observedRuns = new Map<string, number>();
   const openRun = new Map<string, number>();
   const closedRun = new Map<string, number>();
   const deciding: Array<number | undefined> = [];
   const runIds: string[] = [];
   events.forEach((e, i) => {
     const ends = e.type === 'session_end' || e.type === 'process_exit';
-    let run = openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
+    const observed = e.type === 'process_exit' && typeof e.processExitAfter === 'string';
+    let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
+      : openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
+    // The observed run may have been compacted. Its delayed exit must not
+    // manufacture a new session or close a later reuse of the same ID.
+    if (observed && run === undefined) {
+      runOf.push(undefined);
+      return;
+    }
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
       runIds.push(`${e.sessionId}@${e.timestamp}`);
     }
-    if (ends) {
+    if (ends && (!observed || openRun.get(e.sessionId) === run)) {
       openRun.delete(e.sessionId);
       closedRun.set(e.sessionId, run);
-    } else {
+    } else if (!ends) {
       openRun.set(e.sessionId, run);
     }
     runOf.push(run);
+    observedRuns.set(`${e.sessionId}@${e.timestamp}`, run);
     const current = deciding[run];
     if (eventKeys[i] !== undefined ? current === undefined || eventKeys[current] === undefined
       : current === undefined && !!e.cwd) deciding[run] = i;
@@ -419,7 +438,10 @@ export async function filterEventsByScope(
     const cwd = events[i].cwd;
     return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
   }));
-  return events.flatMap((e, i) => (owned[runOf[i]] ? [{ ...e, sessionId: runIds[runOf[i]] }] : []));
+  return events.flatMap((e, i) => {
+    const run = runOf[i];
+    return run !== undefined && owned[run] ? [{ ...e, sessionId: runIds[run] }] : [];
+  });
 }
 
 /**
@@ -430,20 +452,27 @@ export async function filterEventsByScope(
  * bare entry is retired either way, so no later run of that ID reads it. Only
  * an earlier release wrote bare entries, and only for runs it recorded, so a
  * run whose first event carries a `dataHomeKey` takes none: the entry may be
- * another scope's run under a reused PID-fallback ID. Returns `reported`
- * itself when there is nothing to retire; otherwise the caller persists the result.
+ * another scope's run under a reused PID-fallback ID. Shared snapshots also
+ * exclude path-keyed runs: that release already had per-scope snapshots.
+ * Returns `reported` itself when there is nothing to retire; otherwise the
+ * caller persists the result.
  */
-export function adoptBareKeys<T>(reported: Record<string, T>, events: Iterable<DashboardEvent>): Record<string, T> {
+export function adoptBareKeys<T>(
+  reported: Record<string, T>,
+  events: Iterable<DashboardEvent>,
+  source: 'scope' | 'shared' = 'scope',
+): Record<string, T> {
   const adopted = { ...reported };
   const seen = new Set<string>();
   let retired = false;
-  for (const { sessionId: runId, dataHomeKey } of events) {
+  for (const { sessionId: runId, dataHomeKey, dataHome } of events) {
     const at = runId.lastIndexOf('@');
     if (at < 0) continue;
     const id = runId.slice(0, at);
     if (seen.has(id)) continue;
     seen.add(id);
     if (typeof dataHomeKey === 'string' || !Object.hasOwn(reported, id)) continue;
+    if (source === 'shared' && typeof dataHome === 'string') continue;
     if (!Object.hasOwn(adopted, runId)) adopted[runId] = reported[id];
     delete adopted[id];
     retired = true;

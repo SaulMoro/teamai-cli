@@ -355,7 +355,10 @@ mid-session) is reported once, where it started. A session is one ID's run up to
 its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot's
 fallback ID is the parent PID) is decided on its own; a second end with nothing
 recorded since the first (the dashboard monitor's `process_exit` after
-`SessionEnd`) belongs to the run it closed. Every run is reported and
+`SessionEnd`) belongs to the run it closed. The monitor's `process_exit` also
+records `processExitAfter`, the last event it observed, and closes only that
+run: an exit appended after the next run of the same ID began does not end it,
+and one whose run compaction dropped is ignored. Every run is reported and
 snapshotted as `<id>@<first event's timestamp>`, which does not change when
 compaction drops earlier runs; a snapshot entry keyed by the bare ID (written
 before) is rewritten under the first run of that ID in the log the next time
@@ -369,9 +372,13 @@ dispatcher's rule, so a nested clone under a project is not the project's; no
 too (#786), because a session ID can recur in another scope (Copilot's fallback
 ID is the parent PID):
 `<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`
-for the user scope. The first time a scope needs one it copies the shared
+for the user scope. The first time a scope needs one it seeds it from the shared
 `~/.teamai/dashboard/reported-*.json`, so nothing reported before the upgrade is
-sent again; after that it reads only its own. The shared file is no longer
+sent again; after that it reads only its own. The seed takes only the entries of
+the scope's runs in the log, under their run IDs, and none for a run recorded
+with a `dataHome` path: that release already kept per-scope snapshots, so a
+shared entry under its ID is another scope's. An unmatched entry is dropped, so a
+later reuse of the ID cannot inherit it. The shared file is no longer
 written, except by an earlier release after a rollback, so every scope seeds from
 what the machine had reported by then, never from another scope's later report.
 The seed holds a session's whole total, so a session still running at the

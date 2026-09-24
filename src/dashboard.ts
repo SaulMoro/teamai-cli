@@ -121,6 +121,7 @@ export async function startDashboard(port?: number): Promise<void> {
             type: 'process_exit',
             timestamp: new Date().toISOString(),
             sessionId: session.sessionId,
+            processExitAfter: session.lastActivity,
             tool: session.tool,
             cwd: session.cwd,
             // The session's own data home, so its scope's report still sees it end.
