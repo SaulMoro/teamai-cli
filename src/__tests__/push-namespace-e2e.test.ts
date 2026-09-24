@@ -639,7 +639,10 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
       .toContain("Somebody else's rule");
   }, 60_000);
 
-  it('withdraws a placement record when a shared-root rule takes the name', async () => {
+  it('keeps a placement record when a shared-root rule takes the name, and pushes edits to the namespace', async () => {
+    // With a role configured, the placed rule replaces the shared-root rule of
+    // its name here, as an active namespace's rule would (#707): the author's
+    // root copy still stands for rules/be-know/my-rule.md.
     const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
     writeLocalResources(fixture);
     await runCLI(['push', '--role', 'be-know', '--all'], fixture.projectRoot, fixture.home);
@@ -651,17 +654,46 @@ describe('push places new rules and agents in a namespace (issue #649)', () => {
     const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
     expect(pulled.code, pulled.output).toBe(0);
 
-    expect(pulled.output).toContain('rules/my-rule.md now exists at the shared root');
-    expect(readState(fixture).placedRules ?? {}).toEqual({});
+    expect(pulled.output).not.toContain('now exists at the shared root');
+    expect(readState(fixture).placedRules).toEqual({ 'my-rule': 'rules/be-know/my-rule.md' });
     const rulesDir = path.join(fixture.projectRoot, '.claude/rules');
-    expect(fs.readFileSync(path.join(rulesDir, 'my-rule.md'), 'utf8')).toContain('Shared rule');
-    expect(fs.readFileSync(path.join(rulesDir, 'be-know', 'my-rule.md'), 'utf8')).toContain('Rule v1');
-    // And the next push does not follow the withdrawn record onto the namespaced file.
-    fs.writeFileSync(path.join(rulesDir, 'my-rule.md'), '# Shared rule, edited here\n');
+    expect(fs.readFileSync(path.join(rulesDir, 'my-rule.md'), 'utf8')).toBe('# Rule v1\n');
+    expect(fs.existsSync(path.join(rulesDir, 'be-know', 'my-rule.md'))).toBe(false);
+    // An edit goes back to the namespace; the shared-root rule is untouched.
+    fs.writeFileSync(path.join(rulesDir, 'my-rule.md'), '# Rule v2, edited here\n');
     await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+    const { branch } = branchFiles(fixture);
+    expect(git(['show', `${branch}:rules/be-know/my-rule.md`], fixture.remote)).toContain('Rule v2');
+    expect(git(['show', `${branch}:rules/my-rule.md`], fixture.remote)).toContain('Shared rule for everyone');
+  }, 60_000);
+
+  it('pushes an edited overridden skill and agent to their namespace and leaves the root ones untouched', async () => {
+    // backend activates be-skills and be-agents, whose items replace the
+    // shared-root ones of the same name for this member (#707).
+    const fixture = track(makeFixture({ agent: 'claude', provider: 'git' }));
+    commitOnMain(fixture, 'skills/review/SKILL.md', '---\nname: review\ndescription: Shared\n---\n\nShared review.\n');
+    commitOnMain(fixture, 'skills/be-skills/review/SKILL.md', '---\nname: review\ndescription: Backend\n---\n\nBackend review.\n');
+    commitOnMain(fixture, 'agents/reviewer.yaml', 'name: reviewer\ndescription: Shared\ninstructions: Review for everyone.\n');
+    commitOnMain(fixture, 'agents/be-agents/reviewer.yaml', 'name: reviewer\ndescription: Backend\ninstructions: Review the backend.\n');
+    const pulled = await runCLI(['pull', '--force'], fixture.projectRoot, fixture.home);
+    expect(pulled.code, pulled.output).toBe(0);
+
+    const skillFile = path.join(fixture.projectRoot, '.claude/skills/review/SKILL.md');
+    const agentFile = path.join(fixture.projectRoot, '.claude/agents/reviewer.md');
+    expect(fs.readFileSync(skillFile, 'utf8')).toContain('Backend review.');
+    expect(fs.readFileSync(agentFile, 'utf8')).toContain('Review the backend.');
+    fs.writeFileSync(skillFile, fs.readFileSync(skillFile, 'utf8').replace('Backend review.', 'Backend review, edited.'));
+    fs.writeFileSync(agentFile, fs.readFileSync(agentFile, 'utf8').replace('Review the backend.', 'Review the backend, edited.'));
+
+    const pushed = await runCLI(['push', '--all'], fixture.projectRoot, fixture.home);
+
     const { branch, files } = branchFiles(fixture);
-    expect(files, branch).toContain('rules/my-rule.md');
-    expect(git(['show', `${branch}:rules/be-know/my-rule.md`], fixture.remote)).toContain('Rule v1');
+    expect(branch, pushed.output).not.toBe('');
+    expect(git(['show', `${branch}:skills/be-skills/review/SKILL.md`], fixture.remote)).toContain('Backend review, edited.');
+    expect(git(['show', `${branch}:agents/be-agents/reviewer.yaml`], fixture.remote)).toContain('Review the backend, edited.');
+    expect(git(['show', `${branch}:skills/review/SKILL.md`], fixture.remote)).toContain('Shared review.');
+    expect(git(['show', `${branch}:agents/reviewer.yaml`], fixture.remote)).toContain('Review for everyone.');
+    expect(files).not.toContain('skills/review/CONTRIBUTORS');
   }, 60_000);
 
   it('removes only the published agent, through the real remove command', async () => {

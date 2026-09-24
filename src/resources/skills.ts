@@ -11,6 +11,7 @@ import { getHermesHome } from '../hermes-home.js';
 import {
   loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError, type RolesManifest,
 } from '../roles.js';
+import { loadProjectsManifest, resolveProjectResourceNamespaces } from '../projects.js';
 import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
@@ -293,6 +294,29 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
 }
 
 /**
+ * The skills namespaces push treats as this member's: the role ones
+ * (`resolveSkillNamespaces`, legacy fallbacks included), then those of the
+ * active projects, the same union pull delivers from. Without the project
+ * half, a project skill was pushable only through legacy mode's first-match
+ * scan, which can pick another project's skill of the same name.
+ */
+async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<string[]> {
+  const roleNamespaces = await resolveSkillNamespaces(localConfig);
+  const activeProjects = localConfig.projects ?? [];
+  if (activeProjects.length === 0) return roleNamespaces;
+  const manifest = await loadProjectsManifest(localConfig.repo.localPath);
+  if (!manifest) return roleNamespaces;
+  let projectNamespaces: string[];
+  try {
+    projectNamespaces = resolveProjectResourceNamespaces({ manifest, activeProjects }).skills;
+  } catch {
+    // An unknown project id: pull falls back to role-only filtering and warns.
+    return roleNamespaces;
+  }
+  return [...new Set([...roleNamespaces, ...projectNamespaces])];
+}
+
+/**
  * Recursively scan a directory tree to find all subdirectories containing SKILL.md.
  * Returns a map of skill names to their full paths, supporting arbitrary nesting depth.
  * For example, if scanning ~/.claude/skills/, will find both:
@@ -347,6 +371,49 @@ async function scanSkillsRecursively(dirPath: string): Promise<Map<string, strin
   return results;
 }
 
+/**
+ * Every file another team copy of `item`'s skill name tracks: the root skill,
+ * or the skill of that name in any namespace, other than `item` itself.
+ */
+async function otherVersionFiles(repoPath: string, item: ResourceItem): Promise<Set<string>> {
+  const skillsDir = path.join(repoPath, 'skills');
+  const copies: string[] = [];
+  for (const dir of await listDirs(skillsDir)) {
+    const dirPath = path.join(skillsDir, dir);
+    if (await pathExists(path.join(dirPath, SKILL_MD))) {
+      if (dir === item.name) copies.push(dirPath);
+    } else if (await pathExists(path.join(dirPath, item.name))) {
+      copies.push(path.join(dirPath, item.name));
+    }
+  }
+  const files = new Set<string>();
+  for (const copy of copies) {
+    if (path.resolve(copy) === path.resolve(item.sourcePath)) continue;
+    for (const file of await listFilesRecursive(copy)) files.add(file);
+  }
+  return files;
+}
+
+/**
+ * Install replaces the whole skill (#707): after `source` is copied over
+ * `dest`, a file `source` does not have is removed when another team version
+ * of the skill tracks it, so switching between the root skill and a namespace
+ * skill of that name leaves nothing of the previous one behind. A file no
+ * team version has is the member's own, and stays: push does not count such
+ * an extra as a change, so it may never have been pushed.
+ */
+async function removeLeftoverVersionFiles(source: string, dest: string, otherVersions: Set<string>): Promise<void> {
+  if (otherVersions.size === 0) return;
+  const sourceFiles = new Set(await listFilesRecursive(source));
+  let removed = false;
+  for (const file of await listFilesRecursive(dest)) {
+    if (sourceFiles.has(file) || !otherVersions.has(file)) continue;
+    await remove(path.join(dest, file));
+    removed = true;
+  }
+  if (removed) await pruneEmptyDirs(dest);
+}
+
 export class SkillsHandler extends ResourceHandler {
   readonly type = 'skills' as const;
 
@@ -359,7 +426,7 @@ export class SkillsHandler extends ResourceHandler {
    * to enforce role-based access control.
    */
   async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
-    const scopedNamespaces = await resolveSkillNamespaces(localConfig);
+    const scopedNamespaces = await resolvePushSkillNamespaces(localConfig);
     const teamSkills = new Map<string, { dir: string; namespace?: string }>();
     const blockedSkills = new Set<string>(); // Skills in non-allowed namespaces (role-based)
 
@@ -379,12 +446,14 @@ export class SkillsHandler extends ResourceHandler {
         }
       }
 
-      // Second pass: load skills from allowed namespaces
+      // Second pass: load skills from allowed namespaces. A namespace skill
+      // replaces the root skill of its name, as pull delivers it (#707), so an
+      // edit goes back to the namespace; the first namespace keeps a name.
       for (const namespace of scopedNamespaces) {
         const teamSkillsNsDir = path.join(allSkillsDir, namespace);
         const names = await listDirs(teamSkillsNsDir);
         for (const name of names) {
-          if (!teamSkills.has(name)) {
+          if (!teamSkills.get(name)?.namespace) {
             teamSkills.set(name, { dir: path.join(teamSkillsNsDir, name), namespace });
           }
         }
@@ -615,9 +684,11 @@ export class SkillsHandler extends ResourceHandler {
    * Pull a skill from team repo to all configured AI tool directories.
    */
   async pullItem(item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+    const otherVersions = await otherVersionFiles(localConfig.repo.localPath, item);
     for (const { tool, dest } of await this.resolveTargets(teamConfig, localConfig, item, item.sourcePath)) {
       try {
         await copyDir(item.sourcePath, dest);
+        await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions);
         await ensureSkillFrontmatter(dest, item.name);
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {

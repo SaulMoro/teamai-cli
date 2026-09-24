@@ -12,6 +12,8 @@
  * legacy mode (no roles, no projects) does not come through here.
  */
 
+import type { ResourceItem } from './types.js';
+
 /** One named item read from the team repo. `namespace: null` is the root. */
 export interface NamespaceCandidate<T> {
   readonly name: string;
@@ -41,6 +43,11 @@ export interface NamespaceConflict<T> {
 export type NamespaceResolution<T> =
   | { readonly kind: 'resolved'; readonly items: readonly ResolvedNamespaceItem<T>[] }
   | NamespaceConflict<T>;
+
+/** A team-repo resource item as a candidate, named and placed the way the scan found it. */
+export function itemCandidate(item: ResourceItem): NamespaceCandidate<ResourceItem> {
+  return { name: item.name, source: item.relativePath, namespace: item.namespace ?? null, value: item };
+}
 
 /**
  * Resolve candidates against the active namespaces. Candidates in a namespace

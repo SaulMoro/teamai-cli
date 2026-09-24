@@ -40,6 +40,7 @@ function config() {
 }
 
 const { recall } = await import('../recall.js');
+const { loadTeamConfig } = await import('../config.js');
 
 /**
  * A recall that has to rebuild the index must see the same learnings a pull
@@ -69,6 +70,7 @@ describe('recall rebuilding a missing index', () => {
   });
 
   afterEach(() => {
+    vi.mocked(loadTeamConfig).mockResolvedValue(null);
     process.env.HOME = realHome;
     fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -80,5 +82,34 @@ describe('recall rebuilding a missing index', () => {
     const names = index.entries.map((e: { filename: string }) => e.filename);
     expect(names).toContain('shared-note.md');
     expect(names).toContain(path.join('alpha', 'project-note.md'));
+  });
+
+  it('indexes the skills pull delivers here, not every skill in the repo (#707)', async () => {
+    const repo = path.join(tmp, '.teamai', 'team-repo');
+    fs.writeFileSync(
+      path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: alpha\n    name: Alpha\n    resources:\n      learnings: [alpha]\n      skills: [alpha-skills]\n'
+        + '  - id: beta\n    name: Beta\n    resources:\n      skills: [beta-skills]\n',
+    );
+    const skill = (rel: string, name: string): void => {
+      fs.mkdirSync(path.join(repo, 'skills', rel), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'skills', rel, 'SKILL.md'), `---\nname: ${name}\ndescription: retry budget ${name}\n---\nretry budget`);
+    };
+    skill('alpha-skills/gateway', 'gateway');
+    skill('beta-skills/billing', 'billing');
+    skill('untagged-root', 'untagged-root');
+    vi.mocked(loadTeamConfig).mockResolvedValue({
+      team: 't', description: '', repo: 'r', provider: 'git', reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: {},
+    });
+
+    await recall('retry budget', {});
+
+    const index = JSON.parse(fs.readFileSync(path.join(tmp, '.teamai', 'search-index.json'), 'utf8'));
+    const skills = index.entries
+      .filter((e: { type: string }) => e.type === 'skills')
+      .map((e: { filename: string }) => e.filename);
+    expect(skills).toEqual(['gateway.md']);
   });
 });

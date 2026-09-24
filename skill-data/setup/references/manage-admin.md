@@ -101,6 +101,17 @@ manifests. A manifest that breaks this, does not parse, or is empty stops
 members' pull for that scope until it is fixed; the error names the entry. Fix
 it rather than deleting it — with no `roles.yaml`, delivery is unfiltered.
 
+An item in an active namespace replaces the root item of the same name, whole:
+a skill by directory name (including a root skill a member gets through a tag),
+an agent by file stem, a rule by first-level file name (`rules/<ns>/<name>.md`
+replaces `rules/<name>.md`), and a `claudemd/<ns>/<name>.md` file replaces
+`claudemd/<name>.md`. Use this to give a project its own version of a shared
+item under the same name. The same name in two namespaces that one member
+has active is an error naming both files, so give each namespace's version a
+unique name or keep them in namespaces no member combines. `teamai doctor`
+lists each replacement as a note. Teams without roles or projects are
+unaffected.
+
 ## Team dashboard (web UI)
 
 ```bash

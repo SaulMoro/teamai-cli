@@ -1,0 +1,326 @@
+/**
+ * The namespace-over-root rule for the types that already had namespaces
+ * (#707): an item in an active namespace replaces the root item of the same
+ * name, whole; deactivating the namespace brings the root item back; two
+ * active namespaces with one name stop that type for the run and keep what is
+ * installed. Asserted through `pull`, on what lands on disk.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'node:path';
+import os from 'node:os';
+import fse from 'fs-extra';
+
+vi.mock('../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../config.js')>()),
+  requireInit: vi.fn(),
+  loadState: vi.fn().mockResolvedValue({ lastPull: null }),
+  saveState: vi.fn(),
+  loadLocalConfigForScope: vi.fn(),
+  loadTeamConfig: vi.fn(),
+  detectProjectConfig: vi.fn().mockResolvedValue(null),
+  loadStateForScope: vi.fn().mockResolvedValue({ lastPull: null }),
+  saveStateForScope: vi.fn(),
+}));
+
+vi.mock('../utils/git.js', () => ({
+  pullRepo: vi.fn().mockResolvedValue('Already up to date.'),
+}));
+
+vi.mock('../utils/logger.js', () => ({
+  log: {
+    info: vi.fn(),
+    success: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    dim: vi.fn(),
+    persist: vi.fn(),
+  },
+  spinner: vi.fn(() => ({
+    start: vi.fn().mockReturnThis(),
+    succeed: vi.fn().mockReturnThis(),
+    fail: vi.fn().mockReturnThis(),
+    warn: vi.fn().mockReturnThis(),
+    info: vi.fn().mockReturnThis(),
+    stop: vi.fn().mockReturnThis(),
+  })),
+}));
+
+// pull() takes a real ~/.teamai/.sync-lock; parallel workers would race on it.
+vi.mock('../update.js', () => ({
+  acquireLock: vi.fn().mockResolvedValue(true),
+  releaseLock: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { pull } from '../pull.js';
+import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig } from '../config.js';
+import { log } from '../utils/logger.js';
+import type { TeamaiConfig, LocalConfig } from '../types.js';
+
+const ROLES_YAML = `
+version: 1
+roles:
+  - id: frontend
+    description: Frontend
+    resources:
+      knowledge: [frontend]
+      skills: [frontend]
+      agents: [frontend]
+  - id: devops
+    description: DevOps
+    resources:
+      knowledge: [devops]
+      skills: [devops]
+      agents: [devops]
+`;
+
+const skillMd = (name: string, body: string): string => `---\nname: ${name}\ndescription: ${body}\n---\n\n${body}\n`;
+
+describe('pull: an active namespace item replaces the root item of the same name', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let repoPath: string;
+
+  function configFor(roles: string[] | null, extra: Partial<LocalConfig> = {}): LocalConfig {
+    const [primaryRole, ...additionalRoles] = roles ?? [];
+    return {
+      repo: { localPath: repoPath, remote: 'https://example.com/test/repo.git' },
+      username: 'testuser',
+      updatePolicy: 'auto',
+      ...(primaryRole ? { primaryRole } : {}),
+      additionalRoles,
+      resourceProfileVersion: 1,
+      scope: 'user',
+      ...extra,
+    };
+  }
+
+  const as = (roles: string[] | null, extra: Partial<LocalConfig> = {}): void => {
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(configFor(roles, extra));
+  };
+  const read = (rel: string): Promise<string> => fse.readFile(path.join(homeDir, rel), 'utf8');
+  const exists = (rel: string): Promise<boolean> => fse.pathExists(path.join(homeDir, rel));
+  const team = (rel: string, content: string): Promise<void> => fse.outputFile(path.join(repoPath, rel), content);
+  const logged = (level: 'warn' | 'error', pattern: RegExp): boolean => (
+    vi.mocked(log[level]).mock.calls.some((args) => pattern.test(args.map(String).join(' ')))
+  );
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-pull-ns-override-'));
+    homeDir = path.join(tmpDir, 'home');
+    repoPath = path.join(tmpDir, 'team-repo');
+
+    await team('manifest/roles.yaml', ROLES_YAML);
+    await fse.ensureDir(path.join(homeDir, '.claude', 'agents'));
+    await fse.ensureDir(path.join(homeDir, '.claude', 'skills'));
+    await fse.ensureDir(path.join(homeDir, '.claude', 'rules'));
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+
+    const teamConfig: TeamaiConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://example.com/test/repo.git',
+      provider: 'github',
+      reviewers: [],
+      sharing: {
+        skills: {},
+        rules: { enforced: [] },
+        docs: { localDir: '' },
+        env: { injectShellProfile: true },
+      },
+      toolPaths: {
+        claude: { skills: '.claude/skills', rules: '.claude/rules', agents: '.claude/agents', claudemd: '.claude/CLAUDE.md' },
+      },
+    };
+
+    as(['frontend']);
+    vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig);
+    vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    vi.mocked(log.warn).mockClear();
+    vi.mocked(log.error).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  describe('agents', () => {
+    it('delivers the namespace agent in place of the root one, and the root one again once it deactivates', async () => {
+      await team('agents/reviewer.yaml', 'name: reviewer\ndescription: Shared\ninstructions: Review for everyone.\n');
+      await team('agents/frontend/reviewer.yaml', 'name: reviewer\ndescription: Front\ninstructions: Review the front end.\n');
+
+      await pull({});
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review the front end.');
+
+      as(['devops']);
+      await pull({});
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
+    });
+  });
+
+  describe('rules', () => {
+    beforeEach(async () => {
+      await fse.ensureDir(path.join(homeDir, '.hermes'));
+      await team('rules/style.md', '# Shared style\n');
+      await team('rules/frontend/style.md', '# Front style\n');
+    });
+
+    it('suppresses the root rule, in tool dirs and in the Hermes block, while the namespace is active', async () => {
+      await pull({});
+
+      expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
+      expect(await exists('.claude/rules/style.md')).toBe(false);
+      const soul = await read('.hermes/SOUL.md');
+      expect(soul).toContain('# Front style');
+      expect(soul).not.toContain('# Shared style');
+
+      as(['devops']);
+      await pull({});
+
+      expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
+      expect(await exists('.claude/rules/frontend/style.md')).toBe(false);
+      expect(await read('.hermes/SOUL.md')).toContain('# Shared style');
+    });
+
+    it('leaves a root rule alone when only a deeper namespace path shares its file name', async () => {
+      await fse.remove(path.join(repoPath, 'rules/frontend/style.md'));
+      await team('rules/frontend/web/style.md', '# Web style\n');
+
+      await pull({});
+
+      expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
+      expect(await read('.claude/rules/frontend/web/style.md')).toBe('# Web style\n');
+    });
+
+    it('stops rules for the run, naming both files, when two active namespaces define one name', async () => {
+      await team('rules/other.md', '# Other\n');
+      await pull({});
+      expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
+
+      await team('rules/devops/style.md', '# Ops style\n');
+      await team('rules/other.md', '# Other, changed\n');
+      await team('agents/helper.yaml', 'name: helper\ndescription: Helps\ninstructions: Help.\n');
+      as(['frontend', 'devops']);
+      await pull({});
+
+      expect(logged('warn', /rules\/frontend\/style\.md.*rules\/devops\/style\.md/)).toBe(true);
+      // What was installed stays as it was, the new root edit included.
+      expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
+      expect(await read('.claude/rules/other.md')).toBe('# Other\n');
+      expect(await exists('.claude/rules/devops/style.md')).toBe(false);
+      // Only rules stop: the other types still sync.
+      expect(await exists('.claude/agents/helper.md')).toBe(true);
+    });
+  });
+
+  describe('claudemd', () => {
+    it('puts the namespace file in the managed block in place of the root file of that name', async () => {
+      await team('claudemd/team.md', 'ROOT TEAM NOTES\n');
+      await team('claudemd/tools.md', 'SHARED TOOL NOTES\n');
+      await team('claudemd/frontend/team.md', 'FRONT TEAM NOTES\n');
+
+      await pull({});
+      const front = await read('.claude/CLAUDE.md');
+      expect(front).toContain('FRONT TEAM NOTES');
+      expect(front).toContain('SHARED TOOL NOTES');
+      expect(front).not.toContain('ROOT TEAM NOTES');
+
+      as(['devops']);
+      await pull({});
+      const ops = await read('.claude/CLAUDE.md');
+      expect(ops).toContain('ROOT TEAM NOTES');
+      expect(ops).not.toContain('FRONT TEAM NOTES');
+    });
+
+    it('keeps the managed block as it was when two active namespaces define one file name', async () => {
+      await team('claudemd/frontend/team.md', 'FRONT TEAM NOTES\n');
+      await pull({});
+
+      await team('claudemd/devops/team.md', 'OPS TEAM NOTES\n');
+      as(['frontend', 'devops']);
+      await pull({});
+
+      const block = await read('.claude/CLAUDE.md');
+      expect(block).toContain('FRONT TEAM NOTES');
+      expect(block).not.toContain('OPS TEAM NOTES');
+      expect(logged('warn', /claudemd\/frontend\/team\.md.*claudemd\/devops\/team\.md/)).toBe(true);
+    });
+  });
+
+  describe('skills', () => {
+    beforeEach(async () => {
+      await team('tags.yaml', 'skills:\n  review: [ui]\n');
+      await team('skills/review/SKILL.md', skillMd('review', 'Shared review'));
+      await team('skills/review/checklist.md', 'root-only checklist\n');
+      await team('skills/frontend/review/SKILL.md', skillMd('review', 'Front review'));
+      await team('skills/lonely/SKILL.md', skillMd('lonely', 'Untagged root skill'));
+    });
+
+    it('replaces a root skill received through a tag with the active namespace skill, whole', async () => {
+      as(['devops'], { subscribedTags: ['ui'] });
+      await pull({});
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Shared review');
+      expect(await read('.claude/skills/review/checklist.md')).toBe('root-only checklist\n');
+
+      // A file no team version has is the member's own, not a leftover.
+      await fse.outputFile(path.join(homeDir, '.claude/skills/review/my-notes.md'), 'mine\n');
+
+      as(['frontend'], { subscribedTags: ['ui'] });
+      await pull({});
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
+      // Nothing of the root version is left behind in the installed directory.
+      expect(await exists('.claude/skills/review/checklist.md')).toBe(false);
+      expect(await read('.claude/skills/review/my-notes.md')).toBe('mine\n');
+
+      as(['devops'], { subscribedTags: ['ui'] });
+      await pull({});
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Shared review');
+      expect(await read('.claude/skills/review/checklist.md')).toBe('root-only checklist\n');
+    });
+
+    it('indexes for recall the skills pull delivers, not every skill in the repo', async () => {
+      await team('skills/devops/deploy/SKILL.md', skillMd('deploy', 'Deploy things'));
+
+      await pull({});
+
+      const index = await fse.readJson(path.join(homeDir, '.teamai', 'search-index.json')) as {
+        entries: Array<{ type: string; filename: string; path?: string }>;
+      };
+      const skills = index.entries.filter((entry) => entry.type === 'skills');
+      expect(skills.map((entry) => entry.filename)).toEqual(['review.md']);
+      expect(skills[0]?.path).toBe(path.join(repoPath, 'skills/frontend/review/SKILL.md'));
+    });
+
+    it('still does not deliver root skills by default in role mode', async () => {
+      await pull({});
+
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
+      expect(await exists('.claude/skills/lonely')).toBe(false);
+    });
+  });
+
+  describe('legacy mode (no roles, no projects)', () => {
+    it('delivers root and namespace rules and claudemd side by side, as before', async () => {
+      await fse.remove(path.join(repoPath, 'manifest'));
+      await team('rules/style.md', '# Shared style\n');
+      await team('rules/frontend/style.md', '# Front style\n');
+      await team('rules/devops/style.md', '# Ops style\n');
+      await team('claudemd/team.md', 'ROOT TEAM NOTES\n');
+      await team('claudemd/frontend/team.md', 'FRONT TEAM NOTES\n');
+      as(null);
+
+      await pull({});
+
+      expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
+      expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
+      expect(await read('.claude/rules/devops/style.md')).toBe('# Ops style\n');
+      const block = await read('.claude/CLAUDE.md');
+      expect(block).toContain('ROOT TEAM NOTES');
+      expect(block).toContain('FRONT TEAM NOTES');
+      expect(vi.mocked(log.error)).not.toHaveBeenCalled();
+    });
+  });
+});

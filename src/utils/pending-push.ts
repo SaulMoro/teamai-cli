@@ -216,11 +216,16 @@ function sharedRootPaths(root: 'rules' | 'agents', name: string): string[] {
  *      then read as this author's. For the same reason a record whose file
  *      was deleted since the last check (`placementsCheckedAt`) is dropped
  *      even when the path exists again.
- *   3. A record whose bare name is now ALSO a shared-root file is dropped, with
- *      a warning: the author's root copy can no longer stand for the namespaced
- *      resource, because the shared-root rule of that name is what every tool
- *      dir holds at that path, and following the record would push that
- *      unrelated rule over the author's namespaced one.
+ *   3. In legacy mode (no roles, no projects; asked of `deliversEveryNamespace`
+ *      only when a shared-root file is there), a record whose
+ *      bare name is now ALSO a shared-root file is dropped, with a warning: the
+ *      author's root copy can no longer stand for the namespaced resource,
+ *      because every namespace ships there and the shared-root rule of that
+ *      name is what every tool dir holds at that path, so following the record
+ *      would push that unrelated rule over the author's namespaced one. With
+ *      roles or projects the recorded resource replaces the shared-root one of
+ *      its name instead, as an active namespace's would (#707), and the record
+ *      stays.
  *
  * Runs after the pull in `push` and after the refresh in `pull`, before
  * anything reads the records. Returns whether `state` changed.
@@ -233,6 +238,7 @@ export async function reconcilePlacementRecords(
   repoPath: string,
   state: Pick<State, 'placedRules' | 'placedAgents' | 'pendingPushes' | 'placementsCheckedAt' | 'retiredPlacedAgents'>,
   tip?: string,
+  deliversEveryNamespace: () => Promise<boolean> = async () => false,
 ): Promise<boolean> {
   // A ref that cannot be resolved says nothing about any file: reading every
   // record as "gone" against it would drop them all.
@@ -344,7 +350,7 @@ export async function reconcilePlacementRecords(
       for (const candidate of sharedRootPaths(root, name)) {
         if (await exists(candidate)) { shadowed = candidate; break; }
       }
-      if (shadowed) {
+      if (shadowed && await deliversEveryNamespace()) {
         log.warn(
           `[${root}] ${name}: ${shadowed} now exists at the shared root, so your local ${name} follows that `
           + `file from here on and no longer stands for ${recorded}. Edit ${recorded} through its namespace.`,

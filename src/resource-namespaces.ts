@@ -116,3 +116,16 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
   const allSkillNamespaces = new Set<string>([...allRoleSkillNamespaces, ...allProjectSkillNamespaces]);
   return { activeNamespaces, allSkillNamespaces };
 }
+
+/**
+ * True in legacy mode: no role and no project filters this directory, so every
+ * namespace is delivered beside the shared root. A manifest that cannot be read
+ * answers false here; whatever needs the namespaces themselves reports that.
+ */
+export async function deliversEveryNamespace(localConfig: LocalConfig): Promise<boolean> {
+  try {
+    return await resolveResourceNamespaces(localConfig) === null;
+  } catch {
+    return false;
+  }
+}

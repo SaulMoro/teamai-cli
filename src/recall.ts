@@ -344,7 +344,10 @@ async function loadOrBuildScopeIndex(
         learningsNamespaces,
         docsDir: await pathExists(docsDir) ? docsDir : undefined,
         rulesDir: await pathExists(rulesDir) ? rulesDir : undefined,
-        skillsDir: await pathExists(skillsDir) ? skillsDir : undefined,
+        // The skills pull delivers here, not the whole skills/ tree (#707).
+        skillDirs: await pathExists(skillsDir)
+          ? await (await import('./pull.js')).resolveIndexedSkillDirs(localConfig)
+          : undefined,
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,

@@ -1,5 +1,6 @@
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
+import { deliversEveryNamespace } from './resource-namespaces.js';
 import { assertNotReadOnly } from './read-only.js';
 import { pullRepo, pushRepoBranch, checkoutMaster, generateBranchName } from './utils/git.js';
 import { createPrWithFallback, filterExistingTopLevelPaths } from './push.js';
@@ -85,7 +86,7 @@ async function removeCore(
   // the bare stem — and that removes the agent from every namespace.
   try {
     const recordsState = await loadStateForScope(localConfig);
-    if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
+    if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState, undefined, () => deliversEveryNamespace(localConfig))) {
       await saveStateForScope(recordsState, localConfig);
     }
   } catch (e) {

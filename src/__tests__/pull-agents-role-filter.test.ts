@@ -57,14 +57,49 @@ describe('filterAgentsByNamespaces', () => {
       .toThrow(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
   });
 
-  it('throws when a root-level agent and an active namespace share a name', () => {
+  it('delivers the active namespace agent in place of a root agent of the same stem', () => {
+    const agents = [
+      makeAgent('reviewer'),
+      makeAgent('reviewer', 'frontend'),
+      makeAgent('helper'),
+    ];
+
+    const result = filterAgentsByNamespaces(agents, ['frontend']);
+
+    expect(result.map((a) => a.relativePath)).toEqual(['agents/frontend/reviewer.yaml', 'agents/helper.yaml']);
+  });
+
+  it('delivers the root agent again once the namespace that replaced it is inactive', () => {
     const agents = [
       makeAgent('reviewer'),
       makeAgent('reviewer', 'frontend'),
     ];
 
-    expect(() => filterAgentsByNamespaces(agents, ['frontend']))
-      .toThrow(/Duplicate agent "reviewer"/);
+    const result = filterAgentsByNamespaces(agents, ['common']);
+
+    expect(result.map((a) => a.relativePath)).toEqual(['agents/reviewer.yaml']);
+  });
+
+  it('names both namespaces when two active ones replace the same root agent', () => {
+    const agents = [
+      makeAgent('reviewer'),
+      makeAgent('reviewer', 'devops'),
+      makeAgent('reviewer', 'frontend'),
+    ];
+
+    expect(() => filterAgentsByNamespaces(agents, ['frontend', 'devops']))
+      .toThrow(/Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/);
+  });
+
+  it('still rejects a root agent and a namespace agent of one stem when no role is configured', () => {
+    // Legacy mode delivers every namespace, so nothing says which one replaces the root.
+    const agents = [
+      makeAgent('reviewer'),
+      makeAgent('reviewer', 'frontend'),
+    ];
+
+    expect(() => filterAgentsByNamespaces(agents, null))
+      .toThrow(/Duplicate agent "reviewer" found in active namespaces "\(root\)" and "frontend"/);
   });
 
   it('does not report a duplicate when the colliding namespace is inactive', () => {
@@ -115,6 +150,18 @@ describe('filterAgentsByNamespaces', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.namespace).toBe('common');
+  });
+
+  it('delivers the agent this machine published in place of a root agent of the same stem', () => {
+    // The author's flattened copy stands for the placed agent; a shared-root
+    // agent of that stem no longer withdraws the record (#707).
+    const agents = [makeAgent('vr'), makeAgent('vr', 'fe-agents')];
+
+    const result = filterAgentsByNamespaces(agents, ['common'], {
+      vr: 'agents/fe-agents/vr.yaml',
+    });
+
+    expect(result.map((a) => a.relativePath)).toEqual(['agents/fe-agents/vr.yaml']);
   });
 
   it('ignores a record that does not match the agent it names', () => {

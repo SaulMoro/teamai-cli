@@ -12,6 +12,7 @@ import { isSafeNamespaceSegment } from '../manifest-schema.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
+import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import {
   parseAgentYaml,
@@ -76,11 +77,14 @@ export interface AgentResourceItem extends ResourceItem {
  *
  * A stem an ACTIVE namespace already claims is left alone: agents deploy
  * flattened, so two would collide on one filename, and the active one is the
- * agent deployed here.
+ * agent deployed here. A root agent of the stem does not claim it: the
+ * recorded agent replaces it, as an active namespace agent would (#707).
  *
- * Delivery and revocation both resolve through this. They must agree — when
- * only delivery knew about the record, `pull` wrote the agent and the
- * revocation pass deleted it again in the same run.
+ * This is the candidate set, root agents included; `resolveAgentsForDirectory`
+ * applies the namespace rule to it. Delivery and revocation both resolve
+ * through that. They must agree — when only delivery knew about the record,
+ * `pull` wrote the agent and the revocation pass deleted it again in the same
+ * run.
  */
 export function selectAgentsForDirectory(
   agents: ResourceItem[],
@@ -94,12 +98,34 @@ export function selectAgentsForDirectory(
   );
   if (!placedAgents) return active;
 
-  const claimed = new Set(active.map((agent) => agent.name));
+  const claimed = new Set(active.flatMap((agent) => (agent.namespace ? [agent.name] : [])));
   const recovered = agents.filter((agent) => agent.namespace
     && !claimed.has(agent.name)
     && placedResourcePath(placedAgents, 'agents', agent.name)
       === `agents/${agent.namespace}/${path.basename(agent.relativePath)}`);
   return recovered.length > 0 ? [...active, ...recovered] : active;
+}
+
+/**
+ * The agents this directory receives, with the namespace rule applied: an
+ * active (or recorded) namespace agent replaces the root agent of its stem,
+ * and one stem in two active namespaces is a conflict. A recorded namespace
+ * ranks after the active ones, for the message only; it never shares a stem
+ * with an active namespace agent (`selectAgentsForDirectory`).
+ *
+ * Role/project mode only. Legacy mode delivers every namespace into one flat
+ * folder, so there any shared stem is a collision (`filterAgentsByNamespaces`).
+ */
+export function resolveAgentsForDirectory(
+  agents: ResourceItem[],
+  activeNamespaces: string[],
+  placedAgents?: Record<string, string>,
+): NamespaceResolution<ResourceItem> {
+  const selected = selectAgentsForDirectory(agents, activeNamespaces, placedAgents);
+  const recorded = selected.flatMap((agent) => (
+    agent.namespace && !activeNamespaces.includes(agent.namespace) ? [agent.namespace] : []
+  ));
+  return resolveNamespacedItems(selected.map(itemCandidate), [...new Set([...activeNamespaces, ...recorded])]);
 }
 
 export class AgentsHandler extends ResourceHandler {
@@ -301,22 +327,28 @@ export class AgentsHandler extends ResourceHandler {
       const sources = await findTeamAgentFiles(teamAgentsDir, stem);
       const placedNamespace = placedResourcePath(placedAgents, 'agents', stem)?.split('/')[1];
       // Which team file this local agent is a copy of, in the order pull
-      // delivers them: an active source (the shared root counts) is what was
-      // deployed here, then the one this machine's record names. Only when
-      // neither exists does an explicit --role/--project decide — the agent
-      // then needs a destination, and a same-stem copy in some other inactive
-      // namespace is a different agent that must not block it (#649 review).
-      // Letting the flag win outright compared an active agent's rendering
-      // with the requested namespace's file and overwrote it without an edit.
+      // delivers them: an active namespace source, then the one this
+      // machine's record names, then the shared root, which either of the
+      // first two replaces (#707). In legacy mode everything is active and
+      // nothing replaces the root. Only when none exists does an explicit
+      // --role/--project decide — the agent then needs a destination, and a
+      // same-stem copy in some other inactive namespace is a different agent
+      // that must not block it (#649 review). Letting the flag win outright
+      // compared an active agent's rendering with the requested namespace's
+      // file and overwrote it without an edit.
       const active = sources.filter(
         (file) => activeNamespaces === null || !file.namespace
           || activeNamespaces.includes(file.namespace),
       );
+      const activeInNamespace = active.filter((file) => file.namespace);
       const recorded = placedNamespace ? sources.filter((file) => file.namespace === placedNamespace) : [];
+      const atRoot = active.filter((file) => !file.namespace);
       // Two active sources stay ambiguous even under a flag: the flattened file
       // cannot say which one it was delivered from, and picking the requested
       // one compared the other's untouched copy with it (#649 review).
-      const candidates = active.length > 0 ? active : recorded;
+      const candidates = activeNamespaces === null
+        ? (active.length > 0 ? active : recorded)
+        : [activeInNamespace, recorded, atRoot].find((files) => files.length > 0) ?? [];
       if (candidates.length > 1) {
         items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
           relativePath: `agents/${stem}.yaml`, status: 'modified',
@@ -412,7 +444,7 @@ export class AgentsHandler extends ResourceHandler {
 
       // Only a copy that differs is worth holding: an unchanged one — the
       // author's own merged edit included — has nothing to overwrite with.
-      if (located && active.length === 0 && recorded.length > 0) {
+      if (located && candidates === recorded) {
         const recordedPath = `agents/${located.namespace}/${stem}${located.ext}`;
         if (await recordedAgentMovedOn(localConfig.repo.localPath, recordedPath, lastPullRev)) {
           items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
@@ -742,12 +774,14 @@ export class AgentsHandler extends ResourceHandler {
 
   /**
    * Revocation pass for role/project scoping. Removes the deployed copies of
-   * every agent whose namespace is no longer active, on every installed tool.
+   * every agent whose namespace is no longer active, on every installed tool,
+   * and of every root agent a namespace agent now replaces.
    *
    * Data-safety gate, same as inactive skills: a file is deleted only when it
    * is byte-equal to what pull would render from the team source. A local edit
-   * is kept and reported so nothing unpushed is lost. Root-level agents and
-   * agents still deployed to the same tool destination never qualify.
+   * is kept and reported so nothing unpushed is lost. An agent still deployed
+   * to the same tool destination never qualifies, so a replaced root agent is
+   * only removed from a tool its replacement does not target.
    */
   async cleanupInactiveNamespaces(
     teamConfig: TeamaiConfig,
@@ -755,12 +789,15 @@ export class AgentsHandler extends ResourceHandler {
     activeNamespaces: string[],
   ): Promise<void> {
     const items = await this.scanTeamForPull(teamConfig, localConfig);
-    // The same selection `pull` delivers with, records included: revoking an
-    // agent this machine published would delete the copy pull had just written.
+    // The same selection `pull` delivers with, records and overrides included:
+    // revoking an agent this machine published would delete the copy pull had
+    // just written, and a root agent a namespace replaces is not delivered.
     const { placedAgents } = await loadStateForScope(localConfig);
-    const kept = new Set(
-      selectAgentsForDirectory(items, activeNamespaces, placedAgents).map((item) => item.relativePath),
-    );
+    const resolution = resolveAgentsForDirectory(items, activeNamespaces, placedAgents);
+    // `pull` stops the scope on a collision before it gets here; with nothing
+    // settled about what is delivered, nothing is revoked either.
+    if (resolution.kind === 'conflict') return;
+    const kept = new Set(resolution.items.map((item) => item.value.relativePath));
     const active = items.filter((item) => kept.has(item.relativePath));
     const inactive = items.filter(
       (item) => !kept.has(item.relativePath) && !BUILTIN_AGENT_NAMES.has(item.name),

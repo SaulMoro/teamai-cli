@@ -76,7 +76,10 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
     learningsNamespaces: activeLearningsNamespaces,
     docsDir: (await pathExists(docsRepoDir)) ? docsRepoDir : undefined,
     rulesDir: (await pathExists(rulesRepoDir)) ? rulesRepoDir : undefined,
-    skillsDir: (await pathExists(skillsRepoDir)) ? skillsRepoDir : undefined,
+    // The skills pull delivers here, not the whole skills/ tree (#707).
+    skillDirs: (await pathExists(skillsRepoDir))
+      ? await (await import('./pull.js')).resolveIndexedSkillDirs(localConfig)
+      : undefined,
     votesDir: (await pathExists(votesDir)) ? votesDir : undefined,
     indexPath,
   });

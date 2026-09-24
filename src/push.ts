@@ -15,6 +15,7 @@ import { getProvider } from './providers/index.js';
 import { log, spinner } from './utils/logger.js';
 import { getHandler } from './resources/index.js';
 import { scanTeamRepoNamespaces } from './resources/skills.js';
+import { deliversEveryNamespace } from './resource-namespaces.js';
 import type {
   GlobalOptions, ResourceItem, ResourceType, LocalConfig, TeamaiConfig, State,
 } from './types.js';
@@ -950,7 +951,7 @@ async function pushCore(
   if (!teamRepoStale) {
     try {
       const recordsState = await loadStateForScope(localConfig);
-      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState)) {
+      if (await reconcilePlacementRecords(localConfig.repo.localPath, recordsState, undefined, () => deliversEveryNamespace(localConfig))) {
         await saveStateForScope(recordsState, localConfig);
       }
     } catch (e) {

@@ -24,6 +24,7 @@ import {
   buildDeliveryChecks,
   buildRulesDeliveryChecks,
   buildAgentsDeliveryChecks,
+  buildNamespaceNotes,
   buildMcpDeliveryChecks,
   buildEnvDeliveryCheck,
   buildDocsCheck,
@@ -107,7 +108,7 @@ export interface DoctorReport {
   checks: CheckResult[];
   /** Present only when the team repo declares packages. Human text, not checks. */
   packages?: { ok: boolean; lines: string[] };
-  /** Advisories that are not checks — today, the Codex trust-gate reminder. */
+  /** Advisories that are not checks: namespace overrides, the Codex trust-gate reminder. */
   notes?: string[];
 }
 
@@ -542,6 +543,9 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
   const codexNote = await hasInstalledCodexHooks(toolPaths, baseDir)
     ? codexTrustReminder()
     : null;
+  // Which namespace item replaces which root item (#707): information, not a
+  // problem, so a note rather than a check.
+  const notes = [...await buildNamespaceNotes(ctx), ...(codexNote ? [codexNote] : [])];
 
   if (jsonMode) {
     emitReport({
@@ -550,7 +554,7 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
       checks: results,
       // pkgDoctorReport renders its own lines; they are human text, not checks.
       ...(packageReport ? { packages: { ok: packageReport.allPassed, lines: packageReport.lines } } : {}),
-      ...(codexNote ? { notes: [codexNote] } : {}),
+      ...(notes.length > 0 ? { notes } : {}),
     });
     return allPassed;
   }
@@ -559,9 +563,9 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     for (const line of packageReport.lines) console.log(line);
   }
 
-  if (codexNote) {
+  if (notes.length > 0) {
     console.log('');
-    log.info(codexNote);
+    for (const note of notes) log.info(note);
   }
 
   console.log('');

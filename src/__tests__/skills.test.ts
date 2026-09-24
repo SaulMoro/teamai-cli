@@ -444,6 +444,53 @@ scope: 'user',
     expect(item!.namespace).toBeUndefined();
   });
 
+  it('writes an edited overridden skill back to its role namespace and leaves the root untouched', async () => {
+    // The active hai/review replaces the root review for this member (#707),
+    // so the local copy is hai's.
+    localConfig.primaryRole = 'hai';
+    localConfig.additionalRoles = [];
+    const repoSkills = path.join(localConfig.repo.localPath, 'skills');
+    await fse.outputFile(path.join(repoSkills, 'review', 'SKILL.md'), '# Root review');
+    await fse.outputFile(path.join(repoSkills, 'review', 'root-only.md'), 'root file');
+    await fse.outputFile(path.join(repoSkills, 'hai', 'review', 'SKILL.md'), '# hai review');
+    await fse.outputFile(path.join(homeDir, '.claude/skills', 'review', 'SKILL.md'), '# hai review, edited');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'review');
+    expect(item?.status).toBe('modified');
+    expect(item?.namespace).toBe('hai');
+    expect(item?.relativePath).toBe('skills/hai/review');
+
+    for (const pushed of items) await handler.pushItem(pushed, teamConfig, localConfig);
+    expect(await fse.readFile(path.join(repoSkills, 'hai', 'review', 'SKILL.md'), 'utf8')).toContain('# hai review, edited');
+    expect(await fse.readFile(path.join(repoSkills, 'review', 'SKILL.md'), 'utf8')).toBe('# Root review');
+    expect(await fse.pathExists(path.join(repoSkills, 'review', 'root-only.md'))).toBe(true);
+  });
+
+  it('scans project skill namespaces as well as role ones', async () => {
+    const repoPath = localConfig.repo.localPath;
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), [
+      'version: 1',
+      'projects:',
+      '  - id: shop',
+      '    resources:',
+      '      skills: [checkout]',
+      '  - id: finance',
+      '    resources:',
+      '      skills: [billing]',
+    ].join('\n'));
+    localConfig.projects = ['shop'];
+    // `billing` sorts first; only the active project's copy is this member's.
+    await fse.outputFile(path.join(repoPath, 'skills', 'billing', 'pay', 'SKILL.md'), '# billing pay');
+    await fse.outputFile(path.join(repoPath, 'skills', 'checkout', 'pay', 'SKILL.md'), '# checkout pay');
+    await fse.outputFile(path.join(homeDir, '.claude/skills', 'pay', 'SKILL.md'), '# checkout pay, edited');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    const item = items.find((i) => i.name === 'pay');
+    expect(item?.status).toBe('modified');
+    expect(item?.relativePath).toBe('skills/checkout/pay');
+  });
+
   it('detects modified skill in namespaced team repo when no primaryRole is set', async () => {
     // No primaryRole — legacy mode
     // Team repo uses namespaced layout: skills/tencent/tgit/SKILL.md

@@ -134,7 +134,7 @@ describe('teamai pull settles placement records against the default branch', () 
 
     await pull({ silent: true, force: true });
 
-    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(testRoot, 'team-repo'), expect.anything(), undefined);
+    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(testRoot, 'team-repo'), expect.anything(), undefined, expect.any(Function));
   });
 
   it('in single-repo mode, through origin/<default> rather than the member\'s checkout', async () => {
@@ -142,6 +142,6 @@ describe('teamai pull settles placement records against the default branch', () 
 
     await pull({ silent: true, force: true });
 
-    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(business, '.teamai'), expect.anything(), 'origin/main');
+    expect(reconcilePlacementRecords).toHaveBeenCalledWith(path.join(business, '.teamai'), expect.anything(), 'origin/main', expect.any(Function));
   });
 });

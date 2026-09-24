@@ -319,33 +319,63 @@ describe('reconcilePlacementRecords', () => {
       .toEqual({ vr: 'agents/fe/vr.yaml', qa: 'agents/fe/qa.yaml' });
   });
 
-  it('withdraws a record once a shared-root file of the same name exists, and says so', async () => {
+  // Legacy mode (no roles, no projects) delivers every namespace beside the
+  // root, so a shared-root file of the placed name owns the author's path.
+  it('withdraws a record in legacy mode once a shared-root file of the same name exists, and says so', async () => {
     await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'the author\'s');
     await fse.outputFile(path.join(repoPath, 'rules/my-rule.md'), 'somebody else\'s, for everyone');
     const state = { placedRules: { 'my-rule': 'rules/fe/my-rule.md' }, placedAgents: {}, pendingPushes: [] };
 
-    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(await reconcilePlacementRecords(repoPath, state, undefined, async () => true)).toBe(true);
     expect(state.placedRules).toEqual({});
     expect(mockWarn.mock.calls.flat().join(' ')).toContain('rules/my-rule.md now exists at the shared root');
   });
 
-  it('withdraws an agent record shadowed by a legacy shared-root .md of the same stem', async () => {
+  it('withdraws an agent record in legacy mode shadowed by a legacy shared-root .md of the same stem', async () => {
     await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\n');
     await fse.outputFile(path.join(repoPath, 'agents/vr.md'), '# vr\n');
     const state = { placedRules: {}, placedAgents: { vr: 'agents/fe/vr.yaml' }, pendingPushes: [] };
 
-    expect(await reconcilePlacementRecords(repoPath, state)).toBe(true);
+    expect(await reconcilePlacementRecords(repoPath, state, undefined, async () => true)).toBe(true);
     expect(state.placedAgents).toEqual({});
   });
 
-  it('does not record a landed placement that a shared-root file already shadows', async () => {
+  it('does not record a landed placement in legacy mode that a shared-root file already shadows', async () => {
+    const blob = await land('rules/fe/my-rule.md', 'x');
+    await land('rules/my-rule.md', 'y');
+    const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule(), blob }])] };
+
+    await reconcilePlacementRecords(repoPath, state, undefined, async () => true);
+
+    expect(state.placedRules).toEqual({});
+  });
+
+  // With roles or projects, the recorded resource replaces the shared-root one
+  // of its name, as an active namespace's would (#707).
+  it('keeps rule and agent records when a shared-root file of the same name exists', async () => {
+    await fse.outputFile(path.join(repoPath, 'rules/fe/my-rule.md'), 'the author\'s');
+    await fse.outputFile(path.join(repoPath, 'rules/my-rule.md'), 'somebody else\'s, for everyone');
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\n');
+    await fse.outputFile(path.join(repoPath, 'agents/vr.yaml'), 'name: vr\n');
+    const state = {
+      placedRules: { 'my-rule': 'rules/fe/my-rule.md' }, placedAgents: { vr: 'agents/fe/vr.yaml' }, pendingPushes: [],
+    };
+
+    await reconcilePlacementRecords(repoPath, state);
+
+    expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
+    expect(state.placedAgents).toEqual({ vr: 'agents/fe/vr.yaml' });
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('records a landed placement although a shared-root file has the same name', async () => {
     const blob = await land('rules/fe/my-rule.md', 'x');
     await land('rules/my-rule.md', 'y');
     const state = { placedRules: {}, placedAgents: {}, pendingPushes: [pending([{ ...placedRule(), blob }])] };
 
     await reconcilePlacementRecords(repoPath, state);
 
-    expect(state.placedRules).toEqual({});
+    expect(state.placedRules).toEqual({ 'my-rule': 'rules/fe/my-rule.md' });
   });
 });
 

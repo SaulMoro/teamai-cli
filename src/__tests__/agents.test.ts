@@ -719,6 +719,71 @@ projects:
     expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
   });
 
+  it('writes an edited overridden agent back to its namespace and leaves the root untouched', async () => {
+    // fe replaces the shared root reviewer here (#707), so the local copy is
+    // fe's, not an ambiguous pick between the two.
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: front\n    resources:\n      agents: [fe]\n');
+    localConfig.projects = ['front'];
+    const root = 'name: reviewer\ndescription: Shared\ninstructions: Read root.\n';
+    await fse.outputFile(path.join(repoPath, 'agents/reviewer.yaml'), root);
+    const fe = { name: 'reviewer', type: 'agents' as const, sourcePath: path.join(repoPath, 'agents/fe/reviewer.yaml'), relativePath: 'agents/fe/reviewer.yaml', namespace: 'fe' };
+    await fse.outputFile(fe.sourcePath, 'name: reviewer\ndescription: Front\ninstructions: Read fe.\n');
+    await handler.pullItem(fe, teamConfig, localConfig);
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    await fse.writeFile(deployed, (await fse.readFile(deployed, 'utf8')).replace('Read fe.', 'Read fe, edited.'));
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.relativePath).toBe('agents/fe/reviewer.yaml');
+    expect(items[0]?.namespace).toBe('fe');
+    for (const item of items) await handler.pushItem(item, teamConfig, localConfig);
+    expect(await fse.readFile(fe.sourcePath, 'utf8')).toContain('Read fe, edited.');
+    expect(await fse.readFile(path.join(repoPath, 'agents/reviewer.yaml'), 'utf8')).toBe(root);
+  });
+
+  it('writes an edited agent back to its record when a shared-root agent has the same stem', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');
+    const canonical = 'name: reviewer\ndescription: Mine\ninstructions: Read it.\n';
+    await fse.outputFile(path.join(repoPath, 'agents/fe-agents/reviewer.yaml'), canonical);
+    await fse.outputFile(path.join(repoPath, 'agents/reviewer.yaml'),
+      'name: reviewer\ndescription: Shared\ninstructions: Read root.\n');
+    await fse.outputFile(path.join(homeDir, '.claude/agents/reviewer.md'),
+      '---\nname: reviewer\ndescription: Mine\n---\n\nEdited locally.\n');
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      lastPullRev: 'abc1234',
+      placedAgents: { reviewer: 'agents/fe-agents/reviewer.yaml' },
+    });
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from(canonical));
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skipReason).toBeUndefined();
+    expect(items[0]?.relativePath).toBe('agents/fe-agents/reviewer.yaml');
+  });
+
+  it('removes a replaced root agent from a tool its namespace replacement does not target', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
+      'version: 1\nprojects:\n  - id: front\n    resources:\n      agents: [fe]\n');
+    localConfig.projects = ['front'];
+    const root = { name: 'reviewer', type: 'agents' as const, sourcePath: path.join(repoPath, 'agents/reviewer.yaml'), relativePath: 'agents/reviewer.yaml' };
+    await fse.outputFile(root.sourcePath, 'name: reviewer\ndescription: Shared\ninstructions: Read root.\n');
+    await handler.pullItem(root, teamConfig, localConfig);
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    expect(await fse.pathExists(deployed)).toBe(true);
+    // The replacement targets another tool only, so nothing writes over the root copy here.
+    await fse.outputFile(path.join(repoPath, 'agents/fe/reviewer.yaml'),
+      'name: reviewer\ndescription: Front\ninstructions: Read fe.\ntargets: [codex]\n');
+
+    await handler.cleanupInactiveNamespaces(teamConfig, localConfig, ['fe']);
+
+    expect(await fse.pathExists(deployed)).toBe(false);
+  });
+
   it('still skips an inactive agent this machine never published', async () => {
     await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'),
       'version: 1\nprojects:\n  - id: inactive\n    resources:\n      agents: [fe-agents]\n');

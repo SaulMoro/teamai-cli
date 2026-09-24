@@ -14,6 +14,7 @@ import {
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
+import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
 import {
   ruleFileExtensionForTool,
@@ -293,11 +294,13 @@ export class RulesHandler extends ResourceHandler {
       (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
     );
     if (placed !== `rules/${teamName}.md`) return teamName;
-    // A shared-root rule of the same name owns the root path in every tool
-    // dir; delivering both there would leave whichever wrote last. The
-    // reconcile pass withdraws the record for this case, but delivery must
-    // not depend on having run after it.
-    if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${bareName}.md`))) return teamName;
+    // In legacy mode a shared-root rule of the same name is delivered too, and
+    // owns the root path in every tool dir; delivering both there would leave
+    // whichever wrote last. The reconcile pass withdraws the record for this
+    // case, but delivery must not depend on having run after it. With roles or
+    // projects the placed rule replaces that root rule instead (#707).
+    if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${bareName}.md`))
+      && await resolveResourceNamespaces(localConfig) === null) return teamName;
     return bareName;
   }
 

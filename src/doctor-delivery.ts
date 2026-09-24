@@ -204,7 +204,18 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   const { getHandler } = await import('./resources/index.js');
 
   const roleContext = await buildRolePullContext(localConfig);
-  const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
+  const desired = await resolveDesiredRules(teamConfig, localConfig, roleContext);
+  if (desired.kind === 'conflict') {
+    // `pull` leaves rules as they are on this; saying so beats checking a
+    // desired set nobody can name.
+    return [{
+      name: 'Rules to deliver can be resolved',
+      source: 'local',
+      check: async () => false,
+      fix: desired.message,
+    }];
+  }
+  const { items } = desired;
   if (items.length === 0) return [];
 
   const activation = await buildRulesActivationChecks(ctx, items);
@@ -691,4 +702,101 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
     fix: `Missing from ${dest}: ${nameList(missing)}. Run \`teamai pull --force\`: a plain `
       + 'pull skips a scope whose team repo has not changed, so it cannot restore these.',
   }];
+}
+
+/**
+ * Information lines, not checks, that answer "why do I have this version?"
+ * (#707). With roles or projects: each namespace skill, agent, rule or
+ * claudemd file that replaces a root item of the same name. In legacy mode,
+ * where nothing replaces anything: each name the team repo defines more than
+ * once, and what the member receives because of it.
+ *
+ * A team repo whose desired sets cannot be resolved yields no lines: the
+ * delivery checks already report that as a failure.
+ */
+export async function buildNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+
+  const pull = await import('./pull.js');
+  const { getHandler } = await import('./resources/index.js');
+  const { resolveAgentsForDirectory } = await import('./resources/agents.js');
+  const { loadStateForScope } = await import('./config.js');
+
+  try {
+    const roleContext = await pull.buildRolePullContext(localConfig);
+    const skills = await getHandler('skills').scanTeamForPull(teamConfig, localConfig);
+    const rules = await getHandler('rules').scanTeamForPull(teamConfig, localConfig);
+    const claudemd = await pull.collectClaudemdFiles(localConfig.repo.localPath, roleContext);
+
+    if (!roleContext) {
+      const firstLevelRules = rules.filter((rule) => rule.name.split('/').length <= 2);
+      return [
+        ...repeatedNames(skills, (item) => item.name).map(([name, sources]) => (
+          `skills: ${name} is defined in ${listed(sources)}; only one of them is installed`)),
+        ...repeatedNames(firstLevelRules, (item) => path.posix.basename(item.name)).map(([name, sources]) => (
+          `rules: ${name} is defined in ${listed(sources)}; each is delivered at its own path`)),
+        ...(await repeatedClaudemdNames(localConfig.repo.localPath)).map(([name, sources]) => (
+          `claudemd: ${name} is defined in ${listed(sources)}; both are in the managed block`)),
+      ];
+    }
+
+    const notes: string[] = [];
+    const { items: desiredSkills } = await pull.resolveDesiredSkills(teamConfig, localConfig, roleContext);
+    const rootSkills = new Map(skills.filter((item) => !item.namespace).map((item) => [item.name, item.relativePath]));
+    for (const item of desiredSkills) {
+      const root = item.namespace ? rootSkills.get(item.name) : undefined;
+      if (root) notes.push(`skills: ${item.relativePath} replaces ${root}`);
+    }
+    const agents = resolveAgentsForDirectory(
+      await getHandler('agents').scanTeamForPull(teamConfig, localConfig),
+      roleContext.activeNamespaces.agents,
+      (await loadStateForScope(localConfig)).placedAgents,
+    );
+    if (agents.kind === 'resolved') {
+      for (const item of agents.items) {
+        if (item.replaces) notes.push(`agents: ${item.source} replaces ${item.replaces.source}`);
+      }
+    }
+    const desiredRules = await pull.resolveDesiredRules(teamConfig, localConfig, roleContext);
+    if (desiredRules.kind === 'resolved') {
+      for (const { source, replaces } of desiredRules.overrides) notes.push(`rules: ${source} replaces ${replaces}`);
+    }
+    if (claudemd.kind === 'resolved') {
+      for (const { source, replaces } of claudemd.overrides) notes.push(`claudemd: ${source} replaces ${replaces}`);
+    }
+    return notes;
+  } catch {
+    return [];
+  }
+}
+
+/** Names that more than one item carries, with the items' sources sorted. */
+function repeatedNames(items: ResourceItem[], nameOf: (item: ResourceItem) => string): Array<[string, string[]]> {
+  const byName = new Map<string, string[]>();
+  for (const item of items) {
+    const name = nameOf(item);
+    byName.set(name, [...(byName.get(name) ?? []), item.relativePath]);
+  }
+  return [...byName].filter(([, sources]) => sources.length > 1).map(([name, sources]) => [name, sources.sort()]);
+}
+
+/** claudemd file names found at the root and in any subdirectory more than once. */
+async function repeatedClaudemdNames(repoPath: string): Promise<Array<[string, string[]]>> {
+  const claudemdDir = path.join(repoPath, 'claudemd');
+  const files = await listFilesRecursive(claudemdDir);
+  const byName = new Map<string, string[]>();
+  for (const file of files) {
+    const segments = file.split(path.sep);
+    if (segments.length > 2 || !file.endsWith('.md')) continue;
+    const name = segments[segments.length - 1] ?? file;
+    byName.set(name, [...(byName.get(name) ?? []), `claudemd/${segments.join('/')}`]);
+  }
+  return [...byName].filter(([, sources]) => sources.length > 1).map(([name, sources]) => [name, sources.sort()]);
+}
+
+function listed(sources: string[]): string {
+  return sources.length <= 2
+    ? sources.join(' and ')
+    : `${sources.slice(0, -1).join(', ')} and ${sources[sources.length - 1]}`;
 }

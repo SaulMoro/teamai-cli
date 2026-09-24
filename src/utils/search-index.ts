@@ -568,6 +568,24 @@ async function collectSkillEntries(
   return out;
 }
 
+/**
+ * Entries for an explicit list of skill directories, each `<dir>/SKILL.md`,
+ * named after the directory (doc_id = skill name) as `collectSkillEntries` does.
+ */
+async function collectSkillDirEntries(
+  dirs: readonly string[],
+  voteCounts: Map<string, number>,
+): Promise<SearchIndexEntry[]> {
+  const out: SearchIndexEntry[] = [];
+  for (const dir of dirs) {
+    const skillMd = path.join(dir, 'SKILL.md');
+    if (!await pathExists(skillMd)) continue;
+    const e = await entryFromMdFile(skillMd, `${path.basename(dir)}.md`, 'skills', voteCounts);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
 /** Options for the multi-category build. */
 export interface BuildIndexOptions {
   /** One learnings root. Equivalent to `learningsDirs: [dir]`. */
@@ -589,6 +607,12 @@ export interface BuildIndexOptions {
   docsDir?: string;
   rulesDir?: string;
   skillsDir?: string;
+  /**
+   * The skill directories to index, in place of walking `skillsDir`: the set
+   * `pull` delivers to this member (#707), so recall does not return skills
+   * the member does not have.
+   */
+  skillDirs?: readonly string[];
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
@@ -633,7 +657,9 @@ export async function buildIndex(
   if (opts.rulesDir) {
     entries.push(...await collectRecursiveMdEntries(opts.rulesDir, 'rules', voteCounts));
   }
-  if (opts.skillsDir) {
+  if (opts.skillDirs) {
+    entries.push(...await collectSkillDirEntries(opts.skillDirs, voteCounts));
+  } else if (opts.skillsDir) {
     entries.push(...await collectSkillEntries(opts.skillsDir, voteCounts));
   }
   if (opts.codebaseDir) {
