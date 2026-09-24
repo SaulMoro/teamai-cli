@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -22,7 +23,8 @@ vi.mock('../config.js', async (importOriginal) => ({
   saveStateForScope: vi.fn(),
 }));
 
-vi.mock('../utils/git.js', () => ({
+vi.mock('../utils/git.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/git.js')>()),
   pullRepo: vi.fn().mockResolvedValue('Already up to date.'),
 }));
 
@@ -198,6 +200,25 @@ describe('pull: docs by namespace', () => {
     expect(warned(/components\.md/)).toBe(false);
     expect(await exists('devops/deploy.md')).toBe(true);
     expect(await exists('guide.md')).toBe(true);
+  });
+
+  // The team edited a doc after the member received it: the copy is an older
+  // team version, not a member edit, so it goes like an unchanged one.
+  it('removes a copy of a deactivated namespace that the team has edited since it was delivered', async () => {
+    const git = (...args: string[]): string => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8' });
+    git('init', '-q');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    git('add', '-A');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'v1');
+    await pull({});
+    await team('docs/frontend/styling.md', '# Styling v2\n');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'v2');
+
+    as('devops');
+    await pull({});
+
+    expect(await exists('frontend/styling.md')).toBe(false);
+    expect(warned(/Kept \d+ doc/)).toBe(false);
   });
 
   it('never withdraws from the team repo when the docs destination is its docs/ directory', async () => {

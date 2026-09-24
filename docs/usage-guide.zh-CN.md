@@ -922,7 +922,7 @@ projects:
 ```
 
 - 没有覆盖规则：每个 namespace 是独立的子树，namespace 中的文件不会替换根目录的文件。
-- 某个 namespace 对你不再激活时，下一次 pull 会删除本地仍与团队副本逐字节一致的该 namespace 文档；你修改过的文档会保留，并打印一行说明它的路径。其中团队仓库没有的本地文件会被删除，与文档镜像的其他位置一样。
+- 某个 namespace 对你不再激活时，下一次 pull 会删除本地仍与团队副本（或团队更早的某个版本，即你收到后团队又修改过）逐字节一致的该 namespace 文档；你修改过的文档会保留，并打印一行说明它的路径。其中团队仓库没有的本地文件会被删除，与文档镜像的其他位置一样。
 - `team-codebase` 不能作为 docs namespace：`docs/team-codebase/` 是旧版 codebase 输出目录。声明它的 manifest 会加载失败。
 - `recall` 和 `teamai doctor` 使用同一过滤规则：recall 只索引你收到的文档，`Team docs delivered` 不会要求你拥有未激活的 namespace。
 - 旧模式（没有角色，也没有 `projects.yaml`）照旧分发整个 `docs/`。

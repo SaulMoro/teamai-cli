@@ -347,7 +347,8 @@ declared namespace reaches only members who have it active; an undeclared
 `docs/<dir>/` stays shared, so existing subdirectories keep reaching everyone.
 The directory match is case-folded, so `docs/Checkout/` is withheld for an
 inactive `checkout` on every filesystem. When a namespace stops being active,
-pull removes the local copies that are byte-equal to the team file and keeps
+pull removes the local copies that are byte-equal to the team file, or to any
+earlier commit of it (`isPastVersionOf`: the team edited it after delivery), and keeps
 edited ones, naming them. The docs mirror (#817) targets this resolved set: it
 copies only the delivered files and prunes every local file the team repo does
 not have, inside a withheld namespace too, but never a local copy of a withheld

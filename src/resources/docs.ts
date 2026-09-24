@@ -7,6 +7,7 @@ import { expandHome, listDirs, pruneEmptyDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
+import { isPastVersionOf } from '../utils/git.js';
 
 /**
  * The single directory the team docs bundle is copied into. In project scope a
@@ -219,9 +220,11 @@ async function readBytes(filePath: string): Promise<Buffer | null> {
 /**
  * Remove the local copies of the docs `desired` withholds, the way a
  * deactivated namespace's skills and agents go: only a copy byte-equal to the
- * team file is deleted. An edited one is kept and named, so nothing a member
- * wrote over a team doc is lost. A local file the team repo does not have is
- * the mirror's to prune, as anywhere else in the destination.
+ * team file, now or in an earlier commit, is deleted. An older version is what
+ * the mirror delivered before the team edited it, not a member edit. An edited
+ * one is kept and named, so nothing a member wrote over a team doc is lost. A
+ * local file the team repo does not have is the mirror's to prune, as anywhere
+ * else in the destination.
  */
 async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: string, localConfig: LocalConfig): Promise<void> {
   for (const { dir, files } of desired.withheld) {
@@ -231,7 +234,9 @@ async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: st
       const current = await readBytes(deployed);
       if (current === null) continue;
       const source = await readBytes(path.join(desired.sourceDir, dir, file));
-      if (source === null || !current.equals(source)) {
+      const unchanged = source !== null && (current.equals(source)
+        || await isPastVersionOf(localConfig.repo.localPath, deployed, `docs/${dir}/${file}`));
+      if (!unchanged) {
         kept.push(`${dir}/${file}`);
         continue;
       }

@@ -985,7 +985,7 @@ projects:
 ```
 
 - There is no override: each namespace is its own subtree, so a namespace file never replaces a root one.
-- When a namespace stops being active for you, the next pull removes its local docs that still match the team copy byte for byte. A doc you edited is kept, and the pull prints a line naming it. A local file there that the team repo does not have is removed, as anywhere else in the docs mirror.
+- When a namespace stops being active for you, the next pull removes its local docs that still match the team copy byte for byte, or an earlier team version (the team edited it after you received it). A doc you edited is kept, and the pull prints a line naming it. A local file there that the team repo does not have is removed, as anywhere else in the docs mirror.
 - `team-codebase` cannot be a docs namespace: `docs/team-codebase/` is the legacy codebase output. A manifest that declares it fails to load.
 - `recall` and `teamai doctor` use the same filter: recall indexes only the docs you receive, and `Team docs delivered` does not expect a namespace you do not have.
 - Legacy mode (no role and no `projects.yaml`) delivers all of `docs/`, as before.
