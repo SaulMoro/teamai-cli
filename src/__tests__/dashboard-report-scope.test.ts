@@ -914,6 +914,30 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedSessions(project)).toBe(1);
   });
 
+  it('a session the shared snapshot reported is not sent again after compaction dropped its events', async () => {
+    const { root, project } = await setup();
+    // Reported before #795 into the shared snapshot and compacted; P's first
+    // pull seeds its own snapshot; then it is resumed in P, its Stop carrying 2.
+    writeSharedSnapshots({ resumed: 1 }, new Date().toISOString().slice(0, 10));
+    expect(await report(project)).toBeNull();
+    await resume('resumed', root, 2);
+
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('a snapshot entry an earlier release wrote without tokens does not stop the report', async () => {
+    const { root, project } = await setup();
+    const pid = `pid-${process.ppid}`;
+    await asEarlierRelease(() => session('copilot', { cwd: root }), getDataHome(project));
+    // Hand-edited or truncated: no `tokens`, under the bare fallback ID.
+    const dir = path.join(getDataHome(project), 'dashboard');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'reported-prompt-tokens.json'), JSON.stringify({ [pid]: { prompts: 1 } }));
+
+    expect(await report(project)).not.toBeNull();
+    expect(await reportedPrompts(project)).toBe(0);
+  });
+
   it('a scope first seeded after a rollback skips what the earlier release reported', async () => {
     const { root, project } = await setup();
     await asEarlierRelease(() => session('claude', { session_id: 'rollback-p', cwd: root }));

@@ -448,8 +448,10 @@ runs of an ID, so the runs of the whole log consume it in log order, whichever
 scope each belongs to, and the seed keeps the shares of the scope's own runs,
 under their run IDs; none goes to a run recorded
 with a `dataHome` path: that release already kept per-scope snapshots, so a
-shared entry under its ID is another scope's. An unmatched entry is dropped, so a
-later reuse of the ID cannot inherit it. The shared file is no longer
+shared entry under its ID is another scope's. An unmatched fallback entry is
+dropped, so a later reuse of the PID cannot inherit it; a tool's own session ID
+is copied whole, as before, so a session resumed after compaction dropped its
+events is not sent again. The shared file is no longer
 written, except by an earlier release after a rollback, so every scope seeds from
 what the machine had reported by then, never from another scope's later report.
 The seed holds a session's whole total, so a session still running at the

@@ -196,11 +196,14 @@ async function readSnapshot<T>(
   const events = await filterEventsByScope(logged, config);
   const { current, take } = await split(all);
   const adopted = adoptBareKeys(shared ?? {}, all, current, take, 'shared');
-  // Copy only resolved run IDs. An unmatched bare entry cannot be allowed to
-  // attach to a future reuse after the source of the snapshot has been lost.
+  // A tool's own session ID is one session, so its entry is copied whole, as
+  // before: resumed after compaction dropped its events, it is not sent again.
+  // A fallback entry is copied only as a run of this scope: an unmatched bare
+  // one cannot be allowed to attach to a future reuse of its PID.
+  const ownRuns = new Set(events.map((e) => e.sessionId));
   const seed: Record<string, T> = {};
-  for (const { sessionId } of events) {
-    if (Object.hasOwn(adopted, sessionId)) seed[sessionId] = adopted[sessionId];
+  for (const [id, entry] of Object.entries(adopted)) {
+    if (!id.startsWith('pid-') || ownRuns.has(id)) seed[id] = entry;
   }
   try {
     await writeJson(own, seed);
@@ -241,7 +244,9 @@ function upTo(own: number, left: number): number {
  * A run's prompt and token share of a bare entry. This snapshot decides which
  * runs of the ID that release reported: the ones its prompts and tokens reach.
  */
-export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run, left) => {
+export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run, entry) => {
+  // Read from a snapshot file an earlier release wrote, so parsed, not trusted.
+  const left = promptTokensEntry(entry);
   if (left.prompts <= 0 && !hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })) return undefined;
   const taken = {
     prompts: upTo(run.prompts, left.prompts),
@@ -260,8 +265,9 @@ export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run
  * snapshot's: these counts are mostly zero, so running out says nothing.
  */
 export function takeInterventions(covered: (runId: string) => boolean): TakeReported<ReportedInterventions[string]> {
-  return (run, left, runId) => {
+  return (run, entry, runId) => {
     if (!covered(runId)) return undefined;
+    const left = interventionsEntry(entry);
     const taken = {
       interrupt: upTo(run.interrupt, left.interrupt),
       toolReject: upTo(run.toolReject, left.toolReject),
