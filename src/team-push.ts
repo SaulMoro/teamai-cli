@@ -21,6 +21,8 @@ import {
   aggregateDailySessions,
   computeDailyStatsDelta,
   mergeDailyStats,
+  takeDailySession,
+  type DailySessionSnapshot,
   type ReportedDailySessions,
 } from './session-trends.js';
 
@@ -170,18 +172,20 @@ function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | und
 
 /**
  * A scope's snapshot, seeded from the shared one when the scope has none yet.
- * `current` gives each run's entry at its own totals, for {@link adoptBareKeys}.
+ * `split` gives each run's entry at its own totals and its share of a bare
+ * entry, for {@link adoptBareKeys}.
  */
 async function readSnapshot<T>(
   name: ReportedSnapshotName,
   config: LocalConfig | undefined,
-  current: (events: DashboardEvent[]) => Record<string, T>,
+  split: (events: DashboardEvent[]) => Promise<{ current: Record<string, T>; take: TakeReported<T> }>,
 ): Promise<Record<string, T> | null> {
   const own = scopeSnapshotPath(name, config);
   if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
   const shared = await readJson<Record<string, T>>(sharedSnapshotPath(name));
   const events = await filterEventsByScope(await readEvents(), config);
-  const adopted = adoptBareKeys(shared ?? {}, events, current(events), 'shared');
+  const { current, take } = await split(events);
+  const adopted = adoptBareKeys(shared ?? {}, events, current, take, 'shared');
   // Copy only resolved run IDs. An unmatched bare entry cannot be allowed to
   // attach to a future reuse after the source of the snapshot has been lost.
   const seed: Record<string, T> = {};
@@ -198,8 +202,13 @@ async function readSnapshot<T>(
 }
 
 export async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
-  const parsed = await readSnapshot('interventions', config,
-    (events) => Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))));
+  const parsed = await readSnapshot('interventions', config, async (events) => {
+    const promptTokens = await readReportedPromptTokens(config);
+    return {
+      current: Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))),
+      take: takeInterventions((runId) => Object.hasOwn(promptTokens, runId)),
+    };
+  });
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -214,6 +223,57 @@ async function writeReportedInterventions(data: ReportedInterventions, config: L
 /** Each session's intervention counts, the shape its snapshot entry holds. */
 function interventionCounts(metrics: Map<string, SessionMetrics>): Map<string, ReportedInterventions[string]> {
   return new Map([...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]));
+}
+
+/** A counter's share of what is left: up to the run's own. */
+function upTo(own: number, left: number): number {
+  return Math.max(0, Math.min(own, left));
+}
+
+/**
+ * A run's prompt and token share of a bare entry. This snapshot decides which
+ * runs of the ID that release reported: the ones its prompts and tokens reach.
+ */
+export const takePromptTokens: TakeReported<ReportedPromptTokens[string]> = (run, left) => {
+  if (left.prompts <= 0 && !hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })) return undefined;
+  const taken = {
+    prompts: upTo(run.prompts, left.prompts),
+    tokens: {
+      input: upTo(run.tokens.input, left.tokens.input),
+      output: upTo(run.tokens.output, left.tokens.output),
+      cacheRead: upTo(run.tokens.cacheRead, left.tokens.cacheRead),
+      cacheCreation: upTo(run.tokens.cacheCreation, left.tokens.cacheCreation),
+    },
+  };
+  return { taken, left: { prompts: left.prompts - taken.prompts, tokens: tokenDelta(left.tokens, taken.tokens) } };
+};
+
+/**
+ * A run's intervention share, for the runs `covered`, the prompt-token
+ * snapshot's: these counts are mostly zero, so running out says nothing.
+ */
+export function takeInterventions(covered: (runId: string) => boolean): TakeReported<ReportedInterventions[string]> {
+  return (run, left, runId) => {
+    if (!covered(runId)) return undefined;
+    const taken = {
+      interrupt: upTo(run.interrupt, left.interrupt),
+      toolReject: upTo(run.toolReject, left.toolReject),
+      correction: upTo(run.correction, left.correction),
+    };
+    return {
+      taken,
+      left: {
+        interrupt: left.interrupt - taken.interrupt,
+        toolReject: left.toolReject - taken.toolReject,
+        correction: left.correction - taken.correction,
+      },
+    };
+  };
+}
+
+/** A run's daily share, for the runs `covered`, as for interventions. */
+function takeDaily(covered: (runId: string) => boolean): TakeReported<DailySessionSnapshot> {
+  return (run, left, runId) => (covered(runId) ? takeDailySession(run, left) : undefined);
 }
 
 /**
@@ -270,8 +330,10 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //
 
 export async function readReportedPromptTokens(config: LocalConfig | undefined): Promise<ReportedPromptTokens> {
-  const parsed = await readSnapshot('prompt-tokens', config,
-    (events) => computePromptTokenDelta(aggregateSessionMetrics(events), {}).nextReported);
+  const parsed = await readSnapshot('prompt-tokens', config, async (events) => ({
+    current: computePromptTokenDelta(aggregateSessionMetrics(events), {}).nextReported,
+    take: takePromptTokens,
+  }));
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -335,8 +397,13 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
 }
 
 async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
-  return (await readSnapshot('daily-sessions', config,
-    (events) => computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported)) ?? {};
+  return (await readSnapshot('daily-sessions', config, async (events) => {
+    const promptTokens = await readReportedPromptTokens(config);
+    return {
+      current: computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported,
+      take: takeDaily((runId) => Object.hasOwn(promptTokens, runId)),
+    };
+  })) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -408,13 +475,14 @@ export async function filterEventsByScope(
     }
     return key;
   }));
-  // Each run is returned under its session ID plus its first event's
-  // timestamp, which stays the same whichever earlier runs compaction has
-  // dropped. A tool's own session ID is one run, whatever ends it records:
-  // `claude --resume` continues it, in a new process, and its Stop carries the
-  // whole transcript. A PID-fallback ID (`pid-…`) names one run until it ends,
-  // then comes back for a later one, maybe in another scope, so each run is
-  // decided on its own. A second end with nothing recorded since the first
+  // A tool's own session ID is one run, whatever ends it records: `claude
+  // --resume` continues it, in a new process, and its Stop carries the whole
+  // transcript. It is returned under the ID itself, so it stays the session
+  // already reported after compaction drops its events. A PID-fallback ID
+  // (`pid-…`) names one run until it ends, then comes back for a later one,
+  // maybe in another scope, so each run is decided on its own and returned
+  // under the ID plus its first event's timestamp, which stays the same
+  // whichever earlier runs compaction has dropped. A second end with nothing recorded since the first
   // (the dashboard monitor's process_exit after SessionEnd) belongs to the run
   // just closed. A start from another process than its open run's begins a new
   // run, though nothing ended that one (a crash with no dashboard running).
@@ -443,7 +511,7 @@ export async function filterEventsByScope(
     }
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
-      runIds.push(`${e.sessionId}@${e.timestamp}`);
+      runIds.push(fallback ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
     }
     if (ends && fallback && (!observed || openRun.get(e.sessionId) === run)) {
       openRun.delete(e.sessionId);
@@ -471,36 +539,44 @@ export async function filterEventsByScope(
 }
 
 /**
+ * A run's share of what is left of a bare snapshot entry, or undefined when
+ * nothing is left: that run and every later one of its ID were not reported.
+ */
+export type TakeReported<T> = (run: T, left: T, runId: string) => { taken: T; left: T } | undefined;
+
+/**
  * A reported snapshot as the run IDs of {@link filterEventsByScope} read it.
- * Snapshots written before runs had their own IDs are keyed by the bare
- * session ID, summed over every run of that ID the release saw. Of those runs
- * in `events` (the scope's, as that filter returns them), each but the last is
- * taken as reported at its own totals, from `current`, and the last takes the
- * bare entry, so none is sent again; a run's own entry is never replaced. The
- * bare entry is retired, so no later run of that ID reads it. Only an earlier
+ * Snapshots written before fallback runs had their own IDs are keyed by the
+ * bare `pid-…` ID, holding the sum of the runs of that ID in the log at that
+ * release's last report; compaction keeps or drops the runs of an ID together.
+ * So the runs of that ID in `events` (the scope's, as that filter returns them)
+ * consume the entry in order, each taking its share, from its totals in
+ * `current`, of what is left; once nothing is left, the later runs take none
+ * and are reported as new. The first run always takes one: the entry means
+ * that release reported it. A run's own entry is never replaced, and the bare
+ * entry is retired, so no later run of that ID reads it. Only an earlier
  * release wrote bare entries, and only for runs it recorded, so a run whose
  * first event carries a `dataHomeKey`, and every later run of its ID, takes
  * none: the entry may be another scope's run under a reused PID-fallback ID.
  * Shared snapshots also exclude path-keyed runs: that release already had
- * per-scope snapshots.
- * Returns `reported` itself when there is nothing to retire; otherwise the
- * caller persists the result.
+ * per-scope snapshots. A tool's own session ID keys its one run as it is, so
+ * its entry needs no adoption. Returns `reported` itself when there is nothing
+ * to retire; otherwise the caller persists the result.
  */
 export function adoptBareKeys<T>(
   reported: Record<string, T>,
   events: Iterable<DashboardEvent>,
   current: Record<string, T>,
+  take: TakeReported<T>,
   source: 'scope' | 'shared' = 'scope',
 ): Record<string, T> {
   const legacyRuns = new Map<string, string[]>();
   const recorded = new Set<string>();
   const seen = new Set<string>();
   for (const { sessionId: runId, dataHomeKey, dataHome } of events) {
-    if (seen.has(runId)) continue;
+    if (seen.has(runId) || !runId.startsWith('pid-')) continue;
     seen.add(runId);
-    const at = runId.lastIndexOf('@');
-    if (at < 0) continue;
-    const id = runId.slice(0, at);
+    const id = runId.slice(0, runId.lastIndexOf('@'));
     if (recorded.has(id) || !Object.hasOwn(reported, id)) continue;
     if (typeof dataHomeKey === 'string' || (source === 'shared' && typeof dataHome === 'string')) {
       recorded.add(id);
@@ -511,11 +587,19 @@ export function adoptBareKeys<T>(
   if (legacyRuns.size === 0) return reported;
   const adopted = { ...reported };
   for (const [id, runs] of legacyRuns) {
-    runs.forEach((runId, i) => {
-      if (Object.hasOwn(adopted, runId)) return;
-      if (i === runs.length - 1) adopted[runId] = reported[id];
-      else if (Object.hasOwn(current, runId)) adopted[runId] = current[runId];
-    });
+    let left = reported[id];
+    let first = true;
+    for (const runId of runs) {
+      if (!Object.hasOwn(current, runId)) continue;
+      const share = take(current[runId], left, runId);
+      if (!share) {
+        if (first && !Object.hasOwn(adopted, runId)) adopted[runId] = left;
+        break;
+      }
+      if (!Object.hasOwn(adopted, runId)) adopted[runId] = share.taken;
+      left = share.left;
+      first = false;
+    }
     delete adopted[id];
   }
   return adopted;
@@ -568,29 +652,34 @@ export async function reportUsageToTeam(
       read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
       write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
       current: Record<string, T>,
+      take: TakeReported<T>,
     ): Promise<Record<string, T>> => {
       const stored = await read(reportsConfig);
-      const adopted = adoptBareKeys(stored, dashboardEvents, current);
+      const adopted = adoptBareKeys(stored, dashboardEvents, current, take);
       if (adopted !== stored) await write(adopted, reportsConfig);
       return adopted;
     };
+    // Prompt tokens first: they decide which runs of a bare ID were reported.
+    const reportedPromptTokens = await adopt(
+      readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported,
+      takePromptTokens,
+    );
+    const covered = (runId: string) => Object.hasOwn(reportedPromptTokens, runId);
+    const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
+      metrics,
+      reportedPromptTokens,
+    );
     const reportedInterventions = await adopt(
       readReportedInterventions, writeReportedInterventions, Object.fromEntries(currentInterventions),
+      takeInterventions(covered),
     );
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
     );
-
-    const reportedPromptTokens = await adopt(
-      readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported,
-    );
-    const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
-      metrics,
-      reportedPromptTokens,
-    );
     const reportedDailySessions = await adopt(
       readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
+      takeDaily(covered),
     );
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
       currentDaily,

@@ -96,8 +96,7 @@ function writeDashboardEvents(lines: object[]): void {
 }
 
 describe('reportUsageToTeam — intervention reporting', () => {
-  /** The usage file, and the snapshot key of the seeded session under a scope config (its run ID, #785). */
-  function seedReport(): { usagePath: string; run: string } {
+  function seedReport(): string {
     const timestamp = new Date().toISOString();
     writeDashboardEvents([
       { type: 'session_start', timestamp, sessionId: 'slow', tool: 'claude', cwd: '/p' },
@@ -108,14 +107,12 @@ describe('reportUsageToTeam — intervention reporting', () => {
     ]);
     const usagePath = path.join(tmpDir, '.teamai', 'user-usage.jsonl');
     fs.writeFileSync(usagePath, JSON.stringify({ skill: 'review', timestamp, tool: 'claude' }) + '\n');
-    return { usagePath, run: `slow@${timestamp}` };
+    return usagePath;
   }
 
   it.each(['reports', 'legacy'])('finishes acknowledgement after the caller times out (%s)', async (backend) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const { usagePath, run } = seedReport();
-    // A caller without a scope config reads the whole log, under the bare session IDs.
-    const key = backend === 'reports' ? run : 'slow';
+    const usagePath = seedReport();
     const seeded = fs.readFileSync(usagePath, 'utf-8');
     let finish!: (value: boolean) => void;
     let started!: () => void;
@@ -139,7 +136,7 @@ describe('reportUsageToTeam — intervention reporting', () => {
     await vi.advanceTimersByTimeAsync(5000);
     await timeout;
     expect(fs.readFileSync(usagePath, 'utf-8')).toContain('review');
-    expect(reportedSnapshot('prompt-tokens', backend === 'reports')[key]).toBeUndefined();
+    expect(reportedSnapshot('prompt-tokens', backend === 'reports').slow).toBeUndefined();
 
     finish(true);
     expect(await operation).toBe(true);
@@ -147,7 +144,7 @@ describe('reportUsageToTeam — intervention reporting', () => {
     // so it leaves the user-scope file for the scope that owns it.
     expect(fs.readFileSync(usagePath, 'utf-8')).toBe(backend === 'reports' ? '' : seeded);
     for (const name of ['interventions', 'prompt-tokens', 'daily-sessions']) {
-      expect(reportedSnapshot(name, backend === 'reports')[key]).toBeDefined();
+      expect(reportedSnapshot(name, backend === 'reports').slow).toBeDefined();
     }
     const statsPath = backend === 'reports' ? reportsStatsPath() : path.join(repoDir, 'stats', 'me.yaml');
     const before = fs.readFileSync(statsPath, 'utf-8');
@@ -156,14 +153,14 @@ describe('reportUsageToTeam — intervention reporting', () => {
   });
 
   it.each(['false', 'rejection'])('retains events and snapshots when push returns %s', async (failure) => {
-    const { usagePath, run } = seedReport();
+    const usagePath = seedReport();
     const before = fs.readFileSync(usagePath, 'utf-8');
     if (failure === 'false') reportsMocks.updateReports.mockResolvedValueOnce(false);
     else reportsMocks.updateReports.mockRejectedValueOnce(new Error('offline'));
     expect(await reportUsageToTeam(repoDir, 'me', { selfConfig: gitConfig() })).toBe(false);
     expect(fs.readFileSync(usagePath, 'utf-8')).toBe(before);
     for (const name of ['interventions', 'prompt-tokens', 'daily-sessions']) {
-      expect(reportedSnapshot(name)[run]).toBeUndefined();
+      expect(reportedSnapshot(name).slow).toBeUndefined();
     }
     expect(await reportUsageToTeam(repoDir, 'me', { selfConfig: gitConfig() })).toBe(true);
     const stats = YAML.parse(fs.readFileSync(reportsStatsPath(), 'utf-8'));
@@ -193,9 +190,9 @@ describe('reportUsageToTeam — intervention reporting', () => {
 
     // reported snapshot persisted so a second run reports nothing new
     expect(reportedSnapshot('interventions')).toEqual({
-      [`s1@${ts}`]: { interrupt: 2, toolReject: 1, correction: 0 },
+      s1: { interrupt: 2, toolReject: 1, correction: 0 },
     });
-    expect(reportedSnapshot('daily-sessions')[`s1@${ts}`]).toMatchObject({ date: ts.slice(0, 10) });
+    expect(reportedSnapshot('daily-sessions').s1).toMatchObject({ date: ts.slice(0, 10) });
 
     reportsMocks.updateReports.mockClear();
     await reportUsageToTeam(repoDir, 'me', { selfConfig: gitConfig() });

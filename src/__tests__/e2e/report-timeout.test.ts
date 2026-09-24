@@ -92,8 +92,8 @@ function fixture(agent: keyof typeof agents, provider: string, team: Record<stri
     const p = path.join(dashboard, `user-reported-${name}.json`);
     return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
   }
-  // The seeded session's snapshot key: its run ID (#785).
-  const runId = `s1@${timestamp}`;
+  // The seeded session's snapshot key: a tool's own session ID keys its one run (#785).
+  const runId = 's1';
   function run(args: string[]) {
     return execFileSync(process.execPath, [cli, ...args], { cwd: sandbox, env, encoding: 'utf8', windowsHide: true });
   }

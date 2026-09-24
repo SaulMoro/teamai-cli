@@ -463,6 +463,40 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(user)).toBe(2);
   });
 
+  it('a session resumed after compaction dropped its events is still the one already reported', async () => {
+    const { root, project } = await setup();
+    await session('claude', { session_id: 'resumed', cwd: root });
+    await hook('session-end', 'claude', { session_id: 'resumed', cwd: root, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(project)).toBe(1);
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    // `claude --resume`: the same session ID, compared against what P reported.
+    await session('claude', { session_id: 'resumed', cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it.each([
+    ['a shared snapshot, before #785', false],
+    ['the scope\'s own snapshot, main since #795', true],
+  ])('a later run of a bare ID that release never reported is sent: %s', async (_, ownSnapshot) => {
+    const { root, project } = await setup();
+    const [tool, payload] = ownSnapshot ? ['copilot', {}] : ['claude', { cwd: root }];
+    const run = async () => {
+      await session(tool, { ...payload, cwd: root });
+      await hook('session-end', tool, { ...payload, cwd: root, hook_event_name: 'SessionEnd' });
+    };
+    // That release reported the first run; the second came after its last report.
+    await asEarlierRelease(async () => { await run(); await run(); }, ownSnapshot ? getDataHome(project) : undefined);
+    const events = fs.readFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), 'utf-8');
+    const id: string = JSON.parse(events.split('\n')[0]).sessionId;
+    writeSharedSnapshots({ [id]: 1 }, new Date().toISOString().slice(0, 10), ownSnapshot ? project : undefined);
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedInterventionSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
   it('a fallback ID reused in a project after a user-scope run that never ended is the project\'s', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');

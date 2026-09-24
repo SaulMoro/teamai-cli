@@ -97,6 +97,88 @@ function positiveDelta(current: number, previous: number | undefined): number {
   return Math.max(0, current - (previous ?? 0));
 }
 
+/** A reported snapshot's request costs per day, from its session-level fields if it predates them. */
+function reportedRequestDaily(previous: DailySessionSnapshot | undefined): Record<string, RequestCostMetrics> {
+  return previous?.requestDaily ?? (
+    previous?.pricedRequests || previous?.costMicros || previous?.cacheReadTokens || previous?.cacheEligibleInputTokens
+      ? { [previous.date]: {
+        pricedRequests: previous.pricedRequests ?? 0,
+        costMicros: previous.costMicros ?? 0,
+        cacheReadTokens: previous.cacheReadTokens ?? 0,
+        cacheEligibleInputTokens: previous.cacheEligibleInputTokens ?? 0,
+        priceVersion: previous.priceVersion ?? '',
+      } }
+      : {}
+  );
+}
+
+/**
+ * A reported snapshot's session cache tokens. A session reported under the old
+ * code has no sessionCache* fields but does have requestDaily cache: summed as
+ * the baseline, so the first post-upgrade report doesn't re-add counted tokens.
+ */
+function reportedSessionCache(
+  previous: DailySessionSnapshot | undefined,
+  requestDaily: Record<string, RequestCostMetrics>,
+): { read: number; eligible: number } {
+  return {
+    read: previous?.sessionCacheReadTokens ?? Object.values(requestDaily).reduce((sum, r) => sum + r.cacheReadTokens, 0),
+    eligible: previous?.sessionCacheEligibleTokens
+      ?? Object.values(requestDaily).reduce((sum, r) => sum + r.cacheEligibleInputTokens, 0),
+  };
+}
+
+/**
+ * `run`'s share of `left`, what remains of the snapshot an earlier release kept
+ * for all the runs of one session ID: each counter up to the run's own. The
+ * success and correction flags describe the one session that release counted,
+ * so each run it covered reads them as they are.
+ */
+export function takeDailySession(
+  run: DailySessionSnapshot,
+  left: DailySessionSnapshot,
+): { taken: DailySessionSnapshot; left: DailySessionSnapshot } {
+  const upTo = (own: number, rest: number) => Math.max(0, Math.min(own, rest));
+  const leftDaily = reportedRequestDaily(left);
+  const leftCache = reportedSessionCache(left, leftDaily);
+  const takenDaily: Record<string, RequestCostMetrics> = {};
+  const restDaily: Record<string, RequestCostMetrics> = { ...leftDaily };
+  for (const [date, request] of Object.entries(run.requestDaily)) {
+    const rest = leftDaily[date];
+    if (!rest) continue;
+    const taken: RequestCostMetrics = {
+      pricedRequests: upTo(request.pricedRequests, rest.pricedRequests),
+      costMicros: upTo(request.costMicros, rest.costMicros),
+      cacheReadTokens: upTo(request.cacheReadTokens, rest.cacheReadTokens),
+      cacheEligibleInputTokens: upTo(request.cacheEligibleInputTokens, rest.cacheEligibleInputTokens),
+      priceVersion: rest.priceVersion,
+    };
+    takenDaily[date] = taken;
+    restDaily[date] = {
+      pricedRequests: rest.pricedRequests - taken.pricedRequests,
+      costMicros: rest.costMicros - taken.costMicros,
+      cacheReadTokens: rest.cacheReadTokens - taken.cacheReadTokens,
+      cacheEligibleInputTokens: rest.cacheEligibleInputTokens - taken.cacheEligibleInputTokens,
+      priceVersion: rest.priceVersion,
+    };
+  }
+  const prompts = upTo(run.prompts, left.prompts);
+  const durationMs = upTo(run.durationMs, left.durationMs);
+  const cacheRead = upTo(run.sessionCacheReadTokens ?? 0, leftCache.read);
+  const cacheEligible = upTo(run.sessionCacheEligibleTokens ?? 0, leftCache.eligible);
+  return {
+    taken: {
+      date: run.date, prompts, durationMs, succeeded: left.succeeded, corrected: left.corrected,
+      requestDaily: takenDaily, sessionCacheReadTokens: cacheRead, sessionCacheEligibleTokens: cacheEligible,
+    },
+    left: {
+      date: left.date, prompts: left.prompts - prompts, durationMs: left.durationMs - durationMs,
+      succeeded: left.succeeded, corrected: left.corrected, requestDaily: restDaily,
+      sessionCacheReadTokens: leftCache.read - cacheRead, sessionCacheEligibleTokens: leftCache.eligible - cacheEligible,
+    },
+  };
+}
+
 /** Compute idempotent daily deltas while keeping resumed work on the first Stop day. */
 export function computeDailyStatsDelta(
   current: Map<string, DailySessionSnapshot>,
@@ -121,28 +203,13 @@ export function computeDailyStatsDelta(
     bucket.sessionsCorrected += positiveDelta(snapshot.corrected, previous?.corrected);
     delta[date] = bucket;
 
-    const previousDaily = previous?.requestDaily ?? (
-      previous?.pricedRequests || previous?.costMicros || previous?.cacheReadTokens || previous?.cacheEligibleInputTokens
-        ? { [previous.date]: {
-          pricedRequests: previous.pricedRequests ?? 0,
-          costMicros: previous.costMicros ?? 0,
-          cacheReadTokens: previous.cacheReadTokens ?? 0,
-          cacheEligibleInputTokens: previous.cacheEligibleInputTokens ?? 0,
-          priceVersion: previous.priceVersion ?? '',
-        } }
-        : {}
-    );
+    const previousDaily = reportedRequestDaily(previous);
     // Cache-read share is pricing-independent: fold session-level cache tokens onto
     // the firstStop day (like prompts/duration), so it works even when the model
-    // can't be priced. Legacy fallback: a session reported under the old code has no
-    // sessionCache* fields but does have requestDaily cache — sum it as the baseline
-    // so this first post-upgrade report doesn't re-add already-counted tokens.
-    const prevCacheRead = previous?.sessionCacheReadTokens
-      ?? Object.values(previousDaily).reduce((sum, r) => sum + r.cacheReadTokens, 0);
-    const prevCacheEligible = previous?.sessionCacheEligibleTokens
-      ?? Object.values(previousDaily).reduce((sum, r) => sum + r.cacheEligibleInputTokens, 0);
-    bucket.cacheReadTokens += positiveDelta(snapshot.sessionCacheReadTokens ?? 0, prevCacheRead);
-    bucket.cacheEligibleInputTokens += positiveDelta(snapshot.sessionCacheEligibleTokens ?? 0, prevCacheEligible);
+    // can't be priced.
+    const prevCache = reportedSessionCache(previous, previousDaily);
+    bucket.cacheReadTokens += positiveDelta(snapshot.sessionCacheReadTokens ?? 0, prevCache.read);
+    bucket.cacheEligibleInputTokens += positiveDelta(snapshot.sessionCacheEligibleTokens ?? 0, prevCache.eligible);
     delta[date] = bucket;
     // Cost stays per-requestDate from pricing; cache no longer flows through here.
     for (const [requestDate, request] of Object.entries(snapshot.requestDaily)) {
