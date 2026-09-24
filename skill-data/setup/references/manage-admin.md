@@ -106,11 +106,14 @@ a skill by directory name (including a root skill a member gets through a tag),
 an agent by file stem, a rule by first-level file name (`rules/<ns>/<name>.md`
 replaces `rules/<name>.md`), and a `claudemd/<ns>/<name>.md` file replaces
 `claudemd/<name>.md`. Use this to give a project its own version of a shared
-item under the same name. The same name in two namespaces that one member
-has active is an error naming both files, so give each namespace's version a
-unique name or keep them in namespaces no member combines. `teamai doctor`
-lists each replacement as a note. Teams without roles or projects are
-unaffected.
+item under the same name, and keep that shared item at the root rather than in
+a namespace every role activates: `rules/code-style.md` is replaced by
+`rules/checkout/code-style.md` for checkout members, while a
+`rules/common/code-style.md` would reach them alongside it. The same skill or
+agent name in two namespaces one member has active is an error naming both
+files; two namespace rules or claudemd files of one name are both delivered.
+`teamai doctor` lists each replacement as a note. Teams without roles or
+projects are unaffected.
 
 ## Team dashboard (web UI)
 

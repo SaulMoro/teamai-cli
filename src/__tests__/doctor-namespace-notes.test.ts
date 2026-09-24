@@ -109,10 +109,10 @@ describe('doctor — namespace overrides and repeated names', () => {
     const { notes, checks } = await report();
 
     expect(notes).toEqual(expect.arrayContaining([
-      'skills: skills/frontend/review replaces skills/review',
-      'agents: agents/frontend/reviewer.yaml replaces agents/reviewer.yaml',
-      'rules: rules/frontend/style.md replaces rules/style.md',
-      'claudemd: claudemd/frontend/team.md replaces claudemd/team.md',
+      'skills: "review" from skills/frontend/review replaces skills/review',
+      'agents: "reviewer" from agents/frontend/reviewer.yaml replaces agents/reviewer.yaml',
+      'rules: "style" from rules/frontend/style.md replaces rules/style.md',
+      'claudemd: "team.md" from claudemd/frontend/team.md replaces claudemd/team.md',
     ]));
     expect(checks.map((check) => check.name).join('\n')).not.toMatch(/replace/i);
   });
@@ -121,9 +121,9 @@ describe('doctor — namespace overrides and repeated names', () => {
     const { notes } = await report();
 
     expect(notes).toEqual(expect.arrayContaining([
-      'skills: review is defined in skills/frontend/review and skills/review; only one of them is installed',
-      'rules: style is defined in rules/frontend/style.md and rules/style.md; each is delivered at its own path',
-      'claudemd: team.md is defined in claudemd/frontend/team.md and claudemd/team.md; both are in the managed block',
+      'skills: "review" is defined in skills/frontend/review and skills/review (legacy mode: only one of them is installed)',
+      'rules: "style" is defined in rules/frontend/style.md and rules/style.md (legacy mode: each is delivered at its own path)',
+      'claudemd: "team.md" is defined in claudemd/frontend/team.md and claudemd/team.md (legacy mode: all of them are in the managed block)',
     ]));
   });
 });

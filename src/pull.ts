@@ -426,25 +426,44 @@ export async function resolveDesiredSkills(
   return { items, teamItems, skippedByTags };
 }
 
-/** A namespace item delivered in place of a root item, as repo-relative paths. */
+/** A namespace item delivered in place of a root item: its name, and both files repo-relative. */
 export interface NamespaceOverride {
+  readonly name: string;
   readonly source: string;
   readonly replaces: string;
 }
 
 /**
- * The rules this member should have, or why that cannot be said this run.
- *
- * `items`: active knowledge namespaces ∩ tag subscriptions, with an active
- * namespace rule replacing the root rule of the same first-level file name.
- * `overrides`: which rule replaced which, for `doctor`.
- * `skippedByTags`: how many rules the tag channel left out, for the sync line.
- * `conflict`: two active namespaces define one rule name; `message` names both
- * files and the fix.
+ * Root suppression for rules and claudemd: every active namespace item replaces
+ * the root item of its name (#707). Unlike skills and agents, two namespaces
+ * with one name are no conflict here: each namespace rule keeps its own path
+ * (`rules/<ns>/`) and each claudemd file its own place in the block, so they
+ * never compete for one slot, and both are delivered.
  */
-export type DesiredRules =
-  | { kind: 'resolved'; items: ResourceItem[]; overrides: NamespaceOverride[]; skippedByTags: number }
-  | { kind: 'conflict'; message: string };
+function rootOverrides<T>(candidates: readonly NamespaceCandidate<T>[], active: readonly string[]): NamespaceOverride[] {
+  const roots = new Map(candidates.flatMap((candidate) => (
+    candidate.namespace === null ? [[candidate.name, candidate.source] as const] : []
+  )));
+  return candidates.flatMap((candidate) => {
+    const root = candidate.namespace !== null && active.includes(candidate.namespace)
+      ? roots.get(candidate.name)
+      : undefined;
+    return root ? [{ name: candidate.name, source: candidate.source, replaces: root }] : [];
+  });
+}
+
+export interface DesiredRules {
+  /**
+   * The rules this member should have: active knowledge namespaces ∩ tag
+   * subscriptions, with an active namespace rule replacing the root rule of
+   * the same first-level file name.
+   */
+  items: ResourceItem[];
+  /** Which rule replaced which, for `doctor`. */
+  overrides: NamespaceOverride[];
+  /** How many rules the tag channel left out, for the sync line. */
+  skippedByTags: number;
+}
 
 /**
  * Resolve the rules this member should have. Same contract as
@@ -465,18 +484,16 @@ export async function resolveDesiredRules(
   let delivered = roleFiltered;
   let overrides: NamespaceOverride[] = [];
   if (knowledgeNs) {
-    const overridden = await overrideRootRules(roleFiltered, knowledgeNs, localConfig);
-    if (overridden.kind === 'conflict') return overridden;
-    ({ items: delivered, overrides } = overridden);
+    ({ items: delivered, overrides } = await overrideRootRules(roleFiltered, knowledgeNs, localConfig));
   }
   const { included, skipped } = filterByTags(delivered, tagsConfig, localConfig.subscribedTags, 'rules');
-  return { kind: 'resolved', items: included, overrides, skippedByTags: skipped.length };
+  return { items: included, overrides, skippedByTags: skipped.length };
 }
 
 /**
- * The namespace rule for rules, keyed by first-level file name: an active
- * `rules/<ns>/<name>.md` replaces `rules/<name>.md`, and deeper paths are
- * neither replaced nor replace anything. A root rule this machine placed in a
+ * Root suppression for rules, keyed by first-level file name: an active
+ * `rules/<ns>/<name>.md` replaces `rules/<name>.md` (`rootOverrides`), and
+ * deeper paths are neither replaced nor replace anything. A root rule this machine placed in a
  * namespace (its record, #649) is replaced by that rule the same way: the
  * author's root copy stands for it, and the shared-root rule of the name
  * would otherwise be delivered onto that copy.
@@ -487,10 +504,7 @@ async function overrideRootRules(
   rules: ResourceItem[],
   activeNamespaces: string[],
   localConfig: LocalConfig,
-): Promise<
-  | { kind: 'resolved'; items: ResourceItem[]; overrides: NamespaceOverride[] }
-  | { kind: 'conflict'; message: string }
-> {
+): Promise<{ items: ResourceItem[]; overrides: NamespaceOverride[] }> {
   const candidates = rules.flatMap((rule): NamespaceCandidate<ResourceItem>[] => {
     const segments = rule.name.split('/');
     if (segments.length === 1) return [{ name: rule.name, source: rule.relativePath, namespace: null, value: rule }];
@@ -498,18 +512,7 @@ async function overrideRootRules(
     if (segments.length > 2 || namespace === undefined || name === undefined) return [];
     return [{ name, source: rule.relativePath, namespace, value: rule }];
   });
-  const resolution = resolveNamespacedItems(candidates, activeNamespaces);
-  if (resolution.kind === 'conflict') {
-    return {
-      kind: 'conflict',
-      message: `Rule "${resolution.name}" is defined in two active namespaces: ${resolution.first.source} and `
-        + `${resolution.second.source}. Rename one of them in the team repo, or stop activating one of those `
-        + 'namespaces. Rules were not updated this run; the installed ones are kept.',
-    };
-  }
-  const overrides: NamespaceOverride[] = resolution.items.flatMap((item) => (
-    item.replaces ? [{ source: item.source, replaces: item.replaces.source }] : []
-  ));
+  const overrides = rootOverrides(candidates, activeNamespaces);
   const replaced = new Set(overrides.map((override) => override.replaces));
   const { placedRules } = await loadStateForScope(localConfig);
   const items: ResourceItem[] = [];
@@ -517,12 +520,12 @@ async function overrideRootRules(
     if (replaced.has(rule.relativePath)) continue;
     const placed = rule.name.includes('/') ? null : placedResourcePath(placedRules, 'rules', rule.name);
     if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
-      overrides.push({ source: placed, replaces: rule.relativePath });
+      overrides.push({ name: rule.name, source: placed, replaces: rule.relativePath });
       continue;
     }
     items.push(rule);
   }
-  return { kind: 'resolved', items, overrides };
+  return { items, overrides };
 }
 
 /**
@@ -1263,14 +1266,7 @@ async function pullForScope(
 
     if (type === 'rules') {
       const rulesHandler = handler as RulesHandler;
-      const desiredRules = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-      if (desiredRules.kind === 'conflict') {
-        // Nothing is written or swept: the rules installed by the last good
-        // pull stay until the team repo says which one this member receives.
-        log.warn(`[${scopeLabel}] ${desiredRules.message}`);
-        continue;
-      }
-      const { items, skippedByTags } = desiredRules;
+      const { items, skippedByTags } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
       if (options.dryRun) {
         if (items.length > 0) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
@@ -1768,12 +1764,7 @@ async function syncManagedInstructions(
   }
 
   try {
-    const collected = await collectClaudemdFiles(localConfig.repo.localPath, roleContext);
-    if (collected.kind === 'conflict') {
-      log.warn(`[${scopeLabel}] ${collected.message}`);
-      return;
-    }
-    const claudemdContents = collected.contents;
+    const { contents: claudemdContents } = await collectClaudemdFiles(localConfig.repo.localPath, roleContext);
     const compiled = compileClaudemd(claudemdContents);
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
@@ -1925,19 +1916,16 @@ export function compileRecallRulesBlock(): string {
  *
  * Root-level claudemd/*.md files are shared with every member; claudemd/<namespace>/*.md
  * is collected for each active namespace, and replaces the root file of the same
- * name (#707). Two active namespaces with one file name are a conflict: the
- * block would carry both, and nothing says which one this member should read.
- * With no role configured every subdirectory is collected, beside the root.
+ * name (#707); two active namespaces with one file name both stay in the block,
+ * in namespace order (`rootOverrides`). With no role configured every
+ * subdirectory is collected, beside the root.
  */
 export async function collectClaudemdFiles(
     repoPath: string,
     roleContext: RolePullContext | null,
-): Promise<
-    | { kind: 'resolved'; contents: string[]; overrides: NamespaceOverride[] }
-    | { kind: 'conflict'; message: string }
-> {
+): Promise<{ contents: string[]; overrides: NamespaceOverride[] }> {
     const claudemdDir = path.join(repoPath, 'claudemd');
-    if (!await pathExists(claudemdDir)) return { kind: 'resolved', contents: [], overrides: [] };
+    if (!await pathExists(claudemdDir)) return { contents: [], overrides: [] };
 
     const mdFiles = async (dir: string): Promise<string[]> => (await listFiles(dir))
         .filter((f) => f.endsWith('.md'))
@@ -1964,31 +1952,15 @@ export async function collectClaudemdFiles(
         }
     }
 
-    let files = candidates.map((candidate) => candidate.value);
-    let overrides: NamespaceOverride[] = [];
-    if (roleContext) {
-        const resolution = resolveNamespacedItems(candidates, namespaceDirs);
-        if (resolution.kind === 'conflict') {
-            return {
-                kind: 'conflict',
-                message: `Shared instructions "${resolution.name}" are defined in two active namespaces: `
-                    + `${resolution.first.source} and ${resolution.second.source}. Rename one of them in the team repo, `
-                    + 'or stop activating one of those namespaces. Shared instructions were not updated this run; '
-                    + 'the installed ones are kept.',
-            };
-        }
-        files = resolution.items.map((item) => item.value);
-        overrides = resolution.items.flatMap((item) => (
-            item.replaces ? [{ source: item.source, replaces: item.replaces.source }] : []
-        ));
-    }
-
+    const overrides = roleContext ? rootOverrides(candidates, namespaceDirs) : [];
+    const replaced = new Set(overrides.map((override) => override.replaces));
     const contents: string[] = [];
-    for (const file of files) {
-        const content = await readFileSafe(file);
+    for (const candidate of candidates) {
+        if (replaced.has(candidate.source)) continue;
+        const content = await readFileSafe(candidate.value);
         if (content) contents.push(content);
     }
-    return { kind: 'resolved', contents, overrides };
+    return { contents, overrides };
 }
 
 /**

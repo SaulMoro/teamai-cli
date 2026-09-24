@@ -195,24 +195,22 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(await read('.claude/rules/frontend/web/style.md')).toBe('# Web style\n');
     });
 
-    it('stops rules for the run, naming both files, when two active namespaces define one name', async () => {
-      await team('rules/other.md', '# Other\n');
-      await pull({});
-      expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
-
+    it('delivers both namespace rules when two active namespaces define one name, and suppresses the root', async () => {
+      // Each namespace rule keeps its own path, so the two never compete for
+      // one slot: no conflict, only root suppression.
       await team('rules/devops/style.md', '# Ops style\n');
-      await team('rules/other.md', '# Other, changed\n');
-      await team('agents/helper.yaml', 'name: helper\ndescription: Helps\ninstructions: Help.\n');
       as(['frontend', 'devops']);
+
       await pull({});
 
-      expect(logged('warn', /rules\/frontend\/style\.md.*rules\/devops\/style\.md/)).toBe(true);
-      // What was installed stays as it was, the new root edit included.
       expect(await read('.claude/rules/frontend/style.md')).toBe('# Front style\n');
-      expect(await read('.claude/rules/other.md')).toBe('# Other\n');
-      expect(await exists('.claude/rules/devops/style.md')).toBe(false);
-      // Only rules stop: the other types still sync.
-      expect(await exists('.claude/agents/helper.md')).toBe(true);
+      expect(await read('.claude/rules/devops/style.md')).toBe('# Ops style\n');
+      expect(await exists('.claude/rules/style.md')).toBe(false);
+      // Hermes keeps both, in the rules scan order it always used.
+      const soul = await read('.hermes/SOUL.md');
+      expect(soul).toContain('# Front style');
+      expect(soul).toContain('# Ops style');
+      expect(soul).not.toContain('# Shared style');
     });
   });
 
@@ -235,18 +233,18 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(ops).not.toContain('FRONT TEAM NOTES');
     });
 
-    it('keeps the managed block as it was when two active namespaces define one file name', async () => {
+    it('keeps both namespace files in the block, in namespace order, when two active namespaces define one name', async () => {
+      await team('claudemd/team.md', 'ROOT TEAM NOTES\n');
       await team('claudemd/frontend/team.md', 'FRONT TEAM NOTES\n');
-      await pull({});
-
       await team('claudemd/devops/team.md', 'OPS TEAM NOTES\n');
       as(['frontend', 'devops']);
+
       await pull({});
 
       const block = await read('.claude/CLAUDE.md');
-      expect(block).toContain('FRONT TEAM NOTES');
-      expect(block).not.toContain('OPS TEAM NOTES');
-      expect(logged('warn', /claudemd\/frontend\/team\.md.*claudemd\/devops\/team\.md/)).toBe(true);
+      expect(block.indexOf('FRONT TEAM NOTES')).toBeGreaterThan(-1);
+      expect(block.indexOf('OPS TEAM NOTES')).toBeGreaterThan(block.indexOf('FRONT TEAM NOTES'));
+      expect(block).not.toContain('ROOT TEAM NOTES');
     });
   });
 
@@ -256,6 +254,7 @@ describe('pull: an active namespace item replaces the root item of the same name
       await team('skills/review/SKILL.md', skillMd('review', 'Shared review'));
       await team('skills/review/checklist.md', 'root-only checklist\n');
       await team('skills/frontend/review/SKILL.md', skillMd('review', 'Front review'));
+      await team('skills/frontend/review/front-only.md', 'front-only notes\n');
       await team('skills/lonely/SKILL.md', skillMd('lonely', 'Untagged root skill'));
     });
 
@@ -279,6 +278,9 @@ describe('pull: an active namespace item replaces the root item of the same name
       await pull({});
       expect(await read('.claude/skills/review/SKILL.md')).toContain('Shared review');
       expect(await read('.claude/skills/review/checklist.md')).toBe('root-only checklist\n');
+      // And nothing of the namespace version, while the member's own file stays.
+      expect(await exists('.claude/skills/review/front-only.md')).toBe(false);
+      expect(await read('.claude/skills/review/my-notes.md')).toBe('mine\n');
     });
 
     it('indexes for recall the skills pull delivers, not every skill in the repo', async () => {
