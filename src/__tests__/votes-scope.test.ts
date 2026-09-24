@@ -392,7 +392,8 @@ describe('votes stay with the scope they were cast in (#787)', () => {
       stdout.mockRestore();
     }
 
-    expect(out).toContain('API timeout fix');
+    // Nothing is searched there (#796).
+    expect(out).toBe('');
     expect(fs.existsSync(path.join(teamaiHome(), 'user-votes'))).toBe(false);
     expect(fs.existsSync(path.join(teamaiHome(), 'votes'))).toBe(false);
     expect(fs.existsSync(path.join(dataHome, 'votes'))).toBe(false);

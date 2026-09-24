@@ -103,10 +103,11 @@ async function readableProject(root: string, inheritUserScope: boolean): Promise
   });
 }
 
-/** Everything recall records about a search: recalled counts and the quality signal. */
+/** Everything recall records about a search: recalled counts (in any scope's
+ *  votes directory, #787) and the quality signal. */
 function recorded(): { votes: boolean; quality: boolean } {
   return {
-    votes: fs.existsSync(path.join(tmp, 'home', '.teamai', 'votes')),
+    votes: fs.readdirSync(tmp, { recursive: true, encoding: 'utf8' }).some((entry) => ['votes', 'user-votes'].includes(path.basename(entry))),
     quality: readRecallQuality(SESSION) !== null,
   };
 }
