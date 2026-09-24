@@ -331,67 +331,20 @@ function hasDailyDelta(delta: ReturnType<typeof computeDailyStatsDelta>['delta']
 }
 
 /**
- * A Windows-style root: a drive letter (`C:\`, `c:/`) or a UNC share
- * (`\\server\share`). Tested per path rather than per platform, because the
- * dashboard event log is shared — a team repo can hold events pushed from
- * Windows and from Linux in the same file.
- */
-const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/;
-
-type ScopeRoot = { key: string; windows: boolean };
-
-/**
- * Normalize a directory path for scope comparison.
- *
- * Both sides are native paths: `projectRoot` is stored as `path.resolve(cwd)`
- * at init time, and an event's `cwd` is whatever the AI tool put in its hook
- * payload. On Windows both use backslashes, so a literal `root + '/'` prefix
- * can never match a subdirectory, and the two sources can also disagree on the
- * case of the drive letter or of any directory along the way. Windows paths
- * therefore get their separators unified and their case folded.
- *
- * POSIX paths keep both distinctions: they are case-sensitive, and `\` is a
- * legal character in a POSIX filename, so `/work/a\b` and `/work/a/b` are two
- * different directories and must not collapse onto one key.
- *
- * The root decides which set of rules applies to both sides, so a Windows root
- * still matches a cwd the tool reported with forward slashes, and a POSIX root
- * never has a backslash rewritten underneath it.
- */
-function scopeKey(dir: string, windows: boolean): string {
-  if (!windows) return dir.replace(/\/+$/, '');
-  return dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
-function scopeRoot(dir: string): ScopeRoot {
-  const windows = WINDOWS_ROOT.test(dir);
-  return { key: scopeKey(dir, windows), windows };
-}
-
-/** True when `cwd` is the root itself or sits below it. */
-function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
-  const key = scopeKey(cwd, root.windows);
-  return key === root.key || key.startsWith(root.key + '/');
-}
-
-/**
  * The dashboard events a scope reports (#785): every event of the sessions
  * recorded in it. A session is the run of one ID up to its session_end or
- * process_exit, since a PID-fallback ID comes back for a later run; a later
- * run is returned under an ID of its own, so it is counted on its own. It is
+ * process_exit, since a PID-fallback ID comes back for a later run; each run
+ * is returned under its own ID (see {@link adoptBareKeys}). It is
  * decided once, whole, by its first event keyed with a data home
  * (`dataHomeKey`, or the path an unreleased build of #795 wrote), because a
  * Stop carries the whole transcript's totals: split per event, a session that
  * moved into another scope would count there again the part recorded before
  * the move. A project also owns the key of its in-repo `.teamai`, where a
  * hook recorded until migration moved the project to a partition. A session
- * written before events carried a key is decided by its first cwd: a
- * project's when the root holds it, the user scope's when the directory still
- * exists and resolves to the user scope now, the dispatcher's rule; one with
- * no cwd, or a cwd gone since, is no scope's. A cwd is raw as the host sent
- * it (a symlinked checkout, macOS `/tmp` vs `/private/tmp`), and so is a
- * non-git project's root, so both are realpath'd while they still exist. A caller without a scope config reads the
- * whole log.
+ * written before events carried a key is decided by its first cwd, by the
+ * dispatcher's rule: the scope that directory resolves to now, so a nested
+ * clone under a project is not the project's; one with no cwd, or a cwd gone
+ * since, is no scope's. A caller without a scope config reads the whole log.
  */
 export async function filterEventsByScope(
   events: DashboardEvent[],
@@ -405,18 +358,15 @@ export async function filterEventsByScope(
     const legacy = await dataHomeKey(path.join(config.projectRoot, '.teamai'));
     if (legacy !== (await dataHomeKey(path.join(getUserHome(), '.teamai')))) keys.add(legacy);
   }
-  const projectRoot = config.projectRoot;
-  const root = projectRoot ? scopeRoot(await fs.promises.realpath(projectRoot).catch(() => projectRoot)) : undefined;
   const { resolveConfigForDir } = await import('./config.js');
   const resolvesHere = new Map<string, Promise<boolean>>();
   const ownsCwd = (cwd: string): Promise<boolean> => {
     let owns = resolvesHere.get(cwd);
     if (!owns) {
-      owns = root ? fs.promises.realpath(cwd).then((real) => isUnderScopeRoot(real, root), () => false)
-        : pathExists(cwd).then(async (exists) => {
-          const resolved = exists ? await resolveConfigForDir(cwd) : null;
-          return !!resolved && (await dataHomeKey(getDataHome(resolved))) === ownKey;
-        });
+      owns = pathExists(cwd).then(async (exists) => {
+        const resolved = exists ? await resolveConfigForDir(cwd) : null;
+        return !!resolved && keys.has(await dataHomeKey(getDataHome(resolved)));
+      });
       resolvesHere.set(cwd, owns);
     }
     return owns;
@@ -435,21 +385,18 @@ export async function filterEventsByScope(
     return key;
   }));
   // A session ID names one run until it ends: a PID-fallback ID comes back for
-  // a later run, maybe in another scope, so each run is decided on its own.
-  // A later run is also reported as its own session: it is returned under the
-  // ID plus its first event's timestamp. The first run keeps the bare ID, so
-  // the snapshots already written for it still match.
+  // a later run, maybe in another scope, so each run is decided on its own and
+  // returned under the ID plus its first event's timestamp, which stays the
+  // same whichever earlier runs compaction has dropped.
   const runOf: number[] = [];
   const openRun = new Map<string, number>();
   const deciding: Array<number | undefined> = [];
   const runIds: string[] = [];
-  const seen = new Set<string>();
   events.forEach((e, i) => {
     let run = openRun.get(e.sessionId);
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
-      runIds.push(seen.has(e.sessionId) ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
-      seen.add(e.sessionId);
+      runIds.push(`${e.sessionId}@${e.timestamp}`);
     }
     openRun.set(e.sessionId, run);
     if (e.type === 'session_end' || e.type === 'process_exit') openRun.delete(e.sessionId);
@@ -464,11 +411,28 @@ export async function filterEventsByScope(
     const cwd = events[i].cwd;
     return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
   }));
-  return events.flatMap((e, i) => {
-    const run = runOf[i];
-    if (!owned[run]) return [];
-    return runIds[run] === e.sessionId ? [e] : [{ ...e, sessionId: runIds[run] }];
-  });
+  return events.flatMap((e, i) => (owned[runOf[i]] ? [{ ...e, sessionId: runIds[runOf[i]] }] : []));
+}
+
+/**
+ * A reported snapshot as the run IDs of {@link filterEventsByScope} read it.
+ * Snapshots written before runs had their own IDs are keyed by the bare
+ * session ID; the first run of that ID in the log (`current` is in log order)
+ * takes that entry when it has none of its own. The next snapshot holds only
+ * run IDs, so a bare entry is read at most until the scope reports again.
+ */
+export function adoptBareKeys<T>(reported: Record<string, T>, current: Iterable<string>): Record<string, T> {
+  const adopted = { ...reported };
+  const seen = new Set<string>();
+  for (const runId of current) {
+    const at = runId.lastIndexOf('@');
+    if (at < 0) continue;
+    const id = runId.slice(0, at);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (!Object.hasOwn(adopted, runId) && Object.hasOwn(reported, id)) adopted[runId] = reported[id];
+  }
+  return adopted;
 }
 
 /**
@@ -513,18 +477,18 @@ export async function reportUsageToTeam(
     const currentInterventions = new Map(
       [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
     );
-    const reportedInterventions = await readReportedInterventions(reportsConfig);
+    const reportedInterventions = adoptBareKeys(await readReportedInterventions(reportsConfig), metrics.keys());
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
     );
 
-    const reportedPromptTokens = await readReportedPromptTokens(reportsConfig);
+    const reportedPromptTokens = adoptBareKeys(await readReportedPromptTokens(reportsConfig), metrics.keys());
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
     );
-    const reportedDailySessions = await readReportedDailySessions(reportsConfig);
+    const reportedDailySessions = adoptBareKeys(await readReportedDailySessions(reportsConfig), metrics.keys());
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
       aggregateDailySessions(dashboardEvents),
       reportedDailySessions,

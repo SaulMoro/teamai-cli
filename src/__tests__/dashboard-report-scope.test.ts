@@ -165,6 +165,11 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
     fs.symlinkSync(root, link, 'dir');
     fs.mkdirSync(path.join(root, 'src'));
     fs.mkdirSync(path.join(tmp, 'elsewhere'));
+    // A nested clone under P resolves to no project, so it is the user scope's, not P's too.
+    fs.mkdirSync(path.join(root, 'nested'));
+    execFileSync('git', ['init', '-q'], { cwd: path.join(root, 'nested') });
+    // A sibling whose name only starts with P's.
+    fs.mkdirSync(`${root}-ab`);
     const timestamp = new Date().toISOString();
     const old = (sessionId: string, cwd: string | undefined) => [
       { type: 'session_start', timestamp, sessionId, tool: 'claude', cwd },
@@ -176,12 +181,14 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
       ...old('old-in-p', path.join(root, 'src')),
       ...old('old-via-link', link),
       ...old('old-elsewhere', path.join(tmp, 'elsewhere')),
+      ...old('old-nested', path.join(root, 'nested')),
+      ...old('old-sibling', `${root}-ab`),
       // Nothing can tell whose these were, so no scope reports them.
-      ...old('old-gone', path.join(tmp, 'deleted-worktree')),
+      ...old('old-gone', path.join(root, 'removed-worktree')),
       ...old('old-no-cwd', undefined),
     ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 
-    expect(await reportedSessions(user)).toBe(1);
+    expect(await reportedSessions(user)).toBe(3);
     expect(await reportedSessions(project)).toBe(2);
   });
 });
@@ -289,6 +296,19 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedSessions(project)).toBe(1);
     await session('copilot', { cwd: root });
     await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+
+    expect(await reportedSessions(project)).toBe(2);
+    expect(await reportedPrompts(project)).toBe(2);
+  });
+
+  it('a session ID reused in the same scope after compaction dropped the run it reported is a new session', async () => {
+    const { root, project } = await setup();
+    await session('copilot', { cwd: root });
+    await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(project)).toBe(1);
+    // Compaction dropped the ended run before P reported again; the next run in P reuses its ID.
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    await session('copilot', { cwd: root });
 
     expect(await reportedSessions(project)).toBe(2);
     expect(await reportedPrompts(project)).toBe(2);

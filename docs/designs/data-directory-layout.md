@@ -333,13 +333,14 @@ scope's report keeps the sessions whose first keyed event is its own, whole: a
 Stop carries the whole transcript's totals, so a session that moved scope (a `cd`
 mid-session) is reported once, where it started. A session is one ID's run up to
 its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot's
-fallback ID is the parent PID) is decided on its own, and reported and snapshotted
-as its own session under `<id>@<first event's timestamp>` (the first run keeps the
-bare ID, so snapshots written before still match). A session written before that
-field existed is attributed by its first `cwd`: to the project whose root holds
-it (realpath'd), or to the user scope when that directory still exists and
-`resolveConfigForDir` resolves it to the user scope; no `cwd`, or one removed
-since, is no scope's. The snapshots of what was already reported are per scope
+fallback ID is the parent PID) is decided on its own. Every run is reported and
+snapshotted as `<id>@<first event's timestamp>`, which does not change when
+compaction drops earlier runs; a snapshot entry keyed by the bare ID (written
+before) goes to the first run of that ID in the log, until the scope reports
+again. A session written before that field existed is attributed by its first
+`cwd`: to the scope `resolveConfigForDir` resolves that directory to now, the
+dispatcher's rule, so a nested clone under a project is not the project's; no
+`cwd`, or one removed since, is no scope's. The snapshots of what was already reported are per scope
 too (#786), because a session ID can recur in another scope (Copilot's fallback
 ID is the parent PID):
 `<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`

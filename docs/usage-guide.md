@@ -1757,12 +1757,13 @@ longer reports a project's sessions, and a project reports its Copilot sessions
 and sessions started under a symlinked path. A session is reported once, whole,
 by the scope it started in, even if it later moves into another project: its
 Stop carries the whole transcript's totals, so a second scope would count them
-again. Events recorded by an earlier release carry no key: a project reports
-those whose directory lies under its root, and the user scope those whose
-directory still exists and belongs to no project; events with no directory, or
-one removed since, are reported by no one. Each scope also keeps its own
-snapshot of what it already reported, so a session ID another scope already
-reported (Copilot reuses its fallback IDs) still counts as new here; the first
+again. Events recorded by an earlier release carry no key: the scope their
+directory resolves to now reports them (a nested clone under a project resolves
+to its own project or the user scope, not the enclosing project); events with
+no directory, or one removed since, are reported by no one. Each scope also
+keeps its own snapshot of what it already reported, and a session that reuses
+an earlier session's ID (Copilot reuses its fallback IDs) counts as new,
+whichever scope reported the earlier one; the first
 report after upgrading starts from the snapshot every scope used to share, so
 nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes

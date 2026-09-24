@@ -92,7 +92,9 @@ function fixture(agent: keyof typeof agents, provider: string) {
     const p = path.join(dashboard, `user-reported-${name}.json`);
     return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
   }
-  return { home, usage, usageLine, seedEvents, receiver, pull, stats, snapshot };
+  // The seeded session's snapshot key: its run ID (#785).
+  const run = `s1@${timestamp}`;
+  return { home, usage, usageLine, seedEvents, receiver, pull, stats, snapshot, run };
 }
 
 afterEach(() => {
@@ -111,7 +113,7 @@ describe('real CLI report completion', () => {
         f.receiver('slow');
         const output = await f.pull(() => {
           expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
-          expect(f.snapshot('prompt-tokens').s1).toBeUndefined();
+          expect(f.snapshot('prompt-tokens')[f.run]).toBeUndefined();
           expect(fs.existsSync(path.join(f.home, '.teamai/.sync-lock'))).toBe(true);
           // An event arriving during the push must survive cleanup of the batch.
           fs.appendFileSync(f.usage, f.usageLine);
@@ -120,7 +122,7 @@ describe('real CLI report completion', () => {
         expect(f.stats().skills.review.count).toBe(1);
         expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
         for (const name of ['interventions', 'prompt-tokens', 'daily-sessions']) {
-          expect(f.snapshot(name).s1).toBeDefined();
+          expect(f.snapshot(name)[f.run]).toBeDefined();
         }
         expect(fs.existsSync(path.join(f.home, '.teamai/.sync-lock'))).toBe(false);
         f.receiver('normal');
@@ -144,7 +146,7 @@ describe('real CLI report completion', () => {
     f.receiver('reject');
     await f.pull();
     expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
-    expect(f.snapshot('prompt-tokens').s1).toBeUndefined();
+    expect(f.snapshot('prompt-tokens')[f.run]).toBeUndefined();
     f.receiver('normal');
     await f.pull();
     const stats = f.stats();

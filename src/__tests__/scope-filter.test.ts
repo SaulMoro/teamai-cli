@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { filterEventsByScope } from '../team-push.js';
+import { adoptBareKeys, filterEventsByScope } from '../team-push.js';
 import { dataHomeKey } from '../dashboard-collector.js';
 import type { DashboardEvent, LocalConfig } from '../types.js';
 
@@ -26,21 +26,12 @@ function userScope(dataHome = '/home/jeff/.teamai'): LocalConfig {
   return { repo, username: 'jeff', scope: 'user', additionalRoles: [], dataHome };
 }
 
+/** The session of each event a scope keeps: its run ID without the run's start. */
 async function ids(events: DashboardEvent[], config?: LocalConfig): Promise<string[]> {
-  return (await filterEventsByScope(events, config)).map((e) => e.sessionId);
+  return (await filterEventsByScope(events, config)).map((e) => e.sessionId.slice(0, e.sessionId.lastIndexOf('@')));
 }
 
 describe('filterEventsByScope', () => {
-  // The fixed paths below stand for directories that exist: an older event's
-  // cwd counts only while it does. Real temp directories resolve for real.
-  const FIXED_PATH = /^(?:\/Users\/jeff\/|\/work\/|[A-Za-z]:|\\\\)/;
-  beforeEach(() => {
-    const realpath = fs.promises.realpath;
-    vi.spyOn(fs.promises, 'realpath').mockImplementation(async (p) =>
-      typeof p === 'string' && FIXED_PATH.test(p) ? p : realpath(p));
-  });
-  afterEach(() => vi.restoreAllMocks());
-
   const events: DashboardEvent[] = [
     makeEvent('/Users/jeff/project-a', 's1'),
     makeEvent('/Users/jeff/project-a/src', 's2'),
@@ -90,10 +81,23 @@ describe('filterEventsByScope', () => {
         ];
         const project = await filterEventsByScope(reused, projectScope('/Users/jeff/project-a'));
         const user = await filterEventsByScope(reused, userScope());
-        // The later run is its own session, under an ID of its own.
+        // Each run is its own session, under the ID plus its first event's timestamp.
+        const first = `pid-1@${reused[0].timestamp}`;
         expect(project).toEqual([{ ...reused[2], sessionId: `pid-1@${reused[2].timestamp}` }]);
-        expect(user).toEqual([reused[0], reused[1]]);
+        expect(user).toEqual([{ ...reused[0], sessionId: first }, { ...reused[1], sessionId: first }]);
       }
+    });
+
+    it('a run keeps its ID after compaction drops the earlier runs of its ID', async () => {
+      const ended = [
+        await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai/projects/p'),
+        { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai/projects/p')), type: 'session_end' as const },
+      ];
+      const later = { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai/projects/p')), timestamp: '2099-01-01T00:00:00.000Z' };
+      const before = await filterEventsByScope([...ended, later], projectScope('/Users/jeff/project-a'));
+      const after = await filterEventsByScope([later], projectScope('/Users/jeff/project-a'));
+      expect(after.map((e) => e.sessionId)).toEqual(['pid-1@2099-01-01T00:00:00.000Z']);
+      expect(before[2].sessionId).toBe(after[0].sessionId);
     });
 
     it('an event that records its data home as a path, before keys were hashed, is keyed by it', async () => {
@@ -160,114 +164,30 @@ describe('filterEventsByScope', () => {
   });
 
   it('an event whose key is not a string counts as written before keys existed', async () => {
-    // A hand-edited or corrupted line in the shared log.
+    // A hand-edited or corrupted line in the shared log: a later keyed event decides the session.
     const corrupt: DashboardEvent[] = JSON.parse(JSON.stringify([
       { ...makeEvent('/Users/jeff/project-a', 'c1'), dataHomeKey: null },
-      { ...makeEvent('/Users/jeff/other-work', 'c2'), dataHomeKey: 42 },
+      { ...makeEvent('/Users/jeff/project-a', 'c2'), dataHomeKey: 42 },
     ]));
-    expect(await ids(corrupt, projectScope('/Users/jeff/project-a'))).toEqual(['c1']);
-    expect(await ids(corrupt, userScope())).toEqual([]);
-  });
-
-  it('matches an older event\'s real cwd to a project whose root was set through a symlink', async () => {
-    // A non-git project's root is the directory as given, not realpath'd.
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-root-')));
-    try {
-      fs.mkdirSync(path.join(tmp, 'real'));
-      fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link'), 'dir');
-      const evts = [makeEvent(path.join(tmp, 'real'), 'r1')];
-      expect(await ids(evts, projectScope(path.join(tmp, 'link')))).toEqual(['r1']);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it('does not give a project an older event whose cwd under its root is gone', async () => {
-    // A removed worktree may have been a nested clone, whose sessions were never the project's.
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-cwd-')));
-    try {
-      fs.mkdirSync(path.join(tmp, 'src'));
-      const evts = [makeEvent(path.join(tmp, 'src'), 'e1'), makeEvent(path.join(tmp, 'removed-worktree'), 'g1')];
-      expect(await ids(evts, projectScope(tmp))).toEqual(['e1']);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it('the user scope never keeps events without a data home', async () => {
-    expect(await ids(events, userScope())).toEqual([]);
-  });
-
-  // Events without a data home go to the project whose root holds their cwd.
-  it('filters to projectRoot (exact match and subdirectories)', async () => {
-    expect(await ids(events, projectScope('/Users/jeff/project-a'))).toEqual(['s1', 's2']);
-  });
-
-  it('projectRoot with trailing slash works the same', async () => {
-    expect(await ids(events, projectScope('/Users/jeff/project-a/'))).toEqual(['s1', 's2']);
-  });
-
-  it('events with undefined cwd are excluded by projectRoot', async () => {
-    expect(await ids(events, projectScope('/Users/jeff/project-a'))).not.toContain('s5');
-  });
-
-  it('does not match partial directory name prefixes', async () => {
-    const evts = [
-      makeEvent('/Users/jeff/project-ab', 'x1'),
-      makeEvent('/Users/jeff/project-a', 'x2'),
+    const decided = [
+      corrupt[0], await scopedEvent(undefined, 'c1', '/home/jeff/.teamai/projects/p'),
+      corrupt[1], await scopedEvent(undefined, 'c2', '/home/jeff/.teamai/projects/p'),
     ];
-    expect(await ids(evts, projectScope('/Users/jeff/project-a'))).toEqual(['x2']);
+    expect(await ids(decided, projectScope('/Users/jeff/project-a'))).toEqual(['c1', 'c1', 'c2', 'c2']);
+    expect(await ids(decided, userScope())).toEqual([]);
+  });
+});
+
+describe('adoptBareKeys', () => {
+  it('gives a snapshot entry keyed by the bare session ID to the first run of that ID', () => {
+    const reported = { 'pid-1': 3, 's2@t0': 1 };
+    const adopted = adoptBareKeys(reported, ['pid-1@t1', 'pid-1@t2', 's2@t0', 's3@t3']);
+    expect(adopted['pid-1@t1']).toBe(3);
+    expect(adopted['pid-1@t2']).toBeUndefined();
+    expect(adopted['s3@t3']).toBeUndefined();
   });
 
-  // Windows paths are plain strings here, so these run on the ubuntu CI too.
-  // Both sides of the comparison are native paths in production: projectRoot is
-  // path.resolve(cwd) from init, and cwd is whatever the tool's hook payload
-  // carried.
-  describe('Windows paths', () => {
-    const winEvents: DashboardEvent[] = [
-      makeEvent('C:\\Users\\jeff\\project-a', 'w1'),
-      makeEvent('C:\\Users\\jeff\\project-a\\src', 'w2'),
-      makeEvent('C:\\Users\\jeff\\project-ab', 'w3'),
-      makeEvent('C:\\Users\\jeff\\other-work', 'w4'),
-    ];
-
-    it('filters to projectRoot including subdirectories', async () => {
-      expect(await ids(winEvents, projectScope('C:\\Users\\jeff\\project-a'))).toEqual(['w1', 'w2']);
-    });
-
-    it('matches a root and a cwd that disagree on separator style', async () => {
-      expect(await ids(winEvents, projectScope('C:/Users/jeff/project-a'))).toEqual(['w1', 'w2']);
-    });
-
-    it('trailing backslash on the root works the same', async () => {
-      expect(await ids(winEvents, projectScope('C:\\Users\\jeff\\project-a\\'))).toEqual(['w1', 'w2']);
-    });
-
-    it('ignores drive-letter and directory casing', async () => {
-      expect(await ids(winEvents, projectScope('c:\\users\\JEFF\\Project-A'))).toEqual(['w1', 'w2']);
-    });
-
-    it('matches a UNC root whatever its case or separators', async () => {
-      const uncEvents: DashboardEvent[] = [
-        makeEvent('\\\\Server\\Share\\Proj', 'u1'),
-        makeEvent('\\\\server\\share\\proj\\src', 'u2'),
-        makeEvent('\\\\server\\share\\other', 'u3'),
-      ];
-      expect(await ids(uncEvents, projectScope('\\\\SERVER\\SHARE\\proj'))).toEqual(['u1', 'u2']);
-    });
-  });
-
-  // A POSIX path is case-sensitive, and `\` is a legal character in a POSIX
-  // filename, so neither folding may be applied to one.
-  describe('POSIX paths keep their own rules', () => {
-    it('does not fold case', async () => {
-      expect(await ids(events, projectScope('/users/jeff/PROJECT-A'))).toEqual([]);
-    });
-
-    it('treats a backslash in a filename as part of the name', async () => {
-      const evts = [makeEvent('/work/a\\b', 'p1'), makeEvent('/work/a/b', 'p2')];
-      expect(await ids(evts, projectScope('/work/a/b'))).toEqual(['p2']);
-      expect(await ids(evts, projectScope('/work/a\\b'))).toEqual(['p1']);
-    });
+  it('never overrides a run\'s own entry', () => {
+    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, ['pid-1@t1'])['pid-1@t1']).toBe(5);
   });
 });
