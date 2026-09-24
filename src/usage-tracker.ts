@@ -246,9 +246,12 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
     // It holds what the usage file holds, so it gets no wider mode than that file
     // (the umask can only narrow it); owner-only while there is no file yet.
     await ignoreUsageSideFiles(config, usagePath);
-    const pendingPath = path.join(path.dirname(usagePath), `${pendingPrefix(usagePath)}${randomUUID()}.jsonl`);
+    // The id lets a fold tell whether this very line is already in the file;
+    // readers drop it (readUsageEvents), so it never leaves this machine.
+    const pendingId = randomUUID();
+    const pendingPath = path.join(path.dirname(usagePath), `${pendingPrefix(usagePath)}${pendingId}.jsonl`);
     const mode = await fs.promises.stat(usagePath).then((s) => s.mode & 0o777, () => 0o600);
-    await fs.promises.writeFile(pendingPath, line, { encoding: 'utf-8', flag: 'wx', mode });
+    await fs.promises.writeFile(pendingPath, JSON.stringify({ ...event, pendingId }) + '\n', { encoding: 'utf-8', flag: 'wx', mode });
     log.debug(`Tracked skill: ${event.skill} (in ${pendingPath}; ${usagePath}.lock is held)`);
   } catch (e) {
     log.error(`Failed to write usage event: ${(e as Error).message}`);
@@ -269,7 +272,8 @@ export async function readUsageEvents(config: LocalConfig): Promise<UsageEvent[]
       try {
         const parsed = JSON.parse(trimmed) as UsageEvent;
         if (parsed.skill && parsed.timestamp) {
-          events.push(parsed);
+          // A folded side file's id stays in this file (foldPendingEvents).
+          events.push({ skill: parsed.skill, timestamp: parsed.timestamp, tool: parsed.tool });
         }
       } catch {
         log.debug(`Skipping corrupted JSONL line: ${trimmed.slice(0, 50)}`);
@@ -363,9 +367,9 @@ function pendingPrefix(usagePath: string): string {
 /**
  * Append the side files of appends that gave up on the lock to the usage file,
  * then remove them. Each holds one whole line; one without its newline is
- * still being written and waits for the next holder. A line the file already
- * holds was folded by a holder that died or could not remove the side file,
- * so it is not appended again (a line carries its millisecond timestamp).
+ * still being written and waits for the next holder. A side file whose id the
+ * file already holds was folded by a holder that died or could not remove it,
+ * so it is not appended again; identical events keep their own ids and lines.
  */
 async function foldPendingEvents(usagePath: string): Promise<void> {
   const dir = path.dirname(usagePath);
@@ -378,15 +382,29 @@ async function foldPendingEvents(usagePath: string): Promise<void> {
     try {
       const content = await fs.promises.readFile(pendingPath, 'utf-8');
       if (!content.endsWith('\n')) continue;
-      folded ??= new Set((await fs.promises.readFile(usagePath, 'utf-8').catch(() => '')).split('\n'));
-      if (!folded.has(content.slice(0, -1))) {
+      const id = pendingIdOf(content);
+      folded ??= new Set(
+        (await fs.promises.readFile(usagePath, 'utf-8').catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined),
+      );
+      if (id === undefined || !folded.has(id)) {
         await fs.promises.appendFile(usagePath, content, 'utf-8');
-        folded.add(content.slice(0, -1));
+        if (id !== undefined) folded.add(id);
       }
       await fs.promises.rm(pendingPath, { force: true });
     } catch (e) {
       log.debug(`Could not fold ${pendingPath} into ${usagePath}: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+}
+
+/** The id a side file gave its line, if the line has one. */
+function pendingIdOf(line: string): string | undefined {
+  if (!line.includes('"pendingId"')) return undefined;
+  try {
+    const { pendingId } = JSON.parse(line) as { pendingId?: unknown };
+    return typeof pendingId === 'string' ? pendingId : undefined;
+  } catch {
+    return undefined;
   }
 }
 
