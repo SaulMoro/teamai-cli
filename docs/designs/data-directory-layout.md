@@ -376,7 +376,14 @@ scope that first reports it also appends the ID and its own data home key to
 recorded there is that scope's wherever it is resumed later, whatever the log
 still holds, so another scope never reports its transcript again; the first
 line for an ID wins, and the file grows by one line per such session, like the
-snapshots. A
+snapshots. An earlier release kept only per-scope snapshots, so the file is
+first written from them: a tool's own ID in the user scope's or a partition's
+prompt-token snapshot is that scope's, unless the shared snapshot holds it too
+(that release copied the shared file into every scope, so such an ID names no
+owner, and every scope already has its baseline). A project whose data home is
+in its workspace cannot be found this way: a session of its that compaction
+had already dropped gets no owner, and if resumed in another scope is decided
+by its first retained event, as before. A
 fallback run is reported and snapshotted as `<id>@<first event's timestamp>`,
 which does not change when compaction drops earlier runs. A snapshot entry keyed
 by a bare fallback ID (written before) is the sum of the runs of that ID in the

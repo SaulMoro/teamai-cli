@@ -17,6 +17,7 @@ import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
 import { getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { getUserHome } from './utils/home.js';
+import { projectsRootDir } from './utils/partition.js';
 import {
   aggregateDailySessions,
   computeDailyStatsDelta,
@@ -609,13 +610,54 @@ async function runsOfLog(events: DashboardEvent[]): Promise<DashboardEvent[]> {
 //  stays that scope's. Only the ID and the key, never a path (#666). The first
 //  line for an ID wins.
 //
+//  A release before this file kept per-scope snapshots only, so the file is
+//  first written from them: each tool's own ID in the user scope's or a
+//  partition's prompt-token snapshot is that scope's. An ID the shared snapshot
+//  also holds is left out: that release copied the shared file into every
+//  scope, so it names no owner, and every scope already has its baseline.
+//  A project whose data home is in its workspace cannot be found this way.
+//
 
 function sessionOwnersPath(): string {
   return path.join(getTeamaiHomeDir(), 'dashboard', 'session-owners.jsonl');
 }
 
+/** The owners the per-scope snapshots of an earlier release imply, as the file's first lines. */
+async function ownersFromSnapshots(): Promise<string> {
+  const home = getTeamaiHomeDir();
+  const shared = (await readJson<Record<string, unknown>>(sharedSnapshotPath('prompt-tokens'))) ?? {};
+  const scopes = [{ dataHome: home, file: path.join(home, 'dashboard', 'user-reported-prompt-tokens.json') }];
+  const slugs = await fs.promises.readdir(projectsRootDir()).catch(() => []);
+  for (const slug of [...slugs].sort()) {
+    const dataHome = path.join(projectsRootDir(), slug);
+    scopes.push({ dataHome, file: path.join(dataHome, 'dashboard', 'reported-prompt-tokens.json') });
+  }
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const { dataHome, file } of scopes) {
+    const snapshot = await readJson<Record<string, unknown>>(file);
+    if (!snapshot || typeof snapshot !== 'object') continue;
+    const key = await dataHomeKey(dataHome);
+    for (const sessionId of Object.keys(snapshot)) {
+      if (sessionId.startsWith('pid-') || Object.hasOwn(shared, sessionId) || seen.has(sessionId)) continue;
+      seen.add(sessionId);
+      lines.push(JSON.stringify({ sessionId, dataHomeKey: key }));
+    }
+  }
+  return lines.map((line) => `${line}\n`).join('');
+}
+
 async function readSessionOwners(): Promise<Map<string, string>> {
   const owners = new Map<string, string>();
+  if (!(await pathExists(sessionOwnersPath()))) {
+    try {
+      await ensureDir(path.dirname(sessionOwnersPath()));
+      // Exclusive: a report in another scope may be writing it too.
+      await fs.promises.writeFile(sessionOwnersPath(), await ownersFromSnapshots(), { flag: 'wx' });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') log.debug(`Could not seed session owners: ${(e as Error).message}`);
+    }
+  }
   const content = await readFileSafe(sessionOwnersPath());
   for (const line of (content ?? '').split('\n')) {
     if (!line.trim()) continue;

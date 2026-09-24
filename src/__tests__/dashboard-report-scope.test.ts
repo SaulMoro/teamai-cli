@@ -484,6 +484,18 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(project)).toBe(1);
   });
 
+  it('a session main reported in a project, resumed in another after compaction, stays the first project\'s', async () => {
+    const { project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    // Main reported `resumed` in P: only P's own snapshot holds it, and main kept no owners.
+    writeSharedSnapshots({ resumed: 1 }, new Date().toISOString().slice(0, 10), project);
+    // Compaction dropped its events; `claude --resume` in Q.
+    await session('claude', { session_id: 'resumed', cwd: rootQ });
+
+    expect(await report(projectQ)).toBeNull();
+    expect(await report(project)).toBeNull();
+  });
+
   it('the session owners a report keeps hold no path (#666)', async () => {
     const { root, project } = await setup();
     await session('copilot', { session_id: 'copilot-p', cwd: root });
