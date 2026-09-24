@@ -556,6 +556,45 @@ describe('usage file lock (#788)', () => {
   });
 });
 
+describe('usage files in a legacy in-workspace .teamai/ (#788)', () => {
+  // What `teamai init --scope project` wrote before the usage lock existed.
+  const legacyGitignore = [
+    '# teamai local config (do not commit)', 'config.yaml', 'state.json', 'token', 'teamai.lock',
+    '.update-lock', 'env', 'env.sh', 'sessions/', 'dashboard/', 'usage.jsonl', 'known-skills.json',
+    'learnings/', 'search-index.json', 'votes/', '',
+  ].join('\n');
+  const workspace = () => path.join(tmpDir, 'workspace');
+  const project = (): LocalConfig => ({ ...userScope(), scope: 'project', projectRoot: workspace(), dataHome: path.join(workspace(), '.teamai') });
+  const usagePath = () => path.join(workspace(), '.teamai', 'usage.jsonl');
+  const git = (...args: string[]) => spawnSync('git', args, { cwd: workspace(), encoding: 'utf-8' });
+  const event = (skill: string): UsageEvent => ({ skill, timestamp: '2026-01-01T00:00:00Z', tool: 'claude' });
+
+  beforeEach(async () => {
+    await fse.outputFile(path.join(workspace(), '.teamai', '.gitignore'), legacyGitignore);
+    git('init', '-q');
+  });
+
+  it('keeps an event recorded while the lock is held out of git status', async () => {
+    await appendUsageEvent(event('a'), project());
+    await fse.outputFile(`${usagePath()}.lock`, JSON.stringify({ pid: process.pid, startedAt: '2026-01-01T00:00:00Z', owner: 'other' }));
+
+    await appendUsageEvent(event('b'), project());
+
+    expect((await fs.promises.readdir(path.dirname(usagePath()))).some((n) => n.startsWith('usage.pending-'))).toBe(true);
+    expect(git('status', '--porcelain', '--untracked-files=all').stdout.split('\n').filter(Boolean))
+      .toEqual(['?? .teamai/.gitignore']);
+  });
+
+  it('ignores the lock and a rewrite\'s temp copy once the file has been capped', async () => {
+    await fse.outputFile(usagePath(), Array.from({ length: USAGE_EVENT_CAP + 1 }, (_, i) => JSON.stringify(event(`s${i}`))).join('\n') + '\n');
+
+    await capUsageEvents(project());
+
+    const ignored = git('check-ignore', '--no-index', '.teamai/usage.jsonl.lock', '.teamai/usage.jsonl.123.0123456789ab.tmp');
+    expect(ignored.stdout.split('\n').filter(Boolean)).toHaveLength(2);
+  });
+});
+
 describe('usage recorded while every scope shared ~/.teamai/usage.jsonl (#748)', () => {
   const sharedPath = () => path.join(tmpDir, '.teamai', 'usage.jsonl');
   const legacy = '{"skill":"from-another-project","timestamp":"2026-01-01T00:00:00Z","tool":"claude"}\n';

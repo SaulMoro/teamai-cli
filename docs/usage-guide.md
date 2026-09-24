@@ -1806,7 +1806,9 @@ which the next lock holder appends to the usage file; a rewrite that cannot take
 it within ~5 s leaves the file as it is. A pending file gets no wider mode than
 the usage file (owner-only while there is none). An in-workspace
 `.teamai/.gitignore` ignores the lock, a rewrite's temp copy and the pending
-files; `pull` and `push` add those entries to an existing single-repo one.
+files; `pull` and `push` add those entries to an existing single-repo one, and
+the usage file's first pending file or rewrite adds them to an existing
+project-scope one.
 
 ### Git submodules
 

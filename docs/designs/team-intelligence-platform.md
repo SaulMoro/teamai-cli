@@ -115,7 +115,8 @@ Hook 追加、清理与截断共用 usage 文件旁的一把锁（`<usage 文件
 再 rename，保留原文件权限。Hook 约 250 ms 拿不到锁时写入 `*.pending-<id>.jsonl`（O_EXCL），
 由下一个持锁者并入；改写约 5 秒拿不到锁时不改文件。pending 文件权限不宽于 usage 文件
 （尚无 usage 文件时为 0600）。工作区内 `.teamai/.gitignore` 忽略 `usage.jsonl.*` 与
-`usage.pending-*.jsonl`，单仓库模式的已有文件由 `migrateSelfModeGitignoreContent` 补齐。
+`usage.pending-*.jsonl`，单仓库模式的已有文件由 `migrateSelfModeGitignoreContent` 补齐，
+项目级的已有文件在写 pending 文件或改写前由 `ignoreUsageSideFiles` 补齐。
 
 此修复不提供持久化批次或远端去重：进程在推送与确认之间终止、多仓库部分
 成功后的重试仍可能产生重复统计。等待超时不等于取消 Git 或强制退出进程。

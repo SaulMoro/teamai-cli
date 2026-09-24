@@ -245,6 +245,7 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
     // the next lock holder to fold in, rather than race a rewrite.
     // It holds what the usage file holds, so it gets no wider mode than that file
     // (the umask can only narrow it); owner-only while there is no file yet.
+    await ignoreUsageSideFiles(config, usagePath);
     const pendingPath = path.join(path.dirname(usagePath), `${pendingPrefix(usagePath)}${randomUUID()}.jsonl`);
     const mode = await fs.promises.stat(usagePath).then((s) => s.mode & 0o777, () => 0o600);
     await fs.promises.writeFile(pendingPath, line, { encoding: 'utf-8', flag: 'wx', mode });
@@ -394,6 +395,7 @@ async function rewriteUsageFile(config: LocalConfig, keep: (lines: string[]) => 
     // Replace the file itself, not a symlink to it.
     const target = await fs.promises.realpath(usagePath);
     await removeOrphanTemps(target);
+    await ignoreUsageSideFiles(config, usagePath);
     const lines = (await fs.promises.readFile(target, 'utf-8')).split('\n').filter((l) => l.trim());
     const kept = keep(lines);
     if (!kept) return;
@@ -411,6 +413,34 @@ async function rewriteUsageFile(config: LocalConfig, keep: (lines: string[]) => 
   });
   if (!rewritten) {
     throw new Error(`${usagePath}.lock is still held after 5 s, so the file was left as it is; remove the lock if no teamai process is running`);
+  }
+}
+
+/** The lock, a rewrite's temp copy and the events a hook records while the lock is held. */
+const USAGE_SIDE_FILE_PATTERNS = ['usage.jsonl.*', 'usage.pending-*.jsonl'];
+
+/**
+ * Add {@link USAGE_SIDE_FILE_PATTERNS} to the `.gitignore` beside a project
+ * scope's usage file when it predates them. `teamai init` writes that file only
+ * once, so a legacy in-workspace `.teamai/` still ignores `usage.jsonl` alone
+ * and the side files would show in the business repo's git status. Single-repo
+ * mode heals its own file (migrateSelfModeGitignore). Best-effort: a missing
+ * `.gitignore` stays missing, and a failure never costs the event.
+ */
+async function ignoreUsageSideFiles(config: LocalConfig, usagePath: string): Promise<void> {
+  if (config.scope !== 'project' || config.repo.kind === 'self') return;
+  const gitignorePath = path.join(path.dirname(usagePath), '.gitignore');
+  try {
+    const lines = (await fs.promises.readFile(gitignorePath, 'utf-8')).split('\n');
+    const missing = USAGE_SIDE_FILE_PATTERNS.filter((p) => !lines.some((l) => l.trim() === p));
+    if (!missing.length) return;
+    const anchor = lines.findIndex((l) => l.trim() === 'usage.jsonl');
+    const at = anchor >= 0 ? anchor + 1 : lines.length - (lines[lines.length - 1] === '' ? 1 : 0);
+    lines.splice(at, 0, ...missing);
+    await fs.promises.writeFile(gitignorePath, lines.join('\n'), 'utf-8');
+  } catch (e) {
+    if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') return;
+    log.debug(`Could not add the usage side files to ${gitignorePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
