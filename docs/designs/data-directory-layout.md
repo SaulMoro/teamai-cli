@@ -418,9 +418,12 @@ A Codex session is kept per rollout, with or without a token record: a
 rollout's counters restart, and compaction drops its events, so its prompt-token
 entry holds each rollout's reported prompts, tokens, interruptions, rejections,
 corrections, active time and request costs under a hash of the rollout's path,
-written with any delta. A rollout compaction has dropped keeps those totals in
-the session's prompt-token, intervention and daily sums (cache tokens from its
-tokens), so a later rollout is reported in full. An entry
+written with any delta, and whether it failed (an error, an interruption or a
+correction). The session's daily request costs sum its rollouts in the log. A
+rollout compaction has dropped keeps those totals in the session's prompt-token,
+intervention and daily sums (cache tokens from its tokens), and a failed one
+keeps the session unsuccessful, so a later rollout is reported in full and does
+not turn it into a success. An entry
 written before rollouts were kept is one total: an earlier release rewrote every
 session in the log on each report, so it covers the rollouts begun by the time
 its file was last written (read before this report writes it). Those still in

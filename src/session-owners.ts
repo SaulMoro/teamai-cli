@@ -21,6 +21,8 @@ export type ReportedInterventions = Record<string, { interrupt: number; toolReje
 export type ReportedSegments = Record<string, {
   prompts: number; tokens: TokenUsage; interrupt?: number; toolReject?: number; correction?: number;
   durationMs?: number; requestDaily?: Record<string, RequestCostMetrics>;
+  /** The rollout errored, was interrupted or corrected: its session did not succeed. */
+  failed?: boolean;
 }>;
 
 /** Snapshot of already-reported per-session prompt counts + token usage (idempotency basis). */

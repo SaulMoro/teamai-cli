@@ -1222,6 +1222,8 @@ export interface SessionMetrics {
   segments?: Record<string, {
     prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; correction: number;
     durationMs: number; requestDaily: Record<string, RequestCostMetrics>; since: string;
+    /** An event of the rollout ended in an error. */
+    error: boolean;
   }>;
 }
 

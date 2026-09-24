@@ -686,6 +686,36 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(day).toMatchObject({ durationMs: 9 * 60_000, cacheReadTokens: 120 });
   });
 
+  it('a Codex session\'s request costs sum its rollouts still in the log', async () => {
+    const { project } = await setup();
+    const { event, write } = await codexLog(project);
+    const day = new Date().toISOString().slice(0, 10);
+    const cost = (costMicros: number) => ({
+      requestDaily: { [day]: { pricedRequests: 1, costMicros, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1' } },
+    });
+    write([event('rollout-a.jsonl', 'stop', 0, { prompts: 1, ...cost(100) })]);
+    await report(project);
+    // Rollout A is still in the log when rollout B adds its own cost.
+    write([event('rollout-a.jsonl', 'stop', 0, { prompts: 1, ...cost(100) }), event('rollout-b.jsonl', 'stop', 30, { prompts: 1, ...cost(20) })]);
+    const reported = await report(project);
+    const days = reported && typeof reported === 'object' && 'daily' in reported && reported.daily && typeof reported.daily === 'object'
+      ? Object.values(reported.daily) : [];
+
+    expect(days.reduce((sum: number, d: unknown) =>
+      sum + (d && typeof d === 'object' && 'costMicros' in d && typeof d.costMicros === 'number' ? d.costMicros : 0), 0)).toBe(120);
+  });
+
+  it('a dropped Codex rollout that failed keeps the session failed', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    // Rollout A was interrupted; rollout B, after compaction, finishes cleanly.
+    write([event('rollout-a.jsonl', 'stop', 0, { prompts: 1, interventions: { interrupt: 1, toolReject: 0 } })]);
+    await stats();
+    write([event('rollout-b.jsonl', 'stop', 30, { prompts: 1, interventions: { interrupt: 0, toolReject: 0 } })]);
+
+    expect((await stats()).day).toMatchObject({ sessionsSucceeded: 0 });
+  });
+
   it('a rollout\'s intervention change alone still updates its kept totals', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);

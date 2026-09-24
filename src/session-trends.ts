@@ -77,7 +77,10 @@ export function aggregateDailySessions(events: DashboardEvent[]): Map<string, Da
     }
 
     const hasError = own.some((event) => event.status === 'error');
-    const requestDaily = latestRequestDaily(own);
+    // A Codex rollout's costs restart with it: the session sums its rollouts.
+    const requestDaily = metric.segments
+      ? Object.values(metric.segments).reduce((sum, segment) => addRequestDaily(sum, segment.requestDaily), {})
+      : latestRequestDaily(own);
     const corrected = metric.correction > 0 ? 1 : 0;
     result.set(sessionId, {
       date: firstStop.timestamp.slice(0, 10),

@@ -1844,6 +1844,7 @@ export function aggregateSessionMetrics(
   const transcriptInterventions = new Map<string, Map<string, { interrupt: number; toolReject: number }>>();
   const transcriptRequests = new Map<string, Map<string, Record<string, RequestCostMetrics>>>();
   const transcriptCorrections = new Map<string, Map<string, number>>();
+  const transcriptErrors = new Map<string, Set<string>>();
   const transcriptSince = new Map<string, Map<string, string>>();
   const lastTranscript = new Map<string, string>();
   const timeline = new Map<string, Array<{ at: number; transcript: string | undefined }>>();
@@ -1865,8 +1866,12 @@ export function aggregateSessionMetrics(
       rolloutSessions.add(event.sessionId);
     }
     const events = timeline.get(event.sessionId) ?? [];
-    events.push({ at: Date.parse(event.timestamp), transcript: event.transcriptPath ?? lastTranscript.get(event.sessionId) });
+    const rolloutOf = event.transcriptPath ?? lastTranscript.get(event.sessionId);
+    events.push({ at: Date.parse(event.timestamp), transcript: rolloutOf });
     timeline.set(event.sessionId, events);
+    if (event.status === 'error' && rolloutOf !== undefined) {
+      transcriptErrors.set(event.sessionId, (transcriptErrors.get(event.sessionId) ?? new Set<string>()).add(rolloutOf));
+    }
     if (event.type === 'stop' && typeof event.transcriptPath === 'string') {
       const rollout = event.transcriptPath;
       const record = <T>(maps: Map<string, Map<string, T>>, value: T) => {
@@ -1969,6 +1974,7 @@ export function aggregateSessionMetrics(
         durationMs: durations.get(transcript) ?? 0,
         requestDaily: transcriptRequests.get(sid)?.get(transcript) ?? {},
         since: first,
+        error: transcriptErrors.get(sid)?.has(transcript) ?? false,
       }]));
       // A rollout's Stop counts restart too; the session sums them.
       const sum = (field: 'interrupt' | 'toolReject') =>

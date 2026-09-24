@@ -383,6 +383,7 @@ function reportedSegments(entry: unknown): ReportedSegments {
       ...promptTokensEntry(segment), interrupt: iv.interrupt, toolReject: iv.toolReject, correction: iv.correction,
       durationMs: typeof durationMs === 'number' ? durationMs : 0,
       requestDaily: parseRequestDaily(segment && typeof segment === 'object' && 'requestDaily' in segment ? segment.requestDaily : undefined),
+      failed: !!segment && typeof segment === 'object' && 'failed' in segment && segment.failed === true,
     };
   }
   return segments;
@@ -391,7 +392,7 @@ function reportedSegments(entry: unknown): ReportedSegments {
 /** A reported rollout compaction has dropped: its key and the totals it was reported with. */
 export interface DroppedRollout {
   key: string; prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; correction: number;
-  durationMs: number; requestDaily: Record<string, RequestCostMetrics>;
+  durationMs: number; requestDaily: Record<string, RequestCostMetrics>; failed: boolean;
 }
 
 /**
@@ -428,7 +429,7 @@ export function droppedRollouts(
         gone.push({
           key, prompts: segment.prompts, tokens: segment.tokens, interrupt: segment.interrupt ?? 0,
           toolReject: segment.toolReject ?? 0, correction: segment.correction ?? 0, durationMs: segment.durationMs ?? 0,
-          requestDaily: segment.requestDaily ?? {},
+          requestDaily: segment.requestDaily ?? {}, failed: segment.failed ?? false,
         });
       }
     } else {
@@ -465,7 +466,8 @@ export function droppedRollouts(
       const anyLeft = left.prompts > 0 || left.interrupt > 0 || left.toolReject > 0 || left.correction > 0 || left.durationMs > 0
         || hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })
         || Object.values(left.requestDaily).some((r) => r.pricedRequests > 0 || r.costMicros > 0);
-      if (anyLeft) gone.push({ key: 'prior', ...left });
+      // What that release counted as the session's outcome stays with its part.
+      if (anyLeft) gone.push({ key: 'prior', ...left, failed: day?.succeeded === 0 });
     }
     if (gone.length > 0) dropped.set(sid, gone);
   }
@@ -502,6 +504,7 @@ export function computePromptTokenDelta(
         segments[segmentKey(transcript)] = {
           prompts: segment.prompts, tokens: { ...segment.tokens }, interrupt: segment.interrupt, toolReject: segment.toolReject,
           correction: segment.correction, durationMs: segment.durationMs, requestDaily: segment.requestDaily,
+          failed: segment.error || segment.interrupt > 0 || segment.correction > 0,
         };
       }
       for (const gone of dropped.get(sid) ?? []) {
@@ -551,6 +554,9 @@ export function withDroppedRollouts(
         sessionCacheReadTokens: (day.sessionCacheReadTokens ?? 0) + tokens.cacheRead,
         sessionCacheEligibleTokens: (day.sessionCacheEligibleTokens ?? 0) + tokens.input + tokens.cacheRead + tokens.cacheCreation,
         requestDaily: gone.reduce((total, rollout) => addRequestDaily(total, rollout.requestDaily), day.requestDaily),
+        // A session one of whose rollouts failed or was corrected did not succeed.
+        succeeded: gone.some((rollout) => rollout.failed) ? 0 : day.succeeded,
+        corrected: gone.some((rollout) => rollout.correction > 0) ? 1 : day.corrected,
       });
     }
   }
