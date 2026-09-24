@@ -117,6 +117,19 @@ scope: 'user',
       expect(items.map((item) => item.relativePath)).toEqual(['env/billing/env.yaml', 'env/checkout/env.yaml']);
       expect(items.map((item) => item.name)).toEqual(['billing/env.yaml', 'checkout/env.yaml']);
     });
+
+    // git quotes a non-ASCII path in its default output, so it never matched.
+    it('reports a changed namespace file whose name is not ASCII', async () => {
+      await fse.outputFile(path.join(repoPath, 'env', 'café', 'env.yaml'), 'variables: []\n');
+      run(['init', '-q', '-b', 'main']);
+      run(['add', '-A']);
+      run(['commit', '-q', '-m', 'seed']);
+
+      await fse.writeFile(path.join(repoPath, 'env', 'café', 'env.yaml'), 'variables:\n  - key: A\n    value: b\n');
+
+      const items = await handler.scanLocalForPush(teamConfig, localConfig);
+      expect(items.map((item) => item.relativePath)).toEqual(['env/café/env.yaml']);
+    });
   });
 
   describe('scanTeamForPull', () => {

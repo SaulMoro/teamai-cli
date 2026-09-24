@@ -231,15 +231,16 @@ export class EnvHandler extends ResourceHandler {
     const execFileAsync = promisify(execFile);
 
     // Modified and untracked files under env/, in one call. A file git cannot
-    // report on (no repository) is treated as changed, as before.
+    // report on (no repository) is treated as changed, as before. `-z` keeps a
+    // non-ASCII path unquoted, so it matches the name on disk.
     let changed: Set<string> | null = null;
     try {
       const { stdout } = await execFileAsync(
         'git',
-        ['ls-files', '--modified', '--others', '--exclude-standard', '--', 'env'],
+        ['ls-files', '-z', '--modified', '--others', '--exclude-standard', '--', 'env'],
         { cwd: repoPath },
       );
-      changed = new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean));
+      changed = new Set(stdout.split('\0').filter(Boolean));
     } catch {
       changed = null;
     }
