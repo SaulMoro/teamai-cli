@@ -92,12 +92,16 @@ async function setup(): Promise<{ root: string; user: LocalConfig; project: Loca
   return { root, user, project };
 }
 
-/** Report the way pull does, and return the sessions that scope's stats now hold. */
-async function reportedSessions(config: LocalConfig): Promise<number> {
+/** Report the way pull does, and return the stats that scope has pushed so far. */
+async function report(config: LocalConfig): Promise<unknown> {
   await reportUsageToTeam(config.repo.localPath, config.username, { skipTruncate: true, selfConfig: config });
   const statsPath = path.join(path.dirname(config.repo.localPath), 'reports-wt', 'stats', `${config.username}.yaml`);
-  if (!fs.existsSync(statsPath)) return 0;
-  const stats: unknown = YAML.parse(fs.readFileSync(statsPath, 'utf-8'));
+  return fs.existsSync(statsPath) ? YAML.parse(fs.readFileSync(statsPath, 'utf-8')) : null;
+}
+
+/** Report the way pull does, and return the sessions that scope's stats now hold. */
+async function reportedSessions(config: LocalConfig): Promise<number> {
+  const stats = await report(config);
   const daily = stats && typeof stats === 'object' && 'daily' in stats && stats.daily && typeof stats.daily === 'object' ? stats.daily : {};
   return Object.values(daily).reduce((sum: number, day: unknown) =>
     sum + (day && typeof day === 'object' && 'sessionsEnded' in day && typeof day.sessionsEnded === 'number' ? day.sessionsEnded : 0), 0);
@@ -171,5 +175,117 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
 
     expect(await reportedSessions(user)).toBe(0);
     expect(await reportedSessions(project)).toBe(2);
+  });
+});
+
+describe('each scope keeps its own reported snapshot (#786)', () => {
+  /** The prompts a scope's stats hold, 0 before its first push. */
+  async function reportedPrompts(config: LocalConfig): Promise<number> {
+    const stats = await report(config);
+    return stats && typeof stats === 'object' && 'prompts' in stats && typeof stats.prompts === 'number' ? stats.prompts : 0;
+  }
+
+  const shared = (name: string) => path.join(teamaiHome(), 'dashboard', `reported-${name}.json`);
+  const SNAPSHOTS = ['interventions', 'prompt-tokens', 'daily-sessions'];
+
+  /** The shared snapshots as a release before #786 left them, with `prompts` reported per session. */
+  function writeSharedSnapshots(prompts: Record<string, number>, date: string): void {
+    const entries = (value: (n: number) => unknown) =>
+      Object.fromEntries(Object.entries(prompts).map(([sid, n]) => [sid, value(n)]));
+    const values: Record<string, unknown> = {
+      interventions: entries(() => ({ interrupt: 0, toolReject: 0, correction: 0 })),
+      'prompt-tokens': entries((n) => ({ prompts: n, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 } })),
+      // Longer than any fixture session, so no duration is left to report.
+      'daily-sessions': entries((n) => ({ date, prompts: n, durationMs: 3_600_000, succeeded: 1, corrected: 0 })),
+    };
+    fs.mkdirSync(path.join(teamaiHome(), 'dashboard'), { recursive: true });
+    for (const name of SNAPSHOTS) fs.writeFileSync(shared(name), JSON.stringify(values[name]));
+  }
+
+  async function prompts(sessionId: string, cwd: string, count: number): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      await hook('prompt-submit', 'claude', { session_id: sessionId, cwd, hook_event_name: 'UserPromptSubmit', prompt: `p${i}` });
+    }
+  }
+
+  it('a session split across the user scope and a project reaches both teams with its own counts', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    await hook('session-start', 'claude', { session_id: 'split', cwd: elsewhere, hook_event_name: 'SessionStart' });
+    await prompts('split', elsewhere, 3);
+    await prompts('split', root, 2); // `cd` into the project mid-session
+    await hook('stop', 'claude', { session_id: 'split', cwd: root, hook_event_name: 'Stop' });
+
+    expect(await reportedPrompts(user)).toBe(3);
+    expect(await reportedPrompts(project)).toBe(2);
+  });
+
+  it('a session split across two projects reaches both teams with its own counts', async () => {
+    const { root, project } = await setup();
+    const rootQ = path.join(tmp, 'project-q');
+    fs.mkdirSync(rootQ);
+    execFileSync('git', ['init', '-q'], { cwd: rootQ });
+    const dataHomeQ = await resolveProjectDataHome(rootQ);
+    fs.mkdirSync(path.join(dataHomeQ, 'team-repo'), { recursive: true });
+    await saveLocalConfigForScope({
+      repo: { localPath: path.join(dataHomeQ, 'team-repo'), remote: 'https://example.test/acme/team-q.git', kind: 'git' },
+      username: 'tester', scope: 'project', projectRoot: rootQ, additionalRoles: [], dataHome: dataHomeQ,
+    });
+    const projectQ = await resolveConfigForDir(rootQ);
+    if (!projectQ) throw new Error('fixture config Q did not resolve');
+    await hook('session-start', 'claude', { session_id: 'split', cwd: root, hook_event_name: 'SessionStart' });
+    await prompts('split', root, 3);
+    await prompts('split', rootQ, 2);
+    await hook('stop', 'claude', { session_id: 'split', cwd: rootQ, hook_event_name: 'Stop' });
+
+    expect(await reportedPrompts(project)).toBe(3);
+    expect(await reportedPrompts(projectQ)).toBe(2);
+  });
+
+  it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    await session('claude', { session_id: 'old-p', cwd: root });
+    await session('claude', { session_id: 'old-u', cwd: elsewhere });
+    writeSharedSnapshots({ 'old-p': 1, 'old-u': 1 }, new Date().toISOString().slice(0, 10));
+
+    expect(await report(user)).toBeNull();
+    expect(await report(project)).toBeNull();
+  });
+
+  it('once seeded, a scope reads and writes only its own snapshot, even after a rollback rewrites the shared one', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const today = new Date().toISOString().slice(0, 10);
+    writeSharedSnapshots({ 'old-p': 1 }, today);
+    const before = SNAPSHOTS.map((name) => fs.readFileSync(shared(name), 'utf-8'));
+
+    await session('claude', { session_id: 'new-p', cwd: root });
+    expect(await reportedPrompts(project)).toBe(1);
+    await session('claude', { session_id: 'new-u', cwd: elsewhere });
+    expect(await reportedPrompts(user)).toBe(1);
+    expect(SNAPSHOTS.map((name) => fs.readFileSync(shared(name), 'utf-8'))).toEqual(before);
+
+    // An earlier release, after a rollback, records and reports two more
+    // sessions and writes the shared snapshots again.
+    await session('claude', { session_id: 'rollback-p', cwd: root });
+    await session('claude', { session_id: 'rollback-u', cwd: elsewhere });
+    writeSharedSnapshots({ 'old-p': 1, 'rollback-p': 1, 'rollback-u': 1 }, today);
+
+    // Both scopes were seeded before the rollback and read only their own
+    // snapshot, so each reports its session again, as the ticket asks.
+    expect(await reportedPrompts(project)).toBe(2);
+    expect(await reportedPrompts(user)).toBe(2);
+  });
+
+  it('a scope first seeded after a rollback skips what the earlier release reported', async () => {
+    const { root, project } = await setup();
+    await session('claude', { session_id: 'rollback-p', cwd: root });
+    writeSharedSnapshots({ 'rollback-p': 1 }, new Date().toISOString().slice(0, 10));
+
+    expect(await report(project)).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ import {
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
-import { getUserVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
+import { getUserVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
   aggregateDailySessions,
@@ -137,19 +137,58 @@ export function mergeStats(
 //  double-counts a session, since we only add the positive change since last report.
 //
 
-/** Path to the local reported-interventions snapshot (evaluated at call time for tests). */
-function getReportedInterventionsPath(): string {
-  return path.join(getUserHome(), '.teamai', 'dashboard', 'reported-interventions.json');
+// ─── Reported snapshots, one set per scope (#786) ──────
+//
+//  <dataHome>/dashboard/reported-<name>.json          project scope
+//  ~/.teamai/dashboard/user-reported-<name>.json      user scope
+//  ~/.teamai/dashboard/reported-<name>.json           shared, written before #786
+//
+//  A session can record events in two scopes (a `cd` mid-session), so each
+//  scope compares against what it reported itself. The first time a scope needs
+//  a snapshot, it copies the shared one, so nothing an earlier release reported
+//  is sent again; after that only its own file is read. No scope writes the
+//  shared file any more, only an earlier release after a rollback (and a caller
+//  without a scope config, which reads the whole log and reports into it).
+//
+
+type ReportedSnapshotName = 'interventions' | 'prompt-tokens' | 'daily-sessions';
+
+/** The machine-level snapshot every scope shared before #786 (evaluated at call time for tests). */
+function sharedSnapshotPath(name: ReportedSnapshotName): string {
+  return path.join(getTeamaiHomeDir(), 'dashboard', `reported-${name}.json`);
 }
 
-async function readReportedInterventions(): Promise<ReportedInterventions> {
-  const parsed = await readJson<ReportedInterventions>(getReportedInterventionsPath());
+/** A scope's own snapshot. The user scope's data home holds the shared one, hence its prefix. */
+function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | undefined): string {
+  if (!config) return sharedSnapshotPath(name);
+  const dataHome = getDataHome(config);
+  const file = `reported-${name}.json`;
+  if (path.resolve(dataHome) !== path.resolve(getTeamaiHomeDir())) return path.join(dataHome, 'dashboard', file);
+  return path.join(dataHome, 'dashboard', `user-${file}`);
+}
+
+/** A scope's snapshot, seeded from the shared one when the scope has none yet. */
+async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig | undefined): Promise<T | null> {
+  const own = scopeSnapshotPath(name, config);
+  if (!config || await pathExists(own)) return readJson<T>(own);
+  const seed = await readJson<T>(sharedSnapshotPath(name));
+  try {
+    await writeJson(own, seed ?? {});
+  } catch (e) {
+    // Seeded again next time: the shared file is not written any more.
+    log.debug(`Could not seed ${own}: ${(e as Error).message}`);
+  }
+  return seed;
+}
+
+async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
+  const parsed = await readSnapshot<ReportedInterventions>('interventions', config);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
-async function writeReportedInterventions(data: ReportedInterventions): Promise<void> {
+async function writeReportedInterventions(data: ReportedInterventions, config: LocalConfig | undefined): Promise<void> {
   try {
-    await writeJson(getReportedInterventionsPath(), data);
+    await writeJson(scopeSnapshotPath('interventions', config), data);
   } catch (e) {
     log.error(`Failed to persist reported interventions: ${(e as Error).message}`);
   }
@@ -208,27 +247,14 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //  Separate snapshot from interventions so each metric stays independently idempotent.
 //
 
-/** Path to the local prompt/token reported snapshot (evaluated at call time for tests). */
-function getReportedPromptTokensPath(): string {
-  return path.join(getUserHome(), '.teamai', 'dashboard', 'reported-prompt-tokens.json');
+async function readReportedPromptTokens(config: LocalConfig | undefined): Promise<ReportedPromptTokens> {
+  const parsed = await readSnapshot<ReportedPromptTokens>('prompt-tokens', config);
+  return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
-async function readReportedPromptTokens(): Promise<ReportedPromptTokens> {
+async function writeReportedPromptTokens(data: ReportedPromptTokens, config: LocalConfig | undefined): Promise<void> {
   try {
-    const content = await readFileSafe(getReportedPromptTokensPath());
-    if (!content) return {};
-    const parsed = JSON.parse(content);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeReportedPromptTokens(data: ReportedPromptTokens): Promise<void> {
-  try {
-    const p = getReportedPromptTokensPath();
-    await ensureDir(path.dirname(p));
-    await writeFile(p, JSON.stringify(data));
+    await writeJson(scopeSnapshotPath('prompt-tokens', config), data);
   } catch (e) {
     log.error(`Failed to persist reported prompt/token snapshot: ${(e as Error).message}`);
   }
@@ -285,16 +311,12 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
     || d.tokens.cacheRead > 0 || d.tokens.cacheCreation > 0;
 }
 
-function getReportedDailySessionsPath(): string {
-  return path.join(getUserHome(), '.teamai', 'dashboard', 'reported-daily-sessions.json');
+async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
+  return (await readSnapshot<ReportedDailySessions>('daily-sessions', config)) ?? {};
 }
 
-async function readReportedDailySessions(): Promise<ReportedDailySessions> {
-  return (await readJson<ReportedDailySessions>(getReportedDailySessionsPath())) ?? {};
-}
-
-async function writeReportedDailySessions(data: ReportedDailySessions): Promise<void> {
-  await writeJson(getReportedDailySessionsPath(), data);
+async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
+  await writeJson(scopeSnapshotPath('daily-sessions', config), data);
 }
 
 function hasDailyDelta(delta: ReturnType<typeof computeDailyStatsDelta>['delta']): boolean {
@@ -431,18 +453,18 @@ export async function reportUsageToTeam(
     const currentInterventions = new Map(
       [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
     );
-    const reportedInterventions = await readReportedInterventions();
+    const reportedInterventions = await readReportedInterventions(reportsConfig);
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
     );
 
-    const reportedPromptTokens = await readReportedPromptTokens();
+    const reportedPromptTokens = await readReportedPromptTokens(reportsConfig);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
     );
-    const reportedDailySessions = await readReportedDailySessions();
+    const reportedDailySessions = await readReportedDailySessions(reportsConfig);
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
       aggregateDailySessions(dashboardEvents),
       reportedDailySessions,
@@ -598,18 +620,18 @@ export async function reportUsageToTeam(
     // Success — advance the reported snapshots so we don't re-count.
     // Merge (not overwrite) because each scope only touches its own sessions.
     if (hasInterventions) {
-      const existingIv = await readReportedInterventions();
-      await writeReportedInterventions({ ...existingIv, ...nextReported });
+      const existingIv = await readReportedInterventions(reportsConfig);
+      await writeReportedInterventions({ ...existingIv, ...nextReported }, reportsConfig);
       log.debug(`Reported intervention delta (${interventionDelta.sessions} new sessions) to team repo`);
     }
     if (hasPromptTokens) {
-      const existingPt = await readReportedPromptTokens();
-      await writeReportedPromptTokens({ ...existingPt, ...nextReportedPromptTokens });
+      const existingPt = await readReportedPromptTokens(reportsConfig);
+      await writeReportedPromptTokens({ ...existingPt, ...nextReportedPromptTokens }, reportsConfig);
       log.debug(`Reported prompt/token delta (${promptTokenDelta.prompts} prompts) to team repo`);
     }
     if (hasDaily) {
-      const existingDaily = await readReportedDailySessions();
-      await writeReportedDailySessions({ ...existingDaily, ...nextReportedDailySessions });
+      const existingDaily = await readReportedDailySessions(reportsConfig);
+      await writeReportedDailySessions({ ...existingDaily, ...nextReportedDailySessions }, reportsConfig);
       log.debug(`Reported daily session trends (${Object.keys(dailyDelta).length} UTC day buckets) to team repo`);
     }
     if (!hasUsage && !hasInterventions && !hasPromptTokens && !hasDaily) {

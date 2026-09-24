@@ -87,7 +87,12 @@ function fixture(agent: keyof typeof agents, provider: string) {
   function stats() {
     return YAML.parse(git(['show', 'teamai-reports:stats/alice.yaml'], remote, env));
   }
-  return { home, usage, usageLine, dashboard, seedEvents, receiver, pull, stats };
+  /** The user scope's reported snapshot (#786), `{}` before the report writes one. */
+  function snapshot(name: string): Record<string, unknown> {
+    const p = path.join(dashboard, `user-reported-${name}.json`);
+    return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
+  }
+  return { home, usage, usageLine, seedEvents, receiver, pull, stats, snapshot };
 }
 
 afterEach(() => {
@@ -106,7 +111,7 @@ describe('real CLI report completion', () => {
         f.receiver('slow');
         const output = await f.pull(() => {
           expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
-          expect(fs.existsSync(path.join(f.dashboard, 'reported-prompt-tokens.json'))).toBe(false);
+          expect(f.snapshot('prompt-tokens').s1).toBeUndefined();
           expect(fs.existsSync(path.join(f.home, '.teamai/.sync-lock'))).toBe(true);
           // An event arriving during the push must survive cleanup of the batch.
           fs.appendFileSync(f.usage, f.usageLine);
@@ -115,7 +120,7 @@ describe('real CLI report completion', () => {
         expect(f.stats().skills.review.count).toBe(1);
         expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
         for (const name of ['interventions', 'prompt-tokens', 'daily-sessions']) {
-          expect(JSON.parse(fs.readFileSync(path.join(f.dashboard, `reported-${name}.json`), 'utf8')).s1).toBeDefined();
+          expect(f.snapshot(name).s1).toBeDefined();
         }
         expect(fs.existsSync(path.join(f.home, '.teamai/.sync-lock'))).toBe(false);
         f.receiver('normal');
@@ -139,7 +144,7 @@ describe('real CLI report completion', () => {
     f.receiver('reject');
     await f.pull();
     expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
-    expect(fs.existsSync(path.join(f.dashboard, 'reported-prompt-tokens.json'))).toBe(false);
+    expect(f.snapshot('prompt-tokens').s1).toBeUndefined();
     f.receiver('normal');
     await f.pull();
     const stats = f.stats();
