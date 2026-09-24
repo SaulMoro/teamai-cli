@@ -534,10 +534,9 @@ describe('syncVotesToTeam', () => {
 
 describe('recallFeedback', () => {
   beforeEach(() => {
-    vi.doMock('../config.js', () => ({
-      autoDetectInit: () => Promise.resolve({
-        localConfig: { username: 'testuser', repo: { localPath: tmpDir } },
-      }),
+    vi.doMock('../config.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../config.js')>()),
+      resolveConfigForDir: () => Promise.resolve({ username: 'testuser', scope: 'user', repo: { localPath: tmpDir } }),
     }));
   });
 
@@ -546,7 +545,7 @@ describe('recallFeedback', () => {
   });
 
   it('positive increments upvoted_count', async () => {
-    const votesDir = path.join(tmpDir, '.teamai', 'votes');
+    const votesDir = path.join(tmpDir, '.teamai', 'user-votes');
     fs.mkdirSync(votesDir, { recursive: true });
     await incrementRecalled(path.join(votesDir, 'testuser.yaml'), ['doc-a']);
 
@@ -558,7 +557,7 @@ describe('recallFeedback', () => {
   });
 
   it('negative decrements upvoted_count (floor at 0)', async () => {
-    const votesDir = path.join(tmpDir, '.teamai', 'votes');
+    const votesDir = path.join(tmpDir, '.teamai', 'user-votes');
     fs.mkdirSync(votesDir, { recursive: true });
     await incrementRecalled(path.join(votesDir, 'testuser.yaml'), ['doc-b']);
 
@@ -570,7 +569,7 @@ describe('recallFeedback', () => {
   });
 
   it('negative on missing doc warns without crashing', async () => {
-    const votesDir = path.join(tmpDir, '.teamai', 'votes');
+    const votesDir = path.join(tmpDir, '.teamai', 'user-votes');
     fs.mkdirSync(votesDir, { recursive: true });
 
     // Should not throw
@@ -578,7 +577,7 @@ describe('recallFeedback', () => {
   });
 
   it('negative deletes last_upvoted_at when upvoted_count reaches 0', async () => {
-    const votesDir = path.join(tmpDir, '.teamai', 'votes');
+    const votesDir = path.join(tmpDir, '.teamai', 'user-votes');
     fs.mkdirSync(votesDir, { recursive: true });
     const votePath = path.join(votesDir, 'testuser.yaml');
 
