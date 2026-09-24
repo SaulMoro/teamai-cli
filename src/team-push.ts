@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
-import { readEvents, aggregateSessionMetrics, dataHomeKey } from './dashboard-collector.js';
+import { readEvents, aggregateSessionMetrics, dataHomeKey, resolveCopilotUsageTranscript } from './dashboard-collector.js';
 import {
   createGit,
   pushRepoDirectly,
@@ -481,7 +481,12 @@ export async function filterEventsByScope(
   const transcripts = new Map<number, string[]>();
   events.forEach((e, i) => {
     const run = runOf[i];
-    if (run !== undefined && typeof e.transcriptPath === 'string') transcripts.set(run, [...(transcripts.get(run) ?? []), e.transcriptPath]);
+    if (run === undefined) return;
+    // Copilot's session log is found by its ID; the event holds no path (#666).
+    const transcript = typeof e.transcriptPath === 'string' ? e.transcriptPath
+      : e.tool === 'copilot' ? resolveCopilotUsageTranscript(e.sessionId) : null;
+    const known = transcripts.get(run) ?? [];
+    if (transcript && !known.includes(transcript)) transcripts.set(run, [...known, transcript]);
   });
   const owned = await Promise.all(deciding.map(async (i, run) => {
     // Recorded by the scope that first reported it, so a session resumed
@@ -530,8 +535,9 @@ async function transcriptOwner(
 /**
  * The directory a transcript's session started in: the first `cwd` a Claude
  * transcript records (a resume from another project appends to the same file),
- * or a Codex rollout's `session_meta`. Reads a bounded head of the file; the
- * format is the tool's own, so anything else is undefined.
+ * a Codex rollout's `session_meta`, or a Copilot session log's `session.start`.
+ * Reads a bounded head of the file; the format is the tool's own, so anything
+ * else is undefined.
  */
 async function transcriptOrigin(transcript: string): Promise<string | undefined> {
   let head: string;
@@ -559,6 +565,11 @@ async function transcriptOrigin(transcript: string): Promise<string | undefined>
     if ('type' in entry && entry.type === 'session_meta' && 'payload' in entry && entry.payload
       && typeof entry.payload === 'object' && 'cwd' in entry.payload && typeof entry.payload.cwd === 'string') {
       return entry.payload.cwd;
+    }
+    if ('type' in entry && entry.type === 'session.start' && 'data' in entry && entry.data && typeof entry.data === 'object'
+      && 'context' in entry.data && entry.data.context && typeof entry.data.context === 'object'
+      && 'cwd' in entry.data.context && typeof entry.data.context.cwd === 'string') {
+      return entry.data.context.cwd;
     }
   }
   return undefined;
@@ -825,6 +836,64 @@ async function recordSessionOwners(sessionIds: Iterable<string>, key: string): P
 }
 
 /**
+ * A session main split across scopes, crediting every part it reported. Main
+ * (#795) gave each event to the scope its `dataHome` names and reported each
+ * part against that scope's own snapshot, so a scope's entry may hold only its
+ * part (prompts counted before any Stop carried the transcript's total). The
+ * scope that owns the whole run now takes as reported the metrics of the union
+ * of those parts: for each scope, the shortest prefix of its events whose own
+ * metrics reach its snapshot. Only an entry that union exceeds is replaced, so a
+ * run already reported past it is left alone; runs whose events name at most
+ * one data home are untouched.
+ */
+export async function creditSplitRuns(
+  events: DashboardEvent[],
+  reported: { interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions },
+): Promise<{
+  interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions; changed: boolean;
+}> {
+  const byRun = new Map<string, DashboardEvent[]>();
+  for (const e of events) byRun.set(e.sessionId, [...(byRun.get(e.sessionId) ?? []), e]);
+  const result = {
+    interventions: { ...reported.interventions }, promptTokens: { ...reported.promptTokens }, daily: { ...reported.daily },
+    changed: false,
+  };
+  for (const [runId, runEvents] of byRun) {
+    const homes = new Set(runEvents.flatMap((e) => (typeof e.dataHome === 'string' ? [e.dataHome] : [])));
+    if (homes.size < 2) continue;
+    // Main keyed its snapshots by the session ID, before runs had their own.
+    const id = runId.startsWith('pid-') ? runId.slice(0, runId.lastIndexOf('@')) : runId;
+    const counted = new Set<DashboardEvent>();
+    for (const home of homes) {
+      const snapshot = await readJson<Record<string, unknown>>(snapshotPathIn(home, 'prompt-tokens'));
+      const target = reportedSize(snapshot?.[id]);
+      if (!snapshot || !Object.hasOwn(snapshot, id)) continue;
+      const part = runEvents.filter((e) => e.dataHome === home);
+      for (let k = 1; k <= part.length; k++) {
+        const size = aggregateSessionMetrics(part.slice(0, k)).get(runId);
+        const tokens = size ? size.tokens.input + size.tokens.output + size.tokens.cacheRead + size.tokens.cacheCreation : 0;
+        if (k === part.length || (size && size.prompts >= target.prompts && tokens >= target.tokens)) {
+          for (const e of part.slice(0, k)) counted.add(e);
+          break;
+        }
+      }
+    }
+    const union = runEvents.filter((e) => counted.has(e));
+    if (union.length === 0) continue;
+    const metrics = aggregateSessionMetrics(union);
+    const promptTokens = computePromptTokenDelta(metrics, {}).nextReported[runId];
+    if (!promptTokens || reportedSize(result.promptTokens[runId]).prompts >= promptTokens.prompts) continue;
+    result.promptTokens[runId] = promptTokens;
+    const interventions = interventionCounts(metrics).get(runId);
+    if (interventions) result.interventions[runId] = interventions;
+    const daily = computeDailyStatsDelta(aggregateDailySessions(union), {}).nextReported[runId];
+    if (daily) result.daily[runId] = daily;
+    result.changed = true;
+  }
+  return result;
+}
+
+/**
  * A run's share of what is left of a bare snapshot entry, or undefined when
  * nothing is left: that run and every later one of its ID were not reported.
  */
@@ -946,26 +1015,39 @@ export async function reportUsageToTeam(
       return adopted;
     };
     // Prompt tokens first: they decide which runs of a bare ID were reported.
-    const reportedPromptTokens = await adopt(
+    const adoptedPromptTokens = await adopt(
       readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported,
       takePromptTokens,
     );
-    const covered = (runId: string) => Object.hasOwn(reportedPromptTokens, runId);
+    const covered = (runId: string) => Object.hasOwn(adoptedPromptTokens, runId);
+    const adoptedInterventions = await adopt(
+      readReportedInterventions, writeReportedInterventions, Object.fromEntries(currentInterventions),
+      takeInterventions(covered),
+    );
+    const adoptedDailySessions = await adopt(
+      readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
+      takeDaily(covered),
+    );
+    // A session main split across scopes is credited with every part reported,
+    // once, before any delta: written out now, like a retired bare entry.
+    const credited = await creditSplitRuns(dashboardEvents, {
+      interventions: adoptedInterventions, promptTokens: adoptedPromptTokens, daily: adoptedDailySessions,
+    });
+    if (credited.changed) {
+      await writeReportedInterventions(credited.interventions, reportsConfig);
+      await writeReportedPromptTokens(credited.promptTokens, reportsConfig);
+      await writeReportedDailySessions(credited.daily, reportsConfig);
+    }
+    const reportedPromptTokens = credited.promptTokens;
+    const reportedInterventions = credited.interventions;
+    const reportedDailySessions = credited.daily;
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
     );
-    const reportedInterventions = await adopt(
-      readReportedInterventions, writeReportedInterventions, Object.fromEntries(currentInterventions),
-      takeInterventions(covered),
-    );
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
-    );
-    const reportedDailySessions = await adopt(
-      readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
-      takeDaily(covered),
     );
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
       currentDaily,

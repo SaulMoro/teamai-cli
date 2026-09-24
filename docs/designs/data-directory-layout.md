@@ -394,10 +394,19 @@ is found by its transcript: hooks record `transcriptPath` on UserPromptSubmit,
 Stop and SessionEnd (not SessionStart, whose path on a resume from another
 project names a file that never exists; never Copilot's), and a Claude
 transcript keeps its first `cwd` when resumed elsewhere, as a Codex rollout
-keeps its `session_meta`. So a tool's own session with no owner is the scope's
-that directory resolves to, when that scope's snapshots already hold it; else
-it is decided as before (a fork under a new ID, a tool whose transcript records
-no start, Copilot). A
+keeps its `session_meta` and Copilot's own session log, found by the session ID
+without storing its path, its `session.start` context. So a tool's own session
+with no owner is the scope's that directory resolves to, when that scope's
+snapshots already hold it; else it is decided as before (a fork under a new ID,
+a tool whose transcript records no start). A session main split across scopes
+per event, whose events are still in the log with each part's `dataHome`, is
+credited once with every part reported: for each scope, the shortest prefix of
+its events whose metrics reach its snapshot, and the owner takes the metrics of
+their union as reported when they exceed its own entry, so parts counted before
+any Stop carried the transcript's total are neither lost nor sent twice.
+Compaction also keeps a session whose tool process is still running, so a run
+an exit from a dashboard before `processExitAfter` marked stopped keeps its
+start, and its ID. A
 fallback run is reported and snapshotted as `<id>@<first event's timestamp>`,
 which does not change when compaction drops earlier runs. A snapshot entry keyed
 by a bare fallback ID (written before) is the sum of the runs of that ID in the

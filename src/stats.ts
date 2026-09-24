@@ -158,20 +158,24 @@ async function unreportedDashboardStats(
 ): Promise<AggregatedDashboardStats> {
   const {
     adoptBareKeys, computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens,
-    takeInterventions, takePromptTokens,
+    takeInterventions, takePromptTokens, creditSplitRuns,
   } = await import('./team-push.js');
   // The scope's own snapshots, the ones its report compares against (#786).
   const currentInterventions = new Map(
     [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
   );
   // Prompt tokens first: they decide which runs of a bare ID were reported.
-  const promptTokens = adoptBareKeys(
+  const adoptedPromptTokens = adoptBareKeys(
     await readReportedPromptTokens(config), events, computePromptTokenDelta(metrics, {}).nextReported, takePromptTokens,
   );
-  const interventions = adoptBareKeys(
+  const adoptedInterventions = adoptBareKeys(
     await readReportedInterventions(config), events, Object.fromEntries(currentInterventions),
-    takeInterventions((runId) => Object.hasOwn(promptTokens, runId)),
+    takeInterventions((runId) => Object.hasOwn(adoptedPromptTokens, runId)),
   );
+  // As the report credits a session main split across scopes.
+  const { promptTokens, interventions } = await creditSplitRuns(events, {
+    interventions: adoptedInterventions, promptTokens: adoptedPromptTokens, daily: {},
+  });
 
   const interventionDelta = computeInterventionDelta(currentInterventions, interventions);
   const promptTokenDelta = computePromptTokenDelta(metrics, promptTokens);

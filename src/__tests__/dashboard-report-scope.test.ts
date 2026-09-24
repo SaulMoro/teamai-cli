@@ -622,6 +622,69 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await report(projectQ)).toBeNull();
   });
 
+  it('a Copilot session resumed elsewhere after compaction goes to the project its session log started in', async () => {
+    await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const { rootW, projectW } = await setupWorkspaceProject();
+    writeSharedSnapshots({ 'copilot-w': 1 }, new Date().toISOString().slice(0, 10), projectW);
+    // Copilot's own session log, found by the session ID: TeamAI stores no path of it (#666).
+    const log = path.join(tmp, 'home', '.copilot', 'session-state', 'copilot-w', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    fs.writeFileSync(log, JSON.stringify({ type: 'session.start', data: { context: { cwd: rootW } } }) + '\n');
+    await session('copilot', { session_id: 'copilot-w', cwd: rootQ });
+
+    expect(await report(projectQ)).toBeNull();
+  });
+
+  it('main split a session across projects before any Stop: the owner credits what each already reported', async () => {
+    const { root, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    // Main attributed each event to its scope by `dataHome` and reported each
+    // part as its own count: 3 prompts in P, then 2 in Q, no Stop yet.
+    const at = (s: number, type: string, cwd: string, dataHome: string) => JSON.stringify({
+      type, timestamp: new Date(Date.now() - 600_000 + s * 1000).toISOString(), sessionId: 'split', tool: 'claude', cwd, dataHome,
+    });
+    const p = getDataHome(project);
+    const q = getDataHome(projectQ);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    fs.writeFileSync(log, [
+      at(0, 'session_start', root, p), at(1, 'prompt_submit', root, p), at(2, 'prompt_submit', root, p), at(3, 'prompt_submit', root, p),
+      at(10, 'prompt_submit', rootQ, q), at(11, 'prompt_submit', rootQ, q),
+    ].join('\n') + '\n');
+    const today = new Date().toISOString().slice(0, 10);
+    writeSharedSnapshots({ split: 3 }, today, project);
+    writeSharedSnapshots({ split: 2 }, today, projectQ);
+
+    expect(await report(project)).toBeNull();
+    expect(await report(projectQ)).toBeNull();
+  });
+
+  it('main split a session whose parts each ended in a cumulative Stop: a new prompt is reported once', async () => {
+    const { root, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const at = (s: number, type: string, cwd: string, dataHome: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+      type, timestamp: new Date(Date.now() - 600_000 + s * 1000).toISOString(), sessionId: 'split', tool: 'claude', cwd, dataHome, ...extra,
+    });
+    const p = getDataHome(project);
+    const q = getDataHome(projectQ);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    fs.writeFileSync(log, [
+      at(0, 'session_start', root, p), at(1, 'prompt_submit', root, p), at(2, 'stop', root, p, { prompts: 3 }),
+      at(10, 'prompt_submit', rootQ, q), at(11, 'stop', rootQ, q, { prompts: 5 }),
+    ].join('\n') + '\n');
+    const today = new Date().toISOString().slice(0, 10);
+    // Each Stop carried the transcript's total, so Q's snapshot already spans P's part.
+    writeSharedSnapshots({ split: 3 }, today, project);
+    writeSharedSnapshots({ split: 5 }, today, projectQ);
+    expect(await report(project)).toBeNull();
+    expect(await report(projectQ)).toBeNull();
+    fs.appendFileSync(log, [at(20, 'prompt_submit', rootQ, q), at(21, 'stop', rootQ, q, { prompts: 6 })].join('\n') + '\n');
+
+    expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(1);
+  });
+
   it('a transcript that started in a project whose snapshot lacks the session does not hand it there', async () => {
     await setup();
     const { rootQ, projectQ } = await setupQ();

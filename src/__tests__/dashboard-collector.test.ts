@@ -2122,6 +2122,28 @@ describe('compactEvents', () => {
     const content = fs.readFileSync(eventsPath, 'utf-8');
     expect(content.trim().split('\n')).toHaveLength(1);
   });
+
+  it('keeps a session whose tool process is still running, though an exit marked it stopped', async () => {
+    // A dashboard from before processExitAfter may close a live run with an
+    // exit it observed for the run before; dropping that run's start would
+    // give its next activity a new run ID.
+    const eventsPath = path.join(tmpDir, '.teamai', 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
+    const old = new Date(Date.now() - 3_600_000).toISOString();
+    const at = (sessionId: string, type: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ type, timestamp: old, sessionId, tool: 'copilot', ...extra });
+    const lines = [
+      at('pid-live', 'session_start', { monitorPid: process.pid }), at('pid-live', 'process_exit'),
+      at('pid-dead', 'session_start', { monitorPid: 2 ** 22 + 12345 }), at('pid-dead', 'process_exit'),
+      ...Array.from({ length: 5_000 }, (_, i) => at(`filler-${i}`, 'session_end')),
+    ];
+    fs.writeFileSync(eventsPath, lines.join('\n') + '\n');
+
+    await compactEvents(eventsPath);
+
+    const kept = fs.readFileSync(eventsPath, 'utf-8').split('\n').filter(Boolean).map((line) => JSON.parse(line).sessionId);
+    expect(kept).toEqual(['pid-live', 'pid-live']);
+  });
 });
 
 // ─── countInterventions (CodeBuddy index.json) ─────────

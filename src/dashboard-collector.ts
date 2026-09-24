@@ -7,7 +7,7 @@ import { deriveSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { ensureDir } from './utils/fs.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
-import { resolveMonitorPid } from './pid-monitor.js';
+import { isProcessAlive, resolveMonitorPid } from './pid-monitor.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from './utils/redact.js';
 import {
@@ -784,7 +784,8 @@ async function waitForCopilotRunUsage(
 }
 
 /** Resolve Copilot's local event log without accepting path traversal via sessionId. */
-function resolveCopilotUsageTranscript(
+/** Copilot's own session log for `sessionId`, derived from the ID alone (TeamAI stores no path of it, #666). */
+export function resolveCopilotUsageTranscript(
   sessionId: string,
 ): string | null {
   if (!COPILOT_SESSION_ID_RE.test(sessionId) || sessionId === '.' || sessionId === '..') return null;
@@ -1926,7 +1927,10 @@ export function aggregateSessionInterventions(
 
 /**
  * Compact events.jsonl by keeping only events for active sessions.
- * Active = not stopped and last activity within STALE_TIMEOUT.
+ * Active = not stopped and last activity within STALE_TIMEOUT, or its tool
+ * process still running: an exit a dashboard wrote before `processExitAfter`
+ * existed can mark a live run stopped, and dropping that run's start would give
+ * its next activity a new run ID (#785).
  * Called when file exceeds COMPACTION_THRESHOLD lines.
  */
 export async function compactEvents(eventsPath?: string): Promise<void> {
@@ -1943,6 +1947,13 @@ export async function compactEvents(eventsPath?: string): Promise<void> {
     const events = await readEventsRaw(filePath);
     const activeSessions = rebuildSessions(events);
     const activeIds = new Set(activeSessions.map(s => s.sessionId));
+    const monitored = new Map<string, number>();
+    for (const e of events) {
+      if (e.type === 'session_start' && typeof e.monitorPid === 'number') monitored.set(e.sessionId, e.monitorPid);
+    }
+    for (const [sessionId, pid] of monitored) {
+      if (isProcessAlive(pid)) activeIds.add(sessionId);
+    }
 
     // Keep only events for active sessions
     const kept = events.filter(e => activeIds.has(e.sessionId));
