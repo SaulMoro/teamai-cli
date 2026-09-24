@@ -1768,8 +1768,7 @@ git commit -am "stats: remove <skill> reported from another project"
 git push origin teamai-reports
 ```
 
-The next report reads the branch first, so the entry does not come back. For
-an `http` team repo, `stats/<user>.yaml` is on the default branch instead.
+The next report reads the branch first, so the entry does not come back.
 
 ### Git submodules
 

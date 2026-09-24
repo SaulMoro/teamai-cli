@@ -1702,7 +1702,7 @@ git commit -am "stats: remove <skill> reported from another project"
 git push origin teamai-reports
 ```
 
-下一次上报会先读取该分支，所以条目不会再出现。若团队仓为 `http` 类型，`stats/<user>.yaml` 位于默认分支。
+下一次上报会先读取该分支，所以条目不会再出现。
 
 ### Git 子模块
 
