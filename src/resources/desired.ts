@@ -116,11 +116,16 @@ export type DesiredItems =
   }
   | DeliveryConflict;
 
-/** The conflict as one line. */
+/** The conflict as one line naming both items' files. */
 export function describeDeliveryConflict({ type, conflict }: DeliveryConflict): string {
   const { name, first, second } = conflict;
+  const files = `${first.source} and ${second.source}`;
+  if (conflict.reason === 'duplicate') {
+    const place = first.namespace === null ? 'the root' : `namespace "${first.namespace}"`;
+    return `Duplicate ${type} "${name}" in ${place}: ${files}`;
+  }
   return `Duplicate ${type} "${name}" found in active namespaces "${first.namespace ?? '(root)'}" `
-    + `and "${second.namespace ?? '(root)'}"`;
+    + `and "${second.namespace ?? '(root)'}" (${files})`;
 }
 
 /**

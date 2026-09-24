@@ -170,12 +170,22 @@ describe('pull: an active namespace item replaces the root item of the same name
       as(['frontend', 'devops']);
       await pull({});
 
-      expect(logged('warn', /Duplicate agent "reviewer" found in active namespaces "frontend" and "devops"/)).toBe(true);
+      expect(logged('warn', /Duplicate agent "reviewer" found in active namespaces "frontend" and "devops" \(agents\/frontend\/reviewer\.yaml and agents\/devops\/reviewer\.yaml\)/)).toBe(true);
       // The installed agent is kept as it was, and the rest of the pull, which
       // runs after agents, still happens: the search index is rebuilt.
       expect(await read('.claude/agents/reviewer.md')).toContain('Review the front end.');
       const index = await fse.readJson(path.join(homeDir, '.teamai', 'search-index.json')) as { entries: Array<{ filename: string }> };
       expect(index.entries.map((entry) => entry.filename)).toContain('lint.md');
+    });
+
+    it('names the one namespace and both files when an agent is defined twice inside it', async () => {
+      await team('agents/frontend/reviewer.yaml', 'name: reviewer\ndescription: Front\ninstructions: Review the front end.\n');
+      await team('agents/frontend/reviewer.md', '---\nname: reviewer\ndescription: Legacy\n---\nReview, the old way.\n');
+
+      await pull({});
+
+      expect(logged('warn', /Duplicate agent "reviewer" in namespace "frontend": agents\/frontend\/reviewer\.md and agents\/frontend\/reviewer\.yaml\. Agents were not updated/)).toBe(true);
+      expect(logged('warn', /"frontend" and "frontend"/)).toBe(false);
     });
   });
 
@@ -325,7 +335,7 @@ describe('pull: an active namespace item replaces the root item of the same name
       as(['frontend', 'devops']);
       await pull({});
 
-      expect(logged('warn', /Duplicate skill "review" found in active namespaces "frontend" and "devops"/)).toBe(true);
+      expect(logged('warn', /Duplicate skill "review" found in active namespaces "frontend" and "devops" \(skills\/frontend\/review and skills\/devops\/review\)/)).toBe(true);
       // The installed skill is kept as it was: not replaced, not swept.
       expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
       expect(await exists('.claude/agents/helper.md')).toBe(true);
