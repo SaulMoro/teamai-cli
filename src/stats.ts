@@ -149,14 +149,16 @@ function aggregateDashboardStats(metrics: Map<string, SessionMetrics>): Aggregat
  * reported + unreported rather than reported + everything.
  *
  * The caller passes the scope's own metrics, already filtered the way the
- * report path filters them, and the scope whose snapshots the report keeps (#786).
+ * report path filters them.
  */
 async function unreportedDashboardStats(
   metrics: Map<string, SessionMetrics>,
   config: LocalConfig,
 ): Promise<AggregatedDashboardStats> {
-  const { computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens } =
-    await import('./team-push.js');
+  const {
+    computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens,
+  } = await import('./team-push.js');
+  // The scope's own snapshots, the ones its report compares against (#786).
   const interventions = await readReportedInterventions(config);
   const promptTokens = await readReportedPromptTokens(config);
 
@@ -225,12 +227,14 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // is shown can agree with what the team holds: this scope's own sessions only,
   // and only the part of them not already reported (reported sessions stay in
   // events.jsonl until compaction, so counting the full local aggregate would
-  // count each one twice and pull in other projects' sessions).
+  // count each one twice and pull in other projects' sessions). Same filter,
+  // same scope config as the report path (#785).
   const { filterEventsByScope } = await import('./team-push.js');
   const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined);
   const metricsMap = aggregateSessionMetrics(scopedEvents);
-  // Only subtract what the team already holds. Two guards, because the local
-  // snapshots are machine-global while the team file is per user:
+  // Only subtract what the team already holds. Two guards, because a scope's
+  // snapshot is first seeded from the machine-wide one, so it can name sessions
+  // this team file never received:
   //
   //  - `reported` null (no stats file, an unreadable one, a reports worktree
   //    that is not there): the snapshot says nothing about what the team
