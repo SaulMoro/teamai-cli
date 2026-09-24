@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { requireInit, detectProjectConfig, loadLocalConfigForScope } from './config.js';
+import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
 import { loadIndex, buildIndex, search, isLegacyIndex } from './utils/search-index.js';
 import type { SearchResult } from './utils/search-index.js';
 import { readFileSafe, ensureDir, pathExists } from './utils/fs.js';
@@ -400,13 +400,41 @@ export async function recall(
     process.stdout.write(`${line}\n`);
   };
 
-  if (!query || !query.trim()) {
-    if (options.check) {
-      emitCheckVerdict(0);
-      return;
-    }
+  const noQuery = !query || !query.trim();
+  if (noQuery && !options.check) {
     log.error('Usage: teamai recall <query>');
     log.info('Example: teamai recall "api timeout"');
+    return;
+  }
+
+  let projectConfig: LocalConfig | null = null;
+  const unreadable: string[] = [];
+  // A detection that throws still searches what loads next, but its votes must
+  // not reach that scope's team (#787).
+  let projectUnreadable = false;
+  try {
+    projectConfig = await detectProjectConfig(undefined, (configPath, error) => { unreadable.push(`${configPath}: ${error}`); });
+  } catch (e) {
+    // A cwd that no longer exists holds no project: user scope, as in
+    // resolveConfigForDir.
+    const gone = typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT';
+    if (!gone) projectUnreadable = true;
+    log.debug('recall: project scope detection failed');
+  }
+  // Detection skips a project config it cannot read and answers with what
+  // loads next — a legacy `.teamai/` that may name another team, or the user
+  // scope — so recall would search and record for a team this project may not
+  // belong to (#796). An empty result or NOT_RELEVANT would tell the agent the
+  // team has no knowledge, so refuse instead: the rule `pull` follows (#784).
+  const [problem] = unreadable;
+  if (problem !== undefined) {
+    log.error(`Nothing was searched: ${describeUnreadableConfig(problem)}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (noQuery) {
+    emitCheckVerdict(0);
     return;
   }
 
@@ -419,21 +447,6 @@ export async function recall(
   // Scope isolation (issue #73) remains the default. Projects may explicitly
   // opt into searching the user index after the project index.
   const scopeIndexes: Array<{ index: SearchIndex; scope: 'user' | 'project'; config: LocalConfig; learningsBase: string }> = [];
-
-  let projectConfig: LocalConfig | null = null;
-  // A project config that cannot be read (or checked) makes detection fall back
-  // to another scope; searching there is #796's, but its votes must not reach
-  // that scope's team (#787).
-  let projectUnreadable = false;
-  try {
-    projectConfig = await detectProjectConfig(undefined, () => { projectUnreadable = true; });
-  } catch (e) {
-    // A cwd that no longer exists holds no project: user scope, as in
-    // resolveConfigForDir.
-    const gone = typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT';
-    if (!gone) projectUnreadable = true;
-    log.debug('recall: project scope detection failed');
-  }
 
   if (projectConfig) {
     // Project mode: project scope first.

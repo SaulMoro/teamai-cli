@@ -54,6 +54,8 @@ This is the #1 onboarding issue. In order:
    file and the reason; `teamai doctor` checks another config and can pass
    here. Moving it aside and re-running `teamai init` replaces their settings
    for that project: do it only with their consent.
+   `recall` refuses the same way with `Nothing was searched: <file>: <reason>`:
+   no team knowledge was searched, so do not report that the team has none.
 
 ## Permission / access denied
 

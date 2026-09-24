@@ -43,8 +43,15 @@ teamai recall --check "<3-6 keywords from the task>"
   computed over titles and tags only, so a term reported missing may still be
   discussed in a body that a full recall (or a `Grep`) will surface. Only
   `NOT_RELEVANT` short-circuits the flow.
-- If the command fails or `teamai` is not on PATH: skip the precheck and
-  continue to Step 1 (do not block on precheck failure).
+- If the output (stdout or stderr) contains `Nothing was searched:`: this
+  project's teamai config cannot be read, so no team knowledge was searched.
+  Return that line from `Nothing was searched:` to its end, verbatim (it names
+  the file and the fix), and **stop** — do not report "no relevant team
+  knowledge", and do not proceed to Step 1–5. Add that the main conversation
+  should show it to the user and must not move the file or run `teamai init`
+  without the user's consent: that replaces their settings for this project.
+- If the command fails in any other way or `teamai` is not on PATH: skip the
+  precheck and continue to Step 1 (do not block on precheck failure).
 
 #### Complexity quick-judge (after RELEVANT)
 
@@ -199,9 +206,10 @@ in `teamwiki/` with BM25 + graph-boost. Capture the full output.
 If the first call returns insufficient results, you may retry once with
 `--depth lookup` to broaden the search to raw symbol pages.
 
-If the command fails, knowledge base is empty, or returns zero hits,
-emit a single line `No relevant team knowledge found for: <query>` and
-stop.
+If the output contains `Nothing was searched:`, return that line from the
+marker on and stop, as in Step 0. If the command fails otherwise, knowledge base is
+empty, or returns zero hits, emit a single line
+`No relevant team knowledge found for: <query>` and stop.
 
 ### Step 4 — Read the top hits and drill into codebase
 

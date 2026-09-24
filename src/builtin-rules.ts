@@ -155,6 +155,11 @@ teamai recall "<关键词1> <关键词2> ..."
 
 从任务描述中提取 3-6 个高信号关键词进行检索。
 
+If the output contains \`Nothing was searched:\`, this project's teamai config cannot be
+read and no team knowledge was searched: show that line to the user rather than
+concluding the team has no knowledge, and do not move the file or run \`teamai init\`
+without their consent.
+
 **务必中英双语检索（跨语言召回）**：知识库中英文混杂，检索是纯词法匹配，
 中文 query 无法命中纯英文文档，反之亦然。因此每个领域术语都应**同时给出中英两种写法**
 一起检索，例如「重启推理集群」应扩展为 \`重启 推理 集群 restart inference cluster\`；
