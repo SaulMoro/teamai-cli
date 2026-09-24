@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import { getDataHome, getMcpSharing, isAgentExcluded } from './types.js';
-import type { DeliveryTarget, ResourceItem } from './types.js';
+import type { DeliveryTarget, LocalConfig, ResourceItem } from './types.js';
+import type { EntryResolution, EntryType } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
@@ -429,25 +430,24 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
     mcpTargetExcluded, installedMcpEntries,
   } = await import('./mcp-reconcile.js');
-  const { readMcpYaml, teamMcpToDef, teamMcpYamlPath } = await import('./resources/mcp.js');
+  const { resolveTeamMcpServers, teamMcpToDef } = await import('./resources/mcp.js');
+  const { describeEntryFailure } = await import('./namespaced-entries.js');
 
-  // A file that does not parse is not a team without MCP: the pull logs the
-  // reason once and injects nothing anywhere, and every later run is silent.
-  // Flattening it to an empty desired set is what let `doctor --json` answer
-  // `ok: true` over a team whose MCP reaches no tool at all.
-  const read = await readMcpYaml(localConfig.repo.localPath);
-  if (!read.ok) {
-    const yamlPath = teamMcpYamlPath(localConfig.repo.localPath);
+  // A file that does not parse, or a server name defined twice, is not a team
+  // without MCP: the pull logs the reason once and changes nothing in any tool,
+  // and every later run is silent. Flattening it to an empty desired set is
+  // what let `doctor --json` answer `ok: true` over a team whose MCP is stuck.
+  const resolution = await resolveTeamMcpServers(localConfig, { quiet: true });
+  if (resolution.kind === 'failed') {
     return [{
       name: 'Team MCP servers can be read',
       source: 'local',
       check: async () => false,
-      fix: `${yamlPath} does not parse: ${read.reason}. No server is injected into any tool `
-        + 'until it is fixed in the team repo and pushed.',
+      fix: describeEntryFailure(resolution.failure),
     }];
   }
 
-  const teamDefs = (read.yaml?.servers ?? []).map(teamMcpToDef);
+  const teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   if (teamDefs.length === 0) return [];
 
   const targets = await resolveMcpTargets(teamConfig, localConfig);
@@ -489,7 +489,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       source: 'local',
       check: async () => problems.length === 0,
       fix: `In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
-        + '`env/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
+        + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
         + 'parses as no variables at all. Then run `teamai pull --force`: a pull leaves an entry '
         + 'teamai does not own untouched, so a server of your own under a team name only gives '
         + 'way to `--force`.',
@@ -497,6 +497,51 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
   }
 
   return checks;
+}
+
+/**
+ * The per-entry `roles:` / `projects:` keys that namespace files replace (#707).
+ * `roles:` on hooks and MCP still filters for one minor release and `projects:`
+ * (and `roles:` on env) already reaches nobody; pull warns once per run, and
+ * this is the standing version of that warning, naming each target file.
+ * Informational: every entry still resolves as the warning says.
+ */
+export async function buildEntryScopeKeyCheck(ctx: DoctorContext): Promise<Check[]> {
+  const messages = (await resolveEntryTypes(ctx.localConfig))
+    .flatMap(({ resolution }) => resolution.notices)
+    .filter((notice) => notice.kind !== 'file-note')
+    .map((notice) => notice.message);
+  if (messages.length === 0) return [];
+  return [{
+    name: 'Team env, hooks and MCP are scoped by namespace files, not per-entry keys',
+    source: 'local',
+    informational: true,
+    check: async () => false,
+    fix: messages.join(' '),
+  }];
+}
+
+/**
+ * Info lines for `doctor`: which namespace entry replaces which root entry,
+ * and in legacy mode each name the root file repeats. They answer "why do I
+ * have this value?" and are not problems, so they are notes, not checks.
+ */
+export async function entryNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
+  const { describeEntryNotes } = await import('./namespaced-entries.js');
+  return (await resolveEntryTypes(ctx.localConfig)).flatMap(({ type, resolution }) => describeEntryNotes(type, resolution));
+}
+
+async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: EntryType; resolution: EntryResolution<unknown> }[]> {
+  if (localConfig.repo.kind === 'http') return [];
+  const { resolveEntriesFor } = await import('./namespaced-entries.js');
+  const { envEntryReader } = await import('./resources/env.js');
+  const { hooksEntryReader } = await import('./resources/hooks.js');
+  const { mcpEntryReader } = await import('./resources/mcp.js');
+  return [
+    { type: 'env', resolution: await resolveEntriesFor(envEntryReader, localConfig, { quiet: true }) },
+    { type: 'hooks', resolution: await resolveEntriesFor(hooksEntryReader, localConfig, { quiet: true }) },
+    { type: 'mcp', resolution: await resolveEntriesFor(mcpEntryReader, localConfig, { quiet: true }) },
+  ];
 }
 
 /**
@@ -546,31 +591,18 @@ async function envDeliveryProblems(
   const none = { problems: [], staleProfiles: [] };
   if (teamConfig?.sharing?.env?.injectShellProfile === false) return none;
 
-  const envYamlPath = path.join(localConfig.repo.localPath, 'env', 'env.yaml');
-  if (!await pathExists(envYamlPath)) return none;
-
-  const { EnvHandler } = await import('./resources/env.js');
+  const { EnvHandler, envEntryReader } = await import('./resources/env.js');
   const envHandler = new EnvHandler();
 
-  // The handler distinguishes a file that parses from one that does not, so a
-  // shorthand `KEY: value` mapping is reported (#662) while a deliberate
-  // `variables: []` is not. Counting the variables alone cannot tell them apart.
-  const read = await envHandler.readEnvYaml(envYamlPath);
-  if (!read.ok) return { problems: [read.reason], staleProfiles: [] };
-
-  // Only the variables this member and directory are scoped to: the same filter
-  // `pullItem` applies, not a second copy of it. Diffing env.sh against every
-  // DECLARED variable would report a project-scoped one as undelivered on a pull
-  // that correctly withheld it.
-  const { resolveDeliverableEnvVariables } = await import('./resources/env.js');
-  const { resolveMembership } = await import('./membership.js');
-  const declared = resolveDeliverableEnvVariables(read.variables, resolveMembership(localConfig));
-  // The variables the filter withheld. `pull` rewrites env.sh from the
-  // deliverable set, so one of these still exported means the file predates a
-  // rebind (`teamai projects set`) or a role change, and the previous
-  // project's secrets are live in every new shell until the next pull.
+  // The variables this member and directory receive: the same resolution pull
+  // writes env.sh from, not a second copy of it. A file that cannot be used, or
+  // a name defined twice, is reported here as pull reports it (#662), and a
+  // deliberate `variables: []` is not.
+  const { resolveEntriesFor, describeEntryFailure } = await import('./namespaced-entries.js');
+  const resolution = await resolveEntriesFor(envEntryReader, localConfig, { quiet: true });
+  if (resolution.kind === 'failed') return { problems: [describeEntryFailure(resolution.failure)], staleProfiles: [] };
+  const declared = resolution.entries.map((entry) => entry.entry);
   const deliverable = new Set(declared.map((variable) => variable.key));
-  const withheld = read.variables.filter((variable) => !deliverable.has(variable.key));
   const problems: string[] = [];
 
   // env.sh lives under teamaiHome, which is <projectRoot>/.teamai in project
@@ -604,11 +636,14 @@ async function envDeliveryProblems(
         `${envShPath} has a stale value for ${nameList(stale)}: env.yaml declares a different one`,
       );
     }
-    const leftover = withheld.filter((variable) => delivered.has(variable.key)).map((variable) => variable.key);
+    // env.sh holds only what pull wrote, so a key the resolved set lacks is
+    // left over from before a namespace deactivated or the team removed it,
+    // and still live in every new shell until the next pull.
+    const leftover = [...delivered.keys()].filter((key) => !deliverable.has(key));
     if (leftover.length > 0) {
       problems.push(
-        `${envShPath} still exports ${nameList(leftover)}, which env.yaml no longer delivers to this `
-        + 'directory (its roles: or projects: do not match)',
+        `${envShPath} still exports ${nameList(leftover)}, which the team no longer delivers to this `
+        + 'directory (removed, or its namespace is no longer active)',
       );
     }
     // Nothing is owed, so the profile block has nothing to load: a leftover is

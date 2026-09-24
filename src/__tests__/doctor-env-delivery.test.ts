@@ -41,6 +41,27 @@ describe('doctor — env variables reach a shell', () => {
     await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), body);
   }
 
+  /**
+   * Env files in two project namespaces, `checkout` and `billing` (#707): the
+   * way a variable reaches one directory and not another now.
+   */
+  async function writeProjectEnv(files: { checkout?: string; billing?: string }): Promise<void> {
+    // Nothing shared, so only the namespaces decide what this directory gets.
+    await writeEnvYaml('variables: []\n');
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), [
+      'version: 1',
+      'projects:',
+      '  - id: checkout',
+      '    resources: { env: [checkout] }',
+      '  - id: billing',
+      '    resources: { env: [billing] }',
+      '',
+    ].join('\n'));
+    for (const [namespace, body] of Object.entries(files)) {
+      await fse.outputFile(path.join(repoPath, 'env', namespace, 'env.yaml'), body);
+    }
+  }
+
   async function writeEnvSh(body: string): Promise<void> {
     await fse.ensureDir(path.dirname(envShPath));
     await fse.writeFile(envShPath, body);
@@ -272,7 +293,8 @@ describe('doctor — env variables reach a shell', () => {
 
     const check = await envCheck();
     expect(await check.check()).toBe(false);
-    expect(check.fix).toContain(path.join(repoPath, 'env', 'env.yaml'));
+    // Named as it is in the team repo, where it has to be fixed.
+    expect(check.fix).toContain('env/env.yaml is not valid YAML');
   });
 
   it('fails when env.sh still exports the value env.yaml replaced', async () => {
@@ -325,15 +347,13 @@ describe('doctor — env variables reach a shell', () => {
     expect(await (await envCheck()).check()).toBe(true);
   });
 
-  it('does not report a variable this directory is scoped out of as undelivered', async () => {
-    // The false failure #668 would otherwise introduce: pull correctly withholds
-    // BILLING_URL from a checkout directory, and doctor must not call that a
-    // delivery problem.
-    await writeEnvYaml(
-      'variables:\n'
-      + '  - key: CHECKOUT_URL\n    value: "c"\n    projects: [checkout]\n'
-      + '  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n',
-    );
+  it('does not report a variable of an inactive namespace as undelivered', async () => {
+    // Pull correctly withholds BILLING_URL from a checkout directory, and
+    // doctor must not call that a delivery problem.
+    await writeProjectEnv({
+      checkout: 'variables:\n  - key: CHECKOUT_URL\n    value: "c"\n',
+      billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n',
+    });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
     await writeEnvSh("export CHECKOUT_URL='c'\n");
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
@@ -341,12 +361,11 @@ describe('doctor — env variables reach a shell', () => {
     expect(await (await envCheck()).check()).toBe(true);
   });
 
-  it('still reports a scoped-in variable that is missing from env.sh', async () => {
-    await writeEnvYaml(
-      'variables:\n'
-      + '  - key: CHECKOUT_URL\n    value: "c"\n    projects: [checkout]\n'
-      + '  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n',
-    );
+  it('still reports an active namespace variable that is missing from env.sh', async () => {
+    await writeProjectEnv({
+      checkout: 'variables:\n  - key: CHECKOUT_URL\n    value: "c"\n',
+      billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n',
+    });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
     await writeEnvSh('');
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
@@ -357,8 +376,8 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).not.toContain('BILLING_URL');
   });
 
-  it('passes when every declared variable is scoped away from this directory', async () => {
-    await writeEnvYaml('variables:\n  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n');
+  it('passes when every declared variable is in an inactive namespace', async () => {
+    await writeProjectEnv({ billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n' });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
     await writeEnvSh('');
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
@@ -367,10 +386,10 @@ describe('doctor — env variables reach a shell', () => {
   });
 
   // PR #700 review: after `teamai projects set`, the previous project's secrets
-  // sit in env.sh until the next pull rewrites it. A member scoped out of every
-  // variable must not get a pass while env.sh still exports the old ones.
-  it('reports a withheld variable that env.sh still exports when nothing is deliverable', async () => {
-    await writeEnvYaml('variables:\n  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n');
+  // sit in env.sh until the next pull rewrites it. A member with nothing to
+  // receive must not get a pass while env.sh still exports the old ones.
+  it('reports a variable of a deactivated namespace that env.sh still exports when nothing is deliverable', async () => {
+    await writeProjectEnv({ billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n' });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
     await writeEnvSh("export BILLING_URL='b'\n");
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
@@ -382,12 +401,11 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).not.toContain("'b'");
   });
 
-  it('reports a withheld variable left in env.sh beside the delivered ones', async () => {
-    await writeEnvYaml(
-      'variables:\n'
-      + '  - key: CHECKOUT_URL\n    value: "c"\n    projects: [checkout]\n'
-      + '  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n',
-    );
+  it('reports a variable of a deactivated namespace left in env.sh beside the delivered ones', async () => {
+    await writeProjectEnv({
+      checkout: 'variables:\n  - key: CHECKOUT_URL\n    value: "c"\n',
+      billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n',
+    });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
     await writeEnvSh("export CHECKOUT_URL='c'\nexport BILLING_URL='b'\n");
     await writeProfile(`[ -f ${envShPath} ] && source ${envShPath}`);
@@ -398,10 +416,22 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).not.toContain('CHECKOUT_URL');
   });
 
-  it('passes when every variable is scoped away and env.sh was never written', async () => {
-    await writeEnvYaml('variables:\n  - key: BILLING_URL\n    value: "b"\n    projects: [billing]\n');
+  it('passes when every variable is in an inactive namespace and env.sh was never written', async () => {
+    await writeProjectEnv({ billing: 'variables:\n  - key: BILLING_URL\n    value: "b"\n' });
     vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout'] });
 
     expect(await (await envCheck()).check()).toBe(true);
+  });
+
+  it('reports two active namespaces that define the same key, naming both files', async () => {
+    await writeProjectEnv({
+      checkout: 'variables:\n  - key: API_BASE\n    value: "c"\n',
+      billing: 'variables:\n  - key: API_BASE\n    value: "b"\n',
+    });
+    vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, projects: ['checkout', 'billing'] });
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('variable "API_BASE" is defined in both env/checkout/env.yaml and env/billing/env.yaml');
   });
 });

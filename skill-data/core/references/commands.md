@@ -81,6 +81,8 @@ Generated: do not edit by hand. Regenerate with
 
 - `teamai remove <type> <names...>` — Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)
   - `--force` — Skip confirmation prompt
+  - `--role <ns>` — mcp: remove the server from mcp/<ns>/mcp.yaml, when several files define it
+  - `--project <id>` — mcp: remove the server from the project's mcp namespace, when several files define it
 
 ## packages
 
@@ -192,7 +194,11 @@ Generated: do not edit by hand. Regenerate with
     - `--reveal` — Show env variable values in plaintext (default: masked)
   - `teamai env add <key> <value>` — Add or update a team environment variable
     - `-d, --description <desc>` — Description for the variable
+    - `--role <ns>` — Write to env/<ns>/env.yaml instead of env/env.yaml
+    - `--project <id>` — Write to the project's env namespace (resources.env in manifest/projects.yaml)
   - `teamai env remove <key>` — Remove a team environment variable
+    - `--role <ns>` — Remove from env/<ns>/env.yaml instead of env/env.yaml
+    - `--project <id>` — Remove from the project's env namespace (resources.env in manifest/projects.yaml)
 
 ## hooks
 

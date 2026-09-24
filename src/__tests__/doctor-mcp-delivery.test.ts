@@ -191,8 +191,8 @@ describe('doctor — MCP servers delivered on disk', () => {
     const check = (await checks()).find((c) => c.name === 'Team MCP servers can be read');
     if (!check) throw new Error('no MCP parse check');
     expect(await check.check()).toBe(false);
-    expect(check.fix).toContain('does not parse');
-    expect(check.fix).toContain(path.join(repoPath, 'mcp', 'mcp.yaml'));
+    // Named as it is in the team repo, where it has to be fixed.
+    expect(check.fix).toContain('mcp/mcp.yaml does not parse');
   });
 
   it('fails when mcp.yaml parses as YAML but breaks the server schema', async () => {

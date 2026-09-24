@@ -10,10 +10,12 @@ import { askConfirmation } from './utils/prompt.js';
 
 const REMOVABLE_TYPES: ResourceType[] = ['skills', 'rules', 'agents', 'mcp'];
 
+type RemoveOptions = GlobalOptions & { role?: string; project?: string };
+
 export async function remove(
   type: string,
   names: string[],
-  options: GlobalOptions,
+  options: RemoveOptions,
 ): Promise<void> {
   if (!REMOVABLE_TYPES.includes(type as ResourceType)) {
     log.error(`Unsupported resource type: ${type}. Supported types: ${REMOVABLE_TYPES.join(', ')}`);
@@ -22,6 +24,12 @@ export async function remove(
 
   if (names.length === 0) {
     log.error('No resource names provided');
+    return;
+  }
+
+  if (type !== 'mcp' && (options.role !== undefined || options.project !== undefined)) {
+    log.error('--role and --project apply to `teamai remove mcp` only.');
+    process.exitCode = 1;
     return;
   }
 
@@ -51,7 +59,7 @@ export async function remove(
 async function removeCore(
   type: string,
   names: string[],
-  options: GlobalOptions,
+  options: RemoveOptions,
   localConfig: LocalConfig,
   teamConfig: TeamaiConfig,
 ): Promise<void> {
@@ -107,8 +115,10 @@ async function removeCore(
   // `<ns>/<stem>` is what names ONE of them: without it a machine holding no
   // placement record could only type the stem, which removes that agent from
   // every namespace (#649 review).
+  // MCP servers likewise: one name can be defined in mcp/mcp.yaml and in any
+  // mcp/<ns>/mcp.yaml, and `<ns>/<name>` is the one in that namespace.
   const qualified = (item: { name: string; namespace?: string }): string => (
-    type === 'agents' && item.namespace ? `${item.namespace}/${item.name}` : item.name
+    (type === 'agents' || type === 'mcp') && item.namespace ? `${item.namespace}/${item.name}` : item.name
   );
   const allNames = new Set([...teamItems.map(qualified), ...localItems.map((i) => i.name)]);
 
@@ -131,6 +141,18 @@ async function removeCore(
       // the bare name and removed that agent from EVERY namespace (#649 review).
       log.info(`${name} was published as ${published}`);
       found.push(published);
+      continue;
+    }
+    if (type === 'mcp' && !name.includes('/')) {
+      const target = await mcpRemovalTarget(name, teamItems.filter((item) => item.name === name).map(qualified), localConfig, options);
+      if (target === 'ambiguous') {
+        ambiguous = true;
+      } else if (target === null) {
+        notFound.push(name);
+      } else {
+        if (target !== name) log.info(`${name} is ${target}`);
+        found.push(target);
+      }
       continue;
     }
     if (type === 'agents' && !name.includes('/')) {
@@ -290,4 +312,41 @@ async function removeCore(
   // record once the default branch no longer has its file.
   // `wiki` is not tracked in pushedX state; nothing to clean here.
   await saveStateForScope(state, localConfig);
+}
+
+/**
+ * Which file `remove mcp <name>` edits. Every MCP file is searched: a name in
+ * one file is removed from it, and a name in several needs `--role` or
+ * `--project` to say which, since each file reaches different members.
+ * Returns the qualified name (`<ns>/<name>`, or the bare name for the root
+ * file), null when no file defines it, or 'ambiguous' after reporting why.
+ */
+async function mcpRemovalTarget(
+  name: string,
+  candidates: string[],
+  localConfig: LocalConfig,
+  options: RemoveOptions,
+): Promise<string | 'ambiguous' | null> {
+  if (options.role !== undefined || options.project !== undefined) {
+    const { entryNamespaceFromFlags } = await import('./namespaced-entries.js');
+    const target = await entryNamespaceFromFlags(localConfig.repo.localPath, 'mcp', options);
+    if (!target.ok) {
+      log.error(target.message);
+      return 'ambiguous';
+    }
+    const wanted = target.namespace === null ? name : `${target.namespace}/${name}`;
+    return candidates.includes(wanted) ? wanted : null;
+  }
+  if (candidates.length > 1) {
+    const files = candidates.map((candidate) => (candidate.includes('/')
+      ? `mcp/${candidate.slice(0, candidate.lastIndexOf('/'))}/mcp.yaml`
+      : 'mcp/mcp.yaml'));
+    log.error(
+      `MCP server "${name}" is defined in several files (${files.join(', ')}), and each reaches different members. `
+      + 'Pass --role <ns> or --project <id> to remove it from one namespace file. To remove only the shared one '
+      + 'in mcp/mcp.yaml, edit that file and push.',
+    );
+    return 'ambiguous';
+  }
+  return candidates[0] ?? null;
 }

@@ -4,9 +4,12 @@ import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
 import type { ResourceItem, TeamaiConfig, LocalConfig } from '../types.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, isSelfMode } from '../types.js';
-import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual } from '../utils/fs.js';
+import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual, listDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { matchesMembership, resolveMembership, warnUnknownMembershipIds, type Membership } from '../membership.js';
+import {
+  entryFilePath, reportEntryResolution, resolveEntries,
+  type EntryReader, type EntryResolution,
+} from '../namespaced-entries.js';
 import {
   resolveActiveShellProfile,
   shellQuoteValue,
@@ -19,9 +22,11 @@ const EnvVariableSchema = z.object({
   key: z.string(),
   value: z.string(),
   description: z.string().optional(),
-  /** Optional restriction to members holding one of these role ids (default = every member; [] = nobody). */
+  /**
+   * Removed per-entry keys, kept in the schema so they are detected rather than
+   * stripped: a variable carrying one reaches nobody (see namespaced-entries).
+   */
   roles: z.array(z.string()).optional(),
-  /** Optional restriction to directories bound to one of these logical project ids (default = every directory; [] = nobody). */
   projects: z.array(z.string()).optional(),
 });
 
@@ -32,31 +37,48 @@ const EnvYamlSchema = z.object({
 export type EnvVariable = z.infer<typeof EnvVariableSchema>;
 export type EnvYaml = z.infer<typeof EnvYamlSchema>;
 
-/**
- * The declared variables this member and directory are scoped to, in declaration
- * order. Omitted `roles:`/`projects:` = everyone, an empty list = nobody, and an
- * axis the member has not configured filters nothing (see `matchesMembership`).
- *
- * The one filter both delivery paths use: `pullItem` writes env.sh from it, and
- * `doctor` diffs env.sh against it. A second copy is how doctor ends up
- * reporting a project-scoped variable as undelivered on a pull that correctly
- * withheld it.
- *
- * Note this does NOT gate `countEnvVars`, which answers the different question
- * of how many variables the team declares — the probe `pull` uses to tell an
- * empty env.yaml from a malformed one (#662).
- */
-export function resolveDeliverableEnvVariables(
-  variables: EnvVariable[],
-  membership: Membership,
-): EnvVariable[] {
-  return variables.filter((variable) => matchesMembership(variable, membership));
-}
-
 /** A parsed env.yaml, or the reason it declares nothing. See `readEnvYaml`. */
 export type EnvYamlRead =
   | { ok: true; variables: EnvVariable[] }
   | { ok: false; reason: string };
+
+/**
+ * How `env/env.yaml` and `env/<ns>/env.yaml` are read for delivery. A file
+ * without a top-level `variables:` key is broken, not empty (#662), so it keeps
+ * the installed variables instead of clearing them.
+ */
+export const envEntryReader: EntryReader<EnvVariable> = {
+  type: 'env',
+  async read(absolutePath, relativePath) {
+    const content = await readFileSafe(absolutePath);
+    if (content === null) return null;
+    let raw: unknown;
+    try {
+      raw = YAML.parse(content);
+    } catch (e) {
+      return { ok: false, reason: `${relativePath} is not valid YAML: ${(e as Error).message}` };
+    }
+    const shapeProblem = describeEnvYamlShapeProblem(raw);
+    if (shapeProblem) return { ok: false, reason: `${relativePath} declares no variables: ${shapeProblem}` };
+    const read = parseEnvYamlDocument(raw, relativePath);
+    return read.ok ? { ok: true, entries: read.variables } : read;
+  },
+  nameOf: (variable) => variable.key,
+  scopeOf: (variable) => variable,
+};
+
+/**
+ * The variables this member receives: the root file plus the active namespace
+ * files, a namespace variable replacing the root one of the same key. `active`
+ * is null in legacy mode. The one set every reader uses: pull writes env.sh
+ * from it, doctor diffs env.sh against it, and MCP resolves `${VAR}` from it.
+ */
+export function resolveTeamEnv(
+  localConfig: LocalConfig,
+  active: readonly string[] | null,
+): Promise<EntryResolution<EnvVariable>> {
+  return resolveEntries(envEntryReader, localConfig, active);
+}
 
 /**
  * Report the one env.yaml shape mistake zod cannot surface on its own: a
@@ -69,10 +91,8 @@ export type EnvYamlRead =
  * variable silently stops being delivered, with nothing in the output
  * explaining why (#662).
  *
- * Reported from `pullForScope`, which is the only place that can — it skips
- * the env resource as soon as `countEnvVars` reports 0, so the check cannot
- * live in `pullItem`. `describeEnvYamlShapeProblemAt` reads the file and
- * applies this to it.
+ * `envEntryReader` applies this to every env file, so such a file fails the
+ * env resolution and keeps the exported variables, with this as the reason.
  *
  * Only this shape is reported. Every other shape stays permissive on purpose —
  * most importantly a valid `variables:` list that also carries an extra
@@ -167,65 +187,94 @@ export function parseEnvFile(content: string): Map<string, string> {
   return assignments;
 }
 
+/** Validate a parsed env.yaml document; `label` names the file in the reason. */
+function parseEnvYamlDocument(raw: unknown, label: string): EnvYamlRead {
+  // An empty document is a file with nothing to deliver, not a broken one.
+  if (raw === null || raw === undefined) return { ok: true, variables: [] };
+
+  if (typeof raw !== 'object' || Array.isArray(raw) || !('variables' in raw)) {
+    return {
+      ok: false,
+      reason: `${label} declares no variables. Its top-level key must be \`variables:\`, a list `
+        + 'of `key`/`value` entries — a plain `KEY: value` mapping parses as an empty list',
+    };
+  }
+
+  const parsed = EnvYamlSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: `${label} does not match the env.yaml schema: ${parsed.error.message}` };
+  }
+  return { ok: true, variables: parsed.data.variables };
+}
+
+/** Every env file in a team repo checkout, root first: `env/env.yaml`, then `env/<ns>/env.yaml`. */
+export async function listEnvFiles(repoPath: string): Promise<string[]> {
+  const namespaces = (await listDirs(path.join(repoPath, 'env'))).sort();
+  const files = [entryFilePath('env', null), ...namespaces.map((ns) => entryFilePath('env', ns))];
+  const present: string[] = [];
+  for (const file of files) {
+    if (await pathExists(path.join(repoPath, ...file.split('/')))) present.push(file);
+  }
+  return present;
+}
+
+function envPushItem(relativePath: string, sourcePath: string): ResourceItem {
+  return { name: relativePath.slice('env/'.length), type: 'env', sourcePath, relativePath };
+}
+
 // ─── Handler ─────────────────────────────────────────────
 
 export class EnvHandler extends ResourceHandler {
   readonly type = 'env' as const;
 
   /**
-   * Scan for local env changes that need to be pushed.
-   * Compares local env/env.yaml against the committed version.
+   * Scan for local env changes that need to be pushed: `env/env.yaml` and every
+   * `env/<ns>/env.yaml`, one item per changed file.
    */
   async scanLocalForPush(_teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
-    // Single-repo mode: users edit team env directly at <repo>/.teamai/env/env.yaml
+    // Single-repo mode: users edit team env directly at <repo>/.teamai/env/
     // (it lives in their own repo). push runs in the knowledge worktree, so
     // localConfig.repo.localPath here is the origin/<default> checkout — diff the
-    // ACTIVE tree's copy against it and surface genuine additions/edits. (Active
+    // ACTIVE tree's copies against it and surface genuine additions/edits. (Active
     // tree = projectRoot, which withKnowledgeWorktree deliberately leaves intact.)
     if (isSelfMode(localConfig) && localConfig.projectRoot) {
-      const activeEnv = path.join(localConfig.projectRoot, '.teamai', 'env', 'env.yaml');
-      if (!await pathExists(activeEnv)) return [];
-      const baseEnv = path.join(localConfig.repo.localPath, 'env', 'env.yaml');
-      // Not in the baseline → new; present but different → modified; equal → skip.
-      if (await pathExists(baseEnv) && await fileContentEqual(activeEnv, baseEnv)) {
-        return [];
+      const activeRoot = path.join(localConfig.projectRoot, '.teamai');
+      const items: ResourceItem[] = [];
+      for (const relativePath of await listEnvFiles(activeRoot)) {
+        const activeEnv = path.join(activeRoot, ...relativePath.split('/'));
+        const baseEnv = path.join(localConfig.repo.localPath, ...relativePath.split('/'));
+        // Not in the baseline → new; present but different → modified; equal → skip.
+        if (await pathExists(baseEnv) && await fileContentEqual(activeEnv, baseEnv)) continue;
+        items.push(envPushItem(relativePath, activeEnv));
       }
-      return [{
-        name: 'env.yaml',
-        type: 'env',
-        sourcePath: activeEnv,
-        relativePath: 'env/env.yaml',
-      }];
+      return items;
     }
 
-    const envYamlPath = path.join(localConfig.repo.localPath, 'env', 'env.yaml');
-    if (!await pathExists(envYamlPath)) return [];
-
-    // Check if env.yaml has uncommitted changes via git diff
+    const repoPath = localConfig.repo.localPath;
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
 
+    // Modified and untracked files under env/, in one call. A file git cannot
+    // report on (no repository) is treated as changed, as before.
+    let changed: Set<string> | null = null;
     try {
-      // git diff exits 0 if no changes, non-zero otherwise when used with --exit-code
-      await execFileAsync('git', ['diff', '--exit-code', 'env/env.yaml'], {
-        cwd: localConfig.repo.localPath,
-      });
-      // Also check if the file is untracked
-      const { stdout } = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard', 'env/env.yaml'], {
-        cwd: localConfig.repo.localPath,
-      });
-      if (!stdout.trim()) return [];
+      const { stdout } = await execFileAsync(
+        'git',
+        ['ls-files', '--modified', '--others', '--exclude-standard', '--', 'env'],
+        { cwd: repoPath },
+      );
+      changed = new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean));
     } catch {
-      // git diff --exit-code returns 1 when there are changes — that's what we want
+      changed = null;
     }
 
-    return [{
-      name: 'env.yaml',
-      type: 'env',
-      sourcePath: envYamlPath,
-      relativePath: 'env/env.yaml',
-    }];
+    const items: ResourceItem[] = [];
+    for (const relativePath of await listEnvFiles(repoPath)) {
+      if (changed && !changed.has(relativePath)) continue;
+      items.push(envPushItem(relativePath, path.join(repoPath, ...relativePath.split('/'))));
+    }
+    return items;
   }
 
   async scanTeamForPull(_teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
@@ -241,16 +290,16 @@ export class EnvHandler extends ResourceHandler {
   }
 
   async pushItem(item: ResourceItem, _teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
-    // Non-self modes: env.yaml already lives in the repo dir; push.ts commits it
-    // via the env/ sweeper — nothing to copy.
+    // Non-self modes: env files already live in the repo dir; push.ts commits
+    // them via the env/ sweeper — nothing to copy.
     //
-    // Single-repo mode: the source is the ACTIVE tree's .teamai/env/env.yaml, but
+    // Single-repo mode: the source is the ACTIVE tree's .teamai/env/ file, but
     // the commit happens in the knowledge worktree (localConfig.repo.localPath).
     // Copy the active copy into the worktree so the PR actually carries the change;
     // otherwise the env/ sweeper would commit the stale baseline. (Guarded on the
     // paths differing so non-self stays a no-op.)
     if (isSelfMode(localConfig)) {
-      const dest = path.join(localConfig.repo.localPath, 'env', 'env.yaml');
+      const dest = path.join(localConfig.repo.localPath, ...item.relativePath.split('/'));
       if (item.sourcePath !== dest) {
         await ensureDir(path.dirname(dest));
         const content = await readFileSafe(item.sourcePath);
@@ -260,45 +309,43 @@ export class EnvHandler extends ResourceHandler {
   }
 
   /**
-   * Pull env variables: parse env.yaml, write env.sh, inject source line into shell profile.
+   * Pull env variables for this member: resolve the root and active namespace
+   * files, then write env.sh. A failed resolution is reported and leaves the
+   * exported variables as they are.
    */
-  async pullItem(item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
-    const content = await readFileSafe(item.sourcePath);
-    if (!content) return;
+  async pullItem(_item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+    const { activeEntryNamespaces } = await import('../namespaced-entries.js');
+    const namespaces = await activeEntryNamespaces(localConfig, 'env');
+    const resolution: EntryResolution<EnvVariable> = namespaces.ok
+      ? await resolveTeamEnv(localConfig, namespaces.active)
+      : { kind: 'failed', failure: namespaces.failure, notices: [] };
+    reportEntryResolution(resolution);
+    if (resolution.kind === 'failed') return;
+    await this.writeResolvedEnv(resolution.entries.map((entry) => entry.entry), teamConfig, localConfig);
+  }
 
-    let envConfig: EnvYaml;
-    try {
-      const raw = YAML.parse(content);
-      envConfig = EnvYamlSchema.parse(raw);
-    } catch (e) {
-      log.warn(`Invalid env.yaml format: ${(e as Error).message}`);
-      return;
-    }
-
-    if (envConfig.variables.length === 0) return;
-
-    // Which of the declared variables this member and directory are scoped to.
-    // Deliberately applied AFTER the "nothing declared" return above: a team that
-    // declares variables none of which reach this member must still get an
-    // env.sh written (an empty one), because that is what REMOVES the variables
-    // an earlier pull had given them.
-    //
-    // The unknown-id warning belongs to `pullForScope`, not here, so that
-    // `--dry-run` reports it as well (this method never runs on that path).
-    const variables = resolveDeliverableEnvVariables(envConfig.variables, resolveMembership(localConfig));
-
-    // Write the machine-local KEY=VALUE backup (for loadEnvFile / buildVarTable).
+  /**
+   * Write env.sh, its KEY=VALUE backup and the shell profile block from the
+   * resolved variables. Runs with an empty set too, which is what removes the
+   * variables of a namespace that deactivated or a file that was emptied; only
+   * a machine that never had env delivered is left alone (returns false), so
+   * a team without env does not get a profile block for nothing.
+   */
+  async writeResolvedEnv(variables: EnvVariable[], teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<boolean> {
     // getEnvBackupPath returns <teamaiHome>/env normally, but <teamaiHome>/env.local
     // in self mode — where <teamaiHome>/env is a committed DIRECTORY (env/env.yaml)
     // and writing a file there would throw EISDIR.
     const teamaiHome = getDataHome(localConfig);
+    const envShPath = path.join(teamaiHome, 'env.sh');
+    if (variables.length === 0 && !await pathExists(envShPath)) return false;
+
+    // The machine-local KEY=VALUE backup (for loadEnvFile).
     const backupLines = variables.map(v => `${v.key}=${v.value}`);
     await ensureDir(teamaiHome);
     await writeFile(getEnvBackupPath(localConfig), backupLines.join('\n') + '\n');
 
-    // Write <teamaiHome>/env.sh (sourceable export file)
-    const envShContent = this.generateEnvFile(variables);
-    await writeFile(path.join(teamaiHome, 'env.sh'), envShContent);
+    // <teamaiHome>/env.sh (sourceable export file)
+    await writeFile(envShPath, this.generateEnvFile(variables));
 
     // Inject source line into shell profile if enabled
     const inject = teamConfig.sharing.env.injectShellProfile !== false;
@@ -306,49 +353,12 @@ export class EnvHandler extends ResourceHandler {
     if (inject) {
       const profilePath = teamConfig.sharing.env.shellProfilePath
         ? teamConfig.sharing.env.shellProfilePath
-        : await this.detectShellProfile(path.join(teamaiHome, 'env.sh'));
+        : await this.detectShellProfile(envShPath);
 
       const shellBlock = this.generateShellBlock(teamaiHome);
       await this.injectShellProfile(profilePath, shellBlock);
     }
-  }
-
-  /**
-   * Count the number of env variables in env.yaml.
-   */
-  async countEnvVars(sourcePath: string): Promise<number> {
-    const content = await readFileSafe(sourcePath);
-    if (!content) return 0;
-
-    try {
-      const raw = YAML.parse(content);
-      const envConfig = EnvYamlSchema.parse(raw);
-      return envConfig.variables.length;
-    } catch {
-      return 0;
-    }
-  }
-
-  /**
-   * Read an env.yaml and report the shape problem `describeEnvYamlShapeProblem`
-   * detects, or `null` when the file yields a usable shape.
-   *
-   * `countEnvVars` answers the different question of "how many variables", and
-   * a file with no `variables:` key answers 0 just like a genuinely empty one —
-   * which is why the caller needs this separate probe before it skips the
-   * resource.
-   */
-  async describeEnvYamlShapeProblemAt(sourcePath: string): Promise<string | null> {
-    const content = await readFileSafe(sourcePath);
-    if (!content) return null;
-
-    try {
-      return describeEnvYamlShapeProblem(YAML.parse(content));
-    } catch {
-      // Malformed YAML never yields a mapping to inspect; it is a separate
-      // failure, left to the caller's own handling.
-      return null;
-    }
+    return true;
   }
 
   /**
@@ -378,22 +388,7 @@ export class EnvHandler extends ResourceHandler {
     } catch (e) {
       return { ok: false, reason: `${filePath} is not valid YAML: ${(e as Error).message}` };
     }
-    // An empty document is a file with nothing to deliver, not a broken one.
-    if (raw === null || raw === undefined) return { ok: true, variables: [] };
-
-    if (typeof raw !== 'object' || Array.isArray(raw) || !('variables' in raw)) {
-      return {
-        ok: false,
-        reason: `${filePath} declares no variables. Its top-level key must be \`variables:\`, a list `
-          + 'of `key`/`value` entries — a plain `KEY: value` mapping parses as an empty list',
-      };
-    }
-
-    const parsed = EnvYamlSchema.safeParse(raw);
-    if (!parsed.success) {
-      return { ok: false, reason: `${filePath} does not match the env.yaml schema: ${parsed.error.message}` };
-    }
-    return { ok: true, variables: parsed.data.variables };
+    return parseEnvYamlDocument(raw, filePath);
   }
 
   /**

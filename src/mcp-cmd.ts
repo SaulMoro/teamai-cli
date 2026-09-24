@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { autoDetectInit } from './config.js';
-import { parseTeamMcpServers } from './resources/mcp.js';
+import { resolveTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
+import { describeEntryFailure, describeOrigin } from './namespaced-entries.js';
 import {
   reconcileMcpForConfig,
   resolveMcpTargets,
@@ -24,10 +25,16 @@ function displayPath(p: string): string {
 /** Print team MCP servers, their secret requirements, and where they are installed. */
 export async function mcpList(_options: GlobalOptions): Promise<void> {
   const { localConfig, teamConfig } = await autoDetectInit();
-  const servers = await parseTeamMcpServers(localConfig.repo.localPath);
+  const resolution = await resolveTeamMcpServers(localConfig);
+  if (resolution.kind === 'failed') {
+    log.error(describeEntryFailure(resolution.failure));
+    process.exitCode = 1;
+    return;
+  }
+  const servers = resolution.entries;
 
   if (servers.length === 0) {
-    log.info('No team MCP servers defined (mcp/mcp.yaml not found or empty)');
+    log.info('No team MCP servers reach this directory (mcp/mcp.yaml and active mcp/<ns>/mcp.yaml files are absent or empty)');
     return;
   }
 
@@ -41,15 +48,17 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
     ),
   )) ?? {};
 
-  console.log(`Team MCP servers — mcp/mcp.yaml (${servers.length}):`);
+  console.log(`Team MCP servers — mcp/ (${servers.length}):`);
   console.log('');
-  for (const s of servers) {
+  for (const resolved of servers) {
+    const s = teamMcpToDef(resolved.entry);
     const endpoint = s.transport === 'stdio' ? `${s.command} ${(s.args ?? []).join(' ')}`.trim() : s.url;
     console.log(`  ${s.name}  [${s.transport}]`);
     if (s.description) console.log(`    ${s.description}`);
     console.log(`    endpoint: ${endpoint}`);
-    if (s.roles) console.log(`    roles:    ${s.roles.length > 0 ? s.roles.join(', ') : 'nobody'}`);
-    if (s.projects) console.log(`    projects: ${s.projects.length > 0 ? s.projects.join(', ') : 'nobody'}`);
+    console.log(`    from:     ${resolved.source} (${describeOrigin(resolved)})`);
+    const roles = resolved.entry.roles;
+    if (roles) console.log(`    roles:    ${roles.length > 0 ? roles.join(', ') : 'nobody'} (deprecated)`);
 
     const needed = referencedVars(s);
     if (needed.length > 0) {

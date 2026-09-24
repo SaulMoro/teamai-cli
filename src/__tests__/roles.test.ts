@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { log } from '../utils/logger.js';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -140,7 +141,10 @@ roles:
     rmSync(repoDir, { recursive: true, force: true });
   });
 
-  it('fails when a role declares an unknown resource type', async () => {
+  // Refusing an unknown key is what made each new axis break pull for members
+  // on an older CLI (#707): from this version on it is a warning.
+  it('warns about an unknown resource type and loads the rest of the role', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     const repoDir = writeManifest(`
 version: 1
 roles:
@@ -148,11 +152,48 @@ roles:
     resources:
       knowledge: [common, hai]
       skills: [common, hai]
-      docs: [common, hai]
+      bogus: [common, hai]
 `);
 
-    await expect(loadRolesManifest(repoDir)).rejects.toThrow(/unknown resource type/i);
-    rmSync(repoDir, { recursive: true, force: true });
+    try {
+      const manifest = await loadRolesManifest(repoDir);
+      expect(manifest.roles[0]?.resources.skills).toEqual(['common', 'hai']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('role hai declares unknown resource type "bogus"'));
+    } finally {
+      warn.mockRestore();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves env, hooks and mcp namespaces, and writes none a role did not declare', async () => {
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: fe
+    resources:
+      knowledge: [fe]
+      skills: [fe]
+      env: [fe-env]
+      hooks: [fe-hooks]
+      mcp: [fe-mcp]
+  - id: be
+    resources:
+      knowledge: [be]
+      skills: [be]
+`);
+
+    try {
+      const manifest = await loadRolesManifest(repoDir);
+      const namespaces = resolveRoleResourceNamespaces({ manifest, primaryRole: 'fe', additionalRoles: ['be'] });
+      expect(namespaces).toMatchObject({ env: ['fe-env'], hooks: ['fe-hooks'], mcp: ['fe-mcp'] });
+
+      // A role without the new keys is saved without them: a 0.25 CLI rejects them.
+      await saveRolesManifest(repoDir, manifest);
+      const saved = YAML.parse(readFileSync(path.join(repoDir, 'manifest', 'roles.yaml'), 'utf-8'));
+      expect(Object.keys(saved.roles[1].resources).sort()).toEqual(['agents', 'knowledge', 'skills']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it('fails when a resource namespace is not a safe path segment (traversal guard)', async () => {

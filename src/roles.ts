@@ -2,7 +2,10 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
-import { NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, type NamespaceEntry } from './manifest-schema.js';
+import {
+  NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, warnUnknownResourceKeys,
+  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type LaterResourceType, type NamespaceEntry,
+} from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
@@ -19,6 +22,8 @@ const RoleResourceNamespacesSchema = z.object({
   // It never becomes a directory here, so it stays a plain string: holding an old
   // manifest to the namespace rule would reject it over a field nothing reads.
   learnings: z.array(z.string()).optional(),
+  // env, hooks, mcp: optional, see LATER_RESOURCE_TYPES.
+  ...LaterResourceNamespacesShape,
 });
 
 const RoleSchema = z.object({
@@ -45,12 +50,15 @@ export type RolesManifest = z.infer<typeof RolesManifestSchema>;
  * resource types so role and project resolutions share one shape and can be
  * unioned directly.
  */
-export type ResourceNamespaces = {
-  knowledge: string[];
-  skills: string[];
-  learnings: string[];
-  agents: string[];
-};
+export type ResourceNamespaces = Record<RoleResourceType | 'learnings', string[]>
+  // Optional so a resolution built before a type existed (or a test double of
+  // one) still reads as "nothing active" for it: read with `?? []`.
+  & Partial<Record<LaterResourceType, string[]>>;
+
+/** Every type a role or project can namespace, in the order resolution walks them. */
+export const NAMESPACED_RESOURCE_TYPES = [...ROLE_RESOURCE_TYPES, ...LATER_RESOURCE_TYPES] as const;
+
+
 
 function validateManifestShape(raw: unknown): RolesManifest {
   if (!raw || typeof raw !== 'object') {
@@ -74,12 +82,8 @@ function validateManifestShape(raw: unknown): RolesManifest {
     }
 
     // Accept 'learnings' for backward compatibility but only validate active types
-    const ALLOWED_RESOURCE_KEYS = new Set<string>([...ROLE_RESOURCE_TYPES, 'learnings']);
-    for (const key of Object.keys(resources)) {
-      if (!ALLOWED_RESOURCE_KEYS.has(key)) {
-        throw new Error(`Invalid roles manifest: unknown resource type "${key}"`);
-      }
-    }
+    const ALLOWED_RESOURCE_KEYS = new Set<string>([...NAMESPACED_RESOURCE_TYPES, 'learnings']);
+    warnUnknownResourceKeys(resources, ALLOWED_RESOURCE_KEYS, 'roles', `role ${String((role as Record<string, unknown>).id ?? '<unknown>')}`);
   }
 
   const manifest = parseManifest(RolesManifestSchema, raw, 'roles');
@@ -98,8 +102,8 @@ function validateManifestShape(raw: unknown): RolesManifest {
 /** Every namespace a roles manifest puts to use, with the role that declares it. */
 export function roleNamespaceEntries(manifest: RolesManifest): NamespaceEntry[] {
   return manifest.roles.flatMap((role) =>
-    ROLE_RESOURCE_TYPES.flatMap((type) =>
-      role.resources[type].map((namespace) => ({ type, namespace, owner: `role ${role.id}` })),
+    NAMESPACED_RESOURCE_TYPES.flatMap((type) =>
+      (role.resources[type] ?? []).map((namespace) => ({ type, namespace, owner: `role ${role.id}` })),
     ),
   );
 }
@@ -202,24 +206,22 @@ export function resolveRoleResourceNamespaces(input: {
     ...input.additionalRoles.map((roleId) => getRoleOrThrow(input.manifest, roleId)),
   ];
 
-  const namespaces: ResourceNamespaces = {
-    knowledge: [],
-    skills: [],
-    // Roles never contribute learnings namespaces; only projects do. Kept empty
-    // so the shape matches project resolution for a clean union at the call site.
-    learnings: [],
-    agents: [],
-  };
+  // Roles never contribute learnings namespaces; only projects do. Kept empty
+  // so the shape matches project resolution for a clean union at the call site.
+  // A later type (env, hooks, mcp) is absent until one is active.
+  const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
-  for (const type of ROLE_RESOURCE_TYPES) {
+  for (const type of NAMESPACED_RESOURCE_TYPES) {
     const seen = new Set<string>();
+    const out: string[] = [];
     for (const role of resolvedRoles) {
-      for (const namespace of role.resources[type]) {
+      for (const namespace of role.resources[type] ?? []) {
         if (seen.has(namespace)) continue;
         seen.add(namespace);
-        namespaces[type].push(namespace);
+        out.push(namespace);
       }
     }
+    if (out.length > 0 || namespaces[type] !== undefined) namespaces[type] = out;
   }
 
   return namespaces;

@@ -19,7 +19,6 @@ import {
 } from './types.js';
 import type { HookDef, TeamaiConfig, LocalConfig, Scope } from './types.js';
 import { isSelfMode } from './types.js';
-import { resolveMembership } from './membership.js';
 import { builtinHookDefs, applyBuiltinOverride, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
 import { resolveTeamHooks } from './resources/hooks.js';
@@ -1737,15 +1736,20 @@ export async function sweepLegacyProjectHooks(
 export async function reconcileTeamHooksForConfig(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; filterAgents?: string[] } = {},
+  opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; quiet?: boolean; filterAgents?: string[] } = {},
 ): Promise<HookDef[]> {
-  const { defs: teamDefs, builtin } = opts.removeAll
-    ? { defs: [] as HookDef[], builtin: undefined }
-    : await resolveTeamHooks(teamConfig, localConfig.repo.localPath, {
+  const resolved = opts.removeAll
+    ? { ok: true as const, defs: [] as HookDef[], builtin: undefined }
+    : await resolveTeamHooks(teamConfig, localConfig, {
         auto: opts.auto,
         silent: opts.silent,
-        membership: resolveMembership(localConfig),
+        quiet: opts.quiet,
       });
+  // The team's hooks could not be resolved (reported by resolveTeamHooks).
+  // Reconciling now would remove every installed team hook, and apply the
+  // built-in hooks without the root file's overrides; leave all of it as is.
+  if (!resolved.ok) return [];
+  const { defs: teamDefs, builtin } = resolved;
   const { baseDir, manifestPath, scope: hookScope } = resolveHookScope(localConfig);
   const explicitlySelectedAgents = opts.filterAgents ?? localConfig.enabledAgents;
   let filterAgents = explicitlySelectedAgents;

@@ -6,7 +6,10 @@ import type { ResourceItem, TeamaiConfig, LocalConfig, HookDef } from '../types.
 import { TEAMAI_CUSTOM_HOOK_PREFIX, areTeamHooksDisabled, getHooksSharing } from '../types.js';
 import { pathExists, readFileSafe } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { matchesMembership, warnUnknownMembershipIds, type Membership } from '../membership.js';
+import {
+  entryFilePath, reportEntryResolution, resolveEntriesFor,
+  type EntryReader, type EntryResolution,
+} from '../namespaced-entries.js';
 
 // ─── Schema for hooks/hooks.yaml ────────────────────────────
 //
@@ -28,9 +31,9 @@ const TeamHookSchema = z.object({
   timeout: z.number().optional(),
   /** Optional restriction to specific tools (default = all hook-capable tools). */
   tools: z.array(z.string()).optional(),
-  /** Optional restriction to members holding one of these role ids (default = every member). */
+  /** Deprecated (0.25.0): members holding one of these role ids. Use hooks/<ns>/hooks.yaml. */
   roles: z.array(z.string()).optional(),
-  /** Optional restriction to directories bound to one of these logical project ids (default = every directory). */
+  /** Removed (0.26.0 betas only): kept so it is detected; such a hook reaches nobody. */
   projects: z.array(z.string()).optional(),
 });
 
@@ -56,20 +59,48 @@ export function teamHooksYamlPath(repoPath: string): string {
   return path.join(repoPath, 'hooks', 'hooks.yaml');
 }
 
+/** One hooks file, parsed, or why it cannot be used. */
+type HooksFileRead = { ok: true; yaml: HooksYaml; declaresBuiltin: boolean } | { ok: false; reason: string };
+
+/** Read one hooks file; null when it does not exist. */
+async function readHooksFile(absolutePath: string, relativePath: string): Promise<HooksFileRead | null> {
+  const content = await readFileSafe(absolutePath);
+  if (content === null) return null;
+  try {
+    const raw: unknown = YAML.parse(content);
+    const declaresBuiltin = !!raw && typeof raw === 'object' && 'builtin' in raw;
+    return { ok: true, yaml: HooksYamlSchema.parse(raw ?? {}), declaresBuiltin };
+  } catch (e) {
+    return { ok: false, reason: `${relativePath} does not parse: ${(e as Error).message}` };
+  }
+}
+
 /**
  * Parse hooks/hooks.yaml into the raw, validated structure. Returns null when the
  * file is absent or fails validation (so callers never act on a broken set).
  */
 export async function parseHooksYaml(repoPath: string): Promise<HooksYaml | null> {
-  const content = await readFileSafe(teamHooksYamlPath(repoPath));
-  if (!content) return null;
-  try {
-    return HooksYamlSchema.parse(YAML.parse(content));
-  } catch (e) {
-    log.warn(`Invalid hooks.yaml format: ${(e as Error).message} — skipping team hooks this run`);
-    return null;
-  }
+  const read = await readHooksFile(teamHooksYamlPath(repoPath), entryFilePath('hooks', null));
+  return read?.ok ? read.yaml : null;
 }
+
+/**
+ * How `hooks/hooks.yaml` and `hooks/<ns>/hooks.yaml` are read for delivery.
+ * The `builtin:` overrides are team-wide and read from the root file alone.
+ */
+export const hooksEntryReader: EntryReader<TeamHook> = {
+  type: 'hooks',
+  async read(absolutePath, relativePath) {
+    const read = await readHooksFile(absolutePath, relativePath);
+    if (read === null || !read.ok) return read;
+    const notes = read.declaresBuiltin && relativePath !== entryFilePath('hooks', null)
+      ? [`${relativePath}: \`builtin:\` is ignored outside hooks/hooks.yaml; built-in hook overrides apply to the whole team. Move it there.`]
+      : [];
+    return { ok: true, entries: read.yaml.hooks, notes };
+  },
+  nameOf: (hook) => hook.id,
+  scopeOf: (hook) => hook,
+};
 
 /** Convert one validated team hook into the unified HookDef model. */
 export function teamHookToDef(h: TeamHook): HookDef {
@@ -82,31 +113,23 @@ export function teamHookToDef(h: TeamHook): HookDef {
     timeout: h.timeout,
     description: `${TEAMAI_CUSTOM_HOOK_PREFIX}${h.id}] ${h.description}`,
     tools: h.tools,
-    roles: h.roles,
-    projects: h.projects,
   };
 }
 
 /**
- * Parse the team repo's hooks/hooks.yaml into team HookDefs.
- * Returns [] when absent or invalid.
+ * The team hooks this member receives, with where each comes from, plus the
+ * built-in overrides of the root file. A failed resolution (a file that does
+ * not parse, a hook id twice) carries no overrides either: applying the
+ * built-in hooks without them would re-enable the ones the team disabled.
  */
-export async function parseTeamHooks(repoPath: string): Promise<HookDef[]> {
-  const parsed = await parseHooksYaml(repoPath);
-  if (!parsed) return [];
-  return parsed.hooks.map(teamHookToDef);
-}
-
-/**
- * Parse hooks.yaml into both the team HookDefs (B) and the built-in override
- * (§4.8). Returns empty defs + undefined override when absent or invalid.
- */
-export async function parseTeamHooksConfig(
-  repoPath: string,
-): Promise<{ defs: HookDef[]; builtin: BuiltinOverride | undefined }> {
-  const parsed = await parseHooksYaml(repoPath);
-  if (!parsed) return { defs: [], builtin: undefined };
-  return { defs: parsed.hooks.map(teamHookToDef), builtin: parsed.builtin };
+export async function resolveTeamHookEntries(
+  localConfig: LocalConfig,
+  options: { quiet?: boolean } = {},
+): Promise<{ resolution: EntryResolution<TeamHook>; builtin: BuiltinOverride | undefined }> {
+  const resolution = await resolveEntriesFor(hooksEntryReader, localConfig, options);
+  if (resolution.kind === 'failed') return { resolution, builtin: undefined };
+  const root = await parseHooksYaml(localConfig.repo.localPath);
+  return { resolution, builtin: root?.builtin };
 }
 
 // ─── Security gate (§6) ─────────────────────────────────────
@@ -131,29 +154,22 @@ function isTeamScriptCommand(command: string): boolean {
  */
 export async function resolveTeamHooks(
   teamConfig: TeamaiConfig,
-  repoPath: string,
-  opts: { auto?: boolean; silent?: boolean; membership?: Membership } = {},
-): Promise<{ defs: HookDef[]; builtin: BuiltinOverride | undefined }> {
-  const { defs: parsed, builtin } = await parseTeamHooksConfig(repoPath);
+  localConfig: LocalConfig,
+  opts: { auto?: boolean; silent?: boolean; quiet?: boolean } = {},
+): Promise<{ ok: true; defs: HookDef[]; builtin: BuiltinOverride | undefined } | { ok: false }> {
+  // Which hooks this member receives: root plus active namespace files, before
+  // the security gates so the transparency print below lists only hooks this
+  // member will actually run. A resolution that fails keeps what is installed.
+  const { resolution, builtin } = await resolveTeamHookEntries(localConfig, { quiet: opts.quiet });
+  reportEntryResolution(resolution);
+  if (resolution.kind === 'failed') return { ok: false };
   const sharing = getHooksSharing(teamConfig);
-  let defs = parsed;
+  let defs = resolution.entries.map((entry) => teamHookToDef(entry.entry));
 
   if (areTeamHooksDisabled()) {
     if (defs.length > 0) log.warn(`Team hooks disabled (TEAMAI_HOOKS_DISABLED) — skipping ${defs.length} team hook(s)`);
-    return { defs: [], builtin };
+    return { ok: true, defs: [], builtin };
   }
-
-  // Membership filter (hooks.yaml `roles:` and `projects:`), before the security
-  // gates so the transparency print below lists only hooks this member will
-  // actually run. An omitted `membership` — or a null axis within it — means that
-  // axis is not configured, so nothing is filtered on it.
-  const membership = opts.membership ?? { roles: null, projects: null };
-  await warnUnknownMembershipIds(
-    repoPath,
-    'hooks.yaml',
-    defs.map((d) => ({ kind: 'hook', name: d.key, roles: d.roles, projects: d.projects })),
-  );
-  defs = defs.filter((d) => matchesMembership(d, membership));
 
   if (sharing.requireTeamScripts) {
     const before = defs.length;
@@ -166,7 +182,7 @@ export async function resolveTeamHooks(
 
   if (opts.auto && sharing.autoApply === false && defs.length > 0) {
     log.info(`${defs.length} team hook(s) pending — run 'teamai hooks inject' to apply (sharing.hooks.autoApply=false)`);
-    return { defs: [], builtin };
+    return { ok: true, defs: [], builtin };
   }
 
   if (defs.length > 0 && !opts.silent) {
@@ -174,7 +190,7 @@ export async function resolveTeamHooks(
     for (const d of defs) log.info(`  [${d.key}] ${d.command}`);
   }
 
-  return { defs, builtin };
+  return { ok: true, defs, builtin };
 }
 
 // ─── Handler ────────────────────────────────────────────────
@@ -212,9 +228,9 @@ export class HooksHandler extends ResourceHandler {
     return [];
   }
 
-  /** Count declared team hooks (for status/pull output). */
-  async countHooks(repoPath: string): Promise<number> {
-    const parsed = await parseHooksYaml(repoPath);
-    return parsed ? parsed.hooks.length : 0;
+  /** Count the team hooks this member receives (for status output). */
+  async countHooks(localConfig: LocalConfig): Promise<number> {
+    const { resolution } = await resolveTeamHookEntries(localConfig, { quiet: true });
+    return resolution.kind === 'resolved' ? resolution.entries.length : 0;
   }
 }

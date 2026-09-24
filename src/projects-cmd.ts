@@ -208,7 +208,9 @@ function mapResources(
   resources: ProjectResources,
   fn: (namespaces: string[]) => string[],
 ): ProjectResources {
-  return Object.fromEntries(PROJECT_RESOURCE_TYPES.map((type) => [type, fn(resources[type])])) as ProjectResources;
+  // The later types (env, hooks, mcp) are declared by hand and kept as they are:
+  // writing one an admin did not declare breaks pull on older CLIs.
+  return { ...resources, ...Object.fromEntries(PROJECT_RESOURCE_TYPES.map((type) => [type, fn(resources[type])])) } as ProjectResources;
 }
 
 function describeResources(resources: ProjectResources): string {

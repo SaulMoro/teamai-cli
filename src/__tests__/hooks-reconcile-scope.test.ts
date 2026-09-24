@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fse from 'fs-extra';
 
 vi.mock('../utils/logger.js', () => ({
-  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
 import { reconcileTeamHooksForConfig } from '../hooks.js';

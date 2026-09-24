@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { log } from '../utils/logger.js';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,15 +122,38 @@ projects:
     }
   });
 
-  it('rejects unknown resource types', async () => {
+  it('warns about an unknown resource type instead of failing the manifest (#707)', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     const repoDir = writeManifest(`
 version: 1
 projects:
   - id: x
-    resources: { bogus: [a] }
+    resources: { bogus: [a], skills: [x] }
 `);
     try {
-      await expect(loadProjectsManifest(repoDir)).rejects.toThrow(/unknown resource type/i);
+      const manifest = await loadProjectsManifest(repoDir);
+      expect(manifest?.projects[0]?.resources.skills).toEqual(['x']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('project x declares unknown resource type "bogus"'));
+    } finally {
+      warn.mockRestore();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves env, hooks and mcp namespaces of the active projects', async () => {
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: checkout
+    resources: { env: [checkout], hooks: [checkout], mcp: [checkout-mcp] }
+  - id: billing
+    resources: { skills: [billing] }
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      if (!manifest) throw new Error('manifest expected');
+      const namespaces = resolveProjectResourceNamespaces({ manifest, activeProjects: ['checkout', 'billing'] });
+      expect(namespaces).toMatchObject({ env: ['checkout'], hooks: ['checkout'], mcp: ['checkout-mcp'] });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

@@ -262,6 +262,8 @@ program
   .command('remove <type> <names...>')
   .description('Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)')
   .option('--force', 'Skip confirmation prompt')
+  .option('--role <ns>', 'mcp: remove the server from mcp/<ns>/mcp.yaml, when several files define it')
+  .option('--project <id>', "mcp: remove the server from the project's mcp namespace, when several files define it")
   .action(async (type, names, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { remove } = await import('./remove.js');
@@ -630,6 +632,8 @@ envCmd
   .command('add <key> <value>')
   .description('Add or update a team environment variable')
   .option('-d, --description <desc>', 'Description for the variable')
+  .option('--role <ns>', 'Write to env/<ns>/env.yaml instead of env/env.yaml')
+  .option('--project <id>', "Write to the project's env namespace (resources.env in manifest/projects.yaml)")
   .action(async (key, value, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { envAdd } = await import('./env-commands.js');
@@ -639,10 +643,12 @@ envCmd
 envCmd
   .command('remove <key>')
   .description('Remove a team environment variable')
-  .action(async (key) => {
+  .option('--role <ns>', 'Remove from env/<ns>/env.yaml instead of env/env.yaml')
+  .option('--project <id>', "Remove from the project's env namespace (resources.env in manifest/projects.yaml)")
+  .action(async (key, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { envRemove } = await import('./env-commands.js');
-    await envRemove(key, globalOpts);
+    await envRemove(key, { ...globalOpts, ...cmdOpts });
   });
 
 // ─── Hooks commands ─────────────────────────────────────

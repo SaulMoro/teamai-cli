@@ -3,7 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import YAML from 'yaml';
-import { EnvHandler, describeEnvYamlShapeProblem, resolveDeliverableEnvVariables } from '../resources/env.js';
+import { EnvHandler, describeEnvYamlShapeProblem } from '../resources/env.js';
+import { resetEntryWarnings } from '../namespaced-entries.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
 import type { TeamaiConfig, LocalConfig, ResourceItem } from '../types.js';
 
@@ -15,6 +16,7 @@ vi.mock('../utils/logger.js', () => ({
     error: vi.fn(),
     debug: vi.fn(),
     dim: vi.fn(),
+    persist: vi.fn(),
   },
 }));
 
@@ -44,6 +46,7 @@ describe('EnvHandler', () => {
   let localConfig: LocalConfig;
 
   beforeEach(async () => {
+    resetEntryWarnings();
     handler = new EnvHandler();
     tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-env-test-'));
     homeDir = path.join(tmpDir, 'home');
@@ -206,113 +209,6 @@ scope: 'user',
       const envYamlPath = path.join(tmpDir, 'new', 'dir', 'env.yaml');
       await handler.writeEnvYaml(envYamlPath, { variables: [] });
       expect(await fse.pathExists(envYamlPath)).toBe(true);
-    });
-  });
-
-  // ─── countEnvVars ────────────────────────────────────────
-
-  describe('countEnvVars', () => {
-    it('should count variables in env.yaml', async () => {
-      const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
-      await fse.writeFile(envYamlPath, YAML.stringify({
-        variables: [
-          { key: 'A', value: '1' },
-          { key: 'B', value: '2' },
-          { key: 'C', value: '3' },
-        ],
-      }));
-
-      const count = await handler.countEnvVars(envYamlPath);
-      expect(count).toBe(3);
-    });
-
-    it('should return 0 for non-existent file', async () => {
-      const count = await handler.countEnvVars('/no/such/file.yaml');
-      expect(count).toBe(0);
-    });
-
-    it('should return 0 for invalid yaml', async () => {
-      const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
-      await fse.writeFile(envYamlPath, ':::bad');
-
-      const count = await handler.countEnvVars(envYamlPath);
-      expect(count).toBe(0);
-    });
-
-    it('counts the declared total, which the pull summary pairs with the deliverable one', async () => {
-      const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
-      await fse.writeFile(envYamlPath, YAML.stringify({
-        variables: [
-          { key: 'A', value: '1', projects: ['checkout'] },
-          { key: 'B', value: '2', projects: ['billing'] },
-          { key: 'C', value: '3' },
-        ],
-      }));
-
-      // `pullForScope` pairs this with resolveDeliverableEnvVariables to print
-      // "Synced 2 of 3". The count itself stays unfiltered (see #662 above).
-      expect(await handler.countEnvVars(envYamlPath)).toBe(3);
-      const read = await handler.readEnvYaml(envYamlPath);
-      expect(read.ok && resolveDeliverableEnvVariables(read.variables, { roles: null, projects: ['checkout'] }))
-        .toHaveLength(2);
-      expect(read.ok && resolveDeliverableEnvVariables(read.variables, { roles: null, projects: null }))
-        .toHaveLength(3);
-    });
-
-    it('counts what the team declares, not what reaches this member', async () => {
-      // countEnvVars gates the #662 "no variables: key" warning in pull.ts: a
-      // count of 0 means the file may be malformed. Filtering it would fire that
-      // warning at a member scoped out of every variable, on a valid file.
-      const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
-      await fse.writeFile(envYamlPath, YAML.stringify({
-        variables: [
-          { key: 'A', value: '1', projects: ['checkout'] },
-          { key: 'B', value: '2', roles: ['devops'] },
-        ],
-      }));
-
-      expect(await handler.countEnvVars(envYamlPath)).toBe(2);
-    });
-  });
-
-  // ─── membership scoping ──────────────────────────────────
-
-  describe('resolveDeliverableEnvVariables', () => {
-    const variables = [
-      { key: 'CHECKOUT_URL', value: 'c', projects: ['checkout'] },
-      { key: 'BILLING_URL', value: 'b', projects: ['billing'] },
-      { key: 'DEVOPS_TOKEN', value: 'd', roles: ['devops'] },
-      { key: 'FE_CHECKOUT', value: 'f', roles: ['frontend'], projects: ['checkout'] },
-      { key: 'SHARED', value: 's' },
-      { key: 'NOBODY', value: 'n', projects: [] },
-    ];
-    const keys = (m: { roles: string[] | null; projects: string[] | null }) =>
-      resolveDeliverableEnvVariables(variables, m).map((v) => v.key);
-
-    it('delivers every variable to a member who has configured neither axis', () => {
-      expect(keys({ roles: null, projects: null })).toEqual([
-        'CHECKOUT_URL', 'BILLING_URL', 'DEVOPS_TOKEN', 'FE_CHECKOUT', 'SHARED', 'NOBODY',
-      ]);
-    });
-
-    it('delivers a project-scoped variable only to a directory bound to that project', () => {
-      expect(keys({ roles: null, projects: ['checkout'] }))
-        .toEqual(['CHECKOUT_URL', 'DEVOPS_TOKEN', 'FE_CHECKOUT', 'SHARED']);
-    });
-
-    it('delivers a role-scoped variable only to a member holding that role', () => {
-      expect(keys({ roles: ['devops'], projects: null }))
-        .toEqual(['CHECKOUT_URL', 'BILLING_URL', 'DEVOPS_TOKEN', 'SHARED', 'NOBODY']);
-    });
-
-    it('requires both axes when a variable scopes both (AND, not OR)', () => {
-      expect(keys({ roles: ['frontend'], projects: ['checkout'] })).toContain('FE_CHECKOUT');
-      expect(keys({ roles: ['frontend'], projects: ['billing'] })).not.toContain('FE_CHECKOUT');
-      expect(keys({ roles: ['devops'], projects: ['checkout'] })).not.toContain('FE_CHECKOUT');
-    });
-
-    it('can filter every variable away', () => {
-      expect(keys({ roles: ['pm'], projects: ['legacy'] })).toEqual(['SHARED']);
     });
   });
 
@@ -641,152 +537,133 @@ scope: 'user',
       expect(content).toContain(expectedSourceLine(`${homeDir}/.teamai`));
     });
 
-    it('should skip when env.yaml has no variables', async () => {
-      const emptyYamlPath = path.join(repoPath, 'env', 'empty.yaml');
-      await fse.writeFile(emptyYamlPath, YAML.stringify({ variables: [] }));
-
-      const emptyItem: ResourceItem = {
-        name: 'empty.yaml',
-        type: 'env',
-        sourcePath: emptyYamlPath,
-        relativePath: 'env/empty.yaml',
-      };
+    it('should skip when env.yaml has no variables and nothing was delivered before', async () => {
+      await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), YAML.stringify({ variables: [] }));
 
       vi.stubEnv('SHELL', '/bin/bash');
       const bashrcPath = path.join(homeDir, '.bashrc');
       await fse.writeFile(bashrcPath, '# original\n');
 
-      await handler.pullItem(emptyItem, teamConfig, localConfig);
+      await handler.pullItem(item, teamConfig, localConfig);
 
       const content = await fse.readFile(bashrcPath, 'utf-8');
       expect(content).toBe('# original\n');
+      expect(await fse.pathExists(path.join(homeDir, '.teamai', 'env.sh'))).toBe(false);
     });
 
-    it('delivers only the variables this member and directory are scoped to', async () => {
-      const scopedPath = path.join(repoPath, 'env', 'scoped.yaml');
-      await fse.writeFile(scopedPath, YAML.stringify({
-        variables: [
-          { key: 'CHECKOUT_URL', value: 'https://checkout.example.com', projects: ['checkout'] },
-          { key: 'BILLING_URL', value: 'https://billing.example.com', projects: ['billing'] },
-          { key: 'SHARED', value: 'everyone' },
+    // ─── namespaces (#707) ────────────────────────────────
+
+    /** A projects manifest where project checkout declares the env namespace `checkout`. */
+    async function writeCheckoutProject(): Promise<void> {
+      await fse.ensureDir(path.join(repoPath, 'manifest'));
+      await fse.writeFile(path.join(repoPath, 'manifest', 'projects.yaml'), YAML.stringify({
+        version: 1,
+        projects: [
+          { id: 'checkout', resources: { env: ['checkout'] } },
+          { id: 'billing', resources: { skills: ['billing'] } },
         ],
       }));
-      const scopedItem: ResourceItem = {
-        name: 'scoped.yaml', type: 'env', sourcePath: scopedPath, relativePath: 'env/scoped.yaml',
-      };
+    }
 
-      await handler.pullItem(scopedItem, teamConfig, { ...localConfig, projects: ['checkout'] });
+    async function writeNamespaceEnv(namespace: string, variables: { key: string; value: string }[]): Promise<void> {
+      await fse.ensureDir(path.join(repoPath, 'env', namespace));
+      await fse.writeFile(path.join(repoPath, 'env', namespace, 'env.yaml'), YAML.stringify({ variables }));
+    }
 
-      const envSh = await fse.readFile(path.join(homeDir, '.teamai', 'env.sh'), 'utf-8');
-      expect(envSh).toContain('export CHECKOUT_URL=');
-      expect(envSh).toContain('export SHARED=');
-      expect(envSh).not.toContain('BILLING_URL');
+    const envSh = (): Promise<string> => fse.readFile(path.join(homeDir, '.teamai', 'env.sh'), 'utf-8');
 
-      // The KEY=value backup mcp-reconcile resolves ${VAR} from must match, or a
-      // server would resolve a variable the member's shell never exported.
-      const backup = await fse.readFile(path.join(homeDir, '.teamai', 'env'), 'utf-8');
-      expect(backup).toContain('CHECKOUT_URL=');
-      expect(backup).not.toContain('BILLING_URL');
+    it('delivers an active namespace variable in place of the root one of the same key', async () => {
+      await writeCheckoutProject();
+      await writeNamespaceEnv('checkout', [
+        { key: 'MODEL_ENDPOINT', value: 'https://checkout.example.com' },
+        { key: 'CHECKOUT_ONLY', value: 'yes' },
+      ]);
+
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['checkout'] });
+
+      const content = await envSh();
+      expect(content).toContain("export MODEL_ENDPOINT='https://checkout.example.com'");
+      expect(content).not.toContain('https://api.example.com');
+      expect(content).toContain("export CHECKOUT_ONLY='yes'");
+      expect(content).toContain('export TGIT_API_BASE=');
     });
 
-    it('removes a variable from env.sh once the directory stops being bound to its project', async () => {
-      const scopedPath = path.join(repoPath, 'env', 'scoped.yaml');
-      await fse.writeFile(scopedPath, YAML.stringify({
+    it('restores the root value and drops namespace-only variables once the namespace deactivates', async () => {
+      await writeCheckoutProject();
+      await writeNamespaceEnv('checkout', [
+        { key: 'MODEL_ENDPOINT', value: 'https://checkout.example.com' },
+        { key: 'CHECKOUT_ONLY', value: 'yes' },
+      ]);
+
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['checkout'] });
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['billing'] });
+
+      const content = await envSh();
+      expect(content).toContain("export MODEL_ENDPOINT='https://api.example.com'");
+      expect(content).not.toContain('CHECKOUT_ONLY');
+    });
+
+    it('rewrites env.sh on deactivation even when the root env file is missing', async () => {
+      await fse.remove(path.join(repoPath, 'env', 'env.yaml'));
+      await writeCheckoutProject();
+      await writeNamespaceEnv('checkout', [{ key: 'CHECKOUT_ONLY', value: 'yes' }]);
+
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['checkout'] });
+      expect(await envSh()).toContain('CHECKOUT_ONLY');
+
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['billing'] });
+      expect((await envSh()).trim()).toBe('');
+      const backup = await fse.readFile(path.join(homeDir, '.teamai', 'env'), 'utf-8');
+      expect(backup).not.toContain('CHECKOUT_ONLY');
+    });
+
+    it('keeps env.sh as it is when an active namespace file does not parse', async () => {
+      await writeCheckoutProject();
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['checkout'] });
+      const before = await envSh();
+
+      await fse.ensureDir(path.join(repoPath, 'env', 'checkout'));
+      await fse.writeFile(path.join(repoPath, 'env', 'checkout', 'env.yaml'), 'variables: [unclosed\n');
+      await handler.pullItem(item, teamConfig, { ...localConfig, projects: ['checkout'] });
+
+      expect(await envSh()).toBe(before);
+      const { log } = await import('../utils/logger.js');
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('env/checkout/env.yaml is not valid YAML'));
+    });
+
+    it('delivers no variable that carries the removed roles: or projects: keys', async () => {
+      await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), YAML.stringify({
         variables: [
           { key: 'CHECKOUT_URL', value: 'c', projects: ['checkout'] },
+          { key: 'DEVOPS_TOKEN', value: 'd', roles: ['devops'] },
           { key: 'SHARED', value: 's' },
         ],
       }));
-      const scopedItem: ResourceItem = {
-        name: 'scoped.yaml', type: 'env', sourcePath: scopedPath, relativePath: 'env/scoped.yaml',
-      };
-      const envShPath = path.join(homeDir, '.teamai', 'env.sh');
 
-      await handler.pullItem(scopedItem, teamConfig, { ...localConfig, projects: ['checkout'] });
-      expect(await fse.readFile(envShPath, 'utf-8')).toContain('CHECKOUT_URL');
+      await handler.pullItem(item, teamConfig, localConfig);
 
-      await handler.pullItem(scopedItem, teamConfig, { ...localConfig, projects: ['billing'] });
-      const after = await fse.readFile(envShPath, 'utf-8');
-      expect(after).not.toContain('CHECKOUT_URL');
-      expect(after).toContain('SHARED');
-    });
-
-    it('writes an empty env.sh, and still injects, when every variable is filtered out', async () => {
-      // The team declares variables, so this is not the "nothing declared" skip:
-      // the member must end up with an env.sh that exports nothing, which is what
-      // removes variables a previous pull had given them.
-      const scopedPath = path.join(repoPath, 'env', 'scoped.yaml');
-      await fse.writeFile(scopedPath, YAML.stringify({
-        variables: [{ key: 'CHECKOUT_URL', value: 'c', projects: ['checkout'] }],
-      }));
-      const scopedItem: ResourceItem = {
-        name: 'scoped.yaml', type: 'env', sourcePath: scopedPath, relativePath: 'env/scoped.yaml',
-      };
-      vi.stubEnv('SHELL', '/bin/bash');
-      await fse.writeFile(path.join(homeDir, '.bashrc'), '# original\n');
-
-      await handler.pullItem(scopedItem, teamConfig, { ...localConfig, projects: ['billing'] });
-
-      const envSh = await fse.readFile(path.join(homeDir, '.teamai', 'env.sh'), 'utf-8');
-      expect(envSh.trim()).toBe('');
-      expect(await fse.readFile(path.join(homeDir, '.bashrc'), 'utf-8')).toContain(TEAMAI_ENV_START);
+      const content = await envSh();
+      expect(content).toContain('export SHARED=');
+      expect(content).not.toContain('CHECKOUT_URL');
+      expect(content).not.toContain('DEVOPS_TOKEN');
+      const { log } = await import('../utils/logger.js');
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(
+        'env/env.yaml: variable "CHECKOUT_URL" is scoped with per-entry `projects:`, which this version no longer reads, so it reaches nobody.',
+      ));
     });
 
     it('should handle invalid env.yaml gracefully', async () => {
-      const badYamlPath = path.join(repoPath, 'env', 'bad.yaml');
-      await fse.writeFile(badYamlPath, ':::bad yaml');
-
-      const badItem: ResourceItem = {
-        name: 'bad.yaml',
-        type: 'env',
-        sourcePath: badYamlPath,
-        relativePath: 'env/bad.yaml',
-      };
+      await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), ':::bad yaml');
 
       vi.stubEnv('SHELL', '/bin/bash');
       const bashrcPath = path.join(homeDir, '.bashrc');
       await fse.writeFile(bashrcPath, '# original\n');
 
-      await handler.pullItem(badItem, teamConfig, localConfig);
+      await handler.pullItem(item, teamConfig, localConfig);
 
       // Should not crash and should not modify shell profile
       const content = await fse.readFile(bashrcPath, 'utf-8');
       expect(content).toBe('# original\n');
-    });
-
-    it('reports the missing `variables:` key from a real env.yaml file', async () => {
-      // The shape zod used to swallow: a bare key/value mapping. The file
-      // parses cleanly, so the pull looked successful while nothing shipped
-      // (#662). `pullForScope` reads it through this method, because it skips
-      // the resource before `pullItem` — where the check used to live — runs.
-      const shapeYamlPath = path.join(repoPath, 'env', 'shape.yaml');
-      await fse.writeFile(shapeYamlPath, 'FOO: bar\nBAZ: qux\n');
-
-      const problem = await handler.describeEnvYamlShapeProblemAt(shapeYamlPath);
-
-      expect(problem).toContain('no top-level `variables:` key');
-      expect(problem).toContain('`FOO`');
-      expect(problem).toContain('`BAZ`');
-    });
-
-    it('reports nothing for a usable, empty, malformed or missing env.yaml', async () => {
-      const okPath = path.join(repoPath, 'env', 'ok.yaml');
-      await fse.writeFile(okPath, YAML.stringify({ variables: [{ key: 'A', value: 'b' }] }));
-      expect(await handler.describeEnvYamlShapeProblemAt(okPath)).toBeNull();
-
-      const emptyPath = path.join(repoPath, 'env', 'empty.yaml');
-      await fse.writeFile(emptyPath, YAML.stringify({ variables: [] }));
-      expect(await handler.describeEnvYamlShapeProblemAt(emptyPath)).toBeNull();
-
-      // Malformed YAML is a separate failure and must not be dressed up as a
-      // shape problem.
-      const brokenPath = path.join(repoPath, 'env', 'broken.yaml');
-      await fse.writeFile(brokenPath, 'variables: [unclosed\n');
-      expect(await handler.describeEnvYamlShapeProblemAt(brokenPath)).toBeNull();
-
-      expect(
-        await handler.describeEnvYamlShapeProblemAt(path.join(repoPath, 'env', 'absent.yaml')),
-      ).toBeNull();
     });
   });
 

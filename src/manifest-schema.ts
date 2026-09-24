@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expandHome } from './utils/fs.js';
 import { z } from 'zod';
+import { log } from './utils/logger.js';
 
 /**
  * What `manifest/projects.yaml` and `manifest/roles.yaml` share: the spelling of
@@ -60,6 +61,54 @@ export const NAMESPACE_RULE = "resource namespace must be a single path segment 
 export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, (value) => ({
   message: `${NAMESPACE_RULE}; got ${JSON.stringify(value)}`,
 }));
+
+/**
+ * The `resources:` types added after 0.25.0 (#707). A 0.25.0 or 0.26.0-beta CLI
+ * rejects a `resources:` key it does not know, so a manifest that carries one
+ * breaks pull for every member still on those versions. They are therefore
+ * optional in both manifest schemas rather than defaulted: a manifest this CLI
+ * writes back (`roles add`, `projects update`) carries one only when an admin
+ * declared it. A new type is one entry here plus one line in the shape below.
+ */
+export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp'] as const;
+
+export type LaterResourceType = typeof LATER_RESOURCE_TYPES[number];
+
+const OptionalNamespaceList = z.array(NamespaceSegmentSchema).optional();
+
+/** Spread into the roles and projects `resources:` schemas. */
+export const LaterResourceNamespacesShape = {
+  env: OptionalNamespaceList,
+  hooks: OptionalNamespaceList,
+  mcp: OptionalNamespaceList,
+} satisfies Record<LaterResourceType, typeof OptionalNamespaceList>;
+
+/** `${kind}:${owner}:${key}` already reported in this process: manifests load several times per pull. */
+const reportedUnknownResourceKeys = new Set<string>();
+
+/**
+ * Warn about `resources:` keys this CLI does not know, instead of failing the
+ * manifest (#707). Refusing them is what made each new axis break pull for
+ * members on an older CLI; from this version on, an unknown key only means the
+ * team declared a type this CLI cannot deliver yet. Never throws.
+ */
+export function warnUnknownResourceKeys(
+  resources: object,
+  allowed: ReadonlySet<string>,
+  kind: 'projects' | 'roles',
+  owner: string,
+): void {
+  for (const key of Object.keys(resources)) {
+    if (allowed.has(key)) continue;
+    const dedupeKey = `${kind}:${owner}:${key}`;
+    if (reportedUnknownResourceKeys.has(dedupeKey)) continue;
+    reportedUnknownResourceKeys.add(dedupeKey);
+    log.warn(
+      `manifest/${kind}.yaml: ${owner} declares unknown resource type "${key}", which this CLI ignores. `
+      + `Known types: ${[...allowed].join(', ')}. Upgrade teamai if the team uses a newer type, or remove the key.`,
+    );
+  }
+}
 
 /**
  * A role id that stands in for a namespace when `roles.yaml` is absent. The

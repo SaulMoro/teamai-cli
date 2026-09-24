@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { loadLocalConfig, saveLocalConfig } from '../config.js';
-import { matchesMembership, resolveMembership } from '../membership.js';
+import { activeRoleIds } from '../roles.js';
 import { log } from '../utils/logger.js';
 
 describe('loadLocalConfig: legacy role migration against the team repo roles manifest', () => {
@@ -61,9 +61,8 @@ describe('loadLocalConfig: legacy role migration against the team repo roles man
     vi.spyOn(log, 'warn').mockImplementation(() => {});
     const config = await loadLocalConfig();
     if (!config) throw new Error('expected a config');
-    const membership = resolveMembership(config);
-    expect(matchesMembership({ roles: ['hai'] }, membership)).toBe(false);
-    expect(matchesMembership({}, membership)).toBe(true);
+    // Holds no role: no (deprecated) role-scoped hook or MCP server reaches it.
+    expect(activeRoleIds(config)).toEqual([]);
   });
 
   it('does not persist that unresolved state', async () => {
@@ -79,6 +78,7 @@ describe('loadLocalConfig: legacy role migration against the team repo roles man
     writeRoles('version: 1\nroles:\n  - id: frontend\n    resources: { knowledge: [], skills: [frontend] }\n');
     const config = await loadLocalConfig();
     if (!config) throw new Error('expected a config');
-    expect(matchesMembership({ roles: ['frontend'] }, resolveMembership(config))).toBe(true);
+    // No role filter: a (deprecated) role-scoped hook or MCP server still reaches it.
+    expect(activeRoleIds(config)).toBeNull();
   });
 });

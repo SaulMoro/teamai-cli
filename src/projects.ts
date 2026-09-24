@@ -2,7 +2,10 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
-import { NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, type NamespaceEntry } from './manifest-schema.js';
+import {
+  NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, warnUnknownResourceKeys,
+  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type LaterResourceType, type NamespaceEntry,
+} from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
 /**
@@ -13,6 +16,9 @@ import type { ResourceNamespaces } from './roles.js';
 export const PROJECT_RESOURCE_TYPES = ['knowledge', 'skills', 'learnings', 'agents'] as const;
 
 export type ProjectResourceType = typeof PROJECT_RESOURCE_TYPES[number];
+
+/** Every type a project can namespace, the optional later ones included. */
+const ALL_PROJECT_RESOURCE_TYPES = [...PROJECT_RESOURCE_TYPES, ...LATER_RESOURCE_TYPES] as const;
 
 /**
  * A project id becomes a path component (`skills/<id>/`, `learnings/<id>/`) just
@@ -40,6 +46,8 @@ const ProjectResourceNamespacesSchema = z.object({
   skills: z.array(NamespaceSegmentSchema).default([]),
   learnings: z.array(NamespaceSegmentSchema).default([]),
   agents: z.array(NamespaceSegmentSchema).default([]),
+  // env, hooks, mcp: optional, see LATER_RESOURCE_TYPES.
+  ...LaterResourceNamespacesShape,
 });
 
 const ProjectSchema = z.object({
@@ -83,12 +91,12 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
     }
 
     if (resources) {
-      const ALLOWED_RESOURCE_KEYS = new Set<string>(PROJECT_RESOURCE_TYPES);
-      for (const key of Object.keys(resources)) {
-        if (!ALLOWED_RESOURCE_KEYS.has(key)) {
-          throw new Error(`Invalid projects manifest: unknown resource type "${key}"`);
-        }
-      }
+      warnUnknownResourceKeys(
+        resources,
+        new Set<string>(ALL_PROJECT_RESOURCE_TYPES),
+        'projects',
+        `project ${String((project as Record<string, unknown>).id ?? '<unknown>')}`,
+      );
     }
   }
 
@@ -108,8 +116,8 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
 /** Every namespace a projects manifest puts to use, with the project that declares it. */
 export function projectNamespaceEntries(manifest: ProjectsManifest): NamespaceEntry[] {
   return manifest.projects.flatMap((project) =>
-    PROJECT_RESOURCE_TYPES.flatMap((type) =>
-      project.resources[type].map((namespace) => ({ type, namespace, owner: `project ${project.id}` })),
+    ALL_PROJECT_RESOURCE_TYPES.flatMap((type) =>
+      (project.resources[type] ?? []).map((namespace) => ({ type, namespace, owner: `project ${project.id}` })),
     ),
   );
 }
@@ -199,25 +207,23 @@ function getProjectOrThrow(manifest: ProjectsManifest, projectId: string): TeamP
 export function resolveProjectResourceNamespaces(input: {
   manifest: ProjectsManifest;
   activeProjects: string[];
-}): Record<ProjectResourceType, string[]> {
+}): ResourceNamespaces {
   const resolved = input.activeProjects.map((id) => getProjectOrThrow(input.manifest, id));
 
-  const namespaces: Record<ProjectResourceType, string[]> = {
-    knowledge: [],
-    skills: [],
-    learnings: [],
-    agents: [],
-  };
+  // A later type (env, hooks, mcp) is absent until one is active.
+  const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
-  for (const type of PROJECT_RESOURCE_TYPES) {
+  for (const type of ALL_PROJECT_RESOURCE_TYPES) {
     const seen = new Set<string>();
+    const out: string[] = [];
     for (const project of resolved) {
-      for (const namespace of project.resources[type]) {
+      for (const namespace of project.resources[type] ?? []) {
         if (seen.has(namespace)) continue;
         seen.add(namespace);
-        namespaces[type].push(namespace);
+        out.push(namespace);
       }
     }
+    if (out.length > 0 || namespaces[type] !== undefined) namespaces[type] = out;
   }
 
   return namespaces;
@@ -272,7 +278,7 @@ export async function resolveActiveLearningsNamespaces(
  */
 export function mergeNamespaces(
   roleNamespaces: ResourceNamespaces,
-  projectNamespaces: Record<ProjectResourceType, string[]>,
+  projectNamespaces: ResourceNamespaces,
 ): ResourceNamespaces {
   const dedupe = (a: string[], b: string[]): string[] => {
     const seen = new Set<string>();
@@ -285,11 +291,16 @@ export function mergeNamespaces(
     return out;
   };
 
-  return {
+  const merged: ResourceNamespaces = {
     knowledge: dedupe(roleNamespaces.knowledge, projectNamespaces.knowledge),
     skills: dedupe(roleNamespaces.skills, projectNamespaces.skills),
     // Roles never contribute learnings; this is effectively the project set.
     learnings: dedupe(roleNamespaces.learnings, projectNamespaces.learnings),
     agents: dedupe(roleNamespaces.agents, projectNamespaces.agents),
   };
+  for (const type of LATER_RESOURCE_TYPES) {
+    const namespaces = dedupe(roleNamespaces[type] ?? [], projectNamespaces[type] ?? []);
+    if (namespaces.length > 0) merged[type] = namespaces;
+  }
+  return merged;
 }

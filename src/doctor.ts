@@ -26,6 +26,8 @@ import {
   buildAgentsDeliveryChecks,
   buildMcpDeliveryChecks,
   buildEnvDeliveryCheck,
+  buildEntryScopeKeyCheck,
+  entryNamespaceNotes,
   buildDocsCheck,
 } from './doctor-delivery.js';
 
@@ -454,6 +456,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),
+    ...await buildEntryScopeKeyCheck(ctx),
   );
 
   return checks;
@@ -542,6 +545,8 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
   const codexNote = await hasInstalledCodexHooks(toolPaths, baseDir)
     ? codexTrustReminder()
     : null;
+  // Info, not checks: which namespace entry replaces which root one (#707).
+  const notes = [...(codexNote ? [codexNote] : []), ...await entryNamespaceNotes(ctx)];
 
   if (jsonMode) {
     emitReport({
@@ -550,7 +555,7 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
       checks: results,
       // pkgDoctorReport renders its own lines; they are human text, not checks.
       ...(packageReport ? { packages: { ok: packageReport.allPassed, lines: packageReport.lines } } : {}),
-      ...(codexNote ? { notes: [codexNote] } : {}),
+      ...(notes.length > 0 ? { notes } : {}),
     });
     return allPassed;
   }
@@ -559,9 +564,9 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     for (const line of packageReport.lines) console.log(line);
   }
 
-  if (codexNote) {
+  if (notes.length > 0) {
     console.log('');
-    log.info(codexNote);
+    for (const note of notes) log.info(note);
   }
 
   console.log('');
