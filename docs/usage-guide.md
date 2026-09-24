@@ -161,7 +161,11 @@ for tools you have not opened in this project.
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` after
 > upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
 > (copy → verify → atomic switch), then leaves the old directory as `<repo>/.teamai.bak/`
-> for you to delete once you've confirmed everything works. Read-only commands and the
+> for you to delete once you've confirmed everything works. If the partition already
+> exists but its `config.yaml` cannot be read, or is missing, the migration keeps
+> `<repo>/.teamai/` and warns with the path: fix or restore that file (or move the
+> config-less partition aside), and the next `init` / `pull` / `push` finishes the job.
+> Read-only commands and the
 > `hook-dispatch` path never migrate; `teamai --dry-run pull` previews the move.
 > **Downgrading afterwards is not supported** — an older teamai would treat the project
 > as uninitialized; `.teamai.bak/` is the manual rollback path.
@@ -277,7 +281,21 @@ offending entry.
 teamai projects list                 # Defined projects + the ones active in this directory
 teamai projects set hai-inference    # Set active project(s) for this directory (overwrite; comma-separated or repeated; empty to clear)
 teamai projects members hai-inference # Who is registered on a project
+
+# Admin: edit manifest/projects.yaml and open a PR (all support --dry-run)
+teamai projects add checkout --namespaces common,checkout --name "Checkout"  # The first add creates projects.yaml
+teamai projects update checkout --add-namespaces payments --remove-namespaces common
+teamai projects remove checkout
 ```
+
+`--namespaces` sets the same namespaces on every project resource type
+(`knowledge`, `skills`, `learnings`, `agents`); `update` adds or removes them on
+each type's own list, so a hand-edited per-type layout survives. After
+`projects remove`, a directory that still has the project active warns on its
+next pull, falls back to role-only filtering, and has the project's deployed
+skills, rules and agents cleaned up — as long as the project's content is still
+in the team repo, since that is what identifies the deployed copies. Delete the
+content in a later change, after members have pulled.
 
 Member registration is a **side-effect of `init`**: running `teamai init --project <id>`
 appends `<id>` to your `members/<user>.yaml` roster (append + dedupe across
@@ -634,7 +652,10 @@ Exclusion rules take effect after role and tag filtering. When running `teamai p
 teamai push          # Scan for new/modified resources, create an MR
 teamai push --all    # Skip confirmation, push directly
 teamai push --role pm  # Push into the pm namespace (skills/pm/, rules/pm/, agents/pm/)
+teamai push --branch feature/gitee-destination  # Use an explicit destination branch
 ```
+
+`--branch` names the branch that receives a new push; an existing open PR is always updated on its recorded branch. TeamAI refuses to start a push when the team-repo clone has user changes (modified, staged, untracked, or conflicted files); TeamAI-owned `teamai.yaml` and sync-lock state are handled separately. Commit or stash other local changes first.
 
 **Namespace selection (new resources):** When pushing a new skill, rule or agent, the CLI automatically detects available namespaces and offers an interactive choice:
 
@@ -1002,6 +1023,7 @@ The Recall feature is controlled by a two-tier configuration — admins set the 
 | Team default | `teamai.yaml` | `sharing.recall.enabled` | `true` / `false` (default `false`) |
 | User override | `~/.teamai/config.yaml` | `recallEnabled` | `true` / `false`, takes priority over the team default |
 | Environment variable | shell | `TEAMAI_RECALL_DISABLED=1` | Force-disables all recall hooks (emergency kill switch) |
+| Environment variable | shell | `TEAMAI_UPVOTE_JUDGE=1` | Opt-in: on a git-team session a background pass asks your local signed-in CLI whether the latest reply substantively used each recalled doc that left no other adoption trace, and upvotes that subset. Each doc is judged at most once per session (a doc recalled or used only on a later turn is still judged then); an inherited user-scope doc is not upvoted while a project is active. Off by default; runs detached (no added latency) and uses your CLI subscription |
 
 ```bash
 teamai recall enable     # Enable recall, deploy the subagent and rules
@@ -1591,7 +1613,7 @@ Team hooks still come from the team's `hooks/hooks.yaml`: edit that source in th
 - **Skills** land in `.opencode/skills/` (project) or `~/.config/opencode/skills/` (user). OpenCode also reads `.claude/skills` natively, but teamai writes the OpenCode path too so an OpenCode-only user still gets them.
 - **Subagents** are rendered into OpenCode's own `agents/*.md` format: frontmatter carries `description` + `mode: subagent` (plus `model` and any `tool_extras.opencode` fields such as `temperature`); the agent name comes from the filename. OpenCode does **not** read `.claude/agents`, so this native copy is required.
 - **Rules** are copied into `.opencode/rules/` (or `~/.config/opencode/rules/`), but OpenCode does not auto-scan a rules directory — the files are inert until referenced. teamai therefore adds a `rules/*.md` glob to the `instructions` array in `opencode.json` and removes it again when the team's last rule goes away, editing only that one key and leaving your own `instructions` entries untouched.
-- **Hooks** are delivered as an OpenCode *plugin*, not a settings-file entry — OpenCode has no `hooks` array; it auto-loads JS/TS plugins from **both** `~/.config/opencode/plugin/` and `<project>/.opencode/plugin/`. A plugin present in both dirs is loaded twice and would dispatch every event twice, so teamai keeps exactly one copy: `teamai-hooks.ts` in the user dir, which covers every project. Any project-scope copy left by an earlier layout is deleted on the next sync. This matches the other tools, whose `settings.json` hooks also live in HOME and gate on the `cwd` handed to `hook-dispatch`. The plugin subscribes to OpenCode's own events and shelling out to the same `teamai hook-dispatch` entry point every other tool uses. The event mapping mirrors the Claude built-in set: `session.created` → session-start, `session.idle` → stop, `chat.message` → prompt-submit, `tool.execute.after` → post-tool-use. The plugin forwards the same STDIN payload other agents send (`cwd`, `tool_name`, `tool_input`, `prompt`), and maps OpenCode's lowercase tool ids (`skill`, `todowrite`) back to the PascalCase matchers the handler registry expects. OpenCode cannot inject a hook's stdout back into the session, so hooks run purely for their side effects (status report / sync / update). Note that OpenCode *awaits* its named hooks (`chat.message`, `tool.execute.after`), so those dispatches briefly wait on the `teamai` subprocess before the agent continues; the errors are always swallowed so a hook can never fail the session. Server-pushed agent hooks (`teamai-agent-<slug>.ts`) install into the same user plugin dir.
+- **Hooks** are delivered as an OpenCode *plugin*, not a settings-file entry — OpenCode has no `hooks` array; it auto-loads JS/TS plugins from **both** `~/.config/opencode/plugin/` and `<project>/.opencode/plugin/`. A plugin present in both dirs is loaded twice and would dispatch every event twice, so teamai keeps exactly one copy: `teamai-hooks.ts` in the user dir, which covers every project. Any project-scope copy left by an earlier layout is deleted on the next sync. This matches the other tools, whose `settings.json` hooks also live in HOME and gate on the `cwd` handed to `hook-dispatch`. The plugin subscribes to OpenCode's own events and shelling out to the same `teamai hook-dispatch` entry point every other tool uses. The event mapping mirrors the Claude built-in set: `session.created` → session-start, `session.idle` → stop, `chat.message` → prompt-submit, `tool.execute.after` → post-tool-use. The plugin forwards the same STDIN payload other agents send (`cwd`, `tool_name`, `tool_input`, `prompt`), and maps OpenCode's lowercase tool ids (`skill`, `todowrite`) back to the PascalCase matchers the handler registry expects. OpenCode cannot inject a hook's stdout back into the session, so hooks run purely for their side effects (status report / sync / update). Note that OpenCode *awaits* its named hooks (`chat.message`, `tool.execute.after`), so those dispatches briefly wait on the `teamai` subprocess before the agent continues; the errors are always swallowed so a hook can never fail the session. Server-pushed agent hooks (`teamai-agent-<slug>.ts`) install into the same user plugin dir. Because OpenCode's `session.idle` event carries no Claude-style JSONL `transcript_path`, upvote **adoption** (tool-use evidence, the opt-in LLM-judge, and the "adopted team knowledge" summary) does not run for OpenCode — recall still bumps `recalled_count`, but `upvoted_count` collection is a Claude-family (transcript-bearing) feature.
 - **MCP** servers live under the `mcp` key of the shared `opencode.json` (see the MCP section above).
 
 ### Pi Coding Agent
@@ -1909,7 +1931,7 @@ An HTTP source reports status and pulls skill commands via hook dispatch on ever
 | `teamai codebase --lint` | Knowledge graph health check |
 | `teamai ci extract-mr --url <url>` | CI: extract knowledge from MR, post comments, write after merge |
 | `teamai members` | List team members |
-| `teamai projects` | Bind a working directory to one or more logical projects |
+| `teamai projects` | Bind a working directory to one or more logical projects; admins add, update and remove projects |
 | `teamai roles` | Manage team roles and namespaces |
 | `teamai tags` | Manage tag-based skill/rule filtering |
 | `teamai skill exclude add/remove/list` | Manage skills excluded from local sync ([usage guide](#excluding-skills-you-dont-need)) |
