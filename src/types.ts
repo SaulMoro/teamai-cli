@@ -683,10 +683,16 @@ export const StateSchema = z.object({
    * agents and docs into the checkout it runs in: a worktree added after the
    * last pull has not received that revision, and two checkouts with different
    * tool directories must not compare against each other's targets (#807).
+   * `pushBaseRevs` are the team revisions push synced this checkout's
+   * unedited rules and skills to since its last pull, newest first, the bases
+   * its next push compares with; a pull's record drops them, since the pull
+   * delivers `rev` (#812). A forced full sync elsewhere leaves `rev` empty
+   * (`FORCED_FULL_SYNC_REV` in pull.ts).
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),
     targets: z.array(z.string()),
+    pushBaseRevs: z.array(z.string()).optional(),
   })).optional(),
   /** Git commit hash synchronized through the safe user-resource inheritance channel. */
   lastInheritedPullRev: z.string().nullable().optional(),

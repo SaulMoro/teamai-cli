@@ -150,7 +150,9 @@ teamai init https://github.com/yourorg/yourrepo
 项目的机器数据（config、state、team-repo 克隆、搜索索引、MCP manifest、资源缓存）
 存放在 `~/.teamai/projects/<slug>/` 下的按项目分区里，**不再**放进业务仓库，因此工作区
 无 teamai 残留，且同一仓库的 `git worktree` 共享同一分区。在新 worktree 中首次执行
-`teamai pull` 会向它完整同步一次，即使团队仓库自另一个检出 pull 之后并未变化。各 Agent 的项目根目录
+`teamai pull` 会向它完整同步一次，即使团队仓库自另一个检出 pull 之后并未变化。worktree 尚未 pull 过时，
+若 `teamai push` 发现与团队仓库不同的团队 rule 或 skill 就会停止，因为无法区分队友的更新和你的修改。
+`teamai pull` 会覆盖这些文件：如有修改，请先另存一份，再在该 worktree 中执行 `teamai pull`，放回修改后重新 push。各 Agent 的项目根目录
 （`.claude/`、`.cursor/`、`.codebuddy/` 等）仍在工作区内、于 **SessionStart** 时按刚打开的
 工具创建。例如，打开 Claude Code 时会创建 `.claude/`，再由 pull 写入。单独执行 `teamai pull`
 仍会跳过项目里还不存在根目录的工具，因此不会给尚未在本项目打开过的 Agent 凭空建目录。

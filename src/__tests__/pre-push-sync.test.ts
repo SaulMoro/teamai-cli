@@ -100,6 +100,20 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     expect(content).toBe('v2 content');
   });
 
+  it('syncs a local rule at any of several bases, and keeps one at none (#812)', async () => {
+    await fse.writeFile(path.join(repoPath, 'rules', 'at-older.md'), 'v3 content');
+    await fse.writeFile(path.join(repoPath, 'rules', 'edited.md'), 'v3 content');
+    // Both local copies differ from the newer base (rev2); only one is at the older (rev1).
+    await fse.writeFile(path.join(homeDir, '.claude/rules', 'at-older.md'), 'v1 content');
+    await fse.writeFile(path.join(homeDir, '.claude/rules', 'edited.md'), 'local edit');
+    mockGetFileContentAtRev.mockImplementation(async (_repo, rev) => Buffer.from(`${rev === 'rev2' ? 'v2' : 'v1'} content`));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, ['rev2', 'rev1']);
+
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules', 'at-older.md'), 'utf-8')).toBe('v3 content');
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules', 'edited.md'), 'utf-8')).toBe('local edit');
+  });
+
   it('syncs a root-authored rule through its recorded rules/<ns>/ destination', async () => {
     // push placed this rule under rules/fe-know/; the author's copy stayed at
     // the tool's rules root, so there is no rules/my-rule.md to compare against.
@@ -563,6 +577,49 @@ describe('syncTeamUpdatesToLocal — skills', () => {
     await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
 
     expect(mockGetFileContentAtRev).not.toHaveBeenCalled();
+  });
+
+  it('syncs a skill whose files are all at one of several bases (#812)', async () => {
+    const teamSkillDir = path.join(repoPath, 'skills', 'my-skill');
+    await fse.ensureDir(teamSkillDir);
+    await fse.writeFile(path.join(teamSkillDir, 'SKILL.md'), 'v3 skill');
+    await fse.writeFile(path.join(teamSkillDir, 'notes.md'), 'v3 notes');
+
+    // Local is still what the last pull delivered (rev1); the push base (rev2) is newer.
+    const localSkillDir = path.join(homeDir, '.claude/skills', 'my-skill');
+    await fse.ensureDir(localSkillDir);
+    await fse.writeFile(path.join(localSkillDir, 'SKILL.md'), 'v1 skill');
+    await fse.writeFile(path.join(localSkillDir, 'notes.md'), 'v1 notes');
+
+    mockGetFileContentAtRev.mockImplementation(async (_repo, rev, file) => (
+      Buffer.from(`${rev === 'rev2' ? 'v2' : 'v1'} ${file.endsWith('SKILL.md') ? 'skill' : 'notes'}`)
+    ));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, ['rev2', 'rev1']);
+
+    expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v3 skill');
+    expect(await fse.readFile(path.join(localSkillDir, 'notes.md'), 'utf-8')).toBe('v3 notes');
+  });
+
+  it('does not sync a skill whose files come from different bases (#812)', async () => {
+    const teamSkillDir = path.join(repoPath, 'skills', 'my-skill');
+    await fse.ensureDir(teamSkillDir);
+    await fse.writeFile(path.join(teamSkillDir, 'SKILL.md'), 'v3 skill');
+    await fse.writeFile(path.join(teamSkillDir, 'notes.md'), 'v3 notes');
+
+    const localSkillDir = path.join(homeDir, '.claude/skills', 'my-skill');
+    await fse.ensureDir(localSkillDir);
+    await fse.writeFile(path.join(localSkillDir, 'SKILL.md'), 'v2 skill');
+    await fse.writeFile(path.join(localSkillDir, 'notes.md'), 'v1 notes');
+
+    mockGetFileContentAtRev.mockImplementation(async (_repo, rev, file) => (
+      Buffer.from(`${rev === 'rev2' ? 'v2' : 'v1'} ${file.endsWith('SKILL.md') ? 'skill' : 'notes'}`)
+    ));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, ['rev2', 'rev1']);
+
+    expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v2 skill');
+    expect(await fse.readFile(path.join(localSkillDir, 'notes.md'), 'utf-8')).toBe('v1 notes');
   });
 
   it('should skip skills that only exist locally (not in team repo)', async () => {

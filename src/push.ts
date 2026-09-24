@@ -25,8 +25,8 @@ import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFound
 import type { ProjectsManifest } from './projects.js';
 import { isSafeNamespaceSegment, NAMESPACE_RULE, fallbackNamespaceError } from './manifest-schema.js';
 import {
-  isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, resolveProjectNamespace,
-  skillNamespacePath, withNamespace, type PlaceableType,
+  isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, placedResourcePath,
+  resolveProjectNamespace, skillNamespacePath, withNamespace, type PlaceableType,
 } from './push-namespaces.js';
 import { askQuestion, askSelection, isInteractive } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
@@ -966,14 +966,73 @@ async function pushCore(
 
   // Sync team repo updates to local tool directories before scanning.
   // This prevents files changed by teammates from being falsely flagged as "modified".
+  let preSyncFailure: string | undefined;
+  // A project checkout no pull has recorded (a new worktree, or one last
+  // pulled by an older CLI): nothing says which revision it holds, and the
+  // shared lastPullRev its sync falls back to may be another checkout's, or
+  // cleared.
+  let unrecordedCheckout = false;
+  let placedRules: Record<string, string> | undefined;
   try {
     const state = await loadStateForScope(localConfig);
-    // placedRules redirects a root-authored rule to the rules/<ns>/ file push
-    // put it in, so a teammate's newer version syncs down instead of being
-    // overwritten by the stale root copy the scan would otherwise call modified.
-    await syncTeamUpdatesToLocal(teamConfig, localConfig, state.lastPullRev, state.placedRules);
+    // Compare with the revisions THIS checkout synced: state.json is shared by
+    // every worktree, and a pull in another checkout moves the shared
+    // lastPullRev past a copy this checkout still holds unedited (#812).
+    const { checkoutKey, checkoutBaseRevs, addPushBaseRev } = await import('./pull.js');
+    const key = localConfig.scope === 'project' && localConfig.projectRoot
+      ? await checkoutKey(localConfig.projectRoot)
+      : undefined;
+    const checkoutRecord = key ? state.lastPullByWorkspace?.[key] : undefined;
+    unrecordedCheckout = key !== undefined && !checkoutRecord;
+    placedRules = state.placedRules;
+    const checkoutBases = checkoutBaseRevs(checkoutRecord);
+    try {
+      // placedRules redirects a root-authored rule to the rules/<ns>/ file push
+      // put it in, so a teammate's newer version syncs down instead of being
+      // overwritten by the stale root copy the scan would otherwise call modified.
+      await syncTeamUpdatesToLocal(
+        teamConfig,
+        localConfig,
+        checkoutBases.length > 0 ? checkoutBases : state.lastPullRev,
+        state.placedRules,
+      );
+    } catch (e) {
+      preSyncFailure = e instanceof Error ? e.message : String(e);
+    }
+    // The copies the sync wrote now match the refreshed team repo, so that
+    // revision is a base of the next push, even when the sync stopped partway
+    // (the copies it did not reach still match an older base) and even under
+    // --dry-run (the sync has already written the files). The pull record's
+    // `rev` stays, or the next pull would skip the docs and agents of this
+    // revision.
+    const syncedRev = checkoutRecord && checkoutBases.length > 0 && !teamRepoStale
+      ? await getHeadCommit(localConfig.repo.localPath)
+      : null;
+    if (checkoutRecord && syncedRev) {
+      addPushBaseRev(checkoutRecord, syncedRev);
+      try {
+        await saveStateForScope(state, localConfig);
+      } catch (e) {
+        // The sync has already moved copies to this revision; without it on
+        // record, the next push would read them as edits and send them back
+        // over a teammate's later update.
+        log.error(
+          `Could not record the team revision this checkout's rules and skills were brought up to `
+          + `(${e instanceof Error ? e.message : String(e)}). Nothing was pushed. `
+          + 'Check that the teamai state file is writable, then retry.',
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
   } catch (e) {
-    log.debug(`Pre-push sync skipped: ${(e as Error).message}`);
+    preSyncFailure ??= e instanceof Error ? e.message : String(e);
+  }
+  if (preSyncFailure !== undefined) {
+    log.warn(
+      `Could not bring the team's latest rules and skills into this checkout before scanning (${preSyncFailure}). `
+      + 'A resource a teammate updated may be listed as modified: deselect it, or run `teamai pull` and push again.',
+    );
   }
 
   const spin = spinner('Scanning local resources...').start();
@@ -1346,6 +1405,25 @@ async function pushCore(
       return;
     }
     log.info('No new or modified resources to push');
+    return;
+  }
+
+  // In a checkout without a pull record, a team rule or skill listed as
+  // modified may be an unedited copy the sync could not compare with the
+  // revision it came from, and pushing it would send it back over a teammate's
+  // update. A rule this machine placed is its author's own copy (#649).
+  const unsureOfEdit = unrecordedCheckout
+    ? allItems.filter((item) => item.status === 'modified' && (item.type === 'skills'
+      || (item.type === 'rules' && placedResourcePath(placedRules, 'rules', item.name) === null)))
+    : [];
+  if (unsureOfEdit.length > 0) {
+    log.error(
+      'This checkout has no pull record yet, so a teammate\'s update cannot be told from your edit '
+      + `(${unsureOfEdit.map((item) => `[${item.type}] ${item.name}`).join(', ')}). `
+      + 'Nothing was pushed. `teamai pull` replaces these files: if you edited them, copy them somewhere '
+      + 'safe first, then run `teamai pull` here, put your edits back, and push again.',
+    );
+    process.exitCode = 1;
     return;
   }
 

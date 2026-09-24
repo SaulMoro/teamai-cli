@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import matter from 'gray-matter';
 import { selectAgentsForDirectory } from './resources/agents.js';
 import { requireInit, loadState, saveState, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit, getDefaultBranch } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch, listWorktrees } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { learningsRoots } from './utils/learnings-roots.js';
@@ -19,7 +19,7 @@ import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import { loadTagsConfig, filterByTags } from './utils/tags.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
-import type { GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, TagsConfig } from './types.js';
+import type { GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State, TagsConfig } from './types.js';
 import {
   getUserLearningsDir,
   TEAMAI_CULTURE_START,
@@ -758,7 +758,7 @@ function warnStubNotDeployed(scopeLabel: string, e: unknown): void {
  * reuse. The main checkout's `.git` is a directory whose ctime moves on every
  * commit, which is what the birth time falls back to on Linux without statx.
  */
-async function checkoutKey(projectRoot: string): Promise<string> {
+export async function checkoutKey(projectRoot: string): Promise<string> {
   const id = managedMcpWorkspaceId(projectRoot);
   try {
     const dotGit = await stat(path.join(projectRoot, '.git'));
@@ -768,6 +768,72 @@ async function checkoutKey(projectRoot: string): Promise<string> {
   } catch {
     return id;
   }
+}
+
+/**
+ * The records of `records` whose checkout still exists: one `git worktree
+ * list` per full sync, so a removed or re-created worktree's entry does not
+ * stay in state.json forever. A repository always lists its main checkout, so
+ * an empty list means git failed (or there is no repository) and every record
+ * is kept: a stale key matches no checkout, while a dropped one sends push
+ * back to the shared revision (#812).
+ */
+async function liveCheckoutRecords(
+  projectRoot: string,
+  records: State['lastPullByWorkspace'],
+): Promise<State['lastPullByWorkspace']> {
+  if (!records) return undefined;
+  const roots = await listWorktrees(projectRoot);
+  if (roots.length === 0) return records;
+  const live = new Set(await Promise.all(roots.map(checkoutKey)));
+  return Object.fromEntries(Object.entries(records).filter(([key]) => live.has(key)));
+}
+
+type CheckoutRecord = NonNullable<State['lastPullByWorkspace']>[string];
+
+/**
+ * The `rev` a forced full sync (lastPullRev cleared) leaves on every other
+ * checkout's entry. It matches no revision, so each of those checkouts misses
+ * the fast path and does its own full sync, while the entry keeps the base its
+ * push compares with (#812). It is an empty `rev` rather than a new marker
+ * field because an older CLI compares `rev` too, and so also misses its fast
+ * path. Never a revision to hand to git: read bases through checkoutBaseRevs.
+ */
+const FORCED_FULL_SYNC_REV = '';
+
+/**
+ * How many push bases a checkout keeps between pulls. Each push that meets a
+ * new team revision adds one, and each costs the next push one read per
+ * differing file; past the cap the oldest go, and a copy the sync left at one
+ * of those revisions reads as an edit again until the checkout pulls.
+ */
+const MAX_PUSH_BASE_REVS = 20;
+
+/**
+ * The revisions an unedited copy in a checkout can be at: every revision a
+ * push synced it to since its last pull, newest first, then the revision that
+ * pull delivered. Empty for a checkout with no entry, or one a forced full
+ * sync reset before it had a push base.
+ */
+export function checkoutBaseRevs(record: CheckoutRecord | undefined): string[] {
+  const revs = [...(record?.pushBaseRevs ?? []), record?.rev]
+    .filter((rev): rev is string => rev !== undefined && rev !== FORCED_FULL_SYNC_REV);
+  return [...new Set(revs)];
+}
+
+/** Record `rev` as the newest base push synced `record`'s checkout to. */
+export function addPushBaseRev(record: CheckoutRecord, rev: string): void {
+  const older = (record.pushBaseRevs ?? []).filter((base) => base !== rev);
+  record.pushBaseRevs = [rev, ...older].slice(0, MAX_PUSH_BASE_REVS);
+}
+
+/** `records` after a forced full sync: see FORCED_FULL_SYNC_REV. */
+function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<string, CheckoutRecord> {
+  return Object.fromEntries(Object.entries(records).map(([key, record]) => {
+    const pushBaseRevs = checkoutBaseRevs(record).slice(0, MAX_PUSH_BASE_REVS);
+    const reset: CheckoutRecord = { rev: FORCED_FULL_SYNC_REV, targets: record.targets };
+    return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
+  }));
 }
 
 async function pullForScope(
@@ -1458,11 +1524,15 @@ async function pullForScope(
       ?? await getInstalledResourceTargets(freshConfig, localConfig);
     state[targetsField] = syncedTargets;
     const syncedRev = state[revisionField];
-    if (workspaceKey && !submodulesFailed && syncedRev) {
-      // A new revision, or a forced full sync (lastPullRev cleared), leaves
-      // every other checkout out of date too: drop their records so each one
-      // does its own full sync, instead of only the first checkout to pull.
-      const others = previousRev === syncedRev ? state.lastPullByWorkspace : undefined;
+    if (workspaceKey && localConfig.projectRoot && !submodulesFailed && syncedRev) {
+      // A forced full sync (lastPullRev cleared) leaves every other checkout
+      // out of date too: reset their records so each one does its own full
+      // sync, instead of only the first checkout to pull, keeping the base its
+      // push needs to tell a teammate's update from the member's edit (#812).
+      // A new revision resets nothing: a checkout recorded at an older one
+      // already misses the fast path. Records of removed worktrees are dropped.
+      const live = await liveCheckoutRecords(localConfig.projectRoot, state.lastPullByWorkspace);
+      const others = previousRev === null && live ? awaitingFullSync(live) : live;
       state.lastPullByWorkspace = {
         ...others,
         [workspaceKey]: { rev: syncedRev, targets: syncedTargets },

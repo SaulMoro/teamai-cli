@@ -58,14 +58,39 @@ checkout's own revision and tool targets all match. A worktree added after the
 last pull therefore gets a full sync on its first pull, and two checkouts with
 different tool directories no longer force a full sync on each other (#807).
 Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
-roles, projects, init and bootstrap apply their changes: the pull that records a
-revision different from the one it found (a new team revision, or none after a
-clear) drops every other checkout's entry, so each checkout does its own full
-sync. Entries of deleted worktrees are dropped the same way, with the next new
-team revision or forced sync; until then they are a few bytes each and no
-checkout matches their key. A
-state.json written before this field has no entry, so each checkout does one full
-sync after the upgrade.
+roles, projects, init and bootstrap apply their changes: the pull that finds
+`lastPullRev` cleared resets every other checkout's entry to an empty `rev`,
+which matches no revision, so each checkout does its own full sync (an older
+CLI compares `rev` too, so it also misses the fast path). A new team revision
+resets nothing, since a checkout recorded at an older revision already misses
+the fast path. `push` needs that entry too: before scanning, it syncs each rule
+and skill the member never edited, and "never edited" means equal to the
+version at a revision *this* checkout synced, not the shared `lastPullRev`
+another checkout may have moved (#812). That sync brings the unedited copies up
+to the team repo, so when push has refreshed the team repo it adds the
+revision it synced to the entry's `pushBaseRevs`, newest first, even under
+`--dry-run`, since the sync has already written the files, and even when the
+sync stopped partway (it warns), since the copies it did not reach still match
+an older base. If push cannot save that revision, it stops before scanning and
+pushes nothing. The next push
+accepts a copy at any of `pushBaseRevs` or at `rev`, so a copy the sync left
+alone as edited is recognized again once the member undoes the edit, back to
+whichever version a sync gave it. The list keeps the 20 newest revisions; a
+copy at an older one reads as an edit until the checkout pulls. Push never
+moves the entry's `rev`: the pull fast path reads it, and the checkout still
+lacks that revision's docs and agents. A reset entry keeps its bases, `rev`
+included, in `pushBaseRevs`, and the next pull in the checkout rewrites the
+entry without them. A checkout with no entry (new, or last pulled by an older
+CLI) syncs against the shared `lastPullRev`, which may be another checkout's or
+cleared, so when the scan lists a team rule or skill as modified, push stops
+before creating a branch and asks the member to save any edits to them and run
+`teamai pull` in the checkout. A rule this machine placed (`placedRules`) is the
+author's own copy and does not count; config-only pushes and new resources go
+through. Every full sync keeps only the
+entries of checkouts `git worktree list` still reports, so a deleted or
+re-created worktree's entry goes with the next full sync in any checkout. A
+state.json written before this field has no entry, so each checkout does one
+full sync after the upgrade.
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

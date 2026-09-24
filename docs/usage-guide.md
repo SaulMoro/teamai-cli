@@ -153,7 +153,10 @@ manifests, resource cache) lives in a per-project partition under
 `~/.teamai/projects/<slug>/`, **not** in the business repo, so your workspace has no
 teamai residue and a `git worktree` of the same repo shares one partition. The first
 `teamai pull` in a new worktree does a full sync into it, even when the team repo has
-not changed since another checkout pulled. Per-agent
+not changed since another checkout pulled. Until a worktree has pulled, `teamai push`
+there stops if it finds a team rule or skill that differs from the team repo, since it
+cannot tell a teammate's update from your edit. `teamai pull` replaces those files, so
+copy any you edited somewhere safe, pull, put your edits back and push again. Per-agent
 project roots (`.claude/`, `.cursor/`, `.codebuddy/`, …) are still created inside the
 workspace on **SessionStart** for the tool that just opened. For example, opening
 Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull` still
