@@ -364,9 +364,19 @@ ID is not split this way, since Claude fires SessionStart again on resume, in a
 new process, and its Stop carries the whole transcript. The monitor's `process_exit` also
 records `processExitAfter`, the last event it observed, and closes only that
 run: an exit appended after the next run of the same ID began does not end it,
-and one whose run compaction dropped is ignored. A tool's own session ID is
+and one whose run compaction dropped is ignored. A dashboard started before
+that field existed writes none, and it reads the log and appends its exit in
+one pass, so an unannotated exit less than one PID check (15 s) after the open
+fallback run began belongs to the run closed before it; a run that really
+exits that soon is then left open, not counted twice. A tool's own session ID is
 reported and snapshotted under the ID itself, as before, so a session resumed
-after compaction dropped its events still reads what its scope reported; a
+after compaction dropped its events still reads what its scope reported. The
+scope that first reports it also appends the ID and its own data home key to
+`~/.teamai/dashboard/session-owners.jsonl` (never a path, #666), and a session
+recorded there is that scope's wherever it is resumed later, whatever the log
+still holds, so another scope never reports its transcript again; the first
+line for an ID wins, and the file grows by one line per such session, like the
+snapshots. A
 fallback run is reported and snapshotted as `<id>@<first event's timestamp>`,
 which does not change when compaction drops earlier runs. A snapshot entry keyed
 by a bare fallback ID (written before) is the sum of the runs of that ID in the
@@ -389,8 +399,10 @@ ID is the parent PID):
 `<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`
 for the user scope. The first time a scope needs one it seeds it from the shared
 `~/.teamai/dashboard/reported-*.json`, so nothing reported before the upgrade is
-sent again; after that it reads only its own. The seed takes only the entries of
-the scope's runs in the log, under their run IDs, and none for a run recorded
+sent again; after that it reads only its own. That file summed every scope's
+runs of an ID, so the runs of the whole log consume it in log order, whichever
+scope each belongs to, and the seed keeps the shares of the scope's own runs,
+under their run IDs; none goes to a run recorded
 with a `dataHome` path: that release already kept per-scope snapshots, so a
 shared entry under its ID is another scope's. An unmatched entry is dropped, so a
 later reuse of the ID cannot inherit it. The shared file is no longer

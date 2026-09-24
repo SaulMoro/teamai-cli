@@ -15,7 +15,10 @@ import {
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
-import { getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
+import {
+  getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree,
+  DASHBOARD_PID_CHECK_INTERVAL_MS,
+} from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
   aggregateDailySessions,
@@ -172,8 +175,10 @@ function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | und
 
 /**
  * A scope's snapshot, seeded from the shared one when the scope has none yet.
- * `split` gives each run's entry at its own totals and its share of a bare
- * entry, for {@link adoptBareKeys}.
+ * The shared file summed every scope's runs of an ID, so they consume it in
+ * the order of the whole log, and the scope keeps its own runs' shares.
+ * `split` gives each run of the log its entry at its own totals and its share
+ * of a bare entry, for {@link adoptBareKeys}.
  */
 async function readSnapshot<T>(
   name: ReportedSnapshotName,
@@ -183,9 +188,11 @@ async function readSnapshot<T>(
   const own = scopeSnapshotPath(name, config);
   if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
   const shared = await readJson<Record<string, T>>(sharedSnapshotPath(name));
-  const events = await filterEventsByScope(await readEvents(), config);
-  const { current, take } = await split(events);
-  const adopted = adoptBareKeys(shared ?? {}, events, current, take, 'shared');
+  const logged = await readEvents();
+  const all = await runsOfLog(logged);
+  const events = await filterEventsByScope(logged, config);
+  const { current, take } = await split(all);
+  const adopted = adoptBareKeys(shared ?? {}, all, current, take, 'shared');
   // Copy only resolved run IDs. An unmatched bare entry cannot be allowed to
   // attach to a future reuse after the source of the snapshot has been lost.
   const seed: Record<string, T> = {};
@@ -202,13 +209,10 @@ async function readSnapshot<T>(
 }
 
 export async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
-  const parsed = await readSnapshot('interventions', config, async (events) => {
-    const promptTokens = await readReportedPromptTokens(config);
-    return {
-      current: Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))),
-      take: takeInterventions((runId) => Object.hasOwn(promptTokens, runId)),
-    };
-  });
+  const parsed = await readSnapshot('interventions', config, async (events) => ({
+    current: Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))),
+    take: takeInterventions(await sharedCoverage(events)),
+  }));
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -269,6 +273,14 @@ export function takeInterventions(covered: (runId: string) => boolean): TakeRepo
       },
     };
   };
+}
+
+/** The runs of the whole log (`all`) the shared prompt-token snapshot covers, for seeding. */
+async function sharedCoverage(all: DashboardEvent[]): Promise<(runId: string) => boolean> {
+  const shared = await readJson<ReportedPromptTokens>(sharedSnapshotPath('prompt-tokens'));
+  const current = computePromptTokenDelta(aggregateSessionMetrics(all), {}).nextReported;
+  const covered = adoptBareKeys(shared ?? {}, all, current, takePromptTokens, 'shared');
+  return (runId) => Object.hasOwn(covered, runId);
 }
 
 /** A run's daily share, for the runs `covered`, as for interventions. */
@@ -397,13 +409,10 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
 }
 
 async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
-  return (await readSnapshot('daily-sessions', config, async (events) => {
-    const promptTokens = await readReportedPromptTokens(config);
-    return {
-      current: computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported,
-      take: takeDaily((runId) => Object.hasOwn(promptTokens, runId)),
-    };
-  })) ?? {};
+  return (await readSnapshot('daily-sessions', config, async (events) => ({
+    current: computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported,
+    take: takeDaily(await sharedCoverage(events)),
+  }))) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -435,7 +444,9 @@ function hasDailyDelta(delta: ReturnType<typeof computeDailyStatsDelta>['delta']
  * written before events carried a key is decided by its first cwd, by the
  * dispatcher's rule: the scope that directory resolves to now, so a nested
  * clone under a project is not the project's; one with no cwd, or a cwd gone
- * since, is no scope's. A caller without a scope config reads the whole log.
+ * since, is no scope's. A tool's own session ID a scope has recorded as its
+ * own (see `session-owners.jsonl`) is that scope's, whatever the log still
+ * holds. A caller without a scope config reads the whole log.
  */
 export async function filterEventsByScope(
   events: DashboardEvent[],
@@ -462,10 +473,33 @@ export async function filterEventsByScope(
     }
     return owns;
   };
-  // The log is hand-editable: a key that is not a string counts as absent.
-  // An unreleased build of #795 recorded the data home path in place of its key.
+  const eventKeys = await keysOf(events);
+  const { runOf, runIds, deciding } = splitRuns(events, eventKeys);
+  const owners = await readSessionOwners();
+  const owned = await Promise.all(deciding.map(async (i, run) => {
+    // Recorded by the scope that first reported it, so a session resumed
+    // elsewhere after compaction dropped its events stays that scope's.
+    const owner = owners.get(runIds[run]);
+    if (owner !== undefined) return keys.has(owner);
+    if (i === undefined) return false;
+    const key = eventKeys[i];
+    const cwd = events[i].cwd;
+    return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
+  }));
+  return events.flatMap((e, i) => {
+    const run = runOf[i];
+    return run !== undefined && owned[run] ? [{ ...e, sessionId: runIds[run] }] : [];
+  });
+}
+
+/**
+ * Each event's data home key. The log is hand-editable: a key that is not a
+ * string counts as absent. An unreleased build of #795 recorded the data home
+ * path in place of its key.
+ */
+async function keysOf(events: DashboardEvent[]): Promise<Array<string | undefined>> {
   const hashes = new Map<string, Promise<string>>();
-  const eventKeys = await Promise.all(events.map((e) => {
+  return Promise.all(events.map((e) => {
     if (typeof e.dataHomeKey === 'string') return e.dataHomeKey;
     if (typeof e.dataHome !== 'string') return undefined;
     let key = hashes.get(e.dataHome);
@@ -475,19 +509,36 @@ export async function filterEventsByScope(
     }
     return key;
   }));
-  // A tool's own session ID is one run, whatever ends it records: `claude
-  // --resume` continues it, in a new process, and its Stop carries the whole
-  // transcript. It is returned under the ID itself, so it stays the session
-  // already reported after compaction drops its events. A PID-fallback ID
-  // (`pid-…`) names one run until it ends, then comes back for a later one,
-  // maybe in another scope, so each run is decided on its own and returned
-  // under the ID plus its first event's timestamp, which stays the same
-  // whichever earlier runs compaction has dropped. A second end with nothing recorded since the first
-  // (the dashboard monitor's process_exit after SessionEnd) belongs to the run
-  // just closed. A start from another process than its open run's begins a new
-  // run, though nothing ended that one (a crash with no dashboard running).
+}
+
+/**
+ * The runs of a log: each event's run (none for an exit whose run is gone),
+ * each run's ID, and the event that decides its scope.
+ *
+ * A tool's own session ID is one run, whatever ends it records: `claude
+ * --resume` continues it, in a new process, and its Stop carries the whole
+ * transcript. It is returned under the ID itself, so it stays the session
+ * already reported after compaction drops its events. A PID-fallback ID
+ * (`pid-…`) names one run until it ends, then comes back for a later one,
+ * maybe in another scope, so each run is decided on its own and returned under
+ * the ID plus its first event's timestamp, which stays the same whichever
+ * earlier runs compaction has dropped. A second end with nothing recorded since
+ * the first (the dashboard monitor's process_exit after SessionEnd) belongs to
+ * the run just closed. A start from another process than its open run's begins
+ * a new run, though nothing ended that one (a crash with no dashboard running).
+ * The monitor's exit names the last event it observed (`processExitAfter`);
+ * a dashboard started before that field existed wrote none, so its exit less
+ * than one PID check after the open run began may have been observed before
+ * that run, and belongs to the run closed before it.
+ */
+function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined>): {
+  runOf: Array<number | undefined>;
+  runIds: string[];
+  deciding: Array<number | undefined>;
+} {
   const runOf: Array<number | undefined> = [];
   const runPid: Array<number | undefined> = [];
+  const runStart: number[] = [];
   const observedRuns = new Map<string, number>();
   const openRun = new Map<string, number>();
   const closedRun = new Map<string, number>();
@@ -501,8 +552,11 @@ export async function filterEventsByScope(
     const open = openRun.get(e.sessionId);
     if (starts && open !== undefined && fallback
       && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) openRun.delete(e.sessionId);
+    const closed = closedRun.get(e.sessionId);
+    const early = e.type === 'process_exit' && !observed && fallback && open !== undefined && closed !== undefined
+      && Date.parse(e.timestamp) - runStart[open] < DASHBOARD_PID_CHECK_INTERVAL_MS;
     let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
-      : openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
+      : early ? closed : openRun.get(e.sessionId) ?? (ends ? closed : undefined);
     // The observed run may have been compacted. Its delayed exit must not
     // manufacture a new session or close a later reuse of the same ID.
     if (observed && run === undefined) {
@@ -512,8 +566,9 @@ export async function filterEventsByScope(
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
       runIds.push(fallback ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
+      runStart.push(Date.parse(e.timestamp));
     }
-    if (ends && fallback && (!observed || openRun.get(e.sessionId) === run)) {
+    if (ends && fallback && (!(observed || early) || openRun.get(e.sessionId) === run)) {
       openRun.delete(e.sessionId);
       closedRun.set(e.sessionId, run);
     } else if (!ends || !fallback) {
@@ -526,16 +581,62 @@ export async function filterEventsByScope(
     if (eventKeys[i] !== undefined ? current === undefined || eventKeys[current] === undefined
       : current === undefined && !!e.cwd) deciding[run] = i;
   });
-  const owned = await Promise.all(deciding.map(async (i) => {
-    if (i === undefined) return false;
-    const key = eventKeys[i];
-    const cwd = events[i].cwd;
-    return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
-  }));
+  return { runOf, runIds, deciding };
+}
+
+/** Every event of the log under its run ID, whichever scope it belongs to. */
+async function runsOfLog(events: DashboardEvent[]): Promise<DashboardEvent[]> {
+  const { runOf, runIds } = splitRuns(events, await keysOf(events));
   return events.flatMap((e, i) => {
     const run = runOf[i];
-    return run !== undefined && owned[run] ? [{ ...e, sessionId: runIds[run] }] : [];
+    return run !== undefined ? [{ ...e, sessionId: runIds[run] }] : [];
   });
+}
+
+// ─── Session owners ─────────────────────────────────────
+//
+//  ~/.teamai/dashboard/session-owners.jsonl   {"sessionId":"<tool's own ID>","dataHomeKey":"<key>"} per line
+//
+//  A tool's own session ID can be resumed anywhere, long after compaction
+//  dropped its events, and its Stop carries the whole transcript. So the scope
+//  that first reports it records itself here, append-only, and the session
+//  stays that scope's. Only the ID and the key, never a path (#666). The first
+//  line for an ID wins.
+//
+
+function sessionOwnersPath(): string {
+  return path.join(getTeamaiHomeDir(), 'dashboard', 'session-owners.jsonl');
+}
+
+async function readSessionOwners(): Promise<Map<string, string>> {
+  const owners = new Map<string, string>();
+  const content = await readFileSafe(sessionOwnersPath());
+  for (const line of (content ?? '').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed && typeof parsed === 'object' && 'sessionId' in parsed && 'dataHomeKey' in parsed
+        && typeof parsed.sessionId === 'string' && typeof parsed.dataHomeKey === 'string'
+        && !owners.has(parsed.sessionId)) owners.set(parsed.sessionId, parsed.dataHomeKey);
+    } catch {
+      // A torn or hand-edited line records no owner.
+    }
+  }
+  return owners;
+}
+
+/** Records `key` as the owner of the tool-own session IDs among `events` that have none yet. */
+async function recordSessionOwners(events: DashboardEvent[], key: string): Promise<void> {
+  const owners = await readSessionOwners();
+  const ids = new Set(events.map((e) => e.sessionId).filter((id) => !id.startsWith('pid-') && !owners.has(id)));
+  if (ids.size === 0) return;
+  try {
+    await ensureDir(path.dirname(sessionOwnersPath()));
+    await fs.promises.appendFile(sessionOwnersPath(),
+      [...ids].map((sessionId) => JSON.stringify({ sessionId, dataHomeKey: key })).join('\n') + '\n');
+  } catch (e) {
+    log.debug(`Could not record session owners: ${(e as Error).message}`);
+  }
 }
 
 /**
@@ -642,6 +743,7 @@ export async function reportUsageToTeam(
     // both the intervention delta and the prompt-count/token delta from it.
     // Only the sessions recorded in this scope (#785).
     const dashboardEvents = await filterEventsByScope(await readEvents(), reportsConfig);
+    if (reportsConfig) await recordSessionOwners(dashboardEvents, await dataHomeKey(getDataHome(reportsConfig)));
     const metrics = aggregateSessionMetrics(dashboardEvents);
 
     const currentInterventions = interventionCounts(metrics);

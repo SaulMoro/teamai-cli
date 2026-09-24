@@ -118,6 +118,44 @@ describe('filterEventsByScope', () => {
       expect(before[2].sessionId).toBe(after[0].sessionId);
     });
 
+    it('an exit a dashboard before processExitAfter wrote just after the next run began ends the earlier run', async () => {
+      // That monitor read the log before SessionEnd and the next SessionStart,
+      // then appended its exit, unannotated, after them.
+      const p = '/home/jeff/.teamai/projects/p';
+      const at = async (type: DashboardEvent['type'], timestamp: string) =>
+        ({ ...(await scopedEvent(undefined, 'pid-1', p)), type, timestamp });
+      const log = [
+        await at('session_start', '2026-01-01T00:00:00.000Z'),
+        await at('session_end', '2026-01-01T00:01:00.000Z'),
+        await at('session_start', '2026-01-01T00:01:01.000Z'),
+        await at('process_exit', '2026-01-01T00:01:02.000Z'),
+        await at('prompt_submit', '2026-01-01T00:01:03.000Z'),
+      ];
+      const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
+      expect(project.map((e) => e.sessionId)).toEqual([
+        'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z',
+        'pid-1@2026-01-01T00:01:01.000Z', 'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:01:01.000Z',
+      ]);
+    });
+
+    it('an unannotated exit well after the open run began still ends that run', async () => {
+      const p = '/home/jeff/.teamai/projects/p';
+      const at = async (type: DashboardEvent['type'], timestamp: string) =>
+        ({ ...(await scopedEvent(undefined, 'pid-1', p)), type, timestamp });
+      const log = [
+        await at('session_start', '2026-01-01T00:00:00.000Z'),
+        await at('session_end', '2026-01-01T00:01:00.000Z'),
+        await at('session_start', '2026-01-01T00:02:00.000Z'),
+        await at('process_exit', '2026-01-01T00:03:00.000Z'),
+        await at('prompt_submit', '2026-01-01T00:04:00.000Z'),
+      ];
+      const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
+      expect(project.map((e) => e.sessionId)).toEqual([
+        'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z',
+        'pid-1@2026-01-01T00:02:00.000Z', 'pid-1@2026-01-01T00:02:00.000Z', 'pid-1@2026-01-01T00:04:00.000Z',
+      ]);
+    });
+
     it('a delayed observed exit targets the earlier run across scopes and is ignored after that run is compacted', async () => {
       const old = { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai')), timestamp: '2026-01-01T00:00:00Z' };
       const ended = { ...old, type: 'session_end' as const, timestamp: '2026-01-01T00:01:00Z' };

@@ -263,8 +263,8 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(user)).toBe(5);
   });
 
-  it('a session that moves from one project into another is reported once, by the first', async () => {
-    const { root, project } = await setup();
+  /** A second git project, Q, with its own team. */
+  async function setupQ(): Promise<{ rootQ: string; projectQ: LocalConfig }> {
     const rootQ = path.join(tmp, 'project-q');
     fs.mkdirSync(rootQ);
     execFileSync('git', ['init', '-q'], { cwd: rootQ });
@@ -276,6 +276,12 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     });
     const projectQ = await resolveConfigForDir(rootQ);
     if (!projectQ) throw new Error('fixture config Q did not resolve');
+    return { rootQ, projectQ };
+  }
+
+  it('a session that moves from one project into another is reported once, by the first', async () => {
+    const { root, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
     await hook('session-start', 'claude', { session_id: 'moved', cwd: root, hook_event_name: 'SessionStart' });
     await prompts('moved', root, 3);
     await prompts('moved', rootQ, 2);
@@ -463,6 +469,32 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(user)).toBe(2);
   });
 
+  it('a session resumed in another project after compaction dropped its events stays its first project\'s', async () => {
+    const { root, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    await session('claude', { session_id: 'resumed', cwd: root });
+    await hook('session-end', 'claude', { session_id: 'resumed', cwd: root, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(project)).toBe(1);
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    // `claude --resume` in Q: its Stop carries P's transcript, which Q never reported.
+    await session('claude', { session_id: 'resumed', cwd: rootQ });
+
+    expect(await report(projectQ)).toBeNull();
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('the session owners a report keeps hold no path (#666)', async () => {
+    const { root, project } = await setup();
+    await session('copilot', { session_id: 'copilot-p', cwd: root });
+    await report(project);
+
+    const owners = fs.readFileSync(path.join(teamaiHome(), 'dashboard', 'session-owners.jsonl'), 'utf-8');
+    expect(owners).toContain('copilot-p');
+    expect(owners).not.toContain(root);
+    expect(owners).not.toContain(getDataHome(project));
+  });
+
   it('a session resumed after compaction dropped its events is still the one already reported', async () => {
     const { root, project } = await setup();
     await session('claude', { session_id: 'resumed', cwd: root });
@@ -514,6 +546,27 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(project)).toBe(1);
     expect(await reportedSessions(user)).toBe(1);
     expect(await reportedPrompts(user)).toBe(1);
+  });
+
+  it('a shared bare entry is consumed in the order of every scope\'s runs, not one scope\'s', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    // A release before #666 recorded Copilot's cwd. It reported the user-scope
+    // run of `pid-7` as 1 prompt, then recorded P's run of that ID unreported.
+    const timestamp = (s: number) => new Date(Date.now() - 600_000 + s * 1000).toISOString();
+    const event = (type: string, s: number, cwd: string) => ({ type, timestamp: timestamp(s), sessionId: 'pid-7', tool: 'copilot', cwd });
+    const log = [
+      event('session_start', 0, elsewhere), event('prompt_submit', 1, elsewhere), event('stop', 2, elsewhere), event('session_end', 3, elsewhere),
+      event('session_start', 10, root), event('prompt_submit', 11, root), event('stop', 12, root), event('session_end', 13, root),
+    ];
+    fs.mkdirSync(path.join(teamaiHome(), 'dashboard'), { recursive: true });
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), log.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    writeSharedSnapshots({ 'pid-7': 1 }, new Date().toISOString().slice(0, 10));
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+    expect(await report(user)).toBeNull();
   });
 
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
