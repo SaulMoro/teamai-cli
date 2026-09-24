@@ -365,10 +365,10 @@ new process, and its Stop carries the whole transcript. The monitor's `process_e
 records `processExitAfter`, the last event it observed, and closes only that
 run: an exit appended after the next run of the same ID began does not end it,
 and one whose run compaction dropped is ignored. A dashboard started before
-that field existed writes none, and it reads the log and appends its exit in
-one pass, so an unannotated exit less than one PID check (15 s) after the open
-fallback run began belongs to the run closed before it; a run that really
-exits that soon is then left open, not counted twice. A tool's own session ID is
+that field existed writes none. A dead process records nothing more, so such
+an exit followed by more events of its fallback ID before the next start did
+not end the open run: it belongs to the run closed before it, however late it
+was appended. A tool's own session ID is
 reported and snapshotted under the ID itself, as before, so a session resumed
 after compaction dropped its events still reads what its scope reported. The
 scope that first reports it also appends the ID and its own data home key to
@@ -385,7 +385,9 @@ runs of an ID together. So the next time the scope reports, those runs consume
 the entry in log order, each taking up to its own totals of what is left; once
 the prompt-token entry is used up, the later runs were not reported and count
 as new sessions (the interventions and daily snapshots follow the prompt-token
-one, since their counts say nothing when they run out). The first run always
+one, since their counts say nothing when they run out). A run keeps its own
+success and correction flags, since the sum's are no single run's, so an
+adopted run changes no status total. The first run always
 takes a share, as the entry means that release reported it. The entry is then
 removed, so no later run of that ID reads it. Only an earlier release wrote bare
 entries, and a seeded one may be another scope's, so a run whose first event

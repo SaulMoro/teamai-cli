@@ -15,10 +15,7 @@ import {
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
-import {
-  getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree,
-  DASHBOARD_PID_CHECK_INTERVAL_MS,
-} from './types.js';
+import { getVotesDir, getDataHome, getTeamaiHomeDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
   aggregateDailySessions,
@@ -526,10 +523,11 @@ async function keysOf(events: DashboardEvent[]): Promise<Array<string | undefine
  * the first (the dashboard monitor's process_exit after SessionEnd) belongs to
  * the run just closed. A start from another process than its open run's begins
  * a new run, though nothing ended that one (a crash with no dashboard running).
- * The monitor's exit names the last event it observed (`processExitAfter`);
- * a dashboard started before that field existed wrote none, so its exit less
- * than one PID check after the open run began may have been observed before
- * that run, and belongs to the run closed before it.
+ * The monitor's exit names the last event it observed (`processExitAfter`).
+ * A dashboard started before that field existed wrote none; since a dead
+ * process records nothing more, such an exit followed by more events of its
+ * fallback ID before the next start did not end the open run: it was observed
+ * before that run began, and belongs to the run closed before it.
  */
 function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined>): {
   runOf: Array<number | undefined>;
@@ -538,12 +536,21 @@ function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined
 } {
   const runOf: Array<number | undefined> = [];
   const runPid: Array<number | undefined> = [];
-  const runStart: number[] = [];
   const observedRuns = new Map<string, number>();
   const openRun = new Map<string, number>();
   const closedRun = new Map<string, number>();
   const deciding: Array<number | undefined> = [];
   const runIds: string[] = [];
+  // Whether each event is followed by activity of its ID (anything but a start
+  // or a monitor exit) before that ID's next start.
+  const continues: boolean[] = [];
+  const active = new Map<string, boolean>();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const { sessionId, type } = events[i];
+    continues[i] = active.get(sessionId) ?? false;
+    if (type === 'session_start') active.set(sessionId, false);
+    else if (type !== 'process_exit') active.set(sessionId, true);
+  }
   events.forEach((e, i) => {
     const fallback = e.sessionId.startsWith('pid-');
     const ends = e.type === 'session_end' || e.type === 'process_exit';
@@ -553,10 +560,10 @@ function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined
     if (starts && open !== undefined && fallback
       && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) openRun.delete(e.sessionId);
     const closed = closedRun.get(e.sessionId);
-    const early = e.type === 'process_exit' && !observed && fallback && open !== undefined && closed !== undefined
-      && Date.parse(e.timestamp) - runStart[open] < DASHBOARD_PID_CHECK_INTERVAL_MS;
+    const stale = e.type === 'process_exit' && !observed && fallback && open !== undefined && closed !== undefined
+      && continues[i];
     let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
-      : early ? closed : openRun.get(e.sessionId) ?? (ends ? closed : undefined);
+      : stale ? closed : openRun.get(e.sessionId) ?? (ends ? closed : undefined);
     // The observed run may have been compacted. Its delayed exit must not
     // manufacture a new session or close a later reuse of the same ID.
     if (observed && run === undefined) {
@@ -566,9 +573,8 @@ function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined
     if (run === undefined) {
       run = deciding.push(undefined) - 1;
       runIds.push(fallback ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
-      runStart.push(Date.parse(e.timestamp));
     }
-    if (ends && fallback && (!(observed || early) || openRun.get(e.sessionId) === run)) {
+    if (ends && fallback && !stale && (!observed || openRun.get(e.sessionId) === run)) {
       openRun.delete(e.sessionId);
       closedRun.set(e.sessionId, run);
     } else if (!ends || !fallback) {

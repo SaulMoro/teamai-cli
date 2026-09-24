@@ -138,7 +138,9 @@ describe('filterEventsByScope', () => {
       ]);
     });
 
-    it('an unannotated exit well after the open run began still ends that run', async () => {
+    it('an unannotated exit followed by more of the open run did not end it, however late it came', async () => {
+      // A delayed callback or skewed clock: a dead process records nothing more,
+      // so the prompt after the exit shows the open run went on.
       const p = '/home/jeff/.teamai/projects/p';
       const at = async (type: DashboardEvent['type'], timestamp: string) =>
         ({ ...(await scopedEvent(undefined, 'pid-1', p)), type, timestamp });
@@ -148,6 +150,24 @@ describe('filterEventsByScope', () => {
         await at('session_start', '2026-01-01T00:02:00.000Z'),
         await at('process_exit', '2026-01-01T00:03:00.000Z'),
         await at('prompt_submit', '2026-01-01T00:04:00.000Z'),
+      ];
+      const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
+      expect(project.map((e) => e.sessionId)).toEqual([
+        'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z',
+        'pid-1@2026-01-01T00:02:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:02:00.000Z',
+      ]);
+    });
+
+    it('an unannotated exit with nothing more of the open run ends it', async () => {
+      const p = '/home/jeff/.teamai/projects/p';
+      const at = async (type: DashboardEvent['type'], timestamp: string) =>
+        ({ ...(await scopedEvent(undefined, 'pid-1', p)), type, timestamp });
+      const log = [
+        await at('session_start', '2026-01-01T00:00:00.000Z'),
+        await at('session_end', '2026-01-01T00:01:00.000Z'),
+        await at('session_start', '2026-01-01T00:02:00.000Z'),
+        await at('process_exit', '2026-01-01T00:03:00.000Z'),
+        await at('session_start', '2026-01-01T00:04:00.000Z'),
       ];
       const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
       expect(project.map((e) => e.sessionId)).toEqual([

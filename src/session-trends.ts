@@ -131,8 +131,9 @@ function reportedSessionCache(
 /**
  * `run`'s share of `left`, what remains of the snapshot an earlier release kept
  * for all the runs of one session ID: each counter up to the run's own. The
- * success and correction flags describe the one session that release counted,
- * so each run it covered reads them as they are.
+ * sum's success and correction flags are not any one run's (a successful run
+ * and an interrupted one sum to unsuccessful), so each run takes its own and
+ * reports no status change: that release already counted the sum's.
  */
 export function takeDailySession(
   run: DailySessionSnapshot,
@@ -168,7 +169,7 @@ export function takeDailySession(
   const cacheEligible = upTo(run.sessionCacheEligibleTokens ?? 0, leftCache.eligible);
   return {
     taken: {
-      date: run.date, prompts, durationMs, succeeded: left.succeeded, corrected: left.corrected,
+      date: run.date, prompts, durationMs, succeeded: run.succeeded, corrected: run.corrected,
       requestDaily: takenDaily, sessionCacheReadTokens: cacheRead, sessionCacheEligibleTokens: cacheEligible,
     },
     left: {

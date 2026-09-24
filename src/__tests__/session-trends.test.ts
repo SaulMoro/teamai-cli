@@ -5,6 +5,8 @@ import {
   computeDailyStatsDelta,
   mergeDailyStats,
   summarizeTrendWindow,
+  takeDailySession,
+  type DailySessionSnapshot,
 } from '../session-trends.js';
 import type { DashboardEvent, DailyUserStats } from '../types.js';
 
@@ -123,6 +125,24 @@ describe('daily session trends', () => {
     const { delta } = computeDailyStatsDelta(current, legacyReported);
     // Baseline reconstructed from requestDaily → no re-add.
     expect(delta['2026-09-02']).toMatchObject({ cacheReadTokens: 0, cacheEligibleInputTokens: 0 });
+  });
+
+  it('a run taking its share of an earlier release\'s sum reports no status change of its own', () => {
+    // Two reported runs of one ID, one successful and one interrupted: the sum is
+    // unsuccessful, but each run keeps its own status, so neither moves the totals.
+    const day = '2026-09-01';
+    const snapshot = (prompts: number, succeeded: 0 | 1, corrected: 0 | 1): DailySessionSnapshot =>
+      ({ date: day, prompts, durationMs: 1000, succeeded, corrected, requestDaily: {} });
+    const runs = new Map([['pid-1@t1', snapshot(1, 1, 0)], ['pid-1@t2', snapshot(1, 0, 1)]]);
+    let left = snapshot(2, 0, 1);
+    const reported: Record<string, DailySessionSnapshot> = {};
+    for (const [runId, run] of runs) {
+      const share = takeDailySession(run, left);
+      reported[runId] = share.taken;
+      left = share.left;
+    }
+    const { delta } = computeDailyStatsDelta(runs, reported);
+    expect(delta[day]).toMatchObject({ sessionsEnded: 0, sessionsSucceeded: 0, sessionsCorrected: 0, promptTurns: 0 });
   });
 
   it('compares the latest seven UTC days with the prior seven days', () => {
