@@ -151,7 +151,9 @@ In both modes, commands that only read reports (`members`, `digest`, `projects m
 Project machine-data (config, state, the team-repo clone, search index, MCP
 manifests, resource cache) lives in a per-project partition under
 `~/.teamai/projects/<slug>/`, **not** in the business repo, so your workspace has no
-teamai residue and a `git worktree` of the same repo shares one partition. Per-agent
+teamai residue and a `git worktree` of the same repo shares one partition. The first
+`teamai pull` in a new worktree does a full sync into it, even when the team repo has
+not changed since another checkout pulled. Per-agent
 project roots (`.claude/`, `.cursor/`, `.codebuddy/`, …) are still created inside the
 workspace on **SessionStart** for the tool that just opened. For example, opening
 Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull` still

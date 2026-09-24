@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import matter from 'gray-matter';
 import { selectAgentsForDirectory } from './resources/agents.js';
 import { requireInit, loadState, saveState, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
@@ -37,6 +37,7 @@ import {
   scopedToolPaths,
   SYNC_LOCK_FILENAME,
   usesBranchWorktree,
+  managedMcpWorkspaceId,
 } from './types.js';
 import type { CultureFrontmatter } from './types.js';
 import type { ResourceNamespaces } from './roles.js';
@@ -747,6 +748,27 @@ function warnStubNotDeployed(scopeLabel: string, e: unknown): void {
   log.persist(message);
 }
 
+/**
+ * A checkout's key in state.lastPullByWorkspace. The path alone is not enough:
+ * a worktree removed and re-created at the same path would inherit the old
+ * entry and be skipped again (#807). Its `.git` entry is new every time the
+ * checkout is created, so its inode is part of the key. A linked worktree's
+ * `.git` is a file git never rewrites, so its birth time is added against inode
+ * reuse. The main checkout's `.git` is a directory whose ctime moves on every
+ * commit, which is what the birth time falls back to on Linux without statx.
+ */
+async function checkoutKey(projectRoot: string): Promise<string> {
+  const id = managedMcpWorkspaceId(projectRoot);
+  try {
+    const dotGit = await stat(path.join(projectRoot, '.git'));
+    return dotGit.isFile()
+      ? `${id}-${dotGit.ino}-${Math.trunc(dotGit.birthtimeMs)}`
+      : `${id}-${dotGit.ino}`;
+  } catch {
+    return id;
+  }
+}
+
 async function pullForScope(
   localConfig: LocalConfig,
   options: GlobalOptions,
@@ -769,6 +791,12 @@ async function pullForScope(
   const targetsField = revisionField === 'lastPullRev'
     ? 'lastPullTargets' as const
     : 'lastInheritedPullTargets' as const;
+  // This checkout's key in state.lastPullByWorkspace. Only a project scope
+  // delivers into its own checkout; the user scope and inherited pulls write
+  // under HOME, which every worktree shares (#807).
+  const workspaceKey = revisionField === 'lastPullRev' && localConfig.scope === 'project' && localConfig.projectRoot
+    ? await checkoutKey(localConfig.projectRoot)
+    : null;
 
   // Step 1: refresh team repo (git pull, or HTTP /repo materialization)
   const pullSpin = spinner(`[${scopeLabel}] Pulling team repo...`).start();
@@ -1027,9 +1055,14 @@ async function pullForScope(
   if (!options.force && !options.dryRun && !submodulesChanged) {
     try {
       const state = await loadStateForScope(localConfig);
-      if (currentRev && state[revisionField] && state[revisionField] === currentRev) {
+      // The shared revision still gates the fast path: `lastPullRev = null` is
+      // how exclude, tags, roles, projects, init and bootstrap force a full sync.
+      const recorded = workspaceKey
+        ? state.lastPullByWorkspace?.[workspaceKey]
+        : { rev: state[revisionField], targets: state[targetsField] };
+      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev) {
         currentTargets = await getInstalledResourceTargets(freshConfig, localConfig);
-        const previousTargets = state[targetsField];
+        const previousTargets = recorded.targets;
         const syncedTargets = new Set(previousTargets ?? []);
         const targetSetMatches = previousTargets !== undefined
           && previousTargets.length === currentTargets.length
@@ -1382,6 +1415,7 @@ async function pullForScope(
     if (revisionField === 'lastPullRev') {
       state.lastPull = new Date().toISOString();
     }
+    const previousRev = state[revisionField];
     // A failed submodule update keeps the previous rev so the next pull
     // retries the update (see refreshTeamRepo).
     if (!submodulesFailed) {
@@ -1395,8 +1429,20 @@ async function pullForScope(
         }
       }
     }
-    state[targetsField] = currentTargets
+    const syncedTargets = currentTargets
       ?? await getInstalledResourceTargets(freshConfig, localConfig);
+    state[targetsField] = syncedTargets;
+    const syncedRev = state[revisionField];
+    if (workspaceKey && !submodulesFailed && syncedRev) {
+      // A new revision, or a forced full sync (lastPullRev cleared), leaves
+      // every other checkout out of date too: drop their records so each one
+      // does its own full sync, instead of only the first checkout to pull.
+      const others = previousRev === syncedRev ? state.lastPullByWorkspace : undefined;
+      state.lastPullByWorkspace = {
+        ...others,
+        [workspaceKey]: { rev: syncedRev, targets: syncedTargets },
+      };
+    }
     await saveStateForScope(state, localConfig);
   }
 

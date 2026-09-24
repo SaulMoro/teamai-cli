@@ -676,6 +676,18 @@ export const StateSchema = z.object({
   lastPullRev: z.string().nullable().default(null),
   /** Installed, enabled tool targets that completed the last full pull. */
   lastPullTargets: z.array(z.string()).optional(),
+  /**
+   * `lastPullRev` and `lastPullTargets` as each checkout of a project scope
+   * last synced them, by checkout (see `checkoutKey` in pull.ts). state.json is
+   * shared by every worktree of the project, but a pull writes skills, rules,
+   * agents and docs into the checkout it runs in: a worktree added after the
+   * last pull has not received that revision, and two checkouts with different
+   * tool directories must not compare against each other's targets (#807).
+   */
+  lastPullByWorkspace: z.record(z.string(), z.object({
+    rev: z.string(),
+    targets: z.array(z.string()),
+  })).optional(),
   /** Git commit hash synchronized through the safe user-resource inheritance channel. */
   lastInheritedPullRev: z.string().nullable().optional(),
   /** Tool targets that completed the last inherited user-resource pull. */
