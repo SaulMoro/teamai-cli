@@ -47,6 +47,26 @@ from the launch directory to the *current* repository root. None of them follows
 a fresh worktree. So resources have to land in the worktree the user is actually
 working in.
 
+**What that means for "already synced".** `state.json` sits in the shared
+partition, so its `lastPullRev` and `lastPullTargets` say what the *project* last
+synced, not what this checkout holds. A project-scope `pull` also records both per
+checkout in `lastPullByWorkspace`, keyed by `managedMcpWorkspaceId(workspaceRoot)`
+plus the inode and birth time of the checkout's `.git` entry (new each time a
+worktree is created, so a worktree re-created at the same path gets its own key),
+and takes the unchanged-repo fast path only when the shared `lastPullRev` and this
+checkout's own revision and tool targets all match. A worktree added after the
+last pull therefore gets a full sync on its first pull, and two checkouts with
+different tool directories no longer force a full sync on each other (#807).
+Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
+roles, projects, init and bootstrap apply their changes: the pull that records a
+revision different from the one it found (a new team revision, or none after a
+clear) drops every other checkout's entry, so each checkout does its own full
+sync. Entries of deleted worktrees are dropped the same way, with the next new
+team revision or forced sync; until then they are a few bytes each and no
+checkout matches their key. A
+state.json written before this field has no entry, so each checkout does one full
+sync after the upgrade.
+
 ### Why the main worktree, not `git-common-dir` (verified)
 
 `projectAnchor` uses the first entry of `git worktree list --porcelain` rather than
