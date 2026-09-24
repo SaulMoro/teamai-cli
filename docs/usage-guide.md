@@ -1731,14 +1731,17 @@ Dashboard sessions stay in one machine-wide `~/.teamai/dashboard/events.jsonl`,
 but each event records a key of its scope's data home (a hash, not the path),
 so a scope reports only the sessions recorded in it: a user-scope pull no
 longer reports a project's sessions, and a project reports its Copilot sessions
-and sessions started under a symlinked path. The key is per event: hooks that
-run outside the project (for example in a worktree removed before the session
-ends) report their events to the scope they ran in. Events recorded by an
-earlier release carry no key: a project reports those whose directory lies
-under its root, the user scope reports none of them. Each scope also keeps its own snapshot of what it already
-reported, so a session that moved into another project mid-session reaches both
-teams with the part recorded in each; the first report after upgrading starts
-from the snapshot every scope used to share, so nothing is reported twice. A
+and sessions started under a symlinked path. A session is reported once, whole,
+by the scope it started in, even if it later moves into another project: its
+Stop carries the whole transcript's totals, so a second scope would count them
+again. Events recorded by an earlier release carry no key: a project reports
+those whose directory lies under its root, and the user scope those whose
+directory still exists and belongs to no project; events with no directory, or
+one removed since, are reported by no one. Each scope also keeps its own
+snapshot of what it already reported, so a session ID another scope already
+reported (Copilot reuses its fallback IDs) still counts as new here; the first
+report after upgrading starts from the snapshot every scope used to share, so
+nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes
 preserve them. The affected sync locks remain
 held until reporting finishes, preventing another pull from racing the report.

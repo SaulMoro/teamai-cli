@@ -375,14 +375,20 @@ function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
 }
 
 /**
- * The dashboard events a scope reports (#785): those recorded in it, keyed by
- * its data home (`dataHomeKey`). A project also owns the key of its in-repo
- * `.teamai`, where a hook recorded until migration moved the project to a
- * partition. An event written before events carried a key belongs to the
- * project whose root holds its cwd, never to the user scope. A cwd is raw as
- * the host sent it (a symlinked checkout, macOS `/tmp` vs `/private/tmp`), and
- * so is a non-git project's root, so both are realpath'd while they still exist.
- * A caller without a scope config reads the whole log.
+ * The dashboard events a scope reports (#785): every event of the sessions
+ * recorded in it. A session is decided once, whole, by its first event keyed
+ * with a data home (`dataHomeKey`), because a Stop carries the whole
+ * transcript's totals: split per event, a session that moved into another
+ * scope would count there again the part recorded before the move. A project
+ * also owns the key of its in-repo `.teamai`, where a hook recorded until
+ * migration moved the project to a partition. A session written before events
+ * carried a key is decided by its first cwd: a project's when the root holds
+ * it, the user scope's when the directory still exists and resolves to the
+ * user scope now, the dispatcher's rule; one with no cwd, or a cwd gone since,
+ * is no scope's. A cwd is raw as the host sent it (a symlinked checkout, macOS
+ * `/tmp` vs `/private/tmp`), and so is a non-git project's root, so both are
+ * realpath'd while they still exist. A caller without a scope config reads the
+ * whole log.
  */
 export async function filterEventsByScope(
   events: DashboardEvent[],
@@ -398,19 +404,41 @@ export async function filterEventsByScope(
     }
     return real;
   };
-  const keys = new Set([await dataHomeKey(getDataHome(config))]);
+  const ownKey = await dataHomeKey(getDataHome(config));
+  const keys = new Set([ownKey]);
   if (config.projectRoot) {
     // Unless the project is rooted at HOME, where that is the user scope's.
     const legacy = await dataHomeKey(path.join(config.projectRoot, '.teamai'));
     if (legacy !== (await dataHomeKey(path.join(getUserHome(), '.teamai')))) keys.add(legacy);
   }
   const root = config.projectRoot ? scopeRoot(await realPath(config.projectRoot)) : undefined;
-  const kept = await Promise.all(events.map(async (e) => {
-    // The log is hand-editable: a key that is not a string counts as absent.
-    if (typeof e.dataHomeKey === 'string') return keys.has(e.dataHomeKey);
-    return !!root && !!e.cwd && isUnderScopeRoot(await realPath(e.cwd), root);
+  const { resolveConfigForDir } = await import('./config.js');
+  const resolvesHere = new Map<string, Promise<boolean>>();
+  const ownsCwd = (cwd: string): Promise<boolean> => {
+    let owns = resolvesHere.get(cwd);
+    if (!owns) {
+      owns = root ? realPath(cwd).then((real) => isUnderScopeRoot(real, root))
+        : pathExists(cwd).then(async (exists) => {
+          const resolved = exists ? await resolveConfigForDir(cwd) : null;
+          return !!resolved && (await dataHomeKey(getDataHome(resolved))) === ownKey;
+        });
+      resolvesHere.set(cwd, owns);
+    }
+    return owns;
+  };
+  // The log is hand-editable: a key that is not a string counts as absent.
+  const keyed = (e: DashboardEvent | undefined): boolean => typeof e?.dataHomeKey === 'string';
+  const deciding = new Map<string, DashboardEvent>();
+  for (const e of events) {
+    const current = deciding.get(e.sessionId);
+    if (keyed(e) ? !keyed(current) : !current && !!e.cwd) deciding.set(e.sessionId, e);
+  }
+  const owned = new Set<string>();
+  await Promise.all([...deciding].map(async ([sessionId, e]) => {
+    const mine = typeof e.dataHomeKey === 'string' ? keys.has(e.dataHomeKey) : !!e.cwd && await ownsCwd(e.cwd);
+    if (mine) owned.add(sessionId);
   }));
-  return events.filter((_, i) => kept[i]);
+  return events.filter((e) => owned.has(e.sessionId));
 }
 
 /**

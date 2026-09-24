@@ -126,9 +126,13 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
     expect(await reportedSessions(user)).toBe(1);
   });
 
-  it('a Copilot session, which records no cwd, is reported by its project', async () => {
+  it.each([
+    ['names its cwd', true],
+    ['sends no cwd, from a hook running in the project', false],
+  ])('a Copilot session, whose events record no cwd, is reported by its project: payload %s', async (_, withCwd) => {
     const { root, user, project } = await setup();
-    await session('copilot', { session_id: 'copilot-p', cwd: root });
+    if (!withCwd) process.chdir(root);
+    await session('copilot', withCwd ? { session_id: 'copilot-p', cwd: root } : { session_id: 'copilot-p' });
 
     expect(await reportedSessions(user)).toBe(0);
     expect(await reportedSessions(project)).toBe(1);
@@ -155,10 +159,12 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
     expect(await reportedSessions(project)).toBe(1);
   });
 
-  it('events recorded before sessions carried a data home go to their project, never to the user scope', async () => {
+  it('events recorded before sessions carried a data home go to the scope their cwd resolves to now', async () => {
     const { root, user, project } = await setup();
     const link = path.join(tmp, 'link-p');
     fs.symlinkSync(root, link, 'dir');
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.mkdirSync(path.join(tmp, 'elsewhere'));
     const timestamp = new Date().toISOString();
     const old = (sessionId: string, cwd: string | undefined) => [
       { type: 'session_start', timestamp, sessionId, tool: 'claude', cwd },
@@ -170,10 +176,12 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
       ...old('old-in-p', path.join(root, 'src')),
       ...old('old-via-link', link),
       ...old('old-elsewhere', path.join(tmp, 'elsewhere')),
+      // Nothing can tell whose these were, so no scope reports them.
+      ...old('old-gone', path.join(tmp, 'deleted-worktree')),
       ...old('old-no-cwd', undefined),
     ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 
-    expect(await reportedSessions(user)).toBe(0);
+    expect(await reportedSessions(user)).toBe(1);
     expect(await reportedSessions(project)).toBe(2);
   });
 });
@@ -208,20 +216,23 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     }
   }
 
-  it('a session split across the user scope and a project reaches both teams with its own counts', async () => {
+  // A Stop carries the whole transcript's totals, so a session is reported once,
+  // whole, by the scope it started in; split per event, the later scope would
+  // count the earlier scope's part again.
+  it('a session that moves from the user scope into a project is reported once, by the user scope', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');
     fs.mkdirSync(elsewhere);
-    await hook('session-start', 'claude', { session_id: 'split', cwd: elsewhere, hook_event_name: 'SessionStart' });
-    await prompts('split', elsewhere, 3);
-    await prompts('split', root, 2); // `cd` into the project mid-session
-    await hook('stop', 'claude', { session_id: 'split', cwd: root, hook_event_name: 'Stop' });
+    await hook('session-start', 'claude', { session_id: 'moved', cwd: elsewhere, hook_event_name: 'SessionStart' });
+    await prompts('moved', elsewhere, 3);
+    await prompts('moved', root, 2); // `cd` into the project mid-session
+    await hook('stop', 'claude', { session_id: 'moved', cwd: root, hook_event_name: 'Stop' });
 
-    expect(await reportedPrompts(user)).toBe(3);
-    expect(await reportedPrompts(project)).toBe(2);
+    expect(await reportedPrompts(project)).toBe(0);
+    expect(await reportedPrompts(user)).toBe(5);
   });
 
-  it('a session split across two projects reaches both teams with its own counts', async () => {
+  it('a session that moves from one project into another is reported once, by the first', async () => {
     const { root, project } = await setup();
     const rootQ = path.join(tmp, 'project-q');
     fs.mkdirSync(rootQ);
@@ -234,13 +245,27 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     });
     const projectQ = await resolveConfigForDir(rootQ);
     if (!projectQ) throw new Error('fixture config Q did not resolve');
-    await hook('session-start', 'claude', { session_id: 'split', cwd: root, hook_event_name: 'SessionStart' });
-    await prompts('split', root, 3);
-    await prompts('split', rootQ, 2);
-    await hook('stop', 'claude', { session_id: 'split', cwd: rootQ, hook_event_name: 'Stop' });
+    await hook('session-start', 'claude', { session_id: 'moved', cwd: root, hook_event_name: 'SessionStart' });
+    await prompts('moved', root, 3);
+    await prompts('moved', rootQ, 2);
+    await hook('stop', 'claude', { session_id: 'moved', cwd: rootQ, hook_event_name: 'Stop' });
 
-    expect(await reportedPrompts(project)).toBe(3);
-    expect(await reportedPrompts(projectQ)).toBe(2);
+    expect(await reportedPrompts(projectQ)).toBe(0);
+    expect(await reportedPrompts(project)).toBe(5);
+  });
+
+  it('a session ID another scope already reported is a new session in this scope (Copilot PID fallback)', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    // No session ID: Copilot falls back to `pid-<parent pid>`, reused by the next session.
+    await session('copilot', { cwd: elsewhere });
+    expect(await reportedSessions(user)).toBe(1);
+    // Compaction dropped the ended session; a later one in P gets the same ID.
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    await session('copilot', { cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
   });
 
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {

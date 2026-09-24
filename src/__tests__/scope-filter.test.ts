@@ -59,6 +59,27 @@ describe('filterEventsByScope', () => {
       expect(await ids(await scoped(), userScope())).toEqual(['u1']);
     });
 
+    it('a session goes whole to the scope of its first keyed event', async () => {
+      // A Stop carries the whole transcript's totals, so P must not count them again.
+      const moved = [
+        makeEvent('/Users/jeff/other-work', 'm1'),
+        await scopedEvent('/Users/jeff/other-work', 'm1', '/home/jeff/.teamai'),
+        { ...(await scopedEvent('/Users/jeff/project-a', 'm1', '/home/jeff/.teamai/projects/p')), type: 'stop' as const, prompts: 5 },
+      ];
+      expect(await ids(moved, userScope())).toEqual(['m1', 'm1', 'm1']);
+      expect(await ids(moved, projectScope('/Users/jeff/project-a'))).toEqual([]);
+    });
+
+    it('a keyed event decides a session over an earlier unkeyed one', async () => {
+      // Recorded across the upgrade: the unkeyed event's cwd is P's, the key the user scope's.
+      const upgraded = [
+        makeEvent('/Users/jeff/project-a', 'x1'),
+        await scopedEvent('/Users/jeff/project-a', 'x1', '/home/jeff/.teamai'),
+      ];
+      expect(await ids(upgraded, projectScope('/Users/jeff/project-a'))).toEqual([]);
+      expect(await ids(upgraded, userScope())).toEqual(['x1', 'x1']);
+    });
+
     it('a project keeps what it recorded under its in-repo .teamai before moving to a partition', async () => {
       const legacy = [await scopedEvent(undefined, 'l1', '/Users/jeff/project-a/.teamai')];
       expect(await ids(legacy, projectScope('/Users/jeff/project-a'))).toEqual(['l1']);
