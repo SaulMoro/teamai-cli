@@ -14,7 +14,6 @@ import { learningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
-import { placedResourcePath } from './push-namespaces.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { resolveDesiredDocs } from './resources/docs.js';
@@ -22,7 +21,6 @@ import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
-import { loadTagsConfig, filterByTags } from './utils/tags.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import type { GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, TagsConfig } from './types.js';
 import {
@@ -46,8 +44,7 @@ import {
   managedMcpWorkspaceId,
 } from './types.js';
 import type { CultureFrontmatter } from './types.js';
-import type { ResourceNamespaces } from './roles.js';
-import { deliversEveryNamespace, resolveResourceNamespaces } from './resource-namespaces.js';
+import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution, resolveEntries } from './namespaced-entries.js';
 import { resetWarnOnce } from './utils/warn-once.js';
 import { envEntryReader } from './resources/env.js';
