@@ -268,7 +268,8 @@ teamai projects remove checkout
 
 `--namespaces` 会把同一组 namespace 写入项目的每种资源类型（`knowledge`、`skills`、
 `learnings`、`agents`）；`update` 在每种类型各自的列表上增删，因此手工编辑过的按类型
-布局会被保留。执行 `projects remove` 后，仍激活该项目的目录在下一次 pull 时会提示警告、
+布局会被保留。两者都不会改动 `env`、`hooks` 或 `mcp`：这些请手动声明（见
+[Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)），因为旧版 CLI 的成员读不了它们。执行 `projects remove` 后，仍激活该项目的目录在下一次 pull 时会提示警告、
 回退为仅按角色过滤，并清理已部署的该项目 skills、rules 和 agents——前提是该项目的内容
 仍在团队仓库中，因为正是靠它识别已部署的副本。请在成员都 pull 过之后，再用单独的变更删除这些内容。
 
@@ -803,32 +804,85 @@ teamai push
 
 > 管理员可在 `teamai.yaml` 中设置强制规则（`sharing.rules.enforced`），成员不可删除。
 
+### Env、hooks 与 MCP server 按 namespace 划分
+
+环境变量、团队 hooks 和 MCP server 各自是团队仓库根目录下的一个列表文件（对所有人共享），
+外加每个 namespace 一个文件：
+
+```text
+env/env.yaml              hooks/hooks.yaml              mcp/mcp.yaml              根目录，共享
+env/<ns>/env.yaml         hooks/<ns>/hooks.yaml         mcp/<ns>/mcp.yaml         仅在 <ns> 激活时生效
+```
+
+namespace 的声明方式与 skills、agents 相同：写在 `manifest/roles.yaml` 中角色或
+`manifest/projects.yaml` 中项目的 `resources:` 下，每种类型各用自己的 key。成员的活动
+namespace 是其角色与所在目录项目的并集：
+
+```yaml
+# manifest/projects.yaml
+projects:
+  - id: checkout
+    resources:
+      env:   [checkout]
+      hooks: [checkout]
+      mcp:   [checkout]
+```
+
+- **覆盖。** 活动 namespace 中的条目会整体替换根目录中同名的条目：变量按 `key`、hook 按
+  `id`、server 按 `name`（`command`、`args`、`env` 与 `tools:` 一起替换；覆盖条目没有
+  `tools:` 时对所有工具生效）。不做字段级合并。
+- **冲突只停掉该类型，不停掉整个 pull。** 同一文件中重复的名字、两个活动 namespace 中的
+  同名条目，或无法解析的活动文件，都会让该类型本次不生效：已安装的内容保持不变，警告会给出
+  文件与修复方法。Hooks 与 MCP 在文件无效时不再移除全部托管条目。
+- **停用** namespace（`teamai projects set`、`teamai roles set`）后，下一次 pull（包括
+  `Already synced`）会恢复被覆盖的根条目并移除仅属于该 namespace 的条目。即使
+  `env/env.yaml` 不存在或为空，`env.sh` 也会被重写。
+- **MCP 的 `${VAR}`** 从同一份解析后的环境变量集合取值。
+- **旧模式**（成员没有角色，且团队没有 `projects.yaml`）只读取根目录文件，行为不变；
+  `teamai doctor` 会列出根文件中重复的名字。
+- **值从哪里来。** `teamai env list`、`teamai mcp list`、`teamai hooks list` 与
+  `teamai list <env|hooks|mcp> --source repo` 会给出每个条目的 namespace 以及是否覆盖了
+  根条目；`teamai status` 按 namespace 计数；`teamai doctor` 以提示信息列出每一处覆盖。
+- **先让所有成员升级。** teamai 0.25.0 与 0.26.0 beta 会拒绝不认识的 `resources:` key，
+  声明 `env`、`hooks` 或 `mcp` 会让这些版本的 pull 失败。从本版本起，未知的
+  `resources:` key 只会给出警告。
+
+这些文件取代的按条目 key：
+
+| Key | 适用于 | 现在 |
+|---|---|---|
+| `projects:` | env、hooks、MCP | 已移除：该条目不再下发给任何人，每次 pull 都会警告并给出应迁往的文件 |
+| `roles:` | env | 已移除，处理方式相同 |
+| `roles:` | hooks、MCP | 已弃用：在一个次版本内仍按角色过滤；pull 会警告，`teamai doctor` 有一项检查，两者都会列出每个目标文件 |
+
+没有自动迁移：把每个条目移到警告给出的 namespace 文件中，并删掉该 key。
+
 ### Env（环境变量）
 
 ```bash
 teamai env add API_ENDPOINT https://api.example.com --description "团队 API 地址"
+teamai env add API_ENDPOINT https://checkout.internal --project checkout   # 该项目的 env namespace 文件
+teamai env remove API_ENDPOINT --role checkout                          # env/checkout/env.yaml
 teamai env list
 teamai push
 ```
 
-变量定义在团队仓库的 `env/env.yaml` 中。`teamai env add` 只写入前三个字段；`roles` 与 `projects` 需要手动编辑，与 hooks、MCP server 一致：
+变量定义在团队仓库的 `env/env.yaml` 中，按 namespace 划分的写在 `env/<ns>/env.yaml`
+（见 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)）。`teamai env add` 与
+`teamai env remove` 编辑根文件，加上 `--role <ns>` / `--project <id>` 时编辑对应
+namespace 的文件；`--project` 使用该项目声明的唯一 env namespace。`teamai push` 会带上
+其中任何一个文件的改动。
 
 ```yaml
 variables:
   - key: API_ENDPOINT
     value: https://api.example.com
     description: 团队 API 地址              # 可选
-  - key: CHECKOUT_DB_URL
-    value: https://checkout-db.internal
-    projects: [checkout]                  # 可选；默认所有目录
-  - key: DEPLOY_REGISTRY
-    value: registry.internal
-    roles: [devops]                       # 可选；默认所有成员
 ```
 
-`roles` 与 `projects` 的规则与 MCP server、hooks 完全一致：省略时对所有人生效，`[]` 对使用了该维度的成员都不生效，成员未配置的那个维度不产生过滤，两者以 **AND** 组合。不再匹配的变量会在下一次 pull 时从 `env.sh` 中移除，即使这次 pull 因团队仓库未变化而提示 `Already synced` 也一样，因此切换角色、执行 `teamai projects set` 或升级 CLI 都会把它从成员的 shell 中撤掉，无需 `--force`。在那次 pull 之前，`teamai doctor` 会报告 `env.sh` 中仍在导出、但已不再下发的变量，前一个项目的密钥不会悄无声息地继续生效。对已存在的 key 执行 `teamai env add` 会保留它原有的 `roles:`/`projects:`。
-
-`pull` 报告的是实际送达该成员的数量，与声明总数不同时会同时给出总数（`Synced 1 of 3 env variable(s)`），以便区分"被维度过滤掉"和"丢失"。
+不再下发到该目录的变量会在下一次 pull 时从 `env.sh` 中移除，即使这次 pull 因团队仓库
+未变化而提示 `Already synced` 也一样。在那次 pull 之前，`teamai doctor` 会报告
+`env.sh` 中仍在导出的这类变量，前一个项目的密钥不会悄无声息地继续生效。
 
 由于 shell 配置文件中只有一个 teamai 区块、只指向一个 `env.sh`，在多个项目级目录中都执行过 pull 的机器，新开的 shell 里会是最后一次 pull 的那个目录的变量。每个目录自己的 `env.sh` 仍然是正确的；只是 shell 配置文件只能指向其中一个。
 
@@ -866,23 +920,18 @@ servers:
       FORMATTER_MODE: strict
     requires: [npx]                      # PATH 上找不到 npx 时跳过并提示
     tools: [claude, cursor]              # 可选；默认所有支持 MCP 的工具
-    roles: [devops]                      # 可选；默认所有成员
-    projects: [checkout]                 # 可选；默认所有目录
 ```
 
 `requires` 从 `PATH` 解析。Windows 上还会匹配 `PATHEXT` 后缀（`uvx` 可匹配 `uvx.exe` / `uvx.cmd`）。
 
-`roles` 填写 `manifest/roles.yaml` 中的角色 id。成员的任一角色（`primaryRole` 或 `additionalRoles`）被列出时才会安装该 server；`roles: []` 对任何人都不安装，与 `tools: []` 一致。未配置角色的成员会收到全部 server，与 skills、rules 的无过滤回退一致。成员切换角色后，不再匹配的 server 会在下一次 pull 时移除，手动添加的 server 不受影响。`roles.yaml` 中不存在的 id 每次 pull 只提示一次。不支持该字段的旧版 teamai 会忽略它并为所有人安装。
+项目或角色通过 `mcp/<ns>/mcp.yaml` 限定 server（见
+[Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)）：其中的 server 只下发给激活了该
+namespace 的成员，并替换根目录中的同名 server。按 namespace 划分正是为了控制成本：
+否则一个有 5 个项目、每个项目 3 个 server 的团队，会让每位成员启动 15 个 server 进程，
+并在每次会话的上下文中携带 15 份工具列表。
 
-`projects` 填写 `manifest/projects.yaml` 中的项目 id，在另一个维度上遵循同一条规则：目录通过 `teamai projects set` 绑定的任一项目被列出时才会安装该 server；`projects: []` 对任何人都不安装；未绑定任何项目的目录会收到全部 server。`teamai projects set` 切换到其他项目后，不再匹配的 server 会在下一次 pull 时移除。`projects.yaml` 中不存在的 id 每次 pull 只提示一次；团队根本没有 `projects.yaml` 时同样会提示，因为此时无法校验任何 id。
-
-空列表有一个需要注意的点，它对 `roles: []` 一直同样适用：“对任何人都不安装”指的是使用了该维度的成员。完全未配置该维度的成员不受过滤，仍会收到该条目。旧版角色因 `manifest/roles.yaml` 无法加载而未能解析时，不算“未配置”：在 manifest 修复之前，该成员收不到任何按角色限定的条目。如果需要它对所有人都不生效，请用 `tools: []` 或直接删掉该条目。
-
-缺少 `projects.yaml` 并不会关掉这个 key。目录的活动项目来自它自己的 `config.yaml`，所以无论清单是否存在，绑定到 `billing` 的目录依然会过滤掉 `projects: [checkout]` 的 server。清单提供的是校验 id 的能力。
-
-两个维度互相独立，并以 **AND** 组合：`roles: [frontend]` 与 `projects: [checkout]` 同时出现时，只分发给 checkout 上的 frontend 成员，而不是两者的并集。这与 `tools:` 和 `roles:` 现有的组合方式一致，也有意区别于角色与项目**资源命名空间**取并集的行为——后者回答的是"同步哪些目录"这个不同的问题。
-
-这正是这两个 key 要控制的成本：一个有 5 个项目、每个项目 3 个 server 的团队，会让每位持有该角色的成员启动 15 个 server 进程，并在每次会话的上下文中携带 15 份工具列表。
+`teamai remove mcp <name>` 会搜索所有 MCP 文件。名字只在一个文件中定义时从该文件移除；
+在多个文件中定义时，需要用 `--role <ns>` 或 `--project <id>` 指明是哪个 namespace 文件。
 
 各工具的落点：
 
@@ -913,7 +962,7 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 
 Copilot 使用原生 `mcpServers` 结构：`stdio` 写成 `type: "local"`，远程传输保留 `http` 或 `sse`，每个 TeamAI 管理的条目都会带上必需的 `tools: ["*"]` 允许列表。TeamAI 遵循 `COPILOT_HOME`，项目配置使用 Copilot CLI 官方文档指定的 `.github/mcp.json` 仓库路径。详见 [GitHub Copilot CLI 添加 MCP Server](https://docs.github.com/zh/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)。Codex 支持 `stdio` 与 `http`，`sse` 会被跳过。Qoder 使用对应作用域 `.qoder/settings.json` 中与 Claude 兼容的 `mcpServers` 格式。Kiro 在专用的、只含 `mcpServers` 的 `.kiro/settings/mcp.json` 中使用同一格式（见 [Kiro MCP 配置文档](https://kiro.dev/docs/mcp/configuration/)）。OpenCode 支持 `stdio`（写成其 `type:"local"` 形态）与 `http`（`type:"remote"`），`sse` 会被跳过，其 server 位于共享 `opencode.json` 的 `mcp` 键下。归属记录在 `~/.teamai/managed-mcp.json`——手动添加的 server 不动；与手写同名则跳过，除非 `--force`。
 
-**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。取值优先来自环境变量，其次是 `env/env.yaml` → `~/.teamai/env`。变量无法解析则跳过并提示。
+**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。取值优先来自环境变量，其次是该目录收到的团队环境变量（`env/env.yaml` 与活动的 `env/<ns>/env.yaml`）。变量无法解析则跳过并提示。
 
 teamai 会**把每个 `${VAR}` 解析成取值后原样写入**各工具的配置文件（新建文件权限为 `0600`）。它不依赖任何工具自身的环境变量展开——因为那种展开很脆弱：最典型的是，以 GUI 方式（Dock/Launchpad）启动的 IDE 不会继承你 shell 中 `export` 的变量，`${VAR}` 占位符会展开为空、导致服务端 401。解析成明文可以保证无论工具如何启动，token 都在。
 
@@ -922,7 +971,7 @@ teamai 会**把每个 `${VAR}` 解析成取值后原样写入**各工具的配�
 Claude Code 可能把来自仓库的 `.mcp.json` 标为待批准，需在交互式会话中确认一次。
 
 ```bash
-teamai mcp list              # 查看 server、密钥状态、角色限制与安装位置
+teamai mcp list              # 查看 server、各自来自哪个文件、密钥状态与安装位置
 teamai mcp inject            # 立即注入；--dry-run 预览，--force 覆盖同名
 teamai mcp remove            # 移除所有 teamai 管理的 server
 ```
@@ -1479,7 +1528,7 @@ inject 和 remove 只会操作你实际已安装的工具（即 `~/.<tool>/` 根
 
 ### 团队 Hooks 声明
 
-团队可在仓库 `hooks/hooks.yaml` 中声明自定义 hooks，`teamai pull` 会自动分发到支持团队 Hooks 的适配器。Pi 目前仅支持 TeamAI 内置生命周期桥接；此文件中的自定义 Hooks 和内置 Hook 覆盖不会应用到 Pi。
+团队可在仓库 `hooks/hooks.yaml` 中声明自定义 hooks，按 namespace 划分的写在 `hooks/<ns>/hooks.yaml`（见 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)），`teamai pull` 会自动分发到支持团队 Hooks 的适配器。`builtin:` 只从 `hooks/hooks.yaml` 读取。Pi 目前仅支持 TeamAI 内置生命周期桥接；此文件中的自定义 Hooks 和内置 Hook 覆盖不会应用到 Pi。
 
 ```yaml
 hooks:
@@ -1490,8 +1539,6 @@ hooks:
     command: 'bash -lc "~/.teamai/team-scripts/scan-secret.sh" || true'
     timeout: 15
     tools: [claude, cursor]
-    roles: [devops]                      # 可选；默认所有成员
-    projects: [checkout]                 # 可选；默认所有目录
 
 builtin:
   disabled: [Hook dispatch post-tool-use TodoWrite]
@@ -1505,8 +1552,7 @@ builtin:
 | `event` | Claude PascalCase 事件名（跨工具通用） |
 | `matcher` | 可选，工具 matcher |
 | `tools` | 可选，目标工具列表（默认 = 所有 hook 支持的工具） |
-| `roles` | 可选，`manifest/roles.yaml` 中的角色 id 列表（默认 = 所有成员；`[]` = 无人）。在下方安全治理之前生效；切换角色后，原角色的 hooks 会在下一次 pull 时移除。旧版 teamai 会忽略该字段。 |
-| `projects` | 可选，`manifest/projects.yaml` 中的项目 id 列表（默认 = 所有目录；`[]` = 无人）。匹配该目录通过 `teamai projects set` 绑定的项目；切换绑定后，原项目的 hooks 会在下一次 pull 时移除。与 `roles` 以 AND 组合。旧版 teamai 会忽略该字段。 |
+| `roles` | 已弃用：请改用 `hooks/<ns>/hooks.yaml`。在一个次版本内仍按角色 id 过滤，并警告给出目标文件 |
 | `builtin.disabled` | 禁用的内置 hook 列表 |
 | `builtin.overrides` | 仅可覆盖内置 hook 的 `timeout` |
 

@@ -345,7 +345,7 @@ export function resetEntryWarnings(): void {
 }
 
 /**
- * Warn about a failure and the notices, each once per process. Also written
+ * Warn about a failure and the notices, each once per run. Also written
  * to debug.log, because a SessionStart pull runs silent and a failure here is
  * what keeps a member on stale entries.
  */

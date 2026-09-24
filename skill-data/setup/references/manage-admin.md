@@ -92,8 +92,8 @@ above, each of which opens a PR (`--dry-run` previews). After `projects remove`,
 keep the project's content in the team repo until members have pulled: that is
 what lets their next pull clean up the copies they deployed.
 
-Every namespace that names a directory — `knowledge`, `skills` and `agents` in
-either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
+Every namespace that names a directory — `knowledge`, `skills`, `agents`, `env`,
+`hooks` and `mcp` in either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
 ignored and unchecked) — must be a single path segment: no `/`, `\`, `:` or control character, no trailing
 `.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …). Two
 namespaces of one resource type may not differ only by case, across both
@@ -122,14 +122,33 @@ teamai packages install code-review@claude-plugins-official   # Claude plugin
 teamai push                                 # share the updated teamai.yaml
 ```
 
-## Shared environment variables
+## Shared environment variables, hooks and MCP servers
 
 ```bash
-teamai env list              # list (values masked)
+teamai env list              # what reaches this directory, each with its namespace (values masked)
 teamai env list --reveal     # show values in plaintext
-teamai env add <KEY> <VALUE> # add or update
-teamai env remove <KEY>      # remove
+teamai env add <KEY> <VALUE> # add or update in env/env.yaml
+teamai env add <KEY> <VALUE> --project <id>   # or --role <ns>: in that namespace's env/<ns>/env.yaml
+teamai env remove <KEY>      # remove (same --role / --project)
+teamai remove mcp <name>     # searches every mcp file; --role / --project when several define it
 ```
+
+Env variables, team hooks and MCP servers are scoped like skills: the root file
+(`env/env.yaml`, `hooks/hooks.yaml`, `mcp/mcp.yaml`) reaches everyone, and
+`env/<ns>/env.yaml`, `hooks/<ns>/hooks.yaml`, `mcp/<ns>/mcp.yaml` reach only
+members whose role or project lists `<ns>` under `resources.env`, `resources.hooks`
+or `resources.mcp`. A namespace entry replaces the root entry of the same key, hook
+id or server name. Hooks and MCP servers have no add command: edit the file and
+`teamai push`. `teamai doctor` lists each override.
+
+- A name twice in one file, in two active namespaces, or an active file that does
+  not parse: that type is not applied for affected members and their installed
+  state is kept. Fix the file the warning names.
+- Per-entry `projects:` (and `roles:` on env) no longer works: such an entry reaches
+  nobody. `roles:` on hooks and MCP still filters for one more minor release. Pull
+  and `teamai doctor` name the namespace file each entry belongs in; move it there.
+- Have every member upgrade before declaring `env`, `hooks` or `mcp` in a
+  manifest: teamai 0.25.0 and the 0.26.0 betas reject those keys and their pull stops.
 
 ## When sync fails
 

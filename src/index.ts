@@ -388,7 +388,7 @@ projectsCmd
 projectsCmd
   .command('add <id>')
   .description('Add a project to manifest/projects.yaml, creating the file if needed (admin)')
-  .requiredOption('--namespaces <ns>', 'Comma-separated namespaces for every project resource type (e.g. common,checkout)')
+  .requiredOption('--namespaces <ns>', 'Comma-separated namespaces for knowledge, skills, learnings and agents (e.g. common,checkout); env, hooks and mcp are declared by hand')
   .option('--name <name>', 'Display name for the project')
   .option('-d, --description <desc>', 'Description for the project')
   .action(async (id: string, cmdOpts) => {
@@ -400,8 +400,8 @@ projectsCmd
 projectsCmd
   .command('update <id>')
   .description('Update a project in manifest/projects.yaml (admin)')
-  .option('--add-namespaces <ns>', 'Comma-separated namespaces to add to every resource type')
-  .option('--remove-namespaces <ns>', 'Comma-separated namespaces to remove from every resource type')
+  .option('--add-namespaces <ns>', 'Comma-separated namespaces to add to knowledge, skills, learnings and agents')
+  .option('--remove-namespaces <ns>', 'Comma-separated namespaces to remove from knowledge, skills, learnings and agents')
   .option('--name <name>', 'New display name for the project')
   .option('-d, --description <desc>', 'New description for the project')
   .action(async (id: string, cmdOpts) => {

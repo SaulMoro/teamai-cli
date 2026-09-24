@@ -23,7 +23,10 @@ import { maskEnvValue } from './resources/env.js';
 import { resolveTeamMcpServers } from './resources/mcp.js';
 import { resolveTeamHookEntries } from './resources/hooks.js';
 import { envEntryReader } from './resources/env.js';
-import { describeEntryFailure, describeOrigin, resolveEntriesFor } from './namespaced-entries.js';
+import {
+  describeEntryFailure, describeOrigin, resolveEntriesFor,
+  type EntryResolution, type ResolvedEntry,
+} from './namespaced-entries.js';
 
 export interface ListOptions extends GlobalOptions {
   /** Where to look for resources: 'repo' (default for backwards compat),
@@ -95,22 +98,25 @@ export async function status(options: GlobalOptions): Promise<void> {
   // Env, hooks and MCP count what reaches this directory: root plus the active
   // namespace files. A set that cannot be resolved counts as 0; `teamai doctor`
   // and the list commands say why.
-  const env = await resolveEntriesFor(envEntryReader, localConfig, { quiet: true });
-  counts.env = env.kind === 'resolved' ? env.entries.length : 0;
+  // A type with namespace entries says where they come from: `env: 3 (2 root, 1 checkout)`.
+  const origins: Record<string, string> = {};
+  const count = (type: string, resolution: EntryResolution<unknown>): void => {
+    counts[type] = resolution.kind === 'resolved' ? resolution.entries.length : 0;
+    if (resolution.kind === 'failed') origins[type] = ' (cannot be resolved; run `teamai doctor`)';
+    else if (resolution.entries.some((entry) => entry.namespace !== null)) origins[type] = ` (${describeOrigins(resolution.entries)})`;
+  };
+  count('env', await resolveEntriesFor(envEntryReader, localConfig, { quiet: true }));
 
   const agentsHandler = getAllHandlers().find((h) => h.type === 'agents');
   counts.agents = agentsHandler
     ? (await agentsHandler.scanTeamForPull(teamConfig, localConfig)).length
     : 0;
 
-  const hooks = (await resolveTeamHookEntries(localConfig, { quiet: true })).resolution;
-  counts.hooks = hooks.kind === 'resolved' ? hooks.entries.length : 0;
-
-  const mcp = await resolveTeamMcpServers(localConfig, { quiet: true });
-  counts.mcp = mcp.kind === 'resolved' ? mcp.entries.length : 0;
+  count('hooks', (await resolveTeamHookEntries(localConfig, { quiet: true })).resolution);
+  count('mcp', await resolveTeamMcpServers(localConfig, { quiet: true }));
 
   for (const type of RESOURCE_TYPES) {
-    console.log(`  ${type}: ${counts[type] ?? 0}`);
+    console.log(`  ${type}: ${counts[type] ?? 0}${origins[type] ?? ''}`);
   }
 
   // Local pushable items
@@ -466,4 +472,17 @@ async function printLocalAgentsSection(
 function filterAgents(agents: ResolvedAgent[], agentFilter?: string): ResolvedAgent[] {
   if (!agentFilter) return agents;
   return agents.filter((a) => a.id === agentFilter);
+}
+
+/** `2 root, 1 checkout`: how many resolved entries each place contributes, root first. */
+function describeOrigins(entries: readonly ResolvedEntry<unknown>[]): string {
+  const byPlace = new Map<string, number>();
+  for (const entry of entries) {
+    const place = entry.namespace ?? 'root';
+    byPlace.set(place, (byPlace.get(place) ?? 0) + 1);
+  }
+  return [...byPlace]
+    .sort(([a], [b]) => Number(b === 'root') - Number(a === 'root'))
+    .map(([place, n]) => `${n} ${place}`)
+    .join(', ');
 }

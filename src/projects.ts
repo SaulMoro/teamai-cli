@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
 import {
   NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, warnUnknownResourceKeys,
-  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type LaterResourceType, type NamespaceEntry,
+  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type NamespaceEntry,
 } from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
@@ -227,21 +227,6 @@ export function resolveProjectResourceNamespaces(input: {
   }
 
   return namespaces;
-}
-
-/**
- * Logical project ids this directory is bound to, or null when it is bound to
- * none. Null means "no project filter": entries scoped with `projects:` keep
- * reaching a directory that has selected no project, the same fallback
- * `activeRoleIds` applies to a member with no role.
- *
- * An empty list collapses to null on purpose — `LocalConfig.projects` treats
- * absent and empty alike ("no project partitioning"), so a directory cannot
- * express "member of no project" and thereby opt out of every scoped entry.
- */
-export function activeProjectIds(localConfig: { projects?: string[] }): string[] | null {
-  const ids = [...new Set(localConfig.projects ?? [])];
-  return ids.length > 0 ? ids : null;
 }
 
 /**

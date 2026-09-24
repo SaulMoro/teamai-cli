@@ -215,6 +215,13 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
     const hooksList = await runCLI(['hooks', 'list'], projectRoot, home);
     expect(hooksList.output).toContain('[lint] Stop  →  echo checkout-lint  (tools: all)  from checkout, overrides root');
 
+    const status = await runCLI(['status'], projectRoot, home);
+    expect(status.output).toContain('env: 3 (1 root, 2 checkout)');
+    expect(status.output).toContain('mcp: 3 (1 root, 2 checkout)');
+    expect(status.output).toContain('hooks: 1 (1 checkout)');
+    const listRepo = await runCLI(['list', 'mcp', '--source', 'repo'], projectRoot, home);
+    expect(listRepo.output).toContain('db  [http]  https://checkout-db.example.com/mcp  (checkout, overrides root)');
+
     const doctor = await runCLI(['doctor'], projectRoot, home);
     expect(doctor.output).toContain('env: "API_BASE" from env/checkout/env.yaml replaces env/env.yaml');
     expect(doctor.output).toContain('mcp: "db" from mcp/checkout/mcp.yaml replaces mcp/mcp.yaml');

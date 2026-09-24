@@ -124,12 +124,12 @@ Generated: do not edit by hand. Regenerate with
   - `teamai projects list` — List defined projects and the ones active in this directory
   - `teamai projects set [ids...]` — Set the projects active in this directory (comma-separated or repeated; empty to clear)
   - `teamai projects add <id>` — Add a project to manifest/projects.yaml, creating the file if needed (admin)
-    - `--namespaces <ns>` — Comma-separated namespaces for every project resource type (e.g. common,checkout)
+    - `--namespaces <ns>` — Comma-separated namespaces for knowledge, skills, learnings and agents (e.g. common,checkout); env, hooks and mcp are declared by hand
     - `--name <name>` — Display name for the project
     - `-d, --description <desc>` — Description for the project
   - `teamai projects update <id>` — Update a project in manifest/projects.yaml (admin)
-    - `--add-namespaces <ns>` — Comma-separated namespaces to add to every resource type
-    - `--remove-namespaces <ns>` — Comma-separated namespaces to remove from every resource type
+    - `--add-namespaces <ns>` — Comma-separated namespaces to add to knowledge, skills, learnings and agents
+    - `--remove-namespaces <ns>` — Comma-separated namespaces to remove from knowledge, skills, learnings and agents
     - `--name <name>` — New display name for the project
     - `-d, --description <desc>` — New description for the project
   - `teamai projects remove <id>` — Remove a project from manifest/projects.yaml (admin)

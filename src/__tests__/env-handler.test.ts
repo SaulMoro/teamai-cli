@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import YAML from 'yaml';
+import { execFileSync } from 'node:child_process';
 import { EnvHandler, describeEnvYamlShapeProblem } from '../resources/env.js';
 import { resetEntryWarnings } from '../namespaced-entries.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
@@ -93,6 +94,30 @@ scope: 'user',
   });
 
   // ─── scanTeamForPull ─────────────────────────────────────
+
+  describe('scanLocalForPush (#707)', () => {
+    const run = (args: string[]): void => {
+      execFileSync('git', args, {
+        cwd: repoPath,
+        env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+      });
+    };
+
+    it('reports each changed env file, namespace files included, and skips unchanged ones', async () => {
+      await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), 'variables: []\n');
+      await fse.outputFile(path.join(repoPath, 'env', 'billing', 'env.yaml'), 'variables: []\n');
+      run(['init', '-q', '-b', 'main']);
+      run(['add', '-A']);
+      run(['commit', '-q', '-m', 'seed']);
+
+      await fse.outputFile(path.join(repoPath, 'env', 'checkout', 'env.yaml'), 'variables:\n  - key: A\n    value: b\n');
+      await fse.writeFile(path.join(repoPath, 'env', 'billing', 'env.yaml'), 'variables:\n  - key: B\n    value: c\n');
+
+      const items = await handler.scanLocalForPush(teamConfig, localConfig);
+      expect(items.map((item) => item.relativePath)).toEqual(['env/billing/env.yaml', 'env/checkout/env.yaml']);
+      expect(items.map((item) => item.name)).toEqual(['billing/env.yaml', 'checkout/env.yaml']);
+    });
+  });
 
   describe('scanTeamForPull', () => {
     it('should return empty array when env.yaml does not exist', async () => {
