@@ -1,5 +1,6 @@
 import YAML from 'yaml';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
@@ -31,8 +32,11 @@ import {
 /** Snapshot of already-reported per-session intervention counts (idempotency basis). */
 type ReportedInterventions = Record<string, { interrupt: number; toolReject: number; correction: number }>;
 
+/** A rollout's reported totals, keyed by a hash of its transcript path (no path is stored). */
+type ReportedSegments = Record<string, { prompts: number; tokens: TokenUsage }>;
+
 /** Snapshot of already-reported per-session prompt counts + token usage (idempotency basis). */
-type ReportedPromptTokens = Record<string, { prompts: number; tokens: TokenUsage }>;
+type ReportedPromptTokens = Record<string, { prompts: number; tokens: TokenUsage; segments?: ReportedSegments }>;
 
 /** Cumulative delta for conversation-turn count + token usage (Issue #75). */
 interface PromptTokenDelta {
@@ -376,11 +380,33 @@ function tokenDelta(cur: TokenUsage, prev: TokenUsage | undefined): TokenUsage {
   };
 }
 
+/** A rollout's key in a snapshot: its transcript path, hashed. */
+function segmentKey(transcript: string): string {
+  return createHash('sha256').update(transcript).digest('hex').slice(0, 16);
+}
+
+/** The reported rollouts of a snapshot entry read from a file; empty when it holds none. */
+function reportedSegments(entry: unknown): ReportedSegments {
+  const segments: ReportedSegments = {};
+  if (!entry || typeof entry !== 'object' || !('segments' in entry) || !entry.segments || typeof entry.segments !== 'object') {
+    return segments;
+  }
+  for (const [key, segment] of Object.entries(entry.segments)) segments[key] = promptTokensEntry(segment);
+  return segments;
+}
+
 /**
  * Compute the prompt-count + token delta to report: for each current session, the
  * positive change since it was last reported. Idempotent (a re-run reports nothing
  * new), and never negative if a snapshot shrinks. The next snapshot keeps only
  * sessions still present in events.jsonl (compacted sessions stay folded into totals).
+ *
+ * A transcript-scoped session (Codex) is reported per rollout: each rollout's
+ * counters restart, and the session's total sums those still in the log. A
+ * rollout already reported that compaction has since dropped keeps its reported
+ * totals in the sum, so a later rollout of the session is reported in full
+ * rather than against them. An entry written before rollouts were kept is
+ * compared as a whole, then kept per rollout.
  */
 export function computePromptTokenDelta(
   current: Map<string, SessionMetrics>,
@@ -391,9 +417,24 @@ export function computePromptTokenDelta(
 
   for (const [sid, cur] of current) {
     const prev = reported[sid];
-    delta.prompts += Math.max(0, cur.prompts - (prev?.prompts ?? 0));
-    delta.tokens = addTokenUsage(delta.tokens, tokenDelta(cur.tokens, prev?.tokens));
-    nextReported[sid] = { prompts: cur.prompts, tokens: cur.tokens };
+    let prompts = cur.prompts;
+    let tokens = cur.tokens;
+    let segments: ReportedSegments | undefined;
+    if (cur.segments) {
+      segments = {};
+      for (const [transcript, segment] of Object.entries(cur.segments)) {
+        segments[segmentKey(transcript)] = { prompts: segment.prompts, tokens: { ...segment.tokens } };
+      }
+      for (const [key, gone] of Object.entries(reportedSegments(prev))) {
+        if (Object.hasOwn(segments, key)) continue;
+        segments[key] = gone;
+        prompts += gone.prompts;
+        tokens = addTokenUsage(tokens, gone.tokens);
+      }
+    }
+    delta.prompts += Math.max(0, prompts - (prev?.prompts ?? 0));
+    delta.tokens = addTokenUsage(delta.tokens, tokenDelta(tokens, prev?.tokens));
+    nextReported[sid] = { prompts, tokens, ...(segments ? { segments } : {}) };
   }
 
   return { delta, nextReported };

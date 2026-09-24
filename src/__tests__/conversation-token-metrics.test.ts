@@ -25,6 +25,8 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+const emptyTokens = (): TokenUsage => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+
 // An assistant transcript line carrying token usage for one message id.
 function assistantLine(id: string, usage: Partial<Record<string, number>>, blockType = 'text'): string {
   return JSON.stringify({
@@ -366,6 +368,33 @@ describe('aggregateSessionMetrics', () => {
     expect(resumedReport.delta.tokens).toEqual(resumedTokens);
     expect(computePromptTokenDelta(resumedMetrics, resumedReport.nextReported).delta.tokens)
       .toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+  });
+
+  it('keeps a reported rollout\'s totals once compaction drops it, so a resumed rollout is reported', () => {
+    // A Codex build that writes a new rollout per resume restarts its counters.
+    const tokensA = { input: 500, output: 50, cacheRead: 1_000, cacheCreation: 0 };
+    const tokensB = { input: 30, output: 3, cacheRead: 100, cacheCreation: 0 };
+    const stop = (path: string, tokens: TokenUsage, prompts: number): DashboardEvent => ({
+      type: 'stop', timestamp: new Date().toISOString(), sessionId: 's1', tool: 'codex',
+      transcriptPath: path, tokenScope: 'transcript', tokens, prompts,
+    });
+    const first = computePromptTokenDelta(aggregateSessionMetrics([stop('/rollouts/a.jsonl', tokensA, 5)]), {});
+    expect(first.delta).toEqual({ prompts: 5, tokens: tokensA });
+    expect(JSON.stringify(first.nextReported)).not.toContain('/rollouts/');
+
+    // Compaction dropped rollout A; the resume wrote rollout B.
+    const resumed = computePromptTokenDelta(aggregateSessionMetrics([stop('/rollouts/b.jsonl', tokensB, 2)]), first.nextReported);
+    expect(resumed.delta).toEqual({ prompts: 2, tokens: tokensB });
+    const again = computePromptTokenDelta(aggregateSessionMetrics([stop('/rollouts/b.jsonl', tokensB, 2)]), resumed.nextReported);
+    expect(again.delta).toEqual({ prompts: 0, tokens: emptyTokens() });
+  });
+
+  it('counts a Codex session\'s prompts across its rollouts', () => {
+    const stop = (path: string, prompts: number): DashboardEvent => ({
+      type: 'stop', timestamp: new Date().toISOString(), sessionId: 's1', tool: 'codex',
+      transcriptPath: path, tokenScope: 'transcript', tokens: emptyTokens(), prompts,
+    });
+    expect(aggregateSessionMetrics([stop('/rollouts/a.jsonl', 5), stop('/rollouts/b.jsonl', 2)]).get('s1')?.prompts).toBe(7);
   });
 
   it('does not add transcript-scoped Codex totals to a session-scoped snapshot', () => {

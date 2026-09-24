@@ -1214,6 +1214,11 @@ export interface SessionMetrics {
   prompts: number;
   /** Cumulative token usage across the logical session. */
   tokens: TokenUsage;
+  /**
+   * Each rollout's own totals for a transcript-scoped session (Codex), keyed by
+   * its transcript path: a rollout's counters restart, so the session sums them.
+   */
+  segments?: Record<string, { prompts: number; tokens: TokenUsage }>;
 }
 
 export type DashboardSessionStatus = 'running' | 'waiting_for_input' | 'error' | 'idle' | 'stopped';

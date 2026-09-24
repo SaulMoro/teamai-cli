@@ -1835,6 +1835,7 @@ export function aggregateSessionMetrics(
   const unscopedTokens = new Map<string, TimedTokenSnapshot>();
   const sessionTokens = new Map<string, TimedTokenSnapshot>();
   const transcriptTokens = new Map<string, Map<string, TimedTokenSnapshot>>();
+  const transcriptPrompts = new Map<string, Map<string, number>>();
 
   for (const event of events) {
     let m = map.get(event.sessionId);
@@ -1880,6 +1881,11 @@ export function aggregateSessionMetrics(
         // replace the same segment; a resumed rollout has a distinct path and adds
         // one new segment to the logical session total.
         setLatestTokenSnapshot(segments, event.transcriptPath, event);
+        if (event.type === 'stop' && typeof event.prompts === 'number') {
+          const prompts = transcriptPrompts.get(event.sessionId) ?? new Map<string, number>();
+          prompts.set(event.transcriptPath, event.prompts);
+          transcriptPrompts.set(event.sessionId, prompts);
+        }
       } else {
         // Claude, CodeBuddy, and pre-existing events retain latest-Stop semantics.
         setLatestTokenSnapshot(unscopedTokens, event.sessionId, event);
@@ -1900,11 +1906,17 @@ export function aggregateSessionMetrics(
       let total = emptyTokenUsage();
       for (const segment of segments.values()) total = addTokenUsage(total, segment.tokens);
       m.tokens = total;
+      const prompts = transcriptPrompts.get(sid);
+      m.segments = Object.fromEntries([...segments].map(([transcript, segment]) =>
+        [transcript, { prompts: prompts?.get(transcript) ?? 0, tokens: { ...segment.tokens } }]));
     } else {
       const unscoped = unscopedTokens.get(sid);
       if (unscoped) m.tokens = { ...unscoped.tokens };
     }
-    m.prompts = Math.max(submitCount.get(sid) ?? 0, stopPrompts.get(sid) ?? 0);
+    // A rollout's prompt count restarts too: its segments sum where they exist.
+    const rolloutPrompts = m.segments
+      ? Object.values(m.segments).reduce((sum, segment) => sum + segment.prompts, 0) : 0;
+    m.prompts = Math.max(submitCount.get(sid) ?? 0, stopPrompts.get(sid) ?? 0, rolloutPrompts);
   }
 
   return map;
