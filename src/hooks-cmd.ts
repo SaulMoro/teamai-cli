@@ -99,10 +99,15 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
 
     // Explicit user action → not gated by sharing.hooks.autoApply (auto: false).
     const { baseDir } = resolveHookScope(localConfig);
-    await reconcileTeamHooksForConfig(teamConfig, localConfig, {
+    const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
         auto: false,
         silent: options.silent,
     });
+    // The reason is already reported, and every installed hook left as it was.
+    if (!reconciled.ok) {
+        process.exitCode = 1;
+        return;
+    }
     let codexTrustGated = false;
     if (await hasInstalledCodexTrustGatedTool(teamConfig.toolPaths, baseDir)) {
         codexTrustGated = true;

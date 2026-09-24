@@ -22,7 +22,8 @@ vi.mock('../utils/logger.js', () => ({
 
 import { autoDetectInit } from '../config.js';
 import { resolveEntriesFor } from '../namespaced-entries.js';
-import { mcpList } from '../mcp-cmd.js';
+import { mcpInject, mcpList } from '../mcp-cmd.js';
+import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 
 const mockedAutoDetectInit = autoDetectInit as Mock;
 const mockedResolve = resolveEntriesFor as Mock;
@@ -96,5 +97,29 @@ describe('mcpList', () => {
     await listOutput();
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('server "db" is defined in both mcp/checkout/mcp.yaml and mcp/billing/mcp.yaml'));
     process.exitCode = 0;
+  });
+});
+
+describe('mcpInject', () => {
+  beforeEach(() => {
+    mockedAutoDetectInit.mockResolvedValue({
+      localConfig: { repo: { localPath: '/repo' }, scope: 'user', additionalRoles: [] },
+      teamConfig: { toolPaths: {} },
+    });
+  });
+
+  it('fails instead of saying "Already up to date" when the team servers cannot be resolved', async () => {
+    // The reconcile reported why and left every installed server as it was.
+    vi.mocked(reconcileMcpForConfig).mockResolvedValue({ changes: [], wrote: false, unresolved: true });
+    const { log } = await import('../utils/logger.js');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await mcpInject({});
+      expect(log.info).not.toHaveBeenCalledWith('Already up to date.');
+      expect(process.exitCode).toBe(1);
+    } finally {
+      spy.mockRestore();
+      process.exitCode = undefined;
+    }
   });
 });

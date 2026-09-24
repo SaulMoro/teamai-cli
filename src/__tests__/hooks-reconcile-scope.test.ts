@@ -83,8 +83,8 @@ hooks:
     command: npm run lint
     timeout: 20
 `);
-    const defs = await reconcileTeamHooksForConfig(teamConfig, localConfig());
-    expect(defs).toHaveLength(1);
+    const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig());
+    expect(reconciled.ok && reconciled.defs).toHaveLength(1);
 
     const claude = await claudeSettings();
     expect(claude.hooks.Stop).toHaveLength(2); // built-in + team
@@ -243,7 +243,7 @@ hooks:
     await writeYaml('hooks: [unclosed\n');
     const applied = await reconcileTeamHooksForConfig(teamConfig, localConfig());
 
-    expect(applied).toEqual([]);
+    expect(applied).toEqual({ ok: false });
     expect(await claudeSettings()).toEqual(before);
     expect((await manifest()).claude.map((r) => r.id)).toEqual(['lint']);
   });
@@ -305,8 +305,8 @@ builtin:
   });
 
   it('works with no hooks.yaml (built-in self-heal only)', async () => {
-    const defs = await reconcileTeamHooksForConfig(teamConfig, localConfig());
-    expect(defs).toEqual([]);
+    const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig());
+    expect(reconciled).toEqual({ ok: true, defs: [] });
     const claude = await claudeSettings();
     expect(claude.hooks.SessionStart).toHaveLength(1);
     // No manifest written when there are no team hooks.

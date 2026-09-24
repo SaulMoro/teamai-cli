@@ -86,6 +86,11 @@ export interface McpReconcileResult {
   changes: McpChange[];
   /** True when any file was actually written. */
   wrote: boolean;
+  /**
+   * Set when the team's servers could not be resolved (a file that does not
+   * parse, a name twice): nothing was changed, and the reason was reported.
+   */
+  unresolved?: true;
 }
 
 // ─── Manifest ────────────────────────────────────────────────
@@ -524,7 +529,7 @@ export async function reconcileMcpForConfig(
     // installed server as it is: reconciling to an empty set would remove them.
     const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
     reportEntryResolution(resolution);
-    if (resolution.kind === 'failed') return { changes, wrote };
+    if (resolution.kind === 'failed') return { changes, wrote, unresolved: true };
     teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   }
   if (!removeAll && teamDefs.length > 0 && !sharing.autoApply) {

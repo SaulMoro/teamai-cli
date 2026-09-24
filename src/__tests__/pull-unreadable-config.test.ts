@@ -31,7 +31,7 @@ vi.mock('../team-push.js', () => ({ reportUsageToTeam: vi.fn().mockResolvedValue
 vi.mock('../source.js', () => ({ pullSources: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../hooks.js', () => ({
   injectHooksToAllTools: vi.fn().mockResolvedValue(undefined),
-  reconcileTeamHooksForConfig: vi.fn().mockResolvedValue([]),
+  reconcileTeamHooksForConfig: vi.fn().mockResolvedValue({ ok: true, defs: [] }),
 }));
 vi.mock('../mcp-reconcile.js', () => ({
   reconcileMcpForConfig: vi.fn().mockResolvedValue({ changes: [], wrote: false }),

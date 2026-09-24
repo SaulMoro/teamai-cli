@@ -96,10 +96,15 @@ export async function mcpInject(
   options: GlobalOptions & { dryRun?: boolean; force?: boolean },
 ): Promise<void> {
   const { localConfig, teamConfig } = await autoDetectInit();
-  const { changes, wrote } = await reconcileMcpForConfig(teamConfig, localConfig, {
+  const { changes, wrote, unresolved } = await reconcileMcpForConfig(teamConfig, localConfig, {
     dryRun: options.dryRun,
     force: options.force,
   });
+  // The reason is already reported, and every installed server left as it was.
+  if (unresolved) {
+    process.exitCode = 1;
+    return;
+  }
 
   console.log(options.dryRun ? 'MCP inject (dry run):' : 'MCP inject:');
   reportChanges(changes);

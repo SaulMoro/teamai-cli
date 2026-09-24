@@ -129,7 +129,7 @@ beforeEach(() => {
     mockedGetHookStatus.mockResolvedValue('missing');
     mockedReconcileStandalone.mockResolvedValue(undefined);
     mockedReconcile.mockResolvedValue(undefined);
-    mockedReconcileForConfig.mockResolvedValue(undefined);
+    mockedReconcileForConfig.mockResolvedValue({ ok: true, defs: [] });
     mockedHasCodexTrustGated.mockResolvedValue(false);
     mockedParseTeamHooks.mockResolvedValue(hooksYaml(TEAM_DEFS));
 });
@@ -179,6 +179,19 @@ describe('hooksInject', () => {
         await hooksInject({ silent: true });
         expect(mockedLog.success).not.toHaveBeenCalled();
         expect(mockedLog.warn).not.toHaveBeenCalled();
+    });
+
+    it('fails, without the success line, when the team hooks cannot be resolved', async () => {
+        // The reconcile reported why (a broken hooks file, a hook id twice) and
+        // left every installed hook as it was.
+        mockedReconcileForConfig.mockResolvedValue({ ok: false });
+        try {
+            await hooksInject({});
+            expect(mockedLog.success).not.toHaveBeenCalled();
+            expect(process.exitCode).toBe(1);
+        } finally {
+            process.exitCode = undefined;
+        }
     });
 
     it('propagates error when not initialized', async () => {

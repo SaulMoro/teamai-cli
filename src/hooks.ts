@@ -1729,17 +1729,18 @@ export async function sweepLegacyProjectHooks(
 
 /**
  * Reconcile built-in (A) + team (B) hooks for a single scope's tools.
- * Parses the scope's hooks/hooks.yaml, resolves the scope base dir + manifest,
- * and reconciles every tool. Returns the team defs that were applied (for
- * logging/transparency). Used by `pull`, `init`, and `hooks inject`.
+ * Resolves the scope's team hooks, the scope base dir + manifest, and
+ * reconciles every tool. Returns the team defs that were applied (for
+ * logging/transparency), or `ok: false` when the team hooks could not be
+ * resolved and nothing was touched. Used by `pull`, `init`, and `hooks inject`.
  */
 export async function reconcileTeamHooksForConfig(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; filterAgents?: string[] } = {},
-): Promise<HookDef[]> {
-  const resolved = opts.removeAll
-    ? { ok: true as const, defs: [] as HookDef[], builtin: undefined }
+): Promise<{ ok: true; defs: HookDef[] } | { ok: false }> {
+  const resolved: Awaited<ReturnType<typeof resolveTeamHooks>> = opts.removeAll
+    ? { ok: true, defs: [], builtin: undefined }
     : await resolveTeamHooks(teamConfig, localConfig, {
         auto: opts.auto,
         silent: opts.silent,
@@ -1747,7 +1748,7 @@ export async function reconcileTeamHooksForConfig(
   // The team's hooks could not be resolved (reported by resolveTeamHooks).
   // Reconciling now would remove every installed team hook, and apply the
   // built-in hooks without the root file's overrides; leave all of it as is.
-  if (!resolved.ok) return [];
+  if (!resolved.ok) return { ok: false };
   const { defs: teamDefs, builtin } = resolved;
   const { baseDir, manifestPath, scope: hookScope } = resolveHookScope(localConfig);
   const explicitlySelectedAgents = opts.filterAgents ?? localConfig.enabledAgents;
@@ -1797,5 +1798,5 @@ export async function reconcileTeamHooksForConfig(
     }
   }
   await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig);
-  return teamDefs;
+  return { ok: true, defs: teamDefs };
 }

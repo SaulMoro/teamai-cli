@@ -2020,13 +2020,13 @@ async function reconcileHooksAllScopes(
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
       if (!teamConfig) continue;
       const { reconcileTeamHooksForConfig } = await import('./hooks.js');
-      const teamDefs = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
+      const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
         auto: true,
         silent: options.silent,
         filterAgents: localConfig.enabledAgents,
       });
-      if (teamDefs.length > 0) {
-        log.debug(`[${localConfig.scope}] Reconciled ${teamDefs.length} team hook(s)`);
+      if (reconciled.ok && reconciled.defs.length > 0) {
+        log.debug(`[${localConfig.scope}] Reconciled ${reconciled.defs.length} team hook(s)`);
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] Hook reconcile skipped: ${(e as Error).message}`);
