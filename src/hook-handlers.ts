@@ -202,7 +202,7 @@ const dashboardReportHandler: HookHandler = {
       // The dispatcher's scope, which knows the project even when the event
       // records no cwd (Copilot) or a symlinked one (#785).
       event.dataHomeKey = await dataHomeKey(getDataHome(config));
-      event.projectAnchor = await eventProjectAnchor(event.cwd);
+      event.projectAnchor = await eventProjectAnchor(event.cwd, event.sessionId);
       await appendEvent(event);
       // Non-blocking compaction
       compactEvents().catch(() => {});
@@ -213,9 +213,11 @@ const dashboardReportHandler: HookHandler = {
 
 const trackHandler: HookHandler = {
   name: 'track',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
+    // Registered with requiresConfig: the dispatcher's scope, which knows the
+    // project of a removed worktree (#810).
+    if (!config) return null;
     const { resolveSkillUse, appendUsageEvent, updateKnownSkills } = await import('./usage-tracker.js');
-    const { resolveConfigForDir } = await import('./config.js');
 
     const rawToolName = stdin.tool_name;
     if (typeof rawToolName !== 'string') return null;
@@ -228,8 +230,6 @@ const trackHandler: HookHandler = {
     const resolved = resolveSkillUse(toolName, toolInput as Record<string, unknown>);
     if (!resolved) return null;
 
-    const config = await resolveConfigForDir(resolveHookCwd(stdin));
-    if (!config) return null;
     await appendUsageEvent({
       skill: resolved.skillName,
       timestamp: new Date().toISOString(),
@@ -242,9 +242,10 @@ const trackHandler: HookHandler = {
 
 const trackSlashHandler: HookHandler = {
   name: 'track-slash',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
+    // Registered with requiresConfig: the dispatcher's scope (#810).
+    if (!config) return null;
     const { isValidSkillName, appendUsageEvent, updateKnownSkills } = await import('./usage-tracker.js');
-    const { resolveConfigForDir } = await import('./config.js');
 
     const prompt = stdin.prompt;
     if (typeof prompt !== 'string' || !prompt.startsWith('/')) return null;
@@ -259,8 +260,6 @@ const trackSlashHandler: HookHandler = {
     const skillName = match[1];
     if (!isValidSkillName(skillName)) return null;
 
-    const config = await resolveConfigForDir(resolveHookCwd(stdin));
-    if (!config) return null;
     await appendUsageEvent({ skill: skillName, timestamp: new Date().toISOString(), tool }, config);
     await updateKnownSkills(skillName);
     return null;
@@ -308,8 +307,10 @@ const contributeCheckHandler: HookHandler = {
   async execute(stdin, tool) {
     // The payload's cwd, not the process's: hook-dispatch changes into it, but
     // that can fail, and the gate must not then read the launcher's directory.
+    // A removed worktree's session keeps its recorded scope (#810).
     const { contributeHintAllowed } = await import('./skill-content.js');
-    if (!(await contributeHintAllowed(resolveHookCwd(stdin)))) return null;
+    const { hookScopeDir } = await import('./dashboard-collector.js');
+    if (!(await contributeHintAllowed(await hookScopeDir(stdin, tool)))) return null;
 
     const { contributeCheckForSession } = await import('./contribute-check.js');
     const { formatStopHookOutput, relayWhenHidden } = await import('./utils/hook-output.js');
@@ -355,7 +356,8 @@ const pendingHintHandler: HookHandler = {
     // mechanism (#723); only the contribute hint remains. Uses the upstream
     // contributeHintAllowed(cwd) signature (moved to skill-content).
     const { contributeHintAllowed } = await import('./skill-content.js');
-    const hint = (await contributeHintAllowed(resolveHookCwd(stdin))) ? stashed : null;
+    const { hookScopeDir } = await import('./dashboard-collector.js');
+    const hint = (await contributeHintAllowed(await hookScopeDir(stdin, tool))) ? stashed : null;
     if (!hint) return null;
 
     return JSON.stringify({

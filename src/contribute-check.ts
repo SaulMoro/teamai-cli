@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { log } from './utils/logger.js';
 import { RELAY_TO_USER_PREFIX, relayWhenHidden } from './utils/hook-output.js';
 import { readJson, writeJson, ensureDir } from './utils/fs.js';
-import { readEvents, aggregateSessionMetrics, scanTranscriptStop } from './dashboard-collector.js';
+import { readEvents, aggregateSessionMetrics, scanTranscriptStop, hookScopeDir } from './dashboard-collector.js';
 import { readRecallQuality } from './recall-quality.js';
 import { deriveSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
@@ -342,6 +342,7 @@ async function readStdinAndDeriveSession(): Promise<{
   sessionId: string;
   cwd?: string;
   transcriptPath?: string;
+  hookData: Record<string, unknown>;
 } | null> {
   if (process.stdin.isTTY) return null;
 
@@ -360,7 +361,7 @@ async function readStdinAndDeriveSession(): Promise<{
     const transcriptPath = typeof hookData.transcript_path === 'string'
       ? hookData.transcript_path
       : undefined;
-    return { sessionId, cwd, transcriptPath };
+    return { sessionId, cwd, transcriptPath, hookData };
   } catch {
     return null;
   }
@@ -688,18 +689,20 @@ export async function contributeCheck(toolArg?: string): Promise<void> {
     return;
   }
   // Hooks of older installs still call this command in every project; a
-  // directory without teamai has no team to share with (#748).
+  // directory without teamai has no team to share with (#748). The session's
+  // cwd, never the one this process started in; a removed worktree's session
+  // keeps its recorded scope (#810).
+  const scopeDir = await hookScopeDir(stdinData.hookData, toolArg ?? 'claude');
   const { resolveConfigForDir } = await import('./config.js');
-  if (!(await resolveConfigForDir(stdinData.cwd))) {
+  if (!(await resolveConfigForDir(scopeDir))) {
     log.debug('contribute-check: teamai is not set up here, skipping');
     return;
   }
 
   // The same gate as the dispatcher's handler: hooks written before it still
-  // call this command, and must not nudge towards a `share` that refuses. It
-  // is asked about the session's cwd, never the one this process started in.
+  // call this command, and must not nudge towards a `share` that refuses.
   const { contributeHintAllowed } = await import('./skill-content.js');
-  if (!(await contributeHintAllowed(stdinData.cwd))) return;
+  if (!(await contributeHintAllowed(scopeDir))) return;
 
   const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
   const tool = toolArg?.toLowerCase() ?? 'claude';

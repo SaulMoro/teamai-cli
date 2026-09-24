@@ -351,7 +351,9 @@ export async function resolveDataHomeForScope(scope: Scope, projectRoot?: string
  * not belong to (#748). The hook dispatcher and every usage reader and writer
  * resolve through this, so they always agree on the scope. A directory that no
  * longer exists (a hook payload naming a deleted worktree) holds no project
- * config; git refuses to open it, so it is not asked.
+ * config; git refuses to open it, so it is not asked. Hooks go through
+ * resolveHookConfig (dashboard-collector.ts), which gives such a payload the
+ * scope its session last recorded (#810).
  */
 export async function resolveConfigForDir(dir?: string): Promise<LocalConfig | null> {
   const target = dir ?? process.cwd();

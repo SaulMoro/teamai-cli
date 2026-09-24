@@ -7,6 +7,7 @@
  */
 
 import { resolveHookCwd } from './hook-cwd.js';
+import { COPILOT_TOOL_ID } from '../types.js';
 
 export interface DeriveSessionIdOptions {
     /** When true, include the working directory in the PID fallback. */
@@ -45,4 +46,16 @@ export function deriveSessionId(
     }
 
     return `pid-${ppid}`;
+}
+
+/**
+ * The session id a hook's events carry. Copilot's fallback takes no cwd, so it
+ * persists no workspace path. The dispatcher (and its detached child) and the
+ * dashboard's event writers all derive it here, so they always agree.
+ */
+export function deriveDispatchSessionId(
+    data: Record<string, unknown>,
+    tool: string,
+): string {
+    return deriveSessionId(data, { includeCwd: tool.toLowerCase() !== COPILOT_TOOL_ID });
 }

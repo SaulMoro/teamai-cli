@@ -466,7 +466,18 @@ main checkout, which all of its worktrees share (#809); a Copilot event, with no
 `session save` and the dashboard's Repository filter key a session by the last
 anchor it recorded, else by its `cwd`, and the dashboard gives an event to the
 project rooted at its anchor, so a worktree counts as its repo, also after it
-is removed. The snapshots of what was already reported are per scope
+is removed. A hook whose `cwd` no longer exists (a session that outlives its
+worktree) would resolve to the user scope, or be dropped without one, so it
+keeps the scope its session last recorded instead (#810): the config at that
+event's `projectAnchor` (for a bare repo, at one of its worktrees that still
+exists), used only while the key of its `getDataHome()` is still the recorded
+`dataHomeKey`. Its events and skill uses stay with the project, and the share
+reminder's gate reads the project too. A project config there that
+cannot be read records nothing, and with nothing recorded to match the hook
+resolves from its `cwd` as before. The recorded scope is read from `events.jsonl`, so it lasts as long
+as the session's earlier events do (compaction keeps only active sessions),
+and Copilot, whose events record no directory, has none to recover.
+The snapshots of what was already reported are per scope
 too (#786), because a session ID can recur in another scope (Copilot's fallback
 ID is the parent PID):
 `<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`

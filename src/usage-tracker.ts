@@ -61,7 +61,7 @@ function getKnownSkillsPath(): string {
 //               [toolArg → toolSource; Read+SKILL.md → 'cursor']
 //                       │
 //                       ▼
-//               [resolveConfigForDir(cwd)] ─null─▶ skip (#748)
+//               [resolveHookConfig(payload)] ─null─▶ skip (#748)
 //                       │
 //                       ▼
 //               appendFile(<scope usage file>, JSON line)
@@ -647,7 +647,8 @@ export async function trackFromStdin(toolArg?: string): Promise<void> {
     return;
   }
 
-  const config = await resolveConfigForDir(resolveHookCwd(hookData));
+  const { resolveHookConfig } = await import('./dashboard-collector.js');
+  const config = await resolveHookConfig(hookData, toolArg ?? 'claude');
   if (!config) return;
 
   const event: UsageEvent = {
@@ -701,12 +702,14 @@ export async function trackSlashCommand(toolArg?: string): Promise<void> {
   }
 
   const hookCwd = resolveHookCwd(hookData);
-  const config = await resolveConfigForDir(hookCwd);
+  const { resolveHookConfig } = await import('./dashboard-collector.js');
+  const config = await resolveHookConfig(hookData, toolArg ?? 'claude');
   if (!config) return;
   // The same root resolution import and the local agent use, from the hook's
   // directory: a project set up before a user-scope relocation has no record
   // of its own and follows user scope.
-  const toolRoots = await resolveMemberToolRoots(hookCwd);
+  // The scope's own record first: a removed worktree's cwd leads nowhere (#810).
+  const toolRoots = config.toolRoots ?? await resolveMemberToolRoots(hookCwd);
 
   for (const match of matches) {
     const skillName = match[1];

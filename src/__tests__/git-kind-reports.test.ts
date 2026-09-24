@@ -12,7 +12,7 @@ import { getDataHome, getReportsDir, REPORTS_WORKTREE_DIRNAME, type LocalConfig 
 import { commitAndPushReports, ensureReportsWorktree, refreshReportsWorktree, updateReports } from '../utils/reports-branch.js';
 import { pushRepoDirectly } from '../utils/git.js';
 import { reportUsageToTeam } from '../team-push.js';
-import { dataHomeKey } from '../dashboard-collector.js';
+import { dataHomeKey, resolveHookConfig } from '../dashboard-collector.js';
 import { listMembers } from '../members.js';
 import { resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
 import { buildHandlerRegistry } from '../hook-handlers.js';
@@ -660,7 +660,9 @@ describe('skill usage stays in the scope that recorded it (#748)', () => {
   async function useSkill(cwd: string, skill: string): Promise<void> {
     const track = buildHandlerRegistry().find((r) => r.handler.name === 'track');
     if (!track) throw new Error('track handler is not registered');
-    await track.handler.execute({ session_id: `s-${skill}`, cwd, tool_name: 'Skill', tool_input: { skill } }, 'claude', null);
+    // The handler records under the scope the dispatcher resolved for the hook (#810).
+    const payload = { session_id: `s-${skill}`, cwd, tool_name: 'Skill', tool_input: { skill } };
+    await track.handler.execute(payload, 'claude', await resolveHookConfig(payload, 'claude'));
   }
 
   async function reportedSkills(origin: string): Promise<string[]> {

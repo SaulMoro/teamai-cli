@@ -69,8 +69,8 @@ export function attributeRepo(cwd: string | undefined): string {
  * The repo each session belongs to, keyed by session id: the last
  * `projectAnchor` its events recorded, else its last `cwd` (events from before
  * #809, directories outside git), else ''. Every worktree of a repo shares the
- * anchor, and a session keeps it after its worktree is removed, because the
- * events written after that carry no anchor.
+ * anchor, and a session keeps it after its worktree is removed: the events
+ * written after that carry the session's last anchor (#810), or none.
  */
 export function repoKeys(events: DashboardEvent[]): Map<string, string> {
   const anchors = new Map<string, string>();

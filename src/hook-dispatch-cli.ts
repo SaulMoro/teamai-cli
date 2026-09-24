@@ -26,8 +26,7 @@ import { buildHandlerRegistry, filterHandlersForConfig } from './hook-handlers.j
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { windowsPowerShell } from './utils/powershell.js';
 import { log, setStderrOnly } from './utils/logger.js';
-import { deriveSessionId } from './utils/session-id.js';
-import { COPILOT_TOOL_ID } from './types.js';
+import { deriveDispatchSessionId } from './utils/session-id.js';
 
 /**
  * Max time to wait for STDIN EOF before proceeding with whatever was received.
@@ -384,13 +383,7 @@ async function runDispatch(
   return result.output;
 }
 
-/** Keep the detached Copilot fallback stable without persisting a workspace path. */
-export function deriveDispatchSessionId(
-  stdin: Record<string, unknown>,
-  tool: string,
-): string {
-  return deriveSessionId(stdin, { includeCwd: tool.toLowerCase() !== COPILOT_TOOL_ID });
-}
+export { deriveDispatchSessionId };
 
 /**
  * Main CLI handler for hook-dispatch.
@@ -417,8 +410,9 @@ export async function hookDispatchCli(
     // (contribute / mr-hint / votes). The project-scope config of the host's
     // working directory wins (#264), so filterHandlersForConfig can honour a
     // project-level repo.kind; a host that sends no cwd (OpenClaw) runs the
-    // hook in its workspace, so the process cwd stands in.
-    const { resolveConfigForDir } = await import('./config.js');
+    // hook in its workspace, so the process cwd stands in. A cwd that is gone
+    // (a removed worktree) keeps the scope its session recorded (#810).
+    const { resolveHookConfig } = await import('./dashboard-collector.js');
     const cwd = resolveHookCwd(stdin);
     if (cwd) {
       try {
@@ -427,7 +421,7 @@ export async function hookDispatchCli(
         log.debug(`hook-dispatch: chdir to ${cwd} failed: ${(e as Error).message}`);
       }
     }
-    const localConfig = await resolveConfigForDir(cwd);
+    const localConfig = await resolveHookConfig(stdin, tool);
     const handlers = filterHandlersForConfig(buildHandlerRegistry(), localConfig);
     const dispatcher = createDispatcher({ handlers, localConfig });
 

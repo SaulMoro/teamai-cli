@@ -3,7 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { createHash, randomUUID } from 'node:crypto';
 import { log } from './utils/logger.js';
-import { deriveSessionId } from './utils/session-id.js';
+import { deriveDispatchSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { ensureDir } from './utils/fs.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
@@ -35,6 +35,7 @@ import {
   type TokenSnapshotScope,
   type SessionMetrics,
   type RequestCostMetrics,
+  type LocalConfig,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
 import { estimateClaudeRequest } from './model-pricing.js';
@@ -1170,7 +1171,7 @@ export async function parseHookEvent(
   }
 
   const isCopilot = tool.toLowerCase() === COPILOT_TOOL_ID;
-  const derivedSessionId = deriveSessionId(hookData, { includeCwd: !isCopilot });
+  const derivedSessionId = deriveDispatchSessionId(hookData, tool);
   // Copilot IDs are persisted, so reject path-like IDs even when supplied directly.
   const sessionId = isCopilot && !COPILOT_SESSION_ID_RE.test(derivedSessionId)
     ? `pid-${process.ppid ?? process.pid}`
@@ -2074,15 +2075,95 @@ export async function compactEvents(eventsPath?: string): Promise<void> {
   }
 }
 
+/** What a session last recorded: its scope and the repo it was in. */
+interface RecordedScope {
+  /** The last event's data home key, with the `projectAnchor` of that same event. */
+  scope?: { key: string; anchor: string | undefined };
+  /** The last `projectAnchor` the session recorded (#809's attribution rule). */
+  projectAnchor?: string;
+}
+
+const recordedScopes = new Map<string, Promise<RecordedScope>>();
+
+/**
+ * What the session last recorded at `cwd`, else anywhere. A detached hook (a
+ * Stop's) can run after the session moved on, so its own directory comes first.
+ * Read once per process, and only for a hook whose cwd is gone: every other
+ * hook resolves its scope from its cwd without touching events.jsonl.
+ */
+function recordedScope(sessionId: string, cwd: string): Promise<RecordedScope> {
+  const key = `${sessionId}\0${cwd}`;
+  let known = recordedScopes.get(key);
+  if (!known) {
+    known = readEvents().then((events) => {
+      const own = events.filter((e) => e.sessionId === sessionId).reverse();
+      const here = own.filter((e) => e.cwd === cwd);
+      const scoped = here.find((e) => e.dataHomeKey) ?? own.find((e) => e.dataHomeKey);
+      return {
+        scope: scoped?.dataHomeKey ? { key: scoped.dataHomeKey, anchor: scoped.projectAnchor } : undefined,
+        projectAnchor: (here.find((e) => e.projectAnchor) ?? own.find((e) => e.projectAnchor))?.projectAnchor,
+      };
+    });
+    recordedScopes.set(key, known);
+  }
+  return known;
+}
+
+/**
+ * The directory a hook's scope is resolved from (#810): its cwd. A cwd that no
+ * longer exists (a removed worktree) would resolve to the user scope, so it is
+ * instead the checkout of the repo this session last recorded (at that cwd
+ * first, else anywhere: see recordedScope), when the config
+ * there is still the scope that event's data home key names, or cannot be read (so
+ * the hook gets no scope, never the user scope, #748). With nothing recorded to
+ * match, it is the cwd, today's answer. A cwd that exists costs nothing more.
+ */
+export async function hookScopeDir(hookData: Record<string, unknown>, tool: string): Promise<string | undefined> {
+  const cwd = resolveHookCwd(hookData);
+  if (!cwd || fs.existsSync(cwd)) return cwd;
+  const { scope } = await recordedScope(deriveDispatchSessionId(hookData, tool), cwd);
+  const checkout = scope?.anchor ? await checkoutOf(scope.anchor) : undefined;
+  if (scope && checkout) {
+    const { resolveConfigForDir } = await import('./config.js');
+    const config = await resolveConfigForDir(checkout);
+    if (!config || await dataHomeKey(getDataHome(config)) === scope.key) return checkout;
+  }
+  return cwd;
+}
+
+/**
+ * The scope a hook reports to: resolveConfigForDir at {@link hookScopeDir}. The
+ * dispatcher and the legacy `dashboard-report`, `track` and `track-slash` entry
+ * points all resolve through here.
+ */
+export async function resolveHookConfig(hookData: Record<string, unknown>, tool: string): Promise<LocalConfig | null> {
+  const { resolveConfigForDir } = await import('./config.js');
+  return resolveConfigForDir(await hookScopeDir(hookData, tool));
+}
+
+/**
+ * A checkout of the repo anchored at `anchor` to resolve its scope from: the
+ * anchor itself, or for a bare repo (whose anchor is the git directory, which
+ * detection cannot read) the first of its worktrees that still exists.
+ */
+async function checkoutOf(anchor: string): Promise<string | undefined> {
+  if (!fs.existsSync(anchor)) return undefined;
+  if (fs.existsSync(path.join(anchor, '.git'))) return anchor;
+  const { listWorktrees } = await import('./utils/git.js');
+  return (await listWorktrees(anchor)).find((dir) => dir !== anchor && fs.existsSync(dir));
+}
+
 /**
  * The `projectAnchor` an event records (#809): the main checkout of the repo
  * holding the event's `cwd`, the directory the hook resolved its scope for.
  * Undefined for an event that records no cwd, which keeps it free of paths
- * (Copilot), outside git, and for a directory that no longer exists, which git
- * refuses to open. Both event writers go through here.
+ * (Copilot), and outside git. For a cwd that no longer exists, which git refuses
+ * to open, it is the last anchor the session recorded there, else anywhere
+ * (#810). Both event writers go through here.
  */
-export async function eventProjectAnchor(cwd: string | undefined): Promise<string | undefined> {
-  if (!cwd || !fs.existsSync(cwd)) return undefined;
+export async function eventProjectAnchor(cwd: string | undefined, sessionId: string): Promise<string | undefined> {
+  if (!cwd) return undefined;
+  if (!fs.existsSync(cwd)) return (await recordedScope(sessionId, cwd)).projectAnchor;
   const { resolveAnchors } = await import('./utils/git.js');
   return (await resolveAnchors(cwd))?.projectAnchor;
 }
@@ -2116,8 +2197,7 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   } catch {
     // parseHookEvent reports the malformed payload below; nothing to gate on yet.
   }
-  const { resolveConfigForDir } = await import('./config.js');
-  const config = await resolveConfigForDir(resolveHookCwd(hookData));
+  const config = await resolveHookConfig(hookData, toolArg ?? 'claude');
   if (!config) {
     log.debug('dashboard-report: teamai is not set up here, skipping');
     return;
@@ -2127,7 +2207,7 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   if (!event) return;
 
   event.dataHomeKey = await dataHomeKey(getDataHome(config));
-  event.projectAnchor = await eventProjectAnchor(event.cwd);
+  event.projectAnchor = await eventProjectAnchor(event.cwd, event.sessionId);
   await appendEvent(event);
 
   // Trigger compaction check (non-blocking)
