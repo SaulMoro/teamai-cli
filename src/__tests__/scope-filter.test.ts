@@ -70,6 +70,30 @@ describe('filterEventsByScope', () => {
       expect(await ids(moved, projectScope('/Users/jeff/project-a'))).toEqual([]);
     });
 
+    it('a session ID reused after its session ended is decided anew', async () => {
+      // A PID-fallback ID: the user-scope run ended, a later run in P reuses the ID.
+      for (const end of ['session_end', 'process_exit'] as const) {
+        const reused = [
+          await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai'),
+          { ...(await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai')), type: end },
+          await scopedEvent(undefined, 'pid-1', '/home/jeff/.teamai/projects/p'),
+        ];
+        const project = await filterEventsByScope(reused, projectScope('/Users/jeff/project-a'));
+        const user = await filterEventsByScope(reused, userScope());
+        expect(project).toEqual([reused[2]]);
+        expect(user).toEqual([reused[0], reused[1]]);
+      }
+    });
+
+    it('an event that records its data home as a path, before keys were hashed, is keyed by it', async () => {
+      const unhashed: DashboardEvent[] = [
+        { ...makeEvent(undefined, 'c1'), tool: 'copilot', dataHome: '/home/jeff/.teamai/projects/p' },
+        { ...makeEvent('/Users/jeff/project-a', 'u1'), dataHome: '/home/jeff/.teamai' },
+      ];
+      expect(await ids(unhashed, projectScope('/Users/jeff/project-a'))).toEqual(['c1']);
+      expect(await ids(unhashed, userScope())).toEqual(['u1']);
+    });
+
     it('a keyed event decides a session over an earlier unkeyed one', async () => {
       // Recorded across the upgrade: the unkeyed event's cwd is P's, the key the user scope's.
       const upgraded = [

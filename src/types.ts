@@ -1225,6 +1225,11 @@ export interface DashboardEvent {
    * field existed; the report then attributes them by `cwd`.
    */
   dataHomeKey?: string;
+  /**
+   * The data home itself, as a path, which unreleased builds of #795 wrote in
+   * place of `dataHomeKey`. Read only: the report keys it with `dataHomeKey()`.
+   */
+  dataHome?: string;
   /** First user prompt (captured from UserPromptSubmit) */
   promptSummary?: string;
   /**

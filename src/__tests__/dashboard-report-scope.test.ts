@@ -268,6 +268,20 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedSessions(project)).toBe(1);
   });
 
+  it('a session ID reused after its session ended goes to the scope that reuses it, while the log still holds the ended one', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    await session('copilot', { cwd: elsewhere });
+    await hook('session-end', 'copilot', { cwd: elsewhere, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(user)).toBe(1);
+    // Below the compaction threshold the ended `pid-<parent pid>` session stays; the next one in P reuses its ID.
+    await session('copilot', { cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedSessions(user)).toBe(1);
+  });
+
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');

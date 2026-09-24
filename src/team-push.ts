@@ -376,18 +376,20 @@ function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
 
 /**
  * The dashboard events a scope reports (#785): every event of the sessions
- * recorded in it. A session is decided once, whole, by its first event keyed
- * with a data home (`dataHomeKey`), because a Stop carries the whole
- * transcript's totals: split per event, a session that moved into another
- * scope would count there again the part recorded before the move. A project
- * also owns the key of its in-repo `.teamai`, where a hook recorded until
- * migration moved the project to a partition. A session written before events
- * carried a key is decided by its first cwd: a project's when the root holds
- * it, the user scope's when the directory still exists and resolves to the
- * user scope now, the dispatcher's rule; one with no cwd, or a cwd gone since,
- * is no scope's. A cwd is raw as the host sent it (a symlinked checkout, macOS
- * `/tmp` vs `/private/tmp`), and so is a non-git project's root, so both are
- * realpath'd while they still exist. A caller without a scope config reads the
+ * recorded in it. A session is the run of one ID up to its session_end or
+ * process_exit, since a PID-fallback ID comes back for a later run. It is
+ * decided once, whole, by its first event keyed with a data home
+ * (`dataHomeKey`, or the path an unreleased build of #795 wrote), because a
+ * Stop carries the whole transcript's totals: split per event, a session that
+ * moved into another scope would count there again the part recorded before
+ * the move. A project also owns the key of its in-repo `.teamai`, where a
+ * hook recorded until migration moved the project to a partition. A session
+ * written before events carried a key is decided by its first cwd: a
+ * project's when the root holds it, the user scope's when the directory still
+ * exists and resolves to the user scope now, the dispatcher's rule; one with
+ * no cwd, or a cwd gone since, is no scope's. A cwd is raw as the host sent
+ * it (a symlinked checkout, macOS `/tmp` vs `/private/tmp`), and so is a
+ * non-git project's root, so both are realpath'd while they still exist. A caller without a scope config reads the
  * whole log.
  */
 export async function filterEventsByScope(
@@ -427,18 +429,39 @@ export async function filterEventsByScope(
     return owns;
   };
   // The log is hand-editable: a key that is not a string counts as absent.
-  const keyed = (e: DashboardEvent | undefined): boolean => typeof e?.dataHomeKey === 'string';
-  const deciding = new Map<string, DashboardEvent>();
-  for (const e of events) {
-    const current = deciding.get(e.sessionId);
-    if (keyed(e) ? !keyed(current) : !current && !!e.cwd) deciding.set(e.sessionId, e);
-  }
-  const owned = new Set<string>();
-  await Promise.all([...deciding].map(async ([sessionId, e]) => {
-    const mine = typeof e.dataHomeKey === 'string' ? keys.has(e.dataHomeKey) : !!e.cwd && await ownsCwd(e.cwd);
-    if (mine) owned.add(sessionId);
+  // An unreleased build of #795 recorded the data home path in place of its key.
+  const hashes = new Map<string, Promise<string>>();
+  const eventKeys = await Promise.all(events.map((e) => {
+    if (typeof e.dataHomeKey === 'string') return e.dataHomeKey;
+    if (typeof e.dataHome !== 'string') return undefined;
+    let key = hashes.get(e.dataHome);
+    if (!key) {
+      key = dataHomeKey(e.dataHome);
+      hashes.set(e.dataHome, key);
+    }
+    return key;
   }));
-  return events.filter((e) => owned.has(e.sessionId));
+  // A session ID names one run until it ends: a PID-fallback ID comes back for
+  // a later run, maybe in another scope, so each run is decided on its own.
+  const runOf: number[] = [];
+  const openRun = new Map<string, number>();
+  const deciding: Array<number | undefined> = [];
+  events.forEach((e, i) => {
+    const run = openRun.get(e.sessionId) ?? deciding.push(undefined) - 1;
+    openRun.set(e.sessionId, run);
+    if (e.type === 'session_end' || e.type === 'process_exit') openRun.delete(e.sessionId);
+    runOf.push(run);
+    const current = deciding[run];
+    if (eventKeys[i] !== undefined ? current === undefined || eventKeys[current] === undefined
+      : current === undefined && !!e.cwd) deciding[run] = i;
+  });
+  const owned = await Promise.all(deciding.map(async (i) => {
+    if (i === undefined) return false;
+    const key = eventKeys[i];
+    const cwd = events[i].cwd;
+    return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
+  }));
+  return events.filter((_, i) => owned[runOf[i]]);
 }
 
 /**

@@ -331,7 +331,9 @@ carries `dataHomeKey`, a hash of the realpath'd `getDataHome()` of the scope the
 hook resolved (#785; a hash, so a Copilot event still stores no path), and a
 scope's report keeps the sessions whose first keyed event is its own, whole: a
 Stop carries the whole transcript's totals, so a session that moved scope (a `cd`
-mid-session) is reported once, where it started. A session written before that
+mid-session) is reported once, where it started. A session is one ID's run up to
+its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot's
+fallback ID is the parent PID) is decided on its own. A session written before that
 field existed is attributed by its first `cwd`: to the project whose root holds
 it (realpath'd), or to the user scope when that directory still exists and
 `resolveConfigForDir` resolves it to the user scope; no `cwd`, or one removed
