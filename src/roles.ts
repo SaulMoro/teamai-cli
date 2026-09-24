@@ -22,7 +22,7 @@ const RoleResourceNamespacesSchema = z.object({
   // It never becomes a directory here, so it stays a plain string: holding an old
   // manifest to the namespace rule would reject it over a field nothing reads.
   learnings: z.array(z.string()).optional(),
-  // env, hooks, mcp: optional, see LATER_RESOURCE_TYPES.
+  // env, hooks, mcp, docs: optional, see LATER_RESOURCE_TYPES.
   ...LaterResourceNamespacesShape,
 });
 
@@ -208,7 +208,7 @@ export function resolveRoleResourceNamespaces(input: {
 
   // Roles never contribute learnings namespaces; only projects do. Kept empty
   // so the shape matches project resolution for a clean union at the call site.
-  // A later type (env, hooks, mcp) is absent until one is active.
+  // A later type (env, hooks, mcp, docs) is absent until one is active.
   const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
   for (const type of NAMESPACED_RESOURCE_TYPES) {

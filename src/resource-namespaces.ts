@@ -122,7 +122,18 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig, option
   // Skill activation set spans BOTH dimensions: a skill is inactive only if it
   // lives in a namespace that neither an active role nor an active project selects.
   const allSkillNamespaces = new Set<string>([...allRoleSkillNamespaces, ...allProjectSkillNamespaces]);
-  return { activeNamespaces, allSkillNamespaces };
+
+  // Docs are declared, not held: a docs/<dir>/ that ANY role or project lists is
+  // a namespace, whether or not this member holds that role, and reaches only
+  // the members who have it active. Every other docs/<dir>/ stays shared.
+  const declaredDocsNamespaces = new Set<string>([
+    ...(rolesManifest?.roles ?? []).flatMap((role) => role.resources.docs ?? []),
+    ...(projectsManifest?.projects ?? []).flatMap((project) => project.resources.docs ?? []),
+  ]);
+  const activeDocs = new Set(activeNamespaces.docs ?? []);
+  const inactiveDocsNamespaces = [...declaredDocsNamespaces].filter((namespace) => !activeDocs.has(namespace));
+
+  return { activeNamespaces, allSkillNamespaces, inactiveDocsNamespaces };
 }
 
 /**

@@ -159,6 +159,27 @@ projects:
     }
   });
 
+  it('resolves the docs namespaces of the active projects, and rejects team-codebase in any case (#707)', async () => {
+    const valid = writeManifest('version: 1\nprojects:\n  - id: checkout\n    resources: { docs: [checkout] }\n');
+    try {
+      const manifest = await loadProjectsManifest(valid);
+      if (!manifest) throw new Error('manifest expected');
+      expect(resolveProjectResourceNamespaces({ manifest, activeProjects: ['checkout'] }).docs).toEqual(['checkout']);
+    } finally {
+      rmSync(valid, { recursive: true, force: true });
+    }
+    for (const reserved of ['team-codebase', 'Team-Codebase']) {
+      const repoDir = writeManifest(`version: 1\nprojects:\n  - id: checkout\n    resources: { docs: [${reserved}] }\n`);
+      try {
+        await expect(loadProjectsManifest(repoDir)).rejects.toThrow(
+          `projects.0.resources.docs.0: "${reserved}" cannot be a docs namespace: docs/team-codebase/ is reserved`,
+        );
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   // Root reads a mode-000 file, and Windows has no POSIX mode bits.
   const cannotRevokeRead = process.platform === 'win32' || process.getuid?.() === 0;
   it.skipIf(cannotRevokeRead)('throws when the manifest exists but cannot be read, rather than reporting no projects', async () => {

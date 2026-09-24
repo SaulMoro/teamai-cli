@@ -93,9 +93,10 @@ keep the project's content in the team repo until members have pulled: that is
 what lets their next pull clean up the copies they deployed.
 
 Every namespace that names a directory — `knowledge`, `skills`, `agents`, `env`,
-`hooks` and `mcp` in either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
+`hooks`, `mcp` and `docs` in either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
 ignored and unchecked) — must be a single path segment: no `/`, `\`, `:` or control character, no trailing
-`.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …). Two
+`.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …). `team-codebase`
+cannot be a `docs` namespace (`docs/team-codebase/` is the legacy codebase output). Two
 namespaces of one resource type may not differ only by case, across both
 manifests. A manifest that breaks this, does not parse, or is empty stops
 members' pull for that scope until it is fixed; the error names the entry. Fix
@@ -114,6 +115,13 @@ agent name in two namespaces one member has active is an error naming both
 files; two namespace rules or claudemd files of one name are both delivered.
 `teamai doctor` lists each replacement as a note. Teams without roles or
 projects are unaffected.
+
+Docs have no override. A top-level `docs/<ns>/` that any role or project lists
+under `resources.docs` reaches only members with that namespace active; a
+`docs/<dir>/` nobody lists stays shared with everyone. When a member leaves the
+namespace, their next pull removes its docs that still match the team copy and
+keeps (and names) the ones they edited. Recall and `teamai doctor` follow the
+same filter.
 
 ## Team dashboard (web UI)
 

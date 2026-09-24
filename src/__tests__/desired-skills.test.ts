@@ -31,6 +31,7 @@ describe('resolveDesiredSkills', () => {
       activeSkillNames: new Set(),
       inactiveSkillNames: new Set(),
       inactiveSkillSources: new Map(),
+      inactiveDocsNamespaces: [],
     };
   }
 

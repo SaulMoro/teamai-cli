@@ -112,4 +112,30 @@ describe('recall rebuilding a missing index', () => {
       .map((e: { filename: string }) => e.filename);
     expect(skills).toEqual(['gateway.md']);
   });
+
+  it('indexes the docs pull delivers here: shared ones and the active namespace (#707)', async () => {
+    const repo = path.join(tmp, '.teamai', 'team-repo');
+    fs.writeFileSync(
+      path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: alpha\n    name: Alpha\n    resources:\n      docs: [alpha]\n'
+        + '  - id: beta\n    name: Beta\n    resources:\n      docs: [beta]\n',
+    );
+    const doc = (rel: string): void => {
+      fs.mkdirSync(path.dirname(path.join(repo, 'docs', rel)), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'docs', rel), '# retry budget\nretry budget for the gateway');
+    };
+    doc('shared.md');
+    doc('runbooks/oncall.md');
+    doc('alpha/gateway.md');
+    doc('beta/billing.md');
+
+    await recall('retry budget', {});
+
+    const index = JSON.parse(fs.readFileSync(path.join(tmp, '.teamai', 'search-index.json'), 'utf8'));
+    const docs = index.entries
+      .filter((e: { type: string }) => e.type === 'docs')
+      .map((e: { filename: string }) => e.filename)
+      .sort();
+    expect(docs).toEqual(['alpha/gateway.md', 'runbooks/oncall.md', 'shared.md']);
+  });
 });

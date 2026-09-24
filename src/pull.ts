@@ -14,6 +14,7 @@ import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { placedResourcePath } from './push-namespaces.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
+import { resolveDesiredDocs } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
@@ -68,6 +69,8 @@ export interface RolePullContext {
    * user's local edits or unpushed files are never silently destroyed.
    */
   inactiveSkillSources: Map<string, string>;
+  /** Docs namespaces some role or project declares and this member does not have active. */
+  inactiveDocsNamespaces: string[];
 }
 
 /**
@@ -208,7 +211,7 @@ async function usageReportDisabled(repoPath: string): Promise<boolean> {
 export async function buildRolePullContext(localConfig: LocalConfig): Promise<RolePullContext | null> {
   const resolved = await resolveResourceNamespaces(localConfig);
   if (!resolved) return null;
-  const { activeNamespaces, allSkillNamespaces } = resolved;
+  const { activeNamespaces, allSkillNamespaces, inactiveDocsNamespaces } = resolved;
   const inactiveSkillNamespaces = [...allSkillNamespaces].filter((namespace) => !activeNamespaces.skills.includes(namespace));
   const activeSkillNames = new Set<string>();
   const inactiveSkillNames = new Set<string>();
@@ -237,7 +240,7 @@ export async function buildRolePullContext(localConfig: LocalConfig): Promise<Ro
     }
   }
 
-  return { activeNamespaces, activeSkillNames, inactiveSkillNames, inactiveSkillSources };
+  return { activeNamespaces, activeSkillNames, inactiveSkillNames, inactiveSkillSources, inactiveDocsNamespaces };
 }
 
 /**
@@ -1169,6 +1172,8 @@ async function pullForScope(
           ],
           learningsNamespaces: activeLearningsNamespaces,
           docsDir: await pathExists(docsRepoDir) ? docsRepoDir : undefined,
+          // The docs pull delivers here, not the whole docs/ tree (#707).
+          docFiles: (await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? [])).files,
           rulesDir: await pathExists(rulesRepoDir) ? rulesRepoDir : undefined,
           skillDirs: await indexedSkillDirs(),
           codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
@@ -1319,6 +1324,26 @@ async function pullForScope(
       continue;
     }
 
+    if (type === 'docs') {
+      // A declared namespace reaches only members with it active (#707). The
+      // withdrawal runs even when nothing is delivered: leaving the last active
+      // namespace must still take its unchanged copies away.
+      const docsHandler = handler as DocsHandler;
+      const desired = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? []);
+      const fileCount = desired.files.length;
+      if (options.dryRun) {
+        if (fileCount > 0) log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs`);
+      } else {
+        if (fileCount > 0) {
+          await docsHandler.pullDocs(desired, freshConfig, localConfig);
+          log.success(`[${scopeLabel}] Synced ${fileCount} docs`);
+        }
+        await docsHandler.withdrawInactiveNamespaces(desired, freshConfig, localConfig);
+      }
+      totalSynced += fileCount;
+      continue;
+    }
+
     // Skills: directory (role namespace) first, then tags, union of both
     let items: ResourceItem[];
     let skippedByTags = 0;
@@ -1348,20 +1373,6 @@ async function pullForScope(
       items = await handler.scanTeamForPull(freshConfig, localConfig);
     }
     if (items.length === 0) continue;
-
-    if (type === 'docs') {
-      const docsHandler = handler as DocsHandler;
-      const fileCount = await docsHandler.countDocFiles(items[0].sourcePath);
-
-      if (options.dryRun) {
-        log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs`);
-      } else {
-        await docsHandler.pullItem(items[0], freshConfig, localConfig);
-        log.success(`[${scopeLabel}] Synced ${fileCount} docs`);
-      }
-      totalSynced += fileCount;
-      continue;
-    }
 
     // Collect existing local resource names before pulling
     const existingNames = await getExistingLocalNames(type, items, freshConfig, localConfig);

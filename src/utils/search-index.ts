@@ -534,6 +534,22 @@ async function collectRecursiveMdEntries(
   return out;
 }
 
+/** `collectRecursiveMdEntries` over an explicit list of paths relative to `dir`. */
+async function collectListedMdEntries(
+  dir: string,
+  files: readonly string[],
+  type: KnowledgeType,
+  voteCounts: Map<string, number>,
+): Promise<SearchIndexEntry[]> {
+  const out: SearchIndexEntry[] = [];
+  for (const rel of files) {
+    if (!rel.endsWith('.md')) continue;
+    const e = await entryFromMdFile(path.join(dir, rel), rel, type, voteCounts);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
 /**
  * Collect entries from a skills directory whose layout is
  *   skills/<name>/SKILL.md            (flat)
@@ -605,6 +621,12 @@ export interface BuildIndexOptions {
    */
   learningsNamespaces?: string[];
   docsDir?: string;
+  /**
+   * The docs to index, relative to `docsDir`, in place of walking all of it:
+   * the set `pull` delivers to this member (#707), so recall does not return
+   * docs of a namespace the member does not have.
+   */
+  docFiles?: readonly string[];
   rulesDir?: string;
   skillsDir?: string;
   /**
@@ -651,7 +673,9 @@ export async function buildIndex(
   if (learningsDirs.length > 0) {
     entries.push(...await collectLearningsEntries(learningsDirs, opts.learningsNamespaces, voteCounts));
   }
-  if (opts.docsDir) {
+  if (opts.docsDir && opts.docFiles) {
+    entries.push(...await collectListedMdEntries(opts.docsDir, opts.docFiles, 'docs', voteCounts));
+  } else if (opts.docsDir) {
     entries.push(...await collectRecursiveMdEntries(opts.docsDir, 'docs', voteCounts));
   }
   if (opts.rulesDir) {

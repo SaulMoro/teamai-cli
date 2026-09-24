@@ -70,18 +70,34 @@ export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSe
  * writes back (`roles add`, `projects update`) carries one only when an admin
  * declared it. A new type is one entry here plus one line in the shape below.
  */
-export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp'] as const;
+export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp', 'docs'] as const;
 
 export type LaterResourceType = typeof LATER_RESOURCE_TYPES[number];
 
 const OptionalNamespaceList = z.array(NamespaceSegmentSchema).optional();
+
+/**
+ * `docs/team-codebase/` is the legacy codebase output, which recall and the
+ * wiki still read as such, so it cannot also be a docs namespace. Compared
+ * case-folded: on a case-insensitive filesystem `Team-Codebase` is that
+ * directory too.
+ */
+export const RESERVED_DOCS_DIR = 'team-codebase';
+
+const DocsNamespaceList = z.array(NamespaceSegmentSchema.refine(
+  (value) => caseFoldKey(value) !== RESERVED_DOCS_DIR,
+  (value) => ({
+    message: `"${value}" cannot be a docs namespace: docs/${RESERVED_DOCS_DIR}/ is reserved for the legacy codebase output. Pick another name and move its directory`,
+  }),
+)).optional();
 
 /** Spread into the roles and projects `resources:` schemas. */
 export const LaterResourceNamespacesShape = {
   env: OptionalNamespaceList,
   hooks: OptionalNamespaceList,
   mcp: OptionalNamespaceList,
-} satisfies Record<LaterResourceType, typeof OptionalNamespaceList>;
+  docs: DocsNamespaceList,
+} satisfies Record<LaterResourceType, z.ZodOptional<z.ZodArray<z.ZodType<string>>>>;
 
 /** `${kind}:${owner}:${key}` already reported in this process: manifests load several times per pull. */
 const reportedUnknownResourceKeys = new Set<string>();
@@ -219,7 +235,7 @@ export interface NamespaceEntry {
  * toward joining (`ß`/`ss` and `ı`/`i` count as one name), which can only
  * reject a pair, never let an alias through.
  */
-function caseFoldKey(name: string): string {
+export function caseFoldKey(name: string): string {
   return Array.from(name.normalize('NFC'), (ch) => ch.toUpperCase().toLowerCase()).join('').normalize('NFC');
 }
 

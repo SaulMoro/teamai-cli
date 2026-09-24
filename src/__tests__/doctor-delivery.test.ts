@@ -353,6 +353,29 @@ describe('doctor — skills delivered on disk', () => {
     it('asks nothing when the team repo ships no docs', async () => {
       expect(await docsCheck()).toBeUndefined();
     });
+
+    // The same filter pull applies (#707): a declared namespace this member
+    // does not have active is not owed, and an active one is.
+    it('does not expect the docs of a namespace declared elsewhere, and does expect the active one', async () => {
+      await fse.outputFile(
+        path.join(repoPath, 'manifest', 'projects.yaml'),
+        'version: 1\nprojects:\n  - id: alpha\n    resources:\n      docs: [alpha]\n  - id: beta\n    resources:\n      docs: [beta]\n',
+      );
+      localConfig.projects = ['alpha'];
+      await writeTeamDoc('guide.md');
+      await writeTeamDoc('alpha', 'gateway.md');
+      await writeTeamDoc('beta', 'billing.md');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'guide.md'), '# doc\n');
+
+      const check = await docsCheck();
+
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('alpha/gateway.md');
+      expect(check!.fix).not.toContain('beta');
+
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'alpha', 'gateway.md'), '# doc\n');
+      expect(await (await docsCheck())!.check()).toBe(true);
+    });
   });
 
   // The command whose job is reporting bad state must not stack-trace on it.

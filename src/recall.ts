@@ -343,6 +343,10 @@ async function loadOrBuildScopeIndex(
         learningsDirs: indexLearningsDirs,
         learningsNamespaces,
         docsDir: await pathExists(docsDir) ? docsDir : undefined,
+        // The docs pull delivers here, not the whole docs/ tree (#707).
+        docFiles: await pathExists(docsDir)
+          ? (await (await import('./resources/docs.js')).resolveDocsForDirectory(localConfig)).files
+          : undefined,
         rulesDir: await pathExists(rulesDir) ? rulesDir : undefined,
         // The skills pull delivers here, not the whole skills/ tree (#707).
         skillDirs: await pathExists(skillsDir)

@@ -698,22 +698,27 @@ async function envDeliveryProblems(
 
 /**
  * The docs bundle has one destination rather than one per tool: `DocsHandler`
- * copies the whole `docs/` tree into `sharing.docs.localDir`. So this check
- * compares the two trees, file by file, rather than asking each tool.
+ * copies the team's `docs/` tree into `sharing.docs.localDir`. So this check
+ * compares the delivered set with that directory, file by file, rather than
+ * asking each tool.
  */
 export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
-  const { DocsHandler, resolveDocsDestination } = await import('./resources/docs.js');
-  const handler = new DocsHandler();
-  const [item] = await handler.scanTeamForPull(teamConfig, localConfig);
-  if (!item) return [];
+  const { resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  // The set pull delivers: no dotfiles, nothing of a docs namespace this member
+  // does not have active (#707). Manifests that cannot be read leave nothing to
+  // compare against; the skills delivery check reports that failure.
+  let teamFiles: readonly string[];
+  try {
+    teamFiles = (await resolveDocsForDirectory(localConfig)).files;
+  } catch {
+    return [];
+  }
+  if (teamFiles.length === 0) return [];
 
   const dest = resolveDocsDestination(teamConfig, localConfig);
-  const teamFiles = (await listFilesRecursive(item.sourcePath))
-    // Same filter DocsHandler.pullItem copies with: dotfiles never travel.
-    .filter((file) => file.split('/').every((segment) => !segment.startsWith('.')));
 
   // isFile, not merely "something is there": a directory sitting on the
   // expected name, or a symlink with nothing behind it, would satisfy a plain

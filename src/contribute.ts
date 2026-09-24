@@ -75,6 +75,10 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
     // contribute-time rebuild drops the project's other learnings from recall.
     learningsNamespaces: activeLearningsNamespaces,
     docsDir: (await pathExists(docsRepoDir)) ? docsRepoDir : undefined,
+    // The docs pull delivers here, not the whole docs/ tree (#707).
+    docFiles: (await pathExists(docsRepoDir))
+      ? (await (await import('./resources/docs.js')).resolveDocsForDirectory(localConfig)).files
+      : undefined,
     rulesDir: (await pathExists(rulesRepoDir)) ? rulesRepoDir : undefined,
     // The skills pull delivers here, not the whole skills/ tree (#707).
     skillDirs: (await pathExists(skillsRepoDir))

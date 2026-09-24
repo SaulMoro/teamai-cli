@@ -46,7 +46,7 @@ const ProjectResourceNamespacesSchema = z.object({
   skills: z.array(NamespaceSegmentSchema).default([]),
   learnings: z.array(NamespaceSegmentSchema).default([]),
   agents: z.array(NamespaceSegmentSchema).default([]),
-  // env, hooks, mcp: optional, see LATER_RESOURCE_TYPES.
+  // env, hooks, mcp, docs: optional, see LATER_RESOURCE_TYPES.
   ...LaterResourceNamespacesShape,
 });
 
@@ -210,7 +210,7 @@ export function resolveProjectResourceNamespaces(input: {
 }): ResourceNamespaces {
   const resolved = input.activeProjects.map((id) => getProjectOrThrow(input.manifest, id));
 
-  // A later type (env, hooks, mcp) is absent until one is active.
+  // A later type (env, hooks, mcp, docs) is absent until one is active.
   const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
   for (const type of ALL_PROJECT_RESOURCE_TYPES) {
