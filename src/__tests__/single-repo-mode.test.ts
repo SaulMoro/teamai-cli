@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import fse from 'fs-extra';
 import {
   getReportsDir,
   getKnowledgeDir,
@@ -13,7 +14,7 @@ import {
   TeamaiConfigSchema,
   type LocalConfig,
 } from '../types.js';
-import { buildSelfModeGitignore, migrateSelfModeGitignoreContent } from '../init.js';
+import { buildSelfModeGitignore, migrateSelfModeGitignore, migrateSelfModeGitignoreContent } from '../init.js';
 
 /** The names of `names` that `gitignore`, as `.teamai/.gitignore`, makes git ignore. */
 function ignoredBy(gitignore: string, names: string[]): string[] {
@@ -176,6 +177,30 @@ describe('buildSelfModeGitignore', () => {
     expect(lines).toContain('learnings-wt/');
     expect(lines).toContain('.learnings-lock');
     expect(lines).toContain('pending-learnings/');
+  });
+});
+
+describe('migrateSelfModeGitignore', () => {
+  it('leaves the .gitignore whole when the disk fills while it is healed', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-self-heal-'));
+    const gitignorePath = path.join(root, '.teamai', '.gitignore');
+    const old = ['config.yaml', 'token', 'teamai.lock', 'env.local', 'usage.jsonl'].join('\n');
+    fs.mkdirSync(path.dirname(gitignorePath));
+    fs.writeFileSync(gitignorePath, old);
+    // The disk fills after the first bytes, wherever the healed file is written.
+    const spy = vi.spyOn(fse, 'writeFile').mockImplementation(async (file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView) => {
+      fs.writeFileSync(String(file), String(data).slice(0, 10));
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    try {
+      await migrateSelfModeGitignore({ ...makeConfig('self', path.join(root, '.teamai')), projectRoot: root });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(old);
+    expect(fs.readdirSync(path.dirname(gitignorePath))).toEqual(['.gitignore']);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 

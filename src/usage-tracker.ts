@@ -363,19 +363,26 @@ function pendingPrefix(usagePath: string): string {
 /**
  * Append the side files of appends that gave up on the lock to the usage file,
  * then remove them. Each holds one whole line; one without its newline is
- * still being written and waits for the next holder.
+ * still being written and waits for the next holder. A line the file already
+ * holds was folded by a holder that died or could not remove the side file,
+ * so it is not appended again (a line carries its millisecond timestamp).
  */
 async function foldPendingEvents(usagePath: string): Promise<void> {
   const dir = path.dirname(usagePath);
   const prefix = pendingPrefix(usagePath);
   const names = await fs.promises.readdir(dir).catch(() => []);
+  let folded: Set<string> | undefined;
   for (const name of names) {
     if (!name.startsWith(prefix) || !name.endsWith('.jsonl')) continue;
     const pendingPath = path.join(dir, name);
     try {
       const content = await fs.promises.readFile(pendingPath, 'utf-8');
       if (!content.endsWith('\n')) continue;
-      await fs.promises.appendFile(usagePath, content, 'utf-8');
+      folded ??= new Set((await fs.promises.readFile(usagePath, 'utf-8').catch(() => '')).split('\n'));
+      if (!folded.has(content.slice(0, -1))) {
+        await fs.promises.appendFile(usagePath, content, 'utf-8');
+        folded.add(content.slice(0, -1));
+      }
       await fs.promises.rm(pendingPath, { force: true });
     } catch (e) {
       log.debug(`Could not fold ${pendingPath} into ${usagePath}: ${e instanceof Error ? e.message : String(e)}`);

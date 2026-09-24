@@ -7,7 +7,7 @@ import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, reda
 import { pushRepoDirectly } from './utils/git.js';
 import { getProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
-import { ensureDir, writeFile, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
+import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import {
   CLAUDE_TOOL_ID,
@@ -723,7 +723,8 @@ export async function migrateSelfModeGitignore(localConfig: LocalConfig): Promis
     if (current === null) return; // no gitignore to migrate
     const { changed, content } = migrateSelfModeGitignoreContent(current);
     if (!changed) return;
-    await writeFile(gitignorePath, content);
+    // A full disk or a kill mid-write must not leave it partial: it also ignores `token` and `env.local`.
+    await writeFileAtomic(gitignorePath, content);
     log.info(
       'Updated .teamai/.gitignore for current machine-local files — '
       + 'please `git add .teamai/.gitignore` and commit it.',

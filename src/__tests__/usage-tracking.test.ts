@@ -451,6 +451,29 @@ describe('usage file lock (#788)', () => {
     expect(await pendingFiles()).toEqual([]);
   });
 
+  it('folds a side file once when it outlives its append', async () => {
+    await appendUsageEvent(event('a'), userScope());
+    await writeLock(process.pid);
+    await appendUsageEvent(event('b'), userScope());
+    await fs.promises.rm(`${usagePath()}.lock`);
+    // The side file cannot be removed once its event is in the file (or the holder dies there).
+    const realRm = fs.promises.rm;
+    const spy = vi.spyOn(fs.promises, 'rm').mockImplementation(async (file, options) => {
+      if (String(file).includes('.pending-')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return realRm(file, options);
+    });
+    try {
+      await appendUsageEvent(event('c'), userScope());
+    } finally {
+      spy.mockRestore();
+    }
+
+    await appendUsageEvent(event('d'), userScope());
+
+    expect(await skills()).toEqual(['a', 'b', 'c', 'd']);
+    expect(await pendingFiles()).toEqual([]);
+  });
+
   const pendingMode = async () =>
     (await fs.promises.stat(path.join(path.dirname(usagePath()), (await pendingFiles())[0]))).mode & 0o777;
 
