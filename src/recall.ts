@@ -400,6 +400,13 @@ export async function recall(
     process.stdout.write(`${line}\n`);
   };
 
+  const noQuery = !query || !query.trim();
+  if (noQuery && !options.check) {
+    log.error('Usage: teamai recall <query>');
+    log.info('Example: teamai recall "api timeout"');
+    return;
+  }
+
   let projectConfig: LocalConfig | null = null;
   const unreadable: string[] = [];
   // A detection that throws still searches what loads next, but its votes must
@@ -421,23 +428,13 @@ export async function recall(
   // team has no knowledge, so refuse instead: the rule `pull` follows (#784).
   const [problem] = unreadable;
   if (problem !== undefined) {
-    const message = `Nothing was searched: ${describeUnreadableConfig(problem)}`;
-    if (options.silent) {
-      log.persist(message);
-      return;
-    }
-    log.error(message);
+    log.error(`Nothing was searched: ${describeUnreadableConfig(problem)}`);
     process.exitCode = 1;
     return;
   }
 
-  if (!query || !query.trim()) {
-    if (options.check) {
-      emitCheckVerdict(0);
-      return;
-    }
-    log.error('Usage: teamai recall <query>');
-    log.info('Example: teamai recall "api timeout"');
+  if (noQuery) {
+    emitCheckVerdict(0);
     return;
   }
 

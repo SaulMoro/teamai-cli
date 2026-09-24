@@ -176,22 +176,14 @@ describe('recall in a project whose config cannot be read (#796)', () => {
     expect(errors()).toEqual([expect.stringMatching(/^Nothing was searched: /)]);
   });
 
-  it('a silent caller gets no output and exit 0: the reason goes to debug.log', async () => {
-    userScope();
+  it('a missing query is rejected before the project is resolved, as before', async () => {
     const root = gitRepo('project-a');
     await brokenPartition(root);
-    legacyOtherTeam(root);
     process.chdir(root);
 
-    await recall(QUERY, { silent: true });
+    await recall('', {});
 
-    expect(stdout).toBe('');
-    expect(recorded()).toEqual({ votes: false, quality: false });
-    expect(log.error).not.toHaveBeenCalled();
-    expect(vi.mocked(log.persist).mock.calls.map(([msg]) => msg)).toEqual([
-      expect.stringMatching(/^Nothing was searched: /),
-    ]);
-    expect(process.exitCode).toBe(originalExitCode);
+    expect(vi.mocked(log.error).mock.calls.map(([msg]) => msg)).toEqual(['Usage: teamai recall <query>']);
   });
 
   it('searches and records the project scope of a readable project config, as before', async () => {
