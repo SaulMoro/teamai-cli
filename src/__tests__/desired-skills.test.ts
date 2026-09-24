@@ -3,14 +3,14 @@ import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveDesiredSkills, type DesiredSkills } from '../pull.js';
+import { describeDeliveryConflict, resolveDesiredSkills, type DesiredSkills } from '../resources/desired.js';
 
 /** The resolved skills, failing the test on a namespace collision. */
 function resolved(result: Awaited<ReturnType<typeof resolveDesiredSkills>>): DesiredSkills {
-  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${result.message}`);
+  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${describeDeliveryConflict(result)}`);
   return result;
 }
-import type { RolePullContext } from '../pull.js';
+import type { RolePullContext } from '../resources/desired.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 /**

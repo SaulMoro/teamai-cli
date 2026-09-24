@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import type { ResourceItem } from '../types.js';
-import { filterAgentsByNamespaces } from '../pull.js';
+import { describeDeliveryConflict, filterAgentsByNamespaces } from '../resources/desired.js';
 
 /** The delivered agents, failing the test on a collision. */
 function delivered(result: ReturnType<typeof filterAgentsByNamespaces>): ResourceItem[] {
-  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${result.message}`);
+  if (result.kind === 'conflict') throw new Error(`unexpected collision: ${describeDeliveryConflict(result)}`);
   return result.items;
 }
 
 /** The collision message, failing the test when the agents resolved. */
 function collision(result: ReturnType<typeof filterAgentsByNamespaces>): string {
   if (result.kind !== 'conflict') throw new Error('expected a collision');
-  return result.message;
+  return describeDeliveryConflict(result);
 }
 
 describe('filterAgentsByNamespaces', () => {

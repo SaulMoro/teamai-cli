@@ -106,6 +106,54 @@ export function resolveNamespacedItems<T>(
   };
 }
 
+/** A namespace item delivered in place of a root item: its name, and both files repo-relative. */
+export interface NamespaceOverride {
+  readonly name: string;
+  readonly source: string;
+  readonly replaces: string;
+}
+
+/**
+ * Root suppression alone, for types whose namespace items never compete for
+ * one slot (rules keep their `rules/<ns>/` path, claudemd files each keep a
+ * place in the block): every active namespace item replaces the root item of
+ * its name, and two active namespaces with one name are no conflict, so both
+ * are delivered.
+ */
+export function resolveRootOverrides<T>(
+  candidates: readonly NamespaceCandidate<T>[],
+  active: readonly string[],
+): NamespaceOverride[] {
+  const roots = new Map(candidates.flatMap((candidate) => (
+    candidate.namespace === null ? [[candidate.name, candidate.source] as const] : []
+  )));
+  return candidates.flatMap((candidate) => {
+    const root = candidate.namespace !== null && active.includes(candidate.namespace)
+      ? roots.get(candidate.name)
+      : undefined;
+    return root ? [{ name: candidate.name, source: candidate.source, replaces: root }] : [];
+  });
+}
+
+/** One override as `doctor` lists it, the same line for every type. */
+export function describeOverride(type: string, override: NamespaceOverride): string {
+  return `${type}: "${override.name}" from ${override.source} replaces ${override.replaces}`;
+}
+
+/** Each name more than one item carries, with those items' sources sorted, in first-seen order. */
+export function repeatedNames<T>(
+  items: readonly T[],
+  nameOf: (item: T) => string,
+  sourceOf: (item: T) => string,
+): Array<[string, string[]]> {
+  const byName = new Map<string, string[]>();
+  for (const item of items) {
+    const name = nameOf(item);
+    byName.set(name, [...(byName.get(name) ?? []), sourceOf(item)]);
+  }
+  return [...byName].filter(([, sources]) => sources.length > 1).map(([name, sources]) => [name, sources.sort()]);
+}
+
 function conflictBetween<T>(
   name: string,
   first: NamespaceCandidate<T>,

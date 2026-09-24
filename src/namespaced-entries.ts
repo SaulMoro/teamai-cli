@@ -17,7 +17,7 @@
  * keeps its old handling of a repeated name; doctor lists those as info.
  */
 import path from 'node:path';
-import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
+import { describeOverride, repeatedNames, resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { resolveResourceNamespaces } from './resource-namespaces.js';
 import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js';
 import { findProject, loadProjectsManifest, unknownProjectMessage } from './projects.js';
@@ -174,7 +174,6 @@ export async function resolveEntries<E>(
   const targets = new TargetFiles(repoPath, type);
 
   const candidates: NamespaceCandidate<E>[] = [];
-  const rootNames: string[] = [];
   for (const namespace of places) {
     const source = entryFilePath(type, namespace);
     const read = await reader.read(entryFileAbsolutePath(repoPath, type, namespace), source);
@@ -186,12 +185,15 @@ export async function resolveEntries<E>(
       const name = reader.nameOf(entry);
       const scope = reader.scopeOf(entry);
       if (!await keepScopedEntry(type, name, source, scope, localConfig, targets, notices)) continue;
-      if (namespace === null) rootNames.push(name);
       candidates.push({ name, source, namespace, value: entry });
     }
   }
 
-  const repeated = [...new Set(rootNames.filter((name, index) => rootNames.indexOf(name) !== index))];
+  const repeated = repeatedNames(
+    candidates.filter((candidate) => candidate.namespace === null),
+    (candidate) => candidate.name,
+    (candidate) => candidate.source,
+  ).map(([name]) => name);
 
   if (active === null) {
     return {
@@ -396,7 +398,7 @@ export function describeOrigin(entry: ResolvedEntry<unknown>): string {
 export function describeEntryNotes(type: EntryType, resolution: EntryResolution<unknown>): string[] {
   if (resolution.kind !== 'resolved') return [];
   const lines = resolution.entries.flatMap((entry) => (entry.replaces
-    ? [`${type}: "${entry.name}" from ${entry.source} replaces ${entry.replaces}`]
+    ? [describeOverride(type, { name: entry.name, source: entry.source, replaces: entry.replaces })]
     : []));
   if (resolution.active === null) {
     for (const name of resolution.repeated) {

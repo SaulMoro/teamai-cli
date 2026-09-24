@@ -584,6 +584,9 @@ async function collectSkillEntries(
   return out;
 }
 
+/** The skills to index in place of walking `skillsDir`: the directories `pull` delivers to this member (#707). */
+export type IndexedSkills = { readonly kind: 'dirs'; readonly dirs: readonly string[] };
+
 /**
  * Entries for an explicit list of skill directories, each `<dir>/SKILL.md`,
  * named after the directory (doc_id = skill name) as `collectSkillEntries` does.
@@ -628,13 +631,13 @@ export interface BuildIndexOptions {
    */
   docFiles?: readonly string[];
   rulesDir?: string;
-  skillsDir?: string;
   /**
-   * The skill directories to index, in place of walking `skillsDir`: the set
-   * `pull` delivers to this member (#707), so recall does not return skills
-   * the member does not have.
+   * Every skill under this directory. A member's index passes `skills`
+   * instead; `viz` indexes a whole knowledge repo, not one member's view.
    */
-  skillDirs?: readonly string[];
+  skillsDir?: string;
+  /** In place of `skillsDir`: the skills this member receives, so recall does not return others. */
+  skills?: IndexedSkills;
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
@@ -681,8 +684,8 @@ export async function buildIndex(
   if (opts.rulesDir) {
     entries.push(...await collectRecursiveMdEntries(opts.rulesDir, 'rules', voteCounts));
   }
-  if (opts.skillDirs) {
-    entries.push(...await collectSkillDirEntries(opts.skillDirs, voteCounts));
+  if (opts.skills?.kind === 'dirs') {
+    entries.push(...await collectSkillDirEntries(opts.skills.dirs, voteCounts));
   } else if (opts.skillsDir) {
     entries.push(...await collectSkillEntries(opts.skillsDir, voteCounts));
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ResourceItem } from '../types.js';
-import { filterRulesByKnowledgeNamespaces } from '../pull.js';
+import { filterRulesByKnowledgeNamespaces } from '../resources/desired.js';
 
 describe('filterRulesByKnowledgeNamespaces', () => {
   function makeRule(name: string): ResourceItem {

@@ -7,7 +7,7 @@ vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
 }));
 
-import { buildRolePullContext } from '../pull.js';
+import { buildRolePullContext } from '../resources/desired.js';
 import type { LocalConfig } from '../types.js';
 
 /**

@@ -55,7 +55,6 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
   const repoPath = localConfig.repo.localPath;
   const docsRepoDir = path.join(repoPath, 'docs');
   const rulesRepoDir = path.join(repoPath, 'rules');
-  const skillsRepoDir = path.join(repoPath, 'skills');
   const votesDir = path.join(getReportsDir(localConfig), 'votes');
 
   const activeLearningsNamespaces = await resolveActiveLearningsNamespaces(
@@ -66,6 +65,7 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
   const teamaiHome = getDataHome(localConfig);
   const indexPath = path.join(teamaiHome, 'search-index.json');
   const { buildIndex } = await import('./utils/search-index.js');
+  const { deliveredIndexSources } = await import('./resources/desired.js');
   await buildIndex({
     learningsDirs: [
       pendingLearningsDir(localConfig),
@@ -75,15 +75,9 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
     // contribute-time rebuild drops the project's other learnings from recall.
     learningsNamespaces: activeLearningsNamespaces,
     docsDir: (await pathExists(docsRepoDir)) ? docsRepoDir : undefined,
-    // The docs pull delivers here, not the whole docs/ tree (#707).
-    docFiles: (await pathExists(docsRepoDir))
-      ? (await (await import('./resources/docs.js')).resolveDocsForDirectory(localConfig)).files
-      : undefined,
     rulesDir: (await pathExists(rulesRepoDir)) ? rulesRepoDir : undefined,
-    // The skills pull delivers here, not the whole skills/ tree (#707).
-    skillDirs: (await pathExists(skillsRepoDir))
-      ? await (await import('./pull.js')).resolveIndexedSkillDirs(localConfig)
-      : undefined,
+    // The docs and skills pull delivers here, not the whole trees (#707).
+    ...await deliveredIndexSources(localConfig),
     votesDir: (await pathExists(votesDir)) ? votesDir : undefined,
     indexPath,
   });

@@ -571,14 +571,14 @@ describe('pull role-aware sync and cleanup', () => {
       resourceProfileVersion: 1,
       scope: 'user',
     };
-    const { scanRoleAwareSkills } = await import('../pull.js');
+    const { describeDeliveryConflict, scanRoleAwareSkills } = await import('../resources/desired.js');
 
     // pull stops skills for the run on this (#707); the other types still sync.
     const result = await scanRoleAwareSkills(
       localConfig,
       { knowledge: ['common', 'hai'], skills: ['common', 'hai'], learnings: [], agents: [] },
     );
-    expect(result.kind === 'conflict' ? result.message : '').toMatch(/Duplicate skill "shared-skill"/);
+    expect(result.kind === 'conflict' ? describeDeliveryConflict(result) : '').toMatch(/Duplicate skill "shared-skill"/);
   });
 
   it('cleans up stale skills after role change (full pull cycle)', async () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fse from 'fs-extra';
 import { ResourceHandler } from './base.js';
 import { resolveBaseDir, type ResourceItem, type TeamaiConfig, type LocalConfig } from '../types.js';
-import { expandHome, listDirs, listFilesRecursive } from '../utils/fs.js';
+import { expandHome, listDirs, listFilesRecursive, pruneEmptyDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
@@ -75,15 +75,6 @@ async function readBytes(filePath: string): Promise<Buffer | null> {
     return await fs.readFile(filePath);
   } catch {
     return null;
-  }
-}
-
-/** Remove `dir` and each parent up to (not including) `stopAt` while they are empty. */
-async function pruneEmptyDirs(dir: string, stopAt: string): Promise<void> {
-  for (let current = dir; current.startsWith(stopAt + path.sep); current = path.dirname(current)) {
-    const entries = await fs.readdir(current).catch(() => null);
-    if (entries === null || entries.length > 0) return;
-    await fs.rmdir(current).catch(() => undefined);
   }
 }
 
@@ -165,9 +156,9 @@ export class DocsHandler extends ResourceHandler {
           continue;
         }
         await fs.rm(deployed, { force: true });
-        await pruneEmptyDirs(path.dirname(deployed), localDocsDir);
         log.debug(`[${localConfig.scope}] Removed ${dir}/${file} of inactive docs namespace "${dir}"`);
       }
+      await pruneEmptyDirs(path.join(localDocsDir, dir));
       if (kept.length > 0) {
         log.warn(
           `[${localConfig.scope}] Kept ${kept.length} doc(s) of docs namespace "${dir}", which is not active here: `
