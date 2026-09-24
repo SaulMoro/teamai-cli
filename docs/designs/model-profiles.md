@@ -12,13 +12,13 @@ Model profiles let a team publish one gateway catalog that every supported agent
 
 | Data | Location | Git-tracked | Contains secrets |
 | --- | --- | --- | --- |
-| Team profiles | `<team repo>/models/models.yaml` | Yes | No |
+| Team profiles | `<team repo>/models/models.yaml`, plus `models/<ns>/models.yaml` per namespace | Yes | No |
 | Personal profiles | `~/.teamai/models/models.yaml` | No | No |
 | Personal API keys | `~/.teamai/models/values.json` | No, mode `0600` | Key or env-var name |
 | Team-profile API keys | `~/.teamai/models/teams/<team-name>-<hash>.json` | No, mode `0600` | Key or env-var name |
 | Ownership and restore state | `~/.teamai/models/managed.json` | No, mode `0600` | May hold previous and written keys |
 
-A key is either stored or referenced as an environment variable; it is never accepted as a command-line argument. `0600` is not encryption. The team-key file name combines the sanitized `teamai.yaml` team name with a hash of the repository identity, and the same identity is recorded with each `team:` switch so `pull` only re-applies the current team's profiles.
+A key is either stored or referenced as an environment variable; it is never accepted as a command-line argument. `0600` is not encryption. The team-key file name combines the sanitized `teamai.yaml` team name with a hash of the repository identity, and the same identity is recorded with each `team:` switch so `pull` only re-applies the current team's profiles. Inside it, each key is stored under `team:<id>@<origin>`; see [Namespaces and key binding](#namespaces-and-key-binding).
 
 ## Catalog and protocols
 
@@ -38,6 +38,17 @@ Protocols are `anthropic`, `openai-responses`, and `openai-chat-completions`, de
 The first model in the catalog is the default. `switch --model <id>` chooses another one; the choice is remembered for later re-applies. `configure --protocol/--model` edits keep the first model first.
 
 Team and personal profiles live in the `team:` and `local:` namespaces. An unqualified ID works only when unique, and `models add` refuses an ID the team already uses.
+
+## Namespaces and key binding
+
+Team profiles follow the namespace rule every resource type uses (#707): `models/models.yaml` is shared, and `models/<ns>/models.yaml` is read only where `<ns>` is active in `resources.models` of the member's roles or projects. A namespace profile replaces the root profile with the same `id`, whole. The same `id` in two active namespaces, or an active file that does not parse, stops model updates for that pull and leaves every agent as it is; a repeated `id` in one file is already a parse error. Legacy mode (no roles, no projects) reads the root file only.
+
+An override can move a profile to another gateway, so a team key is bound to the profile `id` and the origin of `base_url` (scheme, host, port), and is stored under `team:<id>@<origin>`. A key is only ever written into an agent next to a gateway on that origin:
+
+- `pull` re-applies a profile only when a key is stored for its current origin. When one is stored for the `id` but another origin, it leaves the agents alone and prints `teamai models switch team:<id>`, which asks for the new gateway's key. This covers a root profile moved to another host as well as an override.
+- Keys for several origins of one `id` coexist, so leaving a namespace returns agents to the root profile with the key stored for it, without a prompt.
+- A key stored before this rule, under `team:<id>`, belongs to the root profile's origin: it is used while the resolved profile has that origin, and replaced by the bound form the next time a key is stored for that origin.
+- A profile that exists only in a namespace the member left is not undone: the agents keep their settings and `pull` says the profile `is no longer active in your namespaces`; `teamai models restore` undoes it.
 
 ## Agent writes
 

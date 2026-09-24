@@ -12,13 +12,13 @@
 
 | 数据 | 位置 | Git 跟踪 | 是否含密钥 |
 | --- | --- | --- | --- |
-| 团队配置 | `<团队仓库>/models/models.yaml` | 是 | 否 |
+| 团队配置 | `<团队仓库>/models/models.yaml`，以及每个 namespace 的 `models/<ns>/models.yaml` | 是 | 否 |
 | 个人配置 | `~/.teamai/models/models.yaml` | 否 | 否 |
 | 个人配置的 API key | `~/.teamai/models/values.json` | 否，权限 `0600` | 密钥或环境变量名 |
 | 团队配置的 API key | `~/.teamai/models/teams/<团队名>-<哈希>.json` | 否，权限 `0600` | 密钥或环境变量名 |
 | ownership 与恢复状态 | `~/.teamai/models/managed.json` | 否，权限 `0600` | 可能包含原值和写入的密钥 |
 
-密钥要么保存在本地，要么引用环境变量，不接受命令行参数传入。`0600` 并非加密。团队密钥文件名由 `teamai.yaml` 中清理后的团队名和仓库身份哈希组成；每次切换 `team:` 配置时也会记录这个身份，`pull` 只会重新应用当前团队的配置。
+密钥要么保存在本地，要么引用环境变量，不接受命令行参数传入。`0600` 并非加密。团队密钥文件名由 `teamai.yaml` 中清理后的团队名和仓库身份哈希组成；每次切换 `team:` 配置时也会记录这个身份，`pull` 只会重新应用当前团队的配置。文件内每个密钥保存在 `team:<id>@<origin>` 下，见 [Namespace 与密钥绑定](#namespace-与密钥绑定)。
 
 ## 目录与协议
 
@@ -38,6 +38,17 @@ profiles:
 目录中的第一个模型是默认模型。`switch --model <id>` 可以另选默认模型，之后重新应用时会沿用这个选择。用 `configure --protocol/--model` 编辑时，第一个模型的位置保持不变。
 
 团队配置和个人配置分别使用 `team:` 与 `local:` 命名空间。不带前缀的 ID 只在唯一时可用；团队已使用的 ID，`models add` 会拒绝。
+
+## Namespace 与密钥绑定
+
+团队配置遵循所有资源类型共用的 namespace 规则（#707）：`models/models.yaml` 对所有人共享，`models/<ns>/models.yaml` 只在成员的角色或项目的 `resources.models` 中激活了 `<ns>` 时读取。namespace 中的配置整体替换根目录中 `id` 相同的配置。两个生效 namespace 出现同一个 `id`，或某个生效文件无法解析时，本次 pull 不更新模型，所有 Agent 保持原样；同一文件中重复的 `id` 本身就是解析错误。旧模式（未配置角色和项目）只读取根文件。
+
+覆盖可以把配置指向另一个网关，因此团队密钥绑定到配置 `id` 和 `base_url` 的 origin（协议、主机、端口），保存在 `team:<id>@<origin>` 下。密钥只会与同一 origin 的网关一起写入 Agent：
+
+- 只有当前 origin 存有密钥时，`pull` 才会重新应用配置。如果该 `id` 只存有其他 origin 的密钥，`pull` 不修改 Agent，并提示运行 `teamai models switch team:<id>`，由它询问新网关的密钥。根配置被改到另一个主机时同样如此。
+- 同一个 `id` 可以同时保存多个 origin 的密钥，因此离开 namespace 后 Agent 会用已保存的密钥回到根配置，无需再次输入。
+- 此规则之前保存在 `team:<id>` 下的密钥属于根配置的 origin：只在解析出的配置使用该 origin 时使用，下次为该 origin 保存密钥时改为绑定形式。
+- 只存在于成员已离开的 namespace 中的配置不会被撤销：Agent 保留设置，`pull` 提示该配置 `is no longer active in your namespaces`；可用 `teamai models restore` 撤销。
 
 ## Agent 写入
 

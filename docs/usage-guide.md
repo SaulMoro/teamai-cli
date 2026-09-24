@@ -293,7 +293,7 @@ teamai projects remove checkout
 `--namespaces` sets the same namespaces on every project resource type
 (`knowledge`, `skills`, `learnings`, `agents`); `update` adds or removes them on
 each type's own list, so a hand-edited per-type layout survives. Neither touches
-`env`, `hooks` or `mcp`: declare those by hand (see
+`env`, `hooks`, `mcp` or `models`: declare those by hand (see
 [Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)),
 because a member on an older CLI cannot read them. After
 `projects remove`, a directory that still has the project active warns on its
@@ -1811,7 +1811,7 @@ teamai remove rules <name> --force   # Skip the prompt, for scripts and CI
 
 `teamai doctor` exits with code 0 only when every check passes, and code 1 when any check fails. Before initialization, it reports the missing configuration without assuming a Git provider. The same checks run at the end of a manual `teamai pull`, minus the provider ones and minus any check that pull already reported in its own words on that run. A check marked informational — currently only `No stale env blocks left behind` — still counts toward `doctor`'s exit code, but a pull does not fold its failure into `Pull finished, but N check(s) failed`: a leftover file from an earlier install is cleanup, not a sign this pull broke anything, so it is still named but on its own, gentler line.
 
-Besides the provider, clone, config and hook checks, `doctor` verifies what reached your machine. `<tool> is installed` fails when `enabledAgents` lists a tool that nothing would be delivered to, which is the case where a pull reports success and that tool receives nothing. It asks the same resolver the sync uses, so a tool that keeps its skills somewhere other than its tool root, as OpenClaw does with its workspace directory, is judged where the sync would actually write. It reports an installed tool as passing too, so `--json` carries one entry per enabled tool either way. The checks at the end of a pull cover the scope that pull resolved from the current directory; run `teamai doctor` in another scope to check that one. `Skills delivered to <tool>` compares the skills your role namespaces, tag subscriptions and exclusions resolve to against what is on disk for each installed tool: it reports a skill that was never delivered separately from one that arrived unreadable — `SKILL.md` missing, its frontmatter unparseable, or its `name` not matching the directory, which keeps the agent from ever discovering it. `Team docs delivered` compares the docs you receive (a docs namespace you do not have active is left out) against `sharing.docs.localDir`, which has one destination rather than one per tool; each expected document has to be a file that can be read, so a directory or a dangling link sitting on the name counts as missing. `doctor` also prints notes, which are information rather than failed checks. Each note names a namespace skill, agent, rule, shared-instructions file, env variable, hook or MCP server that replaces a root one here (`rules: "style" from rules/checkout/style.md replaces rules/style.md`). Without roles or projects, the notes name each file the team repo defines more than once instead, and each env variable, hook or MCP server name repeated in its root file.
+Besides the provider, clone, config and hook checks, `doctor` verifies what reached your machine. `<tool> is installed` fails when `enabledAgents` lists a tool that nothing would be delivered to, which is the case where a pull reports success and that tool receives nothing. It asks the same resolver the sync uses, so a tool that keeps its skills somewhere other than its tool root, as OpenClaw does with its workspace directory, is judged where the sync would actually write. It reports an installed tool as passing too, so `--json` carries one entry per enabled tool either way. The checks at the end of a pull cover the scope that pull resolved from the current directory; run `teamai doctor` in another scope to check that one. `Skills delivered to <tool>` compares the skills your role namespaces, tag subscriptions and exclusions resolve to against what is on disk for each installed tool: it reports a skill that was never delivered separately from one that arrived unreadable — `SKILL.md` missing, its frontmatter unparseable, or its `name` not matching the directory, which keeps the agent from ever discovering it. `Team docs delivered` compares the docs you receive (a docs namespace you do not have active is left out) against `sharing.docs.localDir`, which has one destination rather than one per tool; each expected document has to be a file that can be read, so a directory or a dangling link sitting on the name counts as missing. `doctor` also prints notes, which are information rather than failed checks. Each note names a namespace skill, agent, rule, shared-instructions file, env variable, hook, MCP server or team model profile that replaces a root one here (`rules: "style" from rules/checkout/style.md replaces rules/style.md`). Without roles or projects, the notes name each file the team repo defines more than once instead, and each env variable, hook or MCP server name repeated in its root file.
 
 `Rules delivered to <tool>` and `Agents delivered to <tool>` do the same for the other two per-tool resources, and both ask the handler where an item lands rather than deriving a path: a rule's filename and content change per tool (`.md` verbatim, `.mdc` with derived `globs`/`alwaysApply`, `.instructions.md` with `applyTo`), and an agent's destination comes from its render, with `targets:` deciding which tools are owed a copy at all. A delivered rule is compared with the bytes the handler renders for that tool, not merely read for the keys its tool needs: a `.mdc` whose `globs` no longer match the team rule's `paths:` applies to the wrong files while carrying a perfectly legal `alwaysApply`, and that reads here as `delivered from an older copy` — the same label as a body that drifted, because both landed successfully and are still wrong. An agent is compared with the bytes its render produces, so a copy left behind by an older spec — a plain pull skips a scope whose team repo has not changed, so it can sit there indefinitely — is reported as `delivered from an older spec` rather than passing as present. `Every team agent reaches a tool` names an agent that renders for no installed tool — usually a spec that does not parse, or a `targets:` list naming only tools you do not have. These two are `doctor`-only: they read every rule per tool and parse every agent, which would spend the budget the checks at the end of a pull run under.
 
@@ -2135,7 +2135,7 @@ Model profiles point Claude Code, Codex, OpenCode, CodeBuddy, and WorkBuddy at a
 
 There are two sources, both in the same format:
 
-- `team:<id>` comes from the team repository's `models/models.yaml`. It holds URLs and model IDs, never a key.
+- `team:<id>` comes from the team repository's `models/models.yaml`, and from `models/<ns>/models.yaml` for your active namespaces (see [Team profiles by namespace](#team-profiles-by-namespace)). It holds URLs and model IDs, never a key.
 - `local:<id>` is a personal profile in `~/.teamai/models/models.yaml`, visible only on this machine.
 
 Plain `<id>` works while it is unique; if a team and a personal profile share an ID, write `team:<id>` or `local:<id>`.
@@ -2175,7 +2175,7 @@ The example above has no `openai-responses` group, so Codex is left alone; add t
 ### Use a team profile
 
 ```bash
-teamai models list                     # every profile: key source, gateway, models, agents, where it is active
+teamai models list                     # every profile: file it comes from, key source, gateway, models, agents, where it is active
 teamai models list tokenhub            # just one profile
 teamai models switch tokenhub          # asks for the key the first time
 ```
@@ -2192,6 +2192,44 @@ printf '%s' "$TOKENHUB_API_KEY" | teamai models configure tokenhub --api-key-std
 Codex, OpenCode, CodeBuddy, and WorkBuddy then read the variable themselves. Claude Code cannot, so `switch` writes the resolved key into `~/.claude/settings.json`. There is no `--api-key <value>` option, because arguments end up in shell history and process lists. Key files are written with mode `0600`.
 
 When the team edits the catalog, `teamai pull` re-applies it to the agents you switched to it.
+
+### Team profiles by namespace
+
+A project or role can give a team profile its own version, for example to point
+checkout members at the checkout gateway under the same `id`. Put it in
+`models/<ns>/models.yaml` and declare the namespace under `resources.models`, the
+same way as for env, hooks and MCP servers (see
+[Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)):
+
+```yaml
+# manifest/projects.yaml
+projects:
+  - id: checkout
+    resources:
+      models: [checkout]
+```
+
+- **Override.** While `checkout` is active, a profile in `models/checkout/models.yaml`
+  replaces the root profile with the same `id`, whole. Agents switched to
+  `team:<id>` follow it on the next pull; when the namespace deactivates they go
+  back to the root profile. A profile that exists only in a namespace you left
+  is not removed from your agents: pull says it `is no longer active in your
+  namespaces`, and `teamai models restore` undoes it.
+- **Your key stays with its gateway.** A team profile's API key is stored for the
+  profile `id` and the origin (scheme, host and port) of its `base_url`. When an
+  override moves a profile to another origin, pull leaves the agents on it alone
+  and prints a line to run `teamai models switch team:<id>`, which asks for the
+  key of the new gateway (or run `teamai models configure team:<id>` first). The
+  key for the first gateway is kept, so leaving the namespace needs no new key.
+  The same applies when the team moves the root profile to another origin. A key
+  configured before this version is used for the root profile's origin only.
+- **Conflicts stop models, not the pull.** The same `id` in two active namespaces,
+  or an active file that does not parse, means no agent is updated this run; the
+  warning names the file(s). `teamai push` refuses any invalid models file.
+- `teamai models list` shows the file each team profile comes from and whether
+  it overrides the root one; `teamai doctor` lists each override as a note.
+- **Upgrade every member first.** teamai 0.25.0 and the 0.26.0 betas reject the
+  `models` key in `resources:`.
 
 ### Personal profiles
 

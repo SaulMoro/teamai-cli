@@ -268,7 +268,7 @@ teamai projects remove checkout
 
 `--namespaces` 会把同一组 namespace 写入项目的每种资源类型（`knowledge`、`skills`、
 `learnings`、`agents`）；`update` 在每种类型各自的列表上增删，因此手工编辑过的按类型
-布局会被保留。两者都不会改动 `env`、`hooks` 或 `mcp`：这些请手动声明（见
+布局会被保留。两者都不会改动 `env`、`hooks`、`mcp` 或 `models`：这些请手动声明（见
 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)），因为旧版 CLI 的成员读不了它们。执行 `projects remove` 后，仍激活该项目的目录在下一次 pull 时会提示警告、
 回退为仅按角色过滤，并清理已部署的该项目 skills、rules 和 agents——前提是该项目的内容
 仍在团队仓库中，因为正是靠它识别已部署的副本。请在成员都 pull 过之后，再用单独的变更删除这些内容。
@@ -1732,7 +1732,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 仅当所有检查通过时，`teamai doctor` 才以状态码 0 退出；任一检查失败时以状态码 1 退出。尚未初始化时，它只报告缺少配置，不会臆测 Git 托管平台。手动执行 `teamai pull` 结束时会运行同一批检查（不含托管平台相关的检查，也不含本次 pull 已经自行报告过的检查）。被标记为 informational 的检查——目前只有 `No stale env blocks left behind`——仍会计入 `doctor` 的退出码，但 pull 不会把它的失败并入 `Pull finished, but N check(s) failed`：早期安装留下的遗留文件属于清理事项，不代表这次 pull 弄坏了什么，因此依旧会被点名，只是单独用一行更轻的提示呈现。
 
-除了托管平台、clone、配置和 hook 检查之外，`doctor` 还会验证落到本机上的内容。`<tool> is installed` 在 `enabledAgents` 列出了不会收到任何内容的工具时失败——这正是 pull 报告成功、而该工具什么都没收到的情况。它使用与同步相同的解析逻辑，因此像 OpenClaw 这样把 skills 放在 workspace 目录而非工具根目录的工具，会在同步真正写入的位置被判断。工具已安装时也会作为通过项报告，因此 `--json` 无论哪种情况都会为每个已启用工具给出一条记录。pull 结束时的检查只覆盖它从当前目录解析出的那个 scope；其他 scope 请在对应目录下运行 `teamai doctor`。`Skills delivered to <tool>` 会把角色命名空间、标签订阅与排除规则解析出的 skill 集合，与每个已安装工具磁盘上的内容比对：从未送达的 skill 与送达但不可读的 skill 会分别报告——后者指 `SKILL.md` 缺失、frontmatter 无法解析，或其 `name` 与目录名不一致，导致 agent 永远发现不了它。`Team docs delivered` 将你应收到的文档（不含未激活的 docs namespace）与 `sharing.docs.localDir` 比对（它只有一个目标目录，而非每个工具一个）；每个应有的文档都必须是可读取的文件，因此占用了该名字的目录或断链接也算缺失。`doctor` 还会输出提示，它们只是信息，不是失败的检查。每条提示指出一个在本机替换了根目录条目的 namespace skill、agent、rule、共享指令文件、env 变量、hook 或 MCP server（`rules: "style" from rules/checkout/style.md replaces rules/style.md`）。未配置角色或项目时，提示改为列出团队仓库中重复定义的每个文件，以及在根文件中重复出现的每个 env 变量、hook 或 MCP server 名称。
+除了托管平台、clone、配置和 hook 检查之外，`doctor` 还会验证落到本机上的内容。`<tool> is installed` 在 `enabledAgents` 列出了不会收到任何内容的工具时失败——这正是 pull 报告成功、而该工具什么都没收到的情况。它使用与同步相同的解析逻辑，因此像 OpenClaw 这样把 skills 放在 workspace 目录而非工具根目录的工具，会在同步真正写入的位置被判断。工具已安装时也会作为通过项报告，因此 `--json` 无论哪种情况都会为每个已启用工具给出一条记录。pull 结束时的检查只覆盖它从当前目录解析出的那个 scope；其他 scope 请在对应目录下运行 `teamai doctor`。`Skills delivered to <tool>` 会把角色命名空间、标签订阅与排除规则解析出的 skill 集合，与每个已安装工具磁盘上的内容比对：从未送达的 skill 与送达但不可读的 skill 会分别报告——后者指 `SKILL.md` 缺失、frontmatter 无法解析，或其 `name` 与目录名不一致，导致 agent 永远发现不了它。`Team docs delivered` 将你应收到的文档（不含未激活的 docs namespace）与 `sharing.docs.localDir` 比对（它只有一个目标目录，而非每个工具一个）；每个应有的文档都必须是可读取的文件，因此占用了该名字的目录或断链接也算缺失。`doctor` 还会输出提示，它们只是信息，不是失败的检查。每条提示指出一个在本机替换了根目录条目的 namespace skill、agent、rule、共享指令文件、env 变量、hook、MCP server 或团队模型配置（`rules: "style" from rules/checkout/style.md replaces rules/style.md`）。未配置角色或项目时，提示改为列出团队仓库中重复定义的每个文件，以及在根文件中重复出现的每个 env 变量、hook 或 MCP server 名称。
 
 `Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`、`.instructions.md` 带 `applyTo`），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
 
@@ -2039,7 +2039,7 @@ toolRoots:                     # 可选，每机器的工具根目录（见下�
 
 配置有两个来源，格式完全相同：
 
-- `team:<id>` 来自团队仓库的 `models/models.yaml`，只包含 URL 和模型 ID，不包含密钥。
+- `team:<id>` 来自团队仓库的 `models/models.yaml`，以及你当前生效 namespace 的 `models/<ns>/models.yaml`（见[团队配置按 namespace 划分](#团队配置按-namespace-划分)），只包含 URL 和模型 ID，不包含密钥。
 - `local:<id>` 是 `~/.teamai/models/models.yaml` 中的个人配置，只在本机可见。
 
 ID 唯一时可直接写 `<id>`；团队和个人配置同名时，需写成 `team:<id>` 或 `local:<id>`。
@@ -2079,7 +2079,7 @@ profiles:
 ### 使用团队配置
 
 ```bash
-teamai models list                     # 全部配置：密钥来源、网关、模型、Agent 及生效位置
+teamai models list                     # 全部配置：来源文件、密钥来源、网关、模型、Agent 及生效位置
 teamai models list tokenhub            # 只看一个配置
 teamai models switch tokenhub          # 首次使用时提示输入密钥
 ```
@@ -2096,6 +2096,24 @@ printf '%s' "$TOKENHUB_API_KEY" | teamai models configure tokenhub --api-key-std
 Codex、OpenCode、CodeBuddy 和 WorkBuddy 会自行读取该变量。Claude Code 不支持，所以 `switch` 会把解析后的密钥写入 `~/.claude/settings.json`。命令刻意不提供 `--api-key <值>`，因为命令参数会进入 shell 历史和进程列表。密钥文件权限为 `0600`。
 
 团队修改目录后，`teamai pull` 会把新内容重新应用到已切换到该配置的 Agent。
+
+### 团队配置按 namespace 划分
+
+项目或角色可以为某个团队配置提供自己的版本，例如让 checkout 成员在同一个 `id` 下使用 checkout 网关。把它放在 `models/<ns>/models.yaml`，并在 `resources.models` 中声明该 namespace，方式与 env、hooks 和 MCP server 相同（见 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)）：
+
+```yaml
+# manifest/projects.yaml
+projects:
+  - id: checkout
+    resources:
+      models: [checkout]
+```
+
+- **覆盖。** `checkout` 生效期间，`models/checkout/models.yaml` 中的配置整体替换根目录中 `id` 相同的配置。已切换到 `team:<id>` 的 Agent 在下次 pull 时跟随它；namespace 失效后回到根配置。只存在于你已离开的 namespace 中的配置不会从 Agent 中移除：pull 会提示它 `is no longer active in your namespaces`，可用 `teamai models restore` 撤销。
+- **密钥只用于它所属的网关。** 团队配置的 API 密钥按配置 `id` 和 `base_url` 的 origin（协议、主机和端口）保存。覆盖把配置指向另一个 origin 时，pull 不会修改使用它的 Agent，并提示运行 `teamai models switch team:<id>`，该命令会询问新网关的密钥（也可以先运行 `teamai models configure team:<id>`）。原网关的密钥会保留，因此离开 namespace 时无需重新输入。团队把根配置改到另一个 origin 时同样如此。本版本之前配置的密钥只用于根配置的 origin。
+- **冲突只停止 models，不影响整个 pull。** 两个生效 namespace 中出现同一个 `id`，或某个生效文件无法解析时，本次不会更新任何 Agent，警告会指出相关文件。`teamai push` 会拒绝任何无效的 models 文件。
+- `teamai models list` 显示每个团队配置来自哪个文件、是否覆盖根配置；`teamai doctor` 把每个覆盖列为提示。
+- **先让所有成员升级。** teamai 0.25.0 和 0.26.0 beta 版会拒绝 `resources:` 中的 `models` 键。
 
 ### 个人配置
 

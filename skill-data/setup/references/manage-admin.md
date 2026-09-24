@@ -93,7 +93,7 @@ keep the project's content in the team repo until members have pulled: that is
 what lets their next pull clean up the copies they deployed.
 
 Every namespace that names a directory — `knowledge`, `skills`, `agents`, `env`,
-`hooks`, `mcp` and `docs` in either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
+`hooks`, `mcp`, `models` and `docs` in either manifest, and `learnings` in `projects.yaml` (a role's `learnings:` is
 ignored and unchecked) — must be a single path segment: no `/`, `\`, `:` or control character, no trailing
 `.` or space, and not a Windows device name (`CON`, `NUL`, `COM1`, …). `team-codebase`
 cannot be a `docs` namespace (`docs/team-codebase/` is the legacy codebase output). Two
@@ -169,7 +169,12 @@ id or server name. Hooks and MCP servers have no add command: edit the file and
 - Per-entry `projects:` (and `roles:` on env) no longer works: such an entry reaches
   nobody. `roles:` on hooks and MCP still filters for one more minor release. Pull
   and `teamai doctor` name the namespace file each entry belongs in; move it there.
-- Have every member upgrade before declaring `env`, `hooks` or `mcp` in a
+- Team model profiles work the same way: `models/<ns>/models.yaml`, declared under
+  `resources.models`, replaces the root profile with the same `id` for members who
+  have `<ns>` active. A member's API key is bound to the profile's gateway origin:
+  when an override points at another host, their pull leaves the agent alone and
+  asks them to run `teamai models switch team:<id>` to set the key for it.
+- Have every member upgrade before declaring `env`, `hooks`, `mcp` or `models` in a
   manifest: teamai 0.25.0 and the 0.26.0 betas reject those keys and their pull stops.
 
 ## When sync fails
