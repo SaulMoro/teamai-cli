@@ -243,9 +243,63 @@ hooks:
     await writeYaml('hooks: [unclosed\n');
     const applied = await reconcileTeamHooksForConfig(teamConfig, localConfig());
 
-    expect(applied).toEqual({ ok: false });
+    expect(applied).toEqual({ ok: false, builtins: 'defaults-where-none' });
     expect(await claudeSettings()).toEqual(before);
     expect((await manifest()).claude.map((r) => r.id)).toEqual(['lint']);
+  });
+
+  // #707: a first install whose team hooks do not resolve still gets the
+  // built-in hooks, above all the session-start pull that heals the member.
+  it('installs the built-in hooks with the root overrides on a first install whose namespaces clash', async () => {
+    await fse.outputFile(path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: checkout\n    resources: { hooks: [checkout, billing] }\n');
+    await writeYaml('hooks: []\nbuiltin:\n  overrides:\n    Hook dispatch stop: { timeout: 99 }\n');
+    const clash = 'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n';
+    await fse.outputFile(path.join(repo, 'hooks', 'checkout', 'hooks.yaml'), clash);
+    await fse.outputFile(path.join(repo, 'hooks', 'billing', 'hooks.yaml'), clash);
+
+    const applied = await reconcileTeamHooksForConfig(teamConfig, { ...localConfig(), projects: ['checkout'] });
+
+    expect(applied).toEqual({ ok: false, builtins: 'with-overrides' });
+    const claude = await claudeSettings();
+    expect(claude.hooks.SessionStart).toHaveLength(1);
+    expect(claude.hooks.SessionStart[0].hooks[0].command).toContain('hook-dispatch');
+    expect(claude.hooks.Stop.some((h) => h.hooks[0].command.includes('npm run lint'))).toBe(false);
+    expect((await codexSettings()).hooks.Stop[0].hooks[0].timeout).toBe(99);
+    expect(await fse.pathExists(path.join(home, '.teamai', 'managed-hooks.json'))).toBe(false);
+  });
+
+  it('keeps the installed team hooks and still refreshes the built-ins when a namespace file breaks', async () => {
+    await fse.outputFile(path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: checkout\n    resources: { hooks: [checkout] }\n');
+    await writeYaml('hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n');
+    const member = { ...localConfig(), projects: ['checkout'] };
+    await reconcileTeamHooksForConfig(teamConfig, member);
+    // A built-in entry that went missing (hand-edited, or shipped by an upgrade).
+    const settings = await claudeSettings();
+    delete settings.hooks.SessionStart;
+    await fse.writeJson(path.join(home, '.claude', 'settings.json'), settings);
+
+    await fse.outputFile(path.join(repo, 'hooks', 'checkout', 'hooks.yaml'), 'hooks: [unclosed\n');
+    const applied = await reconcileTeamHooksForConfig(teamConfig, member);
+
+    expect(applied).toEqual({ ok: false, builtins: 'with-overrides' });
+    const claude = await claudeSettings();
+    expect(claude.hooks.SessionStart).toHaveLength(1);
+    expect(claude.hooks.Stop.some((h) => h.hooks[0].command.includes('npm run lint'))).toBe(true);
+    expect((await cursorSettings()).hooks.stop.some((h) => h.command.includes('npm run lint'))).toBe(true);
+    expect((await manifest()).claude.map((r) => r.id)).toEqual(['lint']);
+  });
+
+  it('installs the built-in hooks with their defaults on a first install whose hooks.yaml does not parse', async () => {
+    await writeYaml('hooks: [unclosed\n');
+
+    const applied = await reconcileTeamHooksForConfig(teamConfig, localConfig());
+
+    expect(applied).toEqual({ ok: false, builtins: 'defaults-where-none' });
+    expect((await claudeSettings()).hooks.SessionStart).toHaveLength(1);
+    expect((await cursorSettings()).hooks.sessionStart).toHaveLength(1);
+    expect((await codexSettings()).hooks.SessionStart).toHaveLength(1);
   });
 
   it('delivers an active namespace hook in place of the root hook with the same id, and back', async () => {

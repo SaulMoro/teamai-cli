@@ -266,6 +266,14 @@ export interface ManagedHookRecord {
 /** ~/.teamai/managed-hooks.json — team hooks injected per tool. */
 export type ManagedHooksManifest = Record<string, ManagedHookRecord[]>;
 
+/**
+ * Install the built-in hooks alone, for a team set that did not resolve:
+ * `with-overrides` in each tool missing one of them, applying the given
+ * overrides; `defaults-where-none` only in a tool with no teamai hook at all,
+ * for when hooks/hooks.yaml does not parse and the overrides are unknown.
+ */
+export type BuiltinsOnly = 'with-overrides' | 'defaults-where-none';
+
 async function readManifest(manifestPath: string): Promise<ManagedHooksManifest> {
   const data = await readJson<ManagedHooksManifest>(expandHome(manifestPath));
   return data && typeof data === 'object' ? data : {};
@@ -1468,6 +1476,31 @@ export async function injectHooksToAllTools(toolPaths: Record<string, { settings
 }
 
 /**
+ * True when a `builtinsOnly` pass has nothing to install in this tool file, so
+ * it is left byte-for-byte as it is. False for a normal reconcile.
+ */
+async function builtinsInstalled(
+  builtinsOnly: BuiltinsOnly | undefined,
+  settingsPath: string,
+  tool: string,
+  manifestPath: string,
+  builtinOverride: BuiltinHookOverride | undefined,
+): Promise<boolean> {
+  switch (builtinsOnly) {
+    case undefined:
+      return false;
+    case 'with-overrides':
+      return await getHookStatus(settingsPath, tool, builtinOverride) === 'installed';
+    case 'defaults-where-none':
+      return hasTeamaiHooks(settingsPath, tool, manifestPath);
+    default: {
+      const unhandled: never = builtinsOnly;
+      return unhandled;
+    }
+  }
+}
+
+/**
  * Reconcile built-in (A) + team (B) hooks across every tool that has a settings
  * path, using a shared managed-hooks manifest. This is the authoritative
  * injection path used by `teamai pull` / `init` / `hooks inject`.
@@ -1478,14 +1511,22 @@ export async function injectHooksToAllTools(toolPaths: Record<string, { settings
  * OpenCode / OMP adapters' removeAll branches always target HOME — so a caller
  * sweeping a secondary location (the legacy `<projectRoot>` copy) must opt out,
  * or it deletes the hooks the primary pass just installed.
+ *
+ * `builtinsOnly` (see BuiltinsOnly) installs the built-in hooks where they are
+ * missing and leaves every installed team hook and the manifest as they are.
  */
 export async function reconcileHooksToAllTools(
   toolPaths: Record<string, { settings?: string }>,
   baseDir: string,
   teamDefs: HookDef[],
   manifestPath: string,
-  opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope } = {},
+  opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly } = {},
 ): Promise<void> {
+  // Without the manifest, reconcileHooks manages the built-in entries only.
+  const teamManifestPath = opts.builtinsOnly ? undefined : manifestPath;
+  const defs = opts.builtinsOnly ? [] : teamDefs;
+  const skipInstalled = async (settingsPath: string, tool: string): Promise<boolean> =>
+    builtinsInstalled(opts.builtinsOnly, settingsPath, tool, manifestPath, opts.builtinOverride);
   // Removal is JSON editing and needs no shell, so the gate only applies to
   // injection passes — otherwise tools without a shell could never clean up
   // their injected entries.
@@ -1590,7 +1631,7 @@ export async function reconcileHooksToAllTools(
         // gate teammates who never use Pi see this warning on every
         // reconcile whenever the team defines a Pi-targeted hook.
         if (!opts.removeAll && await isPiInstalled(baseDir, opts.installedBaseDir)) {
-          const applicableTeamDefs = teamDefsForTool(teamDefs, 'pi');
+          const applicableTeamDefs = teamDefsForTool(defs, 'pi');
           if (applicableTeamDefs.length > 0) {
             log.warn(
               `Pi supports built-in lifecycle hooks only; skipping ${applicableTeamDefs.length} custom team hook(s) from hooks/hooks.yaml`,
@@ -1618,9 +1659,10 @@ export async function reconcileHooksToAllTools(
       try {
         const dshHome = getUserHome();
         if (opts.removeAll || await pathExists(path.join(dshHome, '.dsh'))) {
-          const { reconcileDshHooks } = await import('./dsh-hooks.js');
-          await reconcileDshHooks(teamDefs, {
-            manifestPath,
+          const { reconcileDshHooks, resolveDshHookConfigPath } = await import('./dsh-hooks.js');
+          if (await skipInstalled(resolveDshHookConfigPath(), 'dsh')) continue;
+          await reconcileDshHooks(defs, {
+            manifestPath: teamManifestPath,
             removeAll: opts.removeAll,
             builtinOverride: opts.builtinOverride,
           });
@@ -1646,8 +1688,9 @@ export async function reconcileHooksToAllTools(
     if (claimedSettingsFiles.has(settingsFileKey)) continue;
     claimedSettingsFiles.add(settingsFileKey);
     try {
-      await reconcileHooks(settingsPath, tool, teamDefs, {
-        manifestPath,
+      if (await skipInstalled(settingsPath, tool)) continue;
+      await reconcileHooks(settingsPath, tool, defs, {
+        manifestPath: teamManifestPath,
         removeAll: opts.removeAll,
         builtinOverride: opts.builtinOverride,
         teamHookProjectRoot: opts.teamHookProjectRoot,
@@ -1728,17 +1771,28 @@ export async function sweepLegacyProjectHooks(
 }
 
 /**
+ * What a team-hooks reconcile did. When the team hooks do not resolve, every
+ * installed team hook is kept and the built-in hooks, the session-start pull
+ * among them, are still installed where missing: with the root file's
+ * overrides when hooks/hooks.yaml parses, and otherwise with their defaults,
+ * only in a tool that has no teamai hook yet (a first install).
+ */
+export type TeamHooksReconcile =
+  | { ok: true; defs: HookDef[] }
+  | { ok: false; builtins: BuiltinsOnly };
+
+/**
  * Reconcile built-in (A) + team (B) hooks for a single scope's tools.
  * Resolves the scope's team hooks, the scope base dir + manifest, and
  * reconciles every tool. Returns the team defs that were applied (for
  * logging/transparency), or `ok: false` when the team hooks could not be
- * resolved and nothing was touched. Used by `pull`, `init`, and `hooks inject`.
+ * resolved (see TeamHooksReconcile). Used by `pull`, `init`, and `hooks inject`.
  */
 export async function reconcileTeamHooksForConfig(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; filterAgents?: string[] } = {},
-): Promise<{ ok: true; defs: HookDef[] } | { ok: false }> {
+): Promise<TeamHooksReconcile> {
   const resolved: Awaited<ReturnType<typeof resolveTeamHooks>> = opts.removeAll
     ? { ok: true, defs: [], builtin: undefined }
     : await resolveTeamHooks(teamConfig, localConfig, {
@@ -1746,10 +1800,13 @@ export async function reconcileTeamHooksForConfig(
         silent: opts.silent,
       });
   // The team's hooks could not be resolved (reported by resolveTeamHooks).
-  // Reconciling now would remove every installed team hook, and apply the
-  // built-in hooks without the root file's overrides; leave all of it as is.
-  if (!resolved.ok) return { ok: false };
-  const { defs: teamDefs, builtin } = resolved;
+  // Reconciling the team set now would remove every installed team hook, so
+  // only the built-in hooks are reconciled.
+  const builtinsOnly: BuiltinsOnly | undefined = resolved.ok ? undefined
+    : resolved.builtin.known ? 'with-overrides' : 'defaults-where-none';
+  const teamDefs = resolved.ok ? resolved.defs : [];
+  const builtin = resolved.ok ? resolved.builtin
+    : resolved.builtin.known ? resolved.builtin.override : undefined;
   const { baseDir, manifestPath, scope: hookScope } = resolveHookScope(localConfig);
   const explicitlySelectedAgents = opts.filterAgents ?? localConfig.enabledAgents;
   let filterAgents = explicitlySelectedAgents;
@@ -1772,6 +1829,7 @@ export async function reconcileTeamHooksForConfig(
       : undefined,
     installedBaseDir: localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined,
     scope: localConfig.scope,
+    builtinsOnly,
   });
 
   const copilotExcluded = disabled?.includes(COPILOT_TOOL_ID) ?? false;
@@ -1784,19 +1842,44 @@ export async function reconcileTeamHooksForConfig(
   const copilotPaths = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID];
   if (copilotEnabled && copilotPaths?.hooks) {
     const copilotBase = resolveToolBaseDir(COPILOT_TOOL_ID, localConfig);
-    if (copilotSelected || await pathExists(getCopilotHome())) {
+    const copilotHooksPath = path.join(copilotBase, copilotPaths.hooks);
+    const copilotManifestPath = getManagedHooksPath(localConfig.scope, localConfig.projectRoot);
+    const copilotInstalled = await builtinsInstalled(
+      builtinsOnly, copilotHooksPath, COPILOT_TOOL_ID, copilotManifestPath, builtin);
+    if (!copilotInstalled && (copilotSelected || await pathExists(getCopilotHome()))) {
       await reconcileHooks(
-        path.join(copilotBase, copilotPaths.hooks),
+        copilotHooksPath,
         COPILOT_TOOL_ID,
         teamDefs,
         {
-          manifestPath: getManagedHooksPath(localConfig.scope, localConfig.projectRoot),
+          manifestPath: builtinsOnly ? undefined : copilotManifestPath,
           removeAll: opts.removeAll,
           builtinOverride: builtin,
         },
       );
     }
   }
+  if (builtinsOnly) return { ok: false, builtins: builtinsOnly };
   await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig);
   return { ok: true, defs: teamDefs };
+}
+
+/**
+ * The line `init` and bootstrap print when the team hooks did not resolve. The
+ * reason, naming the file, was already reported by the resolution.
+ */
+export function describeUnappliedTeamHooks(result: { builtins: BuiltinsOnly }): string {
+  switch (result.builtins) {
+    case 'with-overrides':
+      return 'Team hooks were not installed (see the warning above); the built-in hooks were. '
+        + 'Once the team repo is fixed, the next pull installs the team hooks.';
+    case 'defaults-where-none':
+      return 'Team hooks were not installed: hooks/hooks.yaml in the team repo does not parse, so its built-in '
+        + 'hook overrides are unknown, and the built-in hooks were installed with their defaults where none were '
+        + 'installed yet. Fix hooks/hooks.yaml in the team repo and push; the next pull then applies both.';
+    default: {
+      const unhandled: never = result.builtins;
+      return String(unhandled);
+    }
+  }
 }

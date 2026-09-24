@@ -103,7 +103,7 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
         auto: false,
         silent: options.silent,
     });
-    // The reason is already reported, and every installed hook left as it was.
+    // The reason is already reported; the installed team hooks were left as they were.
     if (!reconciled.ok) {
         process.exitCode = 1;
         return;
@@ -141,7 +141,8 @@ export async function hooksList(_options: GlobalOptions): Promise<void> {
     // The team's `builtin:` block can disable built-in hooks (§4.8); the
     // reconcile engine applies it, so the listing must too or it shows hooks
     // that were just removed from the settings files.
-    const { resolution: teamHooks, builtin: builtinOverride } = await resolveTeamHookEntries(localConfig);
+    const { resolution: teamHooks, builtin } = await resolveTeamHookEntries(localConfig);
+    const builtinOverride = builtin.known ? builtin.override : undefined;
     const rows: HookListRow[] = [];
     // One settings file is one install, so list it once, for the target that owns
     // it — the same rule the write path applies. Qoder CN shares Qoder's project

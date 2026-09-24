@@ -50,7 +50,8 @@ export function buildDshPatch(configPath: string): string {
 }
 
 export interface DshHookReconcileOptions {
-  manifestPath: string;
+  /** Omitted to reconcile the built-in hooks alone (see ReconcileHooksOptions.manifestPath). */
+  manifestPath?: string;
   removeAll?: boolean;
   builtinOverride?: BuiltinHookOverride;
 }

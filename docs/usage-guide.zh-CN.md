@@ -844,7 +844,9 @@ projects:
   `tools:` 时对所有工具生效）。不做字段级合并。
 - **冲突只停掉该类型，不停掉整个 pull。** 同一文件中重复的名字、两个活动 namespace 中的
   同名条目，或无法解析的活动文件，都会让该类型本次不生效：已安装的内容保持不变，警告会给出
-  文件与修复方法。Hooks 与 MCP 在文件无效时不再移除全部托管条目。
+  文件与修复方法。Hooks 与 MCP 在文件无效时不再移除全部托管条目。缺失的内置 hooks 仍会安装，
+  因此首次 `teamai init` 也能拿到 SessionStart pull，之后由它应用修复；若 `hooks/hooks.yaml`
+  本身无法解析，内置 hooks 使用默认设置，且只装到还没有任何 teamai hook 的工具中。
 - **停用** namespace（`teamai projects set`、`teamai roles set`）后，下一次 pull（包括
   `Already synced`）会恢复被覆盖的根条目并移除仅属于该 namespace 的条目。即使
   `env/env.yaml` 不存在或为空，`env.sh` 也会被重写。

@@ -66,7 +66,7 @@ function hooksYaml(hooks: (Record<string, unknown> | [Record<string, unknown>, s
         const namespace = source === 'hooks/hooks.yaml' ? null : source.split('/')[1];
         return { entry, name: entry.id, source, namespace, replaces };
     });
-    return { resolution: { kind: 'resolved', entries, active: [], notices: [], repeated: [] }, builtin };
+    return { resolution: { kind: 'resolved', entries, active: [], notices: [], repeated: [] }, builtin: { known: true, override: builtin } };
 }
 const mockedLog = log as unknown as { info: Mock; success: Mock; warn: Mock; error: Mock; debug: Mock };
 

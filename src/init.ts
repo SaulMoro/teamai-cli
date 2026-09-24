@@ -2,7 +2,7 @@ import YAML from 'yaml';
 import fs from 'node:fs';
 import path from 'node:path';
 import { saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, saveStateForScope, resolveProjectDataHome } from './config.js';
-import { hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig } from './hooks.js';
+import { describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig } from './hooks.js';
 import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward } from './utils/git.js';
 import { pushRepoDirectly } from './utils/git.js';
 import { getProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
@@ -574,7 +574,7 @@ export async function initHttp(
   // Step 5: inject hooks (built-in dispatch incl. the reporter) via the same
   // authoritative path the git init uses, so HTTP consumers behave identically.
   const filterAgents = requestedAgents.length > 0 ? requestedAgents : undefined;
-  await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  await reconcileHooksForInit(teamConfig, localConfig, filterAgents);
 
   // Step 6: also initialize local-agent config so the new hook-dispatch --stdin
   // path can deliver rules/claudemd (not just skills).
@@ -588,6 +588,20 @@ export async function initHttp(
   log.success('teamai initialized (HTTP read-only)!');
   log.info('Skills/rules will auto-sync on each session start via report/sync. This team is read-only (no push).');
   closePrompt();
+}
+
+/**
+ * Install the hooks for a fresh init. When the team hooks do not resolve, the
+ * built-in hooks are still installed; say that the team hooks were not, so the
+ * success line that follows does not claim them.
+ */
+async function reconcileHooksForInit(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  filterAgents: string[] | undefined,
+): Promise<void> {
+  const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  if (!reconciled.ok) log.warn(describeUnappliedTeamHooks(reconciled));
 }
 
 /**
@@ -1050,7 +1064,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   // settings file exists on disk and can be committed to main below. This is what
   // makes a teammate's fresh clone carry the session-start hook that triggers the
   // self-heal bootstrap — the core of "clone = initialized".
-  await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  await reconcileHooksForInit(teamConfig, localConfig, filterAgents);
 
   // Step 5.5: commit the .teamai/ knowledge skeleton + selected tools' hook
   // settings to the current branch. Single-repo mode keeps knowledge on main, and
@@ -1756,7 +1770,7 @@ export async function init(options: GlobalOptions & {
   let stubDeployed = 0;
   if (reloadedTeamConfig) {
     const filterAgents = requestedAgents.length > 0 ? requestedAgents : undefined;
-    await reconcileTeamHooksForConfig(reloadedTeamConfig, localConfig, { filterAgents });
+    await reconcileHooksForInit(reloadedTeamConfig, localConfig, filterAgents);
 
     // Step 7.5: Deploy the built-in discovery stub immediately so the teamai
     // skill is available in the IDE right after init, without waiting for the

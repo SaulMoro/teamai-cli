@@ -76,15 +76,6 @@ async function readHooksFile(absolutePath: string, relativePath: string): Promis
 }
 
 /**
- * Parse hooks/hooks.yaml into the raw, validated structure. Returns null when the
- * file is absent or fails validation (so callers never act on a broken set).
- */
-export async function parseHooksYaml(repoPath: string): Promise<HooksYaml | null> {
-  const read = await readHooksFile(teamHooksYamlPath(repoPath), entryFilePath('hooks', null));
-  return read?.ok ? read.yaml : null;
-}
-
-/**
  * How `hooks/hooks.yaml` and `hooks/<ns>/hooks.yaml` are read for delivery.
  * The `builtin:` overrides are team-wide and read from the root file alone.
  */
@@ -117,18 +108,25 @@ export function teamHookToDef(h: TeamHook): HookDef {
 }
 
 /**
+ * The root file's `builtin:` block. `known: false` when hooks/hooks.yaml does
+ * not parse: applying the built-in hooks without its overrides would re-enable
+ * the ones the team disabled.
+ */
+export type BuiltinOverrideRead = { known: true; override: BuiltinOverride | undefined } | { known: false };
+
+/**
  * The team hooks this member receives, with where each comes from, plus the
- * built-in overrides of the root file. A failed resolution (a file that does
- * not parse, a hook id twice) carries no overrides either: applying the
- * built-in hooks without them would re-enable the ones the team disabled.
+ * built-in overrides of the root file. The overrides are known whenever the
+ * root file parses, even when the resolution fails elsewhere (a namespace file,
+ * a hook id twice).
  */
 export async function resolveTeamHookEntries(
   localConfig: LocalConfig,
-): Promise<{ resolution: EntryResolution<TeamHook>; builtin: BuiltinOverride | undefined }> {
+): Promise<{ resolution: EntryResolution<TeamHook>; builtin: BuiltinOverrideRead }> {
   const resolution = await resolveEntriesFor(hooksEntryReader, localConfig);
-  if (resolution.kind === 'failed') return { resolution, builtin: undefined };
-  const root = await parseHooksYaml(localConfig.repo.localPath);
-  return { resolution, builtin: root?.builtin };
+  const root = await readHooksFile(teamHooksYamlPath(localConfig.repo.localPath), entryFilePath('hooks', null));
+  if (root === null) return { resolution, builtin: { known: true, override: undefined } };
+  return { resolution, builtin: root.ok ? { known: true, override: root.yaml.builtin } : { known: false } };
 }
 
 // ─── Security gate (§6) ─────────────────────────────────────
@@ -155,13 +153,15 @@ export async function resolveTeamHooks(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   opts: { auto?: boolean; silent?: boolean } = {},
-): Promise<{ ok: true; defs: HookDef[]; builtin: BuiltinOverride | undefined } | { ok: false }> {
+): Promise<{ ok: true; defs: HookDef[]; builtin: BuiltinOverride | undefined } | { ok: false; builtin: BuiltinOverrideRead }> {
   // Which hooks this member receives: root plus active namespace files, before
   // the security gates so the transparency print below lists only hooks this
   // member will actually run. A resolution that fails keeps what is installed.
-  const { resolution, builtin } = await resolveTeamHookEntries(localConfig);
+  const { resolution, builtin: builtinRead } = await resolveTeamHookEntries(localConfig);
   reportEntryResolution(resolution);
-  if (resolution.kind === 'failed') return { ok: false };
+  if (resolution.kind === 'failed') return { ok: false, builtin: builtinRead };
+  // A root file that does not parse fails the resolution, so it is known here.
+  const builtin = builtinRead.known ? builtinRead.override : undefined;
   const sharing = getHooksSharing(teamConfig);
   let defs = resolution.entries.map((entry) => teamHookToDef(entry.entry));
 

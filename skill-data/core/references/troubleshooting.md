@@ -82,9 +82,11 @@ teamai init https://git.example.com/yourgroup/yourrepo
 
 ## Which tools actually get hooks
 
-`teamai hooks inject` always prints **"Hooks injected into all AI tool settings"**,
-even for tools where it wrote nothing. **Do not take that line as proof.** Verify
-per-tool instead:
+`teamai hooks inject` prints **"Hooks injected into all AI tool settings"** even
+for tools where it wrote nothing. **Do not take that line as proof.** (When the
+team hooks cannot be resolved it exits 1 with the reason instead: the built-in
+hooks are installed, the team hooks are left as they were.) Verify per-tool
+instead:
 
 ```bash
 teamai doctor          # flags tools whose hooks are missing

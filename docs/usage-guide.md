@@ -898,7 +898,10 @@ projects:
   the same name in two active namespaces, or an active file that does not parse
   means that type is not applied this run: what is installed stays as it is, and
   the warning names the file(s) and the fix. Hooks and MCP no longer remove every
-  managed entry when their file is invalid.
+  managed entry when their file is invalid. The built-in hooks are still
+  installed where missing, so a first `teamai init` gets the session-start pull that applies
+  the fix later; when `hooks/hooks.yaml` itself does not parse, they get their
+  defaults, and only in a tool that has no teamai hook yet.
 - **Deactivating** a namespace (`teamai projects set`, `teamai roles set`)
   restores the overridden root entries and removes the namespace-only ones on
   the next pull, `Already synced` included. `env.sh` is rewritten even when

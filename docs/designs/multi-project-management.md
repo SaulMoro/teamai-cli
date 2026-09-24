@@ -306,7 +306,7 @@ copy is not a duplicate: each copy that passes the role filter is delivered, as
 | Type | Effect of a failure |
 |---|---|
 | env | `env.sh` and the shell profile keep what they had |
-| hooks | the whole hooks reconcile is skipped, built-in hooks included, because their `builtin:` overrides live in the root file |
+| hooks | installed team hooks and the managed-hooks record stay as they are. The built-in hooks are still installed in each tool that misses one (a tool with all of them is not rewritten), so a first install gets the session-start pull that heals it: with the root file's `builtin:` overrides whenever `hooks/hooks.yaml` parses (a broken namespace file or a clash does not hide them), and when the root file itself does not parse, with their defaults and only in a tool that has no teamai hook yet. `teamai init` and bootstrap say the team hooks were not installed; `teamai hooks inject` exits 1 |
 | mcp | no tool's MCP config changes |
 | models | no switched agent is updated; `teamai models` commands fail with the same message; `teamai push` refuses any invalid models file, active or not |
 | skills, agents | that type is neither installed nor swept; the other types and the search index still sync |

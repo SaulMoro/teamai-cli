@@ -121,9 +121,10 @@ vi.mock('../local-agent.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../local-agent.js')>()),
   releaseClaudeModelConfig: vi.fn(),
 }));
-vi.mock('../hooks.js', () => ({
+vi.mock('../hooks.js', async (importOriginal) => ({
+  describeUnappliedTeamHooks: (await importOriginal<typeof import('../hooks.js')>()).describeUnappliedTeamHooks,
   injectHooksToAllTools: vi.fn(),
-  reconcileTeamHooksForConfig: vi.fn(),
+  reconcileTeamHooksForConfig: vi.fn(async () => ({ ok: true, defs: [] })),
   hasTeamaiHooks: vi.fn(async () => true),
   reconcileHooks: vi.fn(),
 }));
@@ -625,31 +626,31 @@ describe('init', () => {
     });
   });
 
-  describe('deploys built-in skills after init', () => {
-    /** Init against a clone whose teamai.yaml loads, so the stub deploy runs. */
-    async function initWithTeamConfig(): Promise<void> {
-      let cloneDone = false;
-      pathExistsFn = (p: string) => (p === localPath ? cloneDone : false);
-      mockGfRepoClone.mockImplementation(() => {
-        cloneDone = true;
-      });
-      vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
-        team: 'my-team',
-        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
-        provider: 'tgit',
-        reviewers: [],
-        sharing: {
-          skills: {},
-          rules: { enforced: [] },
-          docs: { localDir: '~/.teamai/docs' },
-          env: { injectShellProfile: true },
-        },
-        toolPaths: {},
-      } as never);
-      questionAnswers = ['n', '1'];
-      await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user' });
-    }
+  /** Init against a clone whose teamai.yaml loads, so the stub deploy runs. */
+  async function initWithTeamConfig(): Promise<void> {
+    let cloneDone = false;
+    pathExistsFn = (p: string) => (p === localPath ? cloneDone : false);
+    mockGfRepoClone.mockImplementation(() => {
+      cloneDone = true;
+    });
+    vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
+      team: 'my-team',
+      repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+      provider: 'tgit',
+      reviewers: [],
+      sharing: {
+        skills: {},
+        rules: { enforced: [] },
+        docs: { localDir: '~/.teamai/docs' },
+        env: { injectShellProfile: true },
+      },
+      toolPaths: {},
+    } as never);
+    questionAnswers = ['n', '1'];
+    await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user' });
+  }
 
+  describe('deploys built-in skills after init', () => {
     it('calls deployBuiltinSkills with teamConfig when loadTeamConfig returns non-null', async () => {
       await initWithTeamConfig();
 
@@ -687,6 +688,33 @@ describe('init', () => {
       expect(warned).not.toContain('see the lines above');
       expect(warned).not.toContain('teamai doctor');
       expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining('is ready in your IDE'));
+    });
+  });
+
+  // #707: init must not claim the hooks are in place when the team hooks did
+  // not resolve; the built-in hooks were installed, the team hooks were not.
+  describe('team hooks that do not resolve', () => {
+    it('warns that the team hooks were not installed and how they arrive', async () => {
+      const { log } = await import('../utils/logger.js');
+      const { reconcileTeamHooksForConfig } = await import('../hooks.js');
+      vi.mocked(reconcileTeamHooksForConfig).mockResolvedValueOnce({ ok: false, builtins: 'with-overrides' });
+
+      await initWithTeamConfig();
+
+      const warned = vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
+      expect(warned).toContain('Team hooks were not installed');
+      expect(warned).toContain('the built-in hooks were');
+    });
+
+    it('names hooks/hooks.yaml when the built-in hooks were installed with their defaults', async () => {
+      const { log } = await import('../utils/logger.js');
+      const { reconcileTeamHooksForConfig } = await import('../hooks.js');
+      vi.mocked(reconcileTeamHooksForConfig).mockResolvedValueOnce({ ok: false, builtins: 'defaults-where-none' });
+
+      await initWithTeamConfig();
+
+      const warned = vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
+      expect(warned).toContain('Fix hooks/hooks.yaml in the team repo');
     });
   });
 
