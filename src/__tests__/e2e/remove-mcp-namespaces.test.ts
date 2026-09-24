@@ -134,7 +134,7 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
     const result = await runCLI(['remove', 'mcp', 'orders', '--force'], env, homeDir);
 
     expect(result.code, result.output).toBe(1);
-    expect(result.output).toContain('mcp/checkout/mcp.yaml, mcp/billing/mcp.yaml');
+    expect(result.output).toContain('mcp/billing/mcp.yaml, mcp/checkout/mcp.yaml');
     expect(result.output).toContain('Nothing was removed.');
     expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
   });
