@@ -336,8 +336,8 @@ its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot'
 fallback ID is the parent PID) is decided on its own. Every run is reported and
 snapshotted as `<id>@<first event's timestamp>`, which does not change when
 compaction drops earlier runs; a snapshot entry keyed by the bare ID (written
-before) goes to the first run of that ID in the log, until the scope reports
-again. A session written before that field existed is attributed by its first
+before) is rewritten under the first run of that ID in the log the next time
+the scope reports, and removed, so no later run of that ID reads it. A session written before that field existed is attributed by its first
 `cwd`: to the scope `resolveConfigForDir` resolves that directory to now, the
 dispatcher's rule, so a nested clone under a project is not the project's; no
 `cwd`, or one removed since, is no scope's. The snapshots of what was already reported are per scope

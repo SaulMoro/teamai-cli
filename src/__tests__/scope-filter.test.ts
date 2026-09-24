@@ -190,4 +190,14 @@ describe('adoptBareKeys', () => {
   it('never overrides a run\'s own entry', () => {
     expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, ['pid-1@t1'])['pid-1@t1']).toBe(5);
   });
+
+  it('retires the bare entry the first run of its ID reads, so it is never read again', () => {
+    expect(adoptBareKeys({ 'pid-1': 3, s2: 1 }, ['pid-1@t1', 'pid-1@t2'])).toEqual({ 'pid-1@t1': 3, s2: 1 });
+    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, ['pid-1@t1'])).toEqual({ 'pid-1@t1': 5 });
+  });
+
+  it('returns the snapshot itself when it holds no bare entry to retire', () => {
+    const reported = { 'pid-1@t1': 5, s2: 1 };
+    expect(adoptBareKeys(reported, ['pid-1@t1', 's3@t3'])).toBe(reported);
+  });
 });

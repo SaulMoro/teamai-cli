@@ -418,21 +418,26 @@ export async function filterEventsByScope(
  * A reported snapshot as the run IDs of {@link filterEventsByScope} read it.
  * Snapshots written before runs had their own IDs are keyed by the bare
  * session ID; the first run of that ID in the log (`current` is in log order)
- * takes that entry when it has none of its own. The next snapshot holds only
- * run IDs, so a bare entry is read at most until the scope reports again.
+ * takes that entry when it has none of its own, and the bare entry is retired
+ * either way, so no later run of that ID reads it. Returns `reported` itself
+ * when there is nothing to retire; otherwise the caller persists the result.
  */
 export function adoptBareKeys<T>(reported: Record<string, T>, current: Iterable<string>): Record<string, T> {
   const adopted = { ...reported };
   const seen = new Set<string>();
+  let retired = false;
   for (const runId of current) {
     const at = runId.lastIndexOf('@');
     if (at < 0) continue;
     const id = runId.slice(0, at);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (!Object.hasOwn(adopted, runId) && Object.hasOwn(reported, id)) adopted[runId] = reported[id];
+    if (!Object.hasOwn(reported, id)) continue;
+    if (!Object.hasOwn(adopted, runId)) adopted[runId] = reported[id];
+    delete adopted[id];
+    retired = true;
   }
-  return adopted;
+  return retired ? adopted : reported;
 }
 
 /**
@@ -477,18 +482,29 @@ export async function reportUsageToTeam(
     const currentInterventions = new Map(
       [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
     );
-    const reportedInterventions = adoptBareKeys(await readReportedInterventions(reportsConfig), metrics.keys());
+    // A retired bare entry is written out now, even with nothing to report, so
+    // the success writes below, which merge into the file, cannot bring it back.
+    const adopt = async <T>(
+      read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
+      write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
+    ): Promise<Record<string, T>> => {
+      const stored = await read(reportsConfig);
+      const adopted = adoptBareKeys(stored, metrics.keys());
+      if (adopted !== stored) await write(adopted, reportsConfig);
+      return adopted;
+    };
+    const reportedInterventions = await adopt(readReportedInterventions, writeReportedInterventions);
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
     );
 
-    const reportedPromptTokens = adoptBareKeys(await readReportedPromptTokens(reportsConfig), metrics.keys());
+    const reportedPromptTokens = await adopt(readReportedPromptTokens, writeReportedPromptTokens);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
     );
-    const reportedDailySessions = adoptBareKeys(await readReportedDailySessions(reportsConfig), metrics.keys());
+    const reportedDailySessions = await adopt(readReportedDailySessions, writeReportedDailySessions);
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
       aggregateDailySessions(dashboardEvents),
       reportedDailySessions,

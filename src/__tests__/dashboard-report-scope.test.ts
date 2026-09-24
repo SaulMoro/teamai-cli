@@ -352,6 +352,28 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(user)).toBe(2);
   });
 
+  it.each([
+    ['nothing new', 1],
+    ['a new prompt', 0],
+  ])('a bare snapshot entry a run adopts is written back under the run ID only, with %s to report', async (_, reported) => {
+    const { root, project } = await setup();
+    const pid = `pid-${process.ppid}`;
+    await session('copilot', { cwd: root });
+    // An earlier release reported this run under its bare session ID.
+    writeSharedSnapshots({ [pid]: reported }, new Date().toISOString().slice(0, 10));
+    await report(project);
+
+    for (const name of SNAPSHOTS) {
+      const own = JSON.parse(fs.readFileSync(path.join(getDataHome(project), 'dashboard', `reported-${name}.json`), 'utf-8'));
+      expect(Object.keys(own)).toEqual([expect.stringMatching(new RegExp(`^${pid}@`))]);
+    }
+    // Compaction dropped that run; the next one in P reuses its ID and is a new session.
+    fs.writeFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), '');
+    await session('copilot', { cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
+  });
+
   it('a scope first seeded after a rollback skips what the earlier release reported', async () => {
     const { root, project } = await setup();
     await session('claude', { session_id: 'rollback-p', cwd: root });
