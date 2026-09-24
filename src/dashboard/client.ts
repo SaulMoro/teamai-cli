@@ -34,13 +34,14 @@ const tokens = s => Object.values(s.tokens || {}).reduce((sum, v) => sum + (Numb
 function duration(s) { const ms = Date.parse(s.status === 'stopped' ? s.stoppedAt || s.lastActivity : new Date().toISOString()) - Date.parse(s.startedAt); if (!Number.isFinite(ms)) return '—'; const seconds = Math.max(0, Math.floor(ms/1000)); return seconds < 60 ? seconds+'s' : seconds < 3600 ? Math.floor(seconds/60)+'m' : Math.floor(seconds/3600)+'h '+Math.floor(seconds%3600/60)+'m'; }
 function ago(value) { const ms = Date.now()-Date.parse(value); if (!Number.isFinite(ms)) return '—'; if (ms<5000) return t('Just now'); return (ms<60000?Math.floor(ms/1000)+'s':ms<3600000?Math.floor(ms/60000)+'m':Math.floor(ms/3600000)+'h')+' '+t('ago'); }
 function status(s) { return label(statusNames[s.status] || s.status); }
-function scopeSessions() { return sessions.filter(s => (!$('repo').value || s.cwd === $('repo').value) && (!$('agent').value || s.tool === $('agent').value)); }
+function scopeSessions() { return sessions.filter(s => (!$('repo').value || s.repoKey === $('repo').value) && (!$('agent').value || s.tool === $('agent').value)); }
 function filters() {
- for (const [id, field, title] of [['repo','cwd','All repositories'],['agent','tool','All AI tools']]) {
+ for (const [id, field, text, title] of [['repo','repoKey','repoLabel','All repositories'],['agent','tool','tool','All AI tools']]) {
   const selected = $(id).value;
-  const values = [...new Set(sessions.map(s => s[field]).filter(Boolean))].sort();
+  const names = new Map(sessions.map(s => [s[field], s[text]]));
+  const values = [...names.keys()].filter(Boolean).sort();
   if (selected && !values.includes(selected)) values.push(selected);
-  $(id).innerHTML = '<option value="">'+label(title)+'</option>'+values.map(value=>'<option value="'+e(value)+'">'+e(value)+'</option>').join('');
+  $(id).innerHTML = '<option value="">'+label(title)+'</option>'+values.map(value=>'<option value="'+e(value)+'">'+e(names.get(value) ?? value)+'</option>').join('');
   $(id).value = selected === 'all' ? '' : selected;
  }
 }

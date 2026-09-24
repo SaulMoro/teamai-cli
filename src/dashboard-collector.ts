@@ -6,6 +6,7 @@ import { log } from './utils/logger.js';
 import { deriveSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { ensureDir } from './utils/fs.js';
+import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { resolveMonitorPid } from './pid-monitor.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from './utils/redact.js';
@@ -1626,16 +1627,21 @@ export async function readEvents(eventsPath?: string): Promise<DashboardEvent[]>
 export function rebuildSessions(events: DashboardEvent[]): DashboardSession[] {
   const sessions = new Map<string, DashboardSession>();
   const now = Date.now();
+  const keys = repoKeys(events);
+  const allKeys = new Set(keys.values());
 
   for (const event of events) {
     let session = sessions.get(event.sessionId);
 
     if (!session) {
+      const repoKey = keys.get(event.sessionId) ?? '';
       session = {
         sessionId: event.sessionId,
         tool: event.tool,
         status: 'running',
         cwd: event.cwd ?? '',
+        repoKey,
+        repoLabel: repoLabel(repoKey, allKeys),
         promptSummary: '',
         lastActivity: event.timestamp,
         startedAt: event.timestamp,
@@ -1928,6 +1934,19 @@ export async function compactEvents(eventsPath?: string): Promise<void> {
   }
 }
 
+/**
+ * The `projectAnchor` an event records (#809): the main checkout of the repo
+ * holding the event's `cwd`, the directory the hook resolved its scope for.
+ * Undefined for an event that records no cwd, which keeps it free of paths
+ * (Copilot), outside git, and for a directory that no longer exists, which git
+ * refuses to open. Both event writers go through here.
+ */
+export async function eventProjectAnchor(cwd: string | undefined): Promise<string | undefined> {
+  if (!cwd || !fs.existsSync(cwd)) return undefined;
+  const { resolveAnchors } = await import('./utils/git.js');
+  return (await resolveAnchors(cwd))?.projectAnchor;
+}
+
 // ─── CLI entry point ────────────────────────────────────
 
 /**
@@ -1968,6 +1987,7 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   if (!event) return;
 
   event.dataHome = getDataHome(config);
+  event.projectAnchor = await eventProjectAnchor(event.cwd);
   await appendEvent(event);
 
   // Trigger compaction check (non-blocking)

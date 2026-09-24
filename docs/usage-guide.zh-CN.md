@@ -1374,6 +1374,8 @@ teamai codebase --lint --output /path/to/repo
 
 只要 extract 发现了组件，就会写入 `teamwiki/evidence/code/<project>/_manifest.json`（包括跳过 AI 增强或增强没有产出的情况），因此 `--deep-enrich` 可以接着跑。
 
+不传 `--project` 时，`<project>` 取目录名；在 git 链接 worktree 的根目录下取仓库名：主检出的目录名，或 bare 仓库的名称（`repo/.bare` 或 `repo.git` → `repo`）。同一仓库的所有 worktree 写入同一个条目。`teamai import --dir` 用同样的方式确定 slug。
+
 ### Dashboard
 
 ```bash
@@ -1381,7 +1383,7 @@ teamai dashboard             # 启动 Web 面板（默认端口 3721）
 teamai dashboard --port 8080
 ```
 
-侧栏包含 **Overview（总览）**、**Team Execution（团队执行）**、**Team Context（团队上下文）**、**Team Improvement（团队改进）**。总览汇总三模块；执行页展示本机会话，支持工作目录和 AI 工具筛选及完整详情；上下文页保留 KB Health（含作者贡献和从未召回条目）；改进页保留本机趋势及晋升、归档、质量更新维护命令。命令需在终端使用，页面不执行维护操作。
+侧栏包含 **Overview（总览）**、**Team Execution（团队执行）**、**Team Context（团队上下文）**、**Team Improvement（团队改进）**。总览汇总三模块；执行页展示本机会话，支持按仓库（同一仓库的所有 worktree 合为一项）和 AI 工具筛选及完整详情；上下文页保留 KB Health（含作者贡献和从未召回条目）；改进页保留本机趋势及晋升、归档、质量更新维护命令。命令需在终端使用，页面不执行维护操作。
 
 页头支持英文/简体中文及日间/夜间/跟随系统主题，浏览器存储可用时记住偏好。用户输入、AI 输出、知识标题和命令保持原文。独立 `/kb-report` 继续提供原有完整报告。
 
@@ -1446,7 +1448,7 @@ teamai session save --push --force     # 即便是琐碎会话也推送
 teamai session save --push --include-prompt  # 额外带上（脱敏后的）首个 prompt 行
 ```
 
-**本地（始终执行）：** 追加到 `~/.teamai/session-logs/<年-月>.md`。按会话幂等（当月已记录的会话会跳过），且超过 90 天的日志会自动清理。
+**本地（始终执行）：** 追加到 `~/.teamai/session-logs/<年-月>.md`。按会话幂等（当月已记录的会话会跳过），且超过 90 天的日志会自动清理。每条记录用 `Project:` 标出会话所属的仓库（同一仓库的所有 worktree 相同），用 `Directory:` 标出其工作目录。
 
 **团队（`--push`，需显式开启）：** 直接提交（不走 PR）到 `teamai-reports` 分支的 `sessions/<user>/<年-月>.md`——正是 `teamai digest` 读取的路径，于是该会话会出现在 **Session Highlights** 板块。默认只推送**有价值**的会话：出现摩擦（interrupt / tool-reject / correction）或工具使用充分（≥ 3 种不同工具）。琐碎会话除非加 `--force`，否则只留本地。对只读（HTTP 模式）的团队，`--push` 会优雅失败并保留本地日志。
 

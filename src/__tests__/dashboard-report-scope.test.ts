@@ -133,6 +133,21 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
     expect(await reportedSessions(project)).toBe(1);
   });
 
+  it('records the repo of a session, and still no path for a Copilot one (#809)', async () => {
+    const { root } = await setup();
+    await session('claude', { session_id: 'sid-a', cwd: root });
+    await session('copilot', { session_id: 'copilot-a', cwd: root });
+
+    const events = fs.readFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), 'utf-8')
+      .split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const claude = events.filter((e) => e.sessionId === 'sid-a');
+    expect(claude.length).toBeGreaterThan(0);
+    expect(claude.every((e) => e.projectAnchor === root)).toBe(true);
+    const copilot = events.filter((e) => e.tool === 'copilot');
+    expect(copilot.length).toBeGreaterThan(0);
+    expect(copilot.filter((e) => 'cwd' in e || 'projectAnchor' in e)).toEqual([]);
+  });
+
   it('a session started under a symlinked path of the project is reported by the project', async () => {
     const { root, user, project } = await setup();
     const link = path.join(tmp, 'link-p');

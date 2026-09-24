@@ -1435,6 +1435,8 @@ teamai codebase --lint --output /path/to/repo
 
 When extract finds components, it writes `teamwiki/evidence/code/<project>/_manifest.json` even if AI enrichment is skipped or produces nothing, so `--deep-enrich` can start.
 
+Without `--project`, `<project>` is the directory's name. At the root of a linked git worktree it is the repo's name: the main checkout's, or a bare repo's (`repo/.bare` or `repo.git` → `repo`). Every worktree of a repo writes the same entry. `teamai import --dir` picks its slug the same way.
+
 ### Dashboard
 
 ```bash
@@ -1442,7 +1444,7 @@ teamai dashboard             # Start the web dashboard (default port 3721)
 teamai dashboard --port 8080
 ```
 
-The sidebar contains **Overview**, **Team Execution**, **Team Context** and **Team Improvement**. Overview summarizes the three modules. Execution shows this machine's sessions, filters by working directory and AI tool, and opens complete session details. Context contains KB Health (including author contributions and never-recalled entries); Improvement contains local trends and the original promotion/archive/quality-update maintenance commands. Commands are displayed for use in your terminal; the dashboard does not execute them.
+The sidebar contains **Overview**, **Team Execution**, **Team Context** and **Team Improvement**. Overview summarizes the three modules. Execution shows this machine's sessions, filters by repository (every worktree of a repo is one entry) and AI tool, and opens complete session details. Context contains KB Health (including author contributions and never-recalled entries); Improvement contains local trends and the original promotion/archive/quality-update maintenance commands. Commands are displayed for use in your terminal; the dashboard does not execute them.
 
 Use the header to select English or Simplified Chinese and light, dark, or system theme. Preferences are saved in browser storage when available. User prompts, AI output, knowledge titles and commands are not translated. The standalone `/kb-report` remains available as the original complete report.
 
@@ -1507,7 +1509,7 @@ teamai session save --push --force     # push even a trivial session
 teamai session save --push --include-prompt  # also include the (redacted) first-ask line
 ```
 
-**Local (always):** appends to `~/.teamai/session-logs/<year-month>.md`. Idempotent per session (a session already recorded that month is skipped), and logs older than 90 days are pruned automatically.
+**Local (always):** appends to `~/.teamai/session-logs/<year-month>.md`. Idempotent per session (a session already recorded that month is skipped), and logs older than 90 days are pruned automatically. Each entry names the session's repo as `Project:`, the same for every worktree of the repo, and its working directory as `Directory:`.
 
 **Team (`--push`, opt-in):** commits the summary directly (no PR) to `sessions/<user>/<year-month>.md` on the `teamai-reports` branch — the exact path `teamai digest` reads, so the session shows up under **Session Highlights**. Only a **valuable** session is pushed by default: one that shows friction (an interrupt / tool-reject / correction) or substantial tool use (≥ 3 distinct tools). Trivial sessions stay local unless you pass `--force`. On a read-only (HTTP-mode) team, `--push` fails gracefully and the local log is still kept.
 

@@ -1237,6 +1237,15 @@ export interface DashboardEvent {
    * existed; the report then attributes them by `cwd`.
    */
   dataHome?: string;
+  /**
+   * Main checkout of the git repo holding `cwd` (`resolveAnchors().projectAnchor`),
+   * shared by all of its worktrees, so a session is attributed to its repo even
+   * after its worktree is removed (#809). Absent outside git, on events that
+   * record no `cwd` (Copilot) or a `cwd` that no longer exists, and on events
+   * written before this field existed; attribution then uses the session's last
+   * anchor, else `cwd`.
+   */
+  projectAnchor?: string;
   /** First user prompt (captured from UserPromptSubmit) */
   promptSummary?: string;
   /**
@@ -1316,6 +1325,10 @@ export interface DashboardSession {
   status: DashboardSessionStatus;
   /** Working directory */
   cwd: string;
+  /** Repo the session belongs to (`repoKeys`), shared by all worktrees of a repo. */
+  repoKey: string;
+  /** Display name of `repoKey` (`repoLabel`), distinct across the sessions rebuilt with it. */
+  repoLabel: string;
   /** First user prompt summary */
   promptSummary: string;
   /** ISO 8601 timestamp of last activity */

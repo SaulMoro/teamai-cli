@@ -23,6 +23,7 @@ import path from 'node:path';
 import { ensureDir } from './utils/fs.js';
 import { redactWithEnv } from './utils/redact.js';
 import { aggregateSessionMetrics } from './dashboard-collector.js';
+import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { emptyTokenUsage } from './types.js';
 import type { DashboardEvent, SessionMetrics } from './types.js';
 
@@ -30,6 +31,8 @@ import type { DashboardEvent, SessionMetrics } from './types.js';
 export interface SessionSummary {
   sessionId: string;
   tool: string;
+  /** The session's repo (repoLabel over every session in the log), shared by its worktrees. */
+  project: string;
   cwd: string;
   startedAt: string;
   endedAt: string;
@@ -106,10 +109,12 @@ export function collectSession(sessionId: string, events: DashboardEvent[]): Ses
   const firstPrompt = firstPromptRaw
     ? redactWithEnv(firstPromptRaw).replace(/\s+/g, ' ').trim().slice(0, FIRST_PROMPT_MAX_CHARS)
     : '';
+  const keys = repoKeys(events);
 
   return {
     sessionId,
     tool,
+    project: repoLabel(keys.get(sessionId) ?? '', new Set(keys.values())),
     cwd,
     startedAt,
     endedAt,
@@ -154,7 +159,8 @@ export function renderSessionMarkdown(summary: SessionSummary, options: RenderOp
     `<!-- teamai:session ${summary.sessionId} -->`,
     `### ${date} · ${shortId(summary.sessionId)} · ${summary.tool}`,
     '',
-    `- Project: \`${summary.cwd || 'unknown'}\``,
+    `- Project: \`${summary.project}\``,
+    `- Directory: \`${summary.cwd || 'unknown'}\``,
     `- Prompts: ${summary.prompts} · Tools: ${summary.toolTotal} (${summary.distinctTools} distinct)`,
     `- Interventions: interrupt ${iv.interrupt}, toolReject ${iv.toolReject}, correction ${iv.correction}`,
   ];

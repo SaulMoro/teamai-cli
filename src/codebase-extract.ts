@@ -6,7 +6,8 @@
  * evidence pages, router/hot/index navigation, and gaps detection.
  */
 
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import chalk from 'chalk';
@@ -36,6 +37,8 @@ import {
   mergeInterfaceInventories,
 } from './wiki-engine/code-knowledge/code-incremental.js';
 import { writeIfChanged } from './utils/fs.js';
+import { resolveAnchors } from './utils/git.js';
+import { repoName } from './utils/repo-attribution.js';
 import type { GraphIndex } from './wiki-engine/core/graph-index.schema.js';
 import { routerTemplate, indexTemplate, HOT_TEMPLATE } from './wiki-engine/adapters/templates.js';
 import type { DomainGroup, IndexStats } from './wiki-engine/adapters/templates.js';
@@ -533,9 +536,24 @@ function buildOverview(
   return lines.join('\n');
 }
 
+/**
+ * The wiki slug of `dir` when no `--project` is given (#809): a linked
+ * worktree's root takes its repo's name (repoName: the main checkout's, or a
+ * bare repo's), so every worktree of a repo writes the repo's evidence; any
+ * other directory keeps its own name.
+ */
+export async function defaultProjectSlug(dir: string): Promise<string> {
+  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return path.basename(dir);
+  const anchors = await resolveAnchors(dir);
+  if (anchors && anchors.workspaceRoot !== anchors.projectAnchor && await realpath(dir) === anchors.workspaceRoot) {
+    return repoName(anchors.projectAnchor);
+  }
+  return path.basename(dir);
+}
+
 export async function extractCodebase(opts: ExtractCodebaseOptions): Promise<void> {
   const root = path.resolve(opts.path || '.');
-  const project = opts.project || path.basename(root);
+  const project = opts.project || await defaultProjectSlug(root);
   const maxFiles = opts.maxFiles || 200;
   const outputBase = opts.outputRoot ? path.resolve(opts.outputRoot) : root;
 

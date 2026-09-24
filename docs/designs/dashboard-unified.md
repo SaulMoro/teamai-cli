@@ -7,7 +7,7 @@ The logo's charcoal/blue palette, four-module navigation, English/Simplified Chi
 | View | Retained functionality |
 | --- | --- |
 | Overview | Local session status/counts, six current/prior 7-day metrics, KB coverage, maintenance candidate counts, session list |
-| Team Execution | All supported tools, exact working-directory/tool filters, active and recently ended sessions, first/latest secret-redacted prompt summaries and output previews, duration, last activity/tool, intervention and token counts; keyboard-accessible Details opens all captured prompt summaries (capped at 200 characters), safely rendered Markdown output and full breakdowns |
+| Team Execution | All supported tools, repository (all worktrees of a repo as one)/tool filters, active and recently ended sessions, first/latest secret-redacted prompt summaries and output previews, duration, last activity/tool, intervention and token counts; keyboard-accessible Details opens all captured prompt summaries (capped at 200 characters), safely rendered Markdown output and full breakdowns |
 | Team Context | Original KB totals, coverage by type, top recalled chart, expandable never-recalled groups, last-recall month chart, author contribution table, reported data scope and report generation time |
 | Team Improvement | Local trends, original promotion/archive/stale candidate guidance and commands, digest/session-save/share-learnings command references |
 
@@ -45,6 +45,6 @@ The existing `avgRequestCostMicros`, request-day daily buckets and digest statis
 
 ### Workspace selection and missing data
 
-The sidebar switches between all local sessions, user scope, and installed project scopes. Project partitions are discovered from their anchor files; legacy installs are discovered from the startup directory and recorded session directories. Linked Git worktrees share a project. User scope contains sessions outside installed projects. In the all-workspaces view, knowledge uses the startup scope; this is labeled explicitly. Individual scopes select their own knowledge configuration, with separate report caches and stale-response protection. Restart the dashboard after installing a new scope.
+The sidebar switches between all local sessions, user scope, and installed project scopes. Project partitions are discovered from their anchor files; legacy installs are discovered from the startup directory, the repo each event recorded (`projectAnchor`), and recorded session directories. Linked Git worktrees share a project, and a removed worktree's sessions stay with it. User scope contains sessions outside installed projects. In the all-workspaces view, knowledge uses the startup scope; this is labeled explicitly. Individual scopes select their own knowledge configuration, with separate report caches and stale-response protection. Restart the dashboard after installing a new scope.
 
 The complete health report is split between Team Context (coverage, recalls, entries, authors) and Team Improvement (maintenance), with internal navigation. The legacy report URL remains compatible, but is not linked from the dashboard. Missing prior-period samples are labeled as no ended sessions, no priced sessions, or no usage data rather than collecting.
