@@ -164,8 +164,8 @@ async function unreportedDashboardStats(
   // The scope's own snapshots, compared as its report compares them (#786).
   const writtenAt = await snapshotWrittenAt(config);
   const currentDaily = aggregateDailySessions(events);
-  const { promptTokens, interventions } = await reportedBaselines(events, metrics, currentDaily, config, false);
-  const dropped = droppedRollouts(metrics, promptTokens, interventions, writtenAt);
+  const { promptTokens, interventions, daily } = await reportedBaselines(events, metrics, currentDaily, config, false);
+  const dropped = droppedRollouts(metrics, promptTokens, interventions, daily, writtenAt);
   const currentInterventions = withDroppedRollouts(interventionCounts(metrics), currentDaily, dropped).interventions;
 
   const interventionDelta = computeInterventionDelta(currentInterventions, interventions);

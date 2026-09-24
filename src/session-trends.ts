@@ -97,26 +97,48 @@ function positiveDelta(current: number, previous: number | undefined): number {
   return Math.max(0, current - (previous ?? 0));
 }
 
+/** Request costs per day read from a file; empty for what is not one. */
+export function parseRequestDaily(value: unknown): Record<string, RequestCostMetrics> {
+  const requestDaily: Record<string, RequestCostMetrics> = {};
+  if (!value || typeof value !== 'object') return requestDaily;
+  for (const [date, request] of Object.entries(value)) {
+    if (!request || typeof request !== 'object') continue;
+    const num = (field: string) => {
+      const n: unknown = Object.entries(request).find(([k]) => k === field)?.[1];
+      return typeof n === 'number' ? n : 0;
+    };
+    const version: unknown = Object.entries(request).find(([k]) => k === 'priceVersion')?.[1];
+    requestDaily[date] = {
+      pricedRequests: num('pricedRequests'), costMicros: num('costMicros'), cacheReadTokens: num('cacheReadTokens'),
+      cacheEligibleInputTokens: num('cacheEligibleInputTokens'), priceVersion: typeof version === 'string' ? version : '',
+    };
+  }
+  return requestDaily;
+}
+
+/** Request costs per day summed, `a`'s price version where both hold a day. */
+export function addRequestDaily(
+  a: Record<string, RequestCostMetrics>,
+  b: Record<string, RequestCostMetrics>,
+): Record<string, RequestCostMetrics> {
+  const sum = { ...a };
+  for (const [date, request] of Object.entries(b)) {
+    const own = sum[date];
+    sum[date] = own ? {
+      pricedRequests: own.pricedRequests + request.pricedRequests, costMicros: own.costMicros + request.costMicros,
+      cacheReadTokens: own.cacheReadTokens + request.cacheReadTokens,
+      cacheEligibleInputTokens: own.cacheEligibleInputTokens + request.cacheEligibleInputTokens, priceVersion: own.priceVersion,
+    } : request;
+  }
+  return sum;
+}
+
 /** A daily snapshot entry read from a file, or undefined when it is not one. */
 export function parseDailySnapshot(value: unknown): DailySessionSnapshot | undefined {
   if (!value || typeof value !== 'object') return undefined;
   if (!('date' in value) || typeof value.date !== 'string' || !('prompts' in value) || typeof value.prompts !== 'number'
     || !('durationMs' in value) || typeof value.durationMs !== 'number') return undefined;
-  const requestDaily: Record<string, RequestCostMetrics> = {};
-  if ('requestDaily' in value && value.requestDaily && typeof value.requestDaily === 'object') {
-    for (const [date, request] of Object.entries(value.requestDaily)) {
-      if (!request || typeof request !== 'object') continue;
-      const num = (field: string) => {
-        const n: unknown = Object.entries(request).find(([k]) => k === field)?.[1];
-        return typeof n === 'number' ? n : 0;
-      };
-      const version: unknown = Object.entries(request).find(([k]) => k === 'priceVersion')?.[1];
-      requestDaily[date] = {
-        pricedRequests: num('pricedRequests'), costMicros: num('costMicros'), cacheReadTokens: num('cacheReadTokens'),
-        cacheEligibleInputTokens: num('cacheEligibleInputTokens'), priceVersion: typeof version === 'string' ? version : '',
-      };
-    }
-  }
+  const requestDaily = parseRequestDaily('requestDaily' in value ? value.requestDaily : undefined);
   return {
     date: value.date, prompts: value.prompts, durationMs: value.durationMs,
     succeeded: 'succeeded' in value && value.succeeded === 1 ? 1 : 0,

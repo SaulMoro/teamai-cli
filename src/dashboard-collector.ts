@@ -1837,9 +1837,16 @@ export function aggregateSessionMetrics(
   const unscopedTokens = new Map<string, TimedTokenSnapshot>();
   const sessionTokens = new Map<string, TimedTokenSnapshot>();
   const transcriptTokens = new Map<string, Map<string, TimedTokenSnapshot>>();
+  // Per rollout, for a transcript-scoped session (Codex), whose counters restart
+  // with each rollout: see SessionMetrics.segments.
+  const rolloutSessions = new Set<string>();
   const transcriptPrompts = new Map<string, Map<string, number>>();
   const transcriptInterventions = new Map<string, Map<string, { interrupt: number; toolReject: number }>>();
+  const transcriptRequests = new Map<string, Map<string, Record<string, RequestCostMetrics>>>();
+  const transcriptCorrections = new Map<string, Map<string, number>>();
   const transcriptSince = new Map<string, Map<string, string>>();
+  const lastTranscript = new Map<string, string>();
+  const timeline = new Map<string, Array<{ at: number; transcript: string | undefined }>>();
 
   for (const event of events) {
     let m = map.get(event.sessionId);
@@ -1852,6 +1859,26 @@ export function aggregateSessionMetrics(
       const first = since.get(event.transcriptPath);
       if (first === undefined || Date.parse(event.timestamp) < Date.parse(first)) since.set(event.transcriptPath, event.timestamp);
       transcriptSince.set(event.sessionId, since);
+      lastTranscript.set(event.sessionId, event.transcriptPath);
+    }
+    if (event.tokenScope === 'transcript' || (event.tool === 'codex' && typeof event.transcriptPath === 'string')) {
+      rolloutSessions.add(event.sessionId);
+    }
+    const events = timeline.get(event.sessionId) ?? [];
+    events.push({ at: Date.parse(event.timestamp), transcript: event.transcriptPath ?? lastTranscript.get(event.sessionId) });
+    timeline.set(event.sessionId, events);
+    if (event.type === 'stop' && typeof event.transcriptPath === 'string') {
+      const rollout = event.transcriptPath;
+      const record = <T>(maps: Map<string, Map<string, T>>, value: T) => {
+        const perRollout = maps.get(event.sessionId) ?? new Map<string, T>();
+        perRollout.set(rollout, value);
+        maps.set(event.sessionId, perRollout);
+      };
+      if (typeof event.prompts === 'number') record(transcriptPrompts, event.prompts);
+      if (event.interventions) {
+        record(transcriptInterventions, { interrupt: event.interventions.interrupt, toolReject: event.interventions.toolReject });
+      }
+      if (event.requestDaily) record(transcriptRequests, event.requestDaily);
     }
 
     if (event.type === 'stop') {
@@ -1872,6 +1899,12 @@ export function aggregateSessionMetrics(
         const isCorrection = event.correction ?? isCorrectionPrompt(event.promptSummary);
         if (gap >= 0 && gap <= CORRECTION_WINDOW_MS && isCorrection) {
           m.correction++;
+          const rollout = event.transcriptPath ?? lastTranscript.get(event.sessionId);
+          if (rollout !== undefined) {
+            const corrections = transcriptCorrections.get(event.sessionId) ?? new Map<string, number>();
+            corrections.set(rollout, (corrections.get(rollout) ?? 0) + 1);
+            transcriptCorrections.set(event.sessionId, corrections);
+          }
         }
         // Each stop is consumed once — a later prompt is a new task, not a correction.
         lastStopAt.delete(event.sessionId);
@@ -1891,16 +1924,6 @@ export function aggregateSessionMetrics(
         // replace the same segment; a resumed rollout has a distinct path and adds
         // one new segment to the logical session total.
         setLatestTokenSnapshot(segments, event.transcriptPath, event);
-        if (event.type === 'stop' && typeof event.prompts === 'number') {
-          const prompts = transcriptPrompts.get(event.sessionId) ?? new Map<string, number>();
-          prompts.set(event.transcriptPath, event.prompts);
-          transcriptPrompts.set(event.sessionId, prompts);
-        }
-        if (event.type === 'stop' && event.interventions) {
-          const counts = transcriptInterventions.get(event.sessionId) ?? new Map<string, { interrupt: number; toolReject: number }>();
-          counts.set(event.transcriptPath, { interrupt: event.interventions.interrupt, toolReject: event.interventions.toolReject });
-          transcriptInterventions.set(event.sessionId, counts);
-        }
       } else {
         // Claude, CodeBuddy, and pre-existing events retain latest-Stop semantics.
         setLatestTokenSnapshot(unscopedTokens, event.sessionId, event);
@@ -1921,22 +1944,37 @@ export function aggregateSessionMetrics(
       let total = emptyTokenUsage();
       for (const segment of segments.values()) total = addTokenUsage(total, segment.tokens);
       m.tokens = total;
-      const prompts = transcriptPrompts.get(sid);
-      const counts = transcriptInterventions.get(sid);
-      const since = transcriptSince.get(sid);
-      m.segments = Object.fromEntries([...segments].map(([transcript, segment]) => [transcript, {
-        prompts: prompts?.get(transcript) ?? 0, tokens: { ...segment.tokens },
-        interrupt: counts?.get(transcript)?.interrupt ?? 0, toolReject: counts?.get(transcript)?.toolReject ?? 0,
-        since: since?.get(transcript) ?? segment.timestamp,
+    } else {
+      const unscoped = unscopedTokens.get(sid);
+      if (unscoped) m.tokens = { ...unscoped.tokens };
+    }
+    if (rolloutSessions.has(sid) && !sessionSnapshot) {
+      // Active time per rollout: each gap goes to the rollout of the event it ends at.
+      const durations = new Map<string, number>();
+      const own = [...(timeline.get(sid) ?? [])].sort((a, b) => a.at - b.at);
+      for (let i = 1; i < own.length; i++) {
+        const gap = own[i].at - own[i - 1].at;
+        const rollout = own[i].transcript;
+        if (rollout !== undefined && Number.isFinite(gap) && gap >= 0 && gap <= DASHBOARD_IDLE_TIMEOUT_MS) {
+          durations.set(rollout, (durations.get(rollout) ?? 0) + gap);
+        }
+      }
+      const since = transcriptSince.get(sid) ?? new Map<string, string>();
+      m.segments = Object.fromEntries([...since].map(([transcript, first]) => [transcript, {
+        prompts: transcriptPrompts.get(sid)?.get(transcript) ?? 0,
+        tokens: { ...(segments?.get(transcript)?.tokens ?? emptyTokenUsage()) },
+        interrupt: transcriptInterventions.get(sid)?.get(transcript)?.interrupt ?? 0,
+        toolReject: transcriptInterventions.get(sid)?.get(transcript)?.toolReject ?? 0,
+        correction: transcriptCorrections.get(sid)?.get(transcript) ?? 0,
+        durationMs: durations.get(transcript) ?? 0,
+        requestDaily: transcriptRequests.get(sid)?.get(transcript) ?? {},
+        since: first,
       }]));
       // A rollout's Stop counts restart too; the session sums them.
       const sum = (field: 'interrupt' | 'toolReject') =>
         Object.values(m.segments ?? {}).reduce((total, segment) => total + segment[field], 0);
       m.interrupt = Math.max(m.interrupt, sum('interrupt'));
       m.toolReject = Math.max(m.toolReject, sum('toolReject'));
-    } else {
-      const unscoped = unscopedTokens.get(sid);
-      if (unscoped) m.tokens = { ...unscoped.tokens };
     }
     // A rollout's prompt count restarts too: its segments sum where they exist.
     const rolloutPrompts = m.segments

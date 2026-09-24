@@ -15,7 +15,9 @@ import {
 } from './utils/git.js';
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import type { UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig } from './types.js';
+import type {
+  UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig, RequestCostMetrics,
+} from './types.js';
 import { getVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { filterEventsByScope, runsOfLog } from './dashboard-scope.js';
 import {
@@ -28,6 +30,9 @@ import {
   computeDailyStatsDelta,
   mergeDailyStats,
   takeDailySession,
+  parseDailySnapshot,
+  parseRequestDaily,
+  addRequestDaily,
   type DailySessionSnapshot,
   type ReportedDailySessions,
 } from './session-trends.js';
@@ -373,13 +378,21 @@ function reportedSegments(entry: unknown): ReportedSegments {
   }
   for (const [key, segment] of Object.entries(entry.segments)) {
     const iv = interventionsEntry(segment);
-    segments[key] = { ...promptTokensEntry(segment), interrupt: iv.interrupt, toolReject: iv.toolReject };
+    const durationMs: unknown = segment && typeof segment === 'object' && 'durationMs' in segment ? segment.durationMs : 0;
+    segments[key] = {
+      ...promptTokensEntry(segment), interrupt: iv.interrupt, toolReject: iv.toolReject, correction: iv.correction,
+      durationMs: typeof durationMs === 'number' ? durationMs : 0,
+      requestDaily: parseRequestDaily(segment && typeof segment === 'object' && 'requestDaily' in segment ? segment.requestDaily : undefined),
+    };
   }
   return segments;
 }
 
 /** A reported rollout compaction has dropped: its key and the totals it was reported with. */
-export interface DroppedRollout { key: string; prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number }
+export interface DroppedRollout {
+  key: string; prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; correction: number;
+  durationMs: number; requestDaily: Record<string, RequestCostMetrics>;
+}
 
 /**
  * The rollouts of each transcript-scoped session (Codex) that were reported and
@@ -398,6 +411,7 @@ export function droppedRollouts(
   current: Map<string, SessionMetrics>,
   promptTokens: ReportedPromptTokens,
   interventions: ReportedInterventions,
+  daily: ReportedDailySessions,
   writtenAt?: number,
 ): Map<string, DroppedRollout[]> {
   const dropped = new Map<string, DroppedRollout[]>();
@@ -411,27 +425,47 @@ export function droppedRollouts(
     if (Object.keys(previous).length > 0) {
       for (const [key, segment] of Object.entries(previous)) {
         if (present.has(key)) continue;
-        gone.push({ key, prompts: segment.prompts, tokens: segment.tokens, interrupt: segment.interrupt ?? 0, toolReject: segment.toolReject ?? 0 });
+        gone.push({
+          key, prompts: segment.prompts, tokens: segment.tokens, interrupt: segment.interrupt ?? 0,
+          toolReject: segment.toolReject ?? 0, correction: segment.correction ?? 0, durationMs: segment.durationMs ?? 0,
+          requestDaily: segment.requestDaily ?? {},
+        });
       }
     } else {
       const total = promptTokensEntry(prev);
       const iv = interventionsEntry(interventions[sid]);
-      const left = { prompts: total.prompts, tokens: { ...total.tokens }, interrupt: iv.interrupt, toolReject: iv.toolReject };
+      const day = parseDailySnapshot(daily[sid]);
+      const left = {
+        prompts: total.prompts, tokens: { ...total.tokens }, interrupt: iv.interrupt, toolReject: iv.toolReject,
+        correction: iv.correction, durationMs: day?.durationMs ?? 0, requestDaily: { ...(day?.requestDaily ?? {}) },
+      };
       const covered = Object.values(cur.segments)
         .filter((segment) => writtenAt === undefined || Date.parse(segment.since) <= writtenAt)
         .sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+      const take = (own: number, rest: number) => Math.max(0, Math.min(own, rest));
       for (const segment of covered) {
-        const take = (own: number, rest: number) => Math.max(0, Math.min(own, rest));
-        left.prompts -= take(segment.prompts, left.prompts);
-        left.interrupt -= take(segment.interrupt, left.interrupt);
-        left.toolReject -= take(segment.toolReject, left.toolReject);
+        for (const field of ['prompts', 'interrupt', 'toolReject', 'correction', 'durationMs'] as const) {
+          left[field] -= take(segment[field], left[field]);
+        }
         for (const field of ['input', 'output', 'cacheRead', 'cacheCreation'] as const) {
           left.tokens[field] -= take(segment.tokens[field], left.tokens[field]);
         }
+        for (const [date, request] of Object.entries(segment.requestDaily)) {
+          const rest = left.requestDaily[date];
+          if (!rest) continue;
+          left.requestDaily[date] = {
+            ...rest,
+            pricedRequests: rest.pricedRequests - take(request.pricedRequests, rest.pricedRequests),
+            costMicros: rest.costMicros - take(request.costMicros, rest.costMicros),
+            cacheReadTokens: rest.cacheReadTokens - take(request.cacheReadTokens, rest.cacheReadTokens),
+            cacheEligibleInputTokens: rest.cacheEligibleInputTokens - take(request.cacheEligibleInputTokens, rest.cacheEligibleInputTokens),
+          };
+        }
       }
-      if (left.prompts > 0 || left.interrupt > 0 || left.toolReject > 0 || hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })) {
-        gone.push({ key: 'prior', ...left });
-      }
+      const anyLeft = left.prompts > 0 || left.interrupt > 0 || left.toolReject > 0 || left.correction > 0 || left.durationMs > 0
+        || hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })
+        || Object.values(left.requestDaily).some((r) => r.pricedRequests > 0 || r.costMicros > 0);
+      if (anyLeft) gone.push({ key: 'prior', ...left });
     }
     if (gone.length > 0) dropped.set(sid, gone);
   }
@@ -452,7 +486,7 @@ export function droppedRollouts(
 export function computePromptTokenDelta(
   current: Map<string, SessionMetrics>,
   reported: ReportedPromptTokens,
-  dropped: Map<string, DroppedRollout[]> = droppedRollouts(current, reported, {}),
+  dropped: Map<string, DroppedRollout[]> = droppedRollouts(current, reported, {}, {}),
 ): { delta: PromptTokenDelta; nextReported: ReportedPromptTokens } {
   const delta: PromptTokenDelta = { prompts: 0, tokens: emptyTokenUsage() };
   const nextReported: ReportedPromptTokens = {};
@@ -467,10 +501,12 @@ export function computePromptTokenDelta(
       for (const [transcript, segment] of Object.entries(cur.segments)) {
         segments[segmentKey(transcript)] = {
           prompts: segment.prompts, tokens: { ...segment.tokens }, interrupt: segment.interrupt, toolReject: segment.toolReject,
+          correction: segment.correction, durationMs: segment.durationMs, requestDaily: segment.requestDaily,
         };
       }
       for (const gone of dropped.get(sid) ?? []) {
-        segments[gone.key] = { prompts: gone.prompts, tokens: gone.tokens, interrupt: gone.interrupt, toolReject: gone.toolReject };
+        const { key, ...totals } = gone;
+        segments[key] = totals;
         prompts += gone.prompts;
         tokens = addTokenUsage(tokens, gone.tokens);
       }
@@ -496,11 +532,27 @@ export function withDroppedRollouts(
   const nextInterventions = new Map(interventions);
   const nextDaily = new Map(daily);
   for (const [sid, gone] of dropped) {
-    const sum = (field: 'prompts' | 'interrupt' | 'toolReject') => gone.reduce((total, rollout) => total + rollout[field], 0);
+    const sum = (field: 'prompts' | 'interrupt' | 'toolReject' | 'correction' | 'durationMs') =>
+      gone.reduce((total, rollout) => total + rollout[field], 0);
+    const tokens = gone.reduce((total, rollout) => addTokenUsage(total, rollout.tokens), emptyTokenUsage());
     const counts = nextInterventions.get(sid);
-    if (counts) nextInterventions.set(sid, { ...counts, interrupt: counts.interrupt + sum('interrupt'), toolReject: counts.toolReject + sum('toolReject') });
+    if (counts) {
+      nextInterventions.set(sid, {
+        interrupt: counts.interrupt + sum('interrupt'), toolReject: counts.toolReject + sum('toolReject'),
+        correction: counts.correction + sum('correction'),
+      });
+    }
     const day = nextDaily.get(sid);
-    if (day) nextDaily.set(sid, { ...day, prompts: day.prompts + sum('prompts') });
+    if (day) {
+      nextDaily.set(sid, {
+        ...day,
+        prompts: day.prompts + sum('prompts'),
+        durationMs: day.durationMs + sum('durationMs'),
+        sessionCacheReadTokens: (day.sessionCacheReadTokens ?? 0) + tokens.cacheRead,
+        sessionCacheEligibleTokens: (day.sessionCacheEligibleTokens ?? 0) + tokens.input + tokens.cacheRead + tokens.cacheCreation,
+        requestDaily: gone.reduce((total, rollout) => addRequestDaily(total, rollout.requestDaily), day.requestDaily),
+      });
+    }
   }
   return { interventions: nextInterventions, daily: nextDaily };
 }
@@ -792,7 +844,7 @@ export async function reportUsageToTeam(
     const {
       interventions: reportedInterventions, promptTokens: reportedPromptTokens, daily: reportedDailySessions,
     } = await reportedBaselines(dashboardEvents, metrics, currentDaily, reportsConfig, true);
-    const dropped = droppedRollouts(metrics, reportedPromptTokens, reportedInterventions, writtenAt);
+    const dropped = droppedRollouts(metrics, reportedPromptTokens, reportedInterventions, reportedDailySessions, writtenAt);
     const effective = withDroppedRollouts(currentInterventions, currentDaily, dropped);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
@@ -970,7 +1022,8 @@ export async function reportUsageToTeam(
       await writeReportedInterventions({ ...existingIv, ...nextReported }, reportsConfig);
       log.debug(`Reported intervention delta (${interventionDelta.sessions} new sessions) to team repo`);
     }
-    if (hasPromptTokens) {
+    // It also holds each rollout's totals, which any delta may have moved.
+    if (hasPromptTokens || hasInterventions || hasDaily) {
       const existingPt = await readReportedPromptTokens(reportsConfig);
       await writeReportedPromptTokens({ ...existingPt, ...nextReportedPromptTokens }, reportsConfig);
       log.debug(`Reported prompt/token delta (${promptTokenDelta.prompts} prompts) to team repo`);

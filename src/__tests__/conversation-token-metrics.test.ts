@@ -402,11 +402,11 @@ describe('aggregateSessionMetrics', () => {
     const b = stop('/rollouts/b.jsonl', '2026-09-01T13:00:00Z', tokensB, 2);
     // A was compacted before this build's first report; B came after the entry was written.
     const compacted = aggregateSessionMetrics([b]);
-    expect(computePromptTokenDelta(compacted, legacy, droppedRollouts(compacted, legacy, {}, writtenAt)).delta)
+    expect(computePromptTokenDelta(compacted, legacy, droppedRollouts(compacted, legacy, {}, {}, writtenAt)).delta)
       .toEqual({ prompts: 2, tokens: tokensB });
     // A still in the log takes the entry; B is new.
     const retained = aggregateSessionMetrics([a, b]);
-    expect(computePromptTokenDelta(retained, legacy, droppedRollouts(retained, legacy, {}, writtenAt)).delta)
+    expect(computePromptTokenDelta(retained, legacy, droppedRollouts(retained, legacy, {}, {}, writtenAt)).delta)
       .toEqual({ prompts: 2, tokens: tokensB });
   });
 

@@ -625,6 +625,82 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
       expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(expected);
     });
 
+  /** Codex events of one session, as the collector records them, keyed to `config`'s scope. */
+  async function codexLog(config: LocalConfig) {
+    const key = await dataHomeKeyOf(config);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    const base = Date.now() - 3_600_000;
+    const event = (rollout: string, type: string, minute: number, extra: Record<string, unknown> = {}) => JSON.stringify({
+      type, timestamp: new Date(base + minute * 60_000).toISOString(), sessionId: 'codex-s', tool: 'codex', dataHomeKey: key,
+      transcriptPath: path.join(tmp, rollout), ...extra,
+    });
+    const write = (lines: string[]) => fs.writeFileSync(log, lines.join('\n') + '\n');
+    const stats = async () => {
+      const reported = await report(config);
+      const day = reported && typeof reported === 'object' && 'daily' in reported && reported.daily && typeof reported.daily === 'object'
+        ? Object.values(reported.daily)[0] : undefined;
+      const interventions = reported && typeof reported === 'object' && 'interventions' in reported ? reported.interventions : undefined;
+      const prompts = reported && typeof reported === 'object' && 'prompts' in reported ? reported.prompts : undefined;
+      return { day, interventions, prompts };
+    };
+    return { event, write, stats };
+  }
+
+  it('a Codex rollout with no token record is kept per rollout too', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    write([event('rollout-a.jsonl', 'stop', 0, { prompts: 5 })]);
+    await stats();
+    write([event('rollout-b.jsonl', 'stop', 30, { prompts: 2 })]);
+
+    expect((await stats()).prompts).toBe(7);
+  });
+
+  it('a dropped Codex rollout keeps its corrections', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const withCorrection = (rollout: string, minute: number) => [
+      event(rollout, 'stop', minute, { prompts: 1 }),
+      event(rollout, 'prompt_submit', minute + 0.1, { correction: true, promptSummary: 'no, not that' }),
+      event(rollout, 'stop', minute + 0.2, { prompts: 2 }),
+    ];
+    write(withCorrection('rollout-a.jsonl', 0));
+    await stats();
+    write(withCorrection('rollout-b.jsonl', 30));
+
+    expect((await stats()).interventions).toMatchObject({ correction: 2 });
+  });
+
+  it('a dropped Codex rollout keeps its duration and cache tokens', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const tokens = (cacheRead: number) => ({ tokenScope: 'transcript', tokens: { input: 10, output: 1, cacheRead, cacheCreation: 0 } });
+    // Rollout A: 8 active minutes and 100 cache-read tokens; B: 1 minute and 20.
+    write([event('rollout-a.jsonl', 'prompt_submit', 0), event('rollout-a.jsonl', 'prompt_submit', 4),
+      event('rollout-a.jsonl', 'stop', 8, { prompts: 2, ...tokens(100) })]);
+    await stats();
+    write([event('rollout-b.jsonl', 'prompt_submit', 30), event('rollout-b.jsonl', 'stop', 31, { prompts: 1, ...tokens(20) })]);
+    const { day } = await stats();
+
+    expect(day).toMatchObject({ durationMs: 9 * 60_000, cacheReadTokens: 120 });
+  });
+
+  it('a rollout\'s intervention change alone still updates its kept totals', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const stop = (rollout: string, minute: number, toolReject: number) =>
+      event(rollout, 'stop', minute, { prompts: 1, interventions: { interrupt: 0, toolReject } });
+    write([stop('rollout-a.jsonl', 0, 1)]);
+    await stats();
+    // Only the rejection count moves; prompts and tokens stay the same.
+    write([stop('rollout-a.jsonl', 0, 1), stop('rollout-a.jsonl', 1, 2)]);
+    await stats();
+    write([stop('rollout-b.jsonl', 30, 1)]);
+
+    expect((await stats()).interventions).toMatchObject({ toolReject: 3 });
+  });
+
   it('a Codex rollout resumed after compaction reports its daily prompts and interventions too', async () => {
     const { project } = await setup();
     const key = await dataHomeKeyOf(project);

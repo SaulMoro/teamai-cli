@@ -1219,7 +1219,10 @@ export interface SessionMetrics {
    * its transcript path: a rollout's counters restart, so the session sums them.
    * `since` is the rollout's first event.
    */
-  segments?: Record<string, { prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; since: string }>;
+  segments?: Record<string, {
+    prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; correction: number;
+    durationMs: number; requestDaily: Record<string, RequestCostMetrics>; since: string;
+  }>;
 }
 
 export type DashboardSessionStatus = 'running' | 'waiting_for_input' | 'error' | 'idle' | 'stopped';
