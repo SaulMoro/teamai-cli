@@ -803,8 +803,9 @@ export async function buildNamespaceNotes(ctx: DoctorContext): Promise<string[]>
   if (team.mode === 'legacy') {
     const firstLevelRules = team.rules.filter((rule) => rule.name.split('/').length <= 2);
     // claudemd file names at the root and one level down, as the block collects them.
+    // listFilesRecursive joins with '/' on every platform.
     const claudemdFiles = team.claudemdFiles
-      .map((file) => file.split(path.sep))
+      .map((file) => file.split('/'))
       .filter((segments) => segments.length <= 2 && (segments[segments.length - 1] ?? '').endsWith('.md'));
     return [
       ...repeatedNames(team.skills, (item) => item.name, (item) => item.relativePath).map(([name, sources]) => (
