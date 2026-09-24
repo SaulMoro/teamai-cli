@@ -314,14 +314,19 @@ just works. Seven consts that already had runtime getters and no live consumers
 were removed.
 
 **Functionization ≠ project-scoping.** All of these are class-A2 (machine-level):
-the getters still return `~/.teamai/...`, unchanged. The project-scoped equivalents
+the getters still return `~/.teamai/...`, unchanged, except
+`getUserVotesDir()` (below). The project-scoped equivalents
 already route through `getDataHome()`. Skill usage moved there too (#748):
 `usage.jsonl` lives in each scope's `getDataHome()`, because one shared file let a
 project's report carry every project's skills. The user scope records in
 `~/.teamai/user-usage.jsonl`, not that old shared `~/.teamai/usage.jsonl`, which
 an earlier release still writes after a rollback; the shared file is never
-read. The dashboard stays an A2 singleton: `teamai dashboard`, `stats --by-repo`,
-`session save` and the contribute check read across scopes. Each event instead
+read. Local votes followed for the same reason (#787): `<dataHome>/votes/`, and
+`~/.teamai/user-votes/` (`getUserVotesDir()`) for the user scope, so a scope
+pushes only the votes cast where it is set up. The old shared `~/.teamai/votes/`
+is never read, and its pending deltas are not pushed. The dashboard stays an A2
+singleton: `teamai dashboard`, `stats --by-repo`, `session save` and the
+contribute check read across scopes. Each event instead
 carries `dataHomeKey`, a hash of the realpath'd `getDataHome()` of the scope the
 hook resolved (#785; a hash, so a Copilot event still stores no path), and a
 scope's report keeps the sessions whose first keyed event is its own, whole: a

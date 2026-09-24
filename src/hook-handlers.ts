@@ -17,6 +17,7 @@ import { deriveSessionId } from './utils/session-id.js';
 import { log } from './utils/logger.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
+import { pathExists } from './utils/fs.js';
 
 // ─── Public types ───────────────────────────────────────
 
@@ -109,8 +110,16 @@ export const PULL_TIMEOUT_MS = 120_000;
 
 const pullHandler: HookHandler = {
   name: 'pull',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
     const cwd = resolveHookCwd(stdin);
+    // No config resolved: teamai is not set up here, or the project config
+    // cannot be read. Only the second stops the pull, since what detection
+    // loads after that file may be another team's (#784). A cwd that no longer
+    // exists holds no project config, and git refuses to open it.
+    if (!config && (cwd === undefined || await pathExists(cwd))) {
+      const { findUnreadableProjectConfig } = await import('./config.js');
+      if (await findUnreadableProjectConfig(cwd) !== null) return null;
+    }
     const hintCwd = cwd ?? process.cwd();
     const packageHints = await import('./pkg/pkg-hint.js');
     const packageHashBeforePull = await packageHints.packageManifestHashForCwd(hintCwd);
@@ -388,8 +397,8 @@ const votesSyncHandler: HookHandler = {
       const { incrementUpvoted, syncVotesToTeam, pruneUpvoteLedger } = await import('./votes.js');
 
       const voteData = await parseTranscriptForVotes(transcriptPath);
-      const { getUserVotesDir } = await import('./types.js');
-      const votesDir = getUserVotesDir();
+      const { getVotesDir } = await import('./types.js');
+      const votesDir = getVotesDir(localConfig);
       const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
 
       // Count an upvote when a recalled doc was actually adopted this session.
@@ -555,8 +564,8 @@ const votesJudgeHandler: HookHandler = {
       // increment dedups to nothing, could re-trigger a local-CLI judge call on
       // every subsequent Stop (issue #723 review). Filtering here keeps the cost
       // at ~one CLI call per session in the steady state.
-      const { getUserVotesDir, getUserLearningsDir, usesBranchWorktree } = await import('./types.js');
-      const votesDir = getUserVotesDir();
+      const { getVotesDir, getUserLearningsDir, usesBranchWorktree } = await import('./types.js');
+      const votesDir = getVotesDir(localConfig);
       const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
       const { creditedDocIdsForSession } = await import('./votes.js');
       const ledgerCredited = await creditedDocIdsForSession(votePath, sessionId);
