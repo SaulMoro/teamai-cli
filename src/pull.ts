@@ -681,15 +681,16 @@ async function pullForScope(
     return reportsReadRoot;
   };
 
-  // Recall indexes the skills this member receives, as delivered (#707). A
-  // namespace collision stops the skills sync with its own message; recall
-  // then offers no skills rather than ones the member may not have.
+  // Recall indexes the skills this member receives, as delivered (#707). When
+  // they cannot be resolved (a namespace collision stops the skills sync with
+  // its own message), pull keeps the installed skills and the index keeps the
+  // skills it holds.
   const skillsToIndex = async (): Promise<IndexedSkills> => {
     try {
       return await indexedSkills(freshConfig, localConfig, roleContext);
     } catch (e) {
-      log.debug(`[${scopeLabel}] Skills left out of the search index: ${e instanceof Error ? e.message : String(e)}`);
-      return { kind: 'dirs', dirs: [] };
+      log.debug(`[${scopeLabel}] Skills in the search index left as they were: ${e instanceof Error ? e.message : String(e)}`);
+      return { kind: 'keep-indexed' };
     }
   };
 

@@ -377,6 +377,12 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(logged('warn', /Duplicate skill "review" found in active namespaces "frontend" and "devops" \(skills\/frontend\/review and skills\/devops\/review\)/)).toBe(true);
       // The installed skill is kept as it was: not replaced, not swept.
       expect(await read('.claude/skills/review/SKILL.md')).toContain('Front review');
+      // And recall keeps finding it: the index keeps the skills it held.
+      const index = await fse.readJson(path.join(homeDir, '.teamai', 'search-index.json')) as {
+        entries: Array<{ type: string; filename: string; path?: string }>;
+      };
+      const skills = index.entries.filter((entry) => entry.type === 'skills');
+      expect(skills.map((entry) => entry.path)).toEqual([path.join(repoPath, 'skills/frontend/review/SKILL.md')]);
       expect(await exists('.claude/agents/helper.md')).toBe(true);
       expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
       expect(await read('.teamai/env.sh')).toContain('API_BASE');

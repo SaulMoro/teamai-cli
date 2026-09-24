@@ -287,7 +287,10 @@ export async function resolveDesiredSkills(
   return { kind: 'resolved', items, overrides, teamItems, skippedByTags };
 }
 
-/** The skills recall indexes: the skills pull delivers, none on a conflict. */
+/**
+ * The skills recall indexes, from the skills pull delivers. On a conflict pull
+ * keeps the installed skills, so the index keeps the skills it already holds.
+ */
 export async function indexedSkills(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
@@ -296,7 +299,7 @@ export async function indexedSkills(
   const desired = await resolveDesiredSkills(teamConfig, localConfig, roleContext);
   return desired.kind === 'resolved'
     ? { kind: 'dirs', dirs: desired.items.map((item) => item.sourcePath) }
-    : { kind: 'dirs', dirs: [] };
+    : { kind: 'keep-indexed' };
 }
 
 /**

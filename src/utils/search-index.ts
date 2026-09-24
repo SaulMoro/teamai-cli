@@ -584,8 +584,14 @@ async function collectSkillEntries(
   return out;
 }
 
-/** The skills to index in place of walking `skillsDir`: the directories `pull` delivers to this member (#707). */
-export type IndexedSkills = { readonly kind: 'dirs'; readonly dirs: readonly string[] };
+/**
+ * The skills to index in place of walking `skillsDir`: the directories `pull`
+ * delivers to this member (#707), or, when that set cannot be resolved this
+ * run and pull keeps the installed skills, the skills the index already holds.
+ */
+export type IndexedSkills =
+  | { readonly kind: 'dirs'; readonly dirs: readonly string[] }
+  | { readonly kind: 'keep-indexed' };
 
 /**
  * Entries for an explicit list of skill directories, each `<dir>/SKILL.md`,
@@ -686,6 +692,9 @@ export async function buildIndex(
   }
   if (opts.skills?.kind === 'dirs') {
     entries.push(...await collectSkillDirEntries(opts.skills.dirs, voteCounts));
+  } else if (opts.skills?.kind === 'keep-indexed') {
+    const previous = await loadIndex(opts.indexPath ?? getSearchIndexPath());
+    entries.push(...(previous?.entries ?? []).filter((entry) => entry.type === 'skills'));
   } else if (opts.skillsDir) {
     entries.push(...await collectSkillEntries(opts.skillsDir, voteCounts));
   }
