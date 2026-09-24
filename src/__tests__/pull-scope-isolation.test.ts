@@ -64,6 +64,7 @@ vi.mock('../team-push.js', () => ({
 vi.mock('../usage-tracker.js', () => ({
   readUsageEvents: vi.fn().mockResolvedValue([]),
   truncateUsageAfterReport: vi.fn().mockResolvedValue(undefined),
+  capUsageEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../roles.js', () => ({
@@ -96,7 +97,7 @@ import { log } from '../utils/logger.js';
 import { reconcileTeamHooksForConfig } from '../hooks.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { reportUsageToTeam } from '../team-push.js';
-import { readUsageEvents, truncateUsageAfterReport } from '../usage-tracker.js';
+import { capUsageEvents, readUsageEvents, truncateUsageAfterReport } from '../usage-tracker.js';
 import { releaseLock } from '../update.js';
 import { SYNC_LOCK_FILENAME, type TeamaiConfig, type LocalConfig } from '../types.js';
 
@@ -206,6 +207,27 @@ describe('pull scope isolation (issue #73)', () => {
       expect(truncateUsageAfterReport).toHaveBeenCalledWith(1, projectConfig);
     }
     else expect(truncateUsageAfterReport).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('caps the usage file only after the report has truncated it (#788): %s', async (success) => {
+    vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
+    vi.mocked(readUsageEvents).mockResolvedValue([{ skill: 'review', timestamp: new Date().toISOString(), tool: 'claude' }]);
+    vi.mocked(reportUsageToTeam).mockResolvedValueOnce(success);
+    await pull({ silent: true });
+    expect(capUsageEvents).toHaveBeenCalledTimes(1);
+    expect(capUsageEvents).toHaveBeenCalledWith(projectConfig);
+    const capOrder = vi.mocked(capUsageEvents).mock.invocationCallOrder[0];
+    expect(vi.mocked(reportUsageToTeam).mock.invocationCallOrder[0]).toBeLessThan(capOrder);
+    if (success) expect(vi.mocked(truncateUsageAfterReport).mock.invocationCallOrder[0]).toBeLessThan(capOrder);
+  });
+
+  it('caps the usage file of a scope with usageReport: false (#788)', async () => {
+    vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(userConfig);
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...teamConfig, usageReport: false });
+    await pull({ silent: true });
+    expect(reportUsageToTeam).not.toHaveBeenCalled();
+    expect(capUsageEvents).toHaveBeenCalledWith(userConfig);
   });
 
   it.each([true, false])('keeps late completion alive without starting a second report: %s', async (success) => {
@@ -397,5 +419,8 @@ describe('pull scope isolation (issue #73)', () => {
     // HTTP-kind repo: kind !== 'http' guard filters out both report targets,
     // so targets is empty and the business repo's team-repo dir is never reset.
     expect(reportUsageToTeam).not.toHaveBeenCalled();
+    // Its local file is the only source `teamai stats` has, so it is capped
+    // rather than consumed (#788).
+    expect(capUsageEvents).toHaveBeenCalledWith(httpProjectConfig);
   });
 });

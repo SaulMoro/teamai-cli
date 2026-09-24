@@ -26,6 +26,12 @@ describe('unified dashboard', () => {
     expect(html).toContain('/api/sessions');
   });
 
+  it('filters Repository by the session\'s repoKey, labelled with its repoLabel (#809)', () => {
+    const html = getDashboardHtml(3721);
+    expect(html).toContain("s.repoKey === $('repo').value");
+    expect(html).toContain("['repo','repoKey','repoLabel','All repositories']");
+  });
+
   it('counts priced sessions rather than requests; includes resumed costs in first-stop cohorts', () => {
     const result = summarizeSessionCosts(new Map([
       ['current', snapshot('2026-09-16', [['2026-09-15', 8, 600_000], ['2026-09-16', 2, 400_000]])],

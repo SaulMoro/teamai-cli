@@ -322,7 +322,8 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       if (!(await fs.pathExists(dirPath))) {
         throw new Error(`Directory not found: ${dirPath}`);
       }
-      const slug = path.basename(dirPath);
+      const { defaultProjectSlug, extractCodebase } = await import('./codebase-extract.js');
+      const slug = await defaultProjectSlug(dirPath);
       log.info(`Scanning local directory: ${dirPath} (project: ${slug})`);
 
       if (opts.dryRun) {
@@ -334,7 +335,6 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       // 使用临时目录承接 extractCodebase 产物，避免污染源码目录已有的 teamwiki/
       const tmpExtractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-extract-'));
       try {
-        const { extractCodebase } = await import('./codebase-extract.js');
         await extractCodebase({
           path: dirPath,
           project: slug,

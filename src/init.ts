@@ -7,7 +7,7 @@ import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, reda
 import { pushRepoDirectly } from './utils/git.js';
 import { getProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
-import { ensureDir, writeFile, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
+import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import {
   CLAUDE_TOOL_ID,
@@ -630,6 +630,10 @@ export function buildSelfModeGitignore(): string {
     // resolution (self mode uses this name to avoid colliding with the env/ dir).
     'env.local',
     'usage.jsonl',
+    // The usage lock, a rewrite's temp copy and the events a hook records while
+    // the lock is held (#788).
+    'usage.jsonl.*',
+    'usage.pending-*.jsonl',
     'known-skills.json',
     'search-index.json',
     'managed-mcp.json',
@@ -697,6 +701,9 @@ export function migrateSelfModeGitignoreContent(content: string): { changed: boo
   ensure('learnings-wt/', 'reports-wt/');
   ensure('.learnings-lock', '.reports-lock');
   ensure('pending-learnings/', 'knowledge-wt/');
+  // The usage lock, rewrite temps and pending events arrived with the usage cap (#788).
+  ensure('usage.jsonl.*', 'usage.jsonl');
+  ensure('usage.pending-*.jsonl', 'usage.jsonl.*');
 
   return { changed, content: filtered.join('\n') };
 }
@@ -716,7 +723,8 @@ export async function migrateSelfModeGitignore(localConfig: LocalConfig): Promis
     if (current === null) return; // no gitignore to migrate
     const { changed, content } = migrateSelfModeGitignoreContent(current);
     if (!changed) return;
-    await writeFile(gitignorePath, content);
+    // A full disk or a kill mid-write must not leave it partial: it also ignores `token` and `env.local`.
+    await writeFileAtomic(gitignorePath, content);
     log.info(
       'Updated .teamai/.gitignore for current machine-local files — '
       + 'please `git add .teamai/.gitignore` and commit it.',
@@ -1715,6 +1723,8 @@ export async function init(options: GlobalOptions & {
         'sessions/',
         'dashboard/',
         'usage.jsonl',
+        'usage.jsonl.*',
+        'usage.pending-*.jsonl',
         'known-skills.json',
         'learnings/',
         'search-index.json',

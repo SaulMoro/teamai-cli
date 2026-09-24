@@ -290,3 +290,19 @@ describe('reportUsageToTeam — preserve fields across partial reports (Issue #4
     expect(pushRepoDirectly).not.toHaveBeenCalled();
   });
 });
+
+describe('reportUsageToTeam — usage recorded while the usage lock was held (#788)', () => {
+  it('reports the event without the side file id it was folded in with', async () => {
+    const timestamp = new Date().toISOString();
+    const usagePath = path.join(tmpDir, '.teamai', 'user-usage.jsonl');
+    fs.mkdirSync(path.dirname(usagePath), { recursive: true });
+    fs.writeFileSync(usagePath, JSON.stringify({ skill: 'review', timestamp, tool: 'claude', pendingId: '0f8e2c1a-1b2c-4d5e-8f90-a1b2c3d4e5f6' }) + '\n');
+
+    expect(await reportUsageToTeam(repoDir, 'me', { selfConfig: gitConfig() })).toBe(true);
+
+    const yaml = fs.readFileSync(reportsStatsPath(), 'utf-8');
+    expect(YAML.parse(yaml).skills.review.count).toBe(1);
+    expect(yaml).not.toContain('pendingId');
+    expect(yaml).not.toContain('0f8e2c1a');
+  });
+});

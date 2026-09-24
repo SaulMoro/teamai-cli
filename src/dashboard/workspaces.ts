@@ -20,8 +20,16 @@ async function configAt(home: string): Promise<LocalConfig | null> {
   catch { return null; }
 }
 const inside = (cwd: string, root: string) => cwd === root || cwd.startsWith(root + path.sep);
-/** The project workspace that owns an event cwd (longest matching root wins), or null. */
-function ownerOf(cwd: string, projects: DashboardWorkspace[]): string | null {
+/**
+ * The project workspace that owns an event, or null: the project rooted at the
+ * event's projectAnchor, which still names it after its worktree is removed
+ * (#809), else the one whose roots hold its cwd (longest matching root wins).
+ */
+function ownerOf(event: DashboardEvent, projects: DashboardWorkspace[]): string | null {
+  const anchored = event.projectAnchor && projects.find(w => w.root === event.projectAnchor);
+  if (anchored) return anchored.id;
+  const cwd = event.cwd;
+  if (!cwd) return null;
   const matches = projects.filter(w => w.roots.some(root => inside(cwd, root)));
   if (!matches.length) return null;
   return matches.sort((a, b) =>
@@ -54,7 +62,14 @@ export async function dashboardWorkspaces(events: DashboardEvent[]): Promise<Das
     const root = (await fs.readFile(path.join(dataHome, 'anchor'), 'utf8').catch(() => '')).trim();
     if (path.isAbsolute(root)) await add(root, dataHome);
   }
-  for (const cwd of new Set([process.cwd(), ...events.map(event => event.cwd).filter(Boolean)])) {
+  // An event that recorded its repo names the project, even after its worktree
+  // is gone; git is asked only for the rest: older events, this process's cwd,
+  // and an anchor with no config of its own (a legacy `.teamai/` in a worktree).
+  for (const anchor of new Set(events.flatMap(event => event.projectAnchor ? [event.projectAnchor] : []))) {
+    await add(anchor, path.join(anchor, '.teamai'));
+  }
+  const unnamed = events.filter(event => !event.projectAnchor || !seen.has(event.projectAnchor));
+  for (const cwd of new Set([process.cwd(), ...unnamed.map(event => event.cwd).filter(Boolean)])) {
     const anchors = await resolveAnchors(cwd).catch(() => null);
     if (anchors) {
       await add(anchors.projectAnchor, path.join(anchors.workspaceRoot, '.teamai'));
@@ -64,7 +79,7 @@ export async function dashboardWorkspaces(events: DashboardEvent[]): Promise<Das
   // (that silently inflated it). Surface them in a dedicated "unassigned" bucket,
   // but only when such sessions actually exist (PR #604 review #3).
   const projects = result.filter(w => w.scope === 'project');
-  if (events.some(event => event.cwd && !ownerOf(event.cwd, projects))) {
+  if (events.some(event => event.cwd && !ownerOf(event, projects))) {
     result.push({ id: 'unassigned', label: 'Unassigned sessions', scope: 'unassigned', root: '', config: null, roots: [] });
   }
   return result;
@@ -73,7 +88,7 @@ export function workspaceEvents(events: DashboardEvent[], workspace: DashboardWo
   const projects = workspaces.filter(w => w.scope === 'project');
   const owners = new Map<string, string>();
   for (const event of events) {
-    const owner = event.cwd ? ownerOf(event.cwd, projects) : null;
+    const owner = ownerOf(event, projects);
     // First matching event fixes the whole session's owner; unmatched → 'unassigned'.
     if (!owners.has(event.sessionId)) owners.set(event.sessionId, owner ?? 'unassigned');
     else if (owner) owners.set(event.sessionId, owner);

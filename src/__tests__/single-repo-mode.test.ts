@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import fse from 'fs-extra';
 import {
   getReportsDir,
   getKnowledgeDir,
@@ -10,7 +14,30 @@ import {
   TeamaiConfigSchema,
   type LocalConfig,
 } from '../types.js';
-import { buildSelfModeGitignore, migrateSelfModeGitignoreContent } from '../init.js';
+import { buildSelfModeGitignore, migrateSelfModeGitignore, migrateSelfModeGitignoreContent } from '../init.js';
+
+/** The names of `names` that `gitignore`, as `.teamai/.gitignore`, makes git ignore. */
+function ignoredBy(gitignore: string, names: string[]): string[] {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-gitignore-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    fs.mkdirSync(path.join(dir, '.teamai'));
+    fs.writeFileSync(path.join(dir, '.teamai', '.gitignore'), gitignore);
+    return names.filter((name) => {
+      try {
+        execFileSync('git', ['check-ignore', '-q', '--no-index', `.teamai/${name}`], { cwd: dir });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The files a usage write leaves beside `usage.jsonl` while it runs or when it gives up on the lock (#788). */
+const USAGE_SIDE_FILES = ['usage.jsonl.lock', 'usage.jsonl.123.0123456789ab.tmp', 'usage.pending-0f8e2c1a-1b2c-4d5e-8f90-123456789abc.jsonl'];
 
 function makeConfig(kind: 'git' | 'http' | 'self', localPath = '/repo/.teamai'): LocalConfig {
   return {
@@ -141,11 +168,39 @@ describe('buildSelfModeGitignore', () => {
     expect(gi.split('\n').map((l) => l.trim())).toContain('env.sh');
   });
 
+  it('ignores the usage lock, its rewrite temp and pending files, so a usage write leaves git status clean', () => {
+    expect(ignoredBy(gi, USAGE_SIDE_FILES)).toEqual(USAGE_SIDE_FILES);
+  });
+
   it('ignores the learnings worktree, its lock and the queue, so contributing leaves git status clean', () => {
     const lines = gi.split('\n').map((l) => l.trim());
     expect(lines).toContain('learnings-wt/');
     expect(lines).toContain('.learnings-lock');
     expect(lines).toContain('pending-learnings/');
+  });
+});
+
+describe('migrateSelfModeGitignore', () => {
+  it('leaves the .gitignore whole when the disk fills while it is healed', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-self-heal-'));
+    const gitignorePath = path.join(root, '.teamai', '.gitignore');
+    const old = ['config.yaml', 'token', 'teamai.lock', 'env.local', 'usage.jsonl'].join('\n');
+    fs.mkdirSync(path.dirname(gitignorePath));
+    fs.writeFileSync(gitignorePath, old);
+    // The disk fills after the first bytes, wherever the healed file is written.
+    const spy = vi.spyOn(fse, 'writeFile').mockImplementation(async (file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView) => {
+      fs.writeFileSync(String(file), String(data).slice(0, 10));
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    try {
+      await migrateSelfModeGitignore({ ...makeConfig('self', path.join(root, '.teamai')), projectRoot: root });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(old);
+    expect(fs.readdirSync(path.dirname(gitignorePath))).toEqual(['.gitignore']);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -166,6 +221,7 @@ describe('migrateSelfModeGitignoreContent (self-heal old gitignore)', () => {
     const old = [
       'env.sh', 'env.local', 'teamai.lock',
       'learnings-wt/', '.learnings-lock', 'pending-learnings/', 'env/',
+      'usage.jsonl.*', 'usage.pending-*.jsonl',
     ].join('\n');
     const { changed, content } = migrateSelfModeGitignoreContent(old);
     expect(changed).toBe(false); // nothing to remove, env.local already present
@@ -196,6 +252,7 @@ describe('migrateSelfModeGitignoreContent (self-heal old gitignore)', () => {
     const old = [
       '# env is machine-local', 'config.yaml', 'env.local', 'teamai.lock',
       'learnings-wt/', '.learnings-lock', 'pending-learnings/',
+      'usage.jsonl.*', 'usage.pending-*.jsonl',
     ].join('\n');
     const { changed, content } = migrateSelfModeGitignoreContent(old);
     // No bare `env` line, env.local already present → unchanged.
@@ -208,6 +265,14 @@ describe('migrateSelfModeGitignoreContent (self-heal old gitignore)', () => {
     const { changed, content } = migrateSelfModeGitignoreContent(old);
     expect(changed).toBe(true);
     expect(content).toContain('token\nteamai.lock');
+  });
+
+  it('adds the usage lock, rewrite temp and pending patterns to a file that ignores only usage.jsonl', () => {
+    const old = ['config.yaml', 'token', 'teamai.lock', 'env.local', 'usage.jsonl', 'known-skills.json'].join('\n');
+    const { changed, content } = migrateSelfModeGitignoreContent(old);
+    expect(changed).toBe(true);
+    expect(ignoredBy(content, USAGE_SIDE_FILES)).toEqual(USAGE_SIDE_FILES);
+    expect(content).toContain('usage.jsonl\nusage.jsonl.*\nusage.pending-*.jsonl\nknown-skills.json');
   });
 
   it('adds the learnings worktree, its lock and the queue', () => {

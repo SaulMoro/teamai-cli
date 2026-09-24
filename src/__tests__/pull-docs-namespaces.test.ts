@@ -76,6 +76,7 @@ describe('pull: docs by namespace', () => {
   let tmpDir: string;
   let homeDir: string;
   let repoPath: string;
+  let teamConfig: TeamaiConfig;
 
   function configFor(role: string | null, extra: Partial<LocalConfig> = {}): LocalConfig {
     return {
@@ -120,7 +121,7 @@ describe('pull: docs by namespace', () => {
 
     vi.stubEnv('HOME', homeDir);
 
-    const teamConfig: TeamaiConfig = {
+    teamConfig = {
       team: 'test',
       description: '',
       repo: 'https://example.com/test/repo.git',
@@ -191,12 +192,25 @@ describe('pull: docs by namespace', () => {
 
     expect(await exists('frontend/components.md')).toBe(false);
     expect(await fse.readFile(local('frontend/styling.md'), 'utf8')).toBe('# Styling, my notes\n');
-    // Not a team file: nothing to compare against, so it is never touched.
-    expect(await exists('frontend/mine.md')).toBe(true);
+    // Not a team file: the docs mirror prunes it, as anywhere in the destination (#817).
+    expect(await exists('frontend/mine.md')).toBe(false);
     expect(warned(/frontend\/styling\.md/)).toBe(true);
     expect(warned(/components\.md/)).toBe(false);
     expect(await exists('devops/deploy.md')).toBe(true);
     expect(await exists('guide.md')).toBe(true);
+  });
+
+  it('never withdraws from the team repo when the docs destination is its docs/ directory', async () => {
+    vi.mocked(loadTeamConfig).mockResolvedValue({
+      ...teamConfig,
+      sharing: { ...teamConfig.sharing, docs: { localDir: path.join(repoPath, 'docs') } },
+    });
+    await fse.ensureDir(homeDir);
+
+    await pull({});
+
+    expect(warned(/Failed to sync docs/)).toBe(false);
+    expect(await fse.pathExists(path.join(repoPath, 'docs', 'devops', 'deploy.md'))).toBe(true);
   });
 
   it('removes the directory a deactivated namespace leaves empty', async () => {

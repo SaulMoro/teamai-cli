@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveAnchors, listWorktrees } from '../utils/git.js';
+import { defaultProjectSlug } from '../codebase-extract.js';
 
 // ─── Real-git tests for resolveAnchors (issue #374 P0) ──────────────────────
 //
@@ -118,6 +119,90 @@ describe('resolveAnchors', () => {
     // And neither anchor is the shared parent directory.
     expect(a!.projectAnchor).not.toBe(gitdirs);
     expect(b!.projectAnchor).not.toBe(gitdirs);
+  });
+});
+
+describe('resolveAnchors memo (#809)', () => {
+  const freshRepo = (name: string) => {
+    const dir = path.join(base, name);
+    fs.mkdirSync(dir);
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    git(dir, 'commit', '--allow-empty', '-q', '-m', 'init');
+    return dir;
+  };
+
+  it('answers a directory it resolved before without running git again', async () => {
+    const dir = freshRepo('memo-hit');
+    const first = await resolveAnchors(dir);
+    expect(first).not.toBeNull();
+    // With .git gone, git would find no repository here.
+    fs.renameSync(path.join(dir, '.git'), path.join(dir, 'git-moved'));
+    expect(await resolveAnchors(dir)).toEqual(first);
+  });
+
+  it('does not remember a directory that was not a repository', async () => {
+    const dir = path.join(base, 'memo-miss');
+    fs.mkdirSync(dir);
+    expect(await resolveAnchors(dir)).toBeNull();
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    git(dir, 'commit', '--allow-empty', '-q', '-m', 'init');
+    expect(await resolveAnchors(dir)).toEqual({ workspaceRoot: dir, projectAnchor: dir });
+  });
+
+  it('keeps one entry per directory', async () => {
+    const a = freshRepo('memo-a');
+    const b = freshRepo('memo-b');
+    expect((await resolveAnchors(a))?.projectAnchor).toBe(a);
+    expect((await resolveAnchors(b))?.projectAnchor).toBe(b);
+    const sub = path.join(worktreeRoot, 'memo-sub');
+    fs.mkdirSync(sub);
+    expect((await resolveAnchors(sub))?.workspaceRoot).toBe(worktreeRoot);
+  });
+});
+
+describe('defaultProjectSlug (#809)', () => {
+  it('names a linked worktree\'s root after its main checkout', async () => {
+    expect(await defaultProjectSlug(worktreeRoot)).toBe('main-repo');
+  });
+
+  it('keeps the directory\'s own name everywhere else', async () => {
+    const mainSub = path.join(repoRoot, 'pkg', 'api');
+    const worktreeSub = path.join(worktreeRoot, 'pkg', 'web');
+    fs.mkdirSync(mainSub, { recursive: true });
+    fs.mkdirSync(worktreeSub, { recursive: true });
+    expect(await defaultProjectSlug(repoRoot)).toBe('main-repo');
+    expect(await defaultProjectSlug(mainSub)).toBe('api');
+    expect(await defaultProjectSlug(worktreeSub)).toBe('web');
+    expect(await defaultProjectSlug(nonGitDir)).toBe('plain');
+    const file = path.join(repoRoot, 'README.md');
+    fs.writeFileSync(file, '# readme\n');
+    expect(await defaultProjectSlug(file)).toBe('README.md');
+  });
+
+  it('names every worktree of a bare repo after the repo, not its git directory', async () => {
+    // repo/.bare + repo/<worktree>
+    const bare = path.join(base, 'bare-layout', '.bare');
+    execFileSync('git', ['clone', '-q', '--bare', repoRoot, bare]);
+    for (const wt of ['main', 'feature']) {
+      const checkout = path.join(base, 'bare-layout', wt);
+      git(bare, 'worktree', 'add', '-q', checkout);
+      expect((await resolveAnchors(checkout))?.projectAnchor).toBe(bare);
+      expect(await defaultProjectSlug(checkout)).toBe('bare-layout');
+    }
+    const sub = path.join(base, 'bare-layout', 'main', 'pkg');
+    fs.mkdirSync(sub);
+    expect(await defaultProjectSlug(sub)).toBe('pkg');
+
+    // proj.git + a worktree beside it
+    const dotGit = path.join(base, 'proj.git');
+    const checkout = path.join(base, 'proj-wt');
+    execFileSync('git', ['clone', '-q', '--bare', repoRoot, dotGit]);
+    git(dotGit, 'worktree', 'add', '-q', checkout);
+    expect(await defaultProjectSlug(checkout)).toBe('proj');
   });
 });
 

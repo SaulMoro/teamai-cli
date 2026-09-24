@@ -348,8 +348,13 @@ declared namespace reaches only members who have it active; an undeclared
 The directory match is case-folded, so `docs/Checkout/` is withheld for an
 inactive `checkout` on every filesystem. When a namespace stops being active,
 pull removes the local copies that are byte-equal to the team file and keeps
-edited ones, naming them. The search index and `doctor`'s `Team docs delivered`
-use the same filter as pull.
+edited ones, naming them. The docs mirror (#817) targets this resolved set: it
+copies only the delivered files and prunes every local file the team repo does
+not have, inside a withheld namespace too, but never a local copy of a withheld
+namespace's team doc; those follow the byte-equal rule. The search index and
+`doctor`'s `Team docs delivered` use the same filter as pull: doctor expects
+only the delivered files, and does not report a withheld namespace's team doc
+as stale, since pull names the edited copies it keeps.
 
 `team-codebase` (any case) is rejected as a docs namespace at the manifest schema,
 so the manifest fails to load like any invalid namespace:

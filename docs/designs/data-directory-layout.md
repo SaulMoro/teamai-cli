@@ -345,12 +345,18 @@ read. Local votes followed for the same reason (#787): `<dataHome>/votes/`, and
 `~/.teamai/user-votes/` (`getUserVotesDir()`) for the user scope, so a scope
 pushes only the votes cast where it is set up. The old shared `~/.teamai/votes/`
 is never read, and its pending deltas are not pushed. The dashboard stays an A2
-singleton: `teamai dashboard`, `stats --by-repo`, `session save` and the
-contribute check read across scopes. Each event instead
+singleton: `teamai dashboard`, `session save` and the contribute check read
+across scopes; `stats --by-repo` reads only the current scope's events, as the
+rest of `stats` does (#795). Each event instead
 carries `dataHome`, the `getDataHome()` of the scope the hook resolved (#785), and a
 scope's report keeps only its own. An event written before that field existed is
 attributed by its `cwd`, realpath'd, to the project whose root holds it, never to
-the user scope. The snapshots of what was already reported are per scope too
+the user scope. Inside git an event also carries `projectAnchor`, the repo's
+main checkout, which all of its worktrees share (#809). `stats --by-repo`,
+`session save` and the dashboard's Repository filter key a session by the last
+anchor it recorded, else by its `cwd`, and the dashboard gives an event to the
+project rooted at its anchor, so a worktree counts as its repo, also after it
+is removed. The snapshots of what was already reported are per scope too
 (#786), because a session can record events in two scopes (a `cd` mid-session):
 `<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`
 for the user scope. The first time a scope needs one it copies the shared

@@ -16,7 +16,7 @@ import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSa
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
-import { resolveDesiredDocs } from './resources/docs.js';
+import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
@@ -545,7 +545,7 @@ async function pullForScope(
     revisionField?: 'lastPullRev' | 'lastInheritedPullRev';
   } = {},
   /** Set to `{ completed: true }` on a real (non-dry-run) sync. See pull(). */
-  result?: { completed: boolean },
+  result?: { completed: boolean; docsSyncFailed: boolean },
 ): Promise<void> {
   const scopeLabel = localConfig.scope;
   const revisionField = policy.revisionField ?? 'lastPullRev';
@@ -903,6 +903,7 @@ async function pullForScope(
 
   // Step 2: Sync each resource type
   let totalSynced = 0;
+  let docsSyncFailed = false;
   let desiredSkillNames: Set<string> | null = null;
   // Set when two active namespaces collide on a skill: skills are neither
   // installed nor cleaned up this run.
@@ -956,22 +957,33 @@ async function pullForScope(
     }
 
     if (type === 'docs') {
-      // A declared namespace reaches only members with it active (#707). The
-      // withdrawal runs even when nothing is delivered: leaving the last active
-      // namespace must still take its unchanged copies away.
+      // A declared namespace reaches only members with it active (#707), and
+      // the mirror runs even when nothing is delivered: removing stale local
+      // docs and a deactivated namespace's unchanged copies both need it.
       const docsHandler = handler as DocsHandler;
-      const desired = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? []);
-      const fileCount = desired.files.length;
-      if (options.dryRun) {
-        if (fileCount > 0) log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs`);
-      } else {
-        if (fileCount > 0) {
+      try {
+        const desired = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? []);
+        const fileCount = desired.files.length;
+        const destination = resolveDocsDestination(freshConfig, localConfig);
+        if (fileCount === 0 && await docsHandler.countDocFiles(destination) === 0
+          && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) continue;
+        if (options.dryRun) {
+          log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs and remove stale local docs`);
+        } else {
           await docsHandler.pullDocs(desired, freshConfig, localConfig);
           log.success(`[${scopeLabel}] Synced ${fileCount} docs`);
         }
-        await docsHandler.withdrawInactiveNamespaces(desired, freshConfig, localConfig);
+        totalSynced += fileCount;
+      } catch (e) {
+        docsSyncFailed = true;
+        if (result) result.docsSyncFailed = true;
+        log.warn(`[${scopeLabel}] Failed to sync docs: ${e instanceof Error ? e.message : String(e)}`);
+        if (!options.dryRun) {
+          const state = await loadStateForScope(localConfig);
+          state[revisionField] = null;
+          await saveStateForScope(state, localConfig);
+        }
       }
-      totalSynced += fileCount;
       continue;
     }
 
@@ -1122,7 +1134,7 @@ async function pullForScope(
     }
   }
 
-  if (totalSynced === 0) {
+  if (totalSynced === 0 && !docsSyncFailed) {
     log.info(`[${scopeLabel}] No resources to sync`);
   }
 
@@ -1186,7 +1198,8 @@ async function pullForScope(
   // Record the revision only after every resource and knowledge phase has had
   // a chance to run. Inherited pulls use an independent marker so a partial,
   // safe sync can never suppress a later full user-scope pull.
-  if (!options.dryRun) {
+  // A failed docs mirror must be retried even when the team revision is unchanged.
+  if (!options.dryRun && !docsSyncFailed) {
     const state = await loadStateForScope(localConfig);
     if (revisionField === 'lastPullRev') {
       state.lastPull = new Date().toISOString();
@@ -1258,7 +1271,7 @@ async function pullForScope(
   // A real sync ran to completion for this scope. The "Already synced" fast path
   // and every error/skip path return before here, and dry-run is excluded so a
   // preview never reports completion (#702 follow-up).
-  if (result && !options.dryRun) result.completed = true;
+  if (result && !options.dryRun && !docsSyncFailed) result.completed = true;
 }
 
 /**
@@ -1628,6 +1641,8 @@ export async function pull(
   // not repeat it. Owned here rather than at module scope so nothing survives
   // into another call.
   const reported = new Set<string>();
+  // A later successful scope must not hide an earlier docs failure (or vice versa).
+  const syncResult = { completed: false, docsSyncFailed: false };
 
   // Whether HOME's settings.json still has the pre-dispatch hook format. Read now
   // (HOME-only, no shared clone), but the actual reinject runs later under the
@@ -1715,12 +1730,12 @@ export async function pull(
             await pullForScope(inheritedUserConfig, options, reported, {
               resourceTypes: ['skills', 'rules', 'docs', 'agents'],
               revisionField: 'lastInheritedPullRev',
-            }, result);
+            }, syncResult);
           }
         } else {
           activeUserConfig = loadedUserConfig;
           if (await lockScope(activeUserConfig)) {
-            await pullForScope(activeUserConfig, options, reported, {}, result);
+            await pullForScope(activeUserConfig, options, reported, {}, syncResult);
           }
         }
       } else if (inheritUserScope) {
@@ -1737,7 +1752,7 @@ export async function pull(
   if (projectConfig) {
     try {
       if (await lockScope(projectConfig)) {
-        await pullForScope(projectConfig, options, reported, {}, result);
+        await pullForScope(projectConfig, options, reported, {}, syncResult);
       }
     } catch (e) {
       log.warn(`Project-scope pull error: ${(e as Error).message}`);
@@ -1802,7 +1817,7 @@ export async function pull(
     pendingUsageReport = (async () => {
       try {
         const { reportUsageToTeam } = await import('./team-push.js');
-        const { truncateUsageAfterReport, readUsageEvents } = await import('./usage-tracker.js');
+        const { truncateUsageAfterReport, readUsageEvents, capUsageEvents } = await import('./usage-tracker.js');
         const targets: Array<{ repoPath: string; username: string; opts: { skipTruncate: true; selfConfig: LocalConfig } }> = [];
         // Per-target opt-out (teamai.yaml `usageReport: false`): a repo that
         // disables stat commits is dropped from the targets — e.g. teams
@@ -1846,6 +1861,16 @@ export async function pull(
             log.error(`Auto-report to ${t.repoPath} skipped: ${(e as Error).message}`);
           }
         }
+
+        // Cap every active scope, reporting or not (#788): http and
+        // `usageReport: false` scopes, or a remote rejecting every push, would
+        // otherwise grow forever. Only after the truncates above — a cap between
+        // a report's read and its truncate would shift the lines it deletes onto
+        // events never sent (#750). The usage file's own lock serializes the cap
+        // with hook appends and with another pull's cap, http scopes included.
+        for (const scope of [reconcileProject, reconcileUser]) {
+          if (scope) await capUsageEvents(scope);
+        }
       } catch (e) {
         log.debug(`Auto-report skipped: ${(e as Error).message}`);
       }
@@ -1883,6 +1908,7 @@ export async function pull(
   //    transient branch is how a diagnostic invents a failure.
   await reportPostPullChecks(options, reported, contended.size > 0);
   } finally {
+    if (result) result.completed = syncResult.completed && !syncResult.docsSyncFailed;
     const releaseSyncLocks = async () => {
       for (const lock of heldLocks.values()) await releaseLock(lock);
     };

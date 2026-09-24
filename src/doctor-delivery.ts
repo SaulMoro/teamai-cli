@@ -696,27 +696,46 @@ async function envDeliveryProblems(
 
 /**
  * The docs bundle has one destination rather than one per tool: `DocsHandler`
- * copies the team's `docs/` tree into `sharing.docs.localDir`. So this check
- * compares the delivered set with that directory, file by file, rather than
- * asking each tool.
+ * mirrors the team's visible `docs/` tree into `sharing.docs.localDir`. So this
+ * check compares the delivered set with that directory, file by file, rather
+ * than asking each tool.
  */
 export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
-  const { resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  const { listDocFiles, listStaleDocDirectories, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
   // compare against, and pull stops the scope over them.
-  let teamFiles: readonly string[];
+  let desired: Awaited<ReturnType<typeof resolveDocsForDirectory>>;
   try {
-    teamFiles = (await resolveDocsForDirectory(localConfig)).files;
+    desired = await resolveDocsForDirectory(localConfig);
   } catch (e) {
     return unresolvableCheck('docs', e instanceof Error ? e.message : String(e));
   }
-  if (teamFiles.length === 0) return [];
 
   const dest = resolveDocsDestination(teamConfig, localConfig);
+  let localFiles: string[];
+  let staleDirectories: string[];
+  try {
+    localFiles = await listDocFiles(dest);
+    staleDirectories = await listStaleDocDirectories(desired.sourceDir, dest);
+  } catch (e) {
+    return [{
+      name: 'Team docs delivered', source: 'local', check: async () => false,
+      fix: `Could not inspect the docs mirror: ${e instanceof Error ? e.message : String(e)}. Check directory access, then run \`teamai pull --force\`.`,
+    }];
+  }
+  const teamFiles = desired.files;
+  if (teamFiles.length === 0 && localFiles.length === 0 && staleDirectories.length === 0) return [];
+  // A team doc of a namespace not active here is not stale: pull removes the
+  // unchanged copy and names the edited one it keeps.
+  const known = new Set([
+    ...teamFiles,
+    ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`)),
+  ]);
+  const stale = [...localFiles.filter(file => !known.has(file)), ...staleDirectories];
 
   // isFile, not merely "something is there": a directory sitting on the
   // expected name, or a symlink with nothing behind it, would satisfy a plain
@@ -729,9 +748,12 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   return [{
     name: 'Team docs delivered',
     source: 'local',
-    check: async () => missing.length === 0,
-    fix: `Missing from ${dest}: ${nameList(missing)}. Run \`teamai pull --force\`: a plain `
-      + 'pull skips a scope whose team repo has not changed, so it cannot restore these.',
+    check: async () => missing.length === 0 && stale.length === 0,
+    fix: [
+      ...(missing.length ? [`Missing from ${dest}: ${nameList(missing)}.`] : []),
+      ...(stale.length ? [`Stale docs in ${dest}: ${nameList(stale)}.`] : []),
+      'Run `teamai pull --force` to restore the docs mirror; a plain pull skips an already-synced revision.',
+    ].join(' '),
   }];
 }
 
