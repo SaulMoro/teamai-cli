@@ -417,11 +417,17 @@ export class RulesHandler extends ResourceHandler {
   /**
    * Distribute rule files to each tool's rules/ directory, then update
    * CLAUDE.md with a lightweight reference list instead of inlining content.
+   *
+   * `replacedRoots` are root rules an active namespace rule replaces (#707).
+   * The stale sweep removes their copies from the directories teamai owns;
+   * in the ones it shares with the member's own rules, a copy is removed only
+   * while it is byte-equal to what pull wrote for that root rule.
    */
   async pullAllRules(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     filteredRules?: ResourceItem[],
+    replacedRoots: readonly ResourceItem[] = [],
   ): Promise<void> {
     const rules = filteredRules ?? await this.scanTeamForPull(teamConfig, localConfig);
 
@@ -484,6 +490,7 @@ export class RulesHandler extends ResourceHandler {
       }
     }
     const tombstones = await this.readTombstones(localConfig);
+    const replacedSources = new Map(replacedRoots.map((rule) => [rule.name, rule.sourcePath]));
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.rules) continue;
       // `pullItem` above skips excluded tools, so this pass must skip them too.
@@ -504,9 +511,18 @@ export class RulesHandler extends ResourceHandler {
         // JoyCode, OMP, Pi, and Copilot rule directories are shared with
         // user-authored rules. Absence from the current team set is not proof
         // of TeamAI ownership (including legacy .md files); only explicit team
-        // removals authorize cleanup. Cursor is deliberately absent — teamai
+        // removals authorize cleanup, and a replaced root rule's copy that is
+        // still exactly what pull wrote. Cursor is deliberately absent — teamai
         // owns .cursor/rules and sweeps it.
-        if ((tool === 'joycode' || tool === 'omp' || tool === 'pi' || usesCopilotInstructions(tool)) && !tombstones.has(ruleName)) continue;
+        if ((tool === 'joycode' || tool === 'omp' || tool === 'pi' || usesCopilotInstructions(tool)) && !tombstones.has(ruleName)) {
+          const replacedSource = teamRuleNames.has(ruleName) ? undefined : replacedSources.get(ruleName);
+          if (replacedSource !== undefined && localFile === `${ruleName}${ext}`
+            && await isUnchangedRender(tool, path.join(destDir, localFile), replacedSource)) {
+            await remove(path.join(destDir, localFile));
+            log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
+          }
+          continue;
+        }
 
         // `.mdc` tools only read `.mdc`, so any `.md` here is inert leftover from the
         // layout that predates it — removed whether or not the rule is still
@@ -644,6 +660,12 @@ function renderRuleForTool(tool: string, source: string): string {
   if (usesCursorMdcRules(tool)) return teamRuleToCursorMdc(source);
   if (usesCopilotInstructions(tool)) return teamRuleToCopilotInstructions(source);
   return source;
+}
+
+/** Whether `deployed` holds exactly what pull renders for `tool` from the team rule at `source`. */
+async function isUnchangedRender(tool: string, deployed: string, source: string): Promise<boolean> {
+  const [current, team] = await Promise.all([readFileSafe(deployed), readFileSafe(source)]);
+  return current !== null && team !== null && current === renderRuleForTool(tool, team);
 }
 
 /**

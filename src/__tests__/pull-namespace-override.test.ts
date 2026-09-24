@@ -213,6 +213,45 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(await read('.hermes/SOUL.md')).toContain('# Shared style');
     });
 
+    it('keeps the root rule when the tag channel withholds the namespace rule that would replace it', async () => {
+      await team('tags.yaml', 'rules:\n  frontend/style: [backend]\n');
+      as(['frontend'], { subscribedTags: ['ui'] });
+
+      await pull({});
+
+      expect(await read('.claude/rules/style.md')).toBe('# Shared style\n');
+      expect(await exists('.claude/rules/frontend/style.md')).toBe(false);
+    });
+
+    it('withdraws the replaced root rule from rule dirs shared with the member\'s own rules, unless it was edited', async () => {
+      const base = await loadTeamConfig(repoPath);
+      if (!base) throw new Error('no team config');
+      vi.mocked(loadTeamConfig).mockResolvedValue({
+        ...base,
+        toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
+      });
+      await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
+      await fse.outputFile(path.join(homeDir, '.joycode/rules/mine.mdc'), 'my own rule\n');
+      await team('rules/tone.md', '# Shared tone\n');
+      await team('rules/frontend/tone.md', '# Front tone\n');
+
+      as(['devops']);
+      await pull({});
+      expect(await exists('.joycode/rules/style.mdc')).toBe(true);
+      expect(await exists('.joycode/rules/tone.mdc')).toBe(true);
+      await fse.appendFile(path.join(homeDir, '.joycode/rules/tone.mdc'), 'my edit\n');
+
+      as(['frontend']);
+      await pull({});
+
+      // The unchanged root copy goes, so the two versions are not loaded side by side.
+      expect(await exists('.joycode/rules/style.mdc')).toBe(false);
+      expect(await exists('.joycode/rules/frontend/style.mdc')).toBe(true);
+      // An edited copy, and a rule of the member's own, are left alone.
+      expect(await read('.joycode/rules/tone.mdc')).toContain('my edit');
+      expect(await read('.joycode/rules/mine.mdc')).toBe('my own rule\n');
+    });
+
     it('leaves a root rule alone when only a deeper namespace path shares its file name', async () => {
       await fse.remove(path.join(repoPath, 'rules/frontend/style.md'));
       await team('rules/frontend/web/style.md', '# Web style\n');

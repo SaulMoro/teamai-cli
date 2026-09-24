@@ -327,6 +327,12 @@ export interface DesiredRules {
   items: ResourceItem[];
   /** Which rule replaced which, for `doctor`. */
   overrides: NamespaceOverride[];
+  /**
+   * The root rules an active namespace rule replaces. They are not delivered,
+   * and `pullAllRules` withdraws their unchanged copies from the rule
+   * directories its stale sweep leaves alone.
+   */
+  replaced: ResourceItem[];
   /** How many rules the tag channel left out, for the sync line. */
   skippedByTags: number;
 }
@@ -346,14 +352,13 @@ export async function resolveDesiredRules(
   const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
   const allItems = await handler.scanTeamForPull(teamConfig, localConfig);
   const knowledgeNs = roleContext ? roleContext.activeNamespaces.knowledge : null;
-  const roleFiltered = filterRulesByKnowledgeNamespaces(allItems, knowledgeNs);
-  let delivered = roleFiltered;
-  let overrides: NamespaceOverride[] = [];
-  if (knowledgeNs) {
-    ({ items: delivered, overrides } = await overrideRootRules(roleFiltered, knowledgeNs, localConfig));
-  }
-  const { included, skipped } = filterByTags(delivered, tagsConfig, localConfig.subscribedTags, 'rules');
-  return { items: included, overrides, skippedByTags: skipped.length };
+  // The tag channel first: only a namespace rule this member receives
+  // replaces the root rule of its name.
+  const { included, skipped } = filterByTags(
+    filterRulesByKnowledgeNamespaces(allItems, knowledgeNs), tagsConfig, localConfig.subscribedTags, 'rules',
+  );
+  if (!knowledgeNs) return { items: included, overrides: [], replaced: [], skippedByTags: skipped.length };
+  return { ...await overrideRootRules(included, knowledgeNs, localConfig), skippedByTags: skipped.length };
 }
 
 /**
@@ -370,7 +375,7 @@ async function overrideRootRules(
   rules: ResourceItem[],
   activeNamespaces: string[],
   localConfig: LocalConfig,
-): Promise<Pick<DesiredRules, 'items' | 'overrides'>> {
+): Promise<Pick<DesiredRules, 'items' | 'overrides' | 'replaced'>> {
   const candidates = rules.flatMap((rule): NamespaceCandidate<ResourceItem>[] => {
     const segments = rule.name.split('/');
     if (segments.length === 1) return [{ name: rule.name, source: rule.relativePath, namespace: null, value: rule }];
@@ -382,8 +387,12 @@ async function overrideRootRules(
   const replacedPaths = new Set(overrides.map((override) => override.replaces));
   const { placedRules } = await loadStateForScope(localConfig);
   const items: ResourceItem[] = [];
+  const replaced: ResourceItem[] = [];
   for (const rule of rules) {
-    if (replacedPaths.has(rule.relativePath)) continue;
+    if (replacedPaths.has(rule.relativePath)) {
+      replaced.push(rule);
+      continue;
+    }
     const placed = rule.name.includes('/') ? null : placedResourcePath(placedRules, 'rules', rule.name);
     if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
       overrides.push({ name: rule.name, source: placed, replaces: rule.relativePath });
@@ -391,7 +400,7 @@ async function overrideRootRules(
     }
     items.push(rule);
   }
-  return { items, overrides };
+  return { items, overrides, replaced };
 }
 
 /**

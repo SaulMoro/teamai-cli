@@ -918,7 +918,7 @@ async function pullForScope(
 
     if (type === 'rules') {
       const rulesHandler = handler as RulesHandler;
-      const { items, skippedByTags } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
+      const { items, replaced, skippedByTags } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
       if (options.dryRun) {
         if (items.length > 0) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
@@ -928,7 +928,7 @@ async function pullForScope(
         // stale local rule files and deactivates the OpenCode instructions glob
         // when the team's last rule is removed. Guarding on items.length > 0
         // would leak those artifacts on the machine after upstream deletion.
-        await rulesHandler.pullAllRules(freshConfig, localConfig, items);
+        await rulesHandler.pullAllRules(freshConfig, localConfig, items, replaced);
         if (items.length > 0) {
           log.success(`[${scopeLabel}] Synced ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
