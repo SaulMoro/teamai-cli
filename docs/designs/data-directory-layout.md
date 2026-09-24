@@ -360,7 +360,8 @@ Copilot's is the parent PID) names one run up to its `session_end` or
 recorded since the first (the dashboard monitor's `process_exit` after
 `SessionEnd`) belongs to the run it closed. A `session_start` on a fallback ID
 (`pid-…`) whose `monitorPid` differs from its open run's begins a new run even
-though nothing ended that one (a crash with no dashboard running); a tool's own
+though nothing ended that one (a crash with no dashboard running), and that one
+counts as the run closed before it; a tool's own
 ID is not split this way, since Claude fires SessionStart again on resume, in a
 new process, and its Stop carries the whole transcript. The monitor's `process_exit` also
 records `processExitAfter`, the last event it observed, and closes only that
@@ -381,10 +382,13 @@ snapshots. An earlier release kept only per-scope snapshots, so the file is
 first written from them: a tool's own ID in any of a scope's snapshots is the
 scope's that holds its greatest total (prompts, then tokens), since a session
 that release split per event holds only part of it elsewhere, and a scope may
-have reported past the shared total it was seeded with. The scopes read are the
+have reported past the shared total it was seeded with. A tie names no owner:
+that release copied the shared file into every scope, so equal totals show only
+the copy, and each scope already holds that baseline. The scopes read are the
 user scope, every partition, and a project whose data home is in its workspace
 that a session still in the log leads to; each report also records the IDs of
-its own snapshots that have no owner yet. A session of a workspace-data project
+its own snapshots that have no owner yet and show it reported them (absent from
+the shared snapshot, or past its total there). A session of a workspace-data project
 that neither reached gets no owner, and if resumed in another scope is decided
 by its first retained event, as before. A
 fallback run is reported and snapshotted as `<id>@<first event's timestamp>`,

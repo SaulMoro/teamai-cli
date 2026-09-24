@@ -563,7 +563,11 @@ function splitRuns(events: DashboardEvent[], eventKeys: Array<string | undefined
     const starts = e.type === 'session_start' && typeof e.monitorPid === 'number';
     const open = openRun.get(e.sessionId);
     if (starts && open !== undefined && fallback
-      && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) openRun.delete(e.sessionId);
+      && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) {
+      // Nothing ended it (a crash), but a late exit of it must still find it.
+      openRun.delete(e.sessionId);
+      closedRun.set(e.sessionId, open);
+    }
     const closed = closedRun.get(e.sessionId);
     const stale = e.type === 'process_exit' && !observed && fallback && open !== undefined && closed !== undefined
       && continues[i];
@@ -617,11 +621,13 @@ async function runsOfLog(events: DashboardEvent[]): Promise<DashboardEvent[]> {
 //  A release before this file kept per-scope snapshots only, so the file is
 //  first written from them: each tool's own ID in any snapshot of a scope is
 //  the scope's that holds its greatest total (prompts, then tokens), since a
-//  session that release split per event holds only part of it elsewhere. The
+//  session that release split per event holds only part of it elsewhere. A tie
+//  names no owner: that release copied the shared file into every scope. The
 //  scopes read are the user scope, every partition, and a project whose data
 //  home is in its workspace that a session still in the log leads to. Each
 //  report also records the IDs of its own snapshots that have no owner yet,
-//  for such a project the log no longer leads to.
+//  for such a project the log no longer leads to, when they show it reported
+//  them: absent from the shared snapshot, or past its total there.
 //
 
 function sessionOwnersPath(): string {
@@ -655,7 +661,7 @@ function reportedSize(entry: unknown): { prompts: number; tokens: number } {
 
 /** The owners the per-scope snapshots of an earlier release imply, as the file's first lines. */
 async function ownersFromSnapshots(): Promise<string> {
-  const best = new Map<string, { key: string; prompts: number; tokens: number }>();
+  const best = new Map<string, { key: string; prompts: number; tokens: number; tied: boolean }>();
   for (const dataHome of await knownDataHomes()) {
     const [interventions, promptTokens, daily] = await Promise.all(
       REPORTED_SNAPSHOTS.map((name) => readJson<Record<string, unknown>>(snapshotPathIn(dataHome, name))),
@@ -669,11 +675,16 @@ async function ownersFromSnapshots(): Promise<string> {
       const size = { prompts: Math.max(fromTokens.prompts, reportedSize(daily?.[sessionId]).prompts), tokens: fromTokens.tokens };
       const held = best.get(sessionId);
       if (!held || size.prompts > held.prompts || (size.prompts === held.prompts && size.tokens > held.tokens)) {
-        best.set(sessionId, { key, ...size });
+        best.set(sessionId, { key, ...size, tied: false });
+      } else if (size.prompts === held.prompts && size.tokens === held.tokens && key !== held.key) {
+        held.tied = true;
       }
     }
   }
-  return [...best].map(([sessionId, { key }]) => `${JSON.stringify({ sessionId, dataHomeKey: key })}\n`).join('');
+  // A tie is a copy of one shared entry that release made in every scope: it
+  // names no owner, and each scope already holds that baseline.
+  return [...best].flatMap(([sessionId, { key, tied }]) =>
+    (tied ? [] : [`${JSON.stringify({ sessionId, dataHomeKey: key })}\n`])).join('');
 }
 
 async function readSessionOwners(): Promise<Map<string, string>> {
@@ -700,6 +711,33 @@ async function readSessionOwners(): Promise<Map<string, string>> {
     }
   }
   return owners;
+}
+
+/**
+ * The IDs of a scope's snapshots that show it reported them: absent from the
+ * shared snapshot, or past its total there. A copy of a shared entry, which
+ * an earlier release made in every scope, shows nothing.
+ */
+async function reportedBeyondShared(
+  promptTokens: Record<string, unknown>,
+  interventions: Record<string, unknown>,
+  daily: Record<string, unknown>,
+): Promise<string[]> {
+  const [sharedTokens, sharedDaily] = await Promise.all([
+    readJson<Record<string, unknown>>(sharedSnapshotPath('prompt-tokens')),
+    readJson<Record<string, unknown>>(sharedSnapshotPath('daily-sessions')),
+  ]);
+  const size = (tokens: Record<string, unknown> | null, days: Record<string, unknown> | null, id: string) => {
+    const fromTokens = reportedSize(tokens?.[id]);
+    return { prompts: Math.max(fromTokens.prompts, reportedSize(days?.[id]).prompts), tokens: fromTokens.tokens };
+  };
+  const ids = new Set([...Object.keys(promptTokens), ...Object.keys(interventions), ...Object.keys(daily)]);
+  return [...ids].filter((id) => {
+    if (!Object.hasOwn(sharedTokens ?? {}, id) && !Object.hasOwn(sharedDaily ?? {}, id)) return true;
+    const own = size(promptTokens, daily, id);
+    const shared = size(sharedTokens, sharedDaily, id);
+    return own.prompts > shared.prompts || (own.prompts === shared.prompts && own.tokens > shared.tokens);
+  });
 }
 
 /** Records `key` as the owner of the tool-own session IDs among `sessionIds` that have none yet. */
@@ -868,7 +906,7 @@ export async function reportUsageToTeam(
     if (reportsConfig) {
       await recordSessionOwners([
         ...dashboardEvents.map((e) => e.sessionId),
-        ...Object.keys(reportedPromptTokens), ...Object.keys(reportedInterventions), ...Object.keys(reportedDailySessions),
+        ...await reportedBeyondShared(reportedPromptTokens, reportedInterventions, reportedDailySessions),
       ], await dataHomeKey(getDataHome(reportsConfig)));
     }
 

@@ -158,6 +158,26 @@ describe('filterEventsByScope', () => {
       ]);
     });
 
+    it('an unannotated exit of a run a new process superseded does not end the new run', async () => {
+      // The first run crashed with nothing ending it; a dashboard before
+      // processExitAfter appends its exit after the next invocation started.
+      const p = '/home/jeff/.teamai/projects/p';
+      const at = async (type: DashboardEvent['type'], timestamp: string, fields: Partial<DashboardEvent> = {}) =>
+        ({ ...(await scopedEvent(undefined, 'pid-1', p)), type, timestamp, ...fields });
+      const log = [
+        await at('session_start', '2026-01-01T00:00:00.000Z', { monitorPid: 100 }),
+        await at('prompt_submit', '2026-01-01T00:00:30.000Z'),
+        await at('session_start', '2026-01-01T00:02:00.000Z', { monitorPid: 200 }),
+        await at('process_exit', '2026-01-01T00:02:05.000Z'),
+        await at('prompt_submit', '2026-01-01T00:03:00.000Z'),
+      ];
+      const project = await filterEventsByScope(log, projectScope('/Users/jeff/project-a'));
+      expect(project.map((e) => e.sessionId)).toEqual([
+        'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z',
+        'pid-1@2026-01-01T00:02:00.000Z', 'pid-1@2026-01-01T00:00:00.000Z', 'pid-1@2026-01-01T00:02:00.000Z',
+      ]);
+    });
+
     it('an unannotated exit with nothing more of the open run ends it', async () => {
       const p = '/home/jeff/.teamai/projects/p';
       const at = async (type: DashboardEvent['type'], timestamp: string) =>

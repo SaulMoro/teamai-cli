@@ -237,8 +237,10 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
       'daily-sessions': entries((n) => ({ date, prompts: n, durationMs: 3_600_000, succeeded: 1, corrected: 0 })),
     };
     const dir = path.join(config ? getDataHome(config) : teamaiHome(), 'dashboard');
+    // The user scope's own snapshot sits beside the shared one, prefixed.
+    const prefix = config?.scope === 'user' ? 'user-' : '';
     fs.mkdirSync(dir, { recursive: true });
-    for (const name of SNAPSHOTS) fs.writeFileSync(path.join(dir, `reported-${name}.json`), JSON.stringify(values[name]));
+    for (const name of SNAPSHOTS) fs.writeFileSync(path.join(dir, `${prefix}reported-${name}.json`), JSON.stringify(values[name]));
   }
 
   async function prompts(sessionId: string, cwd: string, count: number): Promise<void> {
@@ -533,6 +535,19 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
 
     expect(await report(project)).toBeNull();
     expect(await reportedPrompts(projectQ)).toBe(1);
+  });
+
+  it('equal totals copied from the shared snapshot name no owner: the scope it resumes in reports it', async () => {
+    const { root, user, project } = await setup();
+    const today = new Date().toISOString().slice(0, 10);
+    // Main copied the shared entry into both scopes' snapshots: they tie.
+    writeSharedSnapshots({ copied: 1 }, today);
+    writeSharedSnapshots({ copied: 1 }, today, user);
+    writeSharedSnapshots({ copied: 1 }, today, project);
+    await resume('copied', root, 2);
+
+    expect(await report(user)).toBeNull();
+    expect(await reportedPrompts(project)).toBe(1);
   });
 
   it('a project that reported a session past the shared snapshot\'s total owns it', async () => {
