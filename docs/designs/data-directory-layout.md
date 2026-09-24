@@ -355,17 +355,25 @@ mid-session) is reported once, where it started. A session is one ID's run up to
 its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot's
 fallback ID is the parent PID) is decided on its own; a second end with nothing
 recorded since the first (the dashboard monitor's `process_exit` after
-`SessionEnd`) belongs to the run it closed. The monitor's `process_exit` also
+`SessionEnd`) belongs to the run it closed. A `session_start` on a fallback ID
+(`pid-…`) whose `monitorPid` differs from its open run's begins a new run even
+though nothing ended that one (a crash with no dashboard running); a tool's own
+ID is not split this way, since Claude fires SessionStart again on resume, in a
+new process, and its Stop carries the whole transcript. The monitor's `process_exit` also
 records `processExitAfter`, the last event it observed, and closes only that
 run: an exit appended after the next run of the same ID began does not end it,
 and one whose run compaction dropped is ignored. Every run is reported and
 snapshotted as `<id>@<first event's timestamp>`, which does not change when
-compaction drops earlier runs; a snapshot entry keyed by the bare ID (written
-before) is rewritten under the first run of that ID in the log the next time
-the scope reports, and removed, so no later run of that ID reads it. Only an
-earlier release wrote bare entries, and a seeded one may be another scope's, so
-a run whose first event carries `dataHomeKey` (recorded by this release) takes
-none. A session written before that field existed is attributed by its first
+compaction drops earlier runs. A snapshot entry keyed by the bare ID (written
+before) sums every run of that ID the earlier release saw, so the next time the
+scope reports, each of those runs in the log but the last is taken as reported
+at its own totals, the last takes the entry, and the entry is removed, so no run
+is sent again and no later run of that ID reads it. What the last run records
+beyond the entry is reported; it is undercounted by at most the other runs'
+share of the sum, once (when it was still growing at the upgrade, or had not been
+reported yet). Only an earlier release wrote bare entries, and a seeded one
+may be another scope's, so a run whose first event carries `dataHomeKey`
+(recorded by this release), and every later run of its ID, takes none. A session written before that field existed is attributed by its first
 `cwd`: to the scope `resolveConfigForDir` resolves that directory to now, the
 dispatcher's rule, so a nested clone under a project is not the project's; no
 `cwd`, or one removed since, is no scope's. The snapshots of what was already reported are per scope

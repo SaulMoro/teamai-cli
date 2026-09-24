@@ -168,13 +168,20 @@ function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | und
   return path.join(dataHome, 'dashboard', `user-${file}`);
 }
 
-/** A scope's snapshot, seeded from the shared one when the scope has none yet. */
-async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig | undefined): Promise<Record<string, T> | null> {
+/**
+ * A scope's snapshot, seeded from the shared one when the scope has none yet.
+ * `current` gives each run's entry at its own totals, for {@link adoptBareKeys}.
+ */
+async function readSnapshot<T>(
+  name: ReportedSnapshotName,
+  config: LocalConfig | undefined,
+  current: (events: DashboardEvent[]) => Record<string, T>,
+): Promise<Record<string, T> | null> {
   const own = scopeSnapshotPath(name, config);
   if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
   const shared = await readJson<Record<string, T>>(sharedSnapshotPath(name));
   const events = await filterEventsByScope(await readEvents(), config);
-  const adopted = adoptBareKeys(shared ?? {}, events, 'shared');
+  const adopted = adoptBareKeys(shared ?? {}, events, current(events), 'shared');
   // Copy only resolved run IDs. An unmatched bare entry cannot be allowed to
   // attach to a future reuse after the source of the snapshot has been lost.
   const seed: Record<string, T> = {};
@@ -191,7 +198,8 @@ async function readSnapshot<T>(name: ReportedSnapshotName, config: LocalConfig |
 }
 
 export async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
-  const parsed = await readSnapshot<ReportedInterventions[string]>('interventions', config);
+  const parsed = await readSnapshot('interventions', config,
+    (events) => Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))));
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -201,6 +209,11 @@ async function writeReportedInterventions(data: ReportedInterventions, config: L
   } catch (e) {
     log.error(`Failed to persist reported interventions: ${(e as Error).message}`);
   }
+}
+
+/** Each session's intervention counts, the shape its snapshot entry holds. */
+function interventionCounts(metrics: Map<string, SessionMetrics>): Map<string, ReportedInterventions[string]> {
+  return new Map([...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]));
 }
 
 /**
@@ -257,7 +270,8 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //
 
 export async function readReportedPromptTokens(config: LocalConfig | undefined): Promise<ReportedPromptTokens> {
-  const parsed = await readSnapshot<ReportedPromptTokens[string]>('prompt-tokens', config);
+  const parsed = await readSnapshot('prompt-tokens', config,
+    (events) => computePromptTokenDelta(aggregateSessionMetrics(events), {}).nextReported);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -321,7 +335,8 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
 }
 
 async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
-  return (await readSnapshot<ReportedDailySessions[string]>('daily-sessions', config)) ?? {};
+  return (await readSnapshot('daily-sessions', config,
+    (events) => computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported)) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -399,7 +414,12 @@ export async function filterEventsByScope(
   // same whichever earlier runs compaction has dropped.
   // A second end with nothing recorded since the first (the dashboard
   // monitor's process_exit after SessionEnd) belongs to the run just closed.
+  // A start on a fallback ID from another process than its open run's begins
+  // a new run, though nothing ended that one (a crash with no dashboard
+  // running). A tool's own ID is left alone: Claude fires SessionStart again
+  // on resume, in a new process, and its Stop carries the whole transcript.
   const runOf: Array<number | undefined> = [];
+  const runPid: Array<number | undefined> = [];
   const observedRuns = new Map<string, number>();
   const openRun = new Map<string, number>();
   const closedRun = new Map<string, number>();
@@ -408,6 +428,10 @@ export async function filterEventsByScope(
   events.forEach((e, i) => {
     const ends = e.type === 'session_end' || e.type === 'process_exit';
     const observed = e.type === 'process_exit' && typeof e.processExitAfter === 'string';
+    const starts = e.type === 'session_start' && typeof e.monitorPid === 'number';
+    const open = openRun.get(e.sessionId);
+    if (starts && open !== undefined && e.sessionId.startsWith('pid-')
+      && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) openRun.delete(e.sessionId);
     let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
       : openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
     // The observed run may have been compacted. Its delayed exit must not
@@ -426,6 +450,7 @@ export async function filterEventsByScope(
     } else if (!ends) {
       openRun.set(e.sessionId, run);
     }
+    if (starts) runPid[run] ??= e.monitorPid;
     runOf.push(run);
     observedRuns.set(`${e.sessionId}@${e.timestamp}`, run);
     const current = deciding[run];
@@ -447,37 +472,52 @@ export async function filterEventsByScope(
 /**
  * A reported snapshot as the run IDs of {@link filterEventsByScope} read it.
  * Snapshots written before runs had their own IDs are keyed by the bare
- * session ID; the first run of that ID in `events` (the scope's, as that
- * filter returns them) takes that entry when it has none of its own, and the
- * bare entry is retired either way, so no later run of that ID reads it. Only
- * an earlier release wrote bare entries, and only for runs it recorded, so a
- * run whose first event carries a `dataHomeKey` takes none: the entry may be
- * another scope's run under a reused PID-fallback ID. Shared snapshots also
- * exclude path-keyed runs: that release already had per-scope snapshots.
+ * session ID, summed over every run of that ID the release saw. Of those runs
+ * in `events` (the scope's, as that filter returns them), each but the last is
+ * taken as reported at its own totals, from `current`, and the last takes the
+ * bare entry, so none is sent again; a run's own entry is never replaced. The
+ * bare entry is retired, so no later run of that ID reads it. Only an earlier
+ * release wrote bare entries, and only for runs it recorded, so a run whose
+ * first event carries a `dataHomeKey`, and every later run of its ID, takes
+ * none: the entry may be another scope's run under a reused PID-fallback ID.
+ * Shared snapshots also exclude path-keyed runs: that release already had
+ * per-scope snapshots.
  * Returns `reported` itself when there is nothing to retire; otherwise the
  * caller persists the result.
  */
 export function adoptBareKeys<T>(
   reported: Record<string, T>,
   events: Iterable<DashboardEvent>,
+  current: Record<string, T>,
   source: 'scope' | 'shared' = 'scope',
 ): Record<string, T> {
-  const adopted = { ...reported };
+  const legacyRuns = new Map<string, string[]>();
+  const recorded = new Set<string>();
   const seen = new Set<string>();
-  let retired = false;
   for (const { sessionId: runId, dataHomeKey, dataHome } of events) {
+    if (seen.has(runId)) continue;
+    seen.add(runId);
     const at = runId.lastIndexOf('@');
     if (at < 0) continue;
     const id = runId.slice(0, at);
-    if (seen.has(id)) continue;
-    seen.add(id);
-    if (typeof dataHomeKey === 'string' || !Object.hasOwn(reported, id)) continue;
-    if (source === 'shared' && typeof dataHome === 'string') continue;
-    if (!Object.hasOwn(adopted, runId)) adopted[runId] = reported[id];
-    delete adopted[id];
-    retired = true;
+    if (recorded.has(id) || !Object.hasOwn(reported, id)) continue;
+    if (typeof dataHomeKey === 'string' || (source === 'shared' && typeof dataHome === 'string')) {
+      recorded.add(id);
+      continue;
+    }
+    legacyRuns.set(id, [...(legacyRuns.get(id) ?? []), runId]);
   }
-  return retired ? adopted : reported;
+  if (legacyRuns.size === 0) return reported;
+  const adopted = { ...reported };
+  for (const [id, runs] of legacyRuns) {
+    runs.forEach((runId, i) => {
+      if (Object.hasOwn(adopted, runId)) return;
+      if (i === runs.length - 1) adopted[runId] = reported[id];
+      else if (Object.hasOwn(current, runId)) adopted[runId] = current[runId];
+    });
+    delete adopted[id];
+  }
+  return adopted;
 }
 
 /**
@@ -519,34 +559,40 @@ export async function reportUsageToTeam(
     const dashboardEvents = await filterEventsByScope(await readEvents(), reportsConfig);
     const metrics = aggregateSessionMetrics(dashboardEvents);
 
-    const currentInterventions = new Map(
-      [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
-    );
+    const currentInterventions = interventionCounts(metrics);
+    const currentDaily = aggregateDailySessions(dashboardEvents);
     // A retired bare entry is written out now, even with nothing to report, so
     // the success writes below, which merge into the file, cannot bring it back.
     const adopt = async <T>(
       read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
       write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
+      current: Record<string, T>,
     ): Promise<Record<string, T>> => {
       const stored = await read(reportsConfig);
-      const adopted = adoptBareKeys(stored, dashboardEvents);
+      const adopted = adoptBareKeys(stored, dashboardEvents, current);
       if (adopted !== stored) await write(adopted, reportsConfig);
       return adopted;
     };
-    const reportedInterventions = await adopt(readReportedInterventions, writeReportedInterventions);
+    const reportedInterventions = await adopt(
+      readReportedInterventions, writeReportedInterventions, Object.fromEntries(currentInterventions),
+    );
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
       currentInterventions,
       reportedInterventions,
     );
 
-    const reportedPromptTokens = await adopt(readReportedPromptTokens, writeReportedPromptTokens);
+    const reportedPromptTokens = await adopt(
+      readReportedPromptTokens, writeReportedPromptTokens, computePromptTokenDelta(metrics, {}).nextReported,
+    );
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
     );
-    const reportedDailySessions = await adopt(readReportedDailySessions, writeReportedDailySessions);
+    const reportedDailySessions = await adopt(
+      readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
+    );
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
-      aggregateDailySessions(dashboardEvents),
+      currentDaily,
       reportedDailySessions,
     );
 

@@ -160,13 +160,17 @@ async function unreportedDashboardStats(
     adoptBareKeys, computeInterventionDelta, computePromptTokenDelta, readReportedInterventions, readReportedPromptTokens,
   } = await import('./team-push.js');
   // The scope's own snapshots, the ones its report compares against (#786).
-  const interventions = adoptBareKeys(await readReportedInterventions(config), events);
-  const promptTokens = adoptBareKeys(await readReportedPromptTokens(config), events);
-
-  const interventionDelta = computeInterventionDelta(
-    new Map([...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }])),
-    interventions,
+  const currentInterventions = new Map(
+    [...metrics].map(([sid, m]) => [sid, { interrupt: m.interrupt, toolReject: m.toolReject, correction: m.correction }]),
   );
+  const interventions = adoptBareKeys(
+    await readReportedInterventions(config), events, Object.fromEntries(currentInterventions),
+  );
+  const promptTokens = adoptBareKeys(
+    await readReportedPromptTokens(config), events, computePromptTokenDelta(metrics, {}).nextReported,
+  );
+
+  const interventionDelta = computeInterventionDelta(currentInterventions, interventions);
   const promptTokenDelta = computePromptTokenDelta(metrics, promptTokens);
 
   return {

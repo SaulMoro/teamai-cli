@@ -25,7 +25,8 @@ afterEach(async () => {
   if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by the real monitor', async () => {
+/** A git project P whose data home lives in the project, and the real CLI to drive it. */
+function fixture() {
   sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-reuse-')));
   const home = path.join(sandbox, 'home');
   const project = path.join(sandbox, 'project');
@@ -53,6 +54,29 @@ it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by 
     repo: { localPath: clone, remote, kind: 'git' }, username: 'tester', scope: 'project', projectRoot: project,
     updatePolicy: 'skip', enabledAgents: ['claude'], additionalRoles: [],
   }));
+  const writeLog = (events: DashboardEvent[]) => fs.writeFileSync(logPath, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+  /** The shared snapshots an earlier release left, `prompts` reported per bare session ID. */
+  const writeSharedSnapshots = (prompts: Record<string, number>, date: string) => {
+    const entries = (value: (n: number) => unknown) => Object.fromEntries(Object.entries(prompts).map(([sid, n]) => [sid, value(n)]));
+    const snapshots = {
+      interventions: entries(() => ({ interrupt: 0, toolReject: 0, correction: 0 })),
+      'prompt-tokens': entries((n) => ({ prompts: n, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 } })),
+      'daily-sessions': entries((n) => ({ date, prompts: n, durationMs: 3_600_000, succeeded: 1, corrected: 0 })),
+    };
+    for (const [name, value] of Object.entries(snapshots)) {
+      fs.writeFileSync(path.join(logDir, `reported-${name}.json`), JSON.stringify(value));
+    }
+  };
+  const pull = () => execFileSync(process.execPath, [cli, 'pull'], { cwd: project, env, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 });
+  const stats = () => YAML.parse(git('--git-dir', remote, 'show', 'teamai-reports:stats/tester.yaml'));
+  const reportsHead = () => {
+    try { return git('--git-dir', remote, 'rev-parse', '--verify', '-q', 'teamai-reports'); } catch { return ''; }
+  };
+  return { project, dataHome, remote, logPath, env, git, writeLog, writeSharedSnapshots, pull, stats, reportsHead };
+}
+
+it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by the real monitor', async () => {
+  const { project, dataHome, logPath, env, git, remote, writeLog, writeSharedSnapshots, pull, stats } = fixture();
   const now = Date.now();
   const timestamp = (offset: number) => new Date(now + offset).toISOString();
   const event = (type: DashboardEvent['type'], offset: number): DashboardEvent => ({
@@ -64,18 +88,8 @@ it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by 
     { ...event('prompt_submit', -59_000), dataHome },
     { ...event('stop', -58_000), dataHome },
   ];
-  const writeLog = (events: DashboardEvent[]) => fs.writeFileSync(logPath, events.map(e => JSON.stringify(e)).join('\n') + '\n');
   writeLog([...oldUser, ...firstRun]);
-  const snapshots = {
-    interventions: { interrupt: 0, toolReject: 0, correction: 0 },
-    'prompt-tokens': { prompts: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 } },
-    'daily-sessions': { date: timestamp(0).slice(0, 10), prompts: 1, durationMs: 3_600_000, succeeded: 1, corrected: 0 },
-  };
-  for (const [name, value] of Object.entries(snapshots)) {
-    fs.writeFileSync(path.join(logDir, `reported-${name}.json`), JSON.stringify({ 'pid-123': value }));
-  }
-  const pull = () => execFileSync(process.execPath, [cli, 'pull'], { cwd: project, env, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 });
-  const stats = () => YAML.parse(git('--git-dir', remote, 'show', 'teamai-reports:stats/tester.yaml'));
+  writeSharedSnapshots({ 'pid-123': 1 }, timestamp(0).slice(0, 10));
   pull();
   expect(stats()).toMatchObject({ prompts: 1, interventions: { sessions: 1 } });
 
@@ -112,4 +126,41 @@ it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by 
   const shown = execFileSync(process.execPath, [cli, 'stats'], { cwd: project, env, encoding: 'utf8', timeout: 15_000 });
   expect(shown).toMatch(/Sessions:\s+2/);
   expect(shown).toMatch(/Conversation turns:\s+2/);
+}, 60_000);
+
+it('real CLI sends no run of an aggregated bare ID again and splits a reused ID a crash left open', () => {
+  const { project, dataHome, writeLog, writeSharedSnapshots, pull, stats, reportsHead } = fixture();
+  const now = Date.now();
+  let offset = -600_000;
+  const event = (type: DashboardEvent['type'], sessionId: string, fields: Partial<DashboardEvent> = {}): DashboardEvent =>
+    ({ type, timestamp: new Date(now + (offset += 1000)).toISOString(), sessionId, tool: 'claude', ...fields });
+  const legacyId = `pid-321-${project}`;
+  const legacyRun = () => [
+    event('session_start', legacyId, { cwd: project }), event('prompt_submit', legacyId, { cwd: project }),
+    event('stop', legacyId, { cwd: project }), event('session_end', legacyId, { cwd: project }),
+  ];
+  // An earlier release recorded two runs of one fallback ID and reported them as one.
+  const legacy = [...legacyRun(), ...legacyRun()];
+  writeLog(legacy);
+  writeSharedSnapshots({ [legacyId]: 2 }, new Date(now).toISOString().slice(0, 10));
+  pull();
+  expect(reportsHead()).toBe('');
+
+  // A run that crashed with no dashboard running: nothing ends it.
+  const crashed = [
+    event('session_start', 'pid-9', { dataHome, monitorPid: 99999998 }),
+    event('prompt_submit', 'pid-9', { dataHome }), event('stop', 'pid-9', { dataHome }),
+  ];
+  writeLog([...legacy, ...crashed]);
+  pull();
+  expect(stats()).toMatchObject({ prompts: 1, interventions: { sessions: 1 } });
+
+  // The next invocation reuses the ID from another process.
+  const next = [
+    event('session_start', 'pid-9', { dataHome, monitorPid: 99999999 }),
+    event('prompt_submit', 'pid-9', { dataHome }), event('stop', 'pid-9', { dataHome }),
+  ];
+  writeLog([...legacy, ...crashed, ...next]);
+  pull();
+  expect(stats()).toMatchObject({ prompts: 2, interventions: { sessions: 2 } });
 }, 60_000);

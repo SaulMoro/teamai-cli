@@ -428,6 +428,45 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedPrompts(project)).toBe(2);
   });
 
+  it.each([
+    ['a shared snapshot, before #785', false],
+    ['the scope\'s own snapshot, main since #795', true],
+  ])('two runs an earlier release reported under one bare ID are not sent again: %s', async (_, ownSnapshot) => {
+    const { root, project } = await setup();
+    // No session ID: a fallback ID the second run reuses. That release summed
+    // both runs under it; Claude's fallback carries the cwd, Copilot's does not.
+    const [tool, payload] = ownSnapshot ? ['copilot', {}] : ['claude', { cwd: root }];
+    const run = async () => {
+      await session(tool, { ...payload, cwd: root });
+      await hook('session-end', tool, { ...payload, cwd: root, hook_event_name: 'SessionEnd' });
+    };
+    await asEarlierRelease(async () => { await run(); await run(); }, ownSnapshot ? getDataHome(project) : undefined);
+    const events = fs.readFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), 'utf-8');
+    const id: string = JSON.parse(events.split('\n')[0]).sessionId;
+    writeSharedSnapshots({ [id]: 2 }, new Date().toISOString().slice(0, 10), ownSnapshot ? project : undefined);
+
+    expect(await report(project)).toBeNull();
+  });
+
+  it('a fallback ID reused in a project after a user-scope run that never ended is the project\'s', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    await session('copilot', { cwd: elsewhere });
+    // That invocation crashed with no dashboard running: nothing ended it. Its
+    // process, recorded at SessionStart, is not the next invocation's.
+    fs.writeFileSync(log, fs.readFileSync(log, 'utf-8').split('\n').filter(Boolean)
+      .map((line) => JSON.stringify({ ...JSON.parse(line), ...(line.includes('"monitorPid"') ? { monitorPid: 99999999 } : {}) }))
+      .join('\n') + '\n');
+    await session('copilot', { cwd: root });
+
+    expect(await reportedSessions(project)).toBe(1);
+    expect(await reportedPrompts(project)).toBe(1);
+    expect(await reportedSessions(user)).toBe(1);
+    expect(await reportedPrompts(user)).toBe(1);
+  });
+
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');

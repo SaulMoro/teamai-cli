@@ -136,6 +136,37 @@ describe('filterEventsByScope', () => {
       }
     });
 
+    it('a fallback ID started by another process is a new run, though the last one never ended', async () => {
+      // The user-scope run crashed with no dashboard running, so nothing ended it.
+      const start = (sessionId: string, dataHome: string, monitorPid: number) => scopedEvent(undefined, sessionId, dataHome)
+        .then((e) => ({ ...e, type: 'session_start' as const, monitorPid }));
+      for (const id of ['pid-1', 'pid-1-/Users/jeff/project-a']) {
+        const log = [
+          await start(id, '/home/jeff/.teamai', 100),
+          await scopedEvent(undefined, id, '/home/jeff/.teamai'),
+          await start(id, '/home/jeff/.teamai/projects/p', 200),
+          await scopedEvent(undefined, id, '/home/jeff/.teamai/projects/p'),
+        ];
+        expect(await ids(log, projectScope('/Users/jeff/project-a'))).toEqual([id, id]);
+        expect(await ids(log, userScope())).toEqual([id, id]);
+      }
+    });
+
+    it('a start from the same process, or under a tool\'s own session ID, stays in the open run', async () => {
+      // Claude fires SessionStart again on compact and on resume, a new process for
+      // the same session; its Stop carries the whole transcript, so it must stay one run.
+      const cases: Array<[string, number]> = [['pid-1', 100], ['claude-uuid', 200]];
+      for (const [id, pid] of cases) {
+        const log = [
+          { ...(await scopedEvent(undefined, id, '/home/jeff/.teamai')), type: 'session_start' as const, monitorPid: 100 },
+          { ...(await scopedEvent(undefined, id, '/home/jeff/.teamai/projects/p')), type: 'session_start' as const, monitorPid: pid },
+          await scopedEvent(undefined, id, '/home/jeff/.teamai/projects/p'),
+        ];
+        expect(await ids(log, userScope())).toEqual([id, id, id]);
+        expect(await ids(log, projectScope('/Users/jeff/project-a'))).toEqual([]);
+      }
+    });
+
     it('an event that records its data home as a path, before keys were hashed, is keyed by it', async () => {
       const unhashed: DashboardEvent[] = [
         { ...makeEvent(undefined, 'c1'), tool: 'copilot', dataHome: '/home/jeff/.teamai/projects/p' },
@@ -219,46 +250,54 @@ describe('adoptBareKeys', () => {
   const run = (sessionId: string, fields: Partial<DashboardEvent> = {}): DashboardEvent =>
     ({ type: 'prompt_submit', timestamp: 't', sessionId, tool: 'copilot', ...fields });
 
-  it('gives a snapshot entry keyed by the bare session ID to the first run of that ID', () => {
+  it('gives a snapshot entry keyed by the bare session ID to the last run of that ID', () => {
+    // An earlier release summed every run of the ID under it: the earlier runs are
+    // reported at their own totals, the last takes the sum, so none is sent again.
     const reported = { 'pid-1': 3, 's2@t0': 1 };
-    const adopted = adoptBareKeys(reported, [run('pid-1@t1'), run('pid-1@t2'), run('s2@t0'), run('s3@t3')]);
-    expect(adopted['pid-1@t1']).toBe(3);
-    expect(adopted['pid-1@t2']).toBeUndefined();
-    expect(adopted['s3@t3']).toBeUndefined();
+    const current = { 'pid-1@t1': 1, 'pid-1@t2': 2, 's2@t0': 1, 's3@t3': 4 };
+    const adopted = adoptBareKeys(reported, [run('pid-1@t1'), run('pid-1@t2'), run('s2@t0'), run('s3@t3')], current);
+    expect(adopted).toEqual({ 'pid-1@t1': 1, 'pid-1@t2': 3, 's2@t0': 1 });
+  });
+
+  it('a single run of the ID takes the bare entry', () => {
+    expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1')], { 'pid-1@t1': 5 })).toEqual({ 'pid-1@t1': 3 });
   });
 
   it('never overrides a run\'s own entry', () => {
-    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, [run('pid-1@t1')])['pid-1@t1']).toBe(5);
+    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, [run('pid-1@t1')], {})['pid-1@t1']).toBe(5);
+    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, [run('pid-1@t1'), run('pid-1@t2')], { 'pid-1@t1': 7 }))
+      .toEqual({ 'pid-1@t1': 5, 'pid-1@t2': 3 });
   });
 
-  it('retires the bare entry the first run of its ID reads, so it is never read again', () => {
-    expect(adoptBareKeys({ 'pid-1': 3, s2: 1 }, [run('pid-1@t1'), run('pid-1@t2')])).toEqual({ 'pid-1@t1': 3, s2: 1 });
-    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, [run('pid-1@t1')])).toEqual({ 'pid-1@t1': 5 });
+  it('retires the bare entry its runs read, so it is never read again', () => {
+    expect(adoptBareKeys({ 'pid-1': 3, s2: 1 }, [run('pid-1@t1'), run('pid-1@t2')], { 'pid-1@t1': 1 }))
+      .toEqual({ 'pid-1@t1': 1, 'pid-1@t2': 3, s2: 1 });
+    expect(adoptBareKeys({ 'pid-1': 3, 'pid-1@t1': 5 }, [run('pid-1@t1')], {})).toEqual({ 'pid-1@t1': 5 });
   });
 
   it('returns the snapshot itself when it holds no bare entry to retire', () => {
     const reported = { 'pid-1@t1': 5, s2: 1 };
-    expect(adoptBareKeys(reported, [run('pid-1@t1'), run('s3@t3')])).toBe(reported);
+    expect(adoptBareKeys(reported, [run('pid-1@t1'), run('s3@t3')], {})).toBe(reported);
   });
 
   it('gives no bare entry to a run this build recorded: only an earlier release wrote them', () => {
     // Another scope's run, maybe: the bare entry says nothing about which scope reported it.
     const reported = { 'pid-1': 3 };
-    expect(adoptBareKeys(reported, [run('pid-1@t1', { dataHomeKey: 'k' }), run('pid-1@t2')])).toBe(reported);
+    expect(adoptBareKeys(reported, [run('pid-1@t1', { dataHomeKey: 'k' }), run('pid-1@t2')], {})).toBe(reported);
   });
 
   it('a run recorded by main since #795, which wrote the data home path, is an earlier release\'s', () => {
-    expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1', { dataHome: '/home/jeff/.teamai' })])).toEqual({ 'pid-1@t1': 3 });
+    expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1', { dataHome: '/home/jeff/.teamai' })], {})).toEqual({ 'pid-1@t1': 3 });
   });
 
   it('does not give a path-keyed run a shared bare entry, but still adopts its own scope entry', () => {
     const reported = { 'pid-1': 3 };
     const events = [run('pid-1@t1', { dataHome: '/home/jeff/.teamai/projects/p' })];
-    expect(adoptBareKeys(reported, events, 'shared')).toBe(reported);
-    expect(adoptBareKeys(reported, events, 'scope')).toEqual({ 'pid-1@t1': 3 });
+    expect(adoptBareKeys(reported, events, {}, 'shared')).toBe(reported);
+    expect(adoptBareKeys(reported, events, {}, 'scope')).toEqual({ 'pid-1@t1': 3 });
   });
 
   it('a run in progress across the upgrade is an earlier release\'s, by its first event', () => {
-    expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1'), run('pid-1@t1', { dataHomeKey: 'k' })])).toEqual({ 'pid-1@t1': 3 });
+    expect(adoptBareKeys({ 'pid-1': 3 }, [run('pid-1@t1'), run('pid-1@t1', { dataHomeKey: 'k' })], {})).toEqual({ 'pid-1@t1': 3 });
   });
 });
