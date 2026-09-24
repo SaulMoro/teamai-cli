@@ -155,7 +155,8 @@ export function mergeStats(
 //  the whole log and reports into it).
 //
 
-type ReportedSnapshotName = 'interventions' | 'prompt-tokens' | 'daily-sessions';
+const REPORTED_SNAPSHOTS = ['interventions', 'prompt-tokens', 'daily-sessions'] as const;
+type ReportedSnapshotName = typeof REPORTED_SNAPSHOTS[number];
 
 /** The machine-level snapshot every scope shared before #786 (evaluated at call time for tests). */
 function sharedSnapshotPath(name: ReportedSnapshotName): string {
@@ -164,8 +165,11 @@ function sharedSnapshotPath(name: ReportedSnapshotName): string {
 
 /** A scope's own snapshot. The user scope's data home holds the shared one, hence its prefix. */
 function scopeSnapshotPath(name: ReportedSnapshotName, config: LocalConfig | undefined): string {
-  if (!config) return sharedSnapshotPath(name);
-  const dataHome = getDataHome(config);
+  return config ? snapshotPathIn(getDataHome(config), name) : sharedSnapshotPath(name);
+}
+
+/** The snapshot of the scope whose data home is `dataHome`. */
+function snapshotPathIn(dataHome: string, name: ReportedSnapshotName): string {
   const file = `reported-${name}.json`;
   if (path.resolve(dataHome) !== path.resolve(getTeamaiHomeDir())) return path.join(dataHome, 'dashboard', file);
   return path.join(dataHome, 'dashboard', `user-${file}`);
@@ -611,40 +615,65 @@ async function runsOfLog(events: DashboardEvent[]): Promise<DashboardEvent[]> {
 //  line for an ID wins.
 //
 //  A release before this file kept per-scope snapshots only, so the file is
-//  first written from them: each tool's own ID in the user scope's or a
-//  partition's prompt-token snapshot is that scope's. An ID the shared snapshot
-//  also holds is left out: that release copied the shared file into every
-//  scope, so it names no owner, and every scope already has its baseline.
-//  A project whose data home is in its workspace cannot be found this way.
+//  first written from them: each tool's own ID in any snapshot of a scope is
+//  the scope's that holds its greatest total (prompts, then tokens), since a
+//  session that release split per event holds only part of it elsewhere. The
+//  scopes read are the user scope, every partition, and a project whose data
+//  home is in its workspace that a session still in the log leads to. Each
+//  report also records the IDs of its own snapshots that have no owner yet,
+//  for such a project the log no longer leads to.
 //
 
 function sessionOwnersPath(): string {
   return path.join(getTeamaiHomeDir(), 'dashboard', 'session-owners.jsonl');
 }
 
+/** The data homes whose snapshots an earlier release may have written. */
+async function knownDataHomes(): Promise<string[]> {
+  const slugs = await fs.promises.readdir(projectsRootDir()).catch(() => []);
+  const homes = [getTeamaiHomeDir(), ...[...slugs].sort().map((slug) => path.join(projectsRootDir(), slug))];
+  // A project whose data home is in its workspace is under no partition; a
+  // session of it still in the log leads to it.
+  const { resolveConfigForDir } = await import('./config.js');
+  const cwds = new Set((await readEvents()).flatMap((e) => (typeof e.cwd === 'string' ? [e.cwd] : [])));
+  for (const cwd of cwds) {
+    const config = (await pathExists(cwd)) ? await resolveConfigForDir(cwd) : null;
+    if (config) homes.push(getDataHome(config));
+  }
+  return [...new Set(homes.map((home) => path.resolve(home)))];
+}
+
+/** A snapshot entry's reported prompts and tokens, 0 for what it does not hold. */
+function reportedSize(entry: unknown): { prompts: number; tokens: number } {
+  if (!entry || typeof entry !== 'object') return { prompts: 0, tokens: 0 };
+  const prompts = 'prompts' in entry && typeof entry.prompts === 'number' ? entry.prompts : 0;
+  const tokens = 'tokens' in entry && entry.tokens && typeof entry.tokens === 'object'
+    ? Object.values(entry.tokens).reduce((sum: number, n: unknown) => sum + (typeof n === 'number' ? n : 0), 0)
+    : 0;
+  return { prompts, tokens };
+}
+
 /** The owners the per-scope snapshots of an earlier release imply, as the file's first lines. */
 async function ownersFromSnapshots(): Promise<string> {
-  const home = getTeamaiHomeDir();
-  const shared = (await readJson<Record<string, unknown>>(sharedSnapshotPath('prompt-tokens'))) ?? {};
-  const scopes = [{ dataHome: home, file: path.join(home, 'dashboard', 'user-reported-prompt-tokens.json') }];
-  const slugs = await fs.promises.readdir(projectsRootDir()).catch(() => []);
-  for (const slug of [...slugs].sort()) {
-    const dataHome = path.join(projectsRootDir(), slug);
-    scopes.push({ dataHome, file: path.join(dataHome, 'dashboard', 'reported-prompt-tokens.json') });
-  }
-  const lines: string[] = [];
-  const seen = new Set<string>();
-  for (const { dataHome, file } of scopes) {
-    const snapshot = await readJson<Record<string, unknown>>(file);
-    if (!snapshot || typeof snapshot !== 'object') continue;
+  const best = new Map<string, { key: string; prompts: number; tokens: number }>();
+  for (const dataHome of await knownDataHomes()) {
+    const [interventions, promptTokens, daily] = await Promise.all(
+      REPORTED_SNAPSHOTS.map((name) => readJson<Record<string, unknown>>(snapshotPathIn(dataHome, name))),
+    );
+    const ids = new Set([interventions, promptTokens, daily].flatMap((snapshot) =>
+      (snapshot && typeof snapshot === 'object' ? Object.keys(snapshot) : [])));
     const key = await dataHomeKey(dataHome);
-    for (const sessionId of Object.keys(snapshot)) {
-      if (sessionId.startsWith('pid-') || Object.hasOwn(shared, sessionId) || seen.has(sessionId)) continue;
-      seen.add(sessionId);
-      lines.push(JSON.stringify({ sessionId, dataHomeKey: key }));
+    for (const sessionId of ids) {
+      if (sessionId.startsWith('pid-')) continue;
+      const fromTokens = reportedSize(promptTokens?.[sessionId]);
+      const size = { prompts: Math.max(fromTokens.prompts, reportedSize(daily?.[sessionId]).prompts), tokens: fromTokens.tokens };
+      const held = best.get(sessionId);
+      if (!held || size.prompts > held.prompts || (size.prompts === held.prompts && size.tokens > held.tokens)) {
+        best.set(sessionId, { key, ...size });
+      }
     }
   }
-  return lines.map((line) => `${line}\n`).join('');
+  return [...best].map(([sessionId, { key }]) => `${JSON.stringify({ sessionId, dataHomeKey: key })}\n`).join('');
 }
 
 async function readSessionOwners(): Promise<Map<string, string>> {
@@ -673,10 +702,10 @@ async function readSessionOwners(): Promise<Map<string, string>> {
   return owners;
 }
 
-/** Records `key` as the owner of the tool-own session IDs among `events` that have none yet. */
-async function recordSessionOwners(events: DashboardEvent[], key: string): Promise<void> {
+/** Records `key` as the owner of the tool-own session IDs among `sessionIds` that have none yet. */
+async function recordSessionOwners(sessionIds: Iterable<string>, key: string): Promise<void> {
   const owners = await readSessionOwners();
-  const ids = new Set(events.map((e) => e.sessionId).filter((id) => !id.startsWith('pid-') && !owners.has(id)));
+  const ids = new Set([...sessionIds].filter((id) => !id.startsWith('pid-') && !owners.has(id)));
   if (ids.size === 0) return;
   try {
     await ensureDir(path.dirname(sessionOwnersPath()));
@@ -791,7 +820,6 @@ export async function reportUsageToTeam(
     // both the intervention delta and the prompt-count/token delta from it.
     // Only the sessions recorded in this scope (#785).
     const dashboardEvents = await filterEventsByScope(await readEvents(), reportsConfig);
-    if (reportsConfig) await recordSessionOwners(dashboardEvents, await dataHomeKey(getDataHome(reportsConfig)));
     const metrics = aggregateSessionMetrics(dashboardEvents);
 
     const currentInterventions = interventionCounts(metrics);
@@ -835,6 +863,14 @@ export async function reportUsageToTeam(
       currentDaily,
       reportedDailySessions,
     );
+    // This scope's sessions, and those of its snapshots no owner claims yet
+    // (a project whose data home is in its workspace, which the seed may miss).
+    if (reportsConfig) {
+      await recordSessionOwners([
+        ...dashboardEvents.map((e) => e.sessionId),
+        ...Object.keys(reportedPromptTokens), ...Object.keys(reportedInterventions), ...Object.keys(reportedDailySessions),
+      ], await dataHomeKey(getDataHome(reportsConfig)));
+    }
 
     const hasUsage = events.length > 0;
     const hasInterventions = hasInterventionDelta(interventionDelta);

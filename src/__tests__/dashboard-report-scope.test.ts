@@ -511,6 +511,78 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await report(project)).toBeNull();
   });
 
+  /** `claude --resume` of `sessionId` in `cwd`, whose Stop carries the transcript's `prompts`. */
+  async function resume(sessionId: string, cwd: string, prompts: number): Promise<void> {
+    await session('claude', { session_id: sessionId, cwd });
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.writeFileSync(log, fs.readFileSync(log, 'utf-8').split('\n').filter(Boolean).map((line) => {
+      const event = JSON.parse(line);
+      return JSON.stringify(event.sessionId === sessionId && event.type === 'stop' ? { ...event, prompts } : event);
+    }).join('\n') + '\n');
+  }
+
+  it('main split a session between two projects: the one holding the greater total owns it', async () => {
+    const { root, project } = await setup();
+    const { projectQ } = await setupQ();
+    const today = new Date().toISOString().slice(0, 10);
+    // Main reported 3 prompts to P before the session moved, then its cumulative 5 to Q.
+    writeSharedSnapshots({ moved: 3 }, today, project);
+    writeSharedSnapshots({ moved: 5 }, today, projectQ);
+    // Compaction dropped its events; resumed in P, its Stop carries 6.
+    await resume('moved', root, 6);
+
+    expect(await report(project)).toBeNull();
+    expect(await reportedPrompts(projectQ)).toBe(1);
+  });
+
+  it('a project that reported a session past the shared snapshot\'s total owns it', async () => {
+    const { project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const today = new Date().toISOString().slice(0, 10);
+    // The shared file held 1 prompt; P, seeded from it, then reported through prompt 2.
+    writeSharedSnapshots({ resumed: 1 }, today);
+    writeSharedSnapshots({ resumed: 2 }, today, project);
+    await resume('resumed', rootQ, 3);
+
+    expect(await report(projectQ)).toBeNull();
+    expect(await reportedPrompts(project)).toBe(1);
+  });
+
+  it('a session a project reported with no prompts, only its intervention count, stays that project\'s', async () => {
+    const { project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    writeSharedSnapshots({ quiet: 0 }, new Date().toISOString().slice(0, 10), project);
+    for (const name of ['prompt-tokens', 'daily-sessions']) {
+      fs.rmSync(path.join(getDataHome(project), 'dashboard', `reported-${name}.json`));
+    }
+    await resume('quiet', rootQ, 0);
+
+    expect(await reportedInterventionSessions(projectQ)).toBe(0);
+  });
+
+  it('a session of a project whose data home is in its workspace stays that project\'s', async () => {
+    await setup();
+    const { rootQ, projectQ } = await setupQ();
+    // Not a git repo: its data home is `<root>/.teamai`, under no partition.
+    const rootW = path.join(tmp, 'plain-dir');
+    fs.mkdirSync(rootW);
+    const dataHomeW = await resolveProjectDataHome(rootW);
+    fs.mkdirSync(path.join(dataHomeW, 'team-repo'), { recursive: true });
+    await saveLocalConfigForScope({
+      repo: { localPath: path.join(dataHomeW, 'team-repo'), remote: 'https://example.test/acme/team-w.git', kind: 'git' },
+      username: 'tester', scope: 'project', projectRoot: rootW, additionalRoles: [], dataHome: dataHomeW,
+    });
+    const projectW = await resolveConfigForDir(rootW);
+    if (!projectW) throw new Error('fixture config W did not resolve');
+    expect(getDataHome(projectW)).toBe(path.join(rootW, '.teamai'));
+    writeSharedSnapshots({ resumed: 1 }, new Date().toISOString().slice(0, 10), projectW);
+    // Another of W's sessions is still in the log.
+    await session('claude', { session_id: 'other-w', cwd: rootW });
+    await resume('resumed', rootQ, 2);
+
+    expect(await report(projectQ)).toBeNull();
+  });
+
   it('the session owners a report keeps hold no path (#666)', async () => {
     const { root, project } = await setup();
     await session('copilot', { session_id: 'copilot-p', cwd: root });
