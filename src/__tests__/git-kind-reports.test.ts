@@ -12,6 +12,7 @@ import { getDataHome, getReportsDir, REPORTS_WORKTREE_DIRNAME, type LocalConfig 
 import { commitAndPushReports, ensureReportsWorktree, refreshReportsWorktree, updateReports } from '../utils/reports-branch.js';
 import { pushRepoDirectly } from '../utils/git.js';
 import { reportUsageToTeam } from '../team-push.js';
+import { dataHomeKey } from '../dashboard-collector.js';
 import { listMembers } from '../members.js';
 import { resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
 import { buildHandlerRegistry } from '../hook-handlers.js';
@@ -106,12 +107,12 @@ describe('git-kind reports branch', () => {
     const ts = new Date().toISOString();
     const eventsDir = path.join(process.env.HOME!, '.teamai', 'dashboard');
     // A session the user scope recorded.
-    const dataHome = getDataHome(cfg);
+    const key = await dataHomeKey(getDataHome(cfg));
     fs.mkdirSync(eventsDir, { recursive: true });
     fs.writeFileSync(
       path.join(eventsDir, 'events.jsonl'),
-      `${JSON.stringify({ type: 'session_start', timestamp: ts, sessionId: 's1', tool: 'claude', cwd: '/p', dataHome })}\n` +
-      `${JSON.stringify({ type: 'stop', timestamp: ts, sessionId: 's1', tool: 'claude', dataHome, interventions: { interrupt: 1, toolReject: 0 } })}\n`,
+      `${JSON.stringify({ type: 'session_start', timestamp: ts, sessionId: 's1', tool: 'claude', cwd: '/p', dataHomeKey: key })}\n` +
+      `${JSON.stringify({ type: 'stop', timestamp: ts, sessionId: 's1', tool: 'claude', dataHomeKey: key, interventions: { interrupt: 1, toolReject: 0 } })}\n`,
     );
     await reportUsageToTeam(clone, 'alice', { skipTruncate: true, selfConfig: cfg });
 

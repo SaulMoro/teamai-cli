@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { dashboardReport } from '../dashboard-collector.js';
+import { dashboardReport, dataHomeKey } from '../dashboard-collector.js';
 import { _setLogFilePath, _resetState } from '../utils/logger.js';
 
 // ─── legacy `dashboard-report` config gate ───
@@ -110,6 +110,8 @@ describe('legacy dashboard-report config gate', () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('session_start');
     expect(events[0].sessionId).toBe('sess-legacy-1');
+    // Keyed to the scope it resolved, so that scope's report keeps it (#785).
+    expect(events[0].dataHomeKey).toBe(await dataHomeKey(userConfigDir));
   });
 
   it('records nothing when no cwd can be resolved from the payload', async () => {

@@ -35,11 +35,14 @@ vi.mock('../utils/fs.js', async (importActual) => {
 });
 
 import { reportUsageToTeam } from '../team-push.js';
+import { dataHomeKey } from '../dashboard-collector.js';
 import { withTimeout } from '../utils/async.js';
 
 let tmpDir: string;
 let repoDir: string;
 let originalHome: string;
+/** `dataHomeKey()` of the user scope that `gitConfig()` reports. */
+let userKey: string;
 
 function gitConfig(): LocalConfig {
   return {
@@ -54,10 +57,11 @@ function reportsStatsPath(): string {
   return path.join(tmpDir, 'reports-wt', 'stats', 'me.yaml');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-tp-iv-'));
   originalHome = process.env.HOME ?? '';
   process.env.HOME = tmpDir;
+  userKey = await dataHomeKey(path.join(tmpDir, '.teamai'));
   repoDir = path.join(tmpDir, 'repo');
   fs.mkdirSync(repoDir, { recursive: true });
   pushRepoDirectly.mockReset().mockResolvedValue(undefined);
@@ -79,8 +83,7 @@ afterEach(() => {
 function writeDashboardEvents(lines: object[]): void {
   const p = path.join(tmpDir, '.teamai', 'dashboard', 'events.jsonl');
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  const dataHome = path.join(tmpDir, '.teamai');
-  fs.writeFileSync(p, lines.map((l) => JSON.stringify({ ...l, dataHome })).join('\n') + '\n');
+  fs.writeFileSync(p, lines.map((l) => JSON.stringify({ ...l, dataHomeKey: userKey })).join('\n') + '\n');
 }
 
 describe('reportUsageToTeam — intervention reporting', () => {

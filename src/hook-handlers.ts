@@ -175,7 +175,7 @@ const dashboardReportHandler: HookHandler = {
   async execute(stdin, tool, config) {
     // Registered with requiresConfig: a session outside any scope is not recorded.
     if (!config) return null;
-    const { parseHookEvent, appendEvent, compactEvents } = await import('./dashboard-collector.js');
+    const { parseHookEvent, appendEvent, compactEvents, dataHomeKey } = await import('./dashboard-collector.js');
     const { getDataHome } = await import('./types.js');
     const raw = JSON.stringify(stdin);
     const event = await parseHookEvent(raw, tool, {
@@ -183,9 +183,9 @@ const dashboardReportHandler: HookHandler = {
       modelAliases: await userModelAliases(stdin),
     });
     if (event) {
-      // The dispatcher's scope, which knows the project even when the host
-      // sends no cwd (Copilot) or a symlinked one (#785).
-      event.dataHome = getDataHome(config);
+      // The dispatcher's scope, which knows the project even when the event
+      // records no cwd (Copilot) or a symlinked one (#785).
+      event.dataHomeKey = await dataHomeKey(getDataHome(config));
       await appendEvent(event);
       // Non-blocking compaction
       compactEvents().catch(() => {});

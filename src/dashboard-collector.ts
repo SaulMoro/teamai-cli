@@ -47,7 +47,7 @@ import { estimateClaudeRequest } from './model-pricing.js';
 //      │ extract: session_id / cwd / tool_name / prompt
 //      ▼
 //  DashboardEvent
-//      │ dataHome = data home of the scope the hook resolved
+//      │ dataHomeKey = key of the data home of the scope the hook resolved
 //      ▼
 //  appendEvent(event) → events.jsonl
 //
@@ -1481,6 +1481,22 @@ export async function reconcileRequestLog(
 }
 
 /**
+ * The key an event records for the scope that wrote it, and that a scope's
+ * report matches (#785): a hash of the data home, so the log stores no path
+ * (Copilot events persist none, #666). The data home is realpath'd, so a
+ * symlinked checkout or macOS `/tmp` vs `/private/tmp` keys the same; a
+ * Windows path also folds separators and case, as the report's cwd rule does.
+ * A data home that is gone (an in-repo `.teamai` removed after migration)
+ * keys through its parent's realpath.
+ */
+export async function dataHomeKey(dataHome: string): Promise<string> {
+  const real = await fs.promises.realpath(dataHome).catch(() => !path.isAbsolute(dataHome) ? dataHome
+    : fs.promises.realpath(path.dirname(dataHome)).then((p) => path.join(p, path.basename(dataHome)), () => dataHome));
+  const norm = /^(?:[A-Za-z]:[\\/]|\\\\)/.test(real) ? real.replace(/\\/g, '/').toLowerCase() : real;
+  return createHash('sha256').update(norm.replace(/\/+$/, '')).digest('hex').slice(0, 16);
+}
+
+/**
  * Append a DashboardEvent to the events JSONL file.
  * Silently fails on I/O errors to avoid disrupting the AI session.
  */
@@ -1967,7 +1983,7 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   const event = await parseHookEvent(raw, toolArg ?? 'claude');
   if (!event) return;
 
-  event.dataHome = getDataHome(config);
+  event.dataHomeKey = await dataHomeKey(getDataHome(config));
   await appendEvent(event);
 
   // Trigger compaction check (non-blocking)

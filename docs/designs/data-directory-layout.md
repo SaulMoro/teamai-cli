@@ -314,7 +314,8 @@ project's report carry every project's skills. The user scope records in
 an earlier release still writes after a rollback; the shared file is never
 read. The dashboard stays an A2 singleton: `teamai dashboard`, `stats --by-repo`,
 `session save` and the contribute check read across scopes. Each event instead
-carries `dataHome`, the `getDataHome()` of the scope the hook resolved (#785), and a
+carries `dataHomeKey`, a hash of the realpath'd `getDataHome()` of the scope the
+hook resolved (#785; a hash, so a Copilot event still stores no path), and a
 scope's report keeps only its own. An event written before that field existed is
 attributed by its `cwd`, realpath'd, to the project whose root holds it, never to
 the user scope.

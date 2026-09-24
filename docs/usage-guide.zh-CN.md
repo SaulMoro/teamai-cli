@@ -1685,9 +1685,9 @@ Pull 对整批统计上报最多等待 5 秒，之后继续其他工作，上报
 超时后推送成功，仍会更新本地已上报快照。skill 使用按 scope 记录：写入会话所在
 目录对应的已配置 teamai 项目的数据目录（或 user scope），因此每个目标只上报
 自己的使用；未配置 teamai 的目录不记录。Dashboard 会话仍写入整机共用的
-`~/.teamai/dashboard/events.jsonl`，但每条事件都记下所属 scope 的数据目录（data home），因此每个 scope
+`~/.teamai/dashboard/events.jsonl`，但每条事件都记下所属 scope 数据目录（data home）的键（哈希值，不是路径），因此每个 scope
 只上报在其中记录的会话：user scope 的 pull 不再上报项目的会话，项目会上报自己的
-Copilot 会话以及从软链接路径启动的会话。旧版本记录的事件没有数据目录：项目上报目录
+Copilot 会话以及从软链接路径启动的会话。旧版本记录的事件没有该键：项目上报目录
 位于其根目录下的那些，user scope 一条也不上报。目标确认成功后才清理自己的使用事件，
 推送失败会保留事件。上报完成前继续持有相关同步锁，
 避免另一次 Pull 与尚未完成的上报竞争。

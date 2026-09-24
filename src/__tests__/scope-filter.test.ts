@@ -3,11 +3,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { filterEventsByScope } from '../team-push.js';
+import { dataHomeKey } from '../dashboard-collector.js';
 import type { DashboardEvent, LocalConfig } from '../types.js';
 
-/** An event; without `dataHome` it is one written before events carried one, attributed by cwd. */
-function makeEvent(cwd: string | undefined, sessionId = 's1', dataHome?: string): DashboardEvent {
-  return { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId, tool: 'claude', cwd, dataHome };
+/** An event written before events carried a data home key, attributed by cwd. */
+function makeEvent(cwd: string | undefined, sessionId = 's1'): DashboardEvent {
+  return { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId, tool: 'claude', cwd };
+}
+
+/** An event recorded by the scope whose data home is `dataHome`. */
+async function scopedEvent(cwd: string | undefined, sessionId: string, dataHome: string): Promise<DashboardEvent> {
+  return { ...makeEvent(cwd, sessionId), dataHomeKey: await dataHomeKey(dataHome) };
 }
 
 const repo = { localPath: '/unused/team-repo', remote: 'https://example.test/team.git' };
@@ -37,31 +43,31 @@ describe('filterEventsByScope', () => {
     expect(await filterEventsByScope(events)).toEqual(events);
   });
 
-  describe('events that carry a data home', () => {
-    const scoped: DashboardEvent[] = [
-      makeEvent('/Users/jeff/project-a', 'p1', '/home/jeff/.teamai/projects/p'),
-      makeEvent(undefined, 'p2', '/home/jeff/.teamai/projects/p'),
-      makeEvent('/Users/jeff/project-a', 'u1', '/home/jeff/.teamai'),
-      makeEvent('/Users/jeff/project-a', 'q1', '/home/jeff/.teamai/projects/q'),
-    ];
+  describe('events that carry a data home key', () => {
+    const scoped = (): Promise<DashboardEvent[]> => Promise.all([
+      scopedEvent('/Users/jeff/project-a', 'p1', '/home/jeff/.teamai/projects/p'),
+      scopedEvent(undefined, 'p2', '/home/jeff/.teamai/projects/p'),
+      scopedEvent('/Users/jeff/project-a', 'u1', '/home/jeff/.teamai'),
+      scopedEvent('/Users/jeff/project-a', 'q1', '/home/jeff/.teamai/projects/q'),
+    ]);
 
     it('a project keeps its own, whatever their cwd', async () => {
-      expect(await ids(scoped, projectScope('/Users/jeff/project-a'))).toEqual(['p1', 'p2']);
+      expect(await ids(await scoped(), projectScope('/Users/jeff/project-a'))).toEqual(['p1', 'p2']);
     });
 
     it('the user scope keeps its own and no project\'s', async () => {
-      expect(await ids(scoped, userScope())).toEqual(['u1']);
+      expect(await ids(await scoped(), userScope())).toEqual(['u1']);
     });
 
     it('a project keeps what it recorded under its in-repo .teamai before moving to a partition', async () => {
-      const legacy = [makeEvent(undefined, 'l1', '/Users/jeff/project-a/.teamai')];
+      const legacy = [await scopedEvent(undefined, 'l1', '/Users/jeff/project-a/.teamai')];
       expect(await ids(legacy, projectScope('/Users/jeff/project-a'))).toEqual(['l1']);
       expect(await ids(legacy, userScope())).toEqual([]);
     });
 
     it('a project rooted at HOME does not take the user scope\'s events', async () => {
       const home = os.homedir();
-      const evts = [makeEvent(undefined, 'u1', path.join(home, '.teamai'))];
+      const evts = [await scopedEvent(undefined, 'u1', path.join(home, '.teamai'))];
       expect(await ids(evts, projectScope(home))).toEqual([]);
     });
 
@@ -70,7 +76,7 @@ describe('filterEventsByScope', () => {
       try {
         fs.mkdirSync(path.join(tmp, 'real', '.teamai'), { recursive: true });
         fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link'), 'dir');
-        const evts = [makeEvent(undefined, 'k1', path.join(tmp, 'link', '.teamai'))];
+        const evts = [await scopedEvent(undefined, 'k1', path.join(tmp, 'link', '.teamai'))];
         const config = projectScope(path.join(tmp, 'real'), path.join(tmp, 'real', '.teamai'));
         expect(await ids(evts, config)).toEqual(['k1']);
       } finally {
@@ -78,10 +84,46 @@ describe('filterEventsByScope', () => {
       }
     });
 
+    it('keeps what a project recorded in its in-repo .teamai after migration removed it', async () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-gone-')));
+      try {
+        fs.mkdirSync(path.join(tmp, 'real', '.teamai'), { recursive: true });
+        fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link'), 'dir');
+        const evts = [await scopedEvent(undefined, 'g1', path.join(tmp, 'link', '.teamai'))];
+        fs.rmSync(path.join(tmp, 'real', '.teamai'), { recursive: true });
+        expect(await ids(evts, projectScope(path.join(tmp, 'link')))).toEqual(['g1']);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('a Windows data home matches whatever its case or separators', async () => {
-      const win = [makeEvent(undefined, 'w1', 'C:\\Users\\Jeff\\.teamai'), makeEvent(undefined, 'w2', 'C:\\Users\\jeff\\.teamai\\projects\\p')];
+      const win = await Promise.all([scopedEvent(undefined, 'w1', 'C:\\Users\\Jeff\\.teamai'), scopedEvent(undefined, 'w2', 'C:\\Users\\jeff\\.teamai\\projects\\p')]);
       expect(await ids(win, userScope('c:/users/jeff/.teamai'))).toEqual(['w1']);
     });
+  });
+
+  it('an event whose key is not a string counts as written before keys existed', async () => {
+    // A hand-edited or corrupted line in the shared log.
+    const corrupt: DashboardEvent[] = JSON.parse(JSON.stringify([
+      { ...makeEvent('/Users/jeff/project-a', 'c1'), dataHomeKey: null },
+      { ...makeEvent('/Users/jeff/other-work', 'c2'), dataHomeKey: 42 },
+    ]));
+    expect(await ids(corrupt, projectScope('/Users/jeff/project-a'))).toEqual(['c1']);
+    expect(await ids(corrupt, userScope())).toEqual([]);
+  });
+
+  it('matches an older event\'s real cwd to a project whose root was set through a symlink', async () => {
+    // A non-git project's root is the directory as given, not realpath'd.
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-root-')));
+    try {
+      fs.mkdirSync(path.join(tmp, 'real'));
+      fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link'), 'dir');
+      const evts = [makeEvent(path.join(tmp, 'real'), 'r1')];
+      expect(await ids(evts, projectScope(path.join(tmp, 'link')))).toEqual(['r1']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('the user scope never keeps events without a data home', async () => {

@@ -10,6 +10,7 @@ import os from 'node:os';
 import { simpleGit } from 'simple-git';
 
 import { reportUsageToTeam } from '../team-push.js';
+import { dataHomeKey } from '../dashboard-collector.js';
 import type { LocalConfig } from '../types.js';
 
 let tmp: string;
@@ -96,12 +97,12 @@ describe('E2E self-mode: business repo working tree is never reset', () => {
     const ts = new Date().toISOString();
     const eventsDir = path.join(process.env.HOME!, '.teamai', 'dashboard');
     // A session the user scope recorded (#785).
-    const dataHome = path.join(tmp, 'home', '.teamai');
+    const key = await dataHomeKey(path.join(tmp, 'home', '.teamai'));
     fs.mkdirSync(eventsDir, { recursive: true });
     fs.writeFileSync(
       path.join(eventsDir, 'events.jsonl'),
-      `${JSON.stringify({ type: 'session_start', timestamp: ts, sessionId: 's1', tool: 'claude', cwd: '/p', dataHome })}\n` +
-      `${JSON.stringify({ type: 'stop', timestamp: ts, sessionId: 's1', tool: 'claude', dataHome, interventions: { interrupt: 1, toolReject: 0 } })}\n`,
+      `${JSON.stringify({ type: 'session_start', timestamp: ts, sessionId: 's1', tool: 'claude', cwd: '/p', dataHomeKey: key })}\n` +
+      `${JSON.stringify({ type: 'stop', timestamp: ts, sessionId: 's1', tool: 'claude', dataHomeKey: key, interventions: { interrupt: 1, toolReject: 0 } })}\n`,
     );
 
     const cfg: LocalConfig = {

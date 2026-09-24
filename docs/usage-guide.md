@@ -1745,10 +1745,10 @@ reported snapshots. Skill usage is recorded per scope, in the data directory of
 the project teamai is set up for where the session ran (or the user scope), so
 each target reports only its own; a directory without teamai records none.
 Dashboard sessions stay in one machine-wide `~/.teamai/dashboard/events.jsonl`,
-but each event records the data home of its scope, so a scope reports only the
-sessions recorded in it: a user-scope pull no longer reports a project's
-sessions, and a project reports its Copilot sessions and sessions started under
-a symlinked path. Events recorded by an earlier release carry no data home: a
+but each event records a key of its scope's data home (a hash, not the path),
+so a scope reports only the sessions recorded in it: a user-scope pull no
+longer reports a project's sessions, and a project reports its Copilot sessions and sessions started under
+a symlinked path. Events recorded by an earlier release carry no key: a
 project reports those whose directory lies under its root, the user scope
 reports none of them. A
 target removes its usage events only after it confirms success; failed pushes

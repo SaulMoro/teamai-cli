@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
 import { aggregateUsage } from './stats.js';
-import { readEvents, aggregateSessionMetrics } from './dashboard-collector.js';
+import { readEvents, aggregateSessionMetrics, dataHomeKey } from './dashboard-collector.js';
 import {
   createGit,
   pushRepoDirectly,
@@ -354,14 +354,13 @@ function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
 
 /**
  * The dashboard events a scope reports (#785): those recorded in it, keyed by
- * its data home. A project also owns the key of its in-repo `.teamai`, where a
- * hook recorded until migration moved the project to a partition. An event
- * written before events carried a data home belongs to the project whose root holds
- * its cwd, never to the user scope. `projectRoot` is realpath'd, but a cwd is
- * raw as the host sent it (a symlinked checkout, macOS `/tmp` vs
- * `/private/tmp`) and so is a non-git project's data home, so both are
- * realpath'd while they still exist. A caller without a scope config reads the
- * whole log.
+ * its data home (`dataHomeKey`). A project also owns the key of its in-repo
+ * `.teamai`, where a hook recorded until migration moved the project to a
+ * partition. An event written before events carried a key belongs to the
+ * project whose root holds its cwd, never to the user scope. A cwd is raw as
+ * the host sent it (a symlinked checkout, macOS `/tmp` vs `/private/tmp`), and
+ * so is a non-git project's root, so both are realpath'd while they still exist.
+ * A caller without a scope config reads the whole log.
  */
 export async function filterEventsByScope(
   events: DashboardEvent[],
@@ -377,19 +376,16 @@ export async function filterEventsByScope(
     }
     return real;
   };
-  const keyOf = async (home: string): Promise<ScopeRoot> => scopeRoot(await realPath(home));
-  const homeRoots = [await keyOf(getDataHome(config))];
+  const keys = new Set([await dataHomeKey(getDataHome(config))]);
   if (config.projectRoot) {
     // Unless the project is rooted at HOME, where that is the user scope's.
-    const legacy = await keyOf(path.join(config.projectRoot, '.teamai'));
-    if (legacy.key !== (await keyOf(path.join(getUserHome(), '.teamai'))).key) homeRoots.push(legacy);
+    const legacy = await dataHomeKey(path.join(config.projectRoot, '.teamai'));
+    if (legacy !== (await dataHomeKey(path.join(getUserHome(), '.teamai')))) keys.add(legacy);
   }
-  const root = config.projectRoot ? scopeRoot(config.projectRoot) : undefined;
+  const root = config.projectRoot ? scopeRoot(await realPath(config.projectRoot)) : undefined;
   const kept = await Promise.all(events.map(async (e) => {
-    if (e.dataHome !== undefined) {
-      const dataHome = await realPath(e.dataHome);
-      return homeRoots.some((home) => scopeKey(dataHome, home.windows) === home.key);
-    }
+    // The log is hand-editable: a key that is not a string counts as absent.
+    if (typeof e.dataHomeKey === 'string') return keys.has(e.dataHomeKey);
     return !!root && !!e.cwd && isUnderScopeRoot(await realPath(e.cwd), root);
   }));
   return events.filter((_, i) => kept[i]);

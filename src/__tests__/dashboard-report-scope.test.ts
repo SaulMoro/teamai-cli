@@ -32,6 +32,7 @@ vi.mock('../utils/reports-branch.js', () => ({
 const { hookDispatchCli } = await import('../hook-dispatch-cli.js');
 const { resolveProjectDataHome, saveLocalConfigForScope, resolveConfigForDir, loadLocalConfig } = await import('../config.js');
 const { reportUsageToTeam } = await import('../team-push.js');
+const { getDataHome } = await import('../types.js');
 
 let tmp: string;
 let originalHome: string | undefined;
@@ -127,6 +128,17 @@ describe('each scope reports only the dashboard sessions recorded in it (#785)',
 
     expect(await reportedSessions(user)).toBe(0);
     expect(await reportedSessions(project)).toBe(1);
+  });
+
+  it('a Copilot event records its scope without persisting a path (#666)', async () => {
+    const { root, project } = await setup();
+    await session('copilot', { session_id: 'copilot-p', cwd: root });
+
+    const log = fs.readFileSync(path.join(teamaiHome(), 'dashboard', 'events.jsonl'), 'utf-8');
+    const partition = getDataHome(project);
+    expect(log).not.toContain(root);
+    expect(log).not.toContain(partition);
+    expect(log).not.toContain(path.basename(partition));
   });
 
   it('a session started under a symlinked path of the project is reported by the project', async () => {
