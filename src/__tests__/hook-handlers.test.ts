@@ -39,6 +39,7 @@ vi.mock('../dashboard-collector.js', () => ({
   compactEvents: vi.fn().mockResolvedValue(undefined),
   dashboardReport: mockDashboardReport,
   dataHomeKey: vi.fn().mockResolvedValue('key'),
+  eventProjectAnchor: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Use the REAL resolveSkillUse (pure Skill/Read+SKILL.md logic, no I/O) so the

@@ -7,6 +7,8 @@ import fs from 'fs-extra';
 // Mock external dependencies
 vi.mock('../codebase-extract.js', () => ({
   extractCodebase: vi.fn(),
+  // The fixtures are outside git, where the slug is the directory's name.
+  defaultProjectSlug: async (dir: string) => path.basename(dir),
 }));
 
 vi.mock('../graph-aggregate.js', () => ({

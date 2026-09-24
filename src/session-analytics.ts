@@ -10,7 +10,7 @@
 
 import { aggregateSessionMetrics } from './dashboard-collector.js';
 import { emptyTokenUsage, addTokenUsage, totalTokens } from './types.js';
-import { attributeRepo } from './utils/repo-attribution.js';
+import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import type { DashboardEvent, TokenUsage } from './types.js';
 
 export interface RepoStat {
@@ -23,28 +23,28 @@ export interface RepoStat {
 }
 
 /**
- * Roll usage up per repo. Each session is attributed to the project of its cwd;
- * its prompts/interventions/tokens (from aggregateSessionMetrics) and tool count
- * are added to that repo's totals. Sorted by total tokens, then session count.
+ * Roll usage up per repo. Each session is attributed to its repo (repoKeys), so
+ * every worktree of a repo counts as the repo; its prompts/interventions/tokens
+ * (from aggregateSessionMetrics) and tool count are added to that repo's totals,
+ * under its repoLabel. Sorted by total tokens, then session count.
  */
 export function attributeByRepo(events: DashboardEvent[]): RepoStat[] {
-  const sessionCwd = new Map<string, string>();
   const sessionTools = new Map<string, number>();
-  const sessionIds = new Set<string>();
 
   for (const e of events) {
-    sessionIds.add(e.sessionId);
-    if (e.cwd) sessionCwd.set(e.sessionId, e.cwd);
     if (e.type === 'tool_use') {
       sessionTools.set(e.sessionId, (sessionTools.get(e.sessionId) ?? 0) + 1);
     }
   }
 
+  const keys = repoKeys(events);
+  const allKeys = new Set(keys.values());
   const metrics = aggregateSessionMetrics(events);
   const byRepo = new Map<string, RepoStat>();
 
-  for (const sid of sessionIds) {
-    const repo = attributeRepo(sessionCwd.get(sid));
+  for (const [sid, key] of keys) {
+    // By label, not key: the directories that are not a repo share `no_repo`.
+    const repo = repoLabel(key, allKeys);
     let r = byRepo.get(repo);
     if (!r) {
       r = { repo, sessions: 0, prompts: 0, tools: 0, interventions: 0, tokens: emptyTokenUsage() };

@@ -739,8 +739,25 @@ export interface ProjectAnchors {
  *    `/private/tmp`) does not make the same checkout look like two different ones.
  *    Case-insensitive-filesystem normalization is intentionally NOT done here; it
  *    is only needed for the P1 slug hash and belongs with that change.
+ *  - A directory's anchors are remembered for the life of the process, so the
+ *    hook that resolves them for the config and again for the event runs git
+ *    once (#809). A checkout does not change which repository it belongs to, and
+ *    a long-lived process (the dashboard server) keeps answering for a worktree
+ *    removed after it was first asked, which is what attribution wants. `null`
+ *    is not remembered: a directory can become a repository later.
  */
+const anchorsByDir = new Map<string, ProjectAnchors>();
+
 export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | null> {
+  const dir = path.resolve(cwd ?? process.cwd());
+  const known = anchorsByDir.get(dir);
+  if (known) return known;
+  const anchors = await readAnchors(cwd);
+  if (anchors) anchorsByDir.set(dir, anchors);
+  return anchors;
+}
+
+async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
   const git = createGit(cwd);
   let toplevel: string;
   let mainWorktree: string;

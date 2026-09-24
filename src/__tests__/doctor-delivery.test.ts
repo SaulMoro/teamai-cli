@@ -353,6 +353,74 @@ describe('doctor — skills delivered on disk', () => {
     it('asks nothing when the team repo ships no docs', async () => {
       expect(await docsCheck()).toBeUndefined();
     });
+
+    it('reports missing and stale docs together without changing local files', async () => {
+      await writeTeamDoc('guide.md');
+      const stale = path.join(homeDir, 'team-docs', 'old', 'retired.md');
+      await fse.outputFile(stale, 'stale');
+      const check = await docsCheck();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('Missing from');
+      expect(check!.fix).toContain('guide.md');
+      expect(check!.fix).toContain('Stale docs');
+      expect(check!.fix).toContain('old/retired.md');
+      expect(await fse.readFile(stale, 'utf8')).toBe('stale');
+    });
+
+    it.each(['missing', 'empty', 'hidden-only'])('detects stale docs when the team bundle is %s', async (state) => {
+      if (state === 'empty') await fse.ensureDir(path.join(repoPath, 'docs'));
+      if (state === 'hidden-only') await writeTeamDoc('.keep');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'old.md'), 'stale');
+      const check = await docsCheck();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('Stale docs');
+      expect(check!.fix).toContain('old.md');
+      expect(check!.fix).not.toContain('Missing from');
+      expect(check!.fix).toContain('teamai pull --force');
+    });
+
+    it.each(['missing', 'empty'])('reports stale empty directories when the team bundle is %s', async (state) => {
+      if (state === 'empty') await fse.ensureDir(path.join(repoPath, 'docs'));
+      const empty = path.join(homeDir, 'team-docs', 'old', 'nested');
+      await fse.ensureDir(empty);
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'private', '.keep'), 'hidden');
+      const check = await docsCheck();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('old/nested/');
+      expect(check!.fix).not.toContain('private');
+      expect(await fse.pathExists(empty)).toBe(true);
+    });
+
+    it('accepts an empty directory that still exists in the team bundle', async () => {
+      await fse.ensureDir(path.join(repoPath, 'docs', 'empty'));
+      await fse.ensureDir(path.join(homeDir, 'team-docs', 'empty'));
+      expect(await docsCheck()).toBeUndefined();
+    });
+
+    it('ignores hidden local docs and hidden subdirectories', async () => {
+      await fse.outputFile(path.join(homeDir, 'team-docs', '.draft.md'), 'hidden');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'old', '.private', 'draft.md'), 'hidden');
+      expect(await docsCheck()).toBeUndefined();
+    });
+
+    it('reports a stale directory link without traversing its target', async () => {
+      const outside = path.join(tempDir, 'outside');
+      await fse.outputFile(path.join(outside, 'keep.md'), 'outside');
+      await fse.ensureDir(path.join(homeDir, 'team-docs'));
+      await fse.symlink(outside, path.join(homeDir, 'team-docs', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+      const check = await docsCheck();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('linked');
+      expect(check!.fix).not.toContain('keep.md');
+      expect(await fse.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('outside');
+    });
+
+    it('reports a destination that cannot be inspected instead of throwing', async () => {
+      await fse.outputFile(path.join(homeDir, 'team-docs'), 'not a directory');
+      const check = await docsCheck();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('Could not inspect the docs mirror');
+    });
   });
 
   // The command whose job is reporting bad state must not stack-trace on it.
