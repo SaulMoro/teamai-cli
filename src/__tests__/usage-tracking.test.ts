@@ -31,7 +31,7 @@ import {
   extractSkillName,
   skillExistsOnDisk,
 } from '../usage-tracker.js';
-import { aggregateUsage } from '../stats.js';
+import { aggregateUsage, showStats } from '../stats.js';
 import { mergeStats } from '../team-push.js';
 import { calculateSkillHealth, scoreToStars, calculateTeamHealth } from '../skill-health.js';
 import { getRecommendations } from '../skill-recommend.js';
@@ -472,6 +472,49 @@ describe('usage file lock (#788)', () => {
 
     expect(await skills()).toEqual(['a', 'b', 'c', 'd']);
     expect(await pendingFiles()).toEqual([]);
+  });
+
+  it('keeps a side file event identical to one already in the file', async () => {
+    await appendUsageEvent(event('a'), userScope());
+    await writeLock(process.pid);
+    await appendUsageEvent(event('a'), userScope());
+    await fs.promises.rm(`${usagePath()}.lock`);
+
+    await appendUsageEvent(event('b'), userScope());
+
+    expect(await skills()).toEqual(['a', 'a', 'b']);
+    expect(await pendingFiles()).toEqual([]);
+  });
+
+  it('keeps two identical events recorded in side files at once', async () => {
+    await writeLock(process.pid);
+    await Promise.all([appendUsageEvent(event('a'), userScope()), appendUsageEvent(event('a'), userScope())]);
+    expect(await pendingFiles()).toHaveLength(2);
+    await fs.promises.rm(`${usagePath()}.lock`);
+
+    await appendUsageEvent(event('b'), userScope());
+
+    expect(await skills()).toEqual(['a', 'a', 'b']);
+    expect(await pendingFiles()).toEqual([]);
+  });
+
+  it('keeps the side file id out of what readers and `teamai stats` see', async () => {
+    await writeLock(process.pid);
+    await appendUsageEvent(event('a'), userScope());
+    await fs.promises.rm(`${usagePath()}.lock`);
+    await appendUsageEvent(event('b'), userScope());
+    expect(await fs.promises.readFile(usagePath(), 'utf-8')).toContain('"pendingId"');
+
+    expect(await readUsageEvents(userScope())).toStrictEqual([event('a'), event('b')]);
+    const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await showStats();
+      const printed = out.mock.calls.flat().join('\n');
+      expect(printed).toContain('a');
+      expect(printed).not.toContain('pendingId');
+    } finally {
+      out.mockRestore();
+    }
   });
 
   const pendingMode = async () =>
