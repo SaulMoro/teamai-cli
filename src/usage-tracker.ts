@@ -243,8 +243,11 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
     }
     // The lock is still held: record the event in a side file of its own for
     // the next lock holder to fold in, rather than race a rewrite.
+    // It holds what the usage file holds, so it gets no wider mode than that file
+    // (the umask can only narrow it); owner-only while there is no file yet.
     const pendingPath = path.join(path.dirname(usagePath), `${pendingPrefix(usagePath)}${randomUUID()}.jsonl`);
-    await fs.promises.writeFile(pendingPath, line, { encoding: 'utf-8', flag: 'wx' });
+    const mode = await fs.promises.stat(usagePath).then((s) => s.mode & 0o777, () => 0o600);
+    await fs.promises.writeFile(pendingPath, line, { encoding: 'utf-8', flag: 'wx', mode });
     log.debug(`Tracked skill: ${event.skill} (in ${pendingPath}; ${usagePath}.lock is held)`);
   } catch (e) {
     log.error(`Failed to write usage event: ${(e as Error).message}`);

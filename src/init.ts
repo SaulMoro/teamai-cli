@@ -630,6 +630,10 @@ export function buildSelfModeGitignore(): string {
     // resolution (self mode uses this name to avoid colliding with the env/ dir).
     'env.local',
     'usage.jsonl',
+    // The usage lock, a rewrite's temp copy and the events a hook records while
+    // the lock is held (#788).
+    'usage.jsonl.*',
+    'usage.pending-*.jsonl',
     'known-skills.json',
     'search-index.json',
     'managed-mcp.json',
@@ -697,6 +701,9 @@ export function migrateSelfModeGitignoreContent(content: string): { changed: boo
   ensure('learnings-wt/', 'reports-wt/');
   ensure('.learnings-lock', '.reports-lock');
   ensure('pending-learnings/', 'knowledge-wt/');
+  // The usage lock, rewrite temps and pending events arrived with the usage cap (#788).
+  ensure('usage.jsonl.*', 'usage.jsonl');
+  ensure('usage.pending-*.jsonl', 'usage.jsonl.*');
 
   return { changed, content: filtered.join('\n') };
 }
@@ -1715,6 +1722,8 @@ export async function init(options: GlobalOptions & {
         'sessions/',
         'dashboard/',
         'usage.jsonl',
+        'usage.jsonl.*',
+        'usage.pending-*.jsonl',
         'known-skills.json',
         'learnings/',
         'search-index.json',

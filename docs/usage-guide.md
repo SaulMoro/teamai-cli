@@ -1803,7 +1803,10 @@ report's truncate and the cap take one lock beside the usage file, so a rewrite
 does not lose an event recorded while it runs. A hook that cannot take the lock
 within ~250 ms records its event in a `*.pending-<id>.jsonl` file next to it,
 which the next lock holder appends to the usage file; a rewrite that cannot take
-it within ~5 s leaves the file as it is.
+it within ~5 s leaves the file as it is. A pending file gets no wider mode than
+the usage file (owner-only while there is none). An in-workspace
+`.teamai/.gitignore` ignores the lock, a rewrite's temp copy and the pending
+files; `pull` and `push` add those entries to an existing single-repo one.
 
 ### Git submodules
 

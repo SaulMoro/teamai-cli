@@ -451,6 +451,27 @@ describe('usage file lock (#788)', () => {
     expect(await pendingFiles()).toEqual([]);
   });
 
+  const pendingMode = async () =>
+    (await fs.promises.stat(path.join(path.dirname(usagePath()), (await pendingFiles())[0]))).mode & 0o777;
+
+  it('gives a side file the mode of the usage file', async () => {
+    await appendUsageEvent(event('a'), userScope());
+    await fs.promises.chmod(usagePath(), 0o600);
+    await writeLock(process.pid);
+
+    await appendUsageEvent(event('b'), userScope());
+
+    expect(await pendingMode()).toBe(0o600);
+  });
+
+  it('keeps a side file private to its owner while there is no usage file yet', async () => {
+    await writeLock(process.pid);
+
+    await appendUsageEvent(event('a'), userScope());
+
+    expect(await pendingMode()).toBe(0o600);
+  });
+
   it('keeps an append that gives up on the lock while a slow cap rewrites the file', async () => {
     await fse.outputFile(
       usagePath(),
