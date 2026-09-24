@@ -1800,7 +1800,10 @@ without going empty; a reporting scope whose report does not complete while
 it holds more than 5,000 drops its oldest unreported events the same way. The
 cap runs only after a report has removed the events it sent. Hook appends, the
 report's truncate and the cap take one lock beside the usage file, so a rewrite
-does not lose an event recorded while it runs.
+does not lose an event recorded while it runs. A hook that cannot take the lock
+within ~250 ms records its event in a `*.pending-<id>.jsonl` file next to it,
+which the next lock holder appends to the usage file; a rewrite that cannot take
+it within ~5 s leaves the file as it is.
 
 ### Git submodules
 

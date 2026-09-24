@@ -430,15 +430,75 @@ describe('usage file lock (#788)', () => {
     expect(fs.existsSync(`${usagePath()}.lock`)).toBe(false);
   });
 
-  it('appends within the hook budget while the lock stays held', async () => {
+  const pendingFiles = async () =>
+    (await fs.promises.readdir(path.dirname(usagePath()))).filter((n) => n.startsWith('user-usage.pending-'));
+
+  it('records an event beside the file within the hook budget while the lock stays held, and folds it in later', async () => {
+    await appendUsageEvent(event('a'), userScope());
     await writeLock(process.pid);
 
     const started = Date.now();
-    await appendUsageEvent(event('a'), userScope());
+    await appendUsageEvent(event('b'), userScope());
 
     expect(Date.now() - started).toBeLessThan(1000);
     expect(await skills()).toEqual(['a']);
+    expect(await pendingFiles()).toHaveLength(1);
+
+    await fs.promises.rm(`${usagePath()}.lock`);
+    await appendUsageEvent(event('c'), userScope());
+
+    expect(await skills()).toEqual(['a', 'b', 'c']);
+    expect(await pendingFiles()).toEqual([]);
   });
+
+  it('keeps an append that gives up on the lock while a slow cap rewrites the file', async () => {
+    await fse.outputFile(
+      usagePath(),
+      Array.from({ length: USAGE_EVENT_CAP + 2 }, (_, i) => JSON.stringify(event(`s${i}`))).join('\n') + '\n',
+    );
+    const realWrite = fs.promises.writeFile;
+    let append: Promise<void> | undefined;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (String(file).includes('.pending-')) return realWrite(file, data, options);
+      append = appendUsageEvent(event('late'), userScope());
+      await append;
+      return realWrite(file, data, options);
+    });
+    try {
+      await capUsageEvents(userScope());
+    } finally {
+      spy.mockRestore();
+    }
+    await appendUsageEvent(event('next'), userScope());
+
+    const kept = await skills();
+    expect(kept).toHaveLength(USAGE_EVENT_CAP + 2);
+    expect(kept.slice(-2).sort()).toEqual(['late', 'next']);
+  });
+
+  it('leaves a side file alone while it is still being written', async () => {
+    const partial = path.join(tmpDir, '.teamai', 'user-usage.pending-00000000-0000-4000-8000-000000000000.jsonl');
+    await fse.outputFile(partial, '');
+
+    await appendUsageEvent(event('a'), userScope());
+
+    expect(await skills()).toEqual(['a']);
+    expect(fs.existsSync(partial)).toBe(true);
+  });
+
+  it('does not rewrite the file while another holder keeps the lock', async () => {
+    await fse.outputFile(
+      usagePath(),
+      Array.from({ length: USAGE_EVENT_CAP + 2 }, (_, i) => JSON.stringify(event(`s${i}`))).join('\n') + '\n',
+    );
+    const before = await fs.promises.readFile(usagePath(), 'utf-8');
+    await writeLock(process.pid);
+
+    await capUsageEvents(userScope());
+    await truncateUsageAfterReport(2, userScope());
+
+    expect(await fs.promises.readFile(usagePath(), 'utf-8')).toBe(before);
+  }, 20_000);
 
   it('holds an append issued mid-truncate until the truncated file is in place', async () => {
     for (const s of ['a', 'b', 'c']) await appendUsageEvent(event(s), userScope());

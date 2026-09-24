@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './utils/logger.js';
@@ -237,8 +237,15 @@ export async function appendUsageEvent(event: UsageEvent, config: LocalConfig): 
     const usagePath = getUsagePath(config);
     await ensureDir(path.dirname(usagePath));
     const line = JSON.stringify(event) + '\n';
-    await withUsageLock(usagePath, APPEND_LOCK_WAIT, () => fs.promises.appendFile(usagePath, line, 'utf-8'));
-    log.debug(`Tracked skill: ${event.skill}`);
+    if (await withUsageLock(usagePath, APPEND_LOCK_WAIT, () => fs.promises.appendFile(usagePath, line, 'utf-8'))) {
+      log.debug(`Tracked skill: ${event.skill}`);
+      return;
+    }
+    // The lock is still held: record the event in a side file of its own for
+    // the next lock holder to fold in, rather than race a rewrite.
+    const pendingPath = path.join(path.dirname(usagePath), `${pendingPrefix(usagePath)}${randomUUID()}.jsonl`);
+    await fs.promises.writeFile(pendingPath, line, { encoding: 'utf-8', flag: 'wx' });
+    log.debug(`Tracked skill: ${event.skill} (in ${pendingPath}; ${usagePath}.lock is held)`);
   } catch (e) {
     log.error(`Failed to write usage event: ${(e as Error).message}`);
   }
@@ -319,25 +326,56 @@ const REWRITE_LOCK_WAIT = { attempts: 100, delayMs: 50 };
  * Run `fn` holding the lock every writer of this usage file takes (#788): hook
  * appends, the report's truncate and the cap. A rewrite then cannot drop an
  * append made while it runs, and two pulls cannot interleave their rewrites.
- * A lock whose owner is gone is reclaimed; one still held after the wait is
- * written through anyway rather than dropping the event or the rewrite.
+ * The holder first folds in the side files of appends that gave up waiting. A
+ * lock whose owner is gone is reclaimed. Returns false, without running `fn`,
+ * when the lock is still held after the wait.
  */
-async function withUsageLock<T>(
+async function withUsageLock(
   usagePath: string,
   wait: { attempts: number; delayMs: number },
-  fn: (locked: boolean) => Promise<T>,
-): Promise<T> {
+  fn: () => Promise<void>,
+): Promise<boolean> {
   const lockPath = `${usagePath}.lock`;
-  let locked = false;
-  for (let i = 0; i < wait.attempts && !locked; i++) {
-    locked = await acquireLock(lockPath);
-    if (!locked) await new Promise((r) => setTimeout(r, wait.delayMs));
+  for (let i = 0; i < wait.attempts; i++) {
+    if (await acquireLock(lockPath)) {
+      try {
+        await foldPendingEvents(usagePath);
+        await fn();
+      } finally {
+        await releaseLock(lockPath);
+      }
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, wait.delayMs));
   }
-  if (!locked) log.debug(`${lockPath} still held after ${wait.attempts * wait.delayMs} ms; writing without it`);
-  try {
-    return await fn(locked);
-  } finally {
-    if (locked) await releaseLock(lockPath);
+  return false;
+}
+
+/** Name prefix of the side files an append writes while the usage lock is held. */
+function pendingPrefix(usagePath: string): string {
+  return `${path.basename(usagePath, '.jsonl')}.pending-`;
+}
+
+/**
+ * Append the side files of appends that gave up on the lock to the usage file,
+ * then remove them. Each holds one whole line; one without its newline is
+ * still being written and waits for the next holder.
+ */
+async function foldPendingEvents(usagePath: string): Promise<void> {
+  const dir = path.dirname(usagePath);
+  const prefix = pendingPrefix(usagePath);
+  const names = await fs.promises.readdir(dir).catch(() => []);
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.jsonl')) continue;
+    const pendingPath = path.join(dir, name);
+    try {
+      const content = await fs.promises.readFile(pendingPath, 'utf-8');
+      if (!content.endsWith('\n')) continue;
+      await fs.promises.appendFile(usagePath, content, 'utf-8');
+      await fs.promises.rm(pendingPath, { force: true });
+    } catch (e) {
+      log.debug(`Could not fold ${pendingPath} into ${usagePath}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 
@@ -349,10 +387,10 @@ async function withUsageLock<T>(
  */
 async function rewriteUsageFile(config: LocalConfig, keep: (lines: string[]) => string[] | null): Promise<void> {
   const usagePath = getUsagePath(config);
-  await withUsageLock(usagePath, REWRITE_LOCK_WAIT, async (locked) => {
+  const rewritten = await withUsageLock(usagePath, REWRITE_LOCK_WAIT, async () => {
     // Replace the file itself, not a symlink to it.
     const target = await fs.promises.realpath(usagePath);
-    if (locked) await removeOrphanTemps(target);
+    await removeOrphanTemps(target);
     const lines = (await fs.promises.readFile(target, 'utf-8')).split('\n').filter((l) => l.trim());
     const kept = keep(lines);
     if (!kept) return;
@@ -368,6 +406,9 @@ async function rewriteUsageFile(config: LocalConfig, keep: (lines: string[]) => 
       throw e;
     }
   });
+  if (!rewritten) {
+    throw new Error(`${usagePath}.lock is still held after 5 s, so the file was left as it is; remove the lock if no teamai process is running`);
+  }
 }
 
 /** Remove the temp copies a killed rewrite left beside `target`; only the lock holder writes one. */

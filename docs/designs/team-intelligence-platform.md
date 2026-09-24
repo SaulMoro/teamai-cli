@@ -112,7 +112,8 @@ reports worktree → git add → git commit → git push (teamai-reports)
 HTTP 与 `usageReport: false` 这些从不上报的 scope，#788）。截断必须在清理之后：
 清理按上报读到的条数删除文件开头的行，中间插入截断会把删除挪到未上报的事件上。
 Hook 追加、清理与截断共用 usage 文件旁的一把锁（`<usage 文件>.lock`），改写经临时文件
-再 rename，保留原文件权限。
+再 rename，保留原文件权限。Hook 约 250 ms 拿不到锁时写入 `*.pending-<id>.jsonl`（O_EXCL），
+由下一个持锁者并入；改写约 5 秒拿不到锁时不改文件。
 
 此修复不提供持久化批次或远端去重：进程在推送与确认之间终止、多仓库部分
 成功后的重试仍可能产生重复统计。等待超时不等于取消 Git 或强制退出进程。
