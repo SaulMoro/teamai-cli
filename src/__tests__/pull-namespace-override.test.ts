@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -22,7 +23,8 @@ vi.mock('../config.js', async (importOriginal) => ({
   saveStateForScope: vi.fn(),
 }));
 
-vi.mock('../utils/git.js', () => ({
+vi.mock('../utils/git.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/git.js')>()),
   pullRepo: vi.fn().mockResolvedValue('Already up to date.'),
 }));
 
@@ -53,7 +55,7 @@ vi.mock('../update.js', () => ({
 }));
 
 import { pull } from '../pull.js';
-import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig } from '../config.js';
+import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig, loadStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
@@ -250,6 +252,45 @@ describe('pull: an active namespace item replaces the root item of the same name
       // An edited copy, and a rule of the member's own, are left alone.
       expect(await read('.joycode/rules/tone.mdc')).toContain('my edit');
       expect(await read('.joycode/rules/mine.mdc')).toBe('my own rule\n');
+    });
+
+    // The admin edits the root rule and adds its namespace override in one push:
+    // the member's copy is the version of the last pull, not a member edit.
+    it('withdraws the replaced root rule\'s copy when the root rule changed in the same push, and names an edited one', async () => {
+      const base = await loadTeamConfig(repoPath);
+      if (!base) throw new Error('no team config');
+      vi.mocked(loadTeamConfig).mockResolvedValue({
+        ...base,
+        toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
+      });
+      await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
+      await fse.remove(path.join(repoPath, 'rules/frontend/style.md'));
+      await team('rules/tone.md', '# Shared tone\n');
+      const git = (...args: string[]): string => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: repoPath, encoding: 'utf8' });
+      git('init', '-q');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'v1');
+      const v1 = git('rev-parse', 'HEAD').trim();
+      await pull({});
+      await fse.appendFile(path.join(homeDir, '.joycode/rules/tone.mdc'), 'my edit\n');
+
+      await team('rules/style.md', '# Shared style v2\n');
+      await team('rules/frontend/style.md', '# Front style\n');
+      await team('rules/tone.md', '# Shared tone v2\n');
+      await team('rules/frontend/tone.md', '# Front tone\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'v2');
+      vi.mocked(loadStateForScope).mockResolvedValue({ lastPull: null, lastPullRev: v1 } as never);
+      try {
+        await pull({});
+      } finally {
+        vi.mocked(loadStateForScope).mockResolvedValue({ lastPull: null } as never);
+      }
+
+      expect(await exists('.joycode/rules/style.mdc')).toBe(false);
+      expect(await read('.joycode/rules/tone.mdc')).toContain('my edit');
+      expect(logged('warn', /Kept .*\.joycode\/rules\/tone\.mdc.*rules\/tone\.md/)).toBe(true);
+      expect(logged('warn', /style\.mdc/)).toBe(false);
     });
 
     it('leaves a root rule alone when only a deeper namespace path shares its file name', async () => {

@@ -15,7 +15,7 @@ import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { deliversEveryNamespace } from '../resource-namespaces.js';
-import { isPastVersionOf } from '../utils/git.js';
+import { getFileContentAtRev, isPastVersionOf } from '../utils/git.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -421,7 +421,8 @@ export class RulesHandler extends ResourceHandler {
    * `replacedRoots` are root rules an active namespace rule replaces (#707).
    * The stale sweep removes their copies from the directories teamai owns;
    * in the ones it shares with the member's own rules, a copy is removed only
-   * while it is byte-equal to what pull wrote for that root rule.
+   * while it is byte-equal to what pull wrote for that root rule, now or at the
+   * last pull. A copy kept there is named, since the tool loads it too.
    */
   async pullAllRules(
     teamConfig: TeamaiConfig,
@@ -471,7 +472,7 @@ export class RulesHandler extends ResourceHandler {
     // and only while the team file it points at still exists. Before the PR
     // merges there is no record yet — the placement is on the pending entry —
     // and the copy is just as much ours then.
-    const { placedRules, pendingPushes } = await loadStateForScope(localConfig);
+    const { placedRules, pendingPushes, lastPullRev } = await loadStateForScope(localConfig);
     for (const name of Object.keys(placedRules ?? {})) {
       const placed = placedResourcePath(placedRules, 'rules', name);
       if (placed && await pathExists(path.join(localConfig.repo.localPath, placed))) {
@@ -490,7 +491,7 @@ export class RulesHandler extends ResourceHandler {
       }
     }
     const tombstones = await this.readTombstones(localConfig);
-    const replacedSources = new Map(replacedRoots.map((rule) => [rule.name, rule.sourcePath]));
+    const replacedByName = new Map(replacedRoots.map((rule) => [rule.name, rule]));
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.rules) continue;
       // `pullItem` above skips excluded tools, so this pass must skip them too.
@@ -515,11 +516,18 @@ export class RulesHandler extends ResourceHandler {
         // still exactly what pull wrote. Cursor is deliberately absent — teamai
         // owns .cursor/rules and sweeps it.
         if ((tool === 'joycode' || tool === 'omp' || tool === 'pi' || usesCopilotInstructions(tool)) && !tombstones.has(ruleName)) {
-          const replacedSource = teamRuleNames.has(ruleName) ? undefined : replacedSources.get(ruleName);
-          if (replacedSource !== undefined && localFile === `${ruleName}${ext}`
-            && await isUnchangedRender(tool, path.join(destDir, localFile), replacedSource)) {
-            await remove(path.join(destDir, localFile));
+          const replaced = teamRuleNames.has(ruleName) ? undefined : replacedByName.get(ruleName);
+          if (replaced === undefined || localFile !== `${ruleName}${ext}`) continue;
+          const deployed = path.join(destDir, localFile);
+          if (await isDeliveredRender(tool, deployed, replaced, localConfig.repo.localPath, lastPullRev ?? null)) {
+            await remove(deployed);
             log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
+          } else {
+            log.warn(
+              `Kept ${deployed}: it differs from what teamai delivered for ${replaced.relativePath}, which a namespace `
+              + `rule replaces here, so ${tool} loads both. Delete it if you did not edit it; to keep your changes, `
+              + 'rename it to a name of your own.',
+            );
           }
           continue;
         }
@@ -662,10 +670,25 @@ function renderRuleForTool(tool: string, source: string): string {
   return source;
 }
 
-/** Whether `deployed` holds exactly what pull renders for `tool` from the team rule at `source`. */
-async function isUnchangedRender(tool: string, deployed: string, source: string): Promise<boolean> {
-  const [current, team] = await Promise.all([readFileSafe(deployed), readFileSafe(source)]);
-  return current !== null && team !== null && current === renderRuleForTool(tool, team);
+/**
+ * Whether `deployed` holds exactly what pull renders for `tool` from the team
+ * rule, as it is now or as it was at the last pull: a root rule edited in the
+ * same push that adds its namespace override leaves the older render behind,
+ * which nobody edited.
+ */
+async function isDeliveredRender(
+  tool: string,
+  deployed: string,
+  rule: ResourceItem,
+  repoPath: string,
+  lastPullRev: string | null,
+): Promise<boolean> {
+  const current = await readFileSafe(deployed);
+  if (current === null) return false;
+  const team = await readFileSafe(rule.sourcePath);
+  if (team !== null && current === renderRuleForTool(tool, team)) return true;
+  const atLastPull = lastPullRev ? await getFileContentAtRev(repoPath, lastPullRev, `./${rule.relativePath}`) : null;
+  return atLastPull !== null && current === renderRuleForTool(tool, atLastPull.toString('utf-8'));
 }
 
 /**
