@@ -126,6 +126,7 @@ describe('recall in a project whose config cannot be read (#796)', () => {
 
     expect(stdout).toBe('');
     expect(recorded()).toEqual({ votes: false, quality: false });
+    expect(fs.existsSync(path.join(root, '.teamai', 'team-repo', 'votes'))).toBe(false);
     expect(process.exitCode).toBe(1);
     expect(errors()).toHaveLength(1);
     expect(errors()[0].startsWith(`Nothing was searched: ${configPath}: `)).toBe(true);

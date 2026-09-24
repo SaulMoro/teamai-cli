@@ -47,7 +47,9 @@ teamai recall --check "<3-6 keywords from the task>"
   project's teamai config cannot be read, so no team knowledge was searched.
   Return that line from `Nothing was searched:` to its end, verbatim (it names
   the file and the fix), and **stop** — do not report "no relevant team
-  knowledge", and do not proceed to Step 1–5.
+  knowledge", and do not proceed to Step 1–5. Add that the main conversation
+  should show it to the user and must not move the file or run `teamai init`
+  without the user's consent: that replaces their settings for this project.
 - If the command fails in any other way or `teamai` is not on PATH: skip the
   precheck and continue to Step 1 (do not block on precheck failure).
 
