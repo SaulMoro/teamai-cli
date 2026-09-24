@@ -144,7 +144,7 @@ teamai env list --reveal     # show values in plaintext
 teamai env add <KEY> <VALUE> # add or update in env/env.yaml
 teamai env add <KEY> <VALUE> --project <id>   # or --role <ns>: in that namespace's env/<ns>/env.yaml
 teamai env remove <KEY>      # remove (same --role / --project)
-teamai remove mcp <name>     # searches every mcp file; --role / --project when several define it
+teamai remove mcp <name>     # root mcp/mcp.yaml if it has the name, else the one namespace file; --role / --project pick a namespace
 ```
 
 Env variables, team hooks and MCP servers are scoped like skills: the root file

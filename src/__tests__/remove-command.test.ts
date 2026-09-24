@@ -108,3 +108,66 @@ describe('teamai remove agents names one agent, not a stem every namespace share
     expect(handler.removeItem.mock.calls[0]?.[0]).toBe('fe/vr');
   });
 });
+
+/**
+ * `remove mcp <name>` across mcp/mcp.yaml and mcp/<ns>/mcp.yaml (#707, Q31):
+ * the same convention as push. Without a flag the root file is the target when
+ * it defines the name, else the one namespace file that does; a flag picks a
+ * namespace. Only a name several namespaces define, and the root does not, is
+ * refused.
+ */
+describe('teamai remove mcp picks one file', () => {
+  const server = (namespace?: string) => ({
+    name: 'db',
+    type: 'mcp',
+    ...(namespace ? { namespace } : {}),
+    relativePath: namespace ? `mcp/${namespace}/mcp.yaml` : 'mcp/mcp.yaml',
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.exitCode = undefined;
+    mockSaveStateForScope.mockResolvedValue(undefined);
+    handler.publishedNameFor.mockResolvedValue(null);
+    handler.removeItem.mockResolvedValue(['mcp/mcp.yaml']);
+  });
+  afterEach(() => { process.exitCode = undefined; });
+
+  it('targets the root file when the root defines the name, even beside namespace files', async () => {
+    handler.scanTeamForPull.mockResolvedValue([server(), server('checkout'), server('billing')]);
+
+    await remove('mcp', ['db'], { force: true });
+
+    expect(handler.removeItem).toHaveBeenCalledTimes(1);
+    expect(handler.removeItem.mock.calls[0]?.[0]).toBe('db');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('targets the one namespace file that defines the name when the root does not', async () => {
+    handler.scanTeamForPull.mockResolvedValue([server('checkout')]);
+
+    await remove('mcp', ['db'], { force: true });
+
+    expect(handler.removeItem.mock.calls[0]?.[0]).toBe('checkout/db');
+  });
+
+  it('refuses a name several namespaces define and the root does not, listing them', async () => {
+    handler.scanTeamForPull.mockResolvedValue([server('checkout'), server('billing')]);
+
+    await remove('mcp', ['db'], { force: true });
+
+    expect(handler.removeItem).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const errors = vi.mocked(log.error).mock.calls.flat().join(' ');
+    expect(errors).toContain('mcp/checkout/mcp.yaml, mcp/billing/mcp.yaml');
+    expect(errors).toContain('--role <ns> or --project <id>');
+  });
+
+  it('targets the namespace --role names, even when the root defines the name', async () => {
+    handler.scanTeamForPull.mockResolvedValue([server(), server('checkout')]);
+
+    await remove('mcp', ['db'], { force: true, role: 'checkout' });
+
+    expect(handler.removeItem.mock.calls[0]?.[0]).toBe('checkout/db');
+  });
+});

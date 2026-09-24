@@ -941,8 +941,9 @@ namespace 的成员，并替换根目录中的同名 server。按 namespace 划�
 否则一个有 5 个项目、每个项目 3 个 server 的团队，会让每位成员启动 15 个 server 进程，
 并在每次会话的上下文中携带 15 份工具列表。
 
-`teamai remove mcp <name>` 会搜索所有 MCP 文件。名字只在一个文件中定义时从该文件移除；
-在多个文件中定义时，需要用 `--role <ns>` 或 `--project <id>` 指明是哪个 namespace 文件。
+`teamai remove mcp <name>` 与 `push` 采用同一约定：`mcp/mcp.yaml` 定义了该名字时从这个文件移除，
+否则从唯一定义了它的 `mcp/<ns>/mcp.yaml` 移除。`--role <ns>` 或 `--project <id>` 可改为指定某个
+namespace 文件；只有当根文件未定义、而多个 namespace 文件都定义了该名字时，才必须指定。
 
 各工具的落点：
 

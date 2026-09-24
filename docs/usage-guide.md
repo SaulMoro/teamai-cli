@@ -1003,9 +1003,11 @@ root server of the same name. Scoping by namespace is what keeps the cost down: 
 team with five projects and three servers each would otherwise give every member
 fifteen server processes and fifteen tool lists in the context of every session.
 
-`teamai remove mcp <name>` searches every MCP file. A name defined in one file is
-removed from it; a name defined in several needs `--role <ns>` or
-`--project <id>` to say which namespace file.
+`teamai remove mcp <name>` follows the same convention as `push`: it removes the
+server from `mcp/mcp.yaml` when that file defines it, otherwise from the one
+`mcp/<ns>/mcp.yaml` that does. `--role <ns>` or `--project <id>` picks a
+namespace file instead, and is required only when several namespace files, and
+not the root, define the name.
 
 Where each tool's servers land:
 

@@ -262,8 +262,8 @@ program
   .command('remove <type> <names...>')
   .description('Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)')
   .option('--force', 'Skip confirmation prompt')
-  .option('--role <ns>', 'mcp: remove the server from mcp/<ns>/mcp.yaml, when several files define it')
-  .option('--project <id>', "mcp: remove the server from the project's mcp namespace, when several files define it")
+  .option('--role <ns>', 'mcp: remove the server from mcp/<ns>/mcp.yaml instead of the root mcp/mcp.yaml')
+  .option('--project <id>', "mcp: remove the server from the project's mcp namespace instead of the root mcp/mcp.yaml")
   .action(async (type, names, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { remove } = await import('./remove.js');

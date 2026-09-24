@@ -81,8 +81,8 @@ Generated: do not edit by hand. Regenerate with
 
 - `teamai remove <type> <names...>` — Remove resource(s) from team repo and all local AI tools (type: skills|rules|agents|mcp)
   - `--force` — Skip confirmation prompt
-  - `--role <ns>` — mcp: remove the server from mcp/<ns>/mcp.yaml, when several files define it
-  - `--project <id>` — mcp: remove the server from the project's mcp namespace, when several files define it
+  - `--role <ns>` — mcp: remove the server from mcp/<ns>/mcp.yaml instead of the root mcp/mcp.yaml
+  - `--project <id>` — mcp: remove the server from the project's mcp namespace instead of the root mcp/mcp.yaml
 
 ## packages
 

@@ -8,9 +8,10 @@ import { fileURLToPath } from 'node:url';
 // ─── `teamai remove mcp` across namespace files (#707) ─────────────────
 //
 // A server name can be defined in mcp/mcp.yaml and in any mcp/<ns>/mcp.yaml,
-// and each file reaches different members. `remove mcp <name>` searches every
-// file, removes the name from the one file that has it, and asks for --role /
-// --project when several do.
+// and each file reaches different members. `remove mcp <name>` follows push's
+// convention: the root file when it defines the name, else the one namespace
+// file that does; --role / --project pick a namespace, and are required only
+// when several namespace files (and not the root) define it.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -89,9 +90,10 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
       '    skills: .claude/skills',
       '',
     ].join('\n'));
-    write(seed, 'manifest/projects.yaml', 'version: 1\nprojects:\n  - id: checkout\n    resources: { mcp: [checkout] }\n');
+    write(seed, 'manifest/projects.yaml', 'version: 1\nprojects:\n  - id: checkout\n    resources: { mcp: [checkout] }\n  - id: billing\n    resources: { mcp: [billing] }\n');
     write(seed, 'mcp/mcp.yaml', `servers:\n${server('db', 'https://db.example.com')}${server('shared', 'https://shared.example.com')}`);
     write(seed, 'mcp/checkout/mcp.yaml', `servers:\n${server('db', 'https://checkout-db.example.com')}${server('orders', 'https://orders.example.com')}`);
+    write(seed, 'mcp/billing/mcp.yaml', `servers:\n${server('orders', 'https://billing-orders.example.com')}${server('invoices', 'https://invoices.example.com')}`);
     git('init -q -b main', seed);
     git('add -A', seed);
     git('commit -q -m fixture', seed);
@@ -119,11 +121,20 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
     fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('asks for --role or --project when several files define the name, and removes nothing', async () => {
+  it('removes the name from the root file by default, and leaves the namespace override', async () => {
     const result = await runCLI(['remove', 'mcp', 'db', '--force'], env, homeDir);
 
+    expect(result.code, result.output).toBe(0);
+    expect(onBranch('mcp/mcp.yaml')).not.toContain('https://db.example.com');
+    expect(onBranch('mcp/mcp.yaml')).toContain('shared');
+    expect(onBranch('mcp/checkout/mcp.yaml')).toContain('checkout-db.example.com');
+  });
+
+  it('asks for --role or --project when several namespace files and not the root define the name', async () => {
+    const result = await runCLI(['remove', 'mcp', 'orders', '--force'], env, homeDir);
+
     expect(result.code, result.output).toBe(1);
-    expect(result.output).toContain('MCP server "db" is defined in several files (mcp/mcp.yaml, mcp/checkout/mcp.yaml)');
+    expect(result.output).toContain('mcp/checkout/mcp.yaml, mcp/billing/mcp.yaml');
     expect(result.output).toContain('Nothing was removed.');
     expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
   });
@@ -139,10 +150,10 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
   });
 
   it('finds a name defined in one namespace file alone without a flag', async () => {
-    const result = await runCLI(['remove', 'mcp', 'orders', '--force'], env, homeDir);
+    const result = await runCLI(['remove', 'mcp', 'invoices', '--force'], env, homeDir);
 
     expect(result.code, result.output).toBe(0);
-    expect(onBranch('mcp/checkout/mcp.yaml')).not.toContain('orders');
-    expect(onBranch('mcp/checkout/mcp.yaml')).toContain('checkout-db.example.com');
+    expect(onBranch('mcp/billing/mcp.yaml')).not.toContain('invoices');
+    expect(onBranch('mcp/billing/mcp.yaml')).toContain('billing-orders.example.com');
   });
 });

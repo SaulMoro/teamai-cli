@@ -316,9 +316,11 @@ async function removeCore(
 }
 
 /**
- * Which file `remove mcp <name>` edits. Every MCP file is searched: a name in
- * one file is removed from it, and a name in several needs `--role` or
- * `--project` to say which, since each file reaches different members.
+ * Which file `remove mcp <name>` edits, by the convention push uses: the root
+ * file by default, a flag picks a namespace. Without a flag that is the root
+ * file when it defines the name, else the one namespace file that does; a name
+ * that only several namespace files define is refused, since each reaches
+ * different members.
  * Returns the qualified name (`<ns>/<name>`, or the bare name for the root
  * file), null when no file defines it, or 'ambiguous' after reporting why.
  */
@@ -338,14 +340,12 @@ async function mcpRemovalTarget(
     const wanted = target.namespace === null ? name : `${target.namespace}/${name}`;
     return candidates.includes(wanted) ? wanted : null;
   }
+  if (candidates.includes(name)) return name;
   if (candidates.length > 1) {
-    const files = candidates.map((candidate) => (candidate.includes('/')
-      ? `mcp/${candidate.slice(0, candidate.lastIndexOf('/'))}/mcp.yaml`
-      : 'mcp/mcp.yaml'));
+    const files = candidates.map((candidate) => `mcp/${candidate.slice(0, candidate.lastIndexOf('/'))}/mcp.yaml`);
     log.error(
-      `MCP server "${name}" is defined in several files (${files.join(', ')}), and each reaches different members. `
-      + 'Pass --role <ns> or --project <id> to remove it from one namespace file. To remove only the shared one '
-      + 'in mcp/mcp.yaml, edit that file and push.',
+      `MCP server "${name}" is not in mcp/mcp.yaml but is defined in several namespace files (${files.join(', ')}), `
+      + 'and each reaches different members. Pass --role <ns> or --project <id> to remove it from one of them.',
     );
     return 'ambiguous';
   }
