@@ -396,6 +396,70 @@ describe('pull: an active namespace item replaces the root item of the same name
     });
   });
 
+  describe('env and hooks', () => {
+    beforeEach(async () => {
+      const base = await loadTeamConfig(repoPath);
+      if (!base) throw new Error('no team config');
+      const claude = base.toolPaths.claude;
+      vi.mocked(loadTeamConfig).mockResolvedValue({
+        ...base,
+        toolPaths: { ...base.toolPaths, ...(claude ? { claude: { ...claude, settings: '.claude/settings.json' } } : {}) },
+      });
+      await team('manifest/roles.yaml', `
+version: 1
+roles:
+  - id: frontend
+    resources: { knowledge: [], skills: [], agents: [], env: [frontend], hooks: [frontend] }
+  - id: devops
+    resources: { knowledge: [], skills: [], agents: [], env: [devops], hooks: [devops] }
+`);
+    });
+
+    const lintHook = (script: string): string => `hooks:
+  - id: lint
+    description: lint
+    event: Stop
+    command: 'bash -lc "~/.teamai/team-scripts/${script}" || true'
+`;
+
+    it('keeps env.sh as it is when two active namespaces define one variable, naming both files', async () => {
+      await team('env/frontend/env.yaml', 'variables:\n  - key: API_BASE\n    value: https://front.example.com\n');
+      await team('env/devops/env.yaml', 'variables:\n  - key: API_BASE\n    value: https://ops.example.com\n');
+      await pull({});
+      const before = await read('.teamai/env.sh');
+      expect(before).toContain('https://front.example.com');
+
+      as(['frontend', 'devops']);
+      await pull({ force: true });
+
+      expect(await read('.teamai/env.sh')).toBe(before);
+      expect(logged('warn', /variable "API_BASE" is defined in both env\/frontend\/env\.yaml and env\/devops\/env\.yaml/)).toBe(true);
+    });
+
+    it('keeps the installed hooks when two active namespaces define one hook, naming both files', async () => {
+      await team('hooks/frontend/hooks.yaml', lintHook('front-lint.sh'));
+      await team('hooks/devops/hooks.yaml', lintHook('ops-lint.sh'));
+      await pull({});
+      const before = await read('.claude/settings.json');
+      expect(before).toContain('front-lint.sh');
+
+      as(['frontend', 'devops']);
+      await pull({ force: true });
+
+      expect(await read('.claude/settings.json')).toBe(before);
+      expect(logged('warn', /hook "lint" is defined in both hooks\/frontend\/hooks\.yaml and hooks\/devops\/hooks\.yaml/)).toBe(true);
+    });
+
+    it('warns that builtin: in a namespace hooks file is ignored', async () => {
+      await team('hooks/frontend/hooks.yaml', `${lintHook('front-lint.sh')}builtin:\n  disable: [todo-reminder]\n`);
+
+      await pull({});
+
+      expect(logged('warn', /hooks\/frontend\/hooks\.yaml: `builtin:` is ignored outside hooks\/hooks\.yaml/)).toBe(true);
+      expect(await read('.claude/settings.json')).toContain('front-lint.sh');
+    });
+  });
+
   describe('legacy mode (no roles, no projects)', () => {
     it('delivers root and namespace rules and claudemd side by side, as before', async () => {
       await fse.remove(path.join(repoPath, 'manifest'));
