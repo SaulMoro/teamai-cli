@@ -27,7 +27,7 @@ import { getDataHome, getReportsDir, isSelfMode } from './types.js';
  *   target one explicitly by contributing from that project's directory. This
  *   favors the safe default (visible to all) over silently guessing a namespace.
  */
-async function resolveLearningsSubdir(localConfig: LocalConfig): Promise<string> {
+export async function resolveLearningsSubdir(localConfig: LocalConfig): Promise<string> {
   const namespaces = await resolveActiveLearningsNamespaces(
     localConfig.repo.localPath,
     localConfig.projects ?? [],
@@ -51,7 +51,7 @@ async function resolveLearningsSubdir(localConfig: LocalConfig): Promise<string>
  * recallable the moment it is written, whether or not it has reached origin, and
  * a queued edit of a published learning is the copy recall serves.
  */
-async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<void> {
+export async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<void> {
   const repoPath = localConfig.repo.localPath;
   const docsRepoDir = path.join(repoPath, 'docs');
   const rulesRepoDir = path.join(repoPath, 'rules');
@@ -105,7 +105,7 @@ async function rebuildIndexAfterContribute(localConfig: LocalConfig): Promise<vo
  * The title is slugified (lowercase, hyphens, max 50 chars).
  * A 6-char random suffix avoids collisions.
  */
-function generateFilename(title?: string): string {
+export function generateFilename(title?: string): string {
   const slug = (title ?? 'session-notes')
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-') // Allow CJK characters

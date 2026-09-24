@@ -342,7 +342,7 @@ Generated: do not edit by hand. Regenerate with
 - `teamai codebase` — Inspect and maintain team-codebase outputs
   - `--extract [path]` — Extract code knowledge and build graph from source
   - `--incremental` (hidden) — Only re-extract changed files (requires prior manifest)
-  - `--project <name>` (hidden) — Project slug for --extract (defaults to the directory name; a linked worktree's root uses the repo's name) and required for --deep-enrich
+  - `--project <name>` (hidden) — Project slug for --extract (defaults to the directory name; a checkout's root uses the repo's name) and required for --deep-enrich
   - `--max-files <n>` (hidden) — Max source files to scan (default: 200)
   - `--upgrade-wiki` (hidden) — Migrate docs/team-codebase/ to teamwiki/ graph format
   - `--lint` — Run global consistency lint over the teamwiki knowledge graph

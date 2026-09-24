@@ -537,15 +537,16 @@ function buildOverview(
 }
 
 /**
- * The wiki slug of `dir` when no `--project` is given (#809): a linked
- * worktree's root takes its repo's name (repoName: the main checkout's, or a
- * bare repo's), so every worktree of a repo writes the repo's evidence; any
- * other directory keeps its own name.
+ * The wiki slug of `dir` when no `--project` is given (#809): a checkout's
+ * root, the main one or a linked worktree, takes its repo's name (repoName:
+ * the main checkout's real name, or a bare repo's), so every checkout of a repo
+ * writes the repo's evidence, whatever path it was opened by (#823); any other
+ * directory keeps its own name.
  */
 export async function defaultProjectSlug(dir: string): Promise<string> {
   if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return path.basename(dir);
   const anchors = await resolveAnchors(dir);
-  if (anchors && anchors.workspaceRoot !== anchors.projectAnchor && await realpath(dir) === anchors.workspaceRoot) {
+  if (anchors && await realpath(dir) === anchors.workspaceRoot) {
     return repoName(anchors.projectAnchor);
   }
   return path.basename(dir);

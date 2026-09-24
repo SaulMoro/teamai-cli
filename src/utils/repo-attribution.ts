@@ -124,7 +124,8 @@ export function repoName(anchor: string): string {
  * when that still collides, so two repos never share a label. Keys named by the
  * same directory (a bare repo's `repo/.bare` and a session in `repo/`) are one
  * repo and share a label. A remote-form key keeps its canonical `owner/repo`,
- * which it shares with the same repo on another host.
+ * which it shares with the same repo on another host; a path is never
+ * qualified into one of those labels (#823).
  */
 export function repoLabel(key: string, allKeys: Iterable<string>): string {
   // A repo keeps its name even when it is a word attributeRepo reserves for
@@ -137,10 +138,12 @@ export function repoLabel(key: string, allKeys: Iterable<string>): string {
   const name = nameOf(key);
   if (name === 'no_repo' || !path.isAbsolute(key)) return name;
   const dir = naming(key).dir;
-  const others = [...new Set(allKeys)].filter((k) =>
+  const keys = [...new Set(allKeys)];
+  const others = keys.filter((k) =>
     k !== key && path.isAbsolute(k) && nameOf(k) === name && naming(k).dir !== dir);
   if (others.length === 0) return name;
   const qualified = (k: string) => `${path.basename(path.dirname(naming(k).dir))}/${nameOf(k)}`;
   const label = qualified(key);
-  return others.some((k) => qualified(k) === label) ? key : label;
+  const remoteLabels = new Set(keys.filter((k) => !path.isAbsolute(k)).map(nameOf));
+  return (others.some((k) => qualified(k) === label) || remoteLabels.has(label)) ? dir : label;
 }

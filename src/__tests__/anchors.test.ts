@@ -169,6 +169,16 @@ describe('defaultProjectSlug (#809)', () => {
     expect(await defaultProjectSlug(worktreeRoot)).toBe('main-repo');
   });
 
+  it('names the main checkout after itself when it is opened through a differently named symlink (#823)', async () => {
+    const alias = path.join(base, 'alias-to-main');
+    fs.symlinkSync(repoRoot, alias);
+    // The same slug its worktrees get, so the repo's evidence is not split.
+    expect(await defaultProjectSlug(alias)).toBe('main-repo');
+    // A subdirectory keeps its own name, whatever path leads to it.
+    fs.mkdirSync(path.join(repoRoot, 'pkg', 'cli'), { recursive: true });
+    expect(await defaultProjectSlug(path.join(alias, 'pkg', 'cli'))).toBe('cli');
+  });
+
   it('keeps the directory\'s own name everywhere else', async () => {
     const mainSub = path.join(repoRoot, 'pkg', 'api');
     const worktreeSub = path.join(worktreeRoot, 'pkg', 'web');

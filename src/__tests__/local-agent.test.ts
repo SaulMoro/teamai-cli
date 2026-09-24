@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,7 +21,9 @@ let origHome: string | undefined;
 let origCopilotHome: string | undefined;
 let origPpid: number;
 
-const TEST_SESSION_ID = 'test-session';
+// The hint markers are machine-wide files in os.tmpdir() keyed by session id,
+// so a fixed id let overlapping runs of this file delete each other's (#823).
+const TEST_SESSION_ID = `test-session-${randomUUID()}`;
 
 beforeEach(async () => {
   tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-la-test-'));
@@ -350,7 +353,7 @@ describe('local-agent: emitBindingHint via reportAndSyncLocalAgent', () => {
       await reportAndSyncLocalAgent({
         cwd: projectDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;
@@ -439,7 +442,7 @@ describe('local-agent: emitBindingHint via reportAndSyncLocalAgent', () => {
       await reportAndSyncLocalAgent({
         cwd: projectDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;
@@ -477,7 +480,7 @@ describe('local-agent: emitBindingHint via reportAndSyncLocalAgent', () => {
       await reportAndSyncLocalAgent({
         cwd: projectDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;
@@ -513,7 +516,7 @@ describe('local-agent: emitBindingHint via reportAndSyncLocalAgent', () => {
       await reportAndSyncLocalAgent({
         cwd: projectDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;
@@ -713,7 +716,7 @@ describe('local-agent: worktree binding inheritance', () => {
       await reportAndSyncLocalAgent({
         cwd: worktreeDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;
@@ -1452,7 +1455,7 @@ describe('local-agent: CloudStudio sandbox suppression', () => {
       result = await reportAndSyncLocalAgent({
         cwd: projectDir,
         tool: 'codebuddy',
-        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: 'test-session', tool: 'codebuddy' },
+        event: { type: 'prompt_submit', timestamp: new Date().toISOString(), sessionId: TEST_SESSION_ID, tool: 'codebuddy' },
       });
     } finally {
       process.stdout.write = origWrite;

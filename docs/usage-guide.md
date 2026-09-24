@@ -503,7 +503,7 @@ For users or agents that don't need git access and only consume skills/rules:
 teamai init --http https://your-team-host/api --token <api-key>
 ```
 
-- Read-only mode: `push` / `contribute` / `remove` are not available.
+- Read-only mode: `push` / `contribute` / `remove` are not available, and `import --from-mr` cannot publish its learning (`--dry-run` and `--output` still work).
 - No git clone required — skills/rules are delivered via a report/sync/ack lifecycle on a per-session basis.
 - Supported agents automatically report their installed skill state at session start, and pull install/update/uninstall commands managed by the server.
 - The API key is stored with `0600` permissions, or can be passed via the `TEAMAI_API_TOKEN` environment variable.
@@ -1408,6 +1408,8 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 If core graph extraction or writing fails, the import reports an error without marking the commit as synced. The next incremental run retries that commit.
 
+`--from-mr` publishes its learning the way `teamai contribute` does, on the `teamai-learnings` branch: under `learnings/<namespace>/` when exactly one active project declares a learnings namespace, otherwise at the shared `learnings/` root. If that fails, the learning stays queued on this machine and the next `teamai pull` publishes it.
+
 AI-backed steps (`--deep-enrich`, knowledge enrichment) shell out to an AI coding CLI already installed on the machine instead of calling a model API directly. teamai probes `claude` → `claude-internal` → `codex` → `codex-internal` → `codebuddy` → `workbuddy` → `openclaw` and uses the first one it finds. On macOS and Linux the probe runs through a login shell, so a CLI installed under `~/.nvm/` is found too. On Windows it uses the native `where`, which returns the npm shim (`%APPDATA%\npm\claude.cmd`) that Windows can actually launch — a Git Bash or WSL `bash` only reports MSYS paths such as `/c/Users/...`, which Windows cannot start.
 
 For GitLab behind an API gateway, set `GITLAB_URL` and `GITLAB_API_PREFIX=api/gitlab` before running `teamai import --from-org https://gitlab.example.com/myorg`. Organization listing uses the configured prefix on every page; an unset or blank prefix defaults to `api/v4`.
@@ -1435,7 +1437,7 @@ teamai codebase --lint --output /path/to/repo
 
 When extract finds components, it writes `teamwiki/evidence/code/<project>/_manifest.json` even if AI enrichment is skipped or produces nothing, so `--deep-enrich` can start.
 
-Without `--project`, `<project>` is the directory's name. At the root of a linked git worktree it is the repo's name: the main checkout's, or a bare repo's (`repo/.bare` or `repo.git` → `repo`). Every worktree of a repo writes the same entry. `teamai import --dir` picks its slug the same way.
+Without `--project`, `<project>` is the directory's name. At the root of a checkout, the main one or a linked git worktree, it is the repo's name: the main checkout's real name (also when opened through a symlink), or a bare repo's (`repo/.bare` or `repo.git` → `repo`). Every checkout of a repo writes the same entry. `teamai import --dir` picks its slug the same way.
 
 ### Dashboard
 

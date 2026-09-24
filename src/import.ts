@@ -11,7 +11,9 @@ import { importFromRepoList } from './import-repo-list.js';
 import { importFromOrg } from './import-org.js';
 import { importFromIWikiDual } from './iwiki-dual.js';
 import { learningsRoots } from './utils/learnings-roots.js';
+import { pendingLearningsDir } from './utils/pending-learnings.js';
 import type { GlobalOptions, LearningDraft } from './types.js';
+import { assertNotReadOnly } from './read-only.js';
 import { Listr, PRESET_TIMER } from 'listr2';
 import { log, setSilent } from './utils/logger.js';
 import { autoPushTeamRepo } from './utils/git.js';
@@ -238,22 +240,49 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
     } else if (opts.fromMr) {
       // 分支 1：--from-mr <url>，提取 learning + 增量更新 teamwiki
       const { localConfig, teamConfig } = await autoDetectInit();
+      // Its learning is published the way `teamai contribute` publishes, which a
+      // read-only (HTTP) source refuses; a dry run or --output publishes nothing.
+      if (!opts.dryRun && !opts.output) assertNotReadOnly(localConfig, 'teamai import --from-mr');
+      // As contribute: into the active project's learnings namespace when there
+      // is exactly one, else the shared root.
+      const { resolveLearningsSubdir } = await import('./contribute.js');
+      const learningsSubdir = opts.dryRun || opts.output ? '' : await resolveLearningsSubdir(localConfig);
 
       const tasks = new Listr([
         {
           title: 'Extract learning from MR',
           task: async (ctx) => {
-            const { learning, repoUrl } = await importFromMR({
+            const { learning, repoUrl, learningFile } = await importFromMR({
               url: opts.fromMr!,
-              learningsDirs: learningsRoots(localConfig).read,
+              learningsDirs: [pendingLearningsDir(localConfig), ...learningsRoots(localConfig).read],
               all: opts.all,
               outputDir: opts.output,
-              writeLearningsDir: opts.dryRun ? undefined : learningsRoots(localConfig).write,
+              // Into the contribution queue, which publishing drains (#823).
+              writeLearningsDir: opts.dryRun ? undefined : path.join(pendingLearningsDir(localConfig), learningsSubdir),
               dryRun: opts.dryRun,
             });
             ctx.learning = learning;
             ctx.repoUrl = repoUrl;
+            ctx.learningFile = learningFile;
           },
+        },
+        {
+          title: 'Publish learning',
+          skip: (ctx) => !!opts.dryRun || !!opts.output || !ctx.learning,
+          task: async (ctx, task) => {
+            const { publishQueuedLearnings } = await import('./utils/learnings-publish.js');
+            const { rebuildIndexAfterContribute } = await import('./contribute.js');
+            const report = await publishQueuedLearnings(localConfig, localConfig.username);
+            // Recall finds it where it is now: published, or still queued.
+            await rebuildIndexAfterContribute(localConfig).catch((e: unknown) =>
+              log.debug(`import: index rebuild skipped: ${e instanceof Error ? e.message : String(e)}`));
+            const queued = ctx.learningFile ? path.posix.join(learningsSubdir, path.basename(ctx.learningFile)) : '';
+            if (!report.published.includes(queued)) {
+              task.title = `Learning saved locally (${report.lastError ?? 'not published yet'}); `
+                + 'the next `teamai pull` publishes it';
+            }
+          },
+          rendererOptions: { persistentOutput: true },
         },
         {
           title: 'Incremental teamwiki update',
@@ -296,8 +325,9 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
           rendererOptions: { persistentOutput: true },
         },
         {
+          // The teamwiki update only: the learning was published above.
           title: 'Push changes via MR',
-          skip: (ctx) => !!opts.dryRun || !!opts.output || (!ctx.learning && !ctx.didUpdate),
+          skip: (ctx) => !!opts.dryRun || !!opts.output || (!ctx.didUpdate && 'No teamwiki changes to push'),
           task: async () => {
             const { autoPushViaMR } = await import('./utils/git.js');
             await autoPushViaMR(
@@ -312,8 +342,14 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       ], {
         rendererOptions: { timer: PRESET_TIMER, collapseErrors: false },
         exitOnError: true,
-        ctx: { learning: undefined as LearningDraft | undefined, repoUrl: '', didUpdate: false },
+        ctx: { learning: undefined as LearningDraft | undefined, learningFile: undefined as string | undefined, repoUrl: '', didUpdate: false },
       });
+      // Publishing creates a worktree under `.teamai/`; self-heal the ignore
+      // rule first, as contribute does, while its notice can still be seen.
+      if (!opts.dryRun && !opts.output) {
+        const { migrateSelfModeGitignore } = await import('./init.js');
+        await migrateSelfModeGitignore(localConfig);
+      }
       setSilent(true);
       try { await tasks.run(); } finally { setSilent(false); }
     } else if (opts.dir) {

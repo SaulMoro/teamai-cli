@@ -187,7 +187,7 @@ export async function importFromMR(opts: {
   outputDir?: string;
   writeLearningsDir?: string;
   dryRun?: boolean;
-}): Promise<{ learning?: LearningDraft; repoUrl: string }> {
+}): Promise<{ learning?: LearningDraft; repoUrl: string; learningFile?: string }> {
   const learningsDirs = opts.learningsDirs ?? [DEFAULT_LEARNINGS_DIR];
 
   // ── 步骤 1：获取 MR 数据 ────────────────────────────────
@@ -253,8 +253,9 @@ export async function importFromMR(opts: {
   }
 
   // ── 步骤 6：写文件 ─────────────────────────────────────
+  let learningFile: string | undefined;
   if (!opts.dryRun && acceptLearning) {
-    await writeLearning(learning, opts.outputDir, opts.writeLearningsDir);
+    learningFile = await writeLearning(learning, opts.outputDir, opts.writeLearningsDir);
   }
 
   // 推断仓库 URL
@@ -263,13 +264,15 @@ export async function importFromMR(opts: {
   return {
     learning: acceptLearning ? learning : undefined,
     repoUrl,
+    learningFile,
   };
 }
 
 /**
  * 将 learning 草稿写入磁盘。
  *
- * Writes to outputDir when given, else to learningsDir. With neither, it warns and skips.
+ * Writes to outputDir when given, else to learningsDir, and returns the file written.
+ * With neither, it warns and skips.
  *
  * @param draft         The learning draft
  * @param outputDir     Output directory (optional)
@@ -279,30 +282,26 @@ async function writeLearning(
   draft: LearningDraft,
   outputDir?: string,
   learningsDir?: string,
-): Promise<void> {
+): Promise<string | undefined> {
   if (outputDir) {
     await fs.mkdir(outputDir, { recursive: true });
     const filePath = path.join(outputDir, 'learning.md');
     await fs.writeFile(filePath, draft.content, 'utf-8');
     log.info(`Learning written: ${filePath}`);
-    return;
+    return filePath;
   }
 
   if (learningsDir) {
     await fs.mkdir(learningsDir, { recursive: true });
-    const datePrefix = new Date().toISOString().slice(0, 10);
-    // 将标题转为合法文件名：取前 40 字符，替换非法字符为连字符
-    const safeTitle = draft.title
-      .slice(0, 40)
-      .replace(/[^a-zA-Z0-9一-鿿_-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-    const filename = `${datePrefix}-${safeTitle}.md`;
-    const filePath = path.join(learningsDir, filename);
+    // contribute's naming: the random suffix keeps two members' learnings with
+    // the same title and day apart once both are published (#823).
+    const { generateFilename } = await import('./contribute.js');
+    const filePath = path.join(learningsDir, generateFilename(draft.title));
     await fs.writeFile(filePath, draft.content, 'utf-8');
     log.info(`Learning written: ${filePath}`);
-    return;
+    return filePath;
   }
 
   log.warn('No outputDir or learnings directory specified, learning draft not saved to disk');
+  return undefined;
 }

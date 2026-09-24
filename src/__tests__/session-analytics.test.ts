@@ -79,6 +79,12 @@ describe('repoLabel (#809)', () => {
     const repos = attributeByRepo(keys.map((cwd, i) => ev({ type: 'tool_use', timestamp: 't1', sessionId: `s${i}`, cwd })));
     expect(repos.map((r) => [r.repo, r.sessions])).toEqual([['Tencent/teamai-cli', 2]]);
   });
+  it('does not give a local path the label of a remote key (#823)', () => {
+    const keys = ['github.com/acme/api', '/x/acme/api', '/y/other/api'];
+    expect(keys.map((k) => repoLabel(k, keys))).toEqual(['acme/api', '/x/acme/api', 'other/api']);
+    const repos = attributeByRepo(keys.map((cwd, i) => ev({ type: 'tool_use', timestamp: 't1', sessionId: `s${i}`, cwd })));
+    expect(repos.map((r) => [r.repo, r.sessions]).sort()).toEqual([['/x/acme/api', 1], ['acme/api', 1], ['other/api', 1]]);
+  });
 });
 
 describe('repoName (#809)', () => {
@@ -136,6 +142,17 @@ describe('repoName (#809)', () => {
     const plain = path.join(base, 'plain', 'data');
     fs.mkdirSync(plain, { recursive: true });
     expect(repoLabel(plain, [plain])).toBe('no_repo');
+  });
+
+  it('keeps a bare repo\'s keys in one row when its label falls back to a path (#823)', () => {
+    // A remote key takes `acme/api`, so the bare repo cannot be qualified to it.
+    const anchor = bare('g', 'acme', 'api', '.bare');
+    const container = path.join(base, 'g', 'acme', 'api');
+    const other = path.join(base, 'h', 'other', 'api');
+    fs.mkdirSync(other, { recursive: true });
+    const keys = ['github.com/acme/api', anchor, container, other];
+    expect(repoLabel(anchor, keys)).toBe(repoLabel(container, keys));
+    expect(repoLabel(anchor, keys)).not.toBe('acme/api');
   });
 
   it('counts a session in a bare layout\'s own directory as that repo', () => {
