@@ -4,9 +4,9 @@ vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
   autoDetectInit: vi.fn(),
 }));
-vi.mock('../resources/mcp.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../resources/mcp.js')>()),
-  resolveTeamMcpServers: vi.fn(),
+vi.mock('../namespaced-entries.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../namespaced-entries.js')>()),
+  resolveEntriesFor: vi.fn(),
 }));
 vi.mock('../mcp-reconcile.js', () => ({
   reconcileMcpForConfig: vi.fn(),
@@ -21,13 +21,13 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { autoDetectInit } from '../config.js';
-import { resolveTeamMcpServers } from '../resources/mcp.js';
+import { resolveEntriesFor } from '../namespaced-entries.js';
 import { mcpList } from '../mcp-cmd.js';
 
 const mockedAutoDetectInit = autoDetectInit as Mock;
-const mockedResolve = resolveTeamMcpServers as Mock;
+const mockedResolve = resolveEntriesFor as Mock;
 
-/** A resolution as `resolveTeamMcpServers` returns it, from `[server, source, replaces]`. */
+/** An MCP resolution as `resolveEntriesFor` returns it, from `[server, source, replaces]`. */
 function resolved(entries: [Record<string, unknown>, string, string | null][]) {
   return {
     kind: 'resolved',

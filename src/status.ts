@@ -20,7 +20,7 @@ import {
 import { RESOURCE_TYPES, LocalConfigSchema, getDataHome, type GlobalOptions, type ResourceType } from './types.js';
 import { projectsRootDir, readAnchorFile, projectSlug, legacyProjectSlug } from './utils/partition.js';
 import { maskEnvValue } from './resources/env.js';
-import { resolveTeamMcpServers } from './resources/mcp.js';
+import { mcpEntryReader } from './resources/mcp.js';
 import { resolveTeamHookEntries } from './resources/hooks.js';
 import { envEntryReader } from './resources/env.js';
 import {
@@ -105,15 +105,15 @@ export async function status(options: GlobalOptions): Promise<void> {
     if (resolution.kind === 'failed') origins[type] = ' (cannot be resolved; run `teamai doctor`)';
     else if (resolution.entries.some((entry) => entry.namespace !== null)) origins[type] = ` (${describeOrigins(resolution.entries)})`;
   };
-  count('env', await resolveEntriesFor(envEntryReader, localConfig, { quiet: true }));
+  count('env', await resolveEntriesFor(envEntryReader, localConfig));
 
   const agentsHandler = getAllHandlers().find((h) => h.type === 'agents');
   counts.agents = agentsHandler
     ? (await agentsHandler.scanTeamForPull(teamConfig, localConfig)).length
     : 0;
 
-  count('hooks', (await resolveTeamHookEntries(localConfig, { quiet: true })).resolution);
-  count('mcp', await resolveTeamMcpServers(localConfig, { quiet: true }));
+  count('hooks', (await resolveTeamHookEntries(localConfig)).resolution);
+  count('mcp', await resolveEntriesFor(mcpEntryReader, localConfig));
 
   for (const type of RESOURCE_TYPES) {
     console.log(`  ${type}: ${counts[type] ?? 0}${origins[type] ?? ''}`);
@@ -340,7 +340,7 @@ async function printRepoSection(
   }
 
   if (t === 'mcp') {
-    const mcp = await resolveTeamMcpServers(localConfig);
+    const mcp = await resolveEntriesFor(mcpEntryReader, localConfig);
     if (mcp.kind === 'failed') {
       console.log(`  ${describeEntryFailure(mcp.failure)}`);
       return;

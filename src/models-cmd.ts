@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { autoDetectInit } from './config.js';
-import { describeEntryFailure, describeOrigin, reportEntryResolution } from './namespaced-entries.js';
+import { describeEntryFailure, describeOrigin, reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
 import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { askQuestion, askSecret, isInteractive } from './utils/prompt.js';
@@ -24,7 +24,7 @@ import {
   profileRefName,
   resolveProfile,
   resolveProfileRef,
-  resolveTeamProfiles,
+  modelsEntryReader,
   saveLocalProfiles,
   saveModelInputs,
   setStoredApiKey,
@@ -60,7 +60,7 @@ async function teamContext(): Promise<TeamModelsContext> {
   } catch {
     return { team: { version: 1, profiles: [] } };
   }
-  const resolution = await resolveTeamProfiles(initialized.localConfig);
+  const resolution = await resolveEntriesFor(modelsEntryReader, initialized.localConfig);
   if (resolution.kind === 'failed') throw new Error(describeEntryFailure(resolution.failure));
   return { team: teamProfilesFrom(resolution.entries), localConfig: initialized.localConfig };
 }
@@ -396,8 +396,7 @@ export async function syncTeamModelProfiles(localConfig: LocalConfig, options: {
   // Nothing to update or offer: skip reading the manifests.
   if (groups.size === 0 && !await pathExists(path.join(localConfig.repo.localPath, 'models'))) return undefined;
 
-  // pull already printed the namespace fallback warnings.
-  const resolution = await resolveTeamProfiles(localConfig, { quiet: true });
+  const resolution = await resolveEntriesFor(modelsEntryReader, localConfig);
   if (resolution.kind === 'failed') {
     reportEntryResolution(resolution);
     return undefined;

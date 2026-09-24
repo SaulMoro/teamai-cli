@@ -7,7 +7,8 @@ vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
-import { resolveTeamMcpServers } from '../resources/mcp.js';
+import { mcpEntryReader } from '../resources/mcp.js';
+import { resolveEntriesFor } from '../namespaced-entries.js';
 import type { LocalConfig } from '../types.js';
 
 let repo: string;
@@ -29,12 +30,12 @@ function member(over: Partial<Pick<LocalConfig, 'primaryRole' | 'projects'>> = {
 }
 
 async function serversFor(localConfig: LocalConfig) {
-  const resolution = await resolveTeamMcpServers(localConfig);
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   if (resolution.kind !== 'resolved') throw new Error('servers did not resolve');
   return resolution.entries.map((entry) => entry.entry);
 }
 
-describe('resolveTeamMcpServers — per-entry keys (#707)', () => {
+describe('resolveEntriesFor(mcpEntryReader) — per-entry keys (#707)', () => {
   it('keeps a (deprecated) roles list on the entry, and leaves it undefined when omitted', async () => {
     await writeMcpYaml(`
 servers:

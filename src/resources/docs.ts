@@ -65,7 +65,7 @@ export async function resolveDesiredDocs(repoPath: string, inactiveNamespaces: r
  * scope then.
  */
 export async function resolveDocsForDirectory(localConfig: LocalConfig): Promise<DesiredDocs> {
-  const resolved = await resolveResourceNamespaces(localConfig, { quiet: true });
+  const resolved = await resolveResourceNamespaces(localConfig);
   return resolveDesiredDocs(localConfig.repo.localPath, resolved?.inactiveDocsNamespaces ?? []);
 }
 

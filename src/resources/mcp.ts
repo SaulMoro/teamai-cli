@@ -81,14 +81,6 @@ export const mcpEntryReader: EntryReader<TeamMcpServer> = {
   scopeOf: (server) => server,
 };
 
-/** The team MCP servers this member receives: root plus active namespace files. */
-export function resolveTeamMcpServers(
-  localConfig: LocalConfig,
-  options: { quiet?: boolean } = {},
-): Promise<EntryResolution<TeamMcpServer>> {
-  return resolveEntriesFor(mcpEntryReader, localConfig, options);
-}
-
 /** Every MCP file in a team repo checkout, root first, as `[namespace, repo-relative path]`. */
 async function listMcpFiles(repoPath: string): Promise<[string | null, string][]> {
   const namespaces = (await listDirs(path.join(repoPath, 'mcp'))).sort();

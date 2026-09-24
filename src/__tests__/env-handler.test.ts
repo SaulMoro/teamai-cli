@@ -5,7 +5,7 @@ import fse from 'fs-extra';
 import YAML from 'yaml';
 import { execFileSync } from 'node:child_process';
 import { EnvHandler, describeEnvYamlShapeProblem } from '../resources/env.js';
-import { resetEntryWarnings } from '../namespaced-entries.js';
+import { resetWarnOnce } from '../utils/warn-once.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
 import type { TeamaiConfig, LocalConfig, ResourceItem } from '../types.js';
 
@@ -47,7 +47,7 @@ describe('EnvHandler', () => {
   let localConfig: LocalConfig;
 
   beforeEach(async () => {
-    resetEntryWarnings();
+    resetWarnOnce();
     handler = new EnvHandler();
     tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-env-test-'));
     homeDir = path.join(tmpDir, 'home');

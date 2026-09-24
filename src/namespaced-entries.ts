@@ -24,6 +24,7 @@ import { findProject, loadProjectsManifest, unknownProjectMessage } from './proj
 import { isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import type { LocalConfig } from './types.js';
 import { log } from './utils/logger.js';
+import { warnOnce } from './utils/warn-once.js';
 
 export type EntryType = 'env' | 'hooks' | 'mcp' | 'models';
 
@@ -117,10 +118,9 @@ export type EntryResolution<E> =
 export async function activeEntryNamespaces(
   localConfig: LocalConfig,
   type: EntryType,
-  options: { quiet?: boolean } = {},
 ): Promise<{ ok: true; active: string[] | null } | { ok: false; failure: EntryFailure }> {
   try {
-    const resolved = await resolveResourceNamespaces(localConfig, options);
+    const resolved = await resolveResourceNamespaces(localConfig);
     return { ok: true, active: resolved ? resolved.activeNamespaces[type] ?? [] : null };
   } catch (error) {
     return {
@@ -215,9 +215,8 @@ export async function resolveEntries<E>(
 export async function resolveEntriesFor<E>(
   reader: EntryReader<E>,
   localConfig: LocalConfig,
-  options: { quiet?: boolean } = {},
 ): Promise<EntryResolution<E>> {
-  const namespaces = await activeEntryNamespaces(localConfig, reader.type, options);
+  const namespaces = await activeEntryNamespaces(localConfig, reader.type);
   if (!namespaces.ok) return { kind: 'failed', failure: namespaces.failure, notices: [] };
   return resolveEntries(reader, localConfig, namespaces.active);
 }
@@ -342,27 +341,17 @@ export function describeEntryFailure(failure: EntryFailure): string {
   }
 }
 
-/** Messages already shown in this run: a pull resolves each type more than once. */
-const reported = new Set<string>();
-
-/** Start a run: `pull` calls this so each pull warns again, once. */
-export function resetEntryWarnings(): void {
-  reported.clear();
-}
-
 /**
- * Warn about a failure and the notices, each once per run. Also written
- * to debug.log, because a SessionStart pull runs silent and a failure here is
- * what keeps a member on stale entries.
+ * Warn about a failure and the notices, each once per run (a pull resolves
+ * each type more than once). Also written to debug.log, because a
+ * SessionStart pull runs silent and a failure here is what keeps a member on
+ * stale entries.
  */
 export function reportEntryResolution(resolution: EntryResolution<unknown>): void {
   const messages = resolution.notices.map((notice) => notice.message);
   if (resolution.kind === 'failed') messages.push(describeEntryFailure(resolution.failure));
   for (const message of messages) {
-    if (reported.has(message)) continue;
-    reported.add(message);
-    log.warn(message);
-    log.persist(message);
+    if (warnOnce(message)) log.persist(message);
   }
 }
 

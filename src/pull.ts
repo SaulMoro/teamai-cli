@@ -45,8 +45,9 @@ import {
 import type { CultureFrontmatter } from './types.js';
 import type { ResourceNamespaces } from './roles.js';
 import { deliversEveryNamespace, resolveResourceNamespaces } from './resource-namespaces.js';
-import { reportEntryResolution, resetEntryWarnings } from './namespaced-entries.js';
-import { resolveTeamEnv } from './resources/env.js';
+import { reportEntryResolution, resolveEntries } from './namespaced-entries.js';
+import { resetWarnOnce } from './utils/warn-once.js';
+import { envEntryReader } from './resources/env.js';
 import { getUserHome } from './utils/home.js';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
@@ -821,6 +822,11 @@ async function cleanupTombstonedResources(
   }
 }
 
+/** The env namespaces active for this member, or null in legacy mode. */
+function activeEnvNamespaces(roleContext: RolePullContext | null): string[] | null {
+  return roleContext ? roleContext.activeNamespaces.env ?? [] : null;
+}
+
 /**
  * Pull resources for a single scope. This is the core sync logic extracted
  * from the original pull() function to support both user and project scope.
@@ -846,10 +852,10 @@ async function reconcileEnvForUnchangedRepo(
   roleContext: RolePullContext | null,
 ): Promise<void> {
   try {
-    const resolution = await resolveTeamEnv(localConfig, roleContext ? roleContext.activeNamespaces.env ?? [] : null);
+    const resolution = await resolveEntries(envEntryReader, localConfig, activeEnvNamespaces(roleContext));
     reportEntryResolution(resolution);
     if (resolution.kind === 'failed') return;
-    const envHandler = getHandler('env') as EnvHandler;
+    const envHandler = new EnvHandler();
     await envHandler.writeResolvedEnv(resolution.entries.map((entry) => entry.entry), freshConfig, localConfig);
   } catch (e) {
     // Visible rather than debug-only, and still not rethrown. This is the path
@@ -1309,7 +1315,7 @@ async function pullForScope(
       // even when the root file is absent or empty: rewriting env.sh from the
       // resolved set is what removes a deactivated namespace's variables. A
       // file that cannot be used, or a name defined twice, keeps env.sh as is.
-      const resolution = await resolveTeamEnv(localConfig, roleContext ? roleContext.activeNamespaces.env ?? [] : null);
+      const resolution = await resolveEntries(envEntryReader, localConfig, activeEnvNamespaces(roleContext));
       reportEntryResolution(resolution);
       if (resolution.kind === 'failed') continue;
       const variables = resolution.entries.map((entry) => entry.entry);
@@ -1317,7 +1323,7 @@ async function pullForScope(
 
       if (options.dryRun) {
         if (variables.length > 0) log.info(`[${scopeLabel}] [dry-run] Would sync ${countLabel}`);
-      } else if (await (handler as EnvHandler).writeResolvedEnv(variables, freshConfig, localConfig)) {
+      } else if (await new EnvHandler().writeResolvedEnv(variables, freshConfig, localConfig)) {
         log.success(`[${scopeLabel}] Synced ${countLabel} to ${getDataHome(localConfig)}/env.sh`);
       }
       if (variables.length > 0) totalSynced += 1;
@@ -2042,9 +2048,9 @@ export async function pull(
    */
   result?: { completed: boolean },
 ): Promise<void> {
-  // Env, hooks and MCP warnings are said once per pull, not once per scope or
+  // Warnings about the team repo are said once per pull, not once per scope or
   // per resolution, and every pull says them again.
-  resetEntryWarnings();
+  resetWarnOnce();
   // What the scopes below say in their own words, so the post-pull pass does
   // not repeat it. Owned here rather than at module scope so nothing survives
   // into another call.
@@ -2438,11 +2444,9 @@ async function reconcileHooksAllScopes(
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
       if (!teamConfig) continue;
       const { reconcileTeamHooksForConfig } = await import('./hooks.js');
-      // quiet: this scope's pull already printed the namespace fallback warnings.
       const teamDefs = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
         auto: true,
         silent: options.silent,
-        quiet: true,
         filterAgents: localConfig.enabledAgents,
       });
       if (teamDefs.length > 0) {
@@ -2471,7 +2475,7 @@ async function reconcileMcpAllScopes(
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
       if (!teamConfig) continue;
       const { reconcileMcpForConfig } = await import('./mcp-reconcile.js');
-      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig, { force: options.force, quiet: true });
+      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig, { force: options.force });
 
       const applied = changes.filter((c) => c.action !== 'skipped');
       for (const c of changes) {

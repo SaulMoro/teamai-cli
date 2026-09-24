@@ -8,10 +8,8 @@ import { getTeamaiHomeDir } from '../types.js';
 import { listDirs, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import {
   entryFilePath,
-  resolveEntriesFor,
   type EntryFileRead,
   type EntryReader,
-  type EntryResolution,
   type ResolvedEntry,
 } from '../namespaced-entries.js';
 
@@ -245,18 +243,6 @@ export const modelsEntryReader: EntryReader<ModelProfile> = {
   // Profiles are strict: a per-entry `roles:` or `projects:` fails the file.
   scopeOf: () => ({}),
 };
-
-/**
- * The team profiles this member receives: the root file plus the active
- * `models/<ns>/models.yaml` files, a namespace profile replacing the root
- * profile with the same id (#707).
- */
-export function resolveTeamProfiles(
-  localConfig: LocalConfig,
-  options: { quiet?: boolean } = {},
-): Promise<EntryResolution<ModelProfile>> {
-  return resolveEntriesFor(modelsEntryReader, localConfig, options);
-}
 
 export function teamProfilesFrom(entries: readonly ResolvedEntry<ModelProfile>[]): TeamModelProfiles {
   return {

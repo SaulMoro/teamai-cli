@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expandHome } from './utils/fs.js';
 import { z } from 'zod';
-import { log } from './utils/logger.js';
+import { warnOnce } from './utils/warn-once.js';
 
 /**
  * What `manifest/projects.yaml` and `manifest/roles.yaml` share: the spelling of
@@ -100,14 +100,12 @@ export const LaterResourceNamespacesShape = {
   docs: DocsNamespaceList,
 } satisfies Record<LaterResourceType, z.ZodOptional<z.ZodArray<z.ZodType<string>>>>;
 
-/** `${kind}:${owner}:${key}` already reported in this process: manifests load several times per pull. */
-const reportedUnknownResourceKeys = new Set<string>();
-
 /**
  * Warn about `resources:` keys this CLI does not know, instead of failing the
  * manifest (#707). Refusing them is what made each new axis break pull for
  * members on an older CLI; from this version on, an unknown key only means the
- * team declared a type this CLI cannot deliver yet. Never throws.
+ * team declared a type this CLI cannot deliver yet. Once per run: manifests
+ * load several times per pull. Never throws.
  */
 export function warnUnknownResourceKeys(
   resources: object,
@@ -117,10 +115,7 @@ export function warnUnknownResourceKeys(
 ): void {
   for (const key of Object.keys(resources)) {
     if (allowed.has(key)) continue;
-    const dedupeKey = `${kind}:${owner}:${key}`;
-    if (reportedUnknownResourceKeys.has(dedupeKey)) continue;
-    reportedUnknownResourceKeys.add(dedupeKey);
-    log.warn(
+    warnOnce(
       `manifest/${kind}.yaml: ${owner} declares unknown resource type "${key}", which this CLI ignores. `
       + `Known types: ${[...allowed].join(', ')}. Upgrade teamai if the team uses a newer type, or remove the key.`,
     );

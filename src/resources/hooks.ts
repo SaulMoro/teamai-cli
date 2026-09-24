@@ -124,9 +124,8 @@ export function teamHookToDef(h: TeamHook): HookDef {
  */
 export async function resolveTeamHookEntries(
   localConfig: LocalConfig,
-  options: { quiet?: boolean } = {},
 ): Promise<{ resolution: EntryResolution<TeamHook>; builtin: BuiltinOverride | undefined }> {
-  const resolution = await resolveEntriesFor(hooksEntryReader, localConfig, options);
+  const resolution = await resolveEntriesFor(hooksEntryReader, localConfig);
   if (resolution.kind === 'failed') return { resolution, builtin: undefined };
   const root = await parseHooksYaml(localConfig.repo.localPath);
   return { resolution, builtin: root?.builtin };
@@ -155,12 +154,12 @@ function isTeamScriptCommand(command: string): boolean {
 export async function resolveTeamHooks(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  opts: { auto?: boolean; silent?: boolean; quiet?: boolean } = {},
+  opts: { auto?: boolean; silent?: boolean } = {},
 ): Promise<{ ok: true; defs: HookDef[]; builtin: BuiltinOverride | undefined } | { ok: false }> {
   // Which hooks this member receives: root plus active namespace files, before
   // the security gates so the transparency print below lists only hooks this
   // member will actually run. A resolution that fails keeps what is installed.
-  const { resolution, builtin } = await resolveTeamHookEntries(localConfig, { quiet: opts.quiet });
+  const { resolution, builtin } = await resolveTeamHookEntries(localConfig);
   reportEntryResolution(resolution);
   if (resolution.kind === 'failed') return { ok: false };
   const sharing = getHooksSharing(teamConfig);
@@ -230,7 +229,7 @@ export class HooksHandler extends ResourceHandler {
 
   /** Count the team hooks this member receives (for status output). */
   async countHooks(localConfig: LocalConfig): Promise<number> {
-    const { resolution } = await resolveTeamHookEntries(localConfig, { quiet: true });
+    const { resolution } = await resolveTeamHookEntries(localConfig);
     return resolution.kind === 'resolved' ? resolution.entries.length : 0;
   }
 }

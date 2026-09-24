@@ -30,7 +30,7 @@ import {
   MCP_SERVER_KEY,
   type McpFormat,
 } from './resources/mcp-format.js';
-import { resolveTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
+import { mcpEntryReader, teamMcpToDef } from './resources/mcp.js';
 import { envEntryReader } from './resources/env.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
@@ -73,8 +73,6 @@ export interface McpReconcileOptions {
    * without mutating the host platform.
    */
   lookPath?: LookPathOptions;
-  /** Drop the namespace fallback warnings a pull already printed this run. */
-  quiet?: boolean;
 }
 
 export interface McpChange {
@@ -112,7 +110,7 @@ export async function buildVarTable(localConfig: LocalConfig): Promise<Record<st
   const table: Record<string, string> = {};
   const env = localConfig.repo.kind === 'http'
     ? null
-    : await resolveEntriesFor(envEntryReader, localConfig, { quiet: true });
+    : await resolveEntriesFor(envEntryReader, localConfig);
   if (env?.kind === 'resolved') {
     for (const variable of env.entries) table[variable.name] = variable.entry.value;
   } else {
@@ -524,7 +522,7 @@ export async function reconcileMcpForConfig(
   if (!removeAll) {
     // A file that does not parse, or a server name defined twice, keeps every
     // installed server as it is: reconciling to an empty set would remove them.
-    const resolution = await resolveTeamMcpServers(localConfig, { quiet: options.quiet });
+    const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
     reportEntryResolution(resolution);
     if (resolution.kind === 'failed') return { changes, wrote };
     teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));

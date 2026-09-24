@@ -1736,14 +1736,13 @@ export async function sweepLegacyProjectHooks(
 export async function reconcileTeamHooksForConfig(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; quiet?: boolean; filterAgents?: string[] } = {},
+  opts: { removeAll?: boolean; auto?: boolean; silent?: boolean; filterAgents?: string[] } = {},
 ): Promise<HookDef[]> {
   const resolved = opts.removeAll
     ? { ok: true as const, defs: [] as HookDef[], builtin: undefined }
     : await resolveTeamHooks(teamConfig, localConfig, {
         auto: opts.auto,
         silent: opts.silent,
-        quiet: opts.quiet,
       });
   // The team's hooks could not be resolved (reported by resolveTeamHooks).
   // Reconciling now would remove every installed team hook, and apply the

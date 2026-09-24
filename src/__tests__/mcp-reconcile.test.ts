@@ -21,7 +21,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { reconcileMcpForConfig, resolveMcpTargets, spliceCodexBlock, codexServerNames } from '../mcp-reconcile.js';
-import { resetEntryWarnings } from '../namespaced-entries.js';
+import { resetWarnOnce } from '../utils/warn-once.js';
 import { TeamaiConfigSchema, type TeamaiConfig, type LocalConfig } from '../types.js';
 
 const TOOL_PATHS = {
@@ -45,7 +45,7 @@ describe('MCP reconcile', () => {
   }
 
   beforeEach(async () => {
-    resetEntryWarnings();
+    resetWarnOnce();
     tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-mcp-test-'));
     homeDir = path.join(tmpDir, 'home');
     repoPath = path.join(tmpDir, 'team-repo');
@@ -449,7 +449,7 @@ servers:
 `);
       const { log } = await import('../utils/logger.js');
       vi.mocked(log.warn).mockClear();
-      resetEntryWarnings();
+      resetWarnOnce();
 
       const { changes } = await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['checkout', 'billing'] });
 
@@ -484,7 +484,7 @@ servers:
     url: https://example.com/shared-again
 `);
       const { log } = await import('../utils/logger.js');
-      resetEntryWarnings();
+      resetWarnOnce();
 
       await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['checkout'] });
 
@@ -504,7 +504,7 @@ servers:
     url: https://example.com/shared
 `);
       const { log } = await import('../utils/logger.js');
-      resetEntryWarnings();
+      resetWarnOnce();
 
       await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['billing'] });
 

@@ -434,14 +434,14 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
     mcpTargetExcluded, installedMcpEntries,
   } = await import('./mcp-reconcile.js');
-  const { resolveTeamMcpServers, teamMcpToDef } = await import('./resources/mcp.js');
-  const { describeEntryFailure } = await import('./namespaced-entries.js');
+  const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
+  const { describeEntryFailure, resolveEntriesFor } = await import('./namespaced-entries.js');
 
   // A file that does not parse, or a server name defined twice, is not a team
   // without MCP: the pull logs the reason once and changes nothing in any tool,
   // and every later run is silent. Flattening it to an empty desired set is
   // what let `doctor --json` answer `ok: true` over a team whose MCP is stuck.
-  const resolution = await resolveTeamMcpServers(localConfig, { quiet: true });
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   if (resolution.kind === 'failed') {
     return [{
       name: 'Team MCP servers can be read',
@@ -543,10 +543,10 @@ async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: Entr
   const { mcpEntryReader } = await import('./resources/mcp.js');
   const { modelsEntryReader } = await import('./models/profile.js');
   return [
-    { type: 'env', resolution: await resolveEntriesFor(envEntryReader, localConfig, { quiet: true }) },
-    { type: 'hooks', resolution: await resolveEntriesFor(hooksEntryReader, localConfig, { quiet: true }) },
-    { type: 'mcp', resolution: await resolveEntriesFor(mcpEntryReader, localConfig, { quiet: true }) },
-    { type: 'models', resolution: await resolveEntriesFor(modelsEntryReader, localConfig, { quiet: true }) },
+    { type: 'env', resolution: await resolveEntriesFor(envEntryReader, localConfig) },
+    { type: 'hooks', resolution: await resolveEntriesFor(hooksEntryReader, localConfig) },
+    { type: 'mcp', resolution: await resolveEntriesFor(mcpEntryReader, localConfig) },
+    { type: 'models', resolution: await resolveEntriesFor(modelsEntryReader, localConfig) },
   ];
 }
 
@@ -605,7 +605,7 @@ async function envDeliveryProblems(
   // a name defined twice, is reported here as pull reports it (#662), and a
   // deliberate `variables: []` is not.
   const { resolveEntriesFor, describeEntryFailure } = await import('./namespaced-entries.js');
-  const resolution = await resolveEntriesFor(envEntryReader, localConfig, { quiet: true });
+  const resolution = await resolveEntriesFor(envEntryReader, localConfig);
   if (resolution.kind === 'failed') return { problems: [describeEntryFailure(resolution.failure)], staleProfiles: [] };
   const declared = resolution.entries.map((entry) => entry.entry);
   const deliverable = new Set(declared.map((variable) => variable.key));

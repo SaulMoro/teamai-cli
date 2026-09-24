@@ -7,8 +7,8 @@ import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, isSelf
 import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual, listDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, reportEntryResolution, resolveEntries,
-  type EntryReader, type EntryResolution,
+  entryFilePath, reportEntryResolution, resolveEntriesFor,
+  type EntryReader,
 } from '../namespaced-entries.js';
 import {
   resolveActiveShellProfile,
@@ -66,19 +66,6 @@ export const envEntryReader: EntryReader<EnvVariable> = {
   nameOf: (variable) => variable.key,
   scopeOf: (variable) => variable,
 };
-
-/**
- * The variables this member receives: the root file plus the active namespace
- * files, a namespace variable replacing the root one of the same key. `active`
- * is null in legacy mode. The one set every reader uses: pull writes env.sh
- * from it, doctor diffs env.sh against it, and MCP resolves `${VAR}` from it.
- */
-export function resolveTeamEnv(
-  localConfig: LocalConfig,
-  active: readonly string[] | null,
-): Promise<EntryResolution<EnvVariable>> {
-  return resolveEntries(envEntryReader, localConfig, active);
-}
 
 /**
  * Report the one env.yaml shape mistake zod cannot surface on its own: a
@@ -314,11 +301,7 @@ export class EnvHandler extends ResourceHandler {
    * exported variables as they are.
    */
   async pullItem(_item: ResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
-    const { activeEntryNamespaces } = await import('../namespaced-entries.js');
-    const namespaces = await activeEntryNamespaces(localConfig, 'env');
-    const resolution: EntryResolution<EnvVariable> = namespaces.ok
-      ? await resolveTeamEnv(localConfig, namespaces.active)
-      : { kind: 'failed', failure: namespaces.failure, notices: [] };
+    const resolution = await resolveEntriesFor(envEntryReader, localConfig);
     reportEntryResolution(resolution);
     if (resolution.kind === 'failed') return;
     await this.writeResolvedEnv(resolution.entries.map((entry) => entry.entry), teamConfig, localConfig);

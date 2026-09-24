@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { autoDetectInit } from './config.js';
-import { resolveTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
-import { describeEntryFailure, describeOrigin } from './namespaced-entries.js';
+import { mcpEntryReader, teamMcpToDef } from './resources/mcp.js';
+import { describeEntryFailure, describeOrigin, resolveEntriesFor } from './namespaced-entries.js';
 import {
   reconcileMcpForConfig,
   resolveMcpTargets,
@@ -25,7 +25,7 @@ function displayPath(p: string): string {
 /** Print team MCP servers, their secret requirements, and where they are installed. */
 export async function mcpList(_options: GlobalOptions): Promise<void> {
   const { localConfig, teamConfig } = await autoDetectInit();
-  const resolution = await resolveTeamMcpServers(localConfig);
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   if (resolution.kind === 'failed') {
     log.error(describeEntryFailure(resolution.failure));
     process.exitCode = 1;

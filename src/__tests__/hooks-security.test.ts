@@ -10,7 +10,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { resolveTeamHooks } from '../resources/hooks.js';
-import { resetEntryWarnings } from '../namespaced-entries.js';
+import { resetWarnOnce } from '../utils/warn-once.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 let repo: string;
@@ -63,7 +63,7 @@ beforeEach(async () => {
   repo = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-hooks-sec-'));
   logWarn.mockClear();
   logInfo.mockClear();
-  resetEntryWarnings();
+  resetWarnOnce();
   delete process.env.TEAMAI_HOOKS_DISABLED;
 });
 afterEach(async () => {
