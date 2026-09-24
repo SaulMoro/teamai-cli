@@ -38,11 +38,13 @@ describe('doctor — env, hooks and MCP namespaces', () => {
   it('lists each override as a note naming both files', async () => {
     await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'),
       'version: 1\nprojects:\n  - id: checkout\n    resources: { env: [checkout] }\n');
-    await fse.outputFile(path.join(repoPath, 'env', 'env.yaml'), 'variables:\n  - key: API_BASE\n    value: a\n');
+    await fse.outputFile(path.join(repoPath, 'env', 'env.yaml'), 'variables:\n  - key: API_BASE\n    value: a\n  - key: LOG\n    value: debug\n');
     await fse.outputFile(path.join(repoPath, 'env', 'checkout', 'env.yaml'), 'variables:\n  - key: API_BASE\n    value: b\n');
 
-    expect(await entryNamespaceNotes(ctx({ projects: ['checkout'] })))
-      .toEqual(['env: "API_BASE" from env/checkout/env.yaml replaces env/env.yaml']);
+    expect(await entryNamespaceNotes(ctx({ projects: ['checkout'] }))).toEqual([
+      'env: 2 received here (1 root, 1 checkout)',
+      'env: "API_BASE" from env/checkout/env.yaml replaces env/env.yaml',
+    ]);
     expect(await entryNamespaceNotes(ctx())).toEqual([]);
   });
 
@@ -57,8 +59,10 @@ describe('doctor — env, hooks and MCP namespaces', () => {
     await fse.outputFile(path.join(repoPath, 'models', 'models.yaml'), catalog('https://gw.company.test'));
     await fse.outputFile(path.join(repoPath, 'models', 'checkout', 'models.yaml'), catalog('https://gw.checkout.test'));
 
-    expect(await entryNamespaceNotes(ctx({ projects: ['checkout'] })))
-      .toEqual(['models: "gw" from models/checkout/models.yaml replaces models/models.yaml']);
+    expect(await entryNamespaceNotes(ctx({ projects: ['checkout'] }))).toEqual([
+      'models: 1 received here (1 checkout)',
+      'models: "gw" from models/checkout/models.yaml replaces models/models.yaml',
+    ]);
   });
 
   it('lists a name the root file repeats in legacy mode, where it is not an error', async () => {

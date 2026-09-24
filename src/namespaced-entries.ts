@@ -416,15 +416,32 @@ export function describeOrigin(entry: ResolvedEntry<unknown>): string {
   return entry.replaces ? `${entry.namespace}, overrides root` : entry.namespace;
 }
 
+/** `2 root, 1 checkout`: how many resolved entries each place contributes, root first. */
+export function describeOrigins(entries: readonly ResolvedEntry<unknown>[]): string {
+  const byPlace = new Map<string, number>();
+  for (const entry of entries) {
+    const place = entry.namespace ?? 'root';
+    byPlace.set(place, (byPlace.get(place) ?? 0) + 1);
+  }
+  return [...byPlace]
+    .sort(([a], [b]) => Number(b === 'root') - Number(a === 'root'))
+    .map(([place, n]) => `${n} ${place}`)
+    .join(', ');
+}
+
 /**
- * Info lines for `doctor`: each override, and in legacy mode each name the root
- * file repeats. Neither is a problem, so neither is a failing check.
+ * Info lines for `doctor`: where a type's entries come from when a namespace
+ * contributes any, each override, and in legacy mode each name the root file
+ * repeats. None is a problem, so none is a failing check.
  */
 export function describeEntryNotes(type: EntryType, resolution: EntryResolution<unknown>): string[] {
   if (resolution.kind !== 'resolved') return [];
-  const lines = resolution.entries.flatMap((entry) => (entry.replaces
-    ? [describeOverride(type, { name: entry.name, source: entry.source, replaces: entry.replaces })]
-    : []));
+  const lines = resolution.entries.some((entry) => entry.namespace !== null)
+    ? [`${type}: ${resolution.entries.length} received here (${describeOrigins(resolution.entries)})`]
+    : [];
+  for (const entry of resolution.entries) {
+    if (entry.replaces) lines.push(describeOverride(type, { name: entry.name, source: entry.source, replaces: entry.replaces }));
+  }
   if (resolution.active === null) {
     for (const name of resolution.repeated) {
       lines.push(`${type}: "${name}" is defined more than once in ${entryFilePath(type, null)} (legacy mode does not check this; keep one of them)`);

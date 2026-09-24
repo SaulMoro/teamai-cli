@@ -24,8 +24,8 @@ import { mcpEntryReader } from './resources/mcp.js';
 import { resolveTeamHookEntries } from './resources/hooks.js';
 import { envEntryReader } from './resources/env.js';
 import {
-  describeEntryFailure, describeOrigin, resolveEntriesFor,
-  type EntryResolution, type EntryType, type ResolvedEntry,
+  describeEntryFailure, describeOrigin, describeOrigins, resolveEntriesFor,
+  type EntryResolution, type EntryType,
 } from './namespaced-entries.js';
 
 export interface ListOptions extends GlobalOptions {
@@ -472,17 +472,4 @@ async function printLocalAgentsSection(
 function filterAgents(agents: ResolvedAgent[], agentFilter?: string): ResolvedAgent[] {
   if (!agentFilter) return agents;
   return agents.filter((a) => a.id === agentFilter);
-}
-
-/** `2 root, 1 checkout`: how many resolved entries each place contributes, root first. */
-function describeOrigins(entries: readonly ResolvedEntry<unknown>[]): string {
-  const byPlace = new Map<string, number>();
-  for (const entry of entries) {
-    const place = entry.namespace ?? 'root';
-    byPlace.set(place, (byPlace.get(place) ?? 0) + 1);
-  }
-  return [...byPlace]
-    .sort(([a], [b]) => Number(b === 'root') - Number(a === 'root'))
-    .map(([place, n]) => `${n} ${place}`)
-    .join(', ');
 }
