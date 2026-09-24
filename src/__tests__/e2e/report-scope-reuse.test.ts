@@ -32,10 +32,8 @@ function fixture() {
   const project = path.join(sandbox, 'project');
   const dataHome = path.join(project, '.teamai');
   const remote = path.join(sandbox, 'remote.git');
-  const clone = path.join(dataHome, 'team-repo');
   const logDir = path.join(home, '.teamai', 'dashboard');
   const logPath = path.join(logDir, 'events.jsonl');
-  fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
   const env = {
     ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
@@ -44,16 +42,40 @@ function fixture() {
     GIT_COMMITTER_NAME: 'Scope Test', GIT_COMMITTER_EMAIL: 'test@example.invalid', NO_COLOR: '1',
   };
   const git = (...args: string[]) => execFileSync('git', args, { cwd: project, env, encoding: 'utf8', stdio: 'pipe' });
-  git('init', '-q', '-b', 'main');
-  fs.writeFileSync(path.join(project, 'teamai.yaml'), YAML.stringify({ team: 'scope-test', repo: remote, provider: 'git' }));
-  git('add', 'teamai.yaml');
-  git('commit', '-qm', 'fixture');
-  git('clone', '-q', '--bare', project, remote);
-  git('clone', '-q', remote, clone);
-  fs.writeFileSync(path.join(dataHome, 'config.yaml'), YAML.stringify({
-    repo: { localPath: clone, remote, kind: 'git' }, username: 'tester', scope: 'project', projectRoot: project,
-    updatePolicy: 'skip', enabledAgents: ['claude'], additionalRoles: [],
-  }));
+  /**
+   * A project at `root` with its own team at `teamRemote`. A git project moves
+   * its data home to a partition on its first pull; without git (`git: false`)
+   * it stays in the workspace, `<root>/.teamai`, under no partition.
+   */
+  const makeProject = (root: string, teamRemote: string, { git: inGit = true } = {}) => {
+    const seed = inGit ? root : `${root}-team-seed`;
+    const at = (...args: string[]) => execFileSync('git', args, { cwd: seed, env, encoding: 'utf8', stdio: 'pipe' });
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.mkdirSync(seed, { recursive: true });
+    at('init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(seed, 'teamai.yaml'), YAML.stringify({ team: 'scope-test', repo: teamRemote, provider: 'git' }));
+    at('add', 'teamai.yaml');
+    at('commit', '-qm', 'fixture');
+    at('clone', '-q', '--bare', seed, teamRemote);
+    const teamClone = path.join(root, '.teamai', 'team-repo');
+    at('clone', '-q', teamRemote, teamClone);
+    fs.writeFileSync(path.join(root, '.teamai', 'config.yaml'), YAML.stringify({
+      repo: { localPath: teamClone, remote: teamRemote, kind: 'git' }, username: 'tester', scope: 'project', projectRoot: root,
+      updatePolicy: 'skip', enabledAgents: ['claude'], additionalRoles: [],
+    }));
+    return {
+      pull: () => execFileSync(process.execPath, [cli, 'pull'], { cwd: root, env, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 }),
+      stats: () => YAML.parse(at('--git-dir', teamRemote, 'show', 'teamai-reports:stats/tester.yaml')),
+      reportsHead: () => {
+        try { return at('--git-dir', teamRemote, 'rev-parse', '--verify', '-q', 'teamai-reports'); } catch { return ''; }
+      },
+      /** A hook event the way the installed hooks send it. */
+      hook: (hookName: string, data: Record<string, unknown>) => execFileSync(process.execPath,
+        [cli, 'hook-dispatch', hookName, '--tool', 'claude', '--stdin'],
+        { cwd: root, env, input: JSON.stringify({ cwd: root, ...data }), encoding: 'utf8', stdio: 'pipe', timeout: 30_000 }),
+    };
+  };
+  const main = makeProject(project, remote);
   const writeLog = (events: DashboardEvent[]) => fs.writeFileSync(logPath, events.map(e => JSON.stringify(e)).join('\n') + '\n');
   /** The shared snapshots an earlier release left, `prompts` reported per bare session ID. */
   const writeSharedSnapshots = (prompts: Record<string, number>, date: string) => {
@@ -67,12 +89,13 @@ function fixture() {
       fs.writeFileSync(path.join(logDir, `reported-${name}.json`), JSON.stringify(value));
     }
   };
-  const pull = () => execFileSync(process.execPath, [cli, 'pull'], { cwd: project, env, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 });
-  const stats = () => YAML.parse(git('--git-dir', remote, 'show', 'teamai-reports:stats/tester.yaml'));
-  const reportsHead = () => {
-    try { return git('--git-dir', remote, 'rev-parse', '--verify', '-q', 'teamai-reports'); } catch { return ''; }
+  const { pull, stats, reportsHead, hook } = main;
+  /** Another project with its own team. */
+  const addProject = (name: string, options: { git?: boolean } = {}) => {
+    const root = path.join(sandbox, name);
+    return { root, ...makeProject(root, path.join(sandbox, `${name}-remote.git`), options) };
   };
-  return { project, dataHome, remote, logPath, env, git, writeLog, writeSharedSnapshots, pull, stats, reportsHead };
+  return { home, project, dataHome, remote, logPath, env, git, writeLog, writeSharedSnapshots, pull, stats, reportsHead, hook, addProject };
 }
 
 it('real CLI preserves a path-keyed reuse and replays a delayed exit emitted by the real monitor', async () => {
@@ -164,3 +187,44 @@ it('real CLI sends no run of an aggregated bare ID again and splits a reused ID 
   pull();
   expect(stats()).toMatchObject({ prompts: 2, interventions: { sessions: 2 } });
 }, 60_000);
+
+it('real CLI gives a session resumed in another project after compaction to the project its transcript started in', () => {
+  const { home, logPath, addProject } = fixture();
+  // W keeps its data home in the workspace; Q is a git project.
+  const w = addProject('project-w', { git: false });
+  const q = addProject('project-q');
+  const transcript = path.join(home, '.claude', 'projects', 'w', 'resumed-e2e.jsonl');
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  const turn = (sessionId: string, cwd: string, n: number) => JSON.stringify({
+    type: 'user', sessionId, uuid: `${sessionId}-${n}`, cwd, timestamp: new Date().toISOString(),
+    message: { role: 'user', content: `turn ${n}` },
+  });
+  const run = (project: typeof w, sessionId: string, transcriptPath: string) => {
+    project.hook('prompt-submit', { session_id: sessionId, hook_event_name: 'UserPromptSubmit', prompt: 'turn', transcript_path: transcriptPath });
+    project.hook('stop', { session_id: sessionId, hook_event_name: 'Stop', transcript_path: transcriptPath });
+  };
+  // W records and reports the session.
+  fs.writeFileSync(transcript, turn('resumed-e2e', w.root, 1) + '\n');
+  run(w, 'resumed-e2e', transcript);
+  w.pull();
+  expect(w.stats()).toMatchObject({ prompts: 1, interventions: { sessions: 1 } });
+  expect(fs.existsSync(path.join(w.root, '.teamai', 'dashboard', 'reported-prompt-tokens.json'))).toBe(true);
+  // As if an earlier release had reported it: no owners index. Compaction then
+  // drops every W event, so nothing on disk outside W points to W.
+  fs.rmSync(path.join(home, '.teamai', 'dashboard', 'session-owners.jsonl'), { force: true });
+  fs.writeFileSync(logPath, '');
+
+  // `claude --resume` in Q appends to the same transcript; Q also runs a session of its own.
+  fs.appendFileSync(transcript, turn('resumed-e2e', q.root, 2) + '\n');
+  run(q, 'resumed-e2e', transcript);
+  const own = path.join(home, '.claude', 'projects', 'q', 'q-own.jsonl');
+  fs.mkdirSync(path.dirname(own), { recursive: true });
+  fs.writeFileSync(own, turn('q-own', q.root, 1) + '\n');
+  run(q, 'q-own', own);
+  q.pull();
+  w.pull();
+
+  // Q reports only its own session; W reports the resumed turn.
+  expect(q.stats()).toMatchObject({ prompts: 1, interventions: { sessions: 1 } });
+  expect(w.stats()).toMatchObject({ prompts: 2, interventions: { sessions: 1 } });
+}, 90_000);
