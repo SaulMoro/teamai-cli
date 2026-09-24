@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +31,16 @@ async function ids(events: DashboardEvent[], config?: LocalConfig): Promise<stri
 }
 
 describe('filterEventsByScope', () => {
+  // The fixed paths below stand for directories that exist: an older event's
+  // cwd counts only while it does. Real temp directories resolve for real.
+  const FIXED_PATH = /^(?:\/Users\/jeff\/|\/work\/|[A-Za-z]:|\\\\)/;
+  beforeEach(() => {
+    const realpath = fs.promises.realpath;
+    vi.spyOn(fs.promises, 'realpath').mockImplementation(async (p) =>
+      typeof p === 'string' && FIXED_PATH.test(p) ? p : realpath(p));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   const events: DashboardEvent[] = [
     makeEvent('/Users/jeff/project-a', 's1'),
     makeEvent('/Users/jeff/project-a/src', 's2'),
@@ -80,7 +90,8 @@ describe('filterEventsByScope', () => {
         ];
         const project = await filterEventsByScope(reused, projectScope('/Users/jeff/project-a'));
         const user = await filterEventsByScope(reused, userScope());
-        expect(project).toEqual([reused[2]]);
+        // The later run is its own session, under an ID of its own.
+        expect(project).toEqual([{ ...reused[2], sessionId: `pid-1@${reused[2].timestamp}` }]);
         expect(user).toEqual([reused[0], reused[1]]);
       }
     });
@@ -166,6 +177,18 @@ describe('filterEventsByScope', () => {
       fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link'), 'dir');
       const evts = [makeEvent(path.join(tmp, 'real'), 'r1')];
       expect(await ids(evts, projectScope(path.join(tmp, 'link')))).toEqual(['r1']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not give a project an older event whose cwd under its root is gone', async () => {
+    // A removed worktree may have been a nested clone, whose sessions were never the project's.
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-scope-cwd-')));
+    try {
+      fs.mkdirSync(path.join(tmp, 'src'));
+      const evts = [makeEvent(path.join(tmp, 'src'), 'e1'), makeEvent(path.join(tmp, 'removed-worktree'), 'g1')];
+      expect(await ids(evts, projectScope(tmp))).toEqual(['e1']);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

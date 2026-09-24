@@ -209,6 +209,9 @@ beforeEach(() => {
   consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   initWorkspace();
   DIRS = projectDirs();
+  // An older, unkeyed event counts only while its cwd exists (#785).
+  fs.mkdirSync(DIRS.project, { recursive: true });
+  fs.mkdirSync(DIRS.other, { recursive: true });
 });
 
 afterEach(() => {

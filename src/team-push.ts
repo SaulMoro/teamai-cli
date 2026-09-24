@@ -377,7 +377,8 @@ function isUnderScopeRoot(cwd: string, root: ScopeRoot): boolean {
 /**
  * The dashboard events a scope reports (#785): every event of the sessions
  * recorded in it. A session is the run of one ID up to its session_end or
- * process_exit, since a PID-fallback ID comes back for a later run. It is
+ * process_exit, since a PID-fallback ID comes back for a later run; a later
+ * run is returned under an ID of its own, so it is counted on its own. It is
  * decided once, whole, by its first event keyed with a data home
  * (`dataHomeKey`, or the path an unreleased build of #795 wrote), because a
  * Stop carries the whole transcript's totals: split per event, a session that
@@ -397,15 +398,6 @@ export async function filterEventsByScope(
   config?: LocalConfig,
 ): Promise<DashboardEvent[]> {
   if (!config) return events;
-  const realPaths = new Map<string, Promise<string>>();
-  const realPath = (dir: string): Promise<string> => {
-    let real = realPaths.get(dir);
-    if (!real) {
-      real = fs.promises.realpath(dir).catch(() => dir);
-      realPaths.set(dir, real);
-    }
-    return real;
-  };
   const ownKey = await dataHomeKey(getDataHome(config));
   const keys = new Set([ownKey]);
   if (config.projectRoot) {
@@ -413,13 +405,14 @@ export async function filterEventsByScope(
     const legacy = await dataHomeKey(path.join(config.projectRoot, '.teamai'));
     if (legacy !== (await dataHomeKey(path.join(getUserHome(), '.teamai')))) keys.add(legacy);
   }
-  const root = config.projectRoot ? scopeRoot(await realPath(config.projectRoot)) : undefined;
+  const projectRoot = config.projectRoot;
+  const root = projectRoot ? scopeRoot(await fs.promises.realpath(projectRoot).catch(() => projectRoot)) : undefined;
   const { resolveConfigForDir } = await import('./config.js');
   const resolvesHere = new Map<string, Promise<boolean>>();
   const ownsCwd = (cwd: string): Promise<boolean> => {
     let owns = resolvesHere.get(cwd);
     if (!owns) {
-      owns = root ? realPath(cwd).then((real) => isUnderScopeRoot(real, root))
+      owns = root ? fs.promises.realpath(cwd).then((real) => isUnderScopeRoot(real, root), () => false)
         : pathExists(cwd).then(async (exists) => {
           const resolved = exists ? await resolveConfigForDir(cwd) : null;
           return !!resolved && (await dataHomeKey(getDataHome(resolved))) === ownKey;
@@ -443,11 +436,21 @@ export async function filterEventsByScope(
   }));
   // A session ID names one run until it ends: a PID-fallback ID comes back for
   // a later run, maybe in another scope, so each run is decided on its own.
+  // A later run is also reported as its own session: it is returned under the
+  // ID plus its first event's timestamp. The first run keeps the bare ID, so
+  // the snapshots already written for it still match.
   const runOf: number[] = [];
   const openRun = new Map<string, number>();
   const deciding: Array<number | undefined> = [];
+  const runIds: string[] = [];
+  const seen = new Set<string>();
   events.forEach((e, i) => {
-    const run = openRun.get(e.sessionId) ?? deciding.push(undefined) - 1;
+    let run = openRun.get(e.sessionId);
+    if (run === undefined) {
+      run = deciding.push(undefined) - 1;
+      runIds.push(seen.has(e.sessionId) ? `${e.sessionId}@${e.timestamp}` : e.sessionId);
+      seen.add(e.sessionId);
+    }
     openRun.set(e.sessionId, run);
     if (e.type === 'session_end' || e.type === 'process_exit') openRun.delete(e.sessionId);
     runOf.push(run);
@@ -461,7 +464,11 @@ export async function filterEventsByScope(
     const cwd = events[i].cwd;
     return key !== undefined ? keys.has(key) : !!cwd && await ownsCwd(cwd);
   }));
-  return events.filter((_, i) => owned[runOf[i]]);
+  return events.flatMap((e, i) => {
+    const run = runOf[i];
+    if (!owned[run]) return [];
+    return runIds[run] === e.sessionId ? [e] : [{ ...e, sessionId: runIds[run] }];
+  });
 }
 
 /**

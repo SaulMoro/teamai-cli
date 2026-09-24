@@ -282,6 +282,18 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await reportedSessions(user)).toBe(1);
   });
 
+  it('two sessions that reuse one session ID in the same scope are two sessions, while the log holds both', async () => {
+    const { root, project } = await setup();
+    await session('copilot', { cwd: root });
+    await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(project)).toBe(1);
+    await session('copilot', { cwd: root });
+    await hook('session-end', 'copilot', { cwd: root, hook_event_name: 'SessionEnd' });
+
+    expect(await reportedSessions(project)).toBe(2);
+    expect(await reportedPrompts(project)).toBe(2);
+  });
+
   it('the first report after the upgrade sends nothing a shared snapshot already reported', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');
