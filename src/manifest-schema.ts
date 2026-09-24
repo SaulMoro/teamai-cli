@@ -70,7 +70,7 @@ export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSe
  * writes back (`roles add`, `projects update`) carries one only when an admin
  * declared it. A new type is one entry here plus one line in the shape below.
  */
-export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp', 'docs'] as const;
+export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp', 'models', 'docs'] as const;
 
 export type LaterResourceType = typeof LATER_RESOURCE_TYPES[number];
 
@@ -96,6 +96,7 @@ export const LaterResourceNamespacesShape = {
   env: OptionalNamespaceList,
   hooks: OptionalNamespaceList,
   mcp: OptionalNamespaceList,
+  models: OptionalNamespaceList,
   docs: DocsNamespaceList,
 } satisfies Record<LaterResourceType, z.ZodOptional<z.ZodArray<z.ZodType<string>>>>;
 

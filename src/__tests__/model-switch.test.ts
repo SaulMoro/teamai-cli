@@ -48,12 +48,13 @@ function routed(
     group.models.push(model);
   }
   const id = options.id ?? 'tokenhub';
+  const baseUrl = options.baseUrl ?? 'https://gateway.example.test';
   const profile = ModelProfileSchema.parse({
-    id, name: 'TokenHub', base_url: options.baseUrl ?? 'https://gateway.example.test',
+    id, name: 'TokenHub', base_url: baseUrl,
     api_key: '${API_KEY}', model_groups: groups,
   });
   return resolveProfile({ source: 'team', profile, team: 'demo-team' }, {
-    [`team:${id}`]: { API_KEY: options.env ? { env: options.env } : { value: 'local-secret' } },
+    [`team:${id}@${new URL(baseUrl).origin}`]: { API_KEY: options.env ? { env: options.env } : { value: 'local-secret' } },
   }, options.model);
 }
 

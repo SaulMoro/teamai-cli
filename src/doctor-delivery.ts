@@ -541,10 +541,12 @@ async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: Entr
   const { envEntryReader } = await import('./resources/env.js');
   const { hooksEntryReader } = await import('./resources/hooks.js');
   const { mcpEntryReader } = await import('./resources/mcp.js');
+  const { modelsEntryReader } = await import('./models/profile.js');
   return [
     { type: 'env', resolution: await resolveEntriesFor(envEntryReader, localConfig, { quiet: true }) },
     { type: 'hooks', resolution: await resolveEntriesFor(hooksEntryReader, localConfig, { quiet: true }) },
     { type: 'mcp', resolution: await resolveEntriesFor(mcpEntryReader, localConfig, { quiet: true }) },
+    { type: 'models', resolution: await resolveEntriesFor(modelsEntryReader, localConfig, { quiet: true }) },
   ];
 }
 

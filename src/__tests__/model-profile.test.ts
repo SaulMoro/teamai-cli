@@ -54,7 +54,7 @@ describe('model profiles', () => {
     });
     const resolved = resolveProfile(
       { source: 'team', profile: parsed },
-      { 'team:tokenhub': { API_KEY: { value: 'local-secret' } } },
+      { 'team:tokenhub@https://tokenhub.tencentmaas.com': { API_KEY: { value: 'local-secret' } } },
     );
     expect(resolved.routes.anthropic).toEqual({
       base_url: 'https://tokenhub.tencentmaas.com',
@@ -68,7 +68,7 @@ describe('model profiles', () => {
   });
 
   it('puts a chosen default model first in every route that serves it', () => {
-    const values = { 'team:tokenhub': { API_KEY: { value: 'local-secret' } } };
+    const values = { 'team:tokenhub@https://tokenhub.tencentmaas.com': { API_KEY: { value: 'local-secret' } } };
     const resolved = resolveProfile({ source: 'team', profile: profile('tokenhub') }, values, 'deepseek-v4-flash');
     expect(resolved.routes.anthropic?.models).toEqual(['deepseek-v4-flash', 'glm-5.3']);
     expect(resolved.routes['openai-chat-completions']?.models).toEqual(['deepseek-v4-flash', 'glm-5.3']);
@@ -150,8 +150,20 @@ describe('model profiles', () => {
     expect(resolveProfileRef('local:same', team, local).source).toBe('local');
   });
 
+  it('uses a team key only for the gateway origin it was stored for', () => {
+    const values = { 'team:corp@https://tokenhub.tencentmaas.com': { API_KEY: { value: 'company-secret' } } };
+    const samehost = ModelProfileSchema.parse({ ...TOKENHUB, id: 'corp', base_url: 'https://tokenhub.tencentmaas.com/project' });
+    expect(resolveProfile({ source: 'team', profile: samehost }, values).api_key_value).toBe('company-secret');
+    const otherhost = ModelProfileSchema.parse({ ...TOKENHUB, id: 'corp', base_url: 'https://gateway.project.test' });
+    expect(() => resolveProfile({ source: 'team', profile: otherhost }, values))
+      .toThrow(/team:corp has no API key for https:\/\/gateway\.project\.test/);
+    // A key stored by id alone is never used without the root profile it was configured for.
+    expect(() => resolveProfile({ source: 'team', profile: profile('corp') }, { 'team:corp': { API_KEY: { value: 'old' } } }))
+      .toThrow(/has no API key/);
+  });
+
   it('resolves environment-backed keys without persisting their values', () => {
-    const values = { 'team:corp': { API_KEY: { env: 'TEAMAI_TEST_MODEL_KEY' } } };
+    const values = { 'team:corp@https://tokenhub.tencentmaas.com': { API_KEY: { env: 'TEAMAI_TEST_MODEL_KEY' } } };
     process.env.TEAMAI_TEST_MODEL_KEY = 'from-env';
     try {
       const resolved = resolveProfile({ source: 'team', profile: profile('corp') }, values);

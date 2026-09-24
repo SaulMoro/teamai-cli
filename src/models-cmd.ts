@@ -1,4 +1,7 @@
+import path from 'node:path';
 import { autoDetectInit } from './config.js';
+import { describeEntryFailure, describeOrigin, reportEntryResolution } from './namespaced-entries.js';
+import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { askQuestion, askSecret, isInteractive } from './utils/prompt.js';
 import type { LocalConfig } from './types.js';
@@ -10,22 +13,29 @@ import {
   getLocalValuesPath,
   getTeamIdentity,
   getTeamValuesPath,
+  hasApiKeyForAnotherGateway,
+  inactiveNamespaceDefines,
   isApiKeyConfigured,
   loadLocalProfiles,
   loadModelInputs,
-  loadTeamProfiles,
   profileAgents,
   profileModels,
+  profileOrigin,
   profileRefName,
   resolveProfile,
   resolveProfileRef,
+  resolveTeamProfiles,
   saveLocalProfiles,
   saveModelInputs,
+  setStoredApiKey,
+  storedApiKey,
+  teamProfilesFrom,
   type ModelAgent,
   type ModelGroup,
   type ModelProtocol,
   type ModelProfilesFile,
   type ProfileRef,
+  type TeamModelProfiles,
   type StoredModelInput,
   type StoredModelInputs,
 } from './models/profile.js';
@@ -39,7 +49,7 @@ import {
 } from './models/switch.js';
 
 interface TeamModelsContext {
-  team: ModelProfilesFile;
+  team: TeamModelProfiles;
   localConfig?: LocalConfig;
 }
 
@@ -50,10 +60,14 @@ async function teamContext(): Promise<TeamModelsContext> {
   } catch {
     return { team: { version: 1, profiles: [] } };
   }
-  return {
-    team: await loadTeamProfiles(initialized.localConfig.repo.localPath),
-    localConfig: initialized.localConfig,
-  };
+  const resolution = await resolveTeamProfiles(initialized.localConfig);
+  if (resolution.kind === 'failed') throw new Error(describeEntryFailure(resolution.failure));
+  return { team: teamProfilesFrom(resolution.entries), localConfig: initialized.localConfig };
+}
+
+/** For a team profile, the gateway its key is bound to, as ` at <origin>`. */
+function atGateway(ref: ProfileRef): string {
+  return ref.source === 'team' ? ` at ${profileOrigin(ref.profile)}` : '';
 }
 
 function splitList(value: string | undefined): string[] {
@@ -144,7 +158,7 @@ export async function modelsList(reference?: string): Promise<void> {
     refs = [ref];
   } else {
     refs = [
-      ...context.team.profiles.map((profile) => ({ source: 'team' as const, profile, team })),
+      ...context.team.profiles.map((profile) => ({ ...resolveProfileRef(`team:${profile.id}`, context.team, local), team })),
       ...local.profiles.map((profile) => ({ source: 'local' as const, profile })),
     ];
   }
@@ -153,15 +167,19 @@ export async function modelsList(reference?: string): Promise<void> {
     return;
   }
   const values: Record<ProfileRef['source'], StoredModelInputs> = {
-    team: refs.some((ref) => ref.source === 'team') ? await loadModelInputs(valuesPathFor(refs.find((ref) => ref.source === 'team')!, context)) : {},
+    team: context.localConfig && refs.some((ref) => ref.source === 'team') ? await loadModelInputs(getTeamValuesPath(context.localConfig)) : {},
     local: refs.some((ref) => ref.source === 'local') ? await loadModelInputs(getLocalValuesPath()) : {},
   };
   refs.forEach((ref, index) => {
     if (index > 0) console.log('');
-    const secret = values[ref.source][profileRefName(ref)]?.API_KEY;
+    const secret = storedApiKey(ref, values[ref.source]);
     const activeAgents = activeAgentsFor(ref, active);
     console.log(`${profileRefName(ref)} — ${ref.profile.name}`);
-    console.log(`  API key: ${secret?.env ? `environment ${secret.env}` : secret?.value ? 'configured locally' : 'not configured'}`);
+    if (ref.from) console.log(`  From: ${ref.from.source} (${describeOrigin(ref.from)})`);
+    const missing = hasApiKeyForAnotherGateway(ref, values[ref.source])
+      ? `not configured for ${profileOrigin(ref.profile)} (one is stored for another gateway)`
+      : 'not configured';
+    console.log(`  API key: ${secret?.env ? `environment ${secret.env}` : secret?.value ? 'configured locally' : missing}`);
     console.log(`  Gateway: ${ref.profile.base_url}`);
     console.log('  Models:');
     for (const group of ref.profile.model_groups) {
@@ -277,10 +295,10 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
 
   const file = valuesPathFor(ref, context);
   const values = await loadModelInputs(file);
-  const configured = values[key]?.API_KEY;
+  const configured = storedApiKey(ref, values);
   let secret = await apiKeyFromOptions(options);
   if (!edited && !secret) {
-    const answer = await askSecret(`API key for ${key}${configured ? ' (leave empty to keep)' : ''}: `);
+    const answer = await askSecret(`API key for ${key}${atGateway(ref)}${configured ? ' (leave empty to keep)' : ''}: `);
     if (answer) secret = { value: answer };
   }
   if (!secret && !configured) {
@@ -288,7 +306,7 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
   }
 
   if (secret) {
-    values[key] = { API_KEY: secret };
+    setStoredApiKey(ref, values, secret);
     await saveModelInputs(file, values);
   }
   if (edited) {
@@ -297,8 +315,8 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
   }
   const activeAgents = activeAgentsFor(ref, await activeModelProfiles());
   log.success(activeAgents.length
-    ? `Configured ${key}. Run \`teamai models switch ${key}\` to apply it to ${activeAgents.join(', ')}.`
-    : `Configured ${key}. Agent settings were not changed.`);
+    ? `Configured ${key}${atGateway(ref)}. Run \`teamai models switch ${key}\` to apply it to ${activeAgents.join(', ')}.`
+    : `Configured ${key}${atGateway(ref)}. Agent settings were not changed.`);
 }
 
 interface SwitchOptions {
@@ -312,16 +330,17 @@ export async function modelsSwitch(reference: string, options: SwitchOptions): P
   const key = profileRefName(ref);
   const file = valuesPathFor(ref, context);
   const values = await loadModelInputs(file);
-  const stored = values[key]?.API_KEY;
-  // First use of a profile: ask for the key here instead of requiring a
-  // separate `configure` step.
+  const stored = storedApiKey(ref, values);
+  // First use of a profile, or of its current gateway: ask for the key here
+  // instead of requiring a separate `configure` step.
   if (!stored && !options.dryRun && isInteractive()) {
-    const answer = await askSecret(`API key for ${key}: `);
+    const answer = await askSecret(`API key for ${key}${atGateway(ref)}: `);
     if (!answer) throw new Error(`Profile ${key} needs an API key`);
-    values[key] = { API_KEY: { value: answer } };
+    setStoredApiKey(ref, values, { value: answer });
     await saveModelInputs(file, values);
   } else if (!isApiKeyConfigured(stored) && !stored?.env) {
-    throw new Error(`Profile ${key} has no API key. Run \`teamai models configure ${key}\`.`);
+    const gateway = ref.source === 'team' ? ` for ${profileOrigin(ref.profile)}` : '';
+    throw new Error(`Profile ${key} has no API key${gateway}. Run \`teamai models configure ${key}\`.`);
   }
   const resolved = resolveProfile(ref, values, options.model);
   const explicit = collectAgents(options.agent ?? []);
@@ -359,9 +378,12 @@ export async function modelsRemove(reference: string): Promise<void> {
  * them, so catalog updates arrive with `teamai pull`. Agents the user never
  * switched are left alone. Returns a hint when the team offers profiles that
  * no agent uses yet.
+ *
+ * The profiles are the root file plus the active namespace files (#707). When
+ * they do not resolve, no agent is touched this run. An agent whose profile
+ * moved to a gateway its key was not configured for is left alone too.
  */
 export async function syncTeamModelProfiles(localConfig: LocalConfig, options: { dryRun?: boolean } = {}): Promise<string | undefined> {
-  const team = await loadTeamProfiles(localConfig.repo.localPath);
   const identity = getTeamIdentity(localConfig);
   const groups = new Map<string, { profile: string; model?: string; agents: ModelAgent[] }>();
   for (const [agent, state] of Object.entries(await activeModelProfiles()) as Array<[ModelAgent, ActiveModelProfile]>) {
@@ -371,6 +393,16 @@ export async function syncTeamModelProfiles(localConfig: LocalConfig, options: {
     group.agents.push(agent);
     groups.set(groupKey, group);
   }
+  // Nothing to update or offer: skip reading the manifests.
+  if (groups.size === 0 && !await pathExists(path.join(localConfig.repo.localPath, 'models'))) return undefined;
+
+  // pull already printed the namespace fallback warnings.
+  const resolution = await resolveTeamProfiles(localConfig, { quiet: true });
+  if (resolution.kind === 'failed') {
+    reportEntryResolution(resolution);
+    return undefined;
+  }
+  const team = teamProfilesFrom(resolution.entries);
   if (groups.size === 0) {
     return team.profiles.length > 0
       ? `${team.profiles.length} team model profile(s) available; run \`teamai models list\` to see them.`
@@ -379,18 +411,26 @@ export async function syncTeamModelProfiles(localConfig: LocalConfig, options: {
 
   const values = await loadModelInputs(getTeamValuesPath(localConfig));
   for (const { profile: name, model, agents } of groups.values()) {
-    const profile = team.profiles.find((candidate) => `team:${candidate.id}` === name);
+    const id = name.slice('team:'.length);
+    const profile = team.profiles.find((candidate) => candidate.id === id);
+    const keep = `${agents.join(', ')} keep${agents.length === 1 ? 's' : ''} ${agents.length === 1 ? 'its' : 'their'} settings`;
     if (!profile) {
-      log.warn(`Team model profile ${name} was removed; ${agents.join(', ')} keep their settings. Run \`teamai models restore\` to undo them.`);
+      const why = await inactiveNamespaceDefines(localConfig.repo.localPath, resolution.active ?? [], id)
+        ? 'is no longer active in your namespaces'
+        : 'was removed';
+      log.warn(`Team model profile ${name} ${why}; ${keep}. Run \`teamai models restore\` to undo them.`);
+      continue;
+    }
+    const ref = resolveProfileRef(name, team, { version: 1, profiles: [] });
+    ref.team = identity;
+    if (hasApiKeyForAnotherGateway(ref, values)) {
+      log.warn(`Team model profile ${name} now uses ${profileOrigin(profile)}${ref.from ? ` (${ref.from.source})` : ''}, `
+        + `not the gateway your API key is configured for; ${keep}. Run \`teamai models switch ${name}\` to set a key for it.`);
       continue;
     }
     let resolved;
     try {
-      resolved = resolveProfile(
-        { source: 'team', profile, team: identity },
-        values,
-        model && profileModels(profile).includes(model) ? model : undefined,
-      );
+      resolved = resolveProfile(ref, values, model && profileModels(profile).includes(model) ? model : undefined);
     } catch (error) {
       log.warn(`Cannot update agents using ${name}: ${(error as Error).message}`);
       continue;

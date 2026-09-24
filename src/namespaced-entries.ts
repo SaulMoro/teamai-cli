@@ -1,5 +1,5 @@
 /**
- * Env variables, hooks and MCP servers by namespace (#707).
+ * Env variables, hooks, MCP servers and team model profiles by namespace (#707).
  *
  *   <type>/<type>.yaml         root, shared
  *   <type>/<ns>/<type>.yaml    read only where <ns> is active in resources.<type>
@@ -25,18 +25,19 @@ import { isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import type { LocalConfig } from './types.js';
 import { log } from './utils/logger.js';
 
-export type EntryType = 'env' | 'hooks' | 'mcp';
+export type EntryType = 'env' | 'hooks' | 'mcp' | 'models';
 
-const ENTRY_FILE: Record<EntryType, string> = { env: 'env.yaml', hooks: 'hooks.yaml', mcp: 'mcp.yaml' };
+const ENTRY_FILE: Record<EntryType, string> = { env: 'env.yaml', hooks: 'hooks.yaml', mcp: 'mcp.yaml', models: 'models.yaml' };
 
 /** What one entry is called, for messages. */
-export const ENTRY_NOUN: Record<EntryType, string> = { env: 'variable', hooks: 'hook', mcp: 'server' };
+export const ENTRY_NOUN: Record<EntryType, string> = { env: 'variable', hooks: 'hook', mcp: 'server', models: 'profile' };
 
 /** What a failure leaves unchanged, for messages. */
 const INSTALLED: Record<EntryType, string> = {
   env: 'exported env variables',
   hooks: 'installed team hooks',
   mcp: 'installed team MCP servers',
+  models: 'agent model settings',
 };
 
 /** Repo-relative (`/`-separated) path of a type's file in the root (`null`) or a namespace. */
@@ -73,6 +74,8 @@ export interface ResolvedEntry<E> {
   readonly source: string;
   /** Repo-relative root file whose entry of the same name this one replaces. */
   readonly replaces: string | null;
+  /** The root entry this one replaces. */
+  readonly replacedEntry: E | null;
 }
 
 /** Why a type was not applied this run. */
@@ -165,7 +168,9 @@ export async function resolveEntries<E>(
   if (active === null) {
     return {
       kind: 'resolved',
-      entries: candidates.map((c) => ({ entry: c.value, name: c.name, namespace: null, source: c.source, replaces: null })),
+      entries: candidates.map((c) => ({
+        entry: c.value, name: c.name, namespace: null, source: c.source, replaces: null, replacedEntry: null,
+      })),
       active,
       notices,
       repeated,
@@ -198,6 +203,7 @@ export async function resolveEntries<E>(
       namespace: item.namespace,
       source: item.source,
       replaces: item.replaces?.source ?? null,
+      replacedEntry: item.replaces?.value ?? null,
     })),
     active,
     notices,

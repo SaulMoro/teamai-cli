@@ -46,6 +46,21 @@ describe('doctor — env, hooks and MCP namespaces', () => {
     expect(await entryNamespaceNotes(ctx())).toEqual([]);
   });
 
+  it('lists a model profile override as a note', async () => {
+    const catalog = (url: string): string => [
+      'profiles:',
+      `  - { id: gw, name: Gateway, base_url: '${url}', api_key: '\${API_KEY}', model_groups: [{ protocols: [anthropic], models: [m] }] }`,
+      '',
+    ].join('\n');
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: checkout\n    resources: { models: [checkout] }\n');
+    await fse.outputFile(path.join(repoPath, 'models', 'models.yaml'), catalog('https://gw.company.test'));
+    await fse.outputFile(path.join(repoPath, 'models', 'checkout', 'models.yaml'), catalog('https://gw.checkout.test'));
+
+    expect(await entryNamespaceNotes(ctx({ projects: ['checkout'] })))
+      .toEqual(['models: "gw" from models/checkout/models.yaml replaces models/models.yaml']);
+  });
+
   it('lists a name the root file repeats in legacy mode, where it is not an error', async () => {
     await fse.outputFile(path.join(repoPath, 'mcp', 'mcp.yaml'), [
       'servers:',

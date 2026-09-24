@@ -31,7 +31,7 @@ import {
 } from './push-namespaces.js';
 import { askQuestion, askSelection, isInteractive } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
-import { loadTeamProfiles } from './models/profile.js';
+import { brokenTeamProfileFiles } from './models/profile.js';
 
 /**
  * Filter a list of repo-root-relative paths (e.g. "rules/", "env/") down to
@@ -884,10 +884,9 @@ async function pushCore(
 
   // Validate the refreshed checkout, not the stale local clone. A pull can
   // introduce an invalid catalog even when the pre-pull file was valid.
-  try {
-    await loadTeamProfiles(localConfig.repo.localPath);
-  } catch (error) {
-    log.error(`Cannot push with an invalid model catalog: ${(error as Error).message}`);
+  const brokenCatalogs = await brokenTeamProfileFiles(localConfig.repo.localPath);
+  if (brokenCatalogs.length > 0) {
+    for (const reason of brokenCatalogs) log.error(`Cannot push with an invalid model catalog: ${reason}`);
     process.exitCode = 1;
     return;
   }

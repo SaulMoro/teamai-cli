@@ -5,7 +5,15 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import { getTeamaiHomeDir } from '../types.js';
-import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { listDirs, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import {
+  entryFilePath,
+  resolveEntriesFor,
+  type EntryFileRead,
+  type EntryReader,
+  type EntryResolution,
+  type ResolvedEntry,
+} from '../namespaced-entries.js';
 
 export const ModelProtocolSchema = z.enum([
   'anthropic',
@@ -115,6 +123,13 @@ export interface ProfileRef {
   profile: ModelProfile;
   /** Identity of the team repository a `team:` profile came from. */
   team?: string;
+  /** The file a `team:` profile comes from and the root profile it replaces. */
+  from?: ResolvedEntry<ModelProfile>;
+}
+
+/** The team profiles a member receives, with where each one comes from. */
+export interface TeamModelProfiles extends ModelProfilesFile {
+  readonly origins?: ReadonlyMap<string, ResolvedEntry<ModelProfile>>;
 }
 
 /** A locally stored API key: either the value itself or the environment variable holding it. */
@@ -195,24 +210,82 @@ export function getTeamIdentity(localConfig: LocalConfig): string {
   return path.basename(getTeamValuesPath(localConfig), '.json');
 }
 
-async function loadProfilesFile(filePath: string): Promise<ModelProfilesFile> {
+/** One profiles file, or why it cannot be used; null when it does not exist. `label` names it in the reason. */
+async function readProfilesFile(filePath: string, label: string): Promise<EntryFileRead<ModelProfile> | null> {
   const raw = await readOptionalProfile(filePath);
-  if (raw === null) return { version: 1, profiles: [] };
+  if (raw === null) return null;
   let parsed: unknown;
   try {
     parsed = YAML.parse(raw);
   } catch (error) {
-    throw new Error(`Invalid model profile YAML at ${filePath}: ${(error as Error).message}`);
+    return { ok: false, reason: `Invalid model profile YAML at ${label}: ${(error as Error).message}` };
   }
   const result = ModelProfilesFileSchema.safeParse(parsed);
   if (!result.success) {
-    throw new Error(`Invalid model profile file at ${filePath}: ${result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`);
+    return {
+      ok: false,
+      reason: `Invalid model profile file at ${label}: ${result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+    };
   }
-  return result.data;
+  return { ok: true, entries: result.data.profiles };
 }
 
-export async function loadTeamProfiles(repoPath: string): Promise<ModelProfilesFile> {
-  return loadProfilesFile(path.join(repoPath, 'models', 'models.yaml'));
+async function loadProfilesFile(filePath: string): Promise<ModelProfilesFile> {
+  const read = await readProfilesFile(filePath, filePath);
+  if (read === null) return { version: 1, profiles: [] };
+  if (!read.ok) throw new Error(read.reason);
+  return { version: 1, profiles: [...read.entries] };
+}
+
+/** Team profiles: `models/models.yaml` and `models/<ns>/models.yaml`, one entry per profile id. */
+export const modelsEntryReader: EntryReader<ModelProfile> = {
+  type: 'models',
+  read: readProfilesFile,
+  nameOf: (profile) => profile.id,
+  // Profiles are strict: a per-entry `roles:` or `projects:` fails the file.
+  scopeOf: () => ({}),
+};
+
+/**
+ * The team profiles this member receives: the root file plus the active
+ * `models/<ns>/models.yaml` files, a namespace profile replacing the root
+ * profile with the same id (#707).
+ */
+export function resolveTeamProfiles(
+  localConfig: LocalConfig,
+  options: { quiet?: boolean } = {},
+): Promise<EntryResolution<ModelProfile>> {
+  return resolveEntriesFor(modelsEntryReader, localConfig, options);
+}
+
+export function teamProfilesFrom(entries: readonly ResolvedEntry<ModelProfile>[]): TeamModelProfiles {
+  return {
+    version: 1,
+    profiles: entries.map((entry) => entry.entry),
+    origins: new Map(entries.map((entry) => [entry.name, entry])),
+  };
+}
+
+/** Whether a namespace outside `active` defines profile `id`; a file that does not parse defines nothing. */
+export async function inactiveNamespaceDefines(repoPath: string, active: readonly string[], id: string): Promise<boolean> {
+  for (const namespace of await listDirs(path.join(repoPath, 'models'))) {
+    if (active.includes(namespace)) continue;
+    const file = entryFilePath('models', namespace);
+    const read = await readProfilesFile(path.join(repoPath, ...file.split('/')), file);
+    if (read?.ok && read.entries.some((profile) => profile.id === id)) return true;
+  }
+  return false;
+}
+
+/** Why each team profiles file in the checkout, root or namespace, cannot be used. */
+export async function brokenTeamProfileFiles(repoPath: string): Promise<string[]> {
+  const reasons: string[] = [];
+  for (const namespace of [null, ...(await listDirs(path.join(repoPath, 'models'))).sort()]) {
+    const file = entryFilePath('models', namespace);
+    const read = await readProfilesFile(path.join(repoPath, ...file.split('/')), file);
+    if (read && !read.ok) reasons.push(read.reason);
+  }
+  return reasons;
 }
 
 export async function loadLocalProfiles(): Promise<ModelProfilesFile> {
@@ -251,23 +324,27 @@ export async function saveModelInputs(filePath: string, values: StoredModelInput
 
 export function resolveProfileRef(
   reference: string,
-  team: ModelProfilesFile,
+  team: TeamModelProfiles,
   local: ModelProfilesFile,
 ): ProfileRef {
   const qualified = reference.match(/^(team|local):(.+)$/);
+  const teamRef = (profile: ModelProfile): ProfileRef => {
+    const from = team.origins?.get(profile.id);
+    return { source: 'team', profile, ...(from ? { from } : {}) };
+  };
   if (qualified) {
     const source = qualified[1] as ModelProfileSource;
     const id = qualified[2];
     const file = source === 'team' ? team : local;
     const profile = file.profiles.find((candidate) => candidate.id === id);
     if (!profile) throw new Error(`Unknown ${source} model profile: ${id}`);
-    return { source, profile };
+    return source === 'team' ? teamRef(profile) : { source, profile };
   }
 
   const matches: ProfileRef[] = [];
   const teamProfile = team.profiles.find((profile) => profile.id === reference);
   const localProfile = local.profiles.find((profile) => profile.id === reference);
-  if (teamProfile) matches.push({ source: 'team', profile: teamProfile });
+  if (teamProfile) matches.push(teamRef(teamProfile));
   if (localProfile) matches.push({ source: 'local', profile: localProfile });
   if (matches.length === 0) throw new Error(`Unknown model profile: ${reference}`);
   if (matches.length > 1) {
@@ -278,6 +355,51 @@ export function resolveProfileRef(
 
 export function profileRefName(ref: ProfileRef): string {
   return `${ref.source}:${ref.profile.id}`;
+}
+
+/** Where requests to a profile's gateway go: scheme, host and port of `base_url`. */
+export function profileOrigin(profile: ModelProfile): string {
+  return new URL(profile.base_url).origin;
+}
+
+/**
+ * The name a profile's API key is stored under. A team key is bound to the
+ * profile id and the gateway origin (#707): a namespace can replace a team
+ * profile with one on another host, and the key a member configured for the
+ * first host must never be written into an agent pointed at the second.
+ */
+function apiKeyName(ref: ProfileRef): string {
+  return ref.source === 'team' ? `${profileRefName(ref)}@${profileOrigin(ref.profile)}` : profileRefName(ref);
+}
+
+/**
+ * Keys stored before #707 are named by profile id alone. Only root profiles
+ * existed then, so such a key belongs to the root profile's gateway, and to
+ * no other. Without the root profile it belongs to nothing.
+ */
+function legacyKeyApplies(ref: ProfileRef): boolean {
+  const root = ref.from ? ref.from.replacedEntry ?? (ref.from.namespace === null ? ref.from.entry : null) : null;
+  return root !== null && profileOrigin(root) === profileOrigin(ref.profile);
+}
+
+/** The API key stored for this profile and its gateway. */
+export function storedApiKey(ref: ProfileRef, values: StoredModelInputs): StoredModelInput | undefined {
+  const bound = values[apiKeyName(ref)]?.API_KEY;
+  if (bound || ref.source === 'local') return bound;
+  return legacyKeyApplies(ref) ? values[profileRefName(ref)]?.API_KEY : undefined;
+}
+
+/** Store the API key for this profile and its gateway, replacing a legacy key it supersedes. */
+export function setStoredApiKey(ref: ProfileRef, values: StoredModelInputs, input: StoredModelInput): void {
+  values[apiKeyName(ref)] = { API_KEY: input };
+  if (ref.source === 'team' && legacyKeyApplies(ref)) delete values[profileRefName(ref)];
+}
+
+/** True when a key is stored for this team profile id, but for another gateway. */
+export function hasApiKeyForAnotherGateway(ref: ProfileRef, values: StoredModelInputs): boolean {
+  if (ref.source !== 'team' || storedApiKey(ref, values)) return false;
+  const name = profileRefName(ref);
+  return Object.keys(values).some((key) => key === name || key.startsWith(`${name}@`));
 }
 
 /** True when the API key is stored locally or its environment variable is set. */
@@ -291,10 +413,11 @@ export function resolveProfile(
   model?: string,
 ): ResolvedModelProfile {
   const reference = profileRefName(ref);
-  const secret = values[reference]?.API_KEY;
+  const secret = storedApiKey(ref, values);
   if (!isApiKeyConfigured(secret)) {
+    const gateway = ref.source === 'team' ? ` for ${profileOrigin(ref.profile)}` : '';
     const detail = secret?.env ? ` (environment variable ${secret.env} is not set)` : '';
-    throw new Error(`Profile ${reference} has no API key${detail}. Run \`teamai models configure ${reference}\`.`);
+    throw new Error(`Profile ${reference} has no API key${gateway}${detail}. Run \`teamai models configure ${reference}\`.`);
   }
   if (model !== undefined && !profileModels(ref.profile).includes(model)) {
     throw new Error(`Profile ${reference} has no model ${model}`);
