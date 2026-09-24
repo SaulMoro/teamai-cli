@@ -1763,9 +1763,10 @@ again. Events recorded by an earlier release carry no key: the scope their
 directory resolves to now reports them (a nested clone under a project resolves
 to its own project or the user scope, not the enclosing project); events with
 no directory, or one removed since, are reported by no one. Each scope also
-keeps its own snapshot of what it already reported, and a session that reuses
-an earlier session's ID (Copilot reuses its fallback IDs) counts as new,
-whichever scope reported the earlier one; the first
+keeps its own snapshot of what it already reported, and a session under a
+reused fallback ID (Copilot's PID-based ID when it sends none) counts as new,
+whichever scope reported the earlier one, while a resumed session
+(`claude --resume`) keeps its ID and stays one session; the first
 report after upgrading starts from the snapshot every scope used to share, so
 nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes

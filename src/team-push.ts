@@ -408,16 +408,16 @@ export async function filterEventsByScope(
     }
     return key;
   }));
-  // A session ID names one run until it ends: a PID-fallback ID comes back for
-  // a later run, maybe in another scope, so each run is decided on its own and
-  // returned under the ID plus its first event's timestamp, which stays the
-  // same whichever earlier runs compaction has dropped.
-  // A second end with nothing recorded since the first (the dashboard
-  // monitor's process_exit after SessionEnd) belongs to the run just closed.
-  // A start on a fallback ID from another process than its open run's begins
-  // a new run, though nothing ended that one (a crash with no dashboard
-  // running). A tool's own ID is left alone: Claude fires SessionStart again
-  // on resume, in a new process, and its Stop carries the whole transcript.
+  // Each run is returned under its session ID plus its first event's
+  // timestamp, which stays the same whichever earlier runs compaction has
+  // dropped. A tool's own session ID is one run, whatever ends it records:
+  // `claude --resume` continues it, in a new process, and its Stop carries the
+  // whole transcript. A PID-fallback ID (`pid-…`) names one run until it ends,
+  // then comes back for a later one, maybe in another scope, so each run is
+  // decided on its own. A second end with nothing recorded since the first
+  // (the dashboard monitor's process_exit after SessionEnd) belongs to the run
+  // just closed. A start from another process than its open run's begins a new
+  // run, though nothing ended that one (a crash with no dashboard running).
   const runOf: Array<number | undefined> = [];
   const runPid: Array<number | undefined> = [];
   const observedRuns = new Map<string, number>();
@@ -426,11 +426,12 @@ export async function filterEventsByScope(
   const deciding: Array<number | undefined> = [];
   const runIds: string[] = [];
   events.forEach((e, i) => {
+    const fallback = e.sessionId.startsWith('pid-');
     const ends = e.type === 'session_end' || e.type === 'process_exit';
     const observed = e.type === 'process_exit' && typeof e.processExitAfter === 'string';
     const starts = e.type === 'session_start' && typeof e.monitorPid === 'number';
     const open = openRun.get(e.sessionId);
-    if (starts && open !== undefined && e.sessionId.startsWith('pid-')
+    if (starts && open !== undefined && fallback
       && typeof runPid[open] === 'number' && runPid[open] !== e.monitorPid) openRun.delete(e.sessionId);
     let run = observed ? observedRuns.get(`${e.sessionId}@${e.processExitAfter}`)
       : openRun.get(e.sessionId) ?? (ends ? closedRun.get(e.sessionId) : undefined);
@@ -444,10 +445,10 @@ export async function filterEventsByScope(
       run = deciding.push(undefined) - 1;
       runIds.push(`${e.sessionId}@${e.timestamp}`);
     }
-    if (ends && (!observed || openRun.get(e.sessionId) === run)) {
+    if (ends && fallback && (!observed || openRun.get(e.sessionId) === run)) {
       openRun.delete(e.sessionId);
       closedRun.set(e.sessionId, run);
-    } else if (!ends) {
+    } else if (!ends || !fallback) {
       openRun.set(e.sessionId, run);
     }
     if (starts) runPid[run] ??= e.monitorPid;

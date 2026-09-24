@@ -351,9 +351,11 @@ carries `dataHomeKey`, a hash of the realpath'd `getDataHome()` of the scope the
 hook resolved (#785; a hash, so a Copilot event still stores no path), and a
 scope's report keeps the sessions whose first keyed event is its own, whole: a
 Stop carries the whole transcript's totals, so a session that moved scope (a `cd`
-mid-session) is reported once, where it started. A session is one ID's run up to
-its `session_end` or `process_exit`, so a later run that reuses the ID (Copilot's
-fallback ID is the parent PID) is decided on its own; a second end with nothing
+mid-session) is reported once, where it started. A tool's own session ID is one
+session whatever ends it records: `claude --resume` continues it, in a new
+process, and its Stop carries the whole transcript. A fallback ID (`pid-…`;
+Copilot's is the parent PID) names one run up to its `session_end` or
+`process_exit`, so a later run that reuses it is decided on its own; a second end with nothing
 recorded since the first (the dashboard monitor's `process_exit` after
 `SessionEnd`) belongs to the run it closed. A `session_start` on a fallback ID
 (`pid-…`) whose `monitorPid` differs from its open run's begins a new run even

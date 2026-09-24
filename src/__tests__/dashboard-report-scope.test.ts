@@ -448,6 +448,21 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(await report(project)).toBeNull();
   });
 
+  it('a session resumed in a project after it ended is still the one the user scope reported', async () => {
+    const { root, user, project } = await setup();
+    const elsewhere = path.join(tmp, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    await session('claude', { session_id: 'resumed', cwd: elsewhere });
+    await hook('session-end', 'claude', { session_id: 'resumed', cwd: elsewhere, hook_event_name: 'SessionEnd' });
+    expect(await reportedSessions(user)).toBe(1);
+    // `claude --resume` in P: the same session ID, whose Stop carries the whole transcript.
+    await session('claude', { session_id: 'resumed', cwd: root });
+
+    expect(await reportedSessions(project)).toBe(0);
+    expect(await reportedSessions(user)).toBe(1);
+    expect(await reportedPrompts(user)).toBe(2);
+  });
+
   it('a fallback ID reused in a project after a user-scope run that never ended is the project\'s', async () => {
     const { root, user, project } = await setup();
     const elsewhere = path.join(tmp, 'elsewhere');

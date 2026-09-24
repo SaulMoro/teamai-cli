@@ -136,6 +136,22 @@ describe('filterEventsByScope', () => {
       }
     });
 
+    it('a tool\'s own session ID stays one run across an end and a resume', async () => {
+      // `claude --resume` after the dashboard recorded the exit: its Stop carries
+      // the whole transcript, so a second run would count it again.
+      for (const end of ['session_end', 'process_exit'] as const) {
+        const log = [
+          await scopedEvent(undefined, 'claude-uuid', '/home/jeff/.teamai'),
+          { ...(await scopedEvent(undefined, 'claude-uuid', '/home/jeff/.teamai')), type: end },
+          { ...(await scopedEvent(undefined, 'claude-uuid', '/home/jeff/.teamai/projects/p')), type: 'session_start' as const },
+          await scopedEvent(undefined, 'claude-uuid', '/home/jeff/.teamai/projects/p'),
+        ];
+        const user = await filterEventsByScope(log, userScope());
+        expect(user.map((e) => e.sessionId)).toEqual(Array(4).fill(`claude-uuid@${log[0].timestamp}`));
+        expect(await ids(log, projectScope('/Users/jeff/project-a'))).toEqual([]);
+      }
+    });
+
     it('a fallback ID started by another process is a new run, though the last one never ended', async () => {
       // The user-scope run crashed with no dashboard running, so nothing ended it.
       const start = (sessionId: string, dataHome: string, monitorPid: number) => scopedEvent(undefined, sessionId, dataHome)
