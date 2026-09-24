@@ -265,14 +265,27 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
     expect(envSh()).toContain('CHECKOUT_ONLY');
   }, 120_000);
 
-  it('keeps the exported variables when an active env file does not parse', async () => {
+  it('keeps the exported variables when an active env file does not parse, and applies the other types', async () => {
     const before = envSh();
-    publish('break the checkout env file', () => write(seed, 'env/checkout/env.yaml', 'variables: [unclosed\n'));
+    publish('break the checkout env file, change the checkout hook', () => {
+      write(seed, 'env/checkout/env.yaml', 'variables: [unclosed\n');
+      write(seed, 'hooks/checkout/hooks.yaml', [
+        'hooks:',
+        '  - id: lint',
+        '    description: checkout lint',
+        '    event: Stop',
+        '    command: echo checkout-lint-v2',
+        '',
+      ].join('\n'));
+    });
 
     const pull = await runCLI(['pull', '--force'], projectRoot, home);
 
     expect(pull.output).toContain('env/checkout/env.yaml is not valid YAML');
     expect(pull.output).toContain('your exported env variables are unchanged');
     expect(envSh()).toBe(before);
+    // Only env stopped: the hooks reconcile, which runs after it, still applied
+    // the change from the same commit.
+    expect(hookCommands()).toContain('echo checkout-lint-v2');
   }, 120_000);
 });
