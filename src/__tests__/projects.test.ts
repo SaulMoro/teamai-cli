@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { log } from '../utils/logger.js';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync, symlinkSync, readFileSync } from 'node:fs';
+import YAML from 'yaml';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -134,6 +135,29 @@ projects:
       const manifest = await loadProjectsManifest(repoDir);
       expect(manifest?.projects[0]?.resources.skills).toEqual(['x']);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('project x declares unknown resource type "bogus"'));
+    } finally {
+      warn.mockRestore();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  // A newer CLI's type must survive a `projects` command run on this one, or
+  // saving the manifest deletes it from the team repo for everyone.
+  it('keeps an unknown resource type when the manifest is saved back (#707)', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const repoDir = writeManifest(`
+version: 1
+projects:
+  - id: x
+    resources: { commands: [x], skills: [x] }
+`);
+    try {
+      const manifest = await loadProjectsManifest(repoDir);
+      if (manifest === null) throw new Error('manifest expected');
+      await saveProjectsManifest(repoDir, manifest);
+
+      const saved = readFileSync(path.join(repoDir, 'manifest', 'projects.yaml'), 'utf-8');
+      expect(YAML.parse(saved).projects[0].resources).toEqual(expect.objectContaining({ commands: ['x'], skills: ['x'] }));
     } finally {
       warn.mockRestore();
       rmSync(repoDir, { recursive: true, force: true });

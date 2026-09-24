@@ -165,6 +165,31 @@ roles:
     }
   });
 
+  // A newer CLI's type must survive a `roles` command run on this one, or
+  // saving the manifest deletes it from the team repo for everyone.
+  it('keeps an unknown resource type when the manifest is saved back', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const repoDir = writeManifest(`
+version: 1
+roles:
+  - id: hai
+    resources:
+      knowledge: [hai]
+      skills: [hai]
+      commands: [hai]
+`);
+
+    try {
+      await saveRolesManifest(repoDir, await loadRolesManifest(repoDir));
+
+      const saved = YAML.parse(readFileSync(path.join(repoDir, 'manifest', 'roles.yaml'), 'utf-8'));
+      expect(saved.roles[0].resources).toEqual(expect.objectContaining({ commands: ['hai'], skills: ['hai'] }));
+    } finally {
+      warn.mockRestore();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('resolves env, hooks and mcp namespaces, and writes none a role did not declare', async () => {
     const repoDir = writeManifest(`
 version: 1

@@ -11,6 +11,8 @@ const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
 
 export type RoleResourceType = typeof ROLE_RESOURCE_TYPES[number];
 
+// passthrough: a key this CLI does not know (only warned about) is kept, so a
+// manifest saved by `roles add/update` does not delete a newer CLI's type from the team repo.
 const RoleResourceNamespacesSchema = z.object({
   knowledge: z.array(NamespaceSegmentSchema),
   skills: z.array(NamespaceSegmentSchema),
@@ -24,7 +26,7 @@ const RoleResourceNamespacesSchema = z.object({
   learnings: z.array(z.string()).optional(),
   // env, hooks, mcp, models, docs: optional, see HAND_DECLARED_RESOURCE_TYPES.
   ...HandDeclaredNamespacesShape,
-});
+}).passthrough();
 
 const RoleSchema = z.object({
   id: z.string().min(1),

@@ -858,7 +858,7 @@ projects:
   根条目；`teamai status` 按 namespace 计数；`teamai doctor` 以提示信息列出每一处覆盖。
 - **先让所有成员升级。** teamai 0.25.0 与 0.26.0 beta 会拒绝不认识的 `resources:` key，
   声明 `env`、`hooks` 或 `mcp` 会让这些版本的 pull 失败。从本版本起，未知的
-  `resources:` key 只会给出警告。
+  `resources:` key 只会给出警告，`teamai roles` 与 `teamai projects` 保存 manifest 时也会保留它。
 
 这些文件取代的按条目 key：
 

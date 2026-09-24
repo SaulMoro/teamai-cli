@@ -41,6 +41,9 @@ function isSafeProjectId(id: string): boolean {
   return SAFE_ID.test(id) && id !== '.' && id !== '..';
 }
 
+// passthrough: a key this CLI does not know (only warned about) is kept, so a
+// manifest saved by `projects add/update/remove` does not delete a newer CLI's
+// type from the team repo.
 const ProjectResourceNamespacesSchema = z.object({
   knowledge: z.array(NamespaceSegmentSchema).default([]),
   skills: z.array(NamespaceSegmentSchema).default([]),
@@ -48,7 +51,7 @@ const ProjectResourceNamespacesSchema = z.object({
   agents: z.array(NamespaceSegmentSchema).default([]),
   // env, hooks, mcp, models, docs: optional, see HAND_DECLARED_RESOURCE_TYPES.
   ...HandDeclaredNamespacesShape,
-});
+}).passthrough();
 
 const ProjectSchema = z.object({
   id: z.string().min(1).refine(isSafeProjectId, {

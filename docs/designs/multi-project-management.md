@@ -387,7 +387,7 @@ default would add `env: []` to every manifest an admin edits and break members o
 an older CLI. For the same reason `--namespaces` on `teamai roles` and
 `teamai projects` `add`/`update` sets only the older keys (`knowledge`, `skills`,
 `agents`, and `learnings` for projects); the new keys are declared by hand. An unknown `resources:` key now warns instead of failing the
-scope, so the next axis does not break older members again. 0.25.0 and the
+scope, and a manifest these commands save keeps it, so the next axis does not break older members again. 0.25.0 and the
 0.26.0 betas still reject unknown keys: every member has to upgrade before a team
 declares one of the new axes.
 

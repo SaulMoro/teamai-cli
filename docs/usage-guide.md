@@ -916,7 +916,8 @@ projects:
   namespace; `teamai doctor` lists each override as a note.
 - **Upgrade every member first.** teamai 0.25.0 and the 0.26.0 betas reject a
   `resources:` key they do not know, so declaring `env`, `hooks` or `mcp` breaks
-  their pull. From this version on, an unknown `resources:` key only warns.
+  their pull. From this version on, an unknown `resources:` key only warns, and
+  `teamai roles` and `teamai projects` keep it when they save the manifest.
 
 The per-entry keys these files replace:
 
