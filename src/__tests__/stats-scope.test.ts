@@ -297,11 +297,13 @@ describe('showStats scope and idempotency', () => {
     expect(outputNumber(out, 'Conversation turns:')).toBe(1);
   });
 
-  it('applies no project exclusion in the user scope when no project resolves', async () => {
-    // A user-scope run from a plain directory: detectProjectConfig() finds no
-    // project here, exactly as `pull` sees it from the same directory, so the
-    // report path passes no exclusion list either. The display side matches.
+  it('leaves a project\'s sessions out of the user scope even when no project resolves for the cwd', async () => {
+    // A user-scope run from a plain directory. The user scope reports only its
+    // own sessions (#785): an older unkeyed session goes to the scope its cwd
+    // resolves to now, so P's stays out and the one elsewhere counts.
     await seedUserScopeWithProject();
+    fs.mkdirSync(DIRS.project, { recursive: true });
+    fs.mkdirSync(DIRS.other, { recursive: true });
     await appendEvents([
       ...session('sess-1', DIRS.project),
       ...session('sess-2', DIRS.other),
@@ -321,8 +323,8 @@ describe('showStats scope and idempotency', () => {
     fs.mkdirSync(plainDir, { recursive: true });
     const out = await showStatsFromPlainDir(plainDir);
 
-    expect(outputNumber(out, 'Sessions:')).toBe(2);
-    expect(outputNumber(out, 'Conversation turns:')).toBe(2);
+    expect(outputNumber(out, 'Sessions:')).toBe(1);
+    expect(outputNumber(out, 'Conversation turns:')).toBe(1);
   });
 
   it('still shows local sessions when the team stats file is missing', async () => {
