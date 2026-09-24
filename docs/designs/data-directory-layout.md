@@ -317,7 +317,17 @@ read. The dashboard stays an A2 singleton: `teamai dashboard`, `stats --by-repo`
 carries `dataHome`, the `getDataHome()` of the scope the hook resolved (#785), and a
 scope's report keeps only its own. An event written before that field existed is
 attributed by its `cwd`, realpath'd, to the project whose root holds it, never to
-the user scope.
+the user scope. The snapshots of what was already reported are per scope too
+(#786), because a session can record events in two scopes (a `cd` mid-session):
+`<dataHome>/dashboard/reported-*.json`, and `~/.teamai/dashboard/user-reported-*.json`
+for the user scope. The first time a scope needs one it copies the shared
+`~/.teamai/dashboard/reported-*.json`, so nothing reported before the upgrade is
+sent again; after that it reads only its own. The shared file is no longer
+written, except by an earlier release after a rollback, so every scope seeds from
+what the machine had reported by then, never from another scope's later report.
+The seed holds a session's whole total, so a session still running at the upgrade
+that later records in a second scope reports nothing there until that scope's
+part exceeds it.
 
 **`anchor` on save.** Previously only migration wrote a partition's `anchor`
 reverse-lookup file, so freshly-init'd partitions had none. `saveLocalConfigForScope`

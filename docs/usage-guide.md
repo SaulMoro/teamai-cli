@@ -1750,7 +1750,10 @@ sessions recorded in it: a user-scope pull no longer reports a project's
 sessions, and a project reports its Copilot sessions and sessions started under
 a symlinked path. Events recorded by an earlier release carry no data home: a
 project reports those whose directory lies under its root, the user scope
-reports none of them. A
+reports none of them. Each scope also keeps its own snapshot of what it already
+reported, so a session that moved into another project mid-session reaches both
+teams with the part recorded in each; the first report after upgrading starts
+from the snapshot every scope used to share, so nothing is reported twice. A
 target removes its usage events only after it confirms success; failed pushes
 preserve them. The affected sync locks remain
 held until reporting finishes, preventing another pull from racing the report.
