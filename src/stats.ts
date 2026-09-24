@@ -156,14 +156,20 @@ async function unreportedDashboardStats(
   metrics: Map<string, SessionMetrics>,
   config: LocalConfig,
 ): Promise<AggregatedDashboardStats> {
-  const { computeInterventionDelta, computePromptTokenDelta, interventionCounts, reportedBaselines } = await import('./team-push.js');
+  const {
+    computeInterventionDelta, computePromptTokenDelta, droppedRollouts, interventionCounts, reportedBaselines,
+    snapshotWrittenAt, withDroppedRollouts,
+  } = await import('./team-push.js');
   const { aggregateDailySessions } = await import('./session-trends.js');
   // The scope's own snapshots, compared as its report compares them (#786).
-  const { promptTokens, interventions } = await reportedBaselines(events, metrics, aggregateDailySessions(events), config, false);
-  const currentInterventions = interventionCounts(metrics);
+  const writtenAt = await snapshotWrittenAt(config);
+  const currentDaily = aggregateDailySessions(events);
+  const { promptTokens, interventions } = await reportedBaselines(events, metrics, currentDaily, config, false);
+  const dropped = droppedRollouts(metrics, promptTokens, interventions, writtenAt);
+  const currentInterventions = withDroppedRollouts(interventionCounts(metrics), currentDaily, dropped).interventions;
 
   const interventionDelta = computeInterventionDelta(currentInterventions, interventions);
-  const promptTokenDelta = computePromptTokenDelta(metrics, promptTokens);
+  const promptTokenDelta = computePromptTokenDelta(metrics, promptTokens, dropped);
 
   return {
     sessions: interventionDelta.delta.sessions,

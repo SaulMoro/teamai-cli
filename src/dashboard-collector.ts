@@ -1838,12 +1838,20 @@ export function aggregateSessionMetrics(
   const sessionTokens = new Map<string, TimedTokenSnapshot>();
   const transcriptTokens = new Map<string, Map<string, TimedTokenSnapshot>>();
   const transcriptPrompts = new Map<string, Map<string, number>>();
+  const transcriptInterventions = new Map<string, Map<string, { interrupt: number; toolReject: number }>>();
+  const transcriptSince = new Map<string, Map<string, string>>();
 
   for (const event of events) {
     let m = map.get(event.sessionId);
     if (!m) {
       m = { interrupt: 0, toolReject: 0, correction: 0, prompts: 0, tokens: emptyTokenUsage() };
       map.set(event.sessionId, m);
+    }
+    if (typeof event.transcriptPath === 'string') {
+      const since = transcriptSince.get(event.sessionId) ?? new Map<string, string>();
+      const first = since.get(event.transcriptPath);
+      if (first === undefined || Date.parse(event.timestamp) < Date.parse(first)) since.set(event.transcriptPath, event.timestamp);
+      transcriptSince.set(event.sessionId, since);
     }
 
     if (event.type === 'stop') {
@@ -1888,6 +1896,11 @@ export function aggregateSessionMetrics(
           prompts.set(event.transcriptPath, event.prompts);
           transcriptPrompts.set(event.sessionId, prompts);
         }
+        if (event.type === 'stop' && event.interventions) {
+          const counts = transcriptInterventions.get(event.sessionId) ?? new Map<string, { interrupt: number; toolReject: number }>();
+          counts.set(event.transcriptPath, { interrupt: event.interventions.interrupt, toolReject: event.interventions.toolReject });
+          transcriptInterventions.set(event.sessionId, counts);
+        }
       } else {
         // Claude, CodeBuddy, and pre-existing events retain latest-Stop semantics.
         setLatestTokenSnapshot(unscopedTokens, event.sessionId, event);
@@ -1909,8 +1922,18 @@ export function aggregateSessionMetrics(
       for (const segment of segments.values()) total = addTokenUsage(total, segment.tokens);
       m.tokens = total;
       const prompts = transcriptPrompts.get(sid);
-      m.segments = Object.fromEntries([...segments].map(([transcript, segment]) =>
-        [transcript, { prompts: prompts?.get(transcript) ?? 0, tokens: { ...segment.tokens } }]));
+      const counts = transcriptInterventions.get(sid);
+      const since = transcriptSince.get(sid);
+      m.segments = Object.fromEntries([...segments].map(([transcript, segment]) => [transcript, {
+        prompts: prompts?.get(transcript) ?? 0, tokens: { ...segment.tokens },
+        interrupt: counts?.get(transcript)?.interrupt ?? 0, toolReject: counts?.get(transcript)?.toolReject ?? 0,
+        since: since?.get(transcript) ?? segment.timestamp,
+      }]));
+      // A rollout's Stop counts restart too; the session sums them.
+      const sum = (field: 'interrupt' | 'toolReject') =>
+        Object.values(m.segments ?? {}).reduce((total, segment) => total + segment[field], 0);
+      m.interrupt = Math.max(m.interrupt, sum('interrupt'));
+      m.toolReject = Math.max(m.toolReject, sum('toolReject'));
     } else {
       const unscoped = unscopedTokens.get(sid);
       if (unscoped) m.tokens = { ...unscoped.tokens };

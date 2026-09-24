@@ -7,7 +7,7 @@ import {
   aggregateSessionMetrics,
   rebuildSessions,
 } from '../dashboard-collector.js';
-import { computePromptTokenDelta, mergePromptTokenStats } from '../team-push.js';
+import { computePromptTokenDelta, droppedRollouts, mergePromptTokenStats } from '../team-push.js';
 import { summarizeConversation, formatTokenCount } from '../digest.js';
 import type { DashboardEvent, SessionMetrics, TokenUsage, UserStats } from '../types.js';
 
@@ -387,6 +387,27 @@ describe('aggregateSessionMetrics', () => {
     expect(resumed.delta).toEqual({ prompts: 2, tokens: tokensB });
     const again = computePromptTokenDelta(aggregateSessionMetrics([stop('/rollouts/b.jsonl', tokensB, 2)]), resumed.nextReported);
     expect(again.delta).toEqual({ prompts: 0, tokens: emptyTokens() });
+  });
+
+  it('an entry from before rollouts were kept covers only the rollouts that existed when it was written', () => {
+    const tokensA = { input: 500, output: 50, cacheRead: 1_000, cacheCreation: 0 };
+    const tokensB = { input: 30, output: 3, cacheRead: 100, cacheCreation: 0 };
+    const stop = (path: string, timestamp: string, tokens: TokenUsage, prompts: number): DashboardEvent => ({
+      type: 'stop', timestamp, sessionId: 's1', tool: 'codex', transcriptPath: path, tokenScope: 'transcript', tokens, prompts,
+    });
+    const writtenAt = Date.parse('2026-09-01T12:00:00Z');
+    // An earlier release reported rollout A as a whole, with no rollouts.
+    const legacy = { s1: { prompts: 5, tokens: tokensA } };
+    const a = stop('/rollouts/a.jsonl', '2026-09-01T11:00:00Z', tokensA, 5);
+    const b = stop('/rollouts/b.jsonl', '2026-09-01T13:00:00Z', tokensB, 2);
+    // A was compacted before this build's first report; B came after the entry was written.
+    const compacted = aggregateSessionMetrics([b]);
+    expect(computePromptTokenDelta(compacted, legacy, droppedRollouts(compacted, legacy, {}, writtenAt)).delta)
+      .toEqual({ prompts: 2, tokens: tokensB });
+    // A still in the log takes the entry; B is new.
+    const retained = aggregateSessionMetrics([a, b]);
+    expect(computePromptTokenDelta(retained, legacy, droppedRollouts(retained, legacy, {}, writtenAt)).delta)
+      .toEqual({ prompts: 2, tokens: tokensB });
   });
 
   it('counts a Codex session\'s prompts across its rollouts', () => {

@@ -415,11 +415,15 @@ its events whose metrics reach its snapshot, and the owner takes the metrics of
 their union as reported when they exceed its own entry, so parts counted before
 any Stop carried the transcript's total are neither lost nor sent twice.
 A transcript-scoped session (Codex) is kept per rollout: a rollout's counters
-restart, so its prompt-token entry holds each rollout's reported prompts and
-tokens under a hash of the rollout's path, and a rollout compaction has dropped
-keeps its reported totals in the session's sum; a later rollout is then reported
-in full. An entry written before rollouts were kept is compared as a whole once,
-then kept per rollout.
+restart, so its prompt-token entry holds each rollout's reported prompts, tokens,
+interruptions and rejections under a hash of the rollout's path, and a rollout
+compaction has dropped keeps those totals in the session's prompt-token,
+intervention and daily sums; a later rollout is then reported in full. An entry
+written before rollouts were kept is one total: an earlier release rewrote every
+session in the log on each report, so it covers the rollouts begun by the time
+its file was last written (read before this report writes it). Those still in
+the log consume it in order, what is left is the dropped rollouts', kept as one
+prior rollout, and a rollout begun later is new.
 Compaction also keeps a session whose tool process is still running, so a run
 an exit from a dashboard before `processExitAfter` marked stopped keeps its
 start, and its ID. A

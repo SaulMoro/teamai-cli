@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { readUsageEvents, truncateUsageAfterReport } from './usage-tracker.js';
@@ -370,8 +371,71 @@ function reportedSegments(entry: unknown): ReportedSegments {
   if (!entry || typeof entry !== 'object' || !('segments' in entry) || !entry.segments || typeof entry.segments !== 'object') {
     return segments;
   }
-  for (const [key, segment] of Object.entries(entry.segments)) segments[key] = promptTokensEntry(segment);
+  for (const [key, segment] of Object.entries(entry.segments)) {
+    const iv = interventionsEntry(segment);
+    segments[key] = { ...promptTokensEntry(segment), interrupt: iv.interrupt, toolReject: iv.toolReject };
+  }
   return segments;
+}
+
+/** A reported rollout compaction has dropped: its key and the totals it was reported with. */
+export interface DroppedRollout { key: string; prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number }
+
+/**
+ * The rollouts of each transcript-scoped session (Codex) that were reported and
+ * that compaction has since dropped. A rollout's counters restart, so the
+ * session's totals must keep what those were reported with, or a later rollout
+ * is compared against them and reported late or never.
+ *
+ * An entry written before rollouts were kept is one total. An earlier release
+ * rewrote every session in the log on each report, so that total covers the
+ * rollouts that had begun by `writtenAt`, when its file was last written: those
+ * still in the log consume it in order, and what is left is the dropped ones',
+ * kept as one prior rollout. A rollout begun after it is new. Without
+ * `writtenAt`, every rollout in the log is taken as covered.
+ */
+export function droppedRollouts(
+  current: Map<string, SessionMetrics>,
+  promptTokens: ReportedPromptTokens,
+  interventions: ReportedInterventions,
+  writtenAt?: number,
+): Map<string, DroppedRollout[]> {
+  const dropped = new Map<string, DroppedRollout[]>();
+  for (const [sid, cur] of current) {
+    if (!cur.segments) continue;
+    const prev = promptTokens[sid];
+    if (prev === undefined) continue;
+    const previous = reportedSegments(prev);
+    const present = new Set(Object.keys(cur.segments).map(segmentKey));
+    const gone: DroppedRollout[] = [];
+    if (Object.keys(previous).length > 0) {
+      for (const [key, segment] of Object.entries(previous)) {
+        if (present.has(key)) continue;
+        gone.push({ key, prompts: segment.prompts, tokens: segment.tokens, interrupt: segment.interrupt ?? 0, toolReject: segment.toolReject ?? 0 });
+      }
+    } else {
+      const total = promptTokensEntry(prev);
+      const iv = interventionsEntry(interventions[sid]);
+      const left = { prompts: total.prompts, tokens: { ...total.tokens }, interrupt: iv.interrupt, toolReject: iv.toolReject };
+      const covered = Object.values(cur.segments)
+        .filter((segment) => writtenAt === undefined || Date.parse(segment.since) <= writtenAt)
+        .sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+      for (const segment of covered) {
+        const take = (own: number, rest: number) => Math.max(0, Math.min(own, rest));
+        left.prompts -= take(segment.prompts, left.prompts);
+        left.interrupt -= take(segment.interrupt, left.interrupt);
+        left.toolReject -= take(segment.toolReject, left.toolReject);
+        for (const field of ['input', 'output', 'cacheRead', 'cacheCreation'] as const) {
+          left.tokens[field] -= take(segment.tokens[field], left.tokens[field]);
+        }
+      }
+      if (left.prompts > 0 || left.interrupt > 0 || left.toolReject > 0 || hasPromptTokenDelta({ prompts: 0, tokens: left.tokens })) {
+        gone.push({ key: 'prior', ...left });
+      }
+    }
+    if (gone.length > 0) dropped.set(sid, gone);
+  }
+  return dropped;
 }
 
 /**
@@ -381,15 +445,14 @@ function reportedSegments(entry: unknown): ReportedSegments {
  * sessions still present in events.jsonl (compacted sessions stay folded into totals).
  *
  * A transcript-scoped session (Codex) is reported per rollout: each rollout's
- * counters restart, and the session's total sums those still in the log. A
- * rollout already reported that compaction has since dropped keeps its reported
- * totals in the sum, so a later rollout of the session is reported in full
- * rather than against them. An entry written before rollouts were kept is
- * compared as a whole, then kept per rollout.
+ * counters restart, and the session's total sums those still in the log plus
+ * the `dropped` ones (see {@link droppedRollouts}), which the next snapshot
+ * keeps, so a later rollout of the session is reported in full.
  */
 export function computePromptTokenDelta(
   current: Map<string, SessionMetrics>,
   reported: ReportedPromptTokens,
+  dropped: Map<string, DroppedRollout[]> = droppedRollouts(current, reported, {}),
 ): { delta: PromptTokenDelta; nextReported: ReportedPromptTokens } {
   const delta: PromptTokenDelta = { prompts: 0, tokens: emptyTokenUsage() };
   const nextReported: ReportedPromptTokens = {};
@@ -402,11 +465,12 @@ export function computePromptTokenDelta(
     if (cur.segments) {
       segments = {};
       for (const [transcript, segment] of Object.entries(cur.segments)) {
-        segments[segmentKey(transcript)] = { prompts: segment.prompts, tokens: { ...segment.tokens } };
+        segments[segmentKey(transcript)] = {
+          prompts: segment.prompts, tokens: { ...segment.tokens }, interrupt: segment.interrupt, toolReject: segment.toolReject,
+        };
       }
-      for (const [key, gone] of Object.entries(reportedSegments(prev))) {
-        if (Object.hasOwn(segments, key)) continue;
-        segments[key] = gone;
+      for (const gone of dropped.get(sid) ?? []) {
+        segments[gone.key] = { prompts: gone.prompts, tokens: gone.tokens, interrupt: gone.interrupt, toolReject: gone.toolReject };
         prompts += gone.prompts;
         tokens = addTokenUsage(tokens, gone.tokens);
       }
@@ -417,6 +481,28 @@ export function computePromptTokenDelta(
   }
 
   return { delta, nextReported };
+}
+
+/**
+ * The intervention counts and daily snapshots a report compares, with each
+ * session's dropped rollouts added (see {@link droppedRollouts}): Stop counts
+ * and prompts restart per rollout like the tokens do.
+ */
+export function withDroppedRollouts(
+  interventions: Map<string, ReportedInterventions[string]>,
+  daily: Map<string, DailySessionSnapshot>,
+  dropped: Map<string, DroppedRollout[]>,
+): { interventions: Map<string, ReportedInterventions[string]>; daily: Map<string, DailySessionSnapshot> } {
+  const nextInterventions = new Map(interventions);
+  const nextDaily = new Map(daily);
+  for (const [sid, gone] of dropped) {
+    const sum = (field: 'prompts' | 'interrupt' | 'toolReject') => gone.reduce((total, rollout) => total + rollout[field], 0);
+    const counts = nextInterventions.get(sid);
+    if (counts) nextInterventions.set(sid, { ...counts, interrupt: counts.interrupt + sum('interrupt'), toolReject: counts.toolReject + sum('toolReject') });
+    const day = nextDaily.get(sid);
+    if (day) nextDaily.set(sid, { ...day, prompts: day.prompts + sum('prompts') });
+  }
+  return { interventions: nextInterventions, daily: nextDaily };
 }
 
 /** Accumulate a prompt/token delta onto the user's existing totals. */
@@ -529,6 +615,22 @@ async function creditSplitRuns(
     result.changed = true;
   }
   return result;
+}
+
+/**
+ * When the scope's prompt-token snapshot was last written, before this report
+ * writes it: its own file's, else the shared one it would be seeded from. An
+ * entry an earlier release left covers what that release had seen by then.
+ */
+export async function snapshotWrittenAt(config: LocalConfig | undefined): Promise<number | undefined> {
+  for (const file of [scopeSnapshotPath('prompt-tokens', config), sharedSnapshotPath('prompt-tokens')]) {
+    try {
+      return (await fs.promises.stat(file)).mtimeMs;
+    } catch {
+      // Not written yet: try the next.
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -686,19 +788,23 @@ export async function reportUsageToTeam(
 
     const currentInterventions = interventionCounts(metrics);
     const currentDaily = aggregateDailySessions(dashboardEvents);
+    const writtenAt = await snapshotWrittenAt(reportsConfig);
     const {
       interventions: reportedInterventions, promptTokens: reportedPromptTokens, daily: reportedDailySessions,
     } = await reportedBaselines(dashboardEvents, metrics, currentDaily, reportsConfig, true);
+    const dropped = droppedRollouts(metrics, reportedPromptTokens, reportedInterventions, writtenAt);
+    const effective = withDroppedRollouts(currentInterventions, currentDaily, dropped);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
       reportedPromptTokens,
+      dropped,
     );
     const { delta: interventionDelta, nextReported } = computeInterventionDelta(
-      currentInterventions,
+      effective.interventions,
       reportedInterventions,
     );
     const { delta: dailyDelta, nextReported: nextReportedDailySessions } = computeDailyStatsDelta(
-      currentDaily,
+      effective.daily,
       reportedDailySessions,
     );
     // This scope's sessions, and those of its snapshots no owner claims yet

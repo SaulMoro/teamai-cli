@@ -625,6 +625,29 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
       expect((await reportedPrompts(project)) + (await reportedPrompts(projectQ))).toBe(expected);
     });
 
+  it('a Codex rollout resumed after compaction reports its daily prompts and interventions too', async () => {
+    const { project } = await setup();
+    const key = await dataHomeKeyOf(project);
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    const stop = (rollout: string, prompts: number, toolReject: number) => JSON.stringify({
+      type: 'stop', timestamp: new Date().toISOString(), sessionId: 'codex-s', tool: 'codex', dataHomeKey: key,
+      transcriptPath: path.join(tmp, rollout), tokenScope: 'transcript', prompts,
+      tokens: { input: 10, output: 1, cacheRead: 0, cacheCreation: 0 }, interventions: { interrupt: 0, toolReject },
+    });
+    fs.writeFileSync(log, stop('rollout-a.jsonl', 5, 1) + '\n');
+    await report(project);
+    // Compaction dropped rollout A; the resumed rollout B restarts its counters.
+    fs.writeFileSync(log, stop('rollout-b.jsonl', 2, 1) + '\n');
+    const stats = await report(project);
+    const day = stats && typeof stats === 'object' && 'daily' in stats && stats.daily && typeof stats.daily === 'object'
+      ? Object.values(stats.daily)[0] : undefined;
+    const interventions = stats && typeof stats === 'object' && 'interventions' in stats ? stats.interventions : undefined;
+
+    expect(day).toMatchObject({ promptTurns: 7 });
+    expect(interventions).toMatchObject({ toolReject: 2 });
+  });
+
   it('a compacted split session credits the cumulative Stop interventions once', async () => {
     const { user, project } = await setup();
     const { rootQ, projectQ } = await setupQ();

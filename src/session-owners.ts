@@ -18,7 +18,7 @@ import { parseDailySnapshot, type DailySessionSnapshot } from './session-trends.
 export type ReportedInterventions = Record<string, { interrupt: number; toolReject: number; correction: number }>;
 
 /** A rollout's reported totals, keyed by a hash of its transcript path (no path is stored). */
-export type ReportedSegments = Record<string, { prompts: number; tokens: TokenUsage }>;
+export type ReportedSegments = Record<string, { prompts: number; tokens: TokenUsage; interrupt?: number; toolReject?: number }>;
 
 /** Snapshot of already-reported per-session prompt counts + token usage (idempotency basis). */
 export type ReportedPromptTokens = Record<string, { prompts: number; tokens: TokenUsage; segments?: ReportedSegments }>;

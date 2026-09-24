@@ -1217,8 +1217,9 @@ export interface SessionMetrics {
   /**
    * Each rollout's own totals for a transcript-scoped session (Codex), keyed by
    * its transcript path: a rollout's counters restart, so the session sums them.
+   * `since` is the rollout's first event.
    */
-  segments?: Record<string, { prompts: number; tokens: TokenUsage }>;
+  segments?: Record<string, { prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; since: string }>;
 }
 
 export type DashboardSessionStatus = 'running' | 'waiting_for_input' | 'error' | 'idle' | 'stopped';
