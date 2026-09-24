@@ -2,7 +2,8 @@ import path from 'node:path';
 import { autoDetectInit } from './config.js';
 import { reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, getHookStatus, hasInstalledCodexTrustGatedTool, codexTrustReminder, type HookStatus } from './hooks.js';
 import { applyBuiltinOverride, installedBuiltinHookDefs } from './builtin-hooks.js';
-import { parseTeamHooksConfig } from './resources/hooks.js';
+import { resolveTeamHookEntries } from './resources/hooks.js';
+import { describeEntryFailure, describeOrigin } from './namespaced-entries.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions, HookDef } from './types.js';
 import {
@@ -135,7 +136,7 @@ export async function hooksList(_options: GlobalOptions): Promise<void> {
     // The team's `builtin:` block can disable built-in hooks (§4.8); the
     // reconcile engine applies it, so the listing must too or it shows hooks
     // that were just removed from the settings files.
-    const { defs: teamDefs, builtin: builtinOverride } = await parseTeamHooksConfig(localConfig.repo.localPath);
+    const { resolution: teamHooks, builtin: builtinOverride } = await resolveTeamHookEntries(localConfig);
     const rows: HookListRow[] = [];
     // One settings file is one install, so list it once, for the target that owns
     // it — the same rule the write path applies. Qoder CN shares Qoder's project
@@ -241,16 +242,18 @@ export async function hooksList(_options: GlobalOptions): Promise<void> {
     }
 
     console.log('');
-    console.log(`Team hooks (B) — hooks/hooks.yaml (${teamDefs.length}):`);
-    if (teamDefs.length === 0) {
-        console.log('  (none)');
+    if (teamHooks.kind === 'failed') {
+        console.log('Team hooks (B) — hooks/:');
+        console.log(`  ${describeEntryFailure(teamHooks.failure)}`);
     } else {
-        for (const d of teamDefs) {
-            const matcher = d.matcher ? ` [${d.matcher}]` : '';
-            const tools = d.tools && d.tools.length > 0 ? d.tools.join(',') : 'all';
-            const roles = d.roles ? `, roles: ${d.roles.length > 0 ? d.roles.join(',') : 'nobody'}` : '';
-            const projects = d.projects ? `, projects: ${d.projects.length > 0 ? d.projects.join(',') : 'nobody'}` : '';
-            console.log(`  [${d.key}] ${d.event}${matcher}  →  ${d.command}  (tools: ${tools}${roles}${projects})`);
+        console.log(`Team hooks (B) — hooks/ (${teamHooks.entries.length}):`);
+        if (teamHooks.entries.length === 0) console.log('  (none)');
+        for (const resolved of teamHooks.entries) {
+            const h = resolved.entry;
+            const matcher = h.matcher ? ` [${h.matcher}]` : '';
+            const tools = h.tools && h.tools.length > 0 ? h.tools.join(',') : 'all';
+            const roles = h.roles ? `, roles: ${h.roles.length > 0 ? h.roles.join(',') : 'nobody'} (deprecated)` : '';
+            console.log(`  [${h.id}] ${h.event}${matcher}  →  ${h.command}  (tools: ${tools}${roles})  from ${describeOrigin(resolved)}`);
         }
     }
     console.log('');

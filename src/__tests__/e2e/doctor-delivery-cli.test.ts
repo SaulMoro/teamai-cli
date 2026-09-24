@@ -295,11 +295,17 @@ describe('teamai doctor delivery checks (e2e)', () => {
 
   it('passes an env.yaml that declares `variables: []` on purpose', () => {
     const envYaml = path.join(repo, 'env', 'env.yaml');
+    const envSh = path.join(home, '.teamai', 'env.sh');
     const original = fs.readFileSync(envYaml, 'utf8');
+    const originalSh = fs.readFileSync(envSh, 'utf8');
     write(envYaml, 'variables: []\n');
+    // What pull writes for an empty set (#707): it rewrites env.sh, so the
+    // variables it exported before are gone rather than left live.
+    write(envSh, '\n');
 
     expect(check(runDoctor(), 'Env variables injected in shell profile').ok).toBe(true);
 
     write(envYaml, original);
+    write(envSh, originalSh);
   });
 });

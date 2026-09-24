@@ -27,6 +27,8 @@ import {
   buildNamespaceNotes,
   buildMcpDeliveryChecks,
   buildEnvDeliveryCheck,
+  buildEntryScopeKeyCheck,
+  entryNamespaceNotes,
   buildDocsCheck,
 } from './doctor-delivery.js';
 
@@ -455,6 +457,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),
+    ...await buildEntryScopeKeyCheck(ctx),
   );
 
   return checks;
@@ -543,9 +546,13 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
   const codexNote = await hasInstalledCodexHooks(toolPaths, baseDir)
     ? codexTrustReminder()
     : null;
-  // Which namespace item replaces which root item (#707): information, not a
-  // problem, so a note rather than a check.
-  const notes = [...await buildNamespaceNotes(ctx), ...(codexNote ? [codexNote] : [])];
+  // Info, not checks: which namespace item or entry replaces which root one
+  // (#707).
+  const notes = [
+    ...await buildNamespaceNotes(ctx),
+    ...await entryNamespaceNotes(ctx),
+    ...(codexNote ? [codexNote] : []),
+  ];
 
   if (jsonMode) {
     emitReport({

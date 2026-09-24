@@ -31,7 +31,7 @@ vi.mock('../utils/git.js', () => ({
 
 vi.mock('../utils/logger.js', () => ({
   log: {
-    debug: vi.fn(), error: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), dim: vi.fn(),
+    debug: vi.fn(), error: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), dim: vi.fn(), persist: vi.fn(),
   },
   spinner: vi.fn(() => ({
     fail: vi.fn().mockReturnThis(), info: vi.fn().mockReturnThis(),

@@ -25,7 +25,7 @@ vi.mock('../hooks.js', async () => {
 });
 
 vi.mock('../resources/hooks.js', () => ({
-    parseTeamHooksConfig: vi.fn(),
+    resolveTeamHookEntries: vi.fn(),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -42,7 +42,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { autoDetectInit } from '../config.js';
 import { getHookStatus, reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, hasInstalledCodexTrustGatedTool } from '../hooks.js';
-import { parseTeamHooksConfig } from '../resources/hooks.js';
+import { resolveTeamHookEntries } from '../resources/hooks.js';
 import { log } from '../utils/logger.js';
 import { hooksInject, hooksRemove, hooksList } from '../hooks-cmd.js';
 import { TeamaiConfigSchema } from '../types.js';
@@ -54,11 +54,19 @@ const mockedReconcileStandalone = reconcileHooks as Mock;
 const mockedReconcile = reconcileHooksToAllTools as Mock;
 const mockedReconcileForConfig = reconcileTeamHooksForConfig as Mock;
 const mockedHasCodexTrustGated = hasInstalledCodexTrustGatedTool as Mock;
-const mockedParseTeamHooks = parseTeamHooksConfig as Mock;
+const mockedParseTeamHooks = resolveTeamHookEntries as Mock;
 
-/** hooks.yaml parse result: team defs (B) plus the optional builtin override. */
-function hooksYaml(defs: unknown[], builtin?: unknown) {
-    return { defs, builtin };
+/**
+ * The resolved team hooks (B), as `[hook, source, replaces]` or a bare hook
+ * from hooks/hooks.yaml, plus the optional builtin override.
+ */
+function hooksYaml(hooks: (Record<string, unknown> | [Record<string, unknown>, string, string | null])[], builtin?: unknown) {
+    const entries = hooks.map((hook) => {
+        const [entry, source, replaces] = Array.isArray(hook) ? hook : [hook, 'hooks/hooks.yaml', null];
+        const namespace = source === 'hooks/hooks.yaml' ? null : source.split('/')[1];
+        return { entry, name: entry.id, source, namespace, replaces };
+    });
+    return { resolution: { kind: 'resolved', entries, active: [], notices: [], repeated: [] }, builtin };
 }
 const mockedLog = log as unknown as { info: Mock; success: Mock; warn: Mock; error: Mock; debug: Mock };
 
@@ -78,7 +86,7 @@ const mockTeamConfig = {
     },
 };
 
-const TEAM_DEFS = [{ source: 'team', key: 'x', event: 'Stop', command: 'echo x', description: '[teamai:hook:x] x' }];
+const TEAM_DEFS = [{ id: 'x', event: 'Stop', command: 'echo x', description: 'x' }];
 const COPILOT_HOME_FIXTURE = '/tmp/custom-copilot';
 
 function copilotConfig() {
@@ -201,7 +209,7 @@ describe('hooksInject', () => {
 describe('hooksList', () => {
     it('prints built-in hooks and team hooks from hooks.yaml', async () => {
         mockedParseTeamHooks.mockResolvedValue(hooksYaml([
-            { source: 'team', key: 'lint', event: 'Stop', command: 'npm run lint', description: '[teamai:hook:lint] lint', tools: ['claude'] },
+            { id: 'lint', event: 'Stop', command: 'npm run lint', description: 'lint', tools: ['claude'] },
         ]));
         const out: string[] = [];
         const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)); });
@@ -219,10 +227,10 @@ describe('hooksList', () => {
         expect(text).toContain('(tools: claude)');
     });
 
-    it('prints the roles restriction next to the tools one', async () => {
+    it('prints a deprecated roles restriction next to the tools one', async () => {
         mockedParseTeamHooks.mockResolvedValue(hooksYaml([
-            { source: 'team', key: 'guard-tf', event: 'PreToolUse', matcher: 'Bash', command: 'guard-tf.sh', description: '[teamai:hook:guard-tf] x', roles: ['devops'] },
-            { source: 'team', key: 'lint', event: 'Stop', command: 'npm run lint', description: '[teamai:hook:lint] lint' },
+            { id: 'guard-tf', event: 'PreToolUse', matcher: 'Bash', command: 'guard-tf.sh', description: 'x', roles: ['devops'] },
+            { id: 'lint', event: 'Stop', command: 'npm run lint', description: 'lint' },
         ]));
         const out: string[] = [];
         const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)); });
@@ -232,15 +240,14 @@ describe('hooksList', () => {
             spy.mockRestore();
         }
         const text = out.join('\n');
-        expect(text).toContain('(tools: all, roles: devops)');
-        expect(text).toContain('npm run lint  (tools: all)');
+        expect(text).toContain('(tools: all, roles: devops (deprecated))  from root');
+        expect(text).toContain('npm run lint  (tools: all)  from root');
     });
 
-    it('prints the projects restriction next to the roles one', async () => {
+    it('prints the namespace each team hook comes from, and when it overrides the root', async () => {
         mockedParseTeamHooks.mockResolvedValue(hooksYaml([
-            { source: 'team', key: 'checkout-lint', event: 'Stop', command: 'echo checkout', description: '[teamai:hook:checkout-lint] x', projects: ['checkout'] },
-            { source: 'team', key: 'both', event: 'Stop', command: 'echo both', description: '[teamai:hook:both] x', roles: ['frontend'], projects: ['checkout', 'billing'] },
-            { source: 'team', key: 'nobody', event: 'Stop', command: 'echo none', description: '[teamai:hook:nobody] x', projects: [] },
+            [{ id: 'lint', event: 'Stop', command: 'npm run lint:checkout', description: 'x' }, 'hooks/checkout/hooks.yaml', 'hooks/hooks.yaml'],
+            [{ id: 'orders', event: 'Stop', command: 'echo orders', description: 'x' }, 'hooks/checkout/hooks.yaml', null],
         ]));
         const out: string[] = [];
         const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)); });
@@ -250,9 +257,8 @@ describe('hooksList', () => {
             spy.mockRestore();
         }
         const text = out.join('\n');
-        expect(text).toContain('(tools: all, projects: checkout)');
-        expect(text).toContain('(tools: all, roles: frontend, projects: checkout,billing)');
-        expect(text).toContain('(tools: all, projects: nobody)');
+        expect(text).toContain('[lint] Stop  →  npm run lint:checkout  (tools: all)  from checkout, overrides root');
+        expect(text).toContain('[orders] Stop  →  echo orders  (tools: all)  from checkout');
     });
 });
 

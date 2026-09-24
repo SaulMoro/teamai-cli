@@ -1,0 +1,425 @@
+/**
+ * Env variables, hooks and MCP servers by namespace (#707).
+ *
+ *   <type>/<type>.yaml         root, shared
+ *   <type>/<ns>/<type>.yaml    read only where <ns> is active in resources.<type>
+ *
+ * Each file is a list of named entries. An active namespace entry replaces the
+ * root entry of the same name, whole; the rule itself is `namespace-resolver`.
+ * This module adds what is particular to list files: reading them, the failure
+ * policy, and the per-entry `roles:` / `projects:` keys the namespaces replace.
+ *
+ * Failure policy: a file in the active set that does not parse, a name twice in
+ * one file, or a name in two active namespaces stops the type for this run.
+ * The caller keeps what is installed rather than reconciling to an empty set.
+ *
+ * Legacy mode (no roles, no projects) reads the root file only, as before, and
+ * keeps its old handling of a repeated name; doctor lists those as info.
+ */
+import path from 'node:path';
+import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
+import { resolveResourceNamespaces } from './resource-namespaces.js';
+import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js';
+import { findProject, loadProjectsManifest, unknownProjectMessage } from './projects.js';
+import { isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
+import type { LocalConfig } from './types.js';
+import { log } from './utils/logger.js';
+
+export type EntryType = 'env' | 'hooks' | 'mcp';
+
+const ENTRY_FILE: Record<EntryType, string> = { env: 'env.yaml', hooks: 'hooks.yaml', mcp: 'mcp.yaml' };
+
+/** What one entry is called, for messages. */
+export const ENTRY_NOUN: Record<EntryType, string> = { env: 'variable', hooks: 'hook', mcp: 'server' };
+
+/** What a failure leaves unchanged, for messages. */
+const INSTALLED: Record<EntryType, string> = {
+  env: 'exported env variables',
+  hooks: 'installed team hooks',
+  mcp: 'installed team MCP servers',
+};
+
+/** Repo-relative (`/`-separated) path of a type's file in the root (`null`) or a namespace. */
+export function entryFilePath(type: EntryType, namespace: string | null): string {
+  return namespace === null ? `${type}/${ENTRY_FILE[type]}` : `${type}/${namespace}/${ENTRY_FILE[type]}`;
+}
+
+/** One parsed file, or why it cannot be used; the reason names the file. */
+export type EntryFileRead<E> =
+  | { readonly ok: true; readonly entries: readonly E[]; readonly notes?: readonly string[] }
+  | { readonly ok: false; readonly reason: string };
+
+/** The per-entry scoping keys the namespaces replace. */
+export interface EntryScopeKeys {
+  readonly roles?: readonly string[];
+  readonly projects?: readonly string[];
+}
+
+/** How one type's files are read. */
+export interface EntryReader<E> {
+  readonly type: EntryType;
+  /** null when the file does not exist. */
+  read(absolutePath: string, relativePath: string): Promise<EntryFileRead<E> | null>;
+  nameOf(entry: E): string;
+  scopeOf(entry: E): EntryScopeKeys;
+}
+
+export interface ResolvedEntry<E> {
+  readonly entry: E;
+  readonly name: string;
+  /** null for the root file. */
+  readonly namespace: string | null;
+  /** Repo-relative file the entry comes from. */
+  readonly source: string;
+  /** Repo-relative root file whose entry of the same name this one replaces. */
+  readonly replaces: string | null;
+}
+
+/** Why a type was not applied this run. */
+export type EntryFailure =
+  | { readonly kind: 'broken-file'; readonly type: EntryType; readonly source: string; readonly reason: string }
+  | { readonly kind: 'duplicate'; readonly type: EntryType; readonly name: string; readonly source: string }
+  | {
+    readonly kind: 'two-namespaces';
+    readonly type: EntryType;
+    readonly name: string;
+    readonly first: string;
+    readonly second: string;
+  }
+  | { readonly kind: 'namespaces-unresolved'; readonly type: EntryType; readonly reason: string };
+
+/** A warning about an entry that still resolves, worded for the admin who can fix it. */
+export interface EntryNotice {
+  readonly kind: 'removed-key' | 'deprecated-roles' | 'file-note';
+  readonly message: string;
+}
+
+export type EntryResolution<E> =
+  | {
+    readonly kind: 'resolved';
+    readonly entries: readonly ResolvedEntry<E>[];
+    /** null in legacy mode, which reads the root file alone. */
+    readonly active: readonly string[] | null;
+    readonly notices: readonly EntryNotice[];
+    /** Names repeated in the root file; only legacy mode lets one through. */
+    readonly repeated: readonly string[];
+  }
+  | { readonly kind: 'failed'; readonly failure: EntryFailure; readonly notices: readonly EntryNotice[] };
+
+/**
+ * The active namespaces of `type` for this member, or null in legacy mode.
+ * A manifest that exists and does not load is a failure, never legacy mode:
+ * that would deliver the root alone and drop every namespace entry.
+ */
+export async function activeEntryNamespaces(
+  localConfig: LocalConfig,
+  type: EntryType,
+  options: { quiet?: boolean } = {},
+): Promise<{ ok: true; active: string[] | null } | { ok: false; failure: EntryFailure }> {
+  try {
+    const resolved = await resolveResourceNamespaces(localConfig, options);
+    return { ok: true, active: resolved ? resolved.activeNamespaces[type] ?? [] : null };
+  } catch (error) {
+    return {
+      ok: false,
+      failure: { kind: 'namespaces-unresolved', type, reason: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+/**
+ * Read the root file and every active namespace file of one type, and resolve
+ * them into the entries this member receives.
+ */
+export async function resolveEntries<E>(
+  reader: EntryReader<E>,
+  localConfig: LocalConfig,
+  active: readonly string[] | null,
+): Promise<EntryResolution<E>> {
+  const { type } = reader;
+  const repoPath = localConfig.repo.localPath;
+  const places: (string | null)[] = [null, ...(active ?? [])];
+  const notices: EntryNotice[] = [];
+  const targets = new TargetFiles(repoPath, type);
+
+  const candidates: NamespaceCandidate<E>[] = [];
+  const rootNames: string[] = [];
+  for (const namespace of places) {
+    const source = entryFilePath(type, namespace);
+    const read = await reader.read(path.join(repoPath, ...source.split('/')), source);
+    if (read === null) continue;
+    if (!read.ok) return { kind: 'failed', failure: { kind: 'broken-file', type, source, reason: read.reason }, notices };
+    for (const note of read.notes ?? []) notices.push({ kind: 'file-note', message: note });
+
+    for (const entry of read.entries) {
+      const name = reader.nameOf(entry);
+      const scope = reader.scopeOf(entry);
+      if (!await keepScopedEntry(type, name, source, scope, localConfig, targets, notices)) continue;
+      if (namespace === null) rootNames.push(name);
+      candidates.push({ name, source, namespace, value: entry });
+    }
+  }
+
+  const repeated = [...new Set(rootNames.filter((name, index) => rootNames.indexOf(name) !== index))];
+
+  if (active === null) {
+    return {
+      kind: 'resolved',
+      entries: candidates.map((c) => ({ entry: c.value, name: c.name, namespace: null, source: c.source, replaces: null })),
+      active,
+      notices,
+      repeated,
+    };
+  }
+
+  const resolution = resolveNamespacedItems(candidates, active);
+  if (resolution.kind === 'conflict') {
+    const failure: EntryFailure = resolution.reason === 'duplicate'
+      ? { kind: 'duplicate', type, name: resolution.name, source: resolution.first.source }
+      : { kind: 'two-namespaces', type, name: resolution.name, first: resolution.first.source, second: resolution.second.source };
+    return { kind: 'failed', failure, notices };
+  }
+
+  // File order, not the resolver's name order: hooks on one event run in the
+  // order they are listed. A namespace entry takes the place of the root entry
+  // it replaces; the other namespace entries follow, in `active` order.
+  const firstSeen = new Map<string, number>();
+  candidates.forEach((candidate, index) => {
+    if (!firstSeen.has(candidate.name)) firstSeen.set(candidate.name, index);
+  });
+  const position = (name: string): number => firstSeen.get(name) ?? candidates.length;
+  const items = [...resolution.items].sort((a, b) => position(a.name) - position(b.name));
+
+  return {
+    kind: 'resolved',
+    entries: items.map((item) => ({
+      entry: item.value,
+      name: item.name,
+      namespace: item.namespace,
+      source: item.source,
+      replaces: item.replaces?.source ?? null,
+    })),
+    active,
+    notices,
+    repeated,
+  };
+}
+
+/** Resolve one type for this member: active namespaces, then the files. */
+export async function resolveEntriesFor<E>(
+  reader: EntryReader<E>,
+  localConfig: LocalConfig,
+  options: { quiet?: boolean } = {},
+): Promise<EntryResolution<E>> {
+  const namespaces = await activeEntryNamespaces(localConfig, reader.type, options);
+  if (!namespaces.ok) return { kind: 'failed', failure: namespaces.failure, notices: [] };
+  return resolveEntries(reader, localConfig, namespaces.active);
+}
+
+/**
+ * Whether an entry's per-entry keys let it through, recording a notice when it
+ * carries one.
+ *
+ * `projects:` (every type) and `roles:` on env exist only in the 0.26.0 betas
+ * and are removed: such an entry reaches nobody, which is the direction that
+ * cannot leak a project's value to the whole team. `roles:` on hooks and MCP
+ * shipped in 0.25.0 and keeps filtering for one minor release.
+ */
+async function keepScopedEntry(
+  type: EntryType,
+  name: string,
+  source: string,
+  scope: EntryScopeKeys,
+  localConfig: LocalConfig,
+  targets: TargetFiles,
+  notices: EntryNotice[],
+): Promise<boolean> {
+  const label = `${source}: ${ENTRY_NOUN[type]} "${name}"`;
+  const removedKeys: ('projects' | 'roles')[] = [];
+  if (scope.projects !== undefined) removedKeys.push('projects');
+  if (type === 'env' && scope.roles !== undefined) removedKeys.push('roles');
+  if (removedKeys.length > 0) {
+    const files: string[] = [];
+    for (const key of removedKeys) files.push(...await targets.forIds(key, scope[key] ?? []));
+    notices.push({
+      kind: 'removed-key',
+      message: `${label} is scoped with per-entry ${removedKeys.map((key) => `\`${key}:\``).join(' and ')}, `
+        + 'which this version no longer reads, so it reaches nobody. '
+        + moveTo(files),
+    });
+    return false;
+  }
+
+  if (scope.roles === undefined) return true;
+  notices.push({
+    kind: 'deprecated-roles',
+    message: `${label} is scoped with per-entry \`roles:\`, which is deprecated and stops working in the next `
+      + `minor release. ${moveTo(await targets.forIds('roles', scope.roles))}`,
+  });
+  // The 0.25.0 rule: no role configured matches everything; otherwise share one.
+  const roles = activeRoleIds(localConfig);
+  return roles === null || scope.roles.some((role) => roles.includes(role));
+}
+
+function moveTo(files: string[]): string {
+  if (files.length === 0) return 'It lists no id: remove it, or move it to the namespace file it is meant for.';
+  if (files.length === 1) return `Move it to ${files[0]} and drop the key.`;
+  return `Copy it into each of ${files.join(', ')} and drop the key.`;
+}
+
+/**
+ * The namespace files an id's entries belong in: the namespaces its role or
+ * project declares for the type, or `<type>/<id>/` with the declaration to add
+ * when it declares none. The manifests are read at most once, and only when an
+ * entry carries a per-entry key.
+ */
+class TargetFiles {
+  private roles: Promise<Awaited<ReturnType<typeof loadRolesManifestIfPresent>>> | null = null;
+  private projects: Promise<Awaited<ReturnType<typeof loadProjectsManifest>>> | null = null;
+
+  constructor(private readonly repoPath: string, private readonly type: EntryType) {}
+
+  async forIds(axis: 'roles' | 'projects', ids: readonly string[]): Promise<string[]> {
+    const files: string[] = [];
+    for (const id of ids) {
+      const declared = await this.declared(axis, id);
+      if (declared.length > 0) {
+        files.push(...declared.map((namespace) => entryFilePath(this.type, namespace)));
+      } else {
+        const owner = axis === 'roles' ? `role ${id}` : `project ${id}`;
+        files.push(`${entryFilePath(this.type, id)} (declare ${this.type}: [${id}] for ${owner} in manifest/${axis}.yaml)`);
+      }
+    }
+    return [...new Set(files)];
+  }
+
+  private async declared(axis: 'roles' | 'projects', id: string): Promise<string[]> {
+    try {
+      if (axis === 'roles') {
+        this.roles ??= loadRolesManifestIfPresent(this.repoPath);
+        const manifest = await this.roles;
+        return (manifest ? findRole(manifest, id)?.resources[this.type] : undefined) ?? [];
+      }
+      this.projects ??= loadProjectsManifest(this.repoPath);
+      const manifest = await this.projects;
+      return (manifest ? findProject(manifest, id)?.resources[this.type] : undefined) ?? [];
+    } catch {
+      // A manifest that does not load names no namespace; the fallback path
+      // still tells the admin where the entry goes.
+      return [];
+    }
+  }
+}
+
+/** The failure as one actionable line: what happened, what it left alone, what to do. */
+export function describeEntryFailure(failure: EntryFailure): string {
+  const kept = `${failure.type} was not applied this run, so your ${INSTALLED[failure.type]} are unchanged.`;
+  const noun = ENTRY_NOUN[failure.type];
+  switch (failure.kind) {
+    case 'broken-file':
+      // The reader's reason already names the file.
+      return `${failure.reason.trimEnd().replace(/\.$/, '')}. ${kept} Fix the file in the team repo and push.`;
+    case 'duplicate':
+      return `${failure.source} defines ${noun} "${failure.name}" more than once. ${kept} `
+        + 'Keep one of them in the team repo and push.';
+    case 'two-namespaces':
+      return `${noun} "${failure.name}" is defined in both ${failure.first} and ${failure.second}, and both namespaces `
+        + `are active here, so nothing says which one you should receive. ${kept} Rename or remove it in one of `
+        + 'the files, or stop declaring one of the namespaces for your roles and projects.';
+    case 'namespaces-unresolved':
+      return `Your ${failure.type} namespaces could not be resolved: ${failure.reason}. ${kept} `
+        + 'Fix the manifest in the team repo and push.';
+    default: {
+      const unhandled: never = failure;
+      return String(unhandled);
+    }
+  }
+}
+
+/** Messages already shown in this run: a pull resolves each type more than once. */
+const reported = new Set<string>();
+
+/** Start a run: `pull` calls this so each pull warns again, once. */
+export function resetEntryWarnings(): void {
+  reported.clear();
+}
+
+/**
+ * Warn about a failure and the notices, each once per run. Also written
+ * to debug.log, because a SessionStart pull runs silent and a failure here is
+ * what keeps a member on stale entries.
+ */
+export function reportEntryResolution(resolution: EntryResolution<unknown>): void {
+  const messages = resolution.notices.map((notice) => notice.message);
+  if (resolution.kind === 'failed') messages.push(describeEntryFailure(resolution.failure));
+  for (const message of messages) {
+    if (reported.has(message)) continue;
+    reported.add(message);
+    log.warn(message);
+    log.persist(message);
+  }
+}
+
+/** Where an entry comes from, for the list commands, `status` and `doctor`. */
+export function describeOrigin(entry: ResolvedEntry<unknown>): string {
+  if (entry.namespace === null) return 'root';
+  return entry.replaces ? `${entry.namespace}, overrides root` : entry.namespace;
+}
+
+/**
+ * Info lines for `doctor`: each override, and in legacy mode each name the root
+ * file repeats. Neither is a problem, so neither is a failing check.
+ */
+export function describeEntryNotes(type: EntryType, resolution: EntryResolution<unknown>): string[] {
+  if (resolution.kind !== 'resolved') return [];
+  const lines = resolution.entries.flatMap((entry) => (entry.replaces
+    ? [`${type}: "${entry.name}" from ${entry.source} replaces ${entry.replaces}`]
+    : []));
+  if (resolution.active === null) {
+    for (const name of resolution.repeated) {
+      lines.push(`${type}: "${name}" is defined more than once in ${entryFilePath(type, null)} (legacy mode does not check this; keep one of them)`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * The namespace `--role <ns>` or `--project <id>` points a write at, or null
+ * for the root file when neither is given. `--role` names the namespace itself,
+ * as it does for `push`; `--project` is looked up in that project's own
+ * `resources.<type>`. Phrased for the CLI user on failure.
+ */
+export async function entryNamespaceFromFlags(
+  repoPath: string,
+  type: EntryType,
+  flags: { role?: string; project?: string },
+): Promise<{ ok: true; namespace: string | null } | { ok: false; message: string }> {
+  if (flags.role !== undefined && flags.project !== undefined) {
+    return { ok: false, message: 'Use either --role or --project, not both.' };
+  }
+  if (flags.role !== undefined) {
+    return isSafeNamespaceSegment(flags.role)
+      ? { ok: true, namespace: flags.role }
+      : { ok: false, message: `Invalid --role "${flags.role}": ${NAMESPACE_RULE}.` };
+  }
+  if (flags.project === undefined) return { ok: true, namespace: null };
+
+  let manifest: Awaited<ReturnType<typeof loadProjectsManifest>>;
+  try {
+    manifest = await loadProjectsManifest(repoPath);
+  } catch (error) {
+    return { ok: false, message: `${error instanceof Error ? error.message : String(error)} Fix it, or pass --role <ns>.` };
+  }
+  if (!manifest) return { ok: false, message: 'This team repo defines no projects (no manifest/projects.yaml). Pass --role <ns>.' };
+  const project = findProject(manifest, flags.project);
+  if (!project) return { ok: false, message: unknownProjectMessage(manifest, flags.project) };
+  const namespaces = project.resources[type] ?? [];
+  if (namespaces.length === 1 && namespaces[0] !== undefined) return { ok: true, namespace: namespaces[0] };
+  return {
+    ok: false,
+    message: namespaces.length === 0
+      ? `Project "${flags.project}" declares no ${type} namespace. Add \`${type}: [<ns>]\` to its resources in `
+        + 'manifest/projects.yaml, or pass --role <ns>.'
+      : `Project "${flags.project}" maps ${type} to several namespaces (${namespaces.join(', ')}); pass --role <ns> to pick one.`,
+  };
+}

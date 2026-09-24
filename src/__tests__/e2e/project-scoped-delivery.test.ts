@@ -5,14 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// ─── project-scoped hooks / MCP / env e2e (issue #668) ──────────────────────
+// ─── project-scoped hooks / MCP / env e2e (issue #668, #707) ────────────────
 //
 // The unit suites drive each filter directly. This is the end-to-end leg,
 // through the ACTUAL compiled CLI, for the three resource types whose delivery
-// costs something on every session:
+// costs something on every session. Since #707 a project scopes them with
+// `<type>/<ns>/` files declared in `resources:` rather than per-entry keys:
 //   1. a directory bound to `checkout` receives checkout's MCP server, hook and
 //      env variable, and NOT billing's;
-//   2. an entry scoping both axes reaches only a member matching both;
+//   2. a server in checkout's file that also carries the deprecated `roles:`
+//      reaches only a member matching both;
 //   3. `projects set` to another project REMOVES what the first one delivered —
 //      the guarantee that makes the filter safe to change your mind about.
 //
@@ -133,68 +135,96 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
       '    name: Checkout',
       '    resources:',
       '      skills: []',
+      '      env: [checkout]',
+      '      hooks: [checkout]',
+      '      mcp: [checkout]',
       '  - id: billing',
       '    name: Billing',
       '    resources:',
       '      skills: []',
+      '      env: [billing]',
+      '      hooks: [billing]',
+      '      mcp: [billing]',
       '',
     ].join('\n'));
 
-    fs.writeFileSync(path.join(seed, 'mcp', 'mcp.yaml'), [
+    const writeSeed = (relativePath: string, lines: string[]): void => {
+      fs.mkdirSync(path.dirname(path.join(seed, relativePath)), { recursive: true });
+      fs.writeFileSync(path.join(seed, relativePath), lines.join('\n'));
+    };
+    writeSeed('mcp/mcp.yaml', [
       'servers:',
-      '  - name: checkout-api',
-      '    transport: http',
-      '    url: https://checkout.example.com/mcp',
-      '    projects: [checkout]',
-      '  - name: billing-api',
-      '    transport: http',
-      '    url: https://billing.example.com/mcp',
-      '    projects: [billing]',
-      '  - name: fe-checkout-api',
-      '    transport: http',
-      '    url: https://fe-checkout.example.com/mcp',
-      '    roles: [frontend]',
-      '    projects: [checkout]',
       '  - name: shared-api',
       '    transport: http',
       '    url: https://shared.example.com/mcp',
       '',
-    ].join('\n'));
+    ]);
+    writeSeed('mcp/checkout/mcp.yaml', [
+      'servers:',
+      '  - name: checkout-api',
+      '    transport: http',
+      '    url: https://checkout.example.com/mcp',
+      '  - name: fe-checkout-api',
+      '    transport: http',
+      '    url: https://fe-checkout.example.com/mcp',
+      '    roles: [frontend]',
+      '',
+    ]);
+    writeSeed('mcp/billing/mcp.yaml', [
+      'servers:',
+      '  - name: billing-api',
+      '    transport: http',
+      '    url: https://billing.example.com/mcp',
+      '',
+    ]);
 
-    fs.writeFileSync(path.join(seed, 'hooks', 'hooks.yaml'), [
+    writeSeed('hooks/hooks.yaml', [
       'hooks:',
-      '  - id: checkout-guard',
-      '    description: checkout only',
-      '    event: Stop',
-      '    command: echo checkout',
-      '    projects: [checkout]',
-      '  - id: billing-guard',
-      '    description: billing only',
-      '    event: Stop',
-      '    command: echo billing',
-      '    projects: [billing]',
       '  - id: shared-guard',
       '    description: everyone',
       '    event: Stop',
       '    command: echo shared',
       '',
-    ].join('\n'));
+    ]);
+    writeSeed('hooks/checkout/hooks.yaml', [
+      'hooks:',
+      '  - id: checkout-guard',
+      '    description: checkout only',
+      '    event: Stop',
+      '    command: echo checkout',
+      '',
+    ]);
+    writeSeed('hooks/billing/hooks.yaml', [
+      'hooks:',
+      '  - id: billing-guard',
+      '    description: billing only',
+      '    event: Stop',
+      '    command: echo billing',
+      '',
+    ]);
 
-    fs.writeFileSync(path.join(seed, 'env', 'env.yaml'), [
+    // DEVOPS_ONLY carries `roles:`, which env no longer reads: it reaches nobody.
+    writeSeed('env/env.yaml', [
       'variables:',
-      '  - key: CHECKOUT_URL',
-      '    value: https://checkout.example.com',
-      '    projects: [checkout]',
-      '  - key: BILLING_URL',
-      '    value: https://billing.example.com',
-      '    projects: [billing]',
       '  - key: DEVOPS_ONLY',
       '    value: devops-secret',
       '    roles: [devops]',
       '  - key: SHARED_URL',
       '    value: https://shared.example.com',
       '',
-    ].join('\n'));
+    ]);
+    writeSeed('env/checkout/env.yaml', [
+      'variables:',
+      '  - key: CHECKOUT_URL',
+      '    value: https://checkout.example.com',
+      '',
+    ]);
+    writeSeed('env/billing/env.yaml', [
+      'variables:',
+      '  - key: BILLING_URL',
+      '    value: https://billing.example.com',
+      '',
+    ]);
 
     git(['init', '-q', '-b', 'main'], seed);
     git(['add', '-A'], seed);
@@ -221,7 +251,7 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('delivers only the bound project\'s entries, ANDs the two axes, and removes them on rebind', async () => {
+  it('delivers only the bound project\'s entries, applies a deprecated roles: on top, and removes them on rebind', async () => {
     // ── Bind to checkout ───────────────────────────────────────────────────
     const setCheckout = await runCLI(['projects', 'set', 'checkout'], projectRoot, home);
     expect(setCheckout.code, setCheckout.output).toBe(0);
@@ -237,8 +267,9 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(envCheckout).not.toContain('BILLING_URL');
     expect(envCheckout).not.toContain('DEVOPS_ONLY');
 
-    // mcp: checkout's, the both-axes one (frontend AND checkout both match) and
-    // the shared one are installed for Claude; billing's is not.
+    // mcp: checkout's, the role-scoped one in checkout's file (frontend AND
+    // checkout both match) and the shared one are installed for Claude;
+    // billing's is not.
     const mcpCheckout = readClaudeMcp();
     expect(mcpCheckout).toContain('checkout-api');
     expect(mcpCheckout).toContain('fe-checkout-api');
@@ -252,8 +283,8 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(claudeSettings).not.toContain('echo billing');
 
     // ── Upgrade path: repo unchanged, CLI newer ────────────────────────────
-    // A CLI that ignored `roles:`/`projects:` on env left DEVOPS_ONLY in
-    // env.sh, and the recorded revision still matches HEAD. A plain pull takes
+    // A CLI that honoured `roles:` on env left DEVOPS_ONLY in env.sh, and the
+    // recorded revision still matches HEAD. A plain pull takes
     // the "Already synced" fast path and must still rewrite env.sh from the
     // filtered set, or the withheld secret stays exported until --force.
     fs.appendFileSync(envShPath(), "export DEVOPS_ONLY='devops-secret'\n");
@@ -288,8 +319,8 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(mcpBilling).toContain('billing-api');
     expect(mcpBilling).toContain('shared-api');
     expect(mcpBilling).not.toContain('checkout-api');
-    // The both-axes server: the role still matches, the project no longer does,
-    // so AND drops it. An OR would have kept it.
+    // The role-scoped server in checkout's file: the role still matches, the
+    // namespace is no longer active, so it goes. An OR would have kept it.
     expect(mcpBilling).not.toContain('fe-checkout-api');
 
     const settingsBilling = fs.readFileSync(claudeSettingsPath(), 'utf8');
@@ -297,39 +328,40 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(settingsBilling).not.toContain('echo checkout');
   }, 120_000);
 
-  it('reports the restriction in mcp list, hooks list and env list', async () => {
+  it('reports where each entry comes from in mcp list, hooks list and env list', async () => {
     const mcpList = await runCLI(['mcp', 'list'], projectRoot, home);
     expect(mcpList.code, mcpList.output).toBe(0);
-    expect(mcpList.output).toContain('projects: checkout');
-    expect(mcpList.output).toContain('projects: billing');
-    expect(mcpList.output).toMatch(/roles:\s+frontend/);
+    expect(mcpList.output).toContain('from:     mcp/billing/mcp.yaml (billing)');
+    expect(mcpList.output).toContain('from:     mcp/mcp.yaml (root)');
+    expect(mcpList.output).not.toContain('checkout-api');
 
     const hooksList = await runCLI(['hooks', 'list'], projectRoot, home);
     expect(hooksList.code, hooksList.output).toBe(0);
-    expect(hooksList.output).toContain('projects: checkout');
-    expect(hooksList.output).toContain('projects: billing');
+    expect(hooksList.output).toContain('echo billing  (tools: all)  from billing');
+    expect(hooksList.output).not.toContain('echo checkout');
 
     const envList = await runCLI(['env', 'list'], projectRoot, home);
     expect(envList.code, envList.output).toBe(0);
-    expect(envList.output).toContain('(projects: checkout)');
-    expect(envList.output).toContain('(roles: devops)');
+    expect(envList.output).toMatch(/BILLING_URL=\S+ {2}\(billing\)/);
+    expect(envList.output).not.toContain('DEVOPS_ONLY');
   }, 60_000);
 
-  it('warns about a project id the manifest does not define', async () => {
+  it('warns about per-entry projects:, naming the namespace file to move the entry to', async () => {
     const teamRepo = path.join(projectRoot, '.teamai', 'team-repo');
     fs.writeFileSync(path.join(teamRepo, 'mcp', 'mcp.yaml'), [
       'servers:',
-      '  - name: typo-api',
+      '  - name: legacy-api',
       '    transport: http',
-      '    url: https://typo.example.com/mcp',
-      '    projects: [chekout]',
+      '    url: https://legacy.example.com/mcp',
+      '    projects: [billing]',
       '',
     ].join('\n'));
 
     const pull = await runCLI(['pull', '--force'], projectRoot, home);
     expect(pull.code, pull.output).toBe(0);
-    expect(pull.output).toContain('unknown project id "chekout"');
-    expect(pull.output).toContain('checkout, billing');
+    expect(pull.output).toContain('mcp/mcp.yaml: server "legacy-api" is scoped with per-entry `projects:`');
+    expect(pull.output).toContain('Move it to mcp/billing/mcp.yaml and drop the key.');
+    expect(readClaudeMcp()).not.toContain('legacy-api');
   }, 60_000);
 });
 
@@ -378,24 +410,34 @@ describe('project-scoped MCP reaches the Codex TOML renderer too (issue #668)', 
       '    name: Checkout',
       '    resources:',
       '      skills: []',
+      '      env: [checkout]',
+      '      hooks: [checkout]',
+      '      mcp: [checkout]',
       '  - id: billing',
       '    name: Billing',
       '    resources:',
       '      skills: []',
+      '      env: [billing]',
+      '      hooks: [billing]',
+      '      mcp: [billing]',
       '',
     ].join('\n'));
-    fs.writeFileSync(path.join(seed, 'mcp', 'mcp.yaml'), [
+    fs.mkdirSync(path.join(seed, 'mcp', 'checkout'), { recursive: true });
+    fs.mkdirSync(path.join(seed, 'mcp', 'billing'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'mcp', 'checkout', 'mcp.yaml'), [
       'servers:',
       '  - name: checkout-api',
       '    transport: stdio',
       '    command: echo',
       '    args: [checkout]',
-      '    projects: [checkout]',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(seed, 'mcp', 'billing', 'mcp.yaml'), [
+      'servers:',
       '  - name: billing-api',
       '    transport: stdio',
       '    command: echo',
       '    args: [billing]',
-      '    projects: [billing]',
       '',
     ].join('\n'));
 

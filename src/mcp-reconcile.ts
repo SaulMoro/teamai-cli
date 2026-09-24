@@ -30,9 +30,10 @@ import {
   MCP_SERVER_KEY,
   type McpFormat,
 } from './resources/mcp-format.js';
-import { parseTeamMcpServers } from './resources/mcp.js';
+import { resolveTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
+import { envEntryReader } from './resources/env.js';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { matchesMembership, resolveMembership, warnUnknownMembershipIds, type Membership } from './membership.js';
+import { reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
 import {
   readJson,
   writeJsonAtomic,
@@ -72,6 +73,8 @@ export interface McpReconcileOptions {
    * without mutating the host platform.
    */
   lookPath?: LookPathOptions;
+  /** Drop the namespace fallback warnings a pull already printed this run. */
+  quiet?: boolean;
 }
 
 export interface McpChange {
@@ -97,10 +100,33 @@ async function readManifest(manifestPath: string): Promise<ManagedMcpManifest> {
 // ─── Secret lookup ───────────────────────────────────────────
 
 /**
- * Build the ${VAR} lookup table: process env first, then values the team's env
- * channel already wrote to <teamaiHome>/env (KEY=value per line).
+ * Build the ${VAR} lookup table: the team env variables this member receives
+ * (root plus active namespace files, the same set pull writes env.sh from),
+ * then process env on top.
+ *
+ * The installed KEY=value backup is read instead only when that set cannot be
+ * resolved (pull then keeps env.sh as it is, so MCP sees what the shell sees)
+ * or the team has no repo tree to resolve it from (HTTP mode).
  */
 export async function buildVarTable(localConfig: LocalConfig): Promise<Record<string, string>> {
+  const table: Record<string, string> = {};
+  const env = localConfig.repo.kind === 'http'
+    ? null
+    : await resolveEntriesFor(envEntryReader, localConfig, { quiet: true });
+  if (env?.kind === 'resolved') {
+    for (const variable of env.entries) table[variable.name] = variable.entry.value;
+  } else {
+    Object.assign(table, await readEnvBackup(localConfig));
+  }
+  // process.env wins: it lets a user override a team-provided value locally.
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) table[k] = v;
+  }
+  return table;
+}
+
+/** The KEY=value file the env channel last wrote. */
+async function readEnvBackup(localConfig: LocalConfig): Promise<Record<string, string>> {
   const table: Record<string, string> = {};
   // Must use the same path the env channel wrote (getEnvBackupPath) — self mode
   // uses env.local, not env (which is a committed directory there).
@@ -114,10 +140,6 @@ export async function buildVarTable(localConfig: LocalConfig): Promise<Record<st
       if (eq <= 0) continue;
       table[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
     }
-  }
-  // process.env wins: it lets a user override a team-provided value locally.
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined) table[k] = v;
   }
   return table;
 }
@@ -343,11 +365,6 @@ export interface DesiredMcpEntry {
 export interface DesiredMcpContext {
   sharing: ReturnType<typeof getMcpSharing>;
   excluded: Set<string>;
-  /**
-   * Both membership axes. A null axis means the member has not configured it,
-   * so every entry scoped on that axis applies — see `resolveMembership`.
-   */
-  membership: Membership;
   vars: Record<string, string>;
   lookPath?: McpReconcileOptions['lookPath'];
 }
@@ -360,7 +377,6 @@ export async function buildDesiredMcpContext(
   return {
     sharing: getMcpSharing(teamConfig),
     excluded: new Set(localConfig.excludedSkills ?? []),
-    membership: resolveMembership(localConfig),
     vars: await buildVarTable(localConfig),
     lookPath: options.lookPath,
   };
@@ -385,7 +401,6 @@ export function desiredMcpForTarget(
 
   for (const raw of teamDefs) {
     if (raw.tools && !raw.tools.includes(target.tool)) continue;
-    if (!matchesMembership(raw, ctx.membership)) continue;
     if (ctx.excluded.has(raw.name)) {
       skipped.push({ tool: target.tool, server: raw.name, action: 'skipped', reason: 'excluded by user' });
       continue;
@@ -505,18 +520,18 @@ export async function reconcileMcpForConfig(
     return { changes, wrote };
   }
 
-  const teamDefs = removeAll ? [] : await parseTeamMcpServers(localConfig.repo.localPath);
+  let teamDefs: McpServerDef[] = [];
+  if (!removeAll) {
+    // A file that does not parse, or a server name defined twice, keeps every
+    // installed server as it is: reconciling to an empty set would remove them.
+    const resolution = await resolveTeamMcpServers(localConfig, { quiet: options.quiet });
+    reportEntryResolution(resolution);
+    if (resolution.kind === 'failed') return { changes, wrote };
+    teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  }
   if (!removeAll && teamDefs.length > 0 && !sharing.autoApply) {
     log.info(`${teamDefs.length} team MCP server(s) available. Run \`teamai mcp inject\` to apply.`);
     return { changes, wrote };
-  }
-
-  if (!removeAll) {
-    await warnUnknownMembershipIds(
-      localConfig.repo.localPath,
-      'mcp.yaml',
-      teamDefs.map((def) => ({ kind: 'server', name: def.name, roles: def.roles, projects: def.projects })),
-    );
   }
   const targets = await resolveMcpTargets(teamConfig, localConfig);
   if (targets.length === 0) return { changes, wrote };

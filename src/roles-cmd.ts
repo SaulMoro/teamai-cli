@@ -429,6 +429,8 @@ export async function rolesUpdate(
             ...existingRole,
             description: hasDesc ? options.description! : existingRole.description,
             resources: {
+                // Keeps the hand-declared later types (env, hooks, mcp).
+                ...existingRole.resources,
                 knowledge: updatedNamespaces,
                 skills: updatedNamespaces,
                 agents: updatedNamespaces,

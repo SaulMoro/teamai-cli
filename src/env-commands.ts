@@ -1,50 +1,49 @@
 import path from 'node:path';
-import YAML from 'yaml';
 import { requireInit, detectProjectConfig } from './config.js';
 import { pullRepo } from './utils/git.js';
-import { ensureDir, readFileSafe, writeFile, pathExists } from './utils/fs.js';
+import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
-import { EnvHandler, maskEnvValue, ENV_KEY_RE } from './resources/env.js';
+import { EnvHandler, maskEnvValue, ENV_KEY_RE, envEntryReader } from './resources/env.js';
+import { describeEntryFailure, describeOrigin, entryFilePath, entryNamespaceFromFlags, resolveEntriesFor } from './namespaced-entries.js';
 import type { GlobalOptions } from './types.js';
 import { isSelfMode } from './types.js';
 
 const envHandler = new EnvHandler();
 
 /**
- * List all team env variables from env.yaml.
+ * List the team env variables this directory receives: env/env.yaml plus the
+ * active env/<ns>/env.yaml files, each with the namespace it comes from.
  *
  * By default, values are masked. Pass `reveal: true` to show plaintext.
  */
 export async function envList(options: GlobalOptions & { reveal?: boolean }): Promise<void> {
   const projectConfig = await detectProjectConfig();
   const localConfig = projectConfig ?? (await requireInit()).localConfig;
-  const envYamlPath = path.join(localConfig.repo.localPath, 'env', 'env.yaml');
 
-  if (!await pathExists(envYamlPath)) {
-    log.info('No env variables defined (env/env.yaml not found)');
+  const resolution = await resolveEntriesFor(envEntryReader, localConfig);
+  if (resolution.kind === 'failed') {
+    log.error(describeEntryFailure(resolution.failure));
+    process.exitCode = 1;
     return;
   }
-
-  const envConfig = await envHandler.parseEnvYaml(envYamlPath);
-  if (envConfig.variables.length === 0) {
+  const variables = resolution.entries;
+  if (variables.length === 0) {
     log.info('No env variables defined');
     return;
   }
 
   if (options.reveal) {
-    process.stderr.write('[warn] 敏感信息将明文输出，请确认环境无录屏\n');
+    process.stderr.write('[warn] Env values will be shown in plaintext\n');
   }
 
   console.log('');
-  console.log(`Team env variables (${envConfig.variables.length}):`);
+  console.log(`Team env variables (${variables.length}):`);
   console.log('');
-  for (const v of envConfig.variables) {
-    const displayValue = options.reveal ? v.value : maskEnvValue(v.value);
-    const roles = v.roles ? `  (roles: ${v.roles.length > 0 ? v.roles.join(', ') : 'nobody'})` : '';
-    const projects = v.projects ? `  (projects: ${v.projects.length > 0 ? v.projects.join(', ') : 'nobody'})` : '';
-    console.log(`  ${v.key}=${displayValue}${roles}${projects}`);
-    if (v.description && options.verbose) {
-      log.dim(`    ${v.description}`);
+  for (const v of variables) {
+    const displayValue = options.reveal ? v.entry.value : maskEnvValue(v.entry.value);
+    console.log(`  ${v.name}=${displayValue}  (${describeOrigin(v)})`);
+    if (v.entry.description && options.verbose) {
+      log.dim(`    ${v.entry.description}`);
     }
   }
   console.log('');
@@ -57,7 +56,7 @@ export async function envList(options: GlobalOptions & { reveal?: boolean }): Pr
 export async function envAdd(
   key: string,
   value: string,
-  options: GlobalOptions & { description?: string },
+  options: GlobalOptions & { description?: string; role?: string; project?: string },
 ): Promise<void> {
   // env.sh is generated as `export <key>=...` and sourced by every member, so a
   // key that is not a shell identifier either breaks that line or runs as code.
@@ -74,7 +73,6 @@ export async function envAdd(
   const projectConfig = await detectProjectConfig();
   const localConfig = projectConfig ?? (await requireInit()).localConfig;
   const repoPath = localConfig.repo.localPath;
-  const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
 
   // Pull latest
   if (!isSelfMode(localConfig)) {
@@ -87,7 +85,11 @@ export async function envAdd(
     }
   }
 
-  // Parse existing env.yaml (or create new)
+  const target = await envFileFromFlags(repoPath, options);
+  if (!target) return;
+  const { envYamlPath, where } = target;
+
+  // Parse the target env.yaml (or create new)
   const envConfig = await envHandler.parseEnvYaml(envYamlPath);
 
   // Check if key already exists
@@ -108,16 +110,15 @@ export async function envAdd(
   }
 
   if (options.dryRun) {
-    log.info(`[dry-run] Would ${isUpdate ? 'update' : 'add'} env variable: ${key}=${value}`);
+    log.info(`[dry-run] Would ${isUpdate ? 'update' : 'add'} env variable${where}: ${key}=${value}`);
     return;
   }
 
   // Write updated env.yaml
-  await ensureDir(path.join(repoPath, 'env'));
   await envHandler.writeEnvYaml(envYamlPath, envConfig);
 
   const action = isUpdate ? 'Updated' : 'Added';
-  log.success(`${action} env variable: ${key}=${value}`);
+  log.success(`${action} env variable${where}: ${key}=${value}`);
   log.info('Run `teamai push` to sync to team repo.');
 }
 
@@ -125,11 +126,10 @@ export async function envAdd(
  * Remove an env variable locally.
  * Changes are deferred — run `teamai push` to sync to team repo.
  */
-export async function envRemove(key: string, options: GlobalOptions): Promise<void> {
+export async function envRemove(key: string, options: GlobalOptions & { role?: string; project?: string }): Promise<void> {
   const projectConfig = await detectProjectConfig();
   const localConfig = projectConfig ?? (await requireInit()).localConfig;
   const repoPath = localConfig.repo.localPath;
-  const envYamlPath = path.join(repoPath, 'env', 'env.yaml');
 
   // Pull latest
   if (!isSelfMode(localConfig)) {
@@ -142,8 +142,12 @@ export async function envRemove(key: string, options: GlobalOptions): Promise<vo
     }
   }
 
+  const target = await envFileFromFlags(repoPath, options);
+  if (!target) return;
+  const { envYamlPath, relativePath, where } = target;
+
   if (!await pathExists(envYamlPath)) {
-    log.error('No env variables defined (env/env.yaml not found)');
+    log.error(`No env variables defined (${relativePath} not found)`);
     return;
   }
 
@@ -151,18 +155,41 @@ export async function envRemove(key: string, options: GlobalOptions): Promise<vo
   const idx = envConfig.variables.findIndex(v => v.key === key);
 
   if (idx === -1) {
-    log.error(`Env variable "${key}" not found`);
+    log.error(`Env variable "${key}" not found${where}`);
     return;
   }
 
   if (options.dryRun) {
-    log.info(`[dry-run] Would remove env variable: ${key}`);
+    log.info(`[dry-run] Would remove env variable${where}: ${key}`);
     return;
   }
 
   envConfig.variables.splice(idx, 1);
   await envHandler.writeEnvYaml(envYamlPath, envConfig);
 
-  log.success(`Removed env variable: ${key}`);
+  log.success(`Removed env variable${where}: ${key}`);
   log.info('Run `teamai push` to sync to team repo.');
+}
+
+/**
+ * The env file `--role <ns>` / `--project <id>` name, or env/env.yaml without
+ * either. Reports the reason and returns null when the flags name none.
+ */
+async function envFileFromFlags(
+  repoPath: string,
+  flags: { role?: string; project?: string },
+): Promise<{ envYamlPath: string; relativePath: string; where: string } | null> {
+  const target = await entryNamespaceFromFlags(repoPath, 'env', flags);
+  if (!target.ok) {
+    log.error(target.message);
+    process.exitCode = 1;
+    return null;
+  }
+  const relativePath = entryFilePath('env', target.namespace);
+  return {
+    envYamlPath: path.join(repoPath, ...relativePath.split('/')),
+    relativePath,
+    // Messages name the file only for a namespace; the root is the default.
+    where: target.namespace === null ? '' : ` in ${relativePath}`,
+  };
 }

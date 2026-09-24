@@ -4,12 +4,36 @@ import os from 'node:os';
 import fse from 'fs-extra';
 
 vi.mock('../utils/logger.js', () => ({
-  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
-import { parseTeamHooks, HooksHandler } from '../resources/hooks.js';
+import { resolveTeamHookEntries, teamHookToDef, HooksHandler } from '../resources/hooks.js';
+import type { LocalConfig } from '../types.js';
 
 let repo: string;
+
+function member(): LocalConfig {
+  return { repo: { localPath: repo, remote: 'owner/repo' }, username: 'tester', scope: 'user', additionalRoles: [] };
+}
+
+/** The team hooks a member without roles or projects receives, or null when they do not resolve. */
+async function parseTeamHooks(repoPath: string) {
+  expect(repoPath).toBe(repo);
+  const { resolution } = await resolveTeamHookEntries(member());
+  return resolution.kind === 'resolved' ? resolution.entries.map((entry) => teamHookToDef(entry.entry)) : null;
+}
+
+async function teamHookDefs() {
+  const defs = await parseTeamHooks(repo);
+  if (!defs) throw new Error('hooks did not resolve');
+  return defs;
+}
+
+async function teamHookEntries() {
+  const { resolution } = await resolveTeamHookEntries(member());
+  if (resolution.kind !== 'resolved') throw new Error('hooks did not resolve');
+  return resolution.entries.map((entry) => entry.entry);
+}
 
 beforeEach(async () => {
   repo = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-hooks-handler-'));
@@ -38,7 +62,7 @@ hooks:
     command: 'bash -lc "scan.sh" || true'
     timeout: 15
 `);
-    const defs = await parseTeamHooks(repo);
+    const defs = await teamHookDefs();
     expect(defs).toHaveLength(1);
     expect(defs[0]).toMatchObject({
       source: 'team',
@@ -59,12 +83,12 @@ hooks:
     command: npm run lint
     tools: [claude, cursor]
 `);
-    const defs = await parseTeamHooks(repo);
-    expect(defs[0].tools).toEqual(['claude', 'cursor']);
-    expect(defs[0].matcher).toBeUndefined();
+    const defs = await teamHookDefs();
+    expect(defs[0]?.tools).toEqual(['claude', 'cursor']);
+    expect(defs[0]?.matcher).toBeUndefined();
   });
 
-  it('carries an optional roles list through, and leaves it undefined when omitted', async () => {
+  it('keeps a (deprecated) roles list on the entry, and leaves it undefined when omitted', async () => {
     await writeHooksYaml(`
 hooks:
   - id: guard-tf
@@ -78,12 +102,12 @@ hooks:
     event: Stop
     command: echo hi
 `);
-    const defs = await parseTeamHooks(repo);
-    expect(defs[0].roles).toEqual(['devops']);
-    expect(defs[1].roles).toBeUndefined();
+    const hooks = await teamHookEntries();
+    expect(hooks[0]?.roles).toEqual(['devops']);
+    expect(hooks[1]?.roles).toBeUndefined();
   });
 
-  it('carries an optional projects list through, and leaves it undefined when omitted', async () => {
+  it('delivers no hook that carries the removed projects key', async () => {
     await writeHooksYaml(`
 hooks:
   - id: checkout-lint
@@ -96,12 +120,11 @@ hooks:
     event: Stop
     command: echo hi
 `);
-    const defs = await parseTeamHooks(repo);
-    expect(defs[0].projects).toEqual(['checkout']);
-    expect(defs[1].projects).toBeUndefined();
+    const hooks = await teamHookEntries();
+    expect(hooks.map((hook) => hook.id)).toEqual(['everyone']);
   });
 
-  it('carries both axes on one hook', async () => {
+  it('delivers no hook that carries projects, whatever its roles say', async () => {
     await writeHooksYaml(`
 hooks:
   - id: both
@@ -111,11 +134,10 @@ hooks:
     roles: [frontend]
     projects: [checkout]
 `);
-    const defs = await parseTeamHooks(repo);
-    expect(defs[0]).toMatchObject({ roles: ['frontend'], projects: ['checkout'] });
+    expect(await teamHookEntries()).toEqual([]);
   });
 
-  it('rejects an invalid id and skips the whole file (never writes a broken set)', async () => {
+  it('rejects an invalid id and fails the whole file (never writes a broken set)', async () => {
     await writeHooksYaml(`
 hooks:
   - id: 'Bad ID!'
@@ -123,12 +145,17 @@ hooks:
     event: Stop
     command: echo hi
 `);
-    expect(await parseTeamHooks(repo)).toEqual([]);
+    expect(await parseTeamHooks(repo)).toBeNull();
   });
 
   it('skips the whole file on malformed yaml', async () => {
     await writeHooksYaml(':::not yaml:::\n  - broken');
     expect(await parseTeamHooks(repo)).toEqual([]);
+  });
+
+  it('fails the whole file when it is not YAML at all', async () => {
+    await writeHooksYaml('hooks: [unclosed\n');
+    expect(await parseTeamHooks(repo)).toBeNull();
   });
 });
 
@@ -152,7 +179,7 @@ describe('HooksHandler', () => {
     expect(items).toEqual([]);
   });
 
-  it('countHooks counts declared team hooks', async () => {
+  it('countHooks counts the team hooks this member receives', async () => {
     await writeHooksYaml(`
 hooks:
   - id: a
@@ -164,6 +191,6 @@ hooks:
     event: Stop
     command: echo b
 `);
-    expect(await handler.countHooks(repo)).toBe(2);
+    expect(await handler.countHooks(member())).toBe(2);
   });
 });

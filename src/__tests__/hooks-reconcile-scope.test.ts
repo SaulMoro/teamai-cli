@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fse from 'fs-extra';
 
 vi.mock('../utils/logger.js', () => ({
-  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
 import { reconcileTeamHooksForConfig } from '../hooks.js';
@@ -225,6 +225,44 @@ hooks:
     const cursor = await cursorSettings();
     expect(cursor.hooks.stop.some((h) => h.command.includes('npm run lint:css'))).toBe(false);
     expect(cursor.hooks.stop.some((h) => h.command.includes('guard-tf.sh'))).toBe(true);
+  });
+
+  // #707: an invalid file used to reconcile to an empty team set, removing
+  // every installed team hook. It now keeps them for the run.
+  it('keeps the installed team hooks when hooks.yaml stops parsing', async () => {
+    await writeYaml(`
+hooks:
+  - id: lint
+    description: lint
+    event: Stop
+    command: npm run lint
+`);
+    await reconcileTeamHooksForConfig(teamConfig, localConfig());
+    const before = await claudeSettings();
+
+    await writeYaml('hooks: [unclosed\n');
+    const applied = await reconcileTeamHooksForConfig(teamConfig, localConfig());
+
+    expect(applied).toEqual([]);
+    expect(await claudeSettings()).toEqual(before);
+    expect((await manifest()).claude.map((r) => r.id)).toEqual(['lint']);
+  });
+
+  it('delivers an active namespace hook in place of the root hook with the same id, and back', async () => {
+    await fse.outputFile(path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: checkout\n    resources: { hooks: [checkout] }\n  - id: billing\n    resources: {}\n');
+    await writeYaml('hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n');
+    await fse.outputFile(path.join(repo, 'hooks', 'checkout', 'hooks.yaml'),
+      'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint:checkout\n');
+    const stopCommands = async (): Promise<string[]> => (await claudeSettings()).hooks.Stop.map((h) => h.hooks[0]?.command ?? '');
+
+    await reconcileTeamHooksForConfig(teamConfig, { ...localConfig(), projects: ['checkout'] });
+    expect((await stopCommands()).some((c) => c.includes('npm run lint:checkout'))).toBe(true);
+    expect((await stopCommands()).some((c) => c.includes('npm run lint') && !c.includes('lint:checkout'))).toBe(false);
+
+    await reconcileTeamHooksForConfig(teamConfig, { ...localConfig(), projects: ['billing'] });
+    expect((await stopCommands()).some((c) => c.includes('npm run lint:checkout'))).toBe(false);
+    expect((await stopCommands()).some((c) => c.includes('npm run lint'))).toBe(true);
   });
 
   it('removeAll clears built-in + team hooks', async () => {

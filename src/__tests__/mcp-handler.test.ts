@@ -4,10 +4,11 @@ import os from 'node:os';
 import fse from 'fs-extra';
 
 vi.mock('../utils/logger.js', () => ({
-  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
-import { parseTeamMcpServers } from '../resources/mcp.js';
+import { resolveTeamMcpServers } from '../resources/mcp.js';
+import type { LocalConfig } from '../types.js';
 
 let repo: string;
 
@@ -23,8 +24,18 @@ async function writeMcpYaml(content: string): Promise<void> {
   await fse.writeFile(path.join(repo, 'mcp', 'mcp.yaml'), content);
 }
 
-describe('parseTeamMcpServers', () => {
-  it('carries an optional roles list through, and leaves it undefined when omitted', async () => {
+function member(over: Partial<Pick<LocalConfig, 'primaryRole' | 'projects'>> = {}): LocalConfig {
+  return { repo: { localPath: repo, remote: 'owner/repo' }, username: 'tester', scope: 'user', additionalRoles: [], ...over };
+}
+
+async function serversFor(localConfig: LocalConfig) {
+  const resolution = await resolveTeamMcpServers(localConfig);
+  if (resolution.kind !== 'resolved') throw new Error('servers did not resolve');
+  return resolution.entries.map((entry) => entry.entry);
+}
+
+describe('resolveTeamMcpServers — per-entry keys (#707)', () => {
+  it('keeps a (deprecated) roles list on the entry, and leaves it undefined when omitted', async () => {
     await writeMcpYaml(`
 servers:
   - name: playwright
@@ -36,52 +47,40 @@ servers:
     transport: http
     url: https://example.com/api/mcp
 `);
-    const defs = await parseTeamMcpServers(repo);
-    expect(defs.map((d) => d.roles)).toEqual([['frontend'], undefined]);
+    const servers = await serversFor(member());
+    expect(servers.map((s) => s.roles)).toEqual([['frontend'], undefined]);
   });
 
-  it('accepts an empty roles list (matches nobody, like tools: [])', async () => {
+  it('still filters by the deprecated roles list for a member with a role', async () => {
     await writeMcpYaml(`
 servers:
   - name: nobody
     transport: http
     url: https://example.com/api/mcp
     roles: []
+  - name: shared
+    transport: http
+    url: https://example.com/shared
 `);
-    const defs = await parseTeamMcpServers(repo);
-    expect(defs[0].roles).toEqual([]);
+    expect((await serversFor(member({ primaryRole: 'frontend' }))).map((s) => s.name)).toEqual(['shared']);
   });
 
-  it('carries an optional projects list through, and leaves it undefined when omitted', async () => {
+  it('delivers no server that carries the removed projects key', async () => {
     await writeMcpYaml(`
 servers:
   - name: checkout-db
     transport: http
     url: https://example.com/checkout
     projects: [checkout]
-  - name: shared
-    transport: http
-    url: https://example.com/api/mcp
-`);
-    const defs = await parseTeamMcpServers(repo);
-    expect(defs.map((d) => d.projects)).toEqual([['checkout'], undefined]);
-  });
-
-  it('accepts an empty projects list (matches nobody) and both axes on one server', async () => {
-    await writeMcpYaml(`
-servers:
-  - name: nobody
-    transport: http
-    url: https://example.com/api/mcp
-    projects: []
   - name: both
     transport: http
     url: https://example.com/both
     roles: [frontend]
     projects: [checkout]
+  - name: shared
+    transport: http
+    url: https://example.com/api/mcp
 `);
-    const defs = await parseTeamMcpServers(repo);
-    expect(defs[0].projects).toEqual([]);
-    expect(defs[1]).toMatchObject({ roles: ['frontend'], projects: ['checkout'] });
+    expect((await serversFor(member({ projects: ['checkout'] }))).map((s) => s.name)).toEqual(['shared']);
   });
 });

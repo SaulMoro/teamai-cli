@@ -292,7 +292,10 @@ teamai projects remove checkout
 
 `--namespaces` sets the same namespaces on every project resource type
 (`knowledge`, `skills`, `learnings`, `agents`); `update` adds or removes them on
-each type's own list, so a hand-edited per-type layout survives. After
+each type's own list, so a hand-edited per-type layout survives. Neither touches
+`env`, `hooks` or `mcp`: declare those by hand (see
+[Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)),
+because a member on an older CLI cannot read them. After
 `projects remove`, a directory that still has the project active warns on its
 next pull, falls back to role-only filtering, and has the project's deployed
 skills, rules and agents cleaned up — as long as the project's content is still
@@ -862,32 +865,96 @@ teamai push
 
 > Admins can set enforced rules in `teamai.yaml` (`sharing.rules.enforced`), which members cannot delete.
 
+### Env, hooks and MCP servers by namespace
+
+Env variables, team hooks and MCP servers are each a list file in the team
+repo's root, shared with everyone, plus one file per namespace:
+
+```text
+env/env.yaml              hooks/hooks.yaml              mcp/mcp.yaml              root, shared
+env/<ns>/env.yaml         hooks/<ns>/hooks.yaml         mcp/<ns>/mcp.yaml         only where <ns> is active
+```
+
+A namespace is declared the same way as for skills and agents, under
+`resources:` of a role in `manifest/roles.yaml` or a project in
+`manifest/projects.yaml`, each type with its own key. A member's active
+namespaces are the union of their roles' and their directory's projects':
+
+```yaml
+# manifest/projects.yaml
+projects:
+  - id: checkout
+    resources:
+      env:   [checkout]
+      hooks: [checkout]
+      mcp:   [checkout]
+```
+
+- **Override.** An active namespace entry replaces the root entry of the same
+  name, whole: a variable by `key`, a hook by `id`, a server by `name` (its
+  `command`, `args`, `env` and `tools:` together; an override without `tools:`
+  reaches every tool). There is no field merge.
+- **Conflicts stop the type, not the pull.** The same name twice in one file,
+  the same name in two active namespaces, or an active file that does not parse
+  means that type is not applied this run: what is installed stays as it is, and
+  the warning names the file(s) and the fix. Hooks and MCP no longer remove every
+  managed entry when their file is invalid.
+- **Deactivating** a namespace (`teamai projects set`, `teamai roles set`)
+  restores the overridden root entries and removes the namespace-only ones on
+  the next pull, `Already synced` included. `env.sh` is rewritten even when
+  `env/env.yaml` is missing or empty.
+- **MCP `${VAR}`** resolves from the same resolved env set.
+- **Legacy mode** (a member with no role and a team without `projects.yaml`)
+  reads the root files only, as before; `teamai doctor` lists a name the root file
+  repeats.
+- **Where a value comes from.** `teamai env list`, `teamai mcp list`,
+  `teamai hooks list` and `teamai list <env|hooks|mcp> --source repo` show each
+  entry's namespace and whether it overrides the root; `teamai status` counts per
+  namespace; `teamai doctor` lists each override as a note.
+- **Upgrade every member first.** teamai 0.25.0 and the 0.26.0 betas reject a
+  `resources:` key they do not know, so declaring `env`, `hooks` or `mcp` breaks
+  their pull. From this version on, an unknown `resources:` key only warns.
+
+The per-entry keys these files replace:
+
+| Key | On | Now |
+|---|---|---|
+| `projects:` | env, hooks, MCP | removed: the entry reaches nobody, and each pull warns with the file to move it to |
+| `roles:` | env | removed, the same way |
+| `roles:` | hooks, MCP | deprecated: still filters for one minor release; pull warns and `teamai doctor` has a check, both naming every target file |
+
+There is no automatic migration: move each entry into the namespace file the
+warning names, and drop the key.
+
 ### Env (environment variables)
 
 ```bash
 teamai env add API_ENDPOINT https://api.example.com --description "Team API endpoint"
+teamai env add API_ENDPOINT https://checkout.internal --project checkout   # the project's env namespace file
+teamai env remove API_ENDPOINT --role checkout                          # env/checkout/env.yaml
 teamai env list
 teamai push
 ```
 
-Variables live in the team repo's `env/env.yaml`. `teamai env add` writes the first three fields; `roles` and `projects` are hand-edited, as they are for hooks and MCP servers:
+Variables live in the team repo's `env/env.yaml`, and per namespace in
+`env/<ns>/env.yaml` (see [Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)).
+`teamai env add` and `teamai env remove` edit the root file, or with
+`--role <ns>` / `--project <id>` that namespace's file; `--project` uses the one
+env namespace the project declares. `teamai push` picks up a change to any of
+them.
 
 ```yaml
 variables:
   - key: API_ENDPOINT
     value: https://api.example.com
     description: Team API endpoint        # optional
-  - key: CHECKOUT_DB_URL
-    value: https://checkout-db.internal
-    projects: [checkout]                  # optional; default is every directory
-  - key: DEPLOY_REGISTRY
-    value: registry.internal
-    roles: [devops]                       # optional; default is every member
 ```
 
-`roles` and `projects` follow the same rule as on MCP servers and hooks: omitted reaches everyone, `[]` reaches nobody among members who use that axis, an axis the member has not configured filters nothing, and the two compose as **AND**. A variable that no longer matches is removed from `env.sh` on the next pull, even one that reports `Already synced` because the team repo has not moved, so changing role, running `teamai projects set` or upgrading the CLI takes it out of the member's shell without `--force`. Until that pull runs, `teamai doctor` reports a withheld variable that `env.sh` still exports, so the previous project's secrets are not left live in silence. `teamai env add` on an existing key keeps whatever `roles:`/`projects:` it already carries.
-
-`pull` reports what reached this member, naming the declared total when the two differ (`Synced 1 of 3 env variable(s)`), so a variable that was scoped away is distinguishable from one that was lost.
+A variable that no longer reaches this directory is removed from `env.sh` on
+the next pull, even one that reports `Already synced` because the team repo has
+not moved. Until that pull runs, `teamai doctor` reports a variable that
+`env.sh` still exports, so the previous project's secrets are not left live in
+silence.
 
 Because the shell profile holds a single teamai block pointing at one `env.sh`, a machine that pulls in several project-scoped directories ends up with the last-pulled directory's variables in new shells. Each directory's own `env.sh` stays correct; it is the shell profile that can only point at one of them.
 
@@ -925,23 +992,20 @@ servers:
       FORMATTER_MODE: strict
     requires: [npx]                      # skipped with a hint when npx is absent from PATH
     tools: [claude, cursor]              # optional; default is every capable tool
-    roles: [devops]                      # optional; default is every member
-    projects: [checkout]                 # optional; default is every directory
 ```
 
 `requires` is resolved from `PATH`. On Windows a name also matches a `PATHEXT` suffix (`uvx` matches `uvx.exe` / `uvx.cmd`).
 
-`roles` lists role ids from `manifest/roles.yaml`. A server ships to a member when one of their roles (`primaryRole` or `additionalRoles`) is listed; `roles: []` ships to nobody, the same way `tools: []` does. A member with no role configured receives every server, matching the unfiltered fallback skills and rules use. When a member changes role, servers that no longer match are removed on the next pull. Hand-added servers are never touched. An id that is not in `roles.yaml` produces one warning per pull. A teamai release older than this field ignores it and installs the server for everyone.
+A project or role scopes servers with `mcp/<ns>/mcp.yaml` (see
+[Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)):
+a server there reaches only members with that namespace active, and replaces the
+root server of the same name. Scoping by namespace is what keeps the cost down: a
+team with five projects and three servers each would otherwise give every member
+fifteen server processes and fifteen tool lists in the context of every session.
 
-`projects` lists project ids from `manifest/projects.yaml` and follows the same rule on the other axis: a server ships to a directory when one of the projects it is bound to (`teamai projects set`) is listed; `projects: []` ships to nobody; a directory bound to no project receives every server. `teamai projects set` to another project removes the ones that no longer match on the next pull. An id that is not in `projects.yaml` produces one warning per pull, and so does a `projects:` key in a team that has no `projects.yaml` at all, where no id can be checked.
-
-One caveat on the empty list, which applies to `roles: []` just as it always has. "Ships to nobody" holds among members who use that axis. A member who has not configured it at all is unfiltered and still receives the entry, because an unconfigured axis filters nothing. A legacy role that could not be resolved because `manifest/roles.yaml` does not load is not "unconfigured": that member receives no role-scoped entry until the manifest is fixed. Use `tools: []` or remove the entry if you need it to reach no one at all.
-
-A missing `projects.yaml` does not switch the key off. A directory's active projects come from its own `config.yaml`, so a directory bound to `billing` still filters out a `projects: [checkout]` server whether or not the manifest is there. What the manifest gives you is the ability to check the ids.
-
-The two axes are independent and compose as **AND**: `roles: [frontend]` with `projects: [checkout]` reaches frontend members of checkout, not everyone on either. That is the same way `tools:` and `roles:` already compose, and deliberately not the union that role and project *resource namespaces* take — which answers the different question of which directories to sync.
-
-This is the cost these keys exist to control: a team with five projects and three servers each gives every member of a role fifteen server processes and fifteen tool lists in the context of every session.
+`teamai remove mcp <name>` searches every MCP file. A name defined in one file is
+removed from it; a name defined in several needs `--role <ns>` or
+`--project <id>` to say which namespace file.
 
 Where each tool's servers land:
 
@@ -972,7 +1036,7 @@ Claude Code also reads the root `.mcp.json`, so this file is shared by both tool
 
 Copilot uses its native `mcpServers` schema: `stdio` becomes `type: "local"`, remote transports keep `http` or `sse`, and every managed entry gets the required `tools: ["*"]` allowlist. TeamAI honors `COPILOT_HOME`; project configuration uses Copilot CLI's documented `.github/mcp.json` repository location. See [Adding MCP servers for GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers). Codex supports `stdio` and `http`; `sse` is skipped. Qoder supports the Claude-compatible `mcpServers` format in its scope-specific `.qoder/settings.json`. Kiro supports the same `mcpServers` format in its dedicated, mcpServers-only `.kiro/settings/mcp.json` (see [Kiro's MCP configuration docs](https://kiro.dev/docs/mcp/configuration/)). OpenCode supports `stdio` (written as its `type:"local"` shape) and `http` (`type:"remote"`); `sse` is skipped, and its servers live under the `mcp` key of the shared `opencode.json`. Ownership is tracked in `~/.teamai/managed-mcp.json` — hand-added servers are left alone; name collisions skip unless `--force`.
 
-**Secrets.** Write `${VAR}`, never a literal, in `mcp.yaml`. Values resolve from the environment, then from `env/env.yaml` → `~/.teamai/env`. Unresolved variables skip the server with a hint.
+**Secrets.** Write `${VAR}`, never a literal, in `mcp.yaml`. Values resolve from the environment, then from the team env variables this directory receives (`env/env.yaml` and the active `env/<ns>/env.yaml`). Unresolved variables skip the server with a hint.
 
 teamai **resolves every `${VAR}` to its value and writes it verbatim** into each tool's config (new files are created `0600`). It does not rely on any tool's own env-var expansion: that expansion is fragile — most decisively, IDEs launched from the GUI (Dock/Launchpad) never inherit your shell's exported variables, so a `${VAR}` placeholder expands to empty and the server 401s. Resolving to plaintext makes the token present no matter how the tool is started.
 
@@ -981,7 +1045,7 @@ teamai **resolves every `${VAR}` to its value and writes it verbatim** into each
 Claude Code may show project `.mcp.json` servers as pending approval until you accept them once in an interactive session.
 
 ```bash
-teamai mcp list              # servers, secret status, roles restriction, and where they are installed
+teamai mcp list              # servers, the file each comes from, secret status, and where they are installed
 teamai mcp inject            # apply now; --dry-run to preview, --force to override collisions
 teamai mcp remove            # remove every teamai-managed server
 ```
@@ -1551,7 +1615,7 @@ On Windows, the built-in hook dispatch commands that shell out through bash (e.g
 
 ### Team Hooks Declaration
 
-A team can declare custom hooks in the repo's `hooks/hooks.yaml`; `teamai pull` automatically distributes them to supported hook adapters. Pi is currently limited to TeamAI's built-in lifecycle bridge: custom hooks and built-in overrides from this file are not applied to Pi.
+A team can declare custom hooks in the repo's `hooks/hooks.yaml`, and per namespace in `hooks/<ns>/hooks.yaml` (see [Env, hooks and MCP servers by namespace](#env-hooks-and-mcp-servers-by-namespace)); `teamai pull` automatically distributes them to supported hook adapters. `builtin:` is read from `hooks/hooks.yaml` only. Pi is currently limited to TeamAI's built-in lifecycle bridge: custom hooks and built-in overrides from this file are not applied to Pi.
 
 ```yaml
 hooks:
@@ -1562,8 +1626,6 @@ hooks:
     command: 'bash -lc "~/.teamai/team-scripts/scan-secret.sh" || true'
     timeout: 15
     tools: [claude, cursor]
-    roles: [devops]                      # optional; default is every member
-    projects: [checkout]                 # optional; default is every directory
 
 builtin:
   disabled: [Hook dispatch post-tool-use TodoWrite]
@@ -1577,8 +1639,7 @@ builtin:
 | `event` | Claude PascalCase event name (shared across tools) |
 | `matcher` | Optional tool matcher |
 | `tools` | Optional list of target tools (default = all tools that support hooks) |
-| `roles` | Optional list of role ids from `manifest/roles.yaml` (default = every member; `[]` = nobody). Applied before the security gates below; a role change removes the previous role's hooks on the next pull. Ignored by older teamai releases. |
-| `projects` | Optional list of project ids from `manifest/projects.yaml` (default = every directory; `[]` = nobody). Matches the projects this directory is bound to via `teamai projects set`; a rebind removes the previous project's hooks on the next pull. ANDs with `roles`. Ignored by older teamai releases. |
+| `roles` | Deprecated: use `hooks/<ns>/hooks.yaml`. Still filters by role id for one minor release, with a warning naming the target file |
 | `builtin.disabled` | List of disabled built-in hooks |
 | `builtin.overrides` | Only the `timeout` of a built-in hook can be overridden |
 
@@ -1732,7 +1793,7 @@ teamai remove rules <name> --force   # Skip the prompt, for scripts and CI
 
 `teamai doctor` exits with code 0 only when every check passes, and code 1 when any check fails. Before initialization, it reports the missing configuration without assuming a Git provider. The same checks run at the end of a manual `teamai pull`, minus the provider ones and minus any check that pull already reported in its own words on that run. A check marked informational — currently only `No stale env blocks left behind` — still counts toward `doctor`'s exit code, but a pull does not fold its failure into `Pull finished, but N check(s) failed`: a leftover file from an earlier install is cleanup, not a sign this pull broke anything, so it is still named but on its own, gentler line.
 
-Besides the provider, clone, config and hook checks, `doctor` verifies what reached your machine. `<tool> is installed` fails when `enabledAgents` lists a tool that nothing would be delivered to, which is the case where a pull reports success and that tool receives nothing. It asks the same resolver the sync uses, so a tool that keeps its skills somewhere other than its tool root, as OpenClaw does with its workspace directory, is judged where the sync would actually write. It reports an installed tool as passing too, so `--json` carries one entry per enabled tool either way. The checks at the end of a pull cover the scope that pull resolved from the current directory; run `teamai doctor` in another scope to check that one. `Skills delivered to <tool>` compares the skills your role namespaces, tag subscriptions and exclusions resolve to against what is on disk for each installed tool: it reports a skill that was never delivered separately from one that arrived unreadable — `SKILL.md` missing, its frontmatter unparseable, or its `name` not matching the directory, which keeps the agent from ever discovering it. `Team docs delivered` compares the docs bundle against `sharing.docs.localDir`, which has one destination rather than one per tool; each expected document has to be a file that can be read, so a directory or a dangling link sitting on the name counts as missing. `doctor` also prints notes, which are information rather than failed checks. Each note names a namespace skill, agent, rule or shared-instructions file that replaces a root one here (`rules: "style" from rules/checkout/style.md replaces rules/style.md`). Without roles or projects, the notes name each file the team repo defines more than once instead.
+Besides the provider, clone, config and hook checks, `doctor` verifies what reached your machine. `<tool> is installed` fails when `enabledAgents` lists a tool that nothing would be delivered to, which is the case where a pull reports success and that tool receives nothing. It asks the same resolver the sync uses, so a tool that keeps its skills somewhere other than its tool root, as OpenClaw does with its workspace directory, is judged where the sync would actually write. It reports an installed tool as passing too, so `--json` carries one entry per enabled tool either way. The checks at the end of a pull cover the scope that pull resolved from the current directory; run `teamai doctor` in another scope to check that one. `Skills delivered to <tool>` compares the skills your role namespaces, tag subscriptions and exclusions resolve to against what is on disk for each installed tool: it reports a skill that was never delivered separately from one that arrived unreadable — `SKILL.md` missing, its frontmatter unparseable, or its `name` not matching the directory, which keeps the agent from ever discovering it. `Team docs delivered` compares the docs bundle against `sharing.docs.localDir`, which has one destination rather than one per tool; each expected document has to be a file that can be read, so a directory or a dangling link sitting on the name counts as missing. `doctor` also prints notes, which are information rather than failed checks. Each note names a namespace skill, agent, rule, shared-instructions file, env variable, hook or MCP server that replaces a root one here (`rules: "style" from rules/checkout/style.md replaces rules/style.md`). Without roles or projects, the notes name each file the team repo defines more than once instead, and each env variable, hook or MCP server name repeated in its root file.
 
 `Rules delivered to <tool>` and `Agents delivered to <tool>` do the same for the other two per-tool resources, and both ask the handler where an item lands rather than deriving a path: a rule's filename and content change per tool (`.md` verbatim, `.mdc` with derived `globs`/`alwaysApply`, `.instructions.md` with `applyTo`), and an agent's destination comes from its render, with `targets:` deciding which tools are owed a copy at all. A delivered rule is compared with the bytes the handler renders for that tool, not merely read for the keys its tool needs: a `.mdc` whose `globs` no longer match the team rule's `paths:` applies to the wrong files while carrying a perfectly legal `alwaysApply`, and that reads here as `delivered from an older copy` — the same label as a body that drifted, because both landed successfully and are still wrong. An agent is compared with the bytes its render produces, so a copy left behind by an older spec — a plain pull skips a scope whose team repo has not changed, so it can sit there indefinitely — is reported as `delivered from an older spec` rather than passing as present. `Every team agent reaches a tool` names an agent that renders for no installed tool — usually a spec that does not parse, or a `targets:` list naming only tools you do not have. These two are `doctor`-only: they read every rule per tool and parse every agent, which would spend the budget the checks at the end of a pull run under.
 

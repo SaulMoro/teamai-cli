@@ -11,8 +11,16 @@ import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces
 import { assertNoCaseAliasedNamespaces } from './manifest-schema.js';
 import { log } from './utils/logger.js';
 
-/** Resolve the same role/project activation policy for resource pull and push. */
-export async function resolveResourceNamespaces(localConfig: LocalConfig) {
+/**
+ * Resolve the same role/project activation policy for resource pull and push.
+ *
+ * `quiet` drops the fallback warnings, for a caller that resolves again in a
+ * run whose pull already printed them (hooks and MCP reconcile after it).
+ */
+export async function resolveResourceNamespaces(localConfig: LocalConfig, options: { quiet?: boolean } = {}) {
+  const warn = (message: string): void => {
+    if (!options.quiet) log.warn(message);
+  };
   const activeProjects = localConfig.projects ?? [];
   const primaryRole = localConfig.primaryRole;
   const hasRole = !!primaryRole;
@@ -39,7 +47,7 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
     // to gate. Let it fail the scope's pull, as an invalid projects manifest
     // already does.
     if (!(error instanceof RolesManifestNotFoundError)) throw error;
-    if (primaryRole) log.warn('Roles manifest not found. Skipping role-based filtering.');
+    if (primaryRole) warn('Roles manifest not found. Skipping role-based filtering.');
   }
 
   // When there is nothing to filter by AND the team does not use project
@@ -76,8 +84,8 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
         });
         allRoleSkillNamespaces = new Set(rolesManifest.roles.flatMap((role) => role.resources.skills));
       } catch {
-        log.warn(`Role "${localConfig.primaryRole}" not found in manifest. Falling back to unfiltered sync.`);
-        log.warn('Run `teamai roles set <role>` to pick a valid role.');
+        warn(`Role "${localConfig.primaryRole}" not found in manifest. Falling back to unfiltered sync.`);
+        warn('Run `teamai roles set <role>` to pick a valid role.');
         // A misconfigured role, with nothing else to scope by, can't filter safely.
         if (!hasProjects && !teamHasProjects) return null;
       }
@@ -102,11 +110,11 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
           activeProjects,
         });
       } catch (e) {
-        log.warn(`${e instanceof Error ? e.message : String(e)} Falling back to role-only filtering.`);
+        warn(`${e instanceof Error ? e.message : String(e)} Falling back to role-only filtering.`);
       }
     }
   } else if (hasProjects) {
-    log.warn('Active projects configured but no projects manifest found. Skipping project-based filtering.');
+    warn('Active projects configured but no projects manifest found. Skipping project-based filtering.');
   }
 
   const activeNamespaces = mergeNamespaces(roleNamespaces, projectNamespaces);
