@@ -63,16 +63,17 @@ export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSe
 }));
 
 /**
- * The `resources:` types added after 0.25.0 (#707). A 0.25.0 or 0.26.0-beta CLI
- * rejects a `resources:` key it does not know, so a manifest that carries one
- * breaks pull for every member still on those versions. They are therefore
+ * The `resources:` types an admin declares by hand (#707): `roles add` and
+ * `projects add/update --namespaces` never write them. A 0.25.0 or 0.26.0-beta
+ * CLI rejects a `resources:` key it does not know, so a manifest that carries
+ * one breaks pull for every member still on those versions. They are therefore
  * optional in both manifest schemas rather than defaulted: a manifest this CLI
- * writes back (`roles add`, `projects update`) carries one only when an admin
- * declared it. A new type is one entry here plus one line in the shape below.
+ * writes back carries one only when an admin declared it. A new type is one
+ * entry here plus one line in the shape below.
  */
-export const LATER_RESOURCE_TYPES = ['env', 'hooks', 'mcp', 'models', 'docs'] as const;
+export const HAND_DECLARED_RESOURCE_TYPES = ['env', 'hooks', 'mcp', 'models', 'docs'] as const;
 
-export type LaterResourceType = typeof LATER_RESOURCE_TYPES[number];
+export type HandDeclaredResourceType = typeof HAND_DECLARED_RESOURCE_TYPES[number];
 
 const OptionalNamespaceList = z.array(NamespaceSegmentSchema).optional();
 
@@ -92,13 +93,13 @@ const DocsNamespaceList = z.array(NamespaceSegmentSchema.refine(
 )).optional();
 
 /** Spread into the roles and projects `resources:` schemas. */
-export const LaterResourceNamespacesShape = {
+export const HandDeclaredNamespacesShape = {
   env: OptionalNamespaceList,
   hooks: OptionalNamespaceList,
   mcp: OptionalNamespaceList,
   models: OptionalNamespaceList,
   docs: DocsNamespaceList,
-} satisfies Record<LaterResourceType, z.ZodOptional<z.ZodArray<z.ZodType<string>>>>;
+} satisfies Record<HandDeclaredResourceType, z.ZodOptional<z.ZodArray<z.ZodType<string>>>>;
 
 /**
  * Warn about `resources:` keys this CLI does not know, instead of failing the

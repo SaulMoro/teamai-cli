@@ -25,7 +25,7 @@ import { resolveTeamHookEntries } from './resources/hooks.js';
 import { envEntryReader } from './resources/env.js';
 import {
   describeEntryFailure, describeOrigin, resolveEntriesFor,
-  type EntryResolution, type ResolvedEntry,
+  type EntryResolution, type EntryType, type ResolvedEntry,
 } from './namespaced-entries.js';
 
 export interface ListOptions extends GlobalOptions {
@@ -99,8 +99,8 @@ export async function status(options: GlobalOptions): Promise<void> {
   // namespace files. A set that cannot be resolved counts as 0; `teamai doctor`
   // and the list commands say why.
   // A type with namespace entries says where they come from: `env: 3 (2 root, 1 checkout)`.
-  const origins: Record<string, string> = {};
-  const count = (type: string, resolution: EntryResolution<unknown>): void => {
+  const origins: Partial<Record<ResourceType, string>> = {};
+  const count = (type: EntryType & ResourceType, resolution: EntryResolution<unknown>): void => {
     counts[type] = resolution.kind === 'resolved' ? resolution.entries.length : 0;
     if (resolution.kind === 'failed') origins[type] = ' (cannot be resolved; run `teamai doctor`)';
     else if (resolution.entries.some((entry) => entry.namespace !== null)) origins[type] = ` (${describeOrigins(resolution.entries)})`;
@@ -312,7 +312,7 @@ async function printRepoSection(
   options: ListOptions,
   ctx: { repoPath: string; teamConfig: Awaited<ReturnType<typeof autoDetectInit>>['teamConfig']; localConfig: Awaited<ReturnType<typeof autoDetectInit>>['localConfig'] },
 ): Promise<void> {
-  const { repoPath, teamConfig, localConfig } = ctx;
+  const { teamConfig, localConfig } = ctx;
   console.log('');
   console.log(`=== REPO ${t.toUpperCase()} ===`);
 

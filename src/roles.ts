@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
 import {
   NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, warnUnknownResourceKeys,
-  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type LaterResourceType, type NamespaceEntry,
+  HAND_DECLARED_RESOURCE_TYPES, HandDeclaredNamespacesShape, type HandDeclaredResourceType, type NamespaceEntry,
 } from './manifest-schema.js';
 
 const ROLE_RESOURCE_TYPES = ['knowledge', 'skills', 'agents'] as const;
@@ -22,8 +22,8 @@ const RoleResourceNamespacesSchema = z.object({
   // It never becomes a directory here, so it stays a plain string: holding an old
   // manifest to the namespace rule would reject it over a field nothing reads.
   learnings: z.array(z.string()).optional(),
-  // env, hooks, mcp, models, docs: optional, see LATER_RESOURCE_TYPES.
-  ...LaterResourceNamespacesShape,
+  // env, hooks, mcp, models, docs: optional, see HAND_DECLARED_RESOURCE_TYPES.
+  ...HandDeclaredNamespacesShape,
 });
 
 const RoleSchema = z.object({
@@ -53,12 +53,10 @@ export type RolesManifest = z.infer<typeof RolesManifestSchema>;
 export type ResourceNamespaces = Record<RoleResourceType | 'learnings', string[]>
   // Optional so a resolution built before a type existed (or a test double of
   // one) still reads as "nothing active" for it: read with `?? []`.
-  & Partial<Record<LaterResourceType, string[]>>;
+  & Partial<Record<HandDeclaredResourceType, string[]>>;
 
 /** Every type a role or project can namespace, in the order resolution walks them. */
-export const NAMESPACED_RESOURCE_TYPES = [...ROLE_RESOURCE_TYPES, ...LATER_RESOURCE_TYPES] as const;
-
-
+export const NAMESPACED_RESOURCE_TYPES = [...ROLE_RESOURCE_TYPES, ...HAND_DECLARED_RESOURCE_TYPES] as const;
 
 function validateManifestShape(raw: unknown): RolesManifest {
   if (!raw || typeof raw !== 'object') {
@@ -71,19 +69,21 @@ function validateManifestShape(raw: unknown): RolesManifest {
     throw new Error('Invalid roles manifest: roles must be a non-empty array');
   }
 
-  for (const role of roles) {
+  const entries: unknown[] = roles;
+  for (const role of entries) {
     if (!role || typeof role !== 'object') {
       throw new Error('Invalid roles manifest: every role must be an object');
     }
 
-    const resources = (role as Record<string, unknown>).resources;
+    const id = 'id' in role && role.id != null ? String(role.id) : '<unknown>';
+    const resources = 'resources' in role ? role.resources : undefined;
     if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
-      throw new Error(`Invalid roles manifest: role ${(role as Record<string, unknown>).id ?? '<unknown>'} is missing resources`);
+      throw new Error(`Invalid roles manifest: role ${id} is missing resources`);
     }
 
     // Accept 'learnings' for backward compatibility but only validate active types
     const ALLOWED_RESOURCE_KEYS = new Set<string>([...NAMESPACED_RESOURCE_TYPES, 'learnings']);
-    warnUnknownResourceKeys(resources, ALLOWED_RESOURCE_KEYS, 'roles', `role ${String((role as Record<string, unknown>).id ?? '<unknown>')}`);
+    warnUnknownResourceKeys(resources, ALLOWED_RESOURCE_KEYS, 'roles', `role ${id}`);
   }
 
   const manifest = parseManifest(RolesManifestSchema, raw, 'roles');
@@ -208,7 +208,7 @@ export function resolveRoleResourceNamespaces(input: {
 
   // Roles never contribute learnings namespaces; only projects do. Kept empty
   // so the shape matches project resolution for a clean union at the call site.
-  // A later type (env, hooks, mcp, models, docs) is absent until one is active.
+  // A hand-declared type (env, hooks, mcp, models, docs) is absent until one is active.
   const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
   for (const type of NAMESPACED_RESOURCE_TYPES) {

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
 import {
   NamespaceSegmentSchema, parseManifest, readManifestFile, assertNoCaseAliasedNamespaces, warnUnknownResourceKeys,
-  LATER_RESOURCE_TYPES, LaterResourceNamespacesShape, type NamespaceEntry,
+  HAND_DECLARED_RESOURCE_TYPES, HandDeclaredNamespacesShape, type NamespaceEntry,
 } from './manifest-schema.js';
 import type { ResourceNamespaces } from './roles.js';
 
@@ -17,8 +17,8 @@ export const PROJECT_RESOURCE_TYPES = ['knowledge', 'skills', 'learnings', 'agen
 
 export type ProjectResourceType = typeof PROJECT_RESOURCE_TYPES[number];
 
-/** Every type a project can namespace, the optional later ones included. */
-const ALL_PROJECT_RESOURCE_TYPES = [...PROJECT_RESOURCE_TYPES, ...LATER_RESOURCE_TYPES] as const;
+/** Every type a project can namespace, the hand-declared ones included. */
+const ALL_PROJECT_RESOURCE_TYPES = [...PROJECT_RESOURCE_TYPES, ...HAND_DECLARED_RESOURCE_TYPES] as const;
 
 /**
  * A project id becomes a path component (`skills/<id>/`, `learnings/<id>/`) just
@@ -46,8 +46,8 @@ const ProjectResourceNamespacesSchema = z.object({
   skills: z.array(NamespaceSegmentSchema).default([]),
   learnings: z.array(NamespaceSegmentSchema).default([]),
   agents: z.array(NamespaceSegmentSchema).default([]),
-  // env, hooks, mcp, models, docs: optional, see LATER_RESOURCE_TYPES.
-  ...LaterResourceNamespacesShape,
+  // env, hooks, mcp, models, docs: optional, see HAND_DECLARED_RESOURCE_TYPES.
+  ...HandDeclaredNamespacesShape,
 });
 
 const ProjectSchema = z.object({
@@ -80,23 +80,20 @@ function validateManifestShape(raw: unknown): ProjectsManifest {
     throw new Error('Invalid projects manifest: projects must be an array');
   }
 
-  for (const project of projects ?? []) {
+  const entries: unknown[] = projects ?? [];
+  for (const project of entries) {
     if (!project || typeof project !== 'object') {
       throw new Error('Invalid projects manifest: every project must be an object');
     }
 
-    const resources = (project as Record<string, unknown>).resources;
+    const id = 'id' in project && project.id != null ? String(project.id) : '<unknown>';
+    const resources = 'resources' in project ? project.resources : undefined;
     if (resources !== undefined && (typeof resources !== 'object' || Array.isArray(resources))) {
-      throw new Error(`Invalid projects manifest: project ${(project as Record<string, unknown>).id ?? '<unknown>'} has invalid resources`);
+      throw new Error(`Invalid projects manifest: project ${id} has invalid resources`);
     }
 
     if (resources) {
-      warnUnknownResourceKeys(
-        resources,
-        new Set<string>(ALL_PROJECT_RESOURCE_TYPES),
-        'projects',
-        `project ${String((project as Record<string, unknown>).id ?? '<unknown>')}`,
-      );
+      warnUnknownResourceKeys(resources, new Set<string>(ALL_PROJECT_RESOURCE_TYPES), 'projects', `project ${id}`);
     }
   }
 
@@ -210,7 +207,7 @@ export function resolveProjectResourceNamespaces(input: {
 }): ResourceNamespaces {
   const resolved = input.activeProjects.map((id) => getProjectOrThrow(input.manifest, id));
 
-  // A later type (env, hooks, mcp, models, docs) is absent until one is active.
+  // A hand-declared type (env, hooks, mcp, models, docs) is absent until one is active.
   const namespaces: ResourceNamespaces = { knowledge: [], skills: [], learnings: [], agents: [] };
 
   for (const type of ALL_PROJECT_RESOURCE_TYPES) {
@@ -283,7 +280,7 @@ export function mergeNamespaces(
     learnings: dedupe(roleNamespaces.learnings, projectNamespaces.learnings),
     agents: dedupe(roleNamespaces.agents, projectNamespaces.agents),
   };
-  for (const type of LATER_RESOURCE_TYPES) {
+  for (const type of HAND_DECLARED_RESOURCE_TYPES) {
     const namespaces = dedupe(roleNamespaces[type] ?? [], projectNamespaces[type] ?? []);
     if (namespaces.length > 0) merged[type] = namespaces;
   }

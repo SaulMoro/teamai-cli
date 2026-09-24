@@ -4,10 +4,10 @@ import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
 import type { ResourceItem, TeamaiConfig, LocalConfig } from '../types.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, isSelfMode } from '../types.js';
-import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual, listDirs } from '../utils/fs.js';
+import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, reportEntryResolution, resolveEntriesFor,
+  entryFileAbsolutePath, listEntryFiles, reportEntryResolution, resolveEntriesFor,
   type EntryReader,
 } from '../namespaced-entries.js';
 import {
@@ -56,7 +56,7 @@ export const envEntryReader: EntryReader<EnvVariable> = {
     try {
       raw = YAML.parse(content);
     } catch (e) {
-      return { ok: false, reason: `${relativePath} is not valid YAML: ${(e as Error).message}` };
+      return { ok: false, reason: `${relativePath} is not valid YAML: ${e instanceof Error ? e.message : String(e)}` };
     }
     const shapeProblem = describeEnvYamlShapeProblem(raw);
     if (shapeProblem) return { ok: false, reason: `${relativePath} declares no variables: ${shapeProblem}` };
@@ -194,17 +194,6 @@ function parseEnvYamlDocument(raw: unknown, label: string): EnvYamlRead {
   return { ok: true, variables: parsed.data.variables };
 }
 
-/** Every env file in a team repo checkout, root first: `env/env.yaml`, then `env/<ns>/env.yaml`. */
-export async function listEnvFiles(repoPath: string): Promise<string[]> {
-  const namespaces = (await listDirs(path.join(repoPath, 'env'))).sort();
-  const files = [entryFilePath('env', null), ...namespaces.map((ns) => entryFilePath('env', ns))];
-  const present: string[] = [];
-  for (const file of files) {
-    if (await pathExists(path.join(repoPath, ...file.split('/')))) present.push(file);
-  }
-  return present;
-}
-
 function envPushItem(relativePath: string, sourcePath: string): ResourceItem {
   return { name: relativePath.slice('env/'.length), type: 'env', sourcePath, relativePath };
 }
@@ -227,9 +216,8 @@ export class EnvHandler extends ResourceHandler {
     if (isSelfMode(localConfig) && localConfig.projectRoot) {
       const activeRoot = path.join(localConfig.projectRoot, '.teamai');
       const items: ResourceItem[] = [];
-      for (const relativePath of await listEnvFiles(activeRoot)) {
-        const activeEnv = path.join(activeRoot, ...relativePath.split('/'));
-        const baseEnv = path.join(localConfig.repo.localPath, ...relativePath.split('/'));
+      for (const { namespace, relativePath, absolutePath: activeEnv } of await listEntryFiles(activeRoot, 'env')) {
+        const baseEnv = entryFileAbsolutePath(localConfig.repo.localPath, 'env', namespace);
         // Not in the baseline → new; present but different → modified; equal → skip.
         if (await pathExists(baseEnv) && await fileContentEqual(activeEnv, baseEnv)) continue;
         items.push(envPushItem(relativePath, activeEnv));
@@ -257,9 +245,9 @@ export class EnvHandler extends ResourceHandler {
     }
 
     const items: ResourceItem[] = [];
-    for (const relativePath of await listEnvFiles(repoPath)) {
+    for (const { relativePath, absolutePath } of await listEntryFiles(repoPath, 'env')) {
       if (changed && !changed.has(relativePath)) continue;
-      items.push(envPushItem(relativePath, path.join(repoPath, ...relativePath.split('/'))));
+      items.push(envPushItem(relativePath, absolutePath));
     }
     return items;
   }

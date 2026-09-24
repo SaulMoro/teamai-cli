@@ -23,6 +23,7 @@ import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js'
 import { findProject, loadProjectsManifest, unknownProjectMessage } from './projects.js';
 import { isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import type { LocalConfig } from './types.js';
+import { listDirs, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
 
@@ -44,6 +45,33 @@ const INSTALLED: Record<EntryType, string> = {
 /** Repo-relative (`/`-separated) path of a type's file in the root (`null`) or a namespace. */
 export function entryFilePath(type: EntryType, namespace: string | null): string {
   return namespace === null ? `${type}/${ENTRY_FILE[type]}` : `${type}/${namespace}/${ENTRY_FILE[type]}`;
+}
+
+/** `entryFilePath` under a checkout. */
+export function entryFileAbsolutePath(repoPath: string, type: EntryType, namespace: string | null): string {
+  return path.join(repoPath, ...entryFilePath(type, namespace).split('/'));
+}
+
+/** One of a type's files that exists in a checkout. */
+export interface EntryFile {
+  /** null for the root file. */
+  readonly namespace: string | null;
+  readonly relativePath: string;
+  readonly absolutePath: string;
+}
+
+/**
+ * Every file of `type` in a checkout, active here or not: the root file, then
+ * each `<type>/<ns>/` file in name order. Absent files are left out.
+ */
+export async function listEntryFiles(repoPath: string, type: EntryType): Promise<EntryFile[]> {
+  const namespaces = (await listDirs(path.join(repoPath, type))).sort();
+  const files: EntryFile[] = [];
+  for (const namespace of [null, ...namespaces]) {
+    const absolutePath = entryFileAbsolutePath(repoPath, type, namespace);
+    if (await pathExists(absolutePath)) files.push({ namespace, relativePath: entryFilePath(type, namespace), absolutePath });
+  }
+  return files;
 }
 
 /** One parsed file, or why it cannot be used; the reason names the file. */
@@ -149,7 +177,7 @@ export async function resolveEntries<E>(
   const rootNames: string[] = [];
   for (const namespace of places) {
     const source = entryFilePath(type, namespace);
-    const read = await reader.read(path.join(repoPath, ...source.split('/')), source);
+    const read = await reader.read(entryFileAbsolutePath(repoPath, type, namespace), source);
     if (read === null) continue;
     if (!read.ok) return { kind: 'failed', failure: { kind: 'broken-file', type, source, reason: read.reason }, notices };
     for (const note of read.notes ?? []) notices.push({ kind: 'file-note', message: note });
@@ -279,8 +307,8 @@ function moveTo(files: string[]): string {
  * entry carries a per-entry key.
  */
 class TargetFiles {
-  private roles: Promise<Awaited<ReturnType<typeof loadRolesManifestIfPresent>>> | null = null;
-  private projects: Promise<Awaited<ReturnType<typeof loadProjectsManifest>>> | null = null;
+  private roles: ReturnType<typeof loadRolesManifestIfPresent> | null = null;
+  private projects: ReturnType<typeof loadProjectsManifest> | null = null;
 
   constructor(private readonly repoPath: string, private readonly type: EntryType) {}
 

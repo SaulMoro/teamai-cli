@@ -208,9 +208,11 @@ function mapResources(
   resources: ProjectResources,
   fn: (namespaces: string[]) => string[],
 ): ProjectResources {
-  // The later types (env, hooks, mcp, models, docs) are declared by hand and kept as they are:
+  // The hand-declared types (env, hooks, mcp, models, docs) are kept as they are:
   // writing one an admin did not declare breaks pull on older CLIs.
-  return { ...resources, ...Object.fromEntries(PROJECT_RESOURCE_TYPES.map((type) => [type, fn(resources[type])])) } as ProjectResources;
+  const mapped: ProjectResources = { ...resources };
+  for (const type of PROJECT_RESOURCE_TYPES) mapped[type] = fn(resources[type]);
+  return mapped;
 }
 
 function describeResources(resources: ProjectResources): string {

@@ -11,6 +11,7 @@ import {
   ModelProfileSchema,
   ModelProtocolSchema,
   getLocalValuesPath,
+  gatewaySuffix,
   getTeamIdentity,
   getTeamValuesPath,
   hasApiKeyForAnotherGateway,
@@ -63,11 +64,6 @@ async function teamContext(): Promise<TeamModelsContext> {
   const resolution = await resolveEntriesFor(modelsEntryReader, initialized.localConfig);
   if (resolution.kind === 'failed') throw new Error(describeEntryFailure(resolution.failure));
   return { team: teamProfilesFrom(resolution.entries), localConfig: initialized.localConfig };
-}
-
-/** For a team profile, the gateway its key is bound to, as ` at <origin>`. */
-function atGateway(ref: ProfileRef): string {
-  return ref.source === 'team' ? ` at ${profileOrigin(ref.profile)}` : '';
 }
 
 function splitList(value: string | undefined): string[] {
@@ -298,7 +294,7 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
   const configured = storedApiKey(ref, values);
   let secret = await apiKeyFromOptions(options);
   if (!edited && !secret) {
-    const answer = await askSecret(`API key for ${key}${atGateway(ref)}${configured ? ' (leave empty to keep)' : ''}: `);
+    const answer = await askSecret(`API key for ${key}${gatewaySuffix(ref, 'at')}${configured ? ' (leave empty to keep)' : ''}: `);
     if (answer) secret = { value: answer };
   }
   if (!secret && !configured) {
@@ -315,8 +311,8 @@ export async function modelsConfigure(reference: string, options: ConfigureOptio
   }
   const activeAgents = activeAgentsFor(ref, await activeModelProfiles());
   log.success(activeAgents.length
-    ? `Configured ${key}${atGateway(ref)}. Run \`teamai models switch ${key}\` to apply it to ${activeAgents.join(', ')}.`
-    : `Configured ${key}${atGateway(ref)}. Agent settings were not changed.`);
+    ? `Configured ${key}${gatewaySuffix(ref, 'at')}. Run \`teamai models switch ${key}\` to apply it to ${activeAgents.join(', ')}.`
+    : `Configured ${key}${gatewaySuffix(ref, 'at')}. Agent settings were not changed.`);
 }
 
 interface SwitchOptions {
@@ -334,13 +330,12 @@ export async function modelsSwitch(reference: string, options: SwitchOptions): P
   // First use of a profile, or of its current gateway: ask for the key here
   // instead of requiring a separate `configure` step.
   if (!stored && !options.dryRun && isInteractive()) {
-    const answer = await askSecret(`API key for ${key}${atGateway(ref)}: `);
+    const answer = await askSecret(`API key for ${key}${gatewaySuffix(ref, 'at')}: `);
     if (!answer) throw new Error(`Profile ${key} needs an API key`);
     setStoredApiKey(ref, values, { value: answer });
     await saveModelInputs(file, values);
   } else if (!isApiKeyConfigured(stored) && !stored?.env) {
-    const gateway = ref.source === 'team' ? ` for ${profileOrigin(ref.profile)}` : '';
-    throw new Error(`Profile ${key} has no API key${gateway}. Run \`teamai models configure ${key}\`.`);
+    throw new Error(`Profile ${key} has no API key${gatewaySuffix(ref, 'for')}. Run \`teamai models configure ${key}\`.`);
   }
   const resolved = resolveProfile(ref, values, options.model);
   const explicit = collectAgents(options.agent ?? []);

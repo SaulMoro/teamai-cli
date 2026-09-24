@@ -1,10 +1,9 @@
-import path from 'node:path';
 import { requireInit, detectProjectConfig } from './config.js';
 import { pullRepo } from './utils/git.js';
 import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import { EnvHandler, maskEnvValue, ENV_KEY_RE, envEntryReader } from './resources/env.js';
-import { describeEntryFailure, describeOrigin, entryFilePath, entryNamespaceFromFlags, resolveEntriesFor } from './namespaced-entries.js';
+import { describeEntryFailure, describeOrigin, entryFileAbsolutePath, entryFilePath, entryNamespaceFromFlags, resolveEntriesFor } from './namespaced-entries.js';
 import type { GlobalOptions } from './types.js';
 import { isSelfMode } from './types.js';
 
@@ -187,7 +186,7 @@ async function envFileFromFlags(
   }
   const relativePath = entryFilePath('env', target.namespace);
   return {
-    envYamlPath: path.join(repoPath, ...relativePath.split('/')),
+    envYamlPath: entryFileAbsolutePath(repoPath, 'env', target.namespace),
     relativePath,
     // Messages name the file only for a namespace; the root is the default.
     where: target.namespace === null ? '' : ` in ${relativePath}`,

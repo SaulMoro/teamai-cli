@@ -135,8 +135,11 @@ export async function resolveResourceNamespaces(localConfig: LocalConfig) {
 
 /**
  * True in legacy mode: no role and no project filters this directory, so every
- * namespace is delivered beside the shared root. A manifest that cannot be read
- * answers false here; whatever needs the namespaces themselves reports that.
+ * namespace is delivered beside the shared root. Callers use it to decide
+ * whether a legacy-only step applies: withdrawing a placement record that a
+ * shared-root file now shadows, or letting that root file keep its path. A
+ * manifest that cannot be read answers false, the side that withdraws and
+ * overwrites nothing; whatever needs the namespaces themselves reports it.
  */
 export async function deliversEveryNamespace(localConfig: LocalConfig): Promise<boolean> {
   try {

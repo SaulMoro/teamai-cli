@@ -5,9 +5,9 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import { getTeamaiHomeDir } from '../types.js';
-import { listDirs, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import {
-  entryFilePath,
+  listEntryFiles,
   type EntryFileRead,
   type EntryReader,
   type ResolvedEntry,
@@ -216,7 +216,7 @@ async function readProfilesFile(filePath: string, label: string): Promise<EntryF
   try {
     parsed = YAML.parse(raw);
   } catch (error) {
-    return { ok: false, reason: `Invalid model profile YAML at ${label}: ${(error as Error).message}` };
+    return { ok: false, reason: `Invalid model profile YAML at ${label}: ${error instanceof Error ? error.message : String(error)}` };
   }
   const result = ModelProfilesFileSchema.safeParse(parsed);
   if (!result.success) {
@@ -254,10 +254,9 @@ export function teamProfilesFrom(entries: readonly ResolvedEntry<ModelProfile>[]
 
 /** Whether a namespace outside `active` defines profile `id`; a file that does not parse defines nothing. */
 export async function inactiveNamespaceDefines(repoPath: string, active: readonly string[], id: string): Promise<boolean> {
-  for (const namespace of await listDirs(path.join(repoPath, 'models'))) {
-    if (active.includes(namespace)) continue;
-    const file = entryFilePath('models', namespace);
-    const read = await readProfilesFile(path.join(repoPath, ...file.split('/')), file);
+  for (const { namespace, relativePath, absolutePath } of await listEntryFiles(repoPath, 'models')) {
+    if (namespace === null || active.includes(namespace)) continue;
+    const read = await readProfilesFile(absolutePath, relativePath);
     if (read?.ok && read.entries.some((profile) => profile.id === id)) return true;
   }
   return false;
@@ -266,9 +265,8 @@ export async function inactiveNamespaceDefines(repoPath: string, active: readonl
 /** Why each team profiles file in the checkout, root or namespace, cannot be used. */
 export async function brokenTeamProfileFiles(repoPath: string): Promise<string[]> {
   const reasons: string[] = [];
-  for (const namespace of [null, ...(await listDirs(path.join(repoPath, 'models'))).sort()]) {
-    const file = entryFilePath('models', namespace);
-    const read = await readProfilesFile(path.join(repoPath, ...file.split('/')), file);
+  for (const { relativePath, absolutePath } of await listEntryFiles(repoPath, 'models')) {
+    const read = await readProfilesFile(absolutePath, relativePath);
     if (read && !read.ok) reasons.push(read.reason);
   }
   return reasons;
@@ -348,6 +346,11 @@ export function profileOrigin(profile: ModelProfile): string {
   return new URL(profile.base_url).origin;
 }
 
+/** For a team profile, the gateway its key is bound to, as ` at <origin>` or ` for <origin>`; empty for a local one. */
+export function gatewaySuffix(ref: ProfileRef, preposition: 'at' | 'for'): string {
+  return ref.source === 'team' ? ` ${preposition} ${profileOrigin(ref.profile)}` : '';
+}
+
 /**
  * The name a profile's API key is stored under. A team key is bound to the
  * profile id and the gateway origin (#707): a namespace can replace a team
@@ -401,9 +404,8 @@ export function resolveProfile(
   const reference = profileRefName(ref);
   const secret = storedApiKey(ref, values);
   if (!isApiKeyConfigured(secret)) {
-    const gateway = ref.source === 'team' ? ` for ${profileOrigin(ref.profile)}` : '';
     const detail = secret?.env ? ` (environment variable ${secret.env} is not set)` : '';
-    throw new Error(`Profile ${reference} has no API key${gateway}${detail}. Run \`teamai models configure ${reference}\`.`);
+    throw new Error(`Profile ${reference} has no API key${gatewaySuffix(ref, 'for')}${detail}. Run \`teamai models configure ${reference}\`.`);
   }
   if (model !== undefined && !profileModels(ref.profile).includes(model)) {
     throw new Error(`Profile ${reference} has no model ${model}`);

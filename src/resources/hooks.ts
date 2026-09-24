@@ -71,7 +71,7 @@ async function readHooksFile(absolutePath: string, relativePath: string): Promis
     const declaresBuiltin = !!raw && typeof raw === 'object' && 'builtin' in raw;
     return { ok: true, yaml: HooksYamlSchema.parse(raw ?? {}), declaresBuiltin };
   } catch (e) {
-    return { ok: false, reason: `${relativePath} does not parse: ${(e as Error).message}` };
+    return { ok: false, reason: `${relativePath} does not parse: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 

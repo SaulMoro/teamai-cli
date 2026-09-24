@@ -1,13 +1,12 @@
-import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
 import type { ResourceItem, TeamaiConfig, LocalConfig, McpServerDef } from '../types.js';
-import { listDirs, pathExists, readFileSafe, writeFile } from '../utils/fs.js';
+import { readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, resolveEntriesFor,
-  type EntryReader, type EntryResolution,
+  entryFileAbsolutePath, entryFilePath, listEntryFiles,
+  type EntryReader,
 } from '../namespaced-entries.js';
 
 // ─── Schema for mcp/mcp.yaml ────────────────────────────────
@@ -81,17 +80,6 @@ export const mcpEntryReader: EntryReader<TeamMcpServer> = {
   scopeOf: (server) => server,
 };
 
-/** Every MCP file in a team repo checkout, root first, as `[namespace, repo-relative path]`. */
-async function listMcpFiles(repoPath: string): Promise<[string | null, string][]> {
-  const namespaces = (await listDirs(path.join(repoPath, 'mcp'))).sort();
-  const files: [string | null, string][] = [];
-  for (const namespace of [null, ...namespaces]) {
-    const file = entryFilePath('mcp', namespace);
-    if (await pathExists(path.join(repoPath, ...file.split('/')))) files.push([namespace, file]);
-  }
-  return files;
-}
-
 /** Convert one validated team server into the tool-neutral def model. */
 export function teamMcpToDef(s: TeamMcpServer): McpServerDef {
   return {
@@ -131,8 +119,7 @@ export class McpHandler extends ResourceHandler {
   async scanTeamForPull(_teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
     const repoPath = localConfig.repo.localPath;
     const items: ResourceItem[] = [];
-    for (const [namespace, relativePath] of await listMcpFiles(repoPath)) {
-      const sourcePath = path.join(repoPath, ...relativePath.split('/'));
+    for (const { namespace, relativePath, absolutePath: sourcePath } of await listEntryFiles(repoPath, 'mcp')) {
       const read = await readMcpFile(sourcePath);
       if (!read.ok) {
         log.warn(`${relativePath} does not parse, so its servers are not listed: ${read.reason}`);
@@ -170,7 +157,7 @@ export class McpHandler extends ResourceHandler {
     const slash = name.indexOf('/');
     const namespace = slash === -1 ? null : name.slice(0, slash);
     const serverName = slash === -1 ? name : name.slice(slash + 1);
-    const yamlPath = path.join(localConfig.repo.localPath, ...entryFilePath('mcp', namespace).split('/'));
+    const yamlPath = entryFileAbsolutePath(localConfig.repo.localPath, 'mcp', namespace);
     const read = await readMcpFile(yamlPath);
     if (!read.ok) {
       log.warn(`${entryFilePath('mcp', namespace)} does not parse, so "${serverName}" was not removed: ${read.reason}`);

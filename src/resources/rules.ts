@@ -14,7 +14,7 @@ import {
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
-import { resolveResourceNamespaces } from '../resource-namespaces.js';
+import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
 import {
   ruleFileExtensionForTool,
@@ -300,7 +300,7 @@ export class RulesHandler extends ResourceHandler {
     // case, but delivery must not depend on having run after it. With roles or
     // projects the placed rule replaces that root rule instead (#707).
     if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${bareName}.md`))
-      && await resolveResourceNamespaces(localConfig) === null) return teamName;
+      && await deliversEveryNamespace(localConfig)) return teamName;
     return bareName;
   }
 
