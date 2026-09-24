@@ -1759,7 +1759,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 }
 ```
 
-尚未初始化时 `scope` 为 `null`。仅当团队仓库声明了 packages 时才会出现 `packages` 字段，内容是已渲染的报告行；`notes` 只在有额外提示时出现 —— 目前是 Codex 信任门槛提醒。
+尚未初始化时 `scope` 为 `null`。仅当团队仓库声明了 packages 时才会出现 `packages` 字段，内容是已渲染的报告行；`notes` 只在有额外提示时出现：上文所述的 namespace 提示（替换了根目录条目的条目，或未配置角色或项目时重复定义的名字），以及 Codex 信任门槛提醒。
 
 自动更新在 Stop hook 中执行，可通过两层控制：
 

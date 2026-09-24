@@ -57,15 +57,17 @@ Each resource is delivered to every agent:
 |----------|------------------|-------|
 | **Skills** | `skills/<name>/SKILL.md` | |
 | **Rules** | `rules/*.md` | |
-| **Docs** | `docs/` | Foundational project docs; not all loaded by default (progressive disclosure) |
-| **Agents** | `agents/<name>.yaml`, `agents/<namespace>/<name>.yaml` | Root agents reach everyone; a namespace directory ships only to roles/projects that list it under `agents:` |
+| **Docs** | `docs/`, `docs/<namespace>/` | Foundational project docs; not all loaded by default (progressive disclosure). A `docs/<dir>/` that no role or project declares stays shared |
+| **Agents** | `agents/<name>.yaml`, `agents/<namespace>/<name>.yaml` | |
 | **Culture** | `culture.md` | Team mission, values, and working principles — injected into each agent's CLAUDE.md / AGENTS.md so every session inherits them |
 | **CLAUDE.md** | `claudemd/*.md` | |
-| **Env** | `env/` | Shared team-level environment variables and switches; do not put secrets here. Each variable may carry `roles:` / `projects:` |
-| **Hooks** | `hooks/hooks.yaml` | Each hook may carry `roles:` / `projects:` to reach only members holding one of those roles and directories bound to one of those projects |
-| **MCP** | `mcp/mcp.yaml` | Each server may carry `roles:` / `projects:` to reach only members holding one of those roles and directories bound to one of those projects |
+| **Env** | `env/env.yaml`, `env/<namespace>/env.yaml` | Shared team-level environment variables and switches; do not put secrets here |
+| **Hooks** | `hooks/hooks.yaml`, `hooks/<namespace>/hooks.yaml` | |
+| **MCP** | `mcp/mcp.yaml`, `mcp/<namespace>/mcp.yaml` | |
 | **Packages** | `teamai.yaml` | Currently npm packages and Claude Code plugins only |
-| **Models** | — | Not implemented for every provider yet |
+| **Models** | `models/models.yaml`, `models/<namespace>/models.yaml` | Team model profiles for Claude Code, Codex, OpenCode, CodeBuddy and WorkBuddy; an agent changes only after `teamai models switch` |
+
+Skills, rules, CLAUDE.md, agents, env, hooks, MCP, models and docs can also live under a `<namespace>/` subdirectory, which ships only to the roles and projects that list it in `resources:` (rules and CLAUDE.md under `knowledge:`). A namespace item replaces the root item of the same name; a docs namespace replaces nothing. With roles or projects set, root skills reach a member only through a tag subscription.
 
 For file formats and full workflows, see the [Usage Guide](usage-guide.md).
 

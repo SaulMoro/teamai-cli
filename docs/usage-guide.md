@@ -1838,7 +1838,7 @@ Two tools do not read a rules directory, so a per-file check cannot speak for th
 }
 ```
 
-`scope` is `null` before initialization. `packages` is present only when the team repo declares packages, and carries the rendered report lines. `notes` appears only when there is an advisory — today, the Codex trust-gate reminder.
+`scope` is `null` before initialization. `packages` is present only when the team repo declares packages, and carries the rendered report lines. `notes` appears only when there is an advisory: the namespace notes described above (an item that replaces a root one, or without roles or projects a name defined more than once) and the Codex trust-gate reminder.
 
 Auto-update runs in the Stop hook and is controlled by two tiers:
 

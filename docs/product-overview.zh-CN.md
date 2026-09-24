@@ -57,15 +57,17 @@ teamai push → 创建分支 + MR → reviewer 审批合并
 |------|------------------|------|
 | **Skills** | `skills/<name>/SKILL.md` | |
 | **Rules** | `rules/*.md` | |
-| **Docs** | `docs/` | 项目基础文档，默认不全量加载（渐进式披露） |
-| **Agents** | `agents/<name>.yaml`、`agents/<namespace>/<name>.yaml` | 根目录 agents 对所有人生效；namespace 子目录只同步给在 `agents:` 中列出它的角色/项目 |
+| **Docs** | `docs/`、`docs/<namespace>/` | 项目基础文档，默认不全量加载（渐进式披露）。没有任何角色或项目声明的 `docs/<dir>/` 对所有人共享 |
+| **Agents** | `agents/<name>.yaml`、`agents/<namespace>/<name>.yaml` | |
 | **Culture** | `culture.md` | 团队使命、价值观与协作准则——注入各 Agent 的 CLAUDE.md / AGENTS.md，成为每次会话的行事底色 |
 | **CLAUDE.md** | `claudemd/*.md` | |
-| **Env** | `env/` | 通用环境变量、团队级开关；不建议直接放密钥。每个变量可加 `roles:` / `projects:` |
-| **Hooks** | `hooks/hooks.yaml` | 每条 hook 可加 `roles:` / `projects:`，只分发给持有这些角色的成员、且绑定了这些项目的目录 |
-| **MCP** | `mcp/mcp.yaml` | 每个 server 可加 `roles:` / `projects:`，只分发给持有这些角色的成员、且绑定了这些项目的目录 |
+| **Env** | `env/env.yaml`、`env/<namespace>/env.yaml` | 通用环境变量、团队级开关；不建议直接放密钥 |
+| **Hooks** | `hooks/hooks.yaml`、`hooks/<namespace>/hooks.yaml` | |
+| **MCP** | `mcp/mcp.yaml`、`mcp/<namespace>/mcp.yaml` | |
 | **Packages** | `teamai.yaml` | 目前只支持 npm 包和 Claude 插件 |
-| **Models** | — | 暂时没有对全部 provider 实现 |
+| **Models** | `models/models.yaml`、`models/<namespace>/models.yaml` | 团队模型配置，适用于 Claude Code、Codex、OpenCode、CodeBuddy 和 WorkBuddy；只有运行 `teamai models switch` 后才会改动 Agent |
+
+Skills、rules、CLAUDE.md、agents、env、hooks、MCP、models 和 docs 也可以放在 `<namespace>/` 子目录下，只同步给在 `resources:` 中列出它的角色和项目（rules 与 CLAUDE.md 列在 `knowledge:` 下）。namespace 中的条目会替换根目录中同名的条目；docs namespace 不替换任何内容。配置了角色或项目后，根目录的 skills 只通过标签订阅送达成员。
 
 文件格式与完整工作流见[使用指南](usage-guide.zh-CN.md)。
 

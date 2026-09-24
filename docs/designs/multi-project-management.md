@@ -99,10 +99,11 @@ but is an error. The id keeps the
 older, narrower rule it has always had — letters, digits, `.`, `_`, `-`, and not
 `.` or `..` — because it is also typed on the command line and split on commas.
 The namespace guard applies to `manifest/roles.yaml`'s active namespaces
-(`knowledge`, `skills`, `agents`); its `learnings:` is kept for backward
-compatibility, ignored at runtime, and therefore unchecked.
+(`knowledge`, `skills`, `agents`, and since #707 `env`, `hooks`, `mcp`, `models`
+and `docs`); its `learnings:` is kept for backward compatibility, ignored at
+runtime, and therefore unchecked.
 
-Agent push uses the same role/project namespace resolution as pull and skips ambiguous source destinations. Placement follows it: a new agent pushed with `--role`/`--project` lands under `agents/<namespace>/` (the project's `agents` axis), the same way a new rule resolves from `knowledge` and a new skill from `skills` (issue #649). On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
+Agent push uses the same role/project namespace resolution as pull: an edit goes back to the namespace it was delivered from (see [Push and commands](#push-and-commands)), and an agent with two active sources is skipped as ambiguous. Placement follows it: a new agent pushed with `--role`/`--project` lands under `agents/<namespace>/` (the project's `agents` axis), the same way a new rule resolves from `knowledge` and a new skill from `skills` (issue #649). On a role or project change, agent cleanup checks each tool destination independently, including YAML `targets` and legacy format support. Locally edited copies are preserved.
 
 Directory layout reuses the existing namespace convention, adding one learnings layer:
 
@@ -132,23 +133,19 @@ activeNamespaces = resolveRole(primaryRole, additionalRoles)
 provided *only* by projects, otherwise P1's semantic confusion returns.
 
 **`role` and `project` are orthogonal, not competing — there is no priority
-override between them.** They live on different planes: a "HAI dev" legitimately
+between them.** They live on different planes: a "HAI dev" legitimately
 needs generic dev skills (from `role`) *plus* HAI-specific knowledge (from
 `project`), so the resolver takes the **union**, never one-overrides-the-other.
-Concretely:
+Learnings are the one dimension `project` alone provides (`role` contributes
+nothing).
 
-- **learnings** — `project` alone owns this dimension (`role` contributes nothing),
-  so "project wins" is already a hard invariant here, with nothing to override.
-- **skills / knowledge** — the only place the two dimensions could "cross" is a
-  **same-named** resource in a role namespace and a project namespace. That case
-  is already a hard error today (`src/pull.ts:204` `Duplicate skill ... found in
-  active namespaces`), resolved by the **admin** disambiguating names in the
-  manifest — deliberately **not** by a runtime priority rule. A well-formed
-  manifest keeps role and project namespaces non-overlapping, so the crossing is
-  eliminated at the source rather than arbitrated at pull time.
-
-Implementers should therefore **not** add any project-over-role precedence logic:
-the union + existing duplicate-guard is the whole model.
+The only precedence rule is between an active namespace and the shared root, and
+it is the same for every resource type: see
+[One namespace model for every resource type](#one-namespace-model-for-every-resource-type)
+(#707). A role namespace and a project namespace that define the same name are
+two active namespaces like any other pair: where both would land in one place it
+is a conflict the admin resolves by renaming, never a project-over-role (or
+role-over-project) rule, which would pick a winner the manifest does not show.
 
 ### Data model
 
@@ -217,6 +214,211 @@ doesn't exist") to always **merge** project membership into the existing file.
 and cross-project functions (platform/infra people who need multi-project
 experience) both need it, without affecting the single-project main path.
 
+## One namespace model for every resource type
+
+> Added by [#707](https://github.com/Tencent/teamai-cli/issues/707). Before it,
+> env, hooks and MCP servers were scoped per entry (`roles:` on hooks and MCP
+> from #563, `projects:` and env `roles:` from #668), docs and team model
+> profiles could not be scoped, and a same-name item in a namespace and the root
+> was an error for agents while the other types delivered both or picked one
+> silently.
+
+Every resource type uses one layout and one rule:
+
+```text
+<type>/                 root, shared with everyone
+<type>/<ns>/            delivered only where <ns> is active in resources.<type>
+namespace vs root       the namespace item replaces the root item, whole, no merge
+namespace vs namespace  conflict when both would take one slot (see below)
+duplicate in one file   conflict
+broken active file      that type is not applied this run, installed state is kept
+legacy mode             no override and no conflict rule (see below)
+```
+
+The active set is the union above: the namespaces the member's roles and the
+directory's projects list under `resources.<type>`.
+
+| Type | `resources:` key | Replaced by name | Two active namespaces, one name |
+|---|---|---|---|
+| env | `env` | variable `key` | conflict |
+| hooks | `hooks` | hook `id` | conflict |
+| mcp | `mcp` | server `name` (`command`, `args`, `env` and `tools:` together) | conflict |
+| models | `models` | profile `id` | conflict |
+| skills | `skills` | skill directory | conflict |
+| agents | `agents` | file stem | conflict |
+| rules | `knowledge` | first-level file name: `rules/<ns>/<name>.md` replaces `rules/<name>.md` | both delivered |
+| claudemd | `knowledge` | file name | both delivered |
+| docs | `docs` | none: each namespace is its own subtree | cannot happen |
+| learnings | `learnings` (projects only) | none: ids cannot collide | cannot happen |
+
+`src/namespace-resolver.ts` holds the rule. It takes candidates (name, source
+file, namespace or root) and the active set, and returns either the resolved
+items, each with its origin and the root item it replaces, or a tagged conflict
+that names the item and both source files. The result does not depend on the
+order files are read (property-tested). Per-type code parses files into
+candidates, renders messages and applies the result.
+
+### Override
+
+The namespace item replaces the root item whole; there is no field merge, so an
+MCP override without `tools:` reaches every tool. When the namespace stops being
+active, the next pull delivers the root item again and removes items that only
+the namespace had; for env, hooks and MCP that happens on an `Already synced`
+pull too, and `env.sh` is regenerated from the resolved set even when
+`env/env.yaml` is missing or declares nothing. MCP `${VAR}` lookup reads the same
+resolved env set.
+
+Skills keep one difference: in role/project mode the root `skills/` stays the tag
+catalog and is not delivered by default. A root skill that arrives through a
+subscribed tag is replaced by an active namespace skill of the same name, and
+among tag matches the root skill wins over one in an inactive namespace. Installing
+a skill removes the files that another team version of that skill (root or any
+namespace) has and the new one lacks, so switching versions leaves no team file
+behind; a file the member added stays, because push never counts such extras as
+changes and they may never have been pushed.
+
+Overridable shared content belongs at the root, not in a namespace every role
+activates (`common/`): a root item gives way to an active namespace, a namespace
+item never does. `rules/code-style.md` is replaced by `rules/checkout/code-style.md`
+for checkout members; `rules/common/code-style.md` would be delivered beside it.
+
+### What counts as a conflict
+
+A conflict is two items competing for one slot on the member's machine. Skills and
+agents are flattened into one directory per tool, env keys into one `env.sh`, MCP
+servers into one config map by name, hooks and model profiles into one set by
+id: two active namespaces with the same name cannot both land, and choosing one
+would depend on read order. Rules and claudemd namespaces never share a slot:
+`rules/<ns>/` keeps its own local path and each claudemd file has its own part
+of the managed block (in namespace order), so two namespaces with one name are
+both delivered and only the root item gives way. The root is never a side of a
+conflict: root plus two namespaces is reported as the two namespaces.
+
+### Failure policy
+
+A conflict, a duplicate name inside one file, or a file in the active set that
+does not parse stops that type for the run and keeps what is installed; the rest
+of the pull goes on. The warning names the file or files and the fix.
+
+| Type | Effect of a failure |
+|---|---|
+| env | `env.sh` and the shell profile keep what they had |
+| hooks | the whole hooks reconcile is skipped, built-in hooks included, because their `builtin:` overrides live in the root file |
+| mcp | no tool's MCP config changes |
+| models | no switched agent is updated; `teamai models` commands fail with the same message; `teamai push` refuses any invalid models file, active or not |
+| skills, agents | that type is neither installed nor swept; the other types and the search index still sync |
+| rules, claudemd, docs, learnings | no conflict case |
+
+For env, hooks, MCP and models the warning is also written to
+`~/.teamai/debug.log`, so a silent session-start pull leaves a trace. This
+replaces two earlier behaviours: an invalid hooks or MCP file reconciled to the
+empty set and removed every managed entry, and a skills or agents collision
+aborted the whole scope.
+
+### Legacy mode
+
+Legacy mode is a directory with no active role and no active project in a team
+without `manifest/projects.yaml` (`resolveResourceNamespaces` returns `null`).
+It keeps its old behaviour, and the types differ in what that is:
+
+- **env, hooks, MCP, models** read the root file only; namespace files are
+  ignored. A name the root file repeats is let through as before, and `doctor`
+  lists it. Delivering every namespace here would turn every override into a
+  conflict (`API_BASE` in both `env/checkout/` and `env/billing/`).
+- **skills** deliver every namespace beside the root, flattened; a repeated name
+  installs one of them, and `doctor` lists the name.
+- **agents** keep rejecting a stem clash, root plus namespace included, because
+  the install is flat; agents are not updated that run.
+- **rules, claudemd, docs** deliver every namespace (rules at their own paths,
+  claudemd all in the block, all of `docs/`).
+
+A consequence for hooks and MCP: a role-less member in a team with `roles.yaml`
+used to receive every `roles:`-scoped entry (no role matched all), and stops
+receiving it once the admin moves it into `hooks/<ns>/` or `mcp/<ns>/`.
+
+### Docs
+
+A top-level `docs/<ns>/` is **declared** once any role or project in either
+manifest lists it under `resources.docs`, whatever the member's own roles. A
+declared namespace reaches only members who have it active; an undeclared
+`docs/<dir>/` stays shared, so existing subdirectories keep reaching everyone.
+The directory match is case-folded, so `docs/Checkout/` is withheld for an
+inactive `checkout` on every filesystem. When a namespace stops being active,
+pull removes the local copies that are byte-equal to the team file and keeps
+edited ones, naming them. The search index and `doctor`'s `Team docs delivered`
+use the same filter as pull.
+
+`team-codebase` (any case) is rejected as a docs namespace at the manifest schema,
+so the manifest fails to load like any invalid namespace:
+`docs/team-codebase/` is the legacy codebase output. It therefore stays delivered
+and indexed for everyone. The search index reaches the legacy codebase docs
+only through the docs walk, so withholding `docs/team-codebase/` in a later
+change would silently drop them from recall.
+
+### Models
+
+Team profiles come from `models/models.yaml` plus `models/<ns>/models.yaml` for
+each active namespace; a namespace profile replaces the root one by `id`. A
+stored team API key is bound to the profile id and the origin (scheme, host,
+port) of its `base_url`, stored as `team:<id>@<origin>` so several origins of one
+id coexist. When the resolved profile's origin has no key, pull leaves the agents
+switched to it alone and prints a line to run `teamai models switch team:<id>`;
+an override can therefore never send a key to a gateway it was not configured
+for. The binding applies whoever changed the URL, so moving the root profile to
+another host (legacy mode included) makes each member re-key once. A key stored
+by a 0.26.0 beta as `team:<id>` counts only for the root profile's origin. When
+the namespace deactivates, agents return to the root profile with its key; a
+profile that existed only in a namespace the member left keeps the agent's
+settings, and pull says it `is no longer active in your namespaces`.
+
+### Manifest and per-entry keys
+
+`resources:` gains `env`, `hooks`, `mcp`, `models` and `docs`. They are optional
+and never defaulted: saving a manifest writes back the parsed object, so a
+default would add `env: []` to every manifest an admin edits and break members on
+an older CLI. For the same reason `--namespaces` on `teamai roles` and
+`teamai projects` `add`/`update` sets only the older keys (`knowledge`, `skills`,
+`agents`, and `learnings` for projects); the new keys are declared by hand. An unknown `resources:` key now warns instead of failing the
+scope, so the next axis does not break older members again. 0.25.0 and the
+0.26.0 betas still reject unknown keys: every member has to upgrade before a team
+declares one of the new axes.
+
+The per-entry keys go away. `projects:` on env, hooks and MCP, and `roles:` on
+env, existed only in the 0.26.0 betas: an entry that carries one reaches nobody,
+and pull warns with the namespace file to move it to, one per listed id.
+`roles:` on hooks and MCP shipped in 0.25.0 and keeps filtering for one more
+minor release; pull warns once per run and `doctor` has an informational check,
+both naming every target file. Model profiles are strict, so a per-entry key
+fails the file. There is no automatic migration.
+
+### Push and commands
+
+Write-back goes to the origin the resolver reports: an edited item that replaces
+a root one is written to its namespace file, never to the root. The agents
+source order is active namespace, then this machine's placement record, then the
+shared root; in role/project mode a same-stem root file no longer withdraws the
+placement record (legacy mode still does). The skills push scan uses role ∪
+project namespaces, and `push` picks up a change to any `env/<ns>/env.yaml`.
+`teamai env add|remove` take `--role` / `--project`. `teamai remove mcp <name>`
+removes from the root file when it defines the name, otherwise from the one
+namespace file that does, and asks for `--role` / `--project` only when several
+namespace files and not the root define it; removing a root server that a
+namespace overrides leaves that namespace's members with their override.
+
+`doctor` lists each override as a note (information, not a failed check), and in
+legacy mode each repeated name. `teamai env|mcp|hooks|models list`,
+`teamai list <env|hooks|mcp> --source repo` and `teamai status` show where each
+entry comes from.
+
+### Known gaps
+
+- The tag channel matches skills by name across every namespace, so a tagged
+  skill that exists only in an inactive namespace still reaches the member.
+- No pull protects a local edit from being overwritten, override transitions
+  included.
+- A mistyped per-entry key (`role:`) is stripped by the schema and the entry
+  reaches everyone; `pull --dry-run` prints no hooks or MCP warnings.
+
 ## Backward compatibility
 
 | Scenario | Behavior |
@@ -257,13 +459,13 @@ experience) both need it, without affecting the single-project main path.
 
 **Docs:** README (bilingual) + usage-guide (bilingual) per the CLAUDE.md sync rule.
 
-**Extended by [#668](https://github.com/Tencent/teamai-cli/issues/668):** the three
-per-item-scoped resource types this design did not cover. `hooks/hooks.yaml` and
-`mcp/mcp.yaml` entries gain an optional `projects:` key beside their `roles:` one,
-and `env/env.yaml` variables gain both — `src/membership.ts` resolves the two axes
-together and ANDs them, so a delivery path cannot filter on one and forget the
-other. Unlike resource namespaces, which take the role ∪ project union, a
-per-item key is a restriction.
+**Extended by [#707](https://github.com/Tencent/teamai-cli/issues/707):** env,
+hooks, MCP servers, team model profiles and docs, which this design did not
+cover, take the same `<type>/<ns>/` namespaces, and an active namespace item
+replaces a root item of the same name for every type. It replaces the per-entry
+`roles:` / `projects:` keys that #563 and #668 had added to hooks, MCP servers and
+env variables. See
+[One namespace model for every resource type](#one-namespace-model-for-every-resource-type).
 
 ## Phasing
 
@@ -296,11 +498,11 @@ lone project; migrating existing flat learnings into a `shared/` subdirectory;
 re-running `init --project all` already re-resolves the current manifest).
 
 Also out of scope here, and delivered later by
-[#668](https://github.com/Tencent/teamai-cli/issues/668): per-item project scoping
-of hooks, MCP servers and env variables. Still unscoped on either axis after it:
-`packages` (whose schema mixes an array with a nested object, so it is not the same
-edit), `docs`, and `culture.md` — which suits a document defining how the whole
-team works.
+[#707](https://github.com/Tencent/teamai-cli/issues/707): namespace scoping of
+hooks, MCP servers, env variables, model profiles and docs. Still unscoped after
+it: `packages` (whose schema mixes an array with a nested object, so it is not the
+same edit) and `culture.md`, which suits a document defining how the whole team
+works.
 
 ## End-to-end test plan (real CLI, per CLAUDE.md — type-check/unit tests don't count)
 
