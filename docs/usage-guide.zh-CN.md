@@ -346,21 +346,6 @@ learnings 迁到独立分支之前团队已经写下的内容，原地留在默�
 不迁移：该目录仍会被读取，所有既有 learning 依然能从 `teamai recall` 中找回。新的
 learning 写入 `teamai-learnings`。
 
-**删除其他项目上报进你 `stats/` 的 skill。** 在 skill 使用按 scope 记录之前，下一个
-执行 pull 的项目会上报所有项目的 skill，因此 `teamai-reports` 上的 `stats/<user>.yaml` 可能
-统计了属于无关仓库的 skill。这些事件没有记录目录，teamai 无法归属，也不会改写该
-文件。请手动删除该条目，在单独的 clone 中操作，不要动 teamai 的 `reports-wt/` 检出：
-
-```bash
-git clone --branch teamai-reports --single-branch <team-repo-url> teamai-reports
-cd teamai-reports
-# 删除 stats/<user>.yaml 中 `skills:` 下该 skill 的条目
-git commit -am "stats: remove <skill> reported from another project"
-git push origin teamai-reports
-```
-
-下一次上报会先读取该分支，所以条目不会再出现。
-
 **默认分支受保护时所需的最小 Git 权限。**
 
 成员需要：
@@ -1687,7 +1672,8 @@ Pull 对整批统计上报最多等待 5 秒，之后继续其他工作，上报
 自己的使用；未配置 teamai 的目录不记录。Dashboard 会话仍写入整机共用的
 `~/.teamai/dashboard/events.jsonl`，但每条事件都记下所属 scope 数据目录（data home）的键（哈希值，不是路径），因此每个 scope
 只上报在其中记录的会话：user scope 的 pull 不再上报项目的会话，项目会上报自己的
-Copilot 会话以及从软链接路径启动的会话。旧版本记录的事件没有该键：项目上报目录
+Copilot 会话以及从软链接路径启动的会话。该键按事件记录：在项目之外运行的 hook
+（例如会话结束前已删除的 worktree 中）会把事件上报给其所在的 scope。旧版本记录的事件没有该键：项目上报目录
 位于其根目录下的那些，user scope 一条也不上报。目标确认成功后才清理自己的使用事件，
 推送失败会保留事件。上报完成前继续持有相关同步锁，
 避免另一次 Pull 与尚未完成的上报竞争。
@@ -1702,6 +1688,21 @@ Copilot 会话以及从软链接路径启动的会话。旧版本记录的事件
 ```yaml
 usageReport: false
 ```
+
+**删除其他项目上报进你 `stats/` 的 skill。** 在 skill 使用按 scope 记录之前，下一个
+执行 pull 的项目会上报所有项目的 skill，因此 `teamai-reports` 上的 `stats/<user>.yaml` 可能
+统计了属于无关仓库的 skill。这些事件没有记录目录，teamai 无法归属，也不会改写该
+文件。请手动删除该条目，在单独的 clone 中操作，不要动 teamai 的 `reports-wt/` 检出：
+
+```bash
+git clone --branch teamai-reports --single-branch <team-repo-url> teamai-reports
+cd teamai-reports
+# 删除 stats/<user>.yaml 中 `skills:` 下该 skill 的条目
+git commit -am "stats: remove <skill> reported from another project"
+git push origin teamai-reports
+```
+
+下一次上报会先读取该分支，所以条目不会再出现。若团队仓为 `http` 类型，`stats/<user>.yaml` 位于默认分支。
 
 ### Git 子模块
 
