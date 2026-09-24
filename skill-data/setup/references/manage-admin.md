@@ -174,7 +174,7 @@ id or server name. Hooks and MCP servers have no add command: edit the file and
   have `<ns>` active. A member's API key is bound to the profile's gateway origin:
   when an override points at another host, their pull leaves the agent alone and
   asks them to run `teamai models switch team:<id>` to set the key for it.
-- Have every member upgrade before declaring `env`, `hooks`, `mcp` or `models` in a
+- Have every member upgrade before declaring `env`, `hooks`, `mcp`, `models` or `docs` in a
   manifest: teamai 0.25.0 and the 0.26.0 betas reject those keys and their pull stops.
 
 ## When sync fails
