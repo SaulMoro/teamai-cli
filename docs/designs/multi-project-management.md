@@ -297,7 +297,7 @@ conflict: root plus two namespaces is reported as the two namespaces.
 ### Failure policy
 
 A conflict, a duplicate name inside one file, or a file in the active set that
-does not parse stops that type for the run and keeps what is installed; the rest
+does not parse or cannot be read (only a missing file is absent) stops that type for the run and keeps what is installed; the rest
 of the pull goes on. The warning names the file or files and the fix. During the
 `roles:` deprecation window a name repeated in one file with `roles:` on every
 copy is not a duplicate: each copy that passes the role filter is delivered, as

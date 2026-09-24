@@ -4,10 +4,10 @@ import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
 import type { ResourceItem, TeamaiConfig, LocalConfig, HookDef } from '../types.js';
 import { TEAMAI_CUSTOM_HOOK_PREFIX, areTeamHooksDisabled, getHooksSharing } from '../types.js';
-import { pathExists, readFileSafe } from '../utils/fs.js';
+import { pathExists } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, reportEntryResolution, resolveEntriesFor,
+  entryFilePath, readEntryFileText, reportEntryResolution, resolveEntriesFor,
   type EntryReader, type EntryResolution,
 } from '../namespaced-entries.js';
 
@@ -64,7 +64,9 @@ type HooksFileRead = { ok: true; yaml: HooksYaml; declaresBuiltin: boolean } | {
 
 /** Read one hooks file; null when it does not exist. */
 async function readHooksFile(absolutePath: string, relativePath: string): Promise<HooksFileRead | null> {
-  const content = await readFileSafe(absolutePath);
+  const file = await readEntryFileText(absolutePath, relativePath);
+  if (!file.ok) return file;
+  const content = file.text;
   if (content === null) return null;
   try {
     const raw: unknown = YAML.parse(content);

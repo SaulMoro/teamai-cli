@@ -8,6 +8,7 @@ import { getTeamaiHomeDir } from '../types.js';
 import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import {
   listEntryFiles,
+  readEntryFileText,
   type EntryFileRead,
   type EntryReader,
   type ResolvedEntry,
@@ -161,15 +162,6 @@ export function getLocalProfilesPath(): string {
   return path.join(getTeamaiHomeDir(), 'models', 'models.yaml');
 }
 
-async function readOptionalProfile(file: string): Promise<string | null> {
-  try {
-    return await fs.promises.readFile(file, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
 export function getLocalValuesPath(): string {
   return path.join(getTeamaiHomeDir(), 'models', 'values.json');
 }
@@ -210,7 +202,9 @@ export function getTeamIdentity(localConfig: LocalConfig): string {
 
 /** One profiles file, or why it cannot be used; null when it does not exist. `label` names it in the reason. */
 async function readProfilesFile(filePath: string, label: string): Promise<EntryFileRead<ModelProfile> | null> {
-  const raw = await readOptionalProfile(filePath);
+  const file = await readEntryFileText(filePath, label);
+  if (!file.ok) return file;
+  const raw = file.text;
   if (raw === null) return null;
   let parsed: unknown;
   try {

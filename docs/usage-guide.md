@@ -896,7 +896,7 @@ projects:
   reaches every tool). There is no field merge.
 - **Conflicts stop the type, not the pull.** The same name twice in one file,
   the same name in two active namespaces, or an active file that does not parse
-  means that type is not applied this run: what is installed stays as it is, and
+  or cannot be read means that type is not applied this run: what is installed stays as it is, and
   the warning names the file(s) and the fix. Hooks and MCP no longer remove every
   managed entry when their file is invalid. The built-in hooks are still
   installed where missing, so a first `teamai init` gets the session-start pull that applies

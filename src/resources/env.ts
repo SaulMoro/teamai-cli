@@ -7,7 +7,7 @@ import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, isSelf
 import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFileAbsolutePath, listEntryFiles, reportEntryResolution, resolveEntriesFor,
+  entryFileAbsolutePath, listEntryFiles, readEntryFileText, reportEntryResolution, resolveEntriesFor,
   type EntryReader,
 } from '../namespaced-entries.js';
 import {
@@ -50,7 +50,9 @@ export type EnvYamlRead =
 export const envEntryReader: EntryReader<EnvVariable> = {
   type: 'env',
   async read(absolutePath, relativePath) {
-    const content = await readFileSafe(absolutePath);
+    const file = await readEntryFileText(absolutePath, relativePath);
+    if (!file.ok) return file;
+    const content = file.text;
     if (content === null) return null;
     let raw: unknown;
     try {

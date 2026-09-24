@@ -25,7 +25,7 @@ import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js'
 import { findProject, loadProjectsManifest, unknownProjectMessage } from './projects.js';
 import { caseFoldKey, isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import type { LocalConfig } from './types.js';
-import { listDirs, pathExists } from './utils/fs.js';
+import { listDirs, pathExists, readFileIfExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
 
@@ -88,6 +88,23 @@ export interface EntryScopeKeys {
 }
 
 /** How one type's files are read. */
+/**
+ * The text of one type file, null when it does not exist. Any other read error
+ * (a permission, a directory on the name) is the file's problem, not its
+ * absence: taking it for absent would deliver the root entry in place of an
+ * override.
+ */
+export async function readEntryFileText(
+  absolutePath: string,
+  relativePath: string,
+): Promise<{ ok: true; text: string | null } | { ok: false; reason: string }> {
+  try {
+    return { ok: true, text: await readFileIfExists(absolutePath) };
+  } catch (error) {
+    return { ok: false, reason: `${relativePath} cannot be read: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 export interface EntryReader<E> {
   readonly type: EntryType;
   /** null when the file does not exist. */

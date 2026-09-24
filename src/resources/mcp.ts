@@ -5,7 +5,7 @@ import type { ResourceItem, TeamaiConfig, LocalConfig, McpServerDef } from '../t
 import { readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFileAbsolutePath, entryFilePath, listEntryFiles,
+  entryFileAbsolutePath, entryFilePath, listEntryFiles, readEntryFileText,
   type EntryReader,
 } from '../namespaced-entries.js';
 
@@ -59,7 +59,11 @@ type McpYamlRead =
 
 /** Read one MCP file, keeping why it cannot be used; `yaml: null` when absent. */
 async function readMcpFile(absolutePath: string): Promise<McpYamlRead> {
-  const content = await readFileSafe(absolutePath);
+  return parseMcpContent(await readFileSafe(absolutePath));
+}
+
+/** Parse one MCP file's text; `yaml: null` when it is absent or empty. */
+function parseMcpContent(content: string | null): McpYamlRead {
   if (!content) return { ok: true, yaml: null };
   try {
     return { ok: true, yaml: McpYamlSchema.parse(YAML.parse(content)) };
@@ -72,7 +76,9 @@ async function readMcpFile(absolutePath: string): Promise<McpYamlRead> {
 export const mcpEntryReader: EntryReader<TeamMcpServer> = {
   type: 'mcp',
   async read(absolutePath, relativePath) {
-    const read = await readMcpFile(absolutePath);
+    const file = await readEntryFileText(absolutePath, relativePath);
+    if (!file.ok) return file;
+    const read = parseMcpContent(file.text);
     if (!read.ok) return { ok: false, reason: `${relativePath} does not parse: ${read.reason}` };
     return read.yaml === null ? null : { ok: true, entries: read.yaml.servers };
   },
