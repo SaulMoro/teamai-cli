@@ -138,4 +138,35 @@ describe('recall rebuilding a missing index', () => {
       .sort();
     expect(docs).toEqual(['alpha/gateway.md', 'runbooks/oncall.md', 'shared.md']);
   });
+
+  it('indexes the rules pull delivers here: a namespace rule in place of the root one it replaces (#707)', async () => {
+    const repo = path.join(tmp, '.teamai', 'team-repo');
+    fs.writeFileSync(
+      path.join(repo, 'manifest', 'projects.yaml'),
+      'version: 1\nprojects:\n  - id: alpha\n    name: Alpha\n    resources:\n      knowledge: [alpha]\n'
+        + '  - id: beta\n    name: Beta\n    resources:\n      knowledge: [beta]\n',
+    );
+    const rule = (rel: string): void => {
+      fs.mkdirSync(path.dirname(path.join(repo, 'rules', rel)), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'rules', rel), '# retry budget\nretry budget for the gateway');
+    };
+    rule('shared.md');
+    rule('style.md');
+    rule('alpha/style.md');
+    rule('beta/billing.md');
+    vi.mocked(loadTeamConfig).mockResolvedValue({
+      team: 't', description: '', repo: 'r', provider: 'git', reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: {},
+    });
+
+    await recall('retry budget', {});
+
+    const index = JSON.parse(fs.readFileSync(path.join(tmp, '.teamai', 'search-index.json'), 'utf8'));
+    const rules = index.entries
+      .filter((e: { type: string }) => e.type === 'rules')
+      .map((e: { filename: string }) => e.filename)
+      .sort();
+    expect(rules).toEqual(['alpha/style.md', 'shared.md']);
+  });
 });

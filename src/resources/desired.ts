@@ -302,23 +302,41 @@ export async function indexedSkills(
     : { kind: 'keep-indexed' };
 }
 
+/** The rules recall indexes, relative to `rules/`: the rules pull delivers. */
+export async function indexedRuleFiles(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+): Promise<string[]> {
+  const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
+  return items.map((item) => path.posix.relative('rules', item.relativePath));
+}
+
 /**
- * The docs and skills to index outside `pull` (recall, contribute): the sets
- * pull delivers here, not the whole `docs/` and `skills/` trees. Throws when
- * the scope's manifests cannot be read, as `pull` stops the scope then.
+ * The docs, rules and skills to index outside `pull` (recall, contribute): the
+ * sets pull delivers here, not the whole `docs/`, `rules/` and `skills/` trees.
+ * Throws when the scope's manifests cannot be read, as `pull` stops the scope
+ * then.
  */
 export async function deliveredIndexSources(
   localConfig: LocalConfig,
-): Promise<Pick<BuildIndexOptions, 'docFiles' | 'skills'>> {
+): Promise<Pick<BuildIndexOptions, 'docFiles' | 'ruleFiles' | 'skills'>> {
   const repoPath = localConfig.repo.localPath;
   const docFiles = await pathExists(path.join(repoPath, 'docs'))
     ? (await resolveDocsForDirectory(localConfig)).files
     : undefined;
-  if (!await pathExists(path.join(repoPath, 'skills'))) return { docFiles };
+  const hasRules = await pathExists(path.join(repoPath, 'rules'));
+  const hasSkills = await pathExists(path.join(repoPath, 'skills'));
+  if (!hasRules && !hasSkills) return { docFiles };
   const teamConfig = await loadTeamConfig(repoPath);
   // pull delivers nothing to a scope without teamai.yaml.
-  if (!teamConfig) return { docFiles, skills: { kind: 'dirs', dirs: [] } };
-  return { docFiles, skills: await indexedSkills(teamConfig, localConfig, await buildRolePullContext(localConfig)) };
+  if (!teamConfig) return { docFiles, ruleFiles: [], skills: { kind: 'dirs', dirs: [] } };
+  const roleContext = await buildRolePullContext(localConfig);
+  return {
+    docFiles,
+    ...(hasRules ? { ruleFiles: await indexedRuleFiles(teamConfig, localConfig, roleContext) } : {}),
+    ...(hasSkills ? { skills: await indexedSkills(teamConfig, localConfig, roleContext) } : {}),
+  };
 }
 
 export interface DesiredRules {

@@ -2,8 +2,8 @@ import path from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import matter from 'gray-matter';
 import {
-  buildRolePullContext, collectClaudemdFiles, describeDeliveryConflict, indexedSkills,
-  resolveDesiredAgents, resolveDesiredRules, resolveDesiredSkills, type RolePullContext,
+  buildRolePullContext, collectClaudemdFiles, describeDeliveryConflict, indexedRuleFiles,
+  indexedSkills, resolveDesiredAgents, resolveDesiredRules, resolveDesiredSkills, type RolePullContext,
 } from './resources/desired.js';
 import type { IndexedSkills } from './utils/search-index.js';
 import { requireInit, loadState, saveState, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
@@ -806,6 +806,8 @@ async function pullForScope(
           // The docs pull delivers here, not the whole docs/ tree (#707).
           docFiles: (await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? [])).files,
           rulesDir: await pathExists(rulesRepoDir) ? rulesRepoDir : undefined,
+          // The rules pull delivers here, not the whole rules/ tree (#707).
+          ruleFiles: await indexedRuleFiles(freshConfig, localConfig, roleContext),
           skills: await skillsToIndex(),
           codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
           votesDir: votesExist ? votesDir : undefined,

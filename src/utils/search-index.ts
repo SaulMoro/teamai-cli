@@ -638,6 +638,12 @@ export interface BuildIndexOptions {
   docFiles?: readonly string[];
   rulesDir?: string;
   /**
+   * The rules to index, relative to `rulesDir`, in place of walking all of it:
+   * the set `pull` delivers to this member (#707), so recall returns neither a
+   * root rule a namespace replaces nor a rule of an inactive namespace.
+   */
+  ruleFiles?: readonly string[];
+  /**
    * Every skill under this directory. A member's index passes `skills`
    * instead; `viz` indexes a whole knowledge repo, not one member's view.
    */
@@ -687,7 +693,9 @@ export async function buildIndex(
   } else if (opts.docsDir) {
     entries.push(...await collectRecursiveMdEntries(opts.docsDir, 'docs', voteCounts));
   }
-  if (opts.rulesDir) {
+  if (opts.rulesDir && opts.ruleFiles) {
+    entries.push(...await collectListedMdEntries(opts.rulesDir, opts.ruleFiles, 'rules', voteCounts));
+  } else if (opts.rulesDir) {
     entries.push(...await collectRecursiveMdEntries(opts.rulesDir, 'rules', voteCounts));
   }
   if (opts.skills?.kind === 'dirs') {
