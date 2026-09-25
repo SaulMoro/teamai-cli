@@ -17,7 +17,7 @@ import {
   getStatePath,
   getDataHome,
 } from './types.js';
-import { readFileSafe, readJson, writeFile, writeJson, expandHome, pathExists } from './utils/fs.js';
+import { readFileSafe, readJson, writeFileAtomic, writeJson, expandHome, pathExists } from './utils/fs.js';
 import { resolveAnchors } from './utils/git.js';
 import { getUserHome } from './utils/home.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
@@ -56,7 +56,7 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
     resourceProfileVersion: manifest.version,
   };
 
-  await writeFile(expandHome(configPath), YAML.stringify(migrated));
+  await writeFileAtomic(expandHome(configPath), YAML.stringify(migrated));
   log.info('Migrated legacy teamai config to default role profile: hai');
   return migrated;
 }
@@ -112,7 +112,7 @@ function serializeLocalConfig(config: LocalConfig): string {
  * Save the local config
  */
 export async function saveLocalConfig(config: LocalConfig): Promise<void> {
-  await writeFile(expandHome(getUserConfigPath()), serializeLocalConfig(config));
+  await writeFileAtomic(expandHome(getUserConfigPath()), serializeLocalConfig(config));
 }
 
 /**
@@ -250,7 +250,7 @@ export async function saveLocalConfigForScope(
 ): Promise<void> {
   const dataHome = getDataHome(config);
   const configPath = path.join(dataHome, 'config.yaml');
-  await writeFile(expandHome(configPath), serializeLocalConfig(config));
+  await writeFileAtomic(expandHome(configPath), serializeLocalConfig(config));
   // If the config lives in a project partition, drop the `anchor` reverse-lookup
   // file next to it (issue #374 P3). Previously only migration wrote it, so
   // freshly-init'd partitions had no anchor and `status --all` could not resolve

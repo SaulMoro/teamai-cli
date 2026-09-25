@@ -60,6 +60,29 @@ export async function writeFile(filePath: string, content: string): Promise<void
   await fse.writeFile(expanded, content, 'utf-8');
 }
 
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * The path a link chain starting at `filePath` ends at, whether or not a file
+ * exists there yet; `filePath` itself when it is not a link. Each hop resolves
+ * against the real directory of the link, as the kernel does.
+ */
+async function symlinkTarget(filePath: string): Promise<string> {
+  let target = filePath;
+  for (let hops = 0; hops < MAX_SYMLINK_HOPS; hops++) {
+    try {
+      if (!(await fse.lstat(target)).isSymbolicLink()) return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return target;
+      throw error;
+    }
+    target = path.resolve(await fse.realpath(path.dirname(target)), await fse.readlink(target));
+  }
+  throw new Error(
+    `Cannot write ${filePath}: it is part of a symbolic link loop. Point the link at a regular file, then retry.`,
+  );
+}
+
 /**
  * Write a text file atomically (same-dir temp file + rename), preserving the
  * target's existing permission bits (or defaulting to 0o600 for a new file).
@@ -72,21 +95,22 @@ export async function writeFile(filePath: string, content: string): Promise<void
  * such as a partition's config.yaml; `writeFile` (a plain overwrite) is fine
  * for regenerable files. Pass options.mode to force restrictive permissions
  * for a file that newly contains credentials.
+ *
+ * A symlinked target is written at the file its link chain ends at, so the
+ * links stay; for a dangling link that file (and its directory) is created.
  */
 export async function writeFileAtomic(
   filePath: string,
   content: string,
   options?: { mode?: number },
 ): Promise<void> {
-  const expanded = expandHome(filePath);
+  const expanded = await symlinkTarget(expandHome(filePath));
   await fse.ensureDir(path.dirname(expanded));
   let mode = options?.mode ?? 0o600;
-  if (options?.mode === undefined) {
-    try {
-      mode = (await fse.stat(expanded)).mode & 0o777;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+  try {
+    if (options?.mode === undefined) mode = (await fse.stat(expanded)).mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   const tmp = `${expanded}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
