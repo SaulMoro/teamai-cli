@@ -824,6 +824,21 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
       sum + (d && typeof d === 'object' && 'costMicros' in d && typeof d.costMicros === 'number' ? d.costMicros : 0), 0)).toBe(20);
   });
 
+  it('a whole entry from before covers a rollout still running only as far as it had got', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const today = new Date().toISOString().slice(0, 10);
+    // That release reported 6 prompts: rollout A's 5 and rollout B's first.
+    writeSharedSnapshots({ 'codex-s': 6 }, today, project);
+    const dir = path.join(getDataHome(project), 'dashboard');
+    const writtenAt = new Date(Date.now() - 20 * 60_000);
+    for (const name of SNAPSHOTS) fs.utimesSync(path.join(dir, `reported-${name}.json`), writtenAt, writtenAt);
+    // A was compacted; B had 1 prompt by then, and has 3 now.
+    write([event('rollout-b.jsonl', 'stop', 30, { prompts: 1 }), event('rollout-b.jsonl', 'stop', 50, { prompts: 3 })]);
+
+    expect((await stats()).prompts).toBe(2);
+  });
+
   it('reading the baselines without persisting them, as teamai stats does, does not move the time they cover', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);

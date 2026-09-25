@@ -433,7 +433,7 @@ written before rollouts were kept is one total: an earlier release rewrote every
 session in the log on each report, so it covers the rollouts begun by the time
 its file was last written (read before this report writes it; a seed keeps the
 shared file's time, and `teamai stats`, which only reads, writes no seed). Those still in
-the log consume it in order, what is left is the dropped rollouts', kept as one
+the log consume it in order, as far as each had got by that time, what is left is the dropped rollouts', kept as one
 prior rollout, and a rollout begun later is new.
 Compaction also keeps a session whose tool process is still running, so a run
 an exit from a dashboard before `processExitAfter` marked stopped keeps its

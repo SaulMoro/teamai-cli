@@ -157,7 +157,7 @@ async function unreportedDashboardStats(
   config: LocalConfig,
 ): Promise<AggregatedDashboardStats> {
   const {
-    computeInterventionDelta, computePromptTokenDelta, droppedRollouts, interventionCounts, reportedBaselines,
+    computeInterventionDelta, computePromptTokenDelta, droppedRollouts, interventionCounts, metricsAsOf, reportedBaselines,
     snapshotWrittenAt, withDroppedRollouts,
   } = await import('./team-push.js');
   const { aggregateDailySessions } = await import('./session-trends.js');
@@ -165,7 +165,7 @@ async function unreportedDashboardStats(
   const writtenAt = await snapshotWrittenAt(config);
   const currentDaily = aggregateDailySessions(events);
   const { promptTokens, interventions, daily } = await reportedBaselines(events, metrics, currentDaily, config, false);
-  const dropped = droppedRollouts(metrics, promptTokens, interventions, daily, writtenAt);
+  const dropped = droppedRollouts(metrics, promptTokens, interventions, daily, writtenAt, metricsAsOf(events, writtenAt));
   const currentInterventions = withDroppedRollouts(interventionCounts(metrics), currentDaily, dropped).interventions;
 
   const interventionDelta = computeInterventionDelta(currentInterventions, interventions);

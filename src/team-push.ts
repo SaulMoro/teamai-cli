@@ -410,10 +410,12 @@ export interface DroppedRollout {
  *
  * An entry written before rollouts were kept is one total. An earlier release
  * rewrote every session in the log on each report, so that total covers the
- * rollouts that had begun by `writtenAt`, when its file was last written: those
- * still in the log consume it in order, and what is left is the dropped ones',
- * kept as one prior rollout. A rollout begun after it is new. Without
- * `writtenAt`, every rollout in the log is taken as covered.
+ * rollouts that had begun by `writtenAt`, when its file was last written, as
+ * far as each had got by then (`before`: the metrics of the events up to
+ * `writtenAt`): those still in the log consume it in order, and what is left
+ * is the dropped ones', kept as one prior rollout. A rollout begun after it is
+ * new, as is what one begun before it has done since. Without `writtenAt`,
+ * every rollout in the log is taken as covered, as it is now.
  */
 export function droppedRollouts(
   current: Map<string, SessionMetrics>,
@@ -421,6 +423,7 @@ export function droppedRollouts(
   interventions: ReportedInterventions,
   daily: ReportedDailySessions,
   writtenAt?: number,
+  before?: Map<string, SessionMetrics>,
 ): Map<string, DroppedRollout[]> {
   const dropped = new Map<string, DroppedRollout[]>();
   for (const [sid, cur] of current) {
@@ -447,7 +450,7 @@ export function droppedRollouts(
         prompts: total.prompts, tokens: { ...total.tokens }, interrupt: iv.interrupt, toolReject: iv.toolReject,
         correction: iv.correction, durationMs: day?.durationMs ?? 0, requestDaily: { ...(day?.requestDaily ?? {}) },
       };
-      const covered = Object.values(cur.segments)
+      const covered = Object.values((writtenAt !== undefined && before?.get(sid)?.segments) || cur.segments)
         .filter((segment) => writtenAt === undefined || Date.parse(segment.since) <= writtenAt)
         .sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
       const take = (own: number, rest: number) => Math.max(0, Math.min(own, rest));
@@ -684,6 +687,11 @@ async function creditSplitRuns(
   return result;
 }
 
+/** The metrics of `events` up to `at`, what an entry written then saw; undefined without `at`. */
+export function metricsAsOf(events: DashboardEvent[], at: number | undefined): Map<string, SessionMetrics> | undefined {
+  return at === undefined ? undefined : aggregateSessionMetrics(events.filter((e) => Date.parse(e.timestamp) <= at));
+}
+
 /**
  * When the scope's prompt-token snapshot was last written, before this report
  * writes it: its own file's, else the shared one it would be seeded from. An
@@ -859,7 +867,9 @@ export async function reportUsageToTeam(
     const {
       interventions: reportedInterventions, promptTokens: reportedPromptTokens, daily: reportedDailySessions,
     } = await reportedBaselines(dashboardEvents, metrics, currentDaily, reportsConfig, true);
-    const dropped = droppedRollouts(metrics, reportedPromptTokens, reportedInterventions, reportedDailySessions, writtenAt);
+    const dropped = droppedRollouts(
+      metrics, reportedPromptTokens, reportedInterventions, reportedDailySessions, writtenAt, metricsAsOf(dashboardEvents, writtenAt),
+    );
     const effective = withDroppedRollouts(currentInterventions, currentDaily, dropped);
     const { delta: promptTokenDelta, nextReported: nextReportedPromptTokens } = computePromptTokenDelta(
       metrics,
