@@ -141,7 +141,21 @@ export function parseDailySnapshot(value: unknown): DailySessionSnapshot | undef
   if (!value || typeof value !== 'object') return undefined;
   if (!('date' in value) || typeof value.date !== 'string' || !('prompts' in value) || typeof value.prompts !== 'number'
     || !('durationMs' in value) || typeof value.durationMs !== 'number') return undefined;
-  const requestDaily = parseRequestDaily('requestDaily' in value ? value.requestDaily : undefined);
+  // A snapshot from before costs were kept per day holds them as session fields,
+  // on the session's day: read them as that day's, as the delta does.
+  const legacy = (field: string): number => {
+    const n: unknown = Object.entries(value).find(([k]) => k === field)?.[1];
+    return typeof n === 'number' ? n : 0;
+  };
+  const version: unknown = Object.entries(value).find(([k]) => k === 'priceVersion')?.[1];
+  const requestDaily = 'requestDaily' in value
+    ? parseRequestDaily(value.requestDaily)
+    : legacy('pricedRequests') || legacy('costMicros') || legacy('cacheReadTokens') || legacy('cacheEligibleInputTokens')
+      ? { [value.date]: {
+        pricedRequests: legacy('pricedRequests'), costMicros: legacy('costMicros'), cacheReadTokens: legacy('cacheReadTokens'),
+        cacheEligibleInputTokens: legacy('cacheEligibleInputTokens'), priceVersion: typeof version === 'string' ? version : '',
+      } }
+      : {};
   return {
     date: value.date, prompts: value.prompts, durationMs: value.durationMs,
     succeeded: 'succeeded' in value && value.succeeded === 1 ? 1 : 0,

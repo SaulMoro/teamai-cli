@@ -774,6 +774,31 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect(tokens).toMatchObject({ input: 30 });
   });
 
+  it('a whole daily entry from before request costs were kept per day keeps its cost for a later rollout', async () => {
+    const { project } = await setup();
+    const { event, write } = await codexLog(project);
+    const today = new Date().toISOString().slice(0, 10);
+    // An earlier release reported rollout A: its daily entry holds the cost as session fields.
+    writeSharedSnapshots({ 'codex-s': 5 }, today, project);
+    const dir = path.join(getDataHome(project), 'dashboard');
+    fs.writeFileSync(path.join(dir, 'reported-daily-sessions.json'), JSON.stringify({ 'codex-s': {
+      date: today, prompts: 5, durationMs: 0, succeeded: 1, corrected: 0,
+      pricedRequests: 1, costMicros: 100, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1',
+    } }));
+    const past = new Date(Date.now() - 2 * 3_600_000);
+    for (const name of SNAPSHOTS) fs.utimesSync(path.join(dir, `reported-${name}.json`), past, past);
+    // A was compacted; rollout B, begun later, costs $20 on the same day.
+    write([event('rollout-b.jsonl', 'stop', 30, {
+      prompts: 2, requestDaily: { [today]: { pricedRequests: 1, costMicros: 20, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1' } },
+    })]);
+    const reported = await report(project);
+    const days = reported && typeof reported === 'object' && 'daily' in reported && reported.daily && typeof reported.daily === 'object'
+      ? Object.values(reported.daily) : [];
+
+    expect(days.reduce((sum: number, d: unknown) =>
+      sum + (d && typeof d === 'object' && 'costMicros' in d && typeof d.costMicros === 'number' ? d.costMicros : 0), 0)).toBe(20);
+  });
+
   it('reading the baselines without persisting them, as teamai stats does, does not move the time they cover', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);
