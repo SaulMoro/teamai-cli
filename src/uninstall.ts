@@ -62,6 +62,7 @@ import {
   listFilesRecursive,
   expandHome,
 } from './utils/fs.js';
+import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from './utils/home.js';
@@ -116,6 +117,11 @@ interface RemovalPlan {
   teamaiHome: string;
   /** Whether teamaiHome exists on disk. */
   teamaiHomeExists: boolean;
+  /**
+   * Queues of learnings not published yet that deleting teamaiHome takes with
+   * it, each with how many it holds; empty when teamaiHome stays.
+   */
+  unpublishedQueues: Array<{ dir: string; count: number }>;
   /** Whether shared resources (docs / ~/.teamai / shell profile) are part of this removal. */
   includeShared: boolean;
   /** Whether this removal targets Hermes (clears its SOUL.md block + config.yaml hook). */
@@ -615,6 +621,7 @@ async function buildRemovalPlan(
     docsDir: null,
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
+    unpublishedQueues: includeShared ? await listQueuesIn(teamaiHome) : [],
     includeShared,
     hermesCleanup: toolsToMerge.includes('hermes'),
     scope: localConfig.scope,
@@ -846,6 +853,15 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   if (plan.teamaiHomeExists) {
     console.log('   TeamAI home directory:');
     console.log(`     ${plan.teamaiHome}/`);
+    console.log('');
+  }
+
+  if (plan.unpublishedQueues.length > 0) {
+    console.log('⚠  Learnings not published yet, deleted with the home directory:');
+    for (const { dir, count } of plan.unpublishedQueues) {
+      console.log(`     ${count} unpublished learning(s) in ${dir}`);
+    }
+    console.log('   Run `teamai pull` to publish them first, or copy them somewhere safe.');
     console.log('');
   }
 }

@@ -1,14 +1,16 @@
 import path from 'node:path';
 import fse from 'fs-extra';
 import YAML from 'yaml';
-import { LocalConfigSchema, SYNC_LOCK_FILENAME, WORKTREE_DIRNAMES } from './types.js';
-import { resolveAnchors } from './utils/git.js';
+import { isSelfMode, LocalConfigSchema, SYNC_LOCK_FILENAME, WORKTREE_DIRNAMES, type LocalConfig } from './types.js';
+import { getRemoteUrl, resolveAnchors } from './utils/git.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { realpath } from 'node:fs/promises';
-import { expandHome, pathExists, readFileSafe, remove, writeFile } from './utils/fs.js';
+import { expandHome, listFilesRecursive, pathExists, readFileIfExists, readFileSafe, remove, writeFile } from './utils/fs.js';
 import { acquireLock, releaseLock } from './update.js';
-import { readConfigFrom } from './config.js';
+import { detectProjectConfig, readConfigFrom } from './config.js';
+import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
+import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
 
 /**
  * P1-3 automatic migration (issue #374).
@@ -18,16 +20,17 @@ import { log } from './utils/logger.js';
  * inside the business repo at `<workspaceRoot>/.teamai/`. P1-2 flipped NEW
  * installs to the partition `~/.teamai/projects/<slug>/` and reads old installs
  * via a legacy fallback. This module moves a real legacy `.teamai/` INTO the
- * partition the first time a write command (`init`/`pull`/`push`) runs, so the
- * business workspace ends up with zero teamai residue.
+ * partition the first time a write command (`init`/`pull`/`push`/`contribute`,
+ * `import --from-mr`) runs, so the business workspace ends up with zero teamai
+ * residue.
  *
  * Safety model (issue R2): copy → verify → atomic rename, so an interruption
  * never leaves the data half-in-both-places. The source is only renamed to
  * `.teamai.bak/` AFTER the partition is fully in place; we never delete it.
  *
  * Trigger is narrowed by the caller (the global preAction hook): hook-dispatch
- * and read-only commands never reach here. self mode is a hard no-op (its
- * `.teamai/` is team knowledge committed to main, not machine data).
+ * and read-only commands never reach here. self mode moves only its machine
+ * data (its `.teamai/` is team knowledge committed to main): see migrateSelfA1.
  */
 
 /** Directories/files under a legacy `.teamai/` that must NOT be copied. */
@@ -65,20 +68,40 @@ function isSkippedEntry(name: string): boolean {
 // the member has already made, and nothing else has a copy of them, so it has
 // to travel with the partition.
 
-export interface MigrationPlan {
+export type MigrationPlan = {
   legacyDir: string;
   partitionDir: string;
   anchor: string;
-  /**
-   * 'full': copy legacy → partition, then retire the source.
-   * 'retire-only': the partition is already built (e.g. a prior run crashed
-   * between the partition rename and the source retire), so just clean up the
-   * leftover legacy dir. Without this, planMigration would return null on the
-   * "partition exists" check and the legacy dir — including its plaintext `env`
-   * — would linger in the workspace forever, breaking the zero-residue promise.
-   */
-  mode: 'full' | 'retire-only' | 'self';
-}
+} & (
+  | {
+      /**
+       * 'full': copy legacy → partition, then retire the source.
+       * 'retire-only': the partition is already built (e.g. a prior run crashed
+       * between the partition rename and the source retire), so just clean up the
+       * leftover legacy dir. Without this, planMigration would return null on the
+       * "partition exists" check and the legacy dir — including its plaintext `env`
+       * — would linger in the workspace forever, breaking the zero-residue promise.
+       */
+      mode: 'full' | 'retire-only';
+      /** The install in the legacy dir, whose queue it may hold. */
+      legacyOwner: QueueOwner;
+    }
+  | {
+      mode: 'self';
+      /** The self install whose queue the legacy dir may hold. */
+      legacyOwner: QueueOwner;
+    }
+  | {
+      /**
+       * 'superseded': the legacy dir holds `previousOwner`'s install beside
+       * the self knowledge checked out from main, and the partition serves the
+       * self install `init` set up from another checkout (#808). Its machine
+       * data goes aside; the knowledge stays.
+       */
+      mode: 'superseded';
+      previousOwner: QueueOwner;
+    }
+);
 
 /**
  * Class-A1 machine-data entries under a self install's `<repo>/.teamai/` that P2
@@ -96,9 +119,54 @@ const SELF_A1_ENTRIES = [
   'state.json',
   'env.local',
   'env.sh',
+  'managed-mcp.json',
+  'workspaces',
+  'config.yaml',
+] as const;
+
+/**
+ * Machine data a self install no longer reads, deleted rather than moved: the
+ * search index is kept per checkout under `workspaces/<id>/` and rebuilt, so
+ * the old shared one would only sit unread in the partition (#808).
+ */
+const SELF_STALE_ENTRIES = ['search-index.json'] as const;
+
+/**
+ * The queue of unpublished learnings, which self mode kept in each checkout's
+ * `.teamai/` until #808. It moves file by file (drainLegacyQueue), because the
+ * partition queue may already hold other checkouts' learnings, or aside once
+ * the partition serves another install (settleCheckoutQueue).
+ */
+const SELF_LEGACY_QUEUE = 'pending-learnings';
+
+/** Everything the self migration takes out of a checkout's `.teamai/`. */
+const SELF_LEGACY_ENTRIES = [SELF_LEGACY_QUEUE, ...SELF_STALE_ENTRIES, ...SELF_A1_ENTRIES] as const;
+
+/**
+ * What a git or http project install keeps in `.teamai/`: machine data only,
+ * none of it team knowledge. A superseded install's go to a backup (#808).
+ * Its `env` is a file; a directory of that name is the self install's env.
+ *
+ * ORDER MATTERS, as in SELF_A1_ENTRIES: `config.yaml` is what planMigration
+ * keys on, so it moves LAST. A move that fails partway leaves it in place, and
+ * the next run takes the same path for what is left.
+ */
+const SUPERSEDED_ENTRIES = [
+  'state.json',
+  'token',
+  'env',
+  'env.sh',
+  'env.local',
+  'team-repo',
   'search-index.json',
   'managed-mcp.json',
   'workspaces',
+  'sessions',
+  'votes',
+  'dashboard',
+  'usage.jsonl',
+  'known-skills.json',
+  'teamai.lock',
   'config.yaml',
 ] as const;
 
@@ -117,7 +185,9 @@ const SELF_A1_ENTRIES = [
  *
  * When a readable partition config already exists AND a legacy dir still
  * lingers, returns a 'retire-only' plan to finish an interrupted migration
- * instead of skipping. A partition config that exists but cannot be read skips.
+ * instead of skipping, or a 'superseded' one when that config is a self install
+ * and the legacy dir holds its knowledge. A partition config that exists but
+ * cannot be read skips.
  */
 export async function planMigration(cwd?: string): Promise<MigrationPlan | null> {
   const anchors = await resolveAnchors(cwd ?? process.cwd());
@@ -139,17 +209,26 @@ export async function planMigration(cwd?: string): Promise<MigrationPlan | null>
   // key the whole decision on legacy config.yaml existing (that would go blind and
   // strand the remaining A1 forever). A malformed config is treated as "nothing to
   // migrate" rather than crashing a write command.
-  const gateContent =
-    (await readFileSafe(legacyConfig)) ??
-    (await readFileSafe(path.join(partitionDir, 'config.yaml')));
+  const legacyContent = await readFileSafe(legacyConfig);
+  const gateContent = legacyContent ?? (await readFileSafe(path.join(partitionDir, 'config.yaml')));
   if (!gateContent) return null;
   let scope: string | undefined;
   let kind: string | undefined;
+  let legacyOwner: QueueOwner;
   try {
     const parsed = LocalConfigSchema.parse(YAML.parse(gateContent));
     scope = parsed.scope;
     kind = parsed.repo.kind;
-  } catch {
+    legacyOwner = queueOwner(parsed);
+  } catch (e) {
+    // Its queue then stays, and contribute stops on it (queueKeptInCheckout).
+    if (legacyContent !== null && (await holdsQueued(path.join(legacyDir, SELF_LEGACY_QUEUE)))) {
+      log.warn(
+        `Kept the learnings queued in ${path.join(legacyDir, SELF_LEGACY_QUEUE)}: ${legacyConfig} cannot be read ` +
+          `(${(e instanceof Error ? e.message : String(e)).split('\n')[0]}), so teamai cannot tell which install ` +
+          'they belong to. Fix that file; the next init, pull or push moves them.',
+      );
+    }
     return null;
   }
   if (scope !== 'project') return null;
@@ -162,9 +241,20 @@ export async function planMigration(cwd?: string): Promise<MigrationPlan | null>
   // ANY A1 entry still sits in the repo — not just config.yaml — so an interrupted
   // relocation (config.yaml already moved, env.local not yet) is still finished.
   if (kind === 'self') {
-    const hasLegacyA1 = await anyExists(legacyDir, SELF_A1_ENTRIES);
-    if (!hasLegacyA1) return null;
-    return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'self' };
+    const hasLegacyEntries = await anyExists(legacyDir, SELF_LEGACY_ENTRIES);
+    if (!hasLegacyEntries) return null;
+    // As for the other kinds (#797): the checkout's config is then the only one
+    // that loads, and the relocation would drop it for the broken one.
+    const partition = await readPartitionState(partitionDir, anchors.workspaceRoot);
+    if (partition.state === 'unreadable') {
+      log.warn(
+        `Kept the machine data in ${legacyDir}: ${partition.configPath} cannot be read ` +
+          `(${partition.error.split('\n')[0]}). If that persists, fix the file; the next init, pull or push ` +
+          `then moves it into ${partitionDir}.`,
+      );
+      return null;
+    }
+    return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'self', legacyOwner };
   }
 
   // Non-self (git/http): keyed on legacy config.yaml — the git-mode migration
@@ -178,7 +268,13 @@ export async function planMigration(cwd?: string): Promise<MigrationPlan | null>
   // legacy dir, so the workspace really does end up residue-free.
   const partition = await readPartitionState(partitionDir, anchors.workspaceRoot);
   if (partition.state === 'built') {
-    return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'retire-only' };
+    // Another checkout switched the project to self mode, and this one has
+    // checked out the knowledge that switch committed: retiring the whole dir
+    // would take it too.
+    if (isSelfMode(partition.config) && (await holdsSelfKnowledge(legacyDir))) {
+      return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'superseded', previousOwner: legacyOwner };
+    }
+    return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'retire-only', legacyOwner };
   }
   // A partition config that detection cannot read is not "built": the legacy dir
   // holds the only config that still loads. Leave it in place; once the member
@@ -190,7 +286,7 @@ export async function planMigration(cwd?: string): Promise<MigrationPlan | null>
     return null;
   }
 
-  return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'full' };
+  return { legacyDir, partitionDir, anchor: anchors.projectAnchor, mode: 'full', legacyOwner };
 }
 
 /** Tell the member why the legacy dir stays and what lets the next run migrate it (#797). */
@@ -211,7 +307,7 @@ function warnKeptLegacy(legacyDir: string, partitionDir: string, partition: Part
 }
 
 type PartitionState =
-  | { state: 'built' }
+  | { state: 'built'; config: LocalConfig }
   | { state: 'unreadable'; configPath: string; error: string }
   | { state: 'absent' };
 
@@ -225,7 +321,7 @@ async function readPartitionState(partitionDir: string, workspaceRoot: string): 
   const config = await readConfigFrom(partitionDir, workspaceRoot, undefined, (configPath, error) => {
     unreadable = { state: 'unreadable', configPath, error };
   });
-  if (config) return { state: 'built' };
+  if (config) return { state: 'built', config };
   return unreadable ?? { state: 'absent' };
 }
 
@@ -236,6 +332,13 @@ async function anyExists(dir: string, names: readonly string[]): Promise<boolean
   }
   return false;
 }
+
+/**
+ * 'busy': another process holds the sync lock, so the legacy dir is still where
+ * the command's data goes. 'skipped': the legacy dir stays on purpose (see
+ * warnKeptLegacy).
+ */
+export type MigrationResult = 'migrated' | 'skipped' | 'busy' | 'dry-run';
 
 /**
  * Run migration for a decided plan.
@@ -250,26 +353,38 @@ async function anyExists(dir: string, names: readonly string[]): Promise<boolean
  * exact path an un-migrated pull/push contends on. The lock lives INSIDE
  * legacyDir, which is renamed to `.bak` at the very end; we release it BEFORE
  * that rename so the lock path stays valid for release and no live lock is
- * carried into the backup.
+ * carried into the backup. The queue lock of legacyDir (acquireQueueLock) is
+ * taken next and held to the end: it lives outside legacyDir, and it keeps a
+ * queue write that loaded the legacy config out until that config has moved.
  *
  * dryRun previews without touching disk.
  */
 export async function runMigration(
   plan: MigrationPlan,
   opts: { dryRun?: boolean } = {},
-): Promise<'migrated' | 'skipped' | 'dry-run'> {
+): Promise<MigrationResult> {
   const { legacyDir, partitionDir, anchor, mode } = plan;
 
   if (opts.dryRun) {
-    if (mode === 'self') {
+    if (plan.mode === 'superseded') {
+      log.info(
+        `[dry-run] would move what the previous ${plan.previousOwner.kind} install left in ${legacyDir} ` +
+          `to a ${legacyDir}.bak backup and set its queue aside, leaving team knowledge in place.`,
+      );
+    } else if (mode === 'self') {
       const present = [];
-      for (const n of SELF_A1_ENTRIES) {
+      for (const n of [SELF_LEGACY_QUEUE, ...SELF_A1_ENTRIES]) {
         if (await pathExists(path.join(legacyDir, n))) present.push(n);
+      }
+      const stale = [];
+      for (const n of SELF_STALE_ENTRIES) {
+        if (await pathExists(path.join(legacyDir, n))) stale.push(n);
       }
       log.info(
         `[dry-run] self mode: would relocate ${present.length} machine-data item(s) ` +
-          `(${present.join(', ')}) from ${legacyDir} to ${partitionDir}, leaving team ` +
-          `knowledge in place.`,
+          `(${present.join(', ')}) from ${legacyDir} to ${partitionDir}` +
+          (stale.length > 0 ? ` and delete ${stale.join(', ')}` : '') +
+          ', leaving team knowledge in place.',
       );
     } else if (mode === 'retire-only') {
       log.info(
@@ -289,7 +404,17 @@ export async function runMigration(
   const lockPath = path.join(legacyDir, SYNC_LOCK_FILENAME);
   if (!(await acquireLock(lockPath))) {
     log.debug('migration skipped: a concurrent pull/push holds the sync lock');
-    return 'skipped';
+    return 'busy';
+  }
+  // A command that loaded the config in legacyDir and queues a learning while
+  // this moves it would leave that learning behind (#823 item 11). The queue
+  // lock lives outside legacyDir, so it is held until the dir or its config has
+  // moved; the writer then finds its config gone and saves nothing.
+  const queueLock = await acquireQueueLock(legacyDir);
+  if (!queueLock.acquired) {
+    await releaseLock(lockPath);
+    log.debug('migration skipped: a queue write holds the queue lock');
+    return 'busy';
   }
 
   const staging = `${partitionDir}.staging`;
@@ -299,15 +424,18 @@ export async function runMigration(
     // `.teamai/` into the partition, leaving class-B knowledge and the
     // reports-wt/knowledge-wt worktrees untouched. The `.teamai/` dir is NEVER
     // renamed — the knowledge on main must stay exactly where it is.
-    if (mode === 'self') {
-      await migrateSelfA1(legacyDir, partitionDir);
-      return 'migrated';
+    if (plan.mode === 'self') {
+      return (await migrateSelfA1(legacyDir, partitionDir, plan.legacyOwner)) ? 'migrated' : 'skipped';
+    }
+    if (plan.mode === 'superseded') {
+      return (await retireSupersededInstall(legacyDir, partitionDir, plan.previousOwner)) ? 'migrated' : 'skipped';
     }
 
     // 'retire-only': a prior run already built the partition but crashed before
     // retiring the source. The partition is authoritative — do NOT re-copy onto
     // it — just finish by retiring the leftover legacy dir.
-    if (mode === 'retire-only') {
+    if (plan.mode === 'retire-only') {
+      if (!(await queueSettled(legacyDir, partitionDir, plan.legacyOwner))) return 'skipped';
       await releaseLock(lockPath);
       lockReleased = true;
       const backup = await retireLegacy(legacyDir);
@@ -321,6 +449,7 @@ export async function runMigration(
     // other partition dir is there, keep the legacy dir as planMigration does.
     const partition = await readPartitionState(partitionDir, path.dirname(legacyDir));
     if (partition.state === 'built') {
+      if (!(await queueSettled(legacyDir, partitionDir, plan.legacyOwner))) return 'skipped';
       await releaseLock(lockPath);
       lockReleased = true;
       const backup = await retireLegacy(legacyDir);
@@ -387,6 +516,7 @@ export async function runMigration(
     throw e;
   } finally {
     if (!lockReleased) await releaseLock(lockPath);
+    await releaseLock(queueLock.lockPath);
   }
 }
 
@@ -395,10 +525,106 @@ export async function runMigration(
  * "nothing to do" case. Migration failures are surfaced (a write command should
  * not silently proceed on stale legacy data), but never crash a dry-run preview.
  */
-export async function maybeMigrate(opts: { dryRun?: boolean } = {}): Promise<void> {
+export async function maybeMigrate(opts: { dryRun?: boolean } = {}): Promise<MigrationResult | undefined> {
   const plan = await planMigration();
-  if (!plan) return;
-  await runMigration(plan, opts);
+  if (plan) return runMigration(plan, opts);
+  if (!opts.dryRun) await settleOrphanQueue();
+  return undefined;
+}
+
+/**
+ * A queue in a checkout's `.teamai/` with no config beside it is one an older
+ * self install kept there, its config already in the partition. Once `init`
+ * switched the project to another install no plan covers it, so settle it here,
+ * or nothing ever would (#808).
+ */
+async function settleOrphanQueue(): Promise<void> {
+  const anchors = await resolveAnchors(process.cwd());
+  if (!anchors) return;
+  const legacyDir = path.join(anchors.workspaceRoot, '.teamai');
+  if (!(await holdsQueued(path.join(legacyDir, SELF_LEGACY_QUEUE)))) return;
+  if (await pathExists(path.join(legacyDir, 'config.yaml'))) return;
+  const partitionDir = await resolvePartitionDir(anchors.projectAnchor);
+  const partition = await readPartitionState(partitionDir, anchors.workspaceRoot);
+  if (partition.state !== 'built') return;
+  const remote = (await getRemoteUrl(anchors.workspaceRoot)) ?? '';
+  await settleCheckoutQueue(legacyDir, partitionDir, { kind: 'self', remote });
+}
+
+/**
+ * Why a learning queued now would be kept in this checkout's `.teamai/`, which
+ * a removed linked worktree takes with it (#808), as the message a command that
+ * queues one stops with; null when it would not be. Asked after the migration:
+ * its data home is still that directory, or an old queue there could not move.
+ * Outside a git repo `.teamai/` is where the data belongs.
+ */
+export async function queueKeptInCheckout(migration: MigrationResult | undefined): Promise<string | null> {
+  switch (migration) {
+    case 'dry-run':
+      return null;
+    case 'busy':
+      return keptInCheckout('another teamai command is using it', 'Run this again when that command finishes.');
+    case 'migrated':
+    case 'skipped':
+    case undefined:
+      break;
+    default: {
+      const unhandled: never = migration;
+      throw new Error(`Unhandled migration result: ${String(unhandled)}`);
+    }
+  }
+  const anchors = await resolveAnchors(process.cwd());
+  if (!anchors) return null;
+  const legacyDir = path.join(anchors.workspaceRoot, '.teamai');
+  // A home that is itself a git repo: its `.teamai/` is the user scope's data
+  // home, and the queue there is the user scope's.
+  const home = getUserHome();
+  if (anchors.workspaceRoot === (await realpath(home).catch(() => home))) return null;
+  const config = await detectProjectConfig(anchors.workspaceRoot);
+  const queueDir = config ? pendingLearningsDir(config) : null;
+  if (queueDir && isInside(queueDir, legacyDir)) {
+    const partitionDir = await resolvePartitionDir(anchors.projectAnchor);
+    const partition = await readPartitionState(partitionDir, anchors.workspaceRoot);
+    switch (partition.state) {
+      case 'unreadable':
+        return keptInCheckout(
+          `${partition.configPath} cannot be read: ${partition.error.split('\n')[0]}`,
+          'Fix that file, then run this again.',
+        );
+      case 'absent':
+        return keptInCheckout(
+          `${partitionDir} has no config.yaml`,
+          `Restore that file, or move ${partitionDir} aside, then run this again.`,
+        );
+      case 'built':
+        return keptInCheckout(
+          `its queue, ${queueDir}, is inside this checkout`,
+          `Set repo.localPath in ${path.join(partitionDir, 'config.yaml')} to a path outside it, then run this again.`,
+        );
+      default: {
+        const unhandled: never = partition;
+        throw new Error(`Unhandled partition state: ${JSON.stringify(unhandled)}`);
+      }
+    }
+  }
+  const queue = path.join(legacyDir, SELF_LEGACY_QUEUE);
+  if (await holdsQueued(queue)) {
+    return keptInCheckout(
+      `the learnings queued in ${queue} could not be moved; see the warning above`,
+      'Do what it says, then run this again.',
+    );
+  }
+  return null;
+}
+
+function keptInCheckout(cause: string, next: string): string {
+  return `teamai could not move this checkout's data into the project's shared data directory (${cause}). Nothing was saved. ${next}`;
+}
+
+/** True when `p` is `dir` or inside it. */
+function isInside(p: string, dir: string): boolean {
+  const rel = path.relative(dir, p);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /**
@@ -491,14 +717,64 @@ async function retireLegacy(legacyDir: string): Promise<string> {
   // Make the backup ignore everything it contains, independent of repo rules and
   // the backup's eventual name. Written before the rename so there is never a
   // window in which the credentials sit in a non-ignored directory.
-  await writeFile(path.join(legacyDir, '.gitignore'), '# teamai migration backup — ignore everything\n*\n');
+  await writeFile(path.join(legacyDir, '.gitignore'), BACKUP_GITIGNORE);
 
+  const backup = await freeBackupPath(legacyDir);
+  await fse.rename(legacyDir, backup);
+  return backup;
+}
+
+const BACKUP_GITIGNORE = '# teamai migration backup — ignore everything\n*\n';
+
+/** The first free `.bak` name beside `legacyDir`: an existing backup is never overwritten. */
+async function freeBackupPath(legacyDir: string): Promise<string> {
   let backup = `${legacyDir}.bak`;
   for (let n = 1; await pathExists(backup); n++) {
     backup = `${legacyDir}.bak.${n}`;
   }
-  await fse.rename(legacyDir, backup);
   return backup;
+}
+
+/**
+ * Take a superseded install out of a checkout's `.teamai/` without touching
+ * the knowledge beside it (#808): its queue is set aside, since the self
+ * install would publish it to its own repository, and its machine data moves
+ * to a new git-ignored `.bak` backup, as retireLegacy keeps a whole dir.
+ * False when learnings are still queued once the rest has moved (an older
+ * `contribute` may queue one meanwhile): `config.yaml`, which tells the next
+ * run whose queue it is, stays with them, so a command that queues stops on it
+ * (queueKeptInCheckout) and the next run tries again.
+ */
+async function retireSupersededInstall(legacyDir: string, partitionDir: string, previousOwner: QueueOwner): Promise<boolean> {
+  const present: string[] = [];
+  for (const name of SUPERSEDED_ENTRIES) {
+    const src = path.join(legacyDir, name);
+    if (!(await pathExists(src))) continue;
+    if (name === 'env' && (await isDirectory(src))) continue;
+    present.push(name);
+  }
+  const backup = await freeBackupPath(legacyDir);
+  if (present.length > 0) {
+    await fse.ensureDir(backup);
+    await writeFile(path.join(backup, '.gitignore'), BACKUP_GITIGNORE);
+  }
+  const move = (name: string) => fse.move(path.join(legacyDir, name), path.join(backup, name));
+  for (const name of present) if (name !== 'config.yaml') await move(name);
+  if (!(await queueSettled(legacyDir, partitionDir, previousOwner))) {
+    log.warn(
+      `Kept ${path.join(legacyDir, 'config.yaml')} beside the learnings still queued in ` +
+        `${path.join(legacyDir, SELF_LEGACY_QUEUE)}: it tells the next run which install queued them. ` +
+        'The next init, pull or push tries again.',
+    );
+    return false;
+  }
+  if (present.includes('config.yaml')) await move('config.yaml');
+  if (present.length === 0) return true;
+  log.success(
+    `Moved what the previous ${previousOwner.kind} install left in ${legacyDir} (${present.join(', ')}) ` +
+      `to ${backup}; the team knowledge stays in place. Remove the backup once you no longer need it.`,
+  );
+  return true;
 }
 
 /**
@@ -536,9 +812,17 @@ async function holdsSelfKnowledge(dir: string): Promise<boolean> {
  * `<partition>/env.local` while we relocate: the atomic rename guarantees it sees
  * either the complete file or nothing, never a half-written one. Uses raw fse.copy
  * (NOT copyDir) so a nested `.git` under workspaces/ survives.
+ *
+ * False, relocating nothing, when learnings are still queued in the checkout
+ * once its queue was settled (the queue lock was busy, the partition config
+ * cannot be read, or an older `contribute` queued one meanwhile): its
+ * `config.yaml` tells the next run whose queue it is, so a command that queues
+ * stops on it (queueKeptInCheckout) and the next run tries again.
  */
-async function migrateSelfA1(legacyDir: string, partitionDir: string): Promise<void> {
+async function migrateSelfA1(legacyDir: string, partitionDir: string, legacyOwner: QueueOwner): Promise<boolean> {
   await fse.ensureDir(partitionDir);
+  if (!(await queueSettled(legacyDir, partitionDir, legacyOwner))) return false;
+  for (const name of SELF_STALE_ENTRIES) await remove(path.join(legacyDir, name));
   const moved: string[] = [];
   for (const name of SELF_A1_ENTRIES) {
     const src = path.join(legacyDir, name);
@@ -582,6 +866,134 @@ async function migrateSelfA1(legacyDir: string, partitionDir: string): Promise<v
   } else {
     log.debug('self migration: nothing left to relocate');
   }
+  return true;
+}
+
+/**
+ * Take the queue `owner`'s older install left in a checkout's `.teamai/` out
+ * of it, by what the partition serves now, not by the checkout's own config: a
+ * checkout that has not migrated yet still names its old install after `init`
+ * switched the project from another checkout.
+ *  - no config yet, or the same kind and team repository: into the partition
+ *    queue;
+ *  - another kind or team repository (#823 item 13): set aside, as a mode
+ *    switch does. Its queue would publish the learnings to its own repository;
+ *  - a config that cannot be read: left in place, since where they would be
+ *    published is unknown.
+ */
+export async function settleCheckoutQueue(legacyDir: string, partitionDir: string, owner: QueueOwner): Promise<void> {
+  const queue = path.join(legacyDir, SELF_LEGACY_QUEUE);
+  if (!(await pathExists(queue))) return;
+  // The install read below decides where the queue goes; an init switching it
+  // meanwhile would publish what lands in its live queue (#823 item 11).
+  const settled = await withQueueLock(partitionDir, () => settleByPartitionOwner(legacyDir, partitionDir, owner));
+  if (settled.status === 'busy') {
+    log.warn(
+      `Kept the learnings queued in ${queue}: another teamai command holds ${settled.lockPath}. ` +
+        'The next init, pull or push moves them.',
+    );
+  }
+}
+
+async function settleByPartitionOwner(legacyDir: string, partitionDir: string, owner: QueueOwner): Promise<void> {
+  const queue = path.join(legacyDir, SELF_LEGACY_QUEUE);
+  const partition = await readPartitionState(partitionDir, path.dirname(legacyDir));
+  switch (partition.state) {
+    case 'absent':
+      await drainLegacyQueue(legacyDir, partitionDir);
+      return;
+    case 'built':
+      if (sameQueueOwner(queueOwner(partition.config), owner)) {
+        await drainLegacyQueue(legacyDir, partitionDir);
+      } else {
+        await setAsideCheckoutQueue(queue, partition.config, owner);
+      }
+      return;
+    case 'unreadable':
+      log.warn(
+        `Kept the learnings queued in ${queue}: ${partition.configPath} cannot be read, so teamai cannot tell ` +
+          'which repository they would be published to. Fix that file; the next init, pull or push moves them.',
+      );
+      return;
+    default: {
+      const unhandled: never = partition;
+      throw new Error(`Unhandled partition state: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
+
+/**
+ * Settle the queue in a legacy dir about to be retired to `.teamai.bak`, which
+ * a removed linked worktree takes with it (#808). False when some of it could
+ * not move: the dir is kept, so a command that queues stops on it
+ * (queueKeptInCheckout) and the next run tries again.
+ */
+async function queueSettled(legacyDir: string, partitionDir: string, legacyOwner: QueueOwner): Promise<boolean> {
+  await settleCheckoutQueue(legacyDir, partitionDir, legacyOwner);
+  return !(await holdsQueued(path.join(legacyDir, SELF_LEGACY_QUEUE)));
+}
+
+/** True when `queue` holds a learning, as the set-aside counts them: another file is not one. */
+async function holdsQueued(queue: string): Promise<boolean> {
+  return (await countQueued(queue)) > 0;
+}
+
+/**
+ * Move a checkout's queued learnings into the partition queue, one file at a
+ * time, each via a temp sibling and an atomic rename, then delete the source.
+ * The partition queue is shared by every checkout, so a file there is never
+ * overwritten: the same content means this one already moved, and different
+ * content is kept in place, with a warning, for the member to resolve (queue
+ * names carry a random suffix, so only a hand edit gets there). Once nothing
+ * is kept, the old queue directory goes.
+ */
+async function drainLegacyQueue(legacyDir: string, partitionDir: string): Promise<void> {
+  const src = path.join(legacyDir, SELF_LEGACY_QUEUE);
+  if (!(await pathExists(src))) return;
+  const dest = path.join(partitionDir, SELF_LEGACY_QUEUE);
+  const kept: string[] = [];
+  let moved = 0;
+  // In the partition queue now, moved by this run or by one that stopped
+  // before it dropped the indexes.
+  let placed = 0;
+  for (const relPath of await listFilesRecursive(src)) {
+    const from = path.join(src, relPath);
+    const to = path.join(dest, relPath);
+    // Gone since the listing: a concurrent drain (contribute beside a pull)
+    // already moved it. What is written below is what was read here.
+    const content = await readFileIfExists(from);
+    if (content === null) continue;
+    const existing = await readFileIfExists(to);
+    if (existing === null) {
+      const tmp = `${to}.${process.pid}.tmp`;
+      await remove(tmp);
+      await fse.ensureDir(path.dirname(to));
+      await fse.writeFile(tmp, content);
+      await fse.rename(tmp, to);
+      moved++;
+    } else if (existing !== content) {
+      kept.push(from);
+      continue;
+    }
+    placed++;
+    await remove(from);
+  }
+  if (placed > 0) {
+    // No checkout's index may have them yet; recall rebuilds a missing one.
+    const { dropCheckoutIndexes } = await import('./utils/search-index.js');
+    await dropCheckoutIndexes(partitionDir);
+  }
+  if (moved > 0) log.success(`Moved ${moved} queued learning(s) from ${src} to ${dest}.`);
+  if (kept.length > 0) {
+    log.warn(
+      `Kept ${kept.length} queued learning(s) in ${src}: ${dest} already has a different file ` +
+        `under the same name (${kept.map((f) => path.relative(src, f)).join(', ')}). Compare the two, ` +
+        `delete the one you do not want, and the next init, pull or push moves what is left.`,
+    );
+    return;
+  }
+  // A contribute may have queued here since the listing; leave that for the next run.
+  if ((await listFilesRecursive(src)).length === 0) await remove(src);
 }
 
 /** True when `p` is a directory (following symlinks). Missing path → false. */

@@ -157,11 +157,17 @@ teamai init https://github.com/yourorg/yourrepo
 工具创建。例如，打开 Claude Code 时会创建 `.claude/`，再由 pull 写入。单独执行 `teamai pull`
 仍会跳过项目里还不存在根目录的工具，因此不会给尚未在本项目打开过的 Agent 凭空建目录。
 
-> **从旧版 teamai 升级？** 升级后首次执行 `teamai init` / `pull` / `push` 会自动把已有的
+> **从旧版 teamai 升级？** 升级后首次执行 `teamai init` / `pull` / `push` / `contribute`
+> （或 `import --from-mr`）会自动把已有的
 > `<repo>/.teamai/` 迁移进分区（复制 → 校验 → 原子切换），并把旧目录保留为
-> `<repo>/.teamai.bak/`，待你确认一切正常后自行删除。若分区已存在但其 `config.yaml`
+> `<repo>/.teamai.bak/`，待你确认一切正常后自行删除。若仓库的另一个检出已完成迁移，
+> 旧目录中尚未发布的 learning 队列会先移入分区的队列，绝不会进入备份。若分区已存在但其 `config.yaml`
 > 无法读取或缺失，迁移会保留 `<repo>/.teamai/` 并给出带路径的警告：修复或恢复该文件
-> （或把缺少 config 的分区移开）后，下一次 `init` / `pull` / `push` 会完成迁移。
+> （或把缺少 config 的分区移开）后，下一次执行上述任一命令会完成迁移。
+> 在旧目录的数据迁移完成之前，`contribute`、`import --from-mr` 与 `init`（`--scope user` 除外）
+> 会以退出码 1 停止、不保存任何内容，并说明原因：另一个 teamai 命令正持有其锁、分区 `config.yaml` 如上所述不可用，
+> 或旧队列无法移动。处理之后重新执行即可。`contribute --scope user` 与
+> `import --from-mr --output` 不写本项目的队列，因此既不触发迁移，也不会因此停止。
 > 只读命令与 `hook-dispatch` 路径永不触发迁移；`teamai --dry-run pull` 可预演。**迁移后不支持降级**——旧版会把项目判定为
 > 未初始化；`.teamai.bak/` 是人工回滚路径。
 
@@ -356,8 +362,38 @@ teamai init . --agent claude,codex   # 非交互：启用 Claude Code + Codex
 | 知识资产：`skills/` `rules/` `docs/` `env/` `agents/`、`teamai.yaml` | **main** 分支的 `.teamai/` | `teamai push` → PR | 不需要：推送分支并开 PR 即可 |
 | `learnings/` | `teamai-learnings` **孤儿分支** | `teamai contribute` 直接推送 | 不需要 |
 | 上报数据：`members/` `sessions/` `votes/` `stats/` | `teamai-reports` **孤儿分支** | `init`、`session save`、hook、pull 自动上报 | 不需要 |
-| 本机私有：`config.yaml`、`state.json`、搜索索引、env 备份、MCP manifest | `~/.teamai/projects/<slug>/`（**分区**，在仓库之外） | 仅本地 | — |
-| 可丢弃的 git worktree（`reports-wt/`、`learnings-wt/`、`knowledge-wt/`）与待发布队列（`pending-learnings/`） | `.teamai/`（已 gitignore；按需重建） | 仅本地 | — |
+| 本机私有：`config.yaml`、`state.json`、搜索索引（每个检出一份）、env 备份、MCP manifest、`reports-wt/` 与 `learnings-wt/` 检出、待发布队列（`pending-learnings/`） | `~/.teamai/projects/<slug>/`（**分区**，在仓库之外，所有 worktree 共用） | 仅本地 | — |
+| 可丢弃的知识 PR worktree（`knowledge-wt/`） | `.teamai/`（已 gitignore；按需重建） | 仅本地 | — |
+
+git 同一分支只能在一个 worktree 中检出，所以仓库的所有检出共用 `teamai-learnings`
+和 `teamai-reports` 的检出以及待发布队列。旧版 teamai 把它们放在每个检出自己的
+`.teamai/` 里。`init`、`pull`、`push`、`contribute` 和 `import --from-mr` 会把该检出的队列移入分区，第一个需要分支检出
+的命令会移除旧检出。旧检出中若有未提交的改动则保留，命令会指出其路径：在你提交、
+移走或删除这些改动之前，不会向该分支发布内容，也不会从该分支召回内容，`recall maintenance` 与
+`recall promote` 会停止。已排队的 learning
+仍留在队列中，仍可被召回。检出无法创建时（例如 `teamai-learnings` 已在别处检出），maintenance 与 promote
+同样会停止，并说明原因。
+同一项目的 git 模式安装把检出放在相同的路径。切换模式后，teamai 会拒绝使用属于另一个
+仓库的检出，并打印清除它的 `git worktree remove` 命令：不会向它发布、不会为它建索引（包括其中的投票）、
+也不会改写其中内容（`recall maintenance` 与 `recall promote` 会停止）。旧安装仍在队列中的
+learning 会被移到同一数据目录下的 `pending-learnings.<旧类型>`，新安装不会发布它们；`init`
+会说明数量和位置，并删除为旧仓库构建的搜索索引（下一次 `recall` 会重建）。以同一类型对另一个团队仓库重新运行 `init`
+也同样处理，队列移到 `pending-learnings.<类型>-<仓库>`（例如 `pending-learnings.git-github.com-org-team-a`）；
+同一仓库换一种写法（带或不带 `.git`、SSH 或 HTTPS）不会移动队列。若旧安装的 `config.yaml` 存在但无法读取，
+就无从得知队列属于谁：`init` 会把它移到 `pending-learnings.unknown`，指出该文件，并删除搜索索引。尚未升级的检出中的旧队列也同样处理：
+在该检出运行的下一个命令会把它移到 `pending-learnings.self` 并给出路径。反过来，当某个检出的 `init --self`
+把 git 模式项目切换为单仓库模式，而另一个仍保留旧安装的检出从 main 取得了知识时，在那里运行的下一个
+`init`、`pull`、`push`、`contribute` 或 `import --from-mr` 会把旧安装的队列移到 `pending-learnings.git`，
+其余部分（config、克隆、env 等）移到 `<checkout>/.teamai.bak/`，知识保持不动。`teamai uninstall` 在请求确认前会列出每个仍有未发布 learning 的队列。
+若 `contribute` 或 `import --from-mr` 在迁移正在移动本检出数据、或 `init` 正在切换项目模式或团队仓库时写入队列，
+它会等待对方完成（最多 3 秒）。若此时它启动时读取的安装已经变化，它不保存任何内容并以退出码 1 结束
+（`This project's teamai install changed while this command ran`），重新执行即可。若等待结束后对方仍未完成，
+它同样以退出码 1 结束（`Another teamai command is moving this project's queued learnings`）。
+切换前刚写入的 learning 会随旧安装的队列一起被移开，绝不会发布到新仓库。这需要双方都是本版本：
+旧版 teamai 的 `contribute` 若与迁移同时运行，其 learning 仍可能留在 `.teamai.bak/` 中。
+teamai 无法证明属于本仓库的检出同样会被拒绝，且永不删除：例如其 `.git` 指向已被移动或删除的仓库，
+或本仓库已不再登记它（克隆被删除后重新 clone，`init` 在同一路径切换到另一个团队仓库时即是如此）。
+请把它移开，或在确认其中没有需要的内容后删除。
 
 learnings 迁到独立分支之前团队已经写下的内容，原地留在默认分支上。不复制、不删除、
 不迁移：该目录仍会被读取，所有既有 learning 依然能从 `teamai recall` 中找回。新的
@@ -383,7 +419,7 @@ learning 写入 `teamai-learnings`。
 
 本机私有数据存放在仓库之外的按项目**分区**里，因此单仓模式的 `.teamai/` 只保留提交到
 main 的团队知识 —— `git status` 保持干净。旧版单仓装升级后，下一次
-`init`/`pull`/`push` 会自动把这些机器数据搬进分区（main 上的知识原封不动）。
+`init`/`pull`/`push`/`contribute` 会自动把这些机器数据搬进分区（main 上的知识原封不动）。
 
 **克隆即初始化。** 由于知识资产和 `.teamai/teamai.yaml` 里的 `mode: self` 标记都提交在 main 上，团队成员 clone 仓库后会被自动初始化：下一条 `teamai` 命令或 AI 会话会识别该标记，并（在其 git provider 已认证的前提下）自动写入本机配置、注入 hooks、在孤儿分支上注册成员 —— 无需手抄 repo/role 参数。若尚未认证，teamai 会提示其运行一次 `teamai init .`。
 
@@ -1106,6 +1142,8 @@ teamai recall maintenance --update-quality
 
 运行 `--update-quality` 后，审查生成的 `.draft.md` 文件，将满意的文件重命名为 `.md` 即可应用更新。
 
+另一个 teamai 命令持有 learnings 或 reports checkout 的锁时，`recall maintenance` 与 `recall promote` 会以退出码 1 停止，不写入任何内容（`The learnings checkout is locked: …`）。待该命令结束后再运行。
+
 ### 晋升 Learnings
 
 当 learning 达到成熟标准时，可将其晋升为正式团队知识（skill、rule 或 doc）。晋升判据：置信度 ≥ 0.90、≥ 5 次 upvote、≥ 2 个不同贡献者、存在时长 ≥ 14 天。
@@ -1419,7 +1457,7 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 如果核心知识图谱提取或写入失败，导入会报错，且不会将该提交标记为已同步。下次增量导入会重试该提交。
 
-`--from-mr` 与 `teamai contribute` 一样，把提取的经验发布到 `teamai-learnings` 分支：恰好一个激活项目声明了 learnings namespace 时放在 `learnings/<namespace>/` 下，否则放在共享的 `learnings/` 根目录。发布失败时，经验留在本机队列中，下次 `teamai pull` 会发布它。
+`--from-mr` 与 `teamai contribute` 一样，把提取的经验发布到 `teamai-learnings` 分支：恰好一个激活项目声明了 learnings namespace 时放在 `learnings/<namespace>/` 下，否则放在共享的 `learnings/` 根目录。发布失败时，经验留在本机队列中，下次 `teamai pull` 会发布它；若阻止发布的是 teamai 拒绝使用的 learnings 检出，则在你按提示处理该检出之前，任何 pull 都无法发布它。
 
 需要 AI 的步骤（`--deep-enrich`、知识增强）复用本机已安装的 AI 编码 CLI，而不是直接调用模型 API。teamai 按 `claude` → `claude-internal` → `codex` → `codex-internal` → `codebuddy` → `workbuddy` → `openclaw` 的顺序探测，取第一个可用者。macOS / Linux 上探测经由 login shell，因此装在 `~/.nvm/` 下的 CLI 也能找到；Windows 上改用原生命令 `where`，拿到的是 Windows 真正能启动的 npm shim（`%APPDATA%\npm\claude.cmd`）——Git Bash 或 WSL 的 `bash` 只会返回 `/c/Users/...` 这类 MSYS 路径，Windows 无法启动。
 

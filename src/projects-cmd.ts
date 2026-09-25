@@ -145,10 +145,19 @@ export async function projectsMembers(
   let membersRoot = knowledgePath;
   const { usesBranchWorktree } = await import('./types.js');
   if (usesBranchWorktree(localConfig)) {
-    const { ensureReportsWorktree, refreshReportsWorktree } = await import('./utils/reports-branch.js');
+    const { readableReportsWorktree } = await import('./utils/reports-branch.js');
+    const { CheckoutRefusedError } = await import('./utils/branch-worktree.js');
     // Read-only: never publish a missing reports branch.
-    await refreshReportsWorktree(localConfig, { pushIfCreated: false });
-    membersRoot = await ensureReportsWorktree(localConfig, { pushIfCreated: false });
+    try {
+      membersRoot = await readableReportsWorktree(localConfig);
+    } catch (e) {
+      // A reports checkout teamai refused (#808): another repository's, whose
+      // roster is not this team's, or an old one in the way. The refusal, with
+      // the way out, was already printed.
+      if (!(e instanceof CheckoutRefusedError)) throw e;
+      process.exitCode = 1;
+      return;
+    }
   } else {
     await pullRepo(knowledgePath).catch(() => { /* offline — read local copy */ });
   }

@@ -113,6 +113,10 @@ export function setSilent(s: boolean): void {
   silentMode = s;
 }
 
+export function isSilent(): boolean {
+  return silentMode;
+}
+
 /**
  * Route non-error log output to stderr. Used by hook-dispatch commands to
  * keep stdout as a clean JSON channel for the AI tool. Returns the previous

@@ -163,14 +163,22 @@ Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull` s
 skips tools whose project root does not exist, so it never invents agent directories
 for tools you have not opened in this project.
 
-> **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` after
-> upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
+> **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
+> `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
 > (copy → verify → atomic switch), then leaves the old directory as `<repo>/.teamai.bak/`
-> for you to delete once you've confirmed everything works. If the partition already
+> for you to delete once you've confirmed everything works. When another checkout of the
+> repo already migrated, the old directory's queue of unpublished learnings moves into the
+> partition's first, never into the backup. If the partition already
 > exists but its `config.yaml` cannot be read, or is missing, the migration keeps
 > `<repo>/.teamai/` and warns with the path: fix or restore that file (or move the
-> config-less partition aside), and the next `init` / `pull` / `push` finishes the job.
-> Read-only commands and the
+> config-less partition aside), and the next of those commands finishes the job.
+> Until the old directory's data has moved, `contribute`, `import --from-mr` and
+> `init` (except `--scope user`) stop with exit code 1 and save nothing, naming the
+> cause: another teamai command holding its lock, a partition `config.yaml` as above,
+> or an old queue that could not move.
+> Deal with that, then run them again. `contribute --scope user` and
+> `import --from-mr --output` do not write this project's queue, so they neither
+> migrate nor stop. Read-only commands and the
 > `hook-dispatch` path never migrate; `teamai --dry-run pull` previews the move.
 > **Downgrading afterwards is not supported** — an older teamai would treat the project
 > as uninitialized; `.teamai.bak/` is the manual rollback path.
@@ -388,8 +396,57 @@ teamai init . --agent claude,codex   # non-interactive: set up Claude Code + Cod
 | Knowledge: `skills/` `rules/` `docs/` `env/` `agents/`, `teamai.yaml` | `.teamai/` on the **main** branch | `teamai push` → pull request | No: push a branch, open a pull request |
 | `learnings/` | `teamai-learnings` **orphan branch** | `teamai contribute` → direct push | No |
 | Reports: `members/` `sessions/` `votes/` `stats/` | `teamai-reports` **orphan branch** | `init`, `session save`, hooks, pull auto-report | No |
-| Machine-local: `config.yaml`, `state.json`, search index, env backup, MCP manifests | `~/.teamai/projects/<slug>/` (**partition**, outside the repo) | local only | — |
-| Disposable git worktrees (`reports-wt/`, `learnings-wt/`, `knowledge-wt/`) and the contribution queue (`pending-learnings/`) | `.teamai/` (gitignored; rebuilt on demand) | local only | — |
+| Machine-local: `config.yaml`, `state.json`, search index (one per checkout), env backup, MCP manifests, the `reports-wt/` and `learnings-wt/` checkouts, the contribution queue (`pending-learnings/`) | `~/.teamai/projects/<slug>/` (**partition**, outside the repo, shared by every worktree) | local only | — |
+| Disposable knowledge-PR worktree (`knowledge-wt/`) | `.teamai/` (gitignored; rebuilt on demand) | local only | — |
+
+Git checks a branch out in one worktree only, so every checkout of the repo
+shares the `teamai-learnings` and `teamai-reports` checkouts and the queue. An
+older teamai kept them in each checkout's `.teamai/`. `init`, `pull`, `push`,
+`contribute` and `import --from-mr` move that checkout's queue into the partition, and the first command that needs
+a side-branch checkout removes the old one. An old checkout with uncommitted
+changes is kept, and the command names it: nothing is published to or recalled
+from that branch until you commit, move or delete those changes, and
+`recall maintenance` and `recall promote` stop. Queued learnings stay queued
+and recallable. Maintenance and promote also stop, naming the cause, when the
+checkout cannot be created, such as when `teamai-learnings` is checked out
+somewhere else.
+A git-mode install of the same project keeps its checkouts at the same paths.
+After switching modes, teamai refuses a checkout that belongs to the other
+repository and prints the `git worktree remove` command that clears it: nothing
+is published to it, indexed from it (its votes included) or rewritten in it
+(`recall maintenance` and `recall promote` stop). Learnings still queued by the old install are moved
+to `pending-learnings.<old kind>` in the same data home, never published by the
+new one; `init` says how many and where, and deletes the search indexes built
+for the old repository (the next `recall` rebuilds them). Re-running `init`
+against another team repository of the same kind does the same, to
+`pending-learnings.<kind>-<repo>` (for example
+`pending-learnings.git-github.com-org-team-a`); the same repository written
+another way (with or without `.git`, SSH or HTTPS) keeps the queue. When the old
+install's `config.yaml` exists but cannot be read, nothing says whose the queue is:
+`init` moves it to `pending-learnings.unknown`, names that file and deletes the search indexes. A checkout that had
+not been upgraded yet keeps its old queue the same way: the next command there
+moves it to `pending-learnings.self` and names the path. The other way round, when
+`init --self` in one checkout switches a git-mode project and another checkout that
+still has its old install takes the knowledge from main, the next `init`, `pull`,
+`push`, `contribute` or `import --from-mr` there moves that install's queue to
+`pending-learnings.git` and the rest of it (config, clone, env and the like) to
+`<checkout>/.teamai.bak/`, leaving the knowledge in place. `teamai uninstall` lists every queue
+with learnings not published yet before it asks to confirm.
+A `contribute` or `import --from-mr` that queues its learning while a migration is
+moving this checkout's data, or while `init` switches the project's mode or team repository, waits
+for it (up to 3 seconds). If the install it started with has changed by then, it
+saves nothing and exits 1 (`This project's teamai install changed while this
+command ran`); run it again. If the other command is still at it after the wait,
+it exits 1 the same way (`Another teamai command is moving this project's queued
+learnings`). A learning queued just before the switch is set aside with the old
+install's queue and never published to the new repository. This needs this
+version on both sides: an older teamai's `contribute` running beside a migration
+can still leave its learning in `.teamai.bak/`.
+A checkout teamai cannot show to be this repository's is refused the same way and
+never removed: one whose `.git` leads to a repository that was moved or deleted,
+or one this repository no longer registers (its clone was deleted and cloned
+again, as `init` does when it switches to another team repository at the same
+path). Move it aside, or delete it if it holds nothing you need.
 
 Learnings a team wrote before they moved to their own branch stay on the default
 branch, exactly where they are. Nothing is copied, deleted or migrated: that
@@ -420,7 +477,7 @@ branches at all.
 Machine-local data lives in the per-project **partition** outside the repo, so a
 single-repo `.teamai/` holds only the team knowledge committed to main — `git
 status` stays clean. Upgrading an older single-repo install relocates that machine
-data into the partition automatically on the next `init`/`pull`/`push` (the
+data into the partition automatically on the next `init`/`pull`/`push`/`contribute` (the
 knowledge on main is left exactly in place).
 
 **Clone = initialized.** Because knowledge and the `mode: self` marker in `.teamai/teamai.yaml` are committed to main, a teammate who clones the repo is auto-initialized: the next `teamai` command or AI session detects the marker, and (when their git provider is already authenticated) writes their local config, injects hooks, and registers them on the reports branch — no need to re-type repo/role. If they aren't authenticated yet, teamai prompts them to run `teamai init .` once.
@@ -1174,6 +1231,8 @@ teamai recall maintenance --update-quality
 
 After `--update-quality`, review the generated `.draft.md` files and rename them to `.md` to apply the updates.
 
+While another teamai command holds the learnings or reports checkout's lock, `recall maintenance` and `recall promote` exit 1 without writing anything (`The learnings checkout is locked: …`). Run them again when that command finishes.
+
 ### Promoting Learnings
 
 When a learning reaches maturity, promote it to formal team knowledge (a skill, rule, or doc). Promotion criteria: confidence ≥ 0.90, ≥ 5 upvotes, ≥ 2 distinct contributors, age ≥ 14 days.
@@ -1500,7 +1559,7 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 If core graph extraction or writing fails, the import reports an error without marking the commit as synced. The next incremental run retries that commit.
 
-`--from-mr` publishes its learning the way `teamai contribute` does, on the `teamai-learnings` branch: under `learnings/<namespace>/` when exactly one active project declares a learnings namespace, otherwise at the shared `learnings/` root. If that fails, the learning stays queued on this machine and the next `teamai pull` publishes it.
+`--from-mr` publishes its learning the way `teamai contribute` does, on the `teamai-learnings` branch: under `learnings/<namespace>/` when exactly one active project declares a learnings namespace, otherwise at the shared `learnings/` root. If that fails, the learning stays queued on this machine and the next `teamai pull` publishes it; when a learnings checkout teamai refuses stopped it, no pull can until you deal with that checkout as the message says.
 
 AI-backed steps (`--deep-enrich`, knowledge enrichment) shell out to an AI coding CLI already installed on the machine instead of calling a model API directly. teamai probes `claude` → `claude-internal` → `codex` → `codex-internal` → `codebuddy` → `workbuddy` → `openclaw` and uses the first one it finds. On macOS and Linux the probe runs through a login shell, so a CLI installed under `~/.nvm/` is found too. On Windows it uses the native `where`, which returns the npm shim (`%APPDATA%\npm\claude.cmd`) that Windows can actually launch — a Git Bash or WSL `bash` only reports MSYS paths such as `/c/Users/...`, which Windows cannot start.
 

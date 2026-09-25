@@ -453,7 +453,7 @@ export async function recallFeedback(opts: { positive?: string; negative?: strin
     process.exitCode = 1;
     return;
   }
-  const { getVotesDir, getReportsDir } = await import('./types.js');
+  const { getVotesDir } = await import('./types.js');
   const votePath = path.join(getVotesDir(localConfig), `${localConfig.username}.yaml`);
 
   if (opts.positive) {
@@ -469,13 +469,18 @@ export async function recallFeedback(opts: { positive?: string; negative?: strin
   }
 
   if (opts.negative) {
+    // Not another repository's reports checkout (#808): those votes are that team's.
+    const { indexableVotesDir } = await import('./utils/reports-branch.js');
+    const teamVotesDir = await indexableVotesDir(localConfig);
     // Serialize under the same per-file lock as upvote/sync so a manual
     // downvote cannot race the detached judge or a sync clearing deltas.
     const { acquired, value } = await withVotesLock(votePath, async () => {
       const data = await loadUserVotes(votePath);
       // The scope's own file starts empty on upgrade (#787), so the upvotes its
       // team already holds count too: that file plus the deltas not yet pushed.
-      const team = await loadUserVotes(path.join(getReportsDir(localConfig), 'votes', `${localConfig.username}.yaml`));
+      const team: UserVotesV2 = teamVotesDir === undefined
+        ? { version: 2, votes: {}, deltas: {} }
+        : await loadUserVotes(path.join(teamVotesDir, `${localConfig.username}.yaml`));
       const teamEntry = team.votes[opts.negative!];
       const known = data.votes[opts.negative!] ?? teamEntry;
       if (!known) return 'missing' as const;

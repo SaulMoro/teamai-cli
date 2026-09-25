@@ -13,6 +13,7 @@ import { LEARNINGS_WORKTREE_DIRNAME, type LocalConfig } from '../types.js';
 import { learningsRoots } from '../utils/learnings-roots.js';
 import { savePendingLearning, listPendingLearnings } from '../utils/pending-learnings.js';
 import { publishQueuedLearnings } from '../utils/learnings-publish.js';
+import { writeInstallConfig } from './helpers/install-config.js';
 
 let tmp: string;
 let originalHome: string;
@@ -22,6 +23,7 @@ beforeEach(() => {
   originalHome = process.env.HOME ?? '';
   process.env.HOME = path.join(tmp, 'home');
   fs.mkdirSync(process.env.HOME, { recursive: true });
+  writeInstallConfig(gitConfig(path.join(tmp, 'team-repo')));
 });
 
 afterEach(() => {
@@ -103,6 +105,24 @@ describe('contributing to a repo whose default branch is protected', () => {
     expect(await listPendingLearnings(config)).toEqual([]);
   });
 
+  it('publishes nothing with a config init has since switched to another kind (#823 item 11)', async () => {
+    const { origin, clone } = await seedProtectedOrigin();
+    // This command loaded the git config; then init switched the install, and
+    // the new one queued a learning of its own.
+    const config = gitConfig(clone);
+    writeInstallConfig({ ...config, repo: { ...config.repo, kind: 'http' } });
+    const theirs = path.join(path.dirname(clone), 'pending-learnings', 'theirs-2026-01-01-zzz999.md');
+    fs.mkdirSync(path.dirname(theirs), { recursive: true });
+    fs.writeFileSync(theirs, '# queued by the new install');
+
+    const report = await publishQueuedLearnings(config, 'alice');
+
+    expect(await refsOf(origin, 'teamai-learnings')).not.toContain('learnings/theirs-2026-01-01-zzz999.md');
+    expect(fs.readFileSync(theirs, 'utf8')).toBe('# queued by the new install');
+    expect(report.published).toEqual([]);
+    expect(report.installChanged).toContain(`${path.join(process.env.HOME ?? '', '.teamai', 'config.yaml')} now names a http install, not git`);
+  });
+
   it('keeps the queued copy when the learnings branch is refused too', async () => {
     const { origin, clone } = await seedProtectedOrigin();
     const hook = path.join(origin, 'hooks', 'update');
@@ -174,7 +194,9 @@ describe('contributing to a repo whose default branch is protected', () => {
     const config = gitConfig(clone);
 
     await savePendingLearning(config, 'good-2026-01-01-kkk111.md', '# readable');
-    const unreadable = await savePendingLearning(config, 'bad-2026-01-01-lll222.md', '# unreadable');
+    const queued = await savePendingLearning(config, 'bad-2026-01-01-lll222.md', '# unreadable');
+    if (queued.status !== 'saved') throw new Error(`not queued: ${queued.status}`);
+    const unreadable = queued.path;
     fs.chmodSync(unreadable, 0o000);
 
     try {
@@ -239,7 +261,9 @@ describe('contributing to a repo whose default branch is protected', () => {
     await savePendingLearning(alice, 'from-alice-2026-01-01-hhh888.md', '# alice knows');
     await publishQueuedLearnings(alice, 'alice');
 
-    const bobClone = path.join(tmp, 'team-repo-bob');
+    // Bob's own partition: beside Alice's clone he would share her queue and
+    // her checkout of the branch, which belongs to another repository (#808).
+    const bobClone = path.join(tmp, 'bob', 'team-repo');
     await simpleGit().clone(origin, bobClone);
     await configureGit(bobClone);
     const bob: LocalConfig = {
@@ -302,7 +326,9 @@ describe('contributing to a repo whose default branch is protected', () => {
     const { origin, clone } = await seedProtectedOrigin();
     const alice = gitConfig(clone, 'alice');
 
-    const bobClone = path.join(tmp, 'team-repo-bob');
+    // Bob's own partition: beside Alice's clone he would share her queue and
+    // her checkout of the branch, which belongs to another repository (#808).
+    const bobClone = path.join(tmp, 'bob', 'team-repo');
     await simpleGit().clone(origin, bobClone);
     await configureGit(bobClone);
     const bob: LocalConfig = {

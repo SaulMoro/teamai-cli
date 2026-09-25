@@ -18,9 +18,11 @@ import {
   listPendingLearnings,
   readPendingLearning,
   dropPendingLearning,
+  listQueuesIn,
 } from '../utils/pending-learnings.js';
 import { publishQueuedLearnings } from '../utils/learnings-publish.js';
 import type { LocalConfig } from '../types.js';
+import { writeInstallConfig } from './helpers/install-config.js';
 
 function cloneConfig(localPath: string): LocalConfig {
   return {
@@ -61,13 +63,16 @@ describe('the learnings queue', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-pending-test-'));
+    vi.stubEnv('HOME', tmpDir);
     const repoPath = path.join(tmpDir, 'team-repo');
     fs.mkdirSync(repoPath);
     config = cloneConfig(repoPath);
+    writeInstallConfig(config);
     pendingDir = pendingLearningsDir(config);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -126,13 +131,16 @@ describe('publishQueuedLearnings, from an independent clone', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-publish-test-'));
+    vi.stubEnv('HOME', tmpDir);
     repoPath = path.join(tmpDir, 'team-repo');
     fs.mkdirSync(repoPath);
     config = cloneConfig(repoPath);
+    writeInstallConfig(config);
     pendingDir = pendingLearningsDir(config);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -173,6 +181,7 @@ describe('publishQueuedLearnings, from an independent clone', () => {
       path.join(tmpDir, 'home', '.teamai', '.sync-lock'),
       JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: 'someone-else' }),
     );
+    writeInstallConfig(config);
 
     try {
       await savePendingLearning(config, 'held.md', '# held');
@@ -188,4 +197,34 @@ describe('publishQueuedLearnings, from an independent clone', () => {
     }
   });
 
+});
+
+describe('listQueuesIn', () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-queues-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  function queue(rel: string, count: number): void {
+    fs.mkdirSync(path.join(home, rel), { recursive: true });
+    for (let i = 0; i < count; i++) fs.writeFileSync(path.join(home, rel, `l${i}.md`), '# L\n');
+  }
+
+  it("lists the project partitions' queues too, which deleting the user data home takes with it (#808)", async () => {
+    queue('pending-learnings', 1);
+    queue(path.join('projects', 'app-1a2b', 'pending-learnings'), 2);
+    queue(path.join('projects', 'app-1a2b', 'pending-learnings.git'), 1);
+    queue(path.join('projects', 'empty-3c4d', 'pending-learnings'), 0);
+
+    expect(await listQueuesIn(home)).toEqual([
+      { dir: path.join(home, 'pending-learnings'), count: 1 },
+      { dir: path.join(home, 'projects', 'app-1a2b', 'pending-learnings'), count: 2 },
+      { dir: path.join(home, 'projects', 'app-1a2b', 'pending-learnings.git'), count: 1 },
+    ]);
+  });
 });

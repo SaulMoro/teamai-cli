@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { listFiles } from './fs.js';
 import { learningsBranch } from './learnings-branch.js';
+import { ForeignCheckoutError } from './branch-worktree.js';
 import {
   getDataHome,
   getKnowledgeDir,
@@ -93,6 +94,23 @@ export function learningsRoots(localConfig: LocalConfig): LearningsRoots {
   read.push(inheritedRoot(localConfig));
 
   return { write, read: dedupe(read) };
+}
+
+/**
+ * The read roots an index may be built from: all of them, except the write
+ * root when the learnings checkout there belongs to another repository (a
+ * git/self mode switch, #808). Everything else this project owns, the queue
+ * included, stays indexed. Probes the checkout, so only for index builds.
+ */
+export async function indexableLearningsRoots(localConfig: LocalConfig): Promise<readonly string[]> {
+  const roots = learningsRoots(localConfig);
+  try {
+    await learningsBranch.checkOwner(localConfig);
+    return roots.read;
+  } catch (e) {
+    if (!(e instanceof ForeignCheckoutError)) throw e;
+    return roots.read.filter((root) => root !== roots.write);
+  }
 }
 
 /** One learning file, and the root it actually lives in. */

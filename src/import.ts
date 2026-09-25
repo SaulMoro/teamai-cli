@@ -10,8 +10,8 @@ import { importFromRepo } from './import-repo.js';
 import { importFromRepoList } from './import-repo-list.js';
 import { importFromOrg } from './import-org.js';
 import { importFromIWikiDual } from './iwiki-dual.js';
-import { learningsRoots } from './utils/learnings-roots.js';
-import { pendingLearningsDir } from './utils/pending-learnings.js';
+import { indexableLearningsRoots } from './utils/learnings-roots.js';
+import { pendingLearningsDir, queueWriteRefusal, savePendingLearning } from './utils/pending-learnings.js';
 import type { GlobalOptions, LearningDraft } from './types.js';
 import { assertNotReadOnly } from './read-only.js';
 import { Listr, PRESET_TIMER } from 'listr2';
@@ -245,8 +245,10 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       if (!opts.dryRun && !opts.output) assertNotReadOnly(localConfig, 'teamai import --from-mr');
       // As contribute: into the active project's learnings namespace when there
       // is exactly one, else the shared root.
-      const { resolveLearningsSubdir } = await import('./contribute.js');
+      const { drainCheckoutQueue, resolveLearningsSubdir } = await import('./contribute.js');
       const learningsSubdir = opts.dryRun || opts.output ? '' : await resolveLearningsSubdir(localConfig);
+      // As contribute, before the extraction dedupes against the queue it writes into.
+      if (!opts.dryRun && !opts.output) await drainCheckoutQueue(localConfig);
 
       const tasks = new Listr([
         {
@@ -254,11 +256,16 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
           task: async (ctx) => {
             const { learning, repoUrl, learningFile } = await importFromMR({
               url: opts.fromMr!,
-              learningsDirs: [pendingLearningsDir(localConfig), ...learningsRoots(localConfig).read],
+              // Not another repository's learnings checkout (#808).
+              learningsDirs: [pendingLearningsDir(localConfig), ...(await indexableLearningsRoots(localConfig))],
               all: opts.all,
               outputDir: opts.output,
               // Into the contribution queue, which publishing drains (#823).
-              writeLearningsDir: opts.dryRun ? undefined : path.join(pendingLearningsDir(localConfig), learningsSubdir),
+              queueLearning: opts.dryRun ? undefined : async (filename, content) => {
+                const queued = await savePendingLearning(localConfig, path.posix.join(learningsSubdir, filename), content);
+                if (queued.status !== 'saved') throw new Error(queueWriteRefusal(queued));
+                return queued.path;
+              },
               dryRun: opts.dryRun,
             });
             ctx.learning = learning;
@@ -277,7 +284,13 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
             await rebuildIndexAfterContribute(localConfig).catch((e: unknown) =>
               log.debug(`import: index rebuild skipped: ${e instanceof Error ? e.message : String(e)}`));
             const queued = ctx.learningFile ? path.posix.join(learningsSubdir, path.basename(ctx.learningFile)) : '';
-            if (!report.published.includes(queued)) {
+            if (report.installChanged) {
+              const { KEPT_FOR_ITS_INSTALL } = await import('./contribute.js');
+              task.title = `Learning saved locally, not published: ${report.installChanged}. ${KEPT_FOR_ITS_INSTALL}`;
+            } else if (report.refused) {
+              const { KEPT_UNTIL_CHECKOUT_SETTLED } = await import('./contribute.js');
+              task.title = `Learning saved locally (${report.lastError ?? 'not published yet'}). ${KEPT_UNTIL_CHECKOUT_SETTLED}`;
+            } else if (!report.published.includes(queued)) {
               task.title = `Learning saved locally (${report.lastError ?? 'not published yet'}); `
                 + 'the next `teamai pull` publishes it';
             }

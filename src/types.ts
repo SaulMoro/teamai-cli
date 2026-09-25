@@ -2133,9 +2133,9 @@ export const WORKTREE_DIRNAMES: readonly string[] = [
   LEARNINGS_WORKTREE_DIRNAME,
   KNOWLEDGE_WORKTREE_DIRNAME,
 ];
-/** Lock filename (under <repo>/.teamai) guarding concurrent reports-branch writes. */
+/** Lock filename (beside the reports-wt checkout) guarding concurrent reports-branch writes. */
 export const REPORTS_LOCK_FILENAME = '.reports-lock';
-/** Lock filename (under <repo>/.teamai) guarding concurrent learnings-branch writes. */
+/** Lock filename (beside the learnings-wt checkout) guarding concurrent learnings-branch writes. */
 export const LEARNINGS_LOCK_FILENAME = '.learnings-lock';
 /** Lock filename (under <repo>/.teamai) guarding concurrent self-mode bootstrap. */
 export const BOOTSTRAP_LOCK_FILENAME = '.bootstrap-lock';
@@ -2185,9 +2185,23 @@ export function getDataHome(localConfig: LocalConfig): string {
 }
 
 /**
+ * The project-scope search index. Every checkout of a repo shares one data
+ * home, but in self mode each checkout indexes its own branch's docs, rules
+ * and skills, so the index is kept per checkout, the way managed MCP is
+ * (#808). Elsewhere the knowledge is one clone, and so is the index.
+ */
+export function getProjectSearchIndexPath(localConfig: LocalConfig): string {
+  const dataHome = getDataHome(localConfig);
+  if (isSelfMode(localConfig)) {
+    return path.join(dataHome, 'workspaces', managedMcpWorkspaceId(getBusinessRoot(localConfig)), 'search-index.json');
+  }
+  return path.join(dataHome, 'search-index.json');
+}
+
+/**
  * Directory holding reports data (members/sessions/votes/stats).
  * - http: same as knowledge (localPath) — HTTP does not use the git reports branch.
- * - self: <localPath>/reports-wt — nested under the knowledge dir (`.teamai/`).
+ * - self: <dataHome>/reports-wt — in the partition, shared by every checkout.
  * - git (and legacy configs with no kind): sibling of the clone
  *   (`<dirname(localPath)>/reports-wt`) so clone `reset --hard` cannot nest-destroy it.
  * Callers must ensure the worktree exists first (see ensureReportsWorktree)
@@ -2200,7 +2214,9 @@ export function getReportsDir(localConfig: LocalConfig): string {
 /**
  * Where a side-branch worktree lives for this repo.
  * - http: the knowledge dir itself — HTTP has no git branch to check out.
- * - self: <localPath>/<dirname> — nested under the knowledge dir (`.teamai/`).
+ * - self: <dataHome>/<dirname> — in the partition, not in the checkout's
+ *   `.teamai/`: git checks a branch out in one worktree only, so every
+ *   checkout of the business repo shares this one (#808).
  * - git (and legacy configs with no kind): sibling of the clone
  *   (`<dirname(localPath)>/<dirname>`) so clone `reset --hard` cannot
  *   nest-destroy it.
@@ -2212,7 +2228,7 @@ export function getWorktreeDir(localConfig: LocalConfig, dirname: string): strin
     return localConfig.repo.localPath;
   }
   if (isSelfMode(localConfig)) {
-    return path.join(localConfig.repo.localPath, dirname);
+    return path.join(getDataHome(localConfig), dirname);
   }
   return path.join(path.dirname(localConfig.repo.localPath), dirname);
 }

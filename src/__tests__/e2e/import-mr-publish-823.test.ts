@@ -251,6 +251,7 @@ describe('import --from-mr publishes its learning (#823)', () => {
     it('keeps the learning queued and says the next pull publishes it', () => {
       expect(imported.code, imported.output).toBe(0);
       expect(imported.output).toContain('Learning saved locally');
+      expect(imported.output).toContain('the next `teamai pull` publishes it');
       expect(state.publishedAfterImport).toEqual([]);
       expect(state.queuedAfterImport.filter((f) => /^retry-flaky-s3-uploads-.*\.md$/.test(f)), imported.output).toHaveLength(1);
     });
@@ -258,6 +259,30 @@ describe('import --from-mr publishes its learning (#823)', () => {
     it('publishes it on the next pull', () => {
       expect(s.published(), pulled.output).toHaveLength(1);
       expect(s.queued(), pulled.output).toEqual([]);
+    });
+  });
+
+  describe('when a learnings checkout teamai refuses is in the way', () => {
+    const s = scenario();
+    let imported: RunResult = { code: null, output: '' };
+    beforeAll(async () => {
+      if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+      await s.setup();
+      // A checkout whose repository is gone: every pull refuses it too.
+      const checkout = path.join(s.home, '.teamai', 'learnings-wt');
+      fs.mkdirSync(path.join(checkout, 'learnings'), { recursive: true });
+      fs.writeFileSync(path.join(checkout, '.git'), `gitdir: ${path.join(s.home, '..', 'gone', '.git', 'worktrees', 'learnings-wt')}\n`);
+      imported = await s.run(importMr);
+    }, 120_000);
+    afterAll(() => s.cleanup());
+
+    it('keeps the learning queued and says no pull publishes it until that checkout is dealt with', () => {
+      expect(imported.code, imported.output).toBe(0);
+      expect(imported.output).toContain('Learning saved locally');
+      expect(imported.output).toContain('no `teamai pull` can publish it until that checkout is dealt with: do what the refusal says');
+      expect(imported.output).not.toContain('the next `teamai pull` publishes it');
+      expect(s.queued().filter((f) => /^retry-flaky-s3-uploads-.*\.md$/.test(f)), imported.output).toHaveLength(1);
+      expect(s.published()).toEqual([]);
     });
   });
 

@@ -14,12 +14,10 @@ vi.mock('../utils/git.js', () => ({
 }));
 
 const reportsMocks = vi.hoisted(() => ({
-  ensureReportsWorktree: vi.fn(),
-  refreshReportsWorktree: vi.fn().mockResolvedValue(undefined),
+  readableReportsWorktree: vi.fn(),
 }));
 vi.mock('../utils/reports-branch.js', () => ({
-  ensureReportsWorktree: (...args: unknown[]) => reportsMocks.ensureReportsWorktree(...args),
-  refreshReportsWorktree: (...args: unknown[]) => reportsMocks.refreshReportsWorktree(...args),
+  readableReportsWorktree: (...args: unknown[]) => reportsMocks.readableReportsWorktree(...args),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -54,8 +52,7 @@ describe('projectsMembers: inherited member root (#735)', () => {
       path.join(cloneDir, 'manifest', 'projects.yaml'),
       YAML.stringify({ version: 1, projects: [{ id: 'checkout', resources: {} }] }),
     );
-    reportsMocks.ensureReportsWorktree.mockReset().mockResolvedValue(reportsDir);
-    reportsMocks.refreshReportsWorktree.mockReset().mockResolvedValue(undefined);
+    reportsMocks.readableReportsWorktree.mockReset().mockResolvedValue(reportsDir);
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.mocked(autoDetectInit).mockResolvedValue({
       localConfig: {
@@ -80,6 +77,20 @@ describe('projectsMembers: inherited member root (#735)', () => {
   afterEach(async () => {
     consoleSpy.mockRestore();
     await fse.remove(tmpDir);
+  });
+
+  it('stops with exit 1 on a reports checkout teamai refused, whose warning was printed (#808)', async () => {
+    const { CheckoutRefusedError } = await import('../utils/branch-worktree.js');
+    reportsMocks.readableReportsWorktree.mockRejectedValueOnce(
+      new CheckoutRefusedError('an old checkout has uncommitted changes', 'an old checkout is in the way'),
+    );
+    try {
+      await expect(projectsMembers('checkout', {})).resolves.toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = undefined;
+    }
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('finds project members registered before the reports switch', async () => {

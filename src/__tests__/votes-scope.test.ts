@@ -37,6 +37,10 @@ vi.mock('../utils/reports-branch.js', async () => {
   return {
     updateReports: vi.fn(async (config: LocalConfig, write: (wt: string) => Promise<unknown>) => (await write(checkout(config))) !== null),
     ensureReportsWorktree: vi.fn(async (config: LocalConfig) => checkout(config)),
+    readableReportsWorktree: vi.fn(async (config: LocalConfig) => checkout(config)),
+    // This project's own checkout, so its team votes count.
+    indexableVotesDir: vi.fn(async (config: LocalConfig) =>
+      nodePath.join(nodePath.dirname(config.repo.localPath), 'reports-wt', 'votes')),
   };
 });
 

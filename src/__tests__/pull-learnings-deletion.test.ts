@@ -22,6 +22,8 @@ vi.mock('../config.js', async (importOriginal) => ({
 vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
+  // No learnings checkout exists, so the index's ownership probe passes (#808).
+  isGitRepo: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock('../utils/logger.js', () => ({

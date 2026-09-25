@@ -608,7 +608,17 @@ const votesJudgeHandler: HookHandler = {
       try {
         const { learningsRoots } = await import('./utils/learnings-roots.js');
         const { pendingLearningsDir } = await import('./utils/pending-learnings.js');
-        allowedRoots.push(...learningsRoots(localConfig).read, pendingLearningsDir(localConfig));
+        const { learningsBranch } = await import('./utils/learnings-branch.js');
+        // Not another repository's learnings checkout, if one sits where this
+        // project's would (#808): judged from git's files, since a hook starts
+        // no git process.
+        const checkout = learningsBranch.dir(localConfig);
+        const foreign = await learningsBranch.isForeignByFiles(localConfig);
+        const inCheckout = (root: string) => root === checkout || root.startsWith(`${checkout}${path.sep}`);
+        allowedRoots.push(
+          ...learningsRoots(localConfig).read.filter((root) => !foreign || !inCheckout(root)),
+          pendingLearningsDir(localConfig),
+        );
       } catch (e) {
         log.debug(`votes-judge: could not resolve extra learnings roots: ${(e as Error).message}`);
       }

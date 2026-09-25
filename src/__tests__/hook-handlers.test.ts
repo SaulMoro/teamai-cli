@@ -1015,6 +1015,102 @@ describe('hook-handlers registry', () => {
     expect(mockJudgeAdoption).toHaveBeenCalledWith('used something', ['doc-b'], { 'doc-b': '/l/doc-b.md' }, expect.arrayContaining(['/tmp']));
   });
 
+  describe("votes-judge and the learnings checkout's owner (#808)", () => {
+    let root: string;
+    beforeEach(() => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-judge-808-')));
+    });
+    afterEach(() => {
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    /**
+     * A self-mode project whose partition holds a teamai-learnings checkout
+     * registered in `owner`'s git dir, as git writes it: the checkout's `.git`
+     * file names `<owner>/.git/worktrees/learnings-wt`, whose `commondir` leads
+     * back to `<owner>/.git`. No git process runs.
+     */
+    function selfProjectWithCheckoutOf(
+      owner: 'this project' | 'another repository' | 'this project, pruned' | 'a repository that is gone',
+    ): { config: LocalConfig; checkoutLearnings: string } {
+      const business = path.join(root, 'business');
+      const other = path.join(root, 'other');
+      const dataHome = path.join(root, 'partition');
+      fs.mkdirSync(path.join(business, '.git'), { recursive: true });
+      fs.mkdirSync(path.join(other, '.git'), { recursive: true });
+      const ownerRepo = owner === 'another repository' ? other
+        : owner === 'a repository that is gone' ? path.join(root, 'gone')
+        : business;
+      const registration = path.join(ownerRepo, '.git', 'worktrees', 'learnings-wt');
+      // Git keeps the registration while the checkout is live, and prunes it
+      // once the checkout is gone (a re-cloned repo has none).
+      if (owner === 'this project' || owner === 'another repository') {
+        fs.mkdirSync(registration, { recursive: true });
+        fs.writeFileSync(path.join(registration, 'commondir'), '../..\n');
+      }
+      const checkout = path.join(dataHome, 'learnings-wt');
+      fs.mkdirSync(path.join(checkout, 'learnings'), { recursive: true });
+      fs.writeFileSync(path.join(checkout, '.git'), `gitdir: ${registration}\n`);
+      return {
+        config: {
+          repo: { localPath: path.join(business, '.teamai'), remote: '', kind: 'self', businessRepoRoot: business },
+          username: 'test',
+          scope: 'project',
+          projectRoot: business,
+          dataHome,
+          additionalRoles: [],
+        },
+        checkoutLearnings: path.join(checkout, 'learnings'),
+      };
+    }
+
+    async function judgeRoots(config: LocalConfig): Promise<string[]> {
+      process.env.TEAMAI_UPVOTE_JUDGE = '1';
+      mockParseTranscriptForVotes.mockResolvedValue({
+        recalledDocIds: ['doc-a'], adoptedDocIds: [], finalAssistantText: 'used doc-a',
+        recalledDocPaths: { 'doc-a': '/l/doc-a.md' }, recalledDocScopes: {},
+      });
+      const registry = buildHandlerRegistry();
+      const registration = registry.find((r) => r.event === 'stop' && r.handler.name === 'votes-judge');
+      if (!registration) throw new Error('votes-judge handler missing');
+      await registration.handler.execute(
+        { session_id: 'sid-judge-owner', cwd: '/x', transcript_path: '/t/transcript.jsonl' },
+        'claude', config,
+      );
+      const call = mockJudgeAdoption.mock.calls.at(-1);
+      if (!call) throw new Error('judge not called');
+      const roots: unknown = call[3];
+      return Array.isArray(roots) ? roots.map(String) : [];
+    }
+
+    it("keeps the learnings checkout's root when it is this project's", async () => {
+      const { config, checkoutLearnings } = selfProjectWithCheckoutOf('this project');
+      expect(await judgeRoots(config)).toContain(checkoutLearnings);
+    });
+
+    it('drops it when the checkout belongs to another repository', async () => {
+      const { config, checkoutLearnings } = selfProjectWithCheckoutOf('another repository');
+      const roots = await judgeRoots(config);
+      expect(roots).not.toContain(checkoutLearnings);
+      // The queue and the rest stay.
+      expect(roots).toContain(path.join(root, 'partition', 'pending-learnings'));
+    });
+
+    it("drops it when this project no longer registers it (a clone at the same path proves nothing)", async () => {
+      const { config, checkoutLearnings } = selfProjectWithCheckoutOf('this project, pruned');
+      const roots = await judgeRoots(config);
+      expect(roots).not.toContain(checkoutLearnings);
+      expect(roots).toContain(path.join(root, 'partition', 'pending-learnings'));
+    });
+
+    it("drops it when the checkout's repository was moved or deleted", async () => {
+      const { config, checkoutLearnings } = selfProjectWithCheckoutOf('a repository that is gone');
+      const roots = await judgeRoots(config);
+      expect(roots).not.toContain(checkoutLearnings);
+      expect(roots).toContain(path.join(root, 'partition', 'pending-learnings'));
+    });
+  });
+
   it('votes-judge re-judges a doc not yet in the ledger (no per-session marker blocks it)', async () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
     // doc-a was judged on an earlier Stop but NOT adopted (so it is NOT in the

@@ -5,13 +5,13 @@ import { assertNotReadOnly } from './read-only.js';
 import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import { markContributed } from './contribute-check.js';
-import { pendingLearningsDir, savePendingLearning } from './utils/pending-learnings.js';
+import { pendingLearningsDir, queueOwner, queueWriteRefusal, savePendingLearning } from './utils/pending-learnings.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
-import { learningsRoots } from './utils/learnings-roots.js';
+import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { resolveActiveLearningsNamespaces } from './projects.js';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
-import { getDataHome, getReportsDir, isSelfMode } from './types.js';
+import { getBusinessRoot, getDataHome, getProjectSearchIndexPath, isSelfMode } from './types.js';
 
 /**
  * Decide which learnings subdirectory a contribution lands in — resolved from
@@ -55,21 +55,25 @@ export async function rebuildIndexAfterContribute(localConfig: LocalConfig): Pro
   const repoPath = localConfig.repo.localPath;
   const docsRepoDir = path.join(repoPath, 'docs');
   const rulesRepoDir = path.join(repoPath, 'rules');
-  const votesDir = path.join(getReportsDir(localConfig), 'votes');
+  // Not another repository's reports checkout (#808).
+  const { indexableVotesDir } = await import('./utils/reports-branch.js');
+  const votesDir = await indexableVotesDir(localConfig);
 
   const activeLearningsNamespaces = await resolveActiveLearningsNamespaces(
     repoPath,
     localConfig.projects ?? [],
   );
 
-  const teamaiHome = getDataHome(localConfig);
-  const indexPath = path.join(teamaiHome, 'search-index.json');
-  const { buildIndex } = await import('./utils/search-index.js');
+  const indexPath = getProjectSearchIndexPath(localConfig);
+  const { buildIndex, dropOtherCheckoutIndexes } = await import('./utils/search-index.js');
   const { deliveredIndexSources } = await import('./resources/desired.js');
+  await dropOtherCheckoutIndexes(localConfig);
   await buildIndex({
+    // Without another repository's learnings checkout, if one sits where this
+    // project's would (#808).
     learningsDirs: [
       pendingLearningsDir(localConfig),
-      ...learningsRoots(localConfig).read,
+      ...await indexableLearningsRoots(localConfig),
     ],
     // Manifest-resolved namespaces — MUST match what pull indexes by, or a
     // contribute-time rebuild drops the project's other learnings from recall.
@@ -78,7 +82,7 @@ export async function rebuildIndexAfterContribute(localConfig: LocalConfig): Pro
     rulesDir: (await pathExists(rulesRepoDir)) ? rulesRepoDir : undefined,
     // The docs and skills pull delivers here, not the whole trees (#707).
     ...await deliveredIndexSources(localConfig),
-    votesDir: (await pathExists(votesDir)) ? votesDir : undefined,
+    votesDir: votesDir && (await pathExists(votesDir)) ? votesDir : undefined,
     indexPath,
   });
 }
@@ -97,6 +101,44 @@ export async function rebuildIndexAfterContribute(localConfig: LocalConfig): Pro
 //      │   └── not confirmed → keep it queued, retried by the next pull
 //      └─ done
 //
+
+/**
+ * A queue an older teamai kept in this checkout's `.teamai/` is deleted with a
+ * linked worktree; move it into the shared queue, so the publish that follows
+ * sends it too (#808), or aside when the partition now serves another install
+ * (settleCheckoutQueue). The migration before contribute and import --from-mr
+ * does it too, and they stop when the queue would stay in the checkout
+ * (queueKeptInCheckout); this is a second pass. Best effort: the learning
+ * being queued must still be saved, and the old queue stays where it is.
+ */
+export async function drainCheckoutQueue(localConfig: LocalConfig): Promise<void> {
+  if (!isSelfMode(localConfig)) return;
+  const legacyDir = path.join(getBusinessRoot(localConfig), '.teamai');
+  const dataHome = getDataHome(localConfig);
+  if (path.resolve(legacyDir) === path.resolve(dataHome)) return;
+  const { settleCheckoutQueue } = await import('./migrate.js');
+  try {
+    await settleCheckoutQueue(legacyDir, dataHome, queueOwner(localConfig));
+  } catch (e) {
+    log.warn(
+      `Could not move the learnings an older teamai queued in ${legacyDir} ` +
+        `(${e instanceof Error ? e.message : String(e)}). They stay there; the next teamai pull moves them.`,
+    );
+  }
+}
+
+/**
+ * Where a learning saved for an install that changed before it was published
+ * is, for the member: still queued, or set aside with the previous install's
+ * queue by the `init` that switched it, which names the directory.
+ */
+export const KEPT_FOR_ITS_INSTALL =
+  'It stays on this machine: in the queue, or where `teamai init` set that install\'s queue aside.';
+
+/** What happens to a learning a checkout refusal kept from publishing: every pull meets the refusal too. */
+export const KEPT_UNTIL_CHECKOUT_SETTLED =
+  'It stays queued and recallable here, but no `teamai pull` can publish it until that checkout is dealt with: ' +
+  'do what the refusal says, then run `teamai pull`.';
 
 /**
  * Generate a safe filename for a contribution document.
@@ -124,7 +166,8 @@ export function generateFilename(title?: string): string {
  * The contribution is written to the durable queue first and published from
  * there. Nothing about it depends on the network, on push rights, or on a git
  * operation succeeding right now: what cannot be published stays queued and the
- * next `teamai pull` publishes it.
+ * next `teamai pull` publishes it, once any checkout refusal that stopped it is
+ * dealt with.
  */
 export async function contribute(
   options: GlobalOptions & { file?: string; title?: string; sessionId?: string; scope?: string },
@@ -184,10 +227,16 @@ export async function contribute(
   if (isSelfMode(localConfig)) {
     const { migrateSelfModeGitignore } = await import('./init.js');
     await migrateSelfModeGitignore(localConfig);
+    await drainCheckoutQueue(localConfig);
   }
 
   try {
-    await savePendingLearning(localConfig, relPath, content);
+    const queued = await savePendingLearning(localConfig, relPath, content);
+    if (queued.status !== 'saved') {
+      spin.fail(queueWriteRefusal(queued));
+      process.exitCode = 1;
+      return;
+    }
   } catch (e) {
     spin.fail(`Contribution failed: ${(e as Error).message}`);
     log.info('You can retry with: teamai contribute --file <path>');
@@ -232,9 +281,13 @@ export async function contribute(
     log.info('Your session knowledge has been shared with the team.');
     return;
   }
+  if (report.installChanged) {
+    spin.warn(`Saved locally, not published: ${report.installChanged}. ${KEPT_FOR_ITS_INSTALL}`);
+    return;
+  }
 
   spin.warn(
     `Saved locally (${report.lastError ?? 'not published yet'}). `
-    + 'It stays recallable here and the next `teamai pull` publishes it.',
+    + (report.refused ? KEPT_UNTIL_CHECKOUT_SETTLED : 'It stays recallable here and the next `teamai pull` publishes it.'),
   );
 }

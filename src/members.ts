@@ -98,9 +98,18 @@ export async function listMembers(options: GlobalOptions): Promise<void> {
   let repoPath: string;
   const { usesBranchWorktree } = await import('./types.js');
   if (usesBranchWorktree(localConfig)) {
-    const { ensureReportsWorktree, refreshReportsWorktree } = await import('./utils/reports-branch.js');
-    await refreshReportsWorktree(localConfig, { pushIfCreated: false });
-    repoPath = await ensureReportsWorktree(localConfig, { pushIfCreated: false });
+    const { readableReportsWorktree } = await import('./utils/reports-branch.js');
+    const { CheckoutRefusedError } = await import('./utils/branch-worktree.js');
+    try {
+      repoPath = await readableReportsWorktree(localConfig);
+    } catch (e) {
+      // A reports checkout teamai refused (#808): another repository's, whose
+      // roster is not this team's, or an old one in the way. The refusal, with
+      // the way out, was already printed.
+      if (!(e instanceof CheckoutRefusedError)) throw e;
+      process.exitCode = 1;
+      return;
+    }
   } else {
     repoPath = localConfig.repo.localPath;
     await pullRepo(repoPath);

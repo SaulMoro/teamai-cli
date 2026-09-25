@@ -215,7 +215,7 @@ describe('git-kind reports branch', () => {
     expect(logAfter.total).toBe(logBefore.total);
   });
 
-  it('rebuilds a dangling sibling reports worktree after the clone is removed and re-cloned', async () => {
+  it('refuses and keeps a dangling sibling reports worktree after the clone is removed and re-cloned, and rebuilds it once moved aside', async () => {
     const { origin, clone } = await seedBareOrigin();
     const cfg = gitConfig(clone, origin);
 
@@ -223,14 +223,20 @@ describe('git-kind reports branch', () => {
     fs.mkdirSync(path.join(wt, 'members'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'members', 'alice.yaml'), 'username: alice\n');
     expect(await commitAndPushReports(cfg, '[teamai] Register member: alice', ['members/'])).toBe(true);
+    fs.writeFileSync(path.join(wt, 'draft.txt'), 'uncommitted\n');
 
     fs.rmSync(clone, { recursive: true, force: true });
     await simpleGit().clone(origin, clone);
     await configureGit(clone);
 
     // The sibling husk is still on disk; isGitRepo would return true, but the
-    // gitdir under the old clone is gone. ensureReportsWorktree must recreate.
+    // gitdir under the old clone is gone, and a clone at the same path cannot
+    // show the husk is its own (init reclones another team repo there too).
     expect(fs.existsSync(wt)).toBe(true);
+    await expect(ensureReportsWorktree(cfg)).rejects.toThrow(`${wt} is a teamai-reports checkout teamai cannot show to be`);
+    expect(fs.readFileSync(path.join(wt, 'draft.txt'), 'utf-8')).toBe('uncommitted\n');
+
+    fs.renameSync(wt, `${wt}.aside`);
     const rebuilt = await ensureReportsWorktree(cfg);
     expect(rebuilt).toBe(wt);
 

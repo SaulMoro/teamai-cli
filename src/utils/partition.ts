@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { getUserHome } from './home.js';
 import { readFileSafe, writeFileAtomic, expandHome } from './fs.js';
+import { managedMcpWorkspaceId } from '../types.js';
 
 /**
  * Per-project data partition identity (issue #374 P1).
@@ -330,4 +331,29 @@ export async function readAnchorFile(partitionDir: string): Promise<string | nul
   } catch {
     return null;
   }
+}
+
+/**
+ * Remove `<dataHome>/workspaces/<id>/` for every checkout that no longer
+ * exists: its search index, managed-MCP record and resource cache belong to a
+ * removed worktree (#808). `worktrees` are the repo's live checkouts, realpath'd
+ * as detection keys them (listWorktrees); an empty list proves nothing, so it
+ * removes nothing. Only directories named like a workspace id are touched.
+ * Returns the removed directories.
+ */
+export async function pruneWorkspaceDirs(dataHome: string, worktrees: readonly string[]): Promise<string[]> {
+  if (worktrees.length === 0) return [];
+  const live = new Set(worktrees.map(managedMcpWorkspaceId));
+  const workspaces = path.join(dataHome, 'workspaces');
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(workspaces, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const stale = entries
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{12}$/.test(entry.name) && !live.has(entry.name))
+    .map((entry) => path.join(workspaces, entry.name));
+  await Promise.all(stale.map((dir) => fs.promises.rm(dir, { recursive: true, force: true })));
+  return stale;
 }

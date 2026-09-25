@@ -175,7 +175,7 @@ function extractRepoUrlFromMrUrl(mrUrl: string): string {
  * @param opts.learningsDirs Directories scanned for a superseded draft
  * @param opts.all          Skip interactive confirmation, accept all
  * @param opts.outputDir    Output mode: write to this directory (learning.md)
- * @param opts.writeLearningsDir  Where a new learning is written when outputDir is not set
+ * @param opts.queueLearning  Queues a new learning (its file name, its content) when outputDir is not set, returning the file written
  * @param opts.dryRun       Dry run, no disk writes
  * @returns                 Extraction result containing the learning draft and inferred repo URL
  */
@@ -185,7 +185,7 @@ export async function importFromMR(opts: {
   learningsDirs?: readonly string[];
   all?: boolean;
   outputDir?: string;
-  writeLearningsDir?: string;
+  queueLearning?: (filename: string, content: string) => Promise<string>;
   dryRun?: boolean;
 }): Promise<{ learning?: LearningDraft; repoUrl: string; learningFile?: string }> {
   const learningsDirs = opts.learningsDirs ?? [DEFAULT_LEARNINGS_DIR];
@@ -255,7 +255,7 @@ export async function importFromMR(opts: {
   // ── 步骤 6：写文件 ─────────────────────────────────────
   let learningFile: string | undefined;
   if (!opts.dryRun && acceptLearning) {
-    learningFile = await writeLearning(learning, opts.outputDir, opts.writeLearningsDir);
+    learningFile = await writeLearning(learning, opts.outputDir, opts.queueLearning);
   }
 
   // 推断仓库 URL
@@ -271,7 +271,7 @@ export async function importFromMR(opts: {
 /**
  * 将 learning 草稿写入磁盘。
  *
- * Writes to outputDir when given, else to learningsDir, and returns the file written.
+ * Writes to outputDir when given, else into the queue, and returns the file written.
  * With neither, it warns and skips.
  *
  * @param draft         The learning draft
@@ -281,7 +281,7 @@ export async function importFromMR(opts: {
 async function writeLearning(
   draft: LearningDraft,
   outputDir?: string,
-  learningsDir?: string,
+  queueLearning?: (filename: string, content: string) => Promise<string>,
 ): Promise<string | undefined> {
   if (outputDir) {
     await fs.mkdir(outputDir, { recursive: true });
@@ -291,13 +291,11 @@ async function writeLearning(
     return filePath;
   }
 
-  if (learningsDir) {
-    await fs.mkdir(learningsDir, { recursive: true });
+  if (queueLearning) {
     // contribute's naming: the random suffix keeps two members' learnings with
     // the same title and day apart once both are published (#823).
     const { generateFilename } = await import('./contribute.js');
-    const filePath = path.join(learningsDir, generateFilename(draft.title));
-    await fs.writeFile(filePath, draft.content, 'utf-8');
+    const filePath = await queueLearning(generateFilename(draft.title), draft.content);
     log.info(`Learning written: ${filePath}`);
     return filePath;
   }

@@ -22,6 +22,9 @@ const localConfig = {
   updatePolicy: 'auto' as const,
   additionalRoles: [],
   scope: 'project' as const,
+  // Detection always sets it; the data home, which holds the queue and the
+  // side-branch checkouts in self mode, is derived from it (#808).
+  projectRoot: businessRoot,
 };
 
 vi.mock('../config.js', async (importOriginal) => ({
@@ -47,6 +50,7 @@ vi.mock('../utils/logger.js', () => ({
 const { contribute } = await import('../contribute.js');
 const { buildSelfModeGitignore } = await import('../init.js');
 const { getUserLearningsDir } = await import('../types.js');
+const { writeInstallConfig } = await import('./helpers/install-config.js');
 
 function git(args: string[], cwd: string) {
   execFileSync('git', args, { cwd, stdio: 'ignore' });
@@ -72,6 +76,8 @@ describe('contributeSelf — machine-local learnings cache (issue #472)', () => 
     git(['commit', '-qm', 'init'], businessRoot);
     git(['remote', 'add', 'origin', remote], businessRoot);
     git(['push', '-u', 'origin', 'main'], businessRoot);
+    // Ignored, as a real install's is.
+    writeInstallConfig(localConfig);
 
     // Pre-existing cache content this contribution must never touch: another
     // project's shared root learning, plus a namespace directory unrelated to

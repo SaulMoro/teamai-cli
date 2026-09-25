@@ -13,9 +13,11 @@ vi.mock('../config.js', async (importOriginal) => ({
   saveStateForScope: vi.fn(),
 }));
 
-vi.mock('../utils/git.js', () => ({
+vi.mock('../utils/git.js', async (importOriginal) => ({
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
+  // The queue compares its install's team repo with the config on disk.
+  remotesMatch: (await importOriginal<typeof import('../utils/git.js')>()).remotesMatch,
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -67,6 +69,7 @@ import { buildChecks, resolveDoctorContext, type Check, type DoctorContext } fro
 import { log } from '../utils/logger.js';
 import { pull } from '../pull.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
+import { writeInstallConfig } from './helpers/install-config.js';
 
 /** Every line pull printed, in order, as one string. */
 function printedOutput(): string {
@@ -119,6 +122,7 @@ describe('checks at the end of an interactive pull', () => {
       toolPaths: { claude: { skills: '.claude/skills', rules: '.claude/rules' } },
     };
 
+    writeInstallConfig(localConfig);
     vi.mocked(detectProjectConfig).mockResolvedValue(null);
     vi.mocked(loadLocalConfigForScope).mockResolvedValue(localConfig);
     vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig);

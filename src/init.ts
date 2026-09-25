@@ -8,6 +8,33 @@ import { pushRepoDirectly } from './utils/git.js';
 import { getProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
 import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
+import { queueOwner, sameQueueOwner, setAsideQueueOnModeSwitch } from './utils/pending-learnings.js';
+import { dropAllSearchIndexes } from './utils/search-index.js';
+
+/**
+ * A re-init that changes the install's kind or team repository keeps the data
+ * home (git and self mode share the partition, #808; #823 item 13), and what it
+ * holds was written for the previous repository: set the queue aside and drop
+ * the search indexes, which the new install rebuilds from its own knowledge.
+ * A config that exists but cannot be read names no owner, so it counts as
+ * another. `save` writes the new config.
+ */
+async function settleModeSwitch(previous: LocalConfig | null, next: LocalConfig, save: () => Promise<void>): Promise<void> {
+  const switched = await setAsideQueueOnModeSwitch(previous, next, async () => {
+    const ownerChanged = previous
+      ? !sameQueueOwner(queueOwner(previous), queueOwner(next))
+      : fs.existsSync(path.join(getDataHome(next), 'config.yaml'));
+    if (ownerChanged) await dropAllSearchIndexes(getDataHome(previous ?? next));
+    await save();
+  });
+  if (switched.status === 'busy') {
+    log.error(
+      `Another teamai command is writing this project's queued learnings (${switched.lockPath} is held), ` +
+        'so init did not save the new config. Run init again when it finishes.',
+    );
+    process.exit(1);
+  }
+}
 import { log, spinner } from './utils/logger.js';
 import {
   CLAUDE_TOOL_ID,
@@ -23,6 +50,7 @@ import {
   type Scope,
   getTeamaiHome,
   getConfigPath,
+  getDataHome,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
@@ -554,12 +582,14 @@ export async function initHttp(
   await releasePreviousClaudeRoot(teamConfig, existingLocalConfig, localConfig);
 
   await ensureDir(teamaiHome);
-  if (scope === 'project') {
-    await saveLocalConfigForScope(localConfig, scope, projectRoot);
-  } else {
-    await ensureDir(getTeamaiHomeDir());
-    await saveLocalConfig(localConfig);
-  }
+  await settleModeSwitch(existingLocalConfig, localConfig, async () => {
+    if (scope === 'project') {
+      await saveLocalConfigForScope(localConfig, scope, projectRoot);
+    } else {
+      await ensureDir(getTeamaiHomeDir());
+      await saveLocalConfig(localConfig);
+    }
+  });
   log.success(`Local config saved to ${teamaiHome}/config.yaml`);
 
   // Invalidate cache so the next pull does a full sync.
@@ -1037,7 +1067,8 @@ export async function initSelfRepo(options: GlobalOptions & {
   // getDataHome, which now resolves to the partition.
   await ensureDir(teamaiHome);
   await ensureDir(partitionHome);
-  await saveLocalConfigForScope(localConfig, 'project', businessRepoRoot);
+  await settleModeSwitch(existingSelfConfig, localConfig, () =>
+    saveLocalConfigForScope(localConfig, 'project', businessRepoRoot));
   log.success(`Local config saved to ${partitionHome}/config.yaml`);
   // (Pre-P2 this retired any stale partition config so detection fell back to the
   // in-repo self config. P2 makes self USE the partition, so there is nothing to
@@ -1717,9 +1748,11 @@ export async function init(options: GlobalOptions & {
   await releasePreviousClaudeRoot(currentConfig, existingLocalConfig, localConfig);
 
   await ensureDir(teamaiHome);
+  if (scope !== 'project') await ensureDir(getTeamaiHomeDir());
+  await settleModeSwitch(existingLocalConfig, localConfig, () =>
+    scope === 'project' ? saveLocalConfigForScope(localConfig, scope, projectRoot) : saveLocalConfig(localConfig));
 
   if (scope === 'project') {
-    await saveLocalConfigForScope(localConfig, scope, projectRoot);
     log.success(`Local config saved to ${teamaiHome}/config.yaml`);
 
     // Generate .gitignore for project scope to prevent local config from being committed
@@ -1749,8 +1782,6 @@ export async function init(options: GlobalOptions & {
       log.debug('Generated .teamai/.gitignore for project scope');
     }
   } else {
-    await ensureDir(getTeamaiHomeDir());
-    await saveLocalConfig(localConfig);
     log.success(`Local config saved to ${getTeamaiHomeDir()}/config.yaml`);
   }
 

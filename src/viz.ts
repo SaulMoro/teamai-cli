@@ -19,8 +19,7 @@ import {
   getUserLearningsDir,
   getKnowledgeDir,
   getReportsDir,
-  getDataHome,
-  getTeamaiHome,
+  getProjectSearchIndexPath,
 } from './types.js';
 import type { SearchIndexEntry } from './types.js';
 import { findPromotionCandidates, type PromotionCandidate } from './maintenance/promote.js';
@@ -136,7 +135,7 @@ interface VizPaths {
  * Precedence: explicit `--repo` flag → the cwd's scope (resolveConfigForDir: project, else user)
  * → ~/.teamai fallback. An unreadable project config throws rather than fall back.
  * `config.repo.kind` is 'git' | 'http' | 'self'. In self mode, votes/stats live in the reports
- * worktree (ensureReportsWorktree), while learnings remain in the local ~/.teamai tree.
+ * worktree (readableReportsWorktree), while learnings remain in the local ~/.teamai tree.
  */
 export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
   // Explicit --repo: everything lives under the given repo; no shared index
@@ -171,22 +170,27 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
   if (config?.repo?.localPath) {
     const { usesBranchWorktree } = await import('./types.js');
     if (usesBranchWorktree(config)) {
-      const { ensureReportsWorktree } = await import('./utils/reports-branch.js');
+      const { readableReportsWorktree } = await import('./utils/reports-branch.js');
       // Read-only: never publish a missing reports branch.
-      await ensureReportsWorktree(config, { pushIfCreated: false });
+      await readableReportsWorktree(config);
     }
     const knowledgeRoot = getKnowledgeDir(config);
     const reportsRoot = getReportsDir(config);
     const useProjectScope = config.scope === 'project' && Boolean(config.projectRoot);
-    // Project branch routes through getDataHome (P1-2 partition-aware); the
-    // else branch preserves the original fallback to ~/.teamai for historical
-    // configs that are project-scoped but lack projectRoot (getDataHome would
-    // otherwise throw via getTeamaiHome and fail the dashboard report).
-    const teamaiHome = useProjectScope ? getDataHome(config) : getTeamaiHome('user');
-    const { learningsRoots } = await import('./utils/learnings-roots.js');
+    // Project branch routes through getProjectSearchIndexPath (partition-aware,
+    // per checkout in self mode); the else branch preserves the original
+    // fallback to ~/.teamai for historical configs that are project-scoped but
+    // lack projectRoot (getDataHome would otherwise throw via getTeamaiHome and
+    // fail the dashboard report).
+    const indexPath = useProjectScope ? getProjectSearchIndexPath(config) : getUserSearchIndexPath();
+    const { learningsRoots, indexableLearningsRoots } = await import('./utils/learnings-roots.js');
     const roots = learningsRoots(config);
     const learningsDir = useProjectScope ? roots.write : getUserLearningsDir();
-    const learningsDirs = useProjectScope ? roots.read : [getUserLearningsDir(), ...roots.read];
+    // Not another repository's learnings checkout (#808): the temporary index
+    // and the promotion/prune candidates are built from these.
+    const learningsDirs = useProjectScope
+      ? await indexableLearningsRoots(config)
+      : [getUserLearningsDir(), ...roots.read];
     const source: VizSource = config.repo.kind === 'self'
       ? { scope: 'local', label: 'Personal repo · your recalls only' }
       : { scope: 'team', label: 'Team repo · aggregated across the team' };
@@ -197,7 +201,7 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
       learningsDir,
       learningsDirs,
       statsDir: path.join(reportsRoot, 'stats'),
-      indexPath: path.join(teamaiHome, 'search-index.json'),
+      indexPath,
       source,
     };
   }

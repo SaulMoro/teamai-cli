@@ -56,6 +56,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 const { contribute } = await import('../contribute.js');
 const { listPendingLearnings } = await import('../utils/pending-learnings.js');
+const { writeInstallConfig } = await import('./helpers/install-config.js');
 
 function note(text: string): string {
   const p = path.join(tmp, `note-${Math.random().toString(36).slice(2)}.md`);
@@ -84,6 +85,7 @@ describe('contributing where the learnings branch cannot exist', () => {
     const business = path.join(tmp, 'product');
     fs.mkdirSync(path.join(business, '.teamai'), { recursive: true });
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: business });
+    writeInstallConfig(config());
 
     await expect(
       contribute({ scope: 'project', title: 'no commits yet', file: note('# knowledge') }),

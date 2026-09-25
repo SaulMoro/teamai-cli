@@ -40,6 +40,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 }));
 
 const { contribute } = await import('../contribute.js');
+const { writeInstallConfig } = await import('./helpers/install-config.js');
 
 /**
  * Whatever goes wrong with git, a contribution the member has already made has
@@ -53,6 +54,7 @@ describe('contributing when the learnings branch cannot be written at all', () =
     process.env.HOME = path.join(tmp, 'home');
     fs.mkdirSync(path.join(tmp, 'not-a-clone'), { recursive: true });
     fs.mkdirSync(process.env.HOME, { recursive: true });
+    writeInstallConfig(config());
   });
 
   afterEach(() => {

@@ -57,8 +57,8 @@ async function loadReportedStats(): Promise<UserStats | null> {
     let statsRoot = config.repo.localPath;
     const { usesBranchWorktree } = await import('./types.js');
     if (usesBranchWorktree(config)) {
-      const { ensureReportsWorktree } = await import('./utils/reports-branch.js');
-      statsRoot = await ensureReportsWorktree(config, { pushIfCreated: false });
+      const { readableReportsWorktree } = await import('./utils/reports-branch.js');
+      statsRoot = await readableReportsWorktree(config);
     }
     const statsPath = path.join(statsRoot, 'stats', `${config.username}.yaml`);
     const content = await readFileSafe(statsPath);

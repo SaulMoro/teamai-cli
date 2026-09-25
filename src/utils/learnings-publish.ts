@@ -11,10 +11,11 @@ import fs from 'node:fs';
 
 import { ensureDir } from './fs.js';
 import { learningsBranch } from './learnings-branch.js';
-import type { PublishResult } from './branch-worktree.js';
+import { CheckoutRefusedError, failureReason, type PublishResult } from './branch-worktree.js';
 import { log } from './logger.js';
 import {
   dropPendingLearning,
+  listPendingForInstall,
   listPendingLearnings,
   readPendingLearning,
 } from './pending-learnings.js';
@@ -31,6 +32,17 @@ export interface PublishQueueReport {
    * is still queued because publishing failed, not when the queue was empty.
    */
   lastError?: string;
+  /**
+   * `lastError` is a checkout refusal: every pull meets it too, so the queue
+   * stays until the member does what the refusal says.
+   */
+  refused?: true;
+  /**
+   * Why nothing was published at all: the install the command loaded is not
+   * this queue's any more (init switched its kind, or its config moved away),
+   * so the learnings stay where they are, for the install they belong to.
+   */
+  installChanged?: string;
 }
 
 function commitMessageFor(username: string): string {
@@ -47,7 +59,28 @@ export async function publishQueuedLearnings(
   username: string,
   options: { holdsSyncLock?: boolean } = {},
 ): Promise<PublishQueueReport> {
-  const queued = await listPendingLearnings(localConfig);
+  const listing = await listPendingForInstall(localConfig);
+  switch (listing.status) {
+    case 'listed':
+      break;
+    case 'busy':
+      return {
+        published: [],
+        remaining: (await listPendingLearnings(localConfig)).length,
+        lastError: `another teamai command holds ${listing.lockPath}`,
+      };
+    case 'changed':
+      return {
+        published: [],
+        remaining: 0,
+        installChanged: `this project's teamai install changed while this command ran (${listing.configPath} ${listing.cause})`,
+      };
+    default: {
+      const unhandled: never = listing;
+      throw new Error(`Unhandled queue listing: ${JSON.stringify(unhandled)}`);
+    }
+  }
+  const queued = listing.queued;
   if (queued.length === 0) {
     return { published: [], remaining: 0 };
   }
@@ -78,7 +111,12 @@ export async function publishQueuedLearnings(
     // Never throw: a contribution is already safe in the queue, and publishing
     // it is never the reason a command fails.
     log.debug(`[learnings] publishing failed (non-blocking): ${(e as Error).message}`);
-    return { published: [], remaining: queued.length, lastError: (e as Error).message };
+    return {
+      published: [],
+      remaining: queued.length,
+      lastError: failureReason(e),
+      refused: e instanceof CheckoutRefusedError || undefined,
+    };
   } finally {
     if (syncLock) await releaseLock(syncLock);
   }
@@ -168,6 +206,6 @@ async function publishToLearningsBranch(
     case 'busy':
       return { published: [], lastError: 'another teamai write is in progress' };
     case 'failed':
-      return { published: [], lastError: result.reason };
+      return { published: [], lastError: result.reason, refused: result.refused };
   }
 }

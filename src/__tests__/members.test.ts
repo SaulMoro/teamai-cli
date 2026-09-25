@@ -17,12 +17,10 @@ vi.mock('../utils/git.js', () => ({
 }));
 
 const reportsMocks = vi.hoisted(() => ({
-  ensureReportsWorktree: vi.fn(),
-  refreshReportsWorktree: vi.fn().mockResolvedValue(undefined),
+  readableReportsWorktree: vi.fn(),
 }));
 vi.mock('../utils/reports-branch.js', () => ({
-  ensureReportsWorktree: (...args: unknown[]) => reportsMocks.ensureReportsWorktree(...args),
-  refreshReportsWorktree: (...args: unknown[]) => reportsMocks.refreshReportsWorktree(...args),
+  readableReportsWorktree: (...args: unknown[]) => reportsMocks.readableReportsWorktree(...args),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -162,8 +160,7 @@ describe('listMembers', () => {
     reportsDir = path.join(tmpDir, 'reports-wt');
     await fse.ensureDir(path.join(cloneDir, 'members'));
     await fse.ensureDir(path.join(reportsDir, 'members'));
-    reportsMocks.ensureReportsWorktree.mockReset().mockResolvedValue(reportsDir);
-    reportsMocks.refreshReportsWorktree.mockReset().mockResolvedValue(undefined);
+    reportsMocks.readableReportsWorktree.mockReset().mockResolvedValue(reportsDir);
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.mocked(log.info).mockClear();
     vi.mocked(log.warn).mockClear();
@@ -181,9 +178,23 @@ describe('listMembers', () => {
 
     expect(log.info).toHaveBeenCalledWith('No team members registered');
     expect(consoleSpy).not.toHaveBeenCalled();
-    // Listing is read-only: a cold start must not publish the reports branch.
-    expect(reportsMocks.refreshReportsWorktree).toHaveBeenCalledWith(expect.anything(), { pushIfCreated: false });
-    expect(reportsMocks.ensureReportsWorktree).toHaveBeenCalledWith(expect.anything(), { pushIfCreated: false });
+    // Listing is read-only: it reads through the helper that never publishes the reports branch.
+    expect(reportsMocks.readableReportsWorktree).toHaveBeenCalledOnce();
+  });
+
+  it('stops with exit 1 on a reports checkout teamai refused, whose warning was printed (#808)', async () => {
+    mockRequireInit(cloneDir);
+    const { CheckoutRefusedError } = await import('../utils/branch-worktree.js');
+    reportsMocks.readableReportsWorktree.mockRejectedValueOnce(
+      new CheckoutRefusedError('an old checkout has uncommitted changes', 'an old checkout is in the way'),
+    );
+    try {
+      await expect(listMembers({})).resolves.toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = undefined;
+    }
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('lists members registered before the reports switch from the default-branch clone', async () => {
@@ -203,9 +214,8 @@ describe('listMembers', () => {
     expect(allOutput).toContain('stale');
     expect(allOutput).toContain('Leftover on clone');
     expect(allOutput).toContain('Team members (1)');
-    // Listing is read-only: a cold start must not publish the reports branch.
-    expect(reportsMocks.refreshReportsWorktree).toHaveBeenCalledWith(expect.anything(), { pushIfCreated: false });
-    expect(reportsMocks.ensureReportsWorktree).toHaveBeenCalledWith(expect.anything(), { pushIfCreated: false });
+    // Listing is read-only: it reads through the helper that never publishes the reports branch.
+    expect(reportsMocks.readableReportsWorktree).toHaveBeenCalledOnce();
   });
 
   it('should display members without role tags', async () => {

@@ -220,8 +220,15 @@ old installs through a legacy fallback; P1-3 moves a real legacy `.teamai/` INTO
 partition on the next write command, so the workspace ends up with zero residue.
 
 **Trigger** (`src/migrate.ts`, wired into the global `preAction` hook in `index.ts`):
-- Only `init` / `pull` / `push`. Read-only commands (`status`, `recall`, …) keep using
-  the double-read fallback and never move data.
+- Only `init` / `pull` / `push` / `contribute`, and `import --from-mr`: the
+  commands that write, and the two that queue learnings, which an unmigrated
+  checkout would keep in its own `.teamai/` (#808). `import`'s other modes leave
+  the queue alone, and `import --cache-status --json` prints only its JSON.
+  `contribute --scope user` (the user install's queue) and `import --from-mr
+  --output` (drafts only) do not write this project's queue, so they do not
+  migrate either.
+  Read-only commands (`status`, `recall`, …) keep using the double-read fallback
+  and never move data.
 - `hook-dispatch` is excluded outright (via `TEAMAI_HOOK_SUBCOMMANDS`): it is a
   high-frequency silent path and must never move 12 MB.
 - `--dry-run` (the existing global flag) previews without writing.
@@ -230,17 +237,30 @@ partition on the next write command, so the workspace ends up with zero residue.
 short-circuits on an existing partition and runs the self-heal bootstrap as a side
 effect, both of which would mask the raw legacy state). Act iff:
 - in a git repo (the partition only exists for git repos), AND
-- `<workspaceRoot>/.teamai/config.yaml` exists, AND
-- the legacy config is `scope: project` (user data never lives under `.teamai/`), AND
-- the legacy config is NOT `kind: self` — **self mode is a hard no-op**: its `.teamai/`
-  is team knowledge committed to main, and `init --self` already retires any partition,
-  so moving it would break "knowledge on main".
+- `<workspaceRoot>/.teamai/config.yaml` exists (self mode falls back to the
+  partition's, see below), AND
+- the legacy config is `scope: project` (user data never lives under `.teamai/`).
 
-The plan's **mode** then depends on the partition: a full copy when
+A `kind: self` config plans **mode `self`** whenever any entry the self migration
+takes out (the machine data, the old queue, the old shared search index) is still
+in the checkout's `.teamai/`. That `.teamai/` is team knowledge committed to main,
+so it is never copied whole or renamed: the self migration moves only those
+entries into the partition (see P2 below). Self mode reads its scope and kind
+from the partition's `config.yaml` when the checkout's is gone, so a relocation
+interrupted after the config moved still finishes. A partition `config.yaml` that
+exists but that detection cannot read plans nothing, with a warning naming the
+file, as for the other kinds below: the checkout's config is the only one that
+still loads, and nothing leaves the checkout until the member fixes that file.
+
+For any other kind, the plan's **mode** then depends on the partition: a full copy when
 `<partition>/config.yaml` does not exist yet, or **retire-only** when it exists and
 detection can read it (a prior run built the partition but was interrupted before
 retiring the source — see Interrupt recovery). retire-only never re-copies onto the
-authoritative partition; it only cleans up the leftover legacy dir. A partition
+authoritative partition; it only cleans up the leftover legacy dir, after settling
+its queue by the partition's config (settleCheckoutQueue, below): into the partition
+queue, or set aside, never into `.teamai.bak`, which a removed linked worktree takes
+with it. A queue that cannot move keeps the legacy dir (`'skipped'`), so
+`contribute` and `import --from-mr` stop on it and the next run tries again. A partition
 `config.yaml` that exists but that detection cannot read (it is empty or cannot be
 opened, does not parse, does not validate, or is not `scope: project`) plans nothing:
 the legacy dir holds the only config that still loads, so it stays in place (a warning
@@ -248,7 +268,23 @@ names the file) until the member fixes the partition file, and the next write co
 then gets the retire-only cleanup. A partition dir with no `config.yaml` at all (say,
 one moved aside by hand) plans nothing either, with a warning: the full copy replaces
 the whole dir, so it would take that dir's data with it. The full copy's re-check under
-the lock in `runMigration` applies the same rules, warning included.
+the lock in `runMigration` applies the same rules, warning and queue included.
+
+A readable self partition over a legacy dir that holds self knowledge (a
+`teamai.yaml` with `mode: self`) plans **superseded** instead of retire-only:
+another checkout ran `init --self`, and this one checked out what it committed
+next to its old install, so retiring the whole dir would take the knowledge too
+(#808). Its machine entries (`SUPERSEDED_ENTRIES`: state, token, the `env` file,
+the team-repo clone, indexes, report and usage data) move to a new
+`.teamai.bak[.N]` with its own `.gitignore` (`*`), as step 5 keeps a retired dir;
+the knowledge stays. Then its queue is set aside as `pending-learnings.<old kind>`
+(settleCheckoutQueue, below), and only then does `config.yaml` follow: it is what
+tells the next run the queue is the old install's. A learning still queued at that
+point (a `contribute` from a teamai older than the queue lock, below, running
+beside the migration) keeps it in place (`'skipped'`), as retire-only keeps its dir. A move that fails partway leaves it in
+place too. Either way the next run plans superseded again and moves what is left
+(into the next free `.teamai.bak.N`). With the legacy config
+gone, the next run plans the self branch, which finds nothing left to move.
 
 **Steps** (`runMigration`) — copy → verify → atomic rename, so an interruption never
 leaves data half-in-both-places:
@@ -314,12 +350,13 @@ installs: attach a partition `dataHome` to the self LocalConfig, and every
 
 **Invariant:** `getKnowledgeDir` / `repo.localPath` stay `<repo>/.teamai` — that is
 the class-B knowledge anchor, committed to main, and the ~230 `path.join(localPath,
-…)` call sites do not change. `reports-wt/`, `learnings-wt/` and `knowledge-wt/`
-stay in the repo too (git worktrees must live in the same repo; they anchor on
-`localPath`, not `getDataHome`). Learnings themselves left the default branch in
+…)` call sites do not change. Learnings themselves left the default branch in
 issue #485: new ones are written to `learnings-wt/` (the `teamai-learnings`
 branch) and queued in `pending-learnings/` until they are published, while the
-learnings already on main are read from where they are.
+learnings already on main are read from where they are. Where those two live is
+in "Self mode and linked worktrees (#808)" below; only the disposable
+`knowledge-wt/` (a detached checkout for knowledge PRs, removed after each use)
+stays in the checkout's `.teamai/`.
 
 - **init** (`initSelfRepo`): resolves the partition up front, attaches it as
   `dataHome`, and writes config/state there. The pre-P2 "retire the stale
@@ -337,14 +374,227 @@ learnings already on main are read from where they are.
 - **migration** (`migrate.ts`, `mode: 'self'`): self CANNOT use the git-mode whole
   directory copy→rename (that would carry the knowledge off and rename `.teamai` to
   `.bak`, breaking "knowledge on main"). Instead it selectively relocates the A1
-  whitelist (config.yaml, state.json, env.local, env.sh, search-index.json,
-  managed-mcp.json, workspaces/) entry-by-entry, destination-first (copy to the
+  whitelist (config.yaml, state.json, env.local, env.sh, managed-mcp.json,
+  workspaces/) entry-by-entry, destination-first (copy to the
   partition, then delete the source), leaving class-B knowledge and the worktrees
   untouched and never renaming `.teamai/`. self `repo.localPath` is NOT rebased —
-  it must keep pointing at the in-repo knowledge.
+  it must keep pointing at the in-repo knowledge. It also drains the checkout's
+  queue (`pending-learnings/`, see #808 below), and deletes the old shared
+  `search-index.json` instead of moving it: self mode keeps one index per
+  checkout under `workspaces/<id>/` and rebuilds it.
 
 Acceptance: after slimming, `git status` is clean (the A1 data is physically gone,
 not merely ignored) and a teammate's fresh clone bootstraps into the partition.
+
+### Self mode and linked worktrees (#808)
+
+Git checks a branch out in one worktree only. Self mode used to derive the
+`teamai-learnings` and `teamai-reports` checkouts, and the queue, from
+`localPath`, which is re-anchored to each checkout's `.teamai/`. So the first
+checkout to create a side-branch checkout owned the branch, every other checkout
+of the repo failed with `'teamai-learnings' is already used by worktree`, and a
+learning queued in a linked worktree was deleted with it (its `.teamai/` is
+ignored, so a plain `git worktree remove` takes it). The partition is shared by
+every checkout, so that is where they live now:
+
+```text
+~/.teamai/projects/<slug>/                     one per project, every checkout
+├── learnings-wt/                              getWorktreeDir → <dataHome>/<dirname>
+├── reports-wt/                                (the side-branch locks sit beside them)
+├── pending-learnings/                         pendingLearningsDir → <dataHome>/pending-learnings
+└── workspaces/<managedMcpWorkspaceId(root)>/
+    └── search-index.json                      getProjectSearchIndexPath, one per checkout
+<checkout>/.teamai/                            one per checkout: committed knowledge, knowledge-wt/
+```
+
+`git worktree add` takes a path outside the repo, and the owning repo is still
+the business repo, whose refs every checkout shares. The search index is keyed
+per checkout, like managed MCP, because each checkout indexes its own branch's
+docs, rules and skills; a shared index served whichever checkout rebuilt it last,
+with paths into that checkout. The learnings they index are shared, though, so
+when `contribute` or `pull` rebuilds one checkout's index it deletes the other
+checkouts' `workspaces/*/search-index.json` in the partition, and each rebuilds
+from its own roots on its next `recall`. Git and http mode keep their paths:
+their checkouts and queue already sat beside the shared clone.
+
+Upgrading from the per-checkout layout:
+
+- **Queue.** The self migration (`init` / `pull` / `push` / `contribute` /
+  `import --from-mr`, above) moves each
+  file of `<checkout>/.teamai/pending-learnings/` into the partition queue,
+  atomically, never overwriting: a file with the same content there is the one
+  already moved, and one with different content stays in place with a warning.
+  The partition's config decides, not the checkout's: after `init` switched the
+  project to another kind from another checkout, a checkout that has not
+  migrated still says `kind: self`, and its queue would publish to the new
+  repository. It is set aside instead, as a mode switch does (below), to
+  `pending-learnings.self` beside the partition queue, with a warning naming
+  it; `contribute` and `import --from-mr` take the same step before they queue.
+  A queue with no `config.yaml` beside it is one an older self install left
+  after its config had moved to the partition; once the project serves another
+  install no plan covers it, so every migrating command sets it aside the same
+  way, as the self install's. Beside a legacy `config.yaml` that cannot be read
+  it stays, with a warning naming that file.
+  A superseded git install's queue goes to `pending-learnings.git` the same way,
+  and a git or http checkout's queue takes the same step before retire-only
+  retires the rest. A queue is the partition's only when both installs have the
+  same kind and team repository (#823 item 13, below): a checkout's git install
+  of another team repository has its queue set aside as
+  `pending-learnings.git-<repo>`. While the partition config cannot be read, the self
+  migration keeps everything in the checkout, queue included, with a warning.
+  Likewise, whenever a learning is still in the checkout's queue once it was
+  settled (the queue lock was busy, or one was queued meanwhile), the self
+  migration relocates nothing and reports `skipped`, keeping `config.yaml`, as
+  retire-only and superseded do: the next run settles it.
+  It runs per checkout; the old directory is the "not done yet" marker.
+  After the migration, `contribute` and `import --from-mr` stop with exit code 1
+  and save nothing whenever a learning queued now would still be kept in the
+  checkout's `.teamai/` (`queueKeptInCheckout`): the migration stood down on the
+  checkout's busy `.teamai/.sync-lock`, the data home is still that directory
+  because the partition has no config detection can read, or an old queue there
+  could not move. The message names the cause and the next step. `init`
+  (except `--scope user`) stops the same way, before it writes anything: it
+  would set the project up and leave that queue for `git worktree remove` to
+  delete. A linked worktree that only ever contributes or imports does not
+  take a learning with it when removed.
+- **Queue lock (#823 item 11).** A command loads its config long before it
+  queues, and in between the migration can move that config (it retires the
+  checkout's `.teamai/`, or relocates `config.yaml`) or `init` can switch the
+  project's kind or team repository. Queue writes (`savePendingLearning`, which `contribute` and
+  `import --from-mr` both use), the migration and the kind switch therefore
+  share one lock per queue home, the directory holding `pending-learnings/`:
+  `~/.teamai/locks/queue-<first 16 hex of sha256(realpath(home))>.lock`. It
+  lives outside the home because the migration renames a checkout's
+  `.teamai/`, and a writer waiting on a lock inside it would create the
+  directory again; the sync lock is not reused because git pulls hold it for
+  their whole run. A write holds the lock only around the file write: under
+  it, it re-reads `<dataHome>/config.yaml` and saves nothing when that file is
+  gone, cannot be read or names another kind or team repository (`changed`).
+  The migration holds
+  the checkout's lock from after its sync lock to the end, through the rename
+  or the last `config.yaml` move; `settleCheckoutQueue` holds the partition's
+  around reading its install and moving the queue; `init` holds it around setting
+  the queue aside and saving the new config. The publish lists the queue under
+  the same lock and check, so a command whose install changed publishes
+  nothing: the learnings stay for the install they were written for. Waits
+  are bounded (30 x 100 ms): a write then exits 1 with `Another teamai command
+  is moving this project's queued learnings (...). Nothing was saved.`, the
+  migration returns `busy`, and `init` exits 1 without saving the new config. Locks are
+  taken in the order sync lock, checkout queue lock, partition queue lock, and
+  a queue write holds no other lock. A teamai older than this takes no queue
+  lock, so its `contribute` beside a migration can still leave a learning in
+  `.teamai.bak`.
+- **Old checkouts.** Registrations are shared by every checkout, and one left in
+  any checkout's `.teamai/` blocks the shared one from all of them, so the
+  migration cannot wait for a pull in the right checkout. `ensureWorktree`
+  handles it on its cold path, just before `git worktree add`: for every
+  registration of the same branch at a path ending in `/.teamai/<dirname>`, it
+  runs `git worktree remove` without `--force`. A clean one goes (its commits
+  are on the branch, which the new checkout reuses), so a `contribute` in a
+  linked worktree works with no pull first. One with uncommitted changes stays:
+  the side-branch step fails with an error naming the path and the next step
+  (commit or move the changes, or delete the path by hand), and the queue keeps
+  the learnings until then. The error is also printed as a warning, because
+  several callers treat a side-branch failure as non-fatal and log it at debug
+  only; a silent (hook) run prints nothing. `refresh` does not swallow it:
+  `recall maintenance` and `recall promote` stop with exit code 1 and write
+  nothing, since the shared checkout they would write into does not exist and
+  the next publish would clear what they wrote there as a stale directory. Any
+  other failure to create or sync the checkout (`git worktree add` refusing a
+  branch checked out at a path teamai does not know, say) makes `refresh`
+  return `failed` with the cause: readers use what is there, and maintenance
+  and promote stop the same way, naming the cause.
+- **Lock.** Every checkout of the repo now shares each side-branch checkout
+  and its lock. A `refresh` that cannot take the lock (held, or not creatable)
+  checks nothing and never creates, prunes or removes a checkout, which may be
+  the holder's work in progress; it returns `busy` with the lock path, and a
+  reader (`members`, `projects members`, `digest`, `pull`, `stats` and `viz`,
+  through `readableReportsWorktree`) uses the local copy and never ensures it,
+  after the same ownership probe as `indexableVotesDir` (below): another
+  repository's copy is refused with `ForeignCheckoutError`. The
+  checkout there may be another repository's, or not created yet, so
+  `recall maintenance` and `recall promote` stop with exit code 1 and write
+  nothing when either the reports lock (they rank by its votes) or the
+  learnings lock is taken; the error names the lock and says to run the command
+  again, or to check that the partition is writable.
+
+A git-mode install keeps the same checkouts and queue at the same partition
+paths (beside `<partition>/team-repo`), so after a project switches mode the
+checkout there may belong to the other repository. `ensureWorktree` accepts an
+existing checkout only when its `git rev-parse --git-common-dir`, resolved,
+matches the owning repo's. Otherwise it fails with an error naming the checkout,
+the repository it belongs to and the command that removes it
+(`git -C <owner> worktree remove <checkout>`); it never removes it itself. A
+checkout git cannot open (`rev-parse` fails) is recreated only while the owning
+repo still registers it: its `.git` file names a gitdir whose `commondir` leads
+to the owning repo's git dir. A gitdir without it proves nothing: git pruned the
+registration, and a clone at the same path (the clone was deleted and cloned
+again, as `init` does when it switches to another team repository) is not the
+repository the checkout came from. That checkout, and any other path with a
+`.git` (one whose repository was moved or deleted, or a `.git` directory), is refused with
+the same error type, saying teamai cannot show whose it is, and is never
+removed; a path with no `.git` (a partial leftover) is cleared as before. The
+refusal is a `ForeignCheckoutError`, which `refresh` does not swallow either,
+because every path under the checkout is the other install's:
+`recall maintenance` and `recall promote` stop with exit code 1 instead of
+rewriting that team's learnings, and `members` and `projects members` stop the
+same way on another repository's reports checkout. Every search-index build
+(`pull`, `contribute`, and `recall` when it has no index) builds from
+`indexableLearningsRoots`, which probes ownership and leaves out only that
+checkout's learnings: the queue, docs, rules, skills and older learnings stay
+recallable, and a plain `recall` runs no git. `digest` and the dashboard (`viz`:
+its throwaway index and its promotion and prune candidates) use the same roots.
+Those builds, and the reports checkout `teamai recall feedback --negative` counts
+the team's upvotes from, take the votes directory from `indexableVotesDir`,
+which runs the same probe on the reports checkout: another repository's votes
+are left out, so no learning of this project carries that team's hotness.
+The recall hook's vote judge, which starts no git process, reads the same answer
+from git's files: the checkout's `.git` file names its gitdir, whose `commondir`
+leads to the owning repository's git dir, compared (realpath'd) with this
+project's. When they differ, or either cannot be read (a gitdir without
+`commondir` included), the checkout's roots
+leave the judge's allowed read roots; a path with no `.git` is judged as before.
+
+The queue is the same partition directory in both modes, and its learnings were
+written for the previous install's repository. A queue's owner is its install's
+kind and team repository (`repo.remote`, compared as `remotesMatch` compares
+remotes: credentials, protocol, scp or URL form, a trailing `.git` or `/` and
+case do not count; #823 item 13). When `init` changes the owner with learnings
+still queued, it moves the queue, under the queue lock and together with saving
+the new config (above), to `pending-learnings.<previous kind>`, or
+`pending-learnings.<kind>-<repo>` when only the team repository changed (`<repo>`
+is the compared form of the previous remote with `/` and the like as `-`, e.g.
+`pending-learnings.git-github.com-org-team-a`), beside it (the first free name,
+nothing is overwritten) and says how many learnings it set aside and where;
+nothing is published to the new repository or deleted. A previous config that
+exists but cannot be read names no owner: the loaders return null for it as for
+a fresh install, so `init` checks for the file, and with learnings queued moves
+them to `pending-learnings.unknown` the same way, the warning naming that config;
+queued or not, it drops the search indexes, as on an owner change.
+A self install whose
+business repository moved to another URL (renamed or transferred) is another
+owner too: `init` sets its queue aside, and the warning names the directory to
+move the files back from. It also deletes every search index
+in the data home (the root one and each `workspaces/*/`): they were built from
+the other repository, and `recall` rebuilds a missing index. `uninstall` lists, before it asks,
+how many unpublished learnings each queue in the data home holds, set-aside ones
+included, so the member can publish or copy them first.
+
+Every checkout keeps its `workspaces/<id>/` (search index, managed MCP,
+resource cache) in the shared data home. A full `pull` removes those of
+checkouts `git worktree list` no longer shows; the fast path does not list
+worktrees.
+
+`import --from-mr` queues its learning in `pendingLearningsDir` and publishes
+it as `contribute` does (#823), so in self mode it lands in the partition queue
+and needs no checkout before the extraction. Its supersede check reads the
+queue and `indexableLearningsRoots`, never another repository's checkout.
+
+The self migration that moves queued learnings into the partition drops every
+checkout's `workspaces/*/search-index.json`: none of them has the moved
+learnings, and `recall` rebuilds a missing index. It drops them whenever a
+learning ends up in the partition queue, including one an interrupted run had
+already moved there, so a retry after a crash does not leave them stale.
 
 ## P3 — constant functionization + `status --all` (implemented)
 

@@ -18,9 +18,46 @@ vi.mock('../utils/logger.js', () => ({
   },
 }));
 
-import { planMigration, runMigration, maybeMigrate } from '../migrate.js';
+// Runs once after the next listing, to queue a learning while a drain is under way.
+const listing = vi.hoisted((): { after: (() => void | Promise<void>) | undefined } => ({ after: undefined }));
+vi.mock('../utils/fs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/fs.js')>();
+  return {
+    ...actual,
+    listFilesRecursive: async (dir: string) => {
+      const files = await actual.listFilesRecursive(dir);
+      const after = listing.after;
+      listing.after = undefined;
+      await after?.();
+      return files;
+    },
+  };
+});
+
+import { planMigration, runMigration, maybeMigrate, queueKeptInCheckout } from '../migrate.js';
+import { readConfigFrom } from '../config.js';
 import { log } from '../utils/logger.js';
 import { projectDataHome } from '../utils/partition.js';
+import { queueLockPath, savePendingLearning, setAsideQueueOnModeSwitch, type QueueWrite } from '../utils/pending-learnings.js';
+import { acquireLock, releaseLock } from '../update.js';
+
+/**
+ * Start a queue write as a contribute already running beside the migration
+ * would, and give it `ms` to finish before the migration goes on: without the
+ * queue lock it is done by then; with it, it waits for the migration.
+ */
+async function startBeside(write: () => Promise<QueueWrite>, ms = 300): Promise<{ result: Promise<QueueWrite> }> {
+  const result = write();
+  await Promise.race([result, new Promise((resolve) => setTimeout(resolve, ms))]);
+  return { result };
+}
+
+/** The config a contribute loaded from the checkout's `.teamai/` before the migration moved it. */
+async function checkoutConfig() {
+  const config = await readConfigFrom(legacyDir, repoRoot);
+  if (!config) throw new Error(`no config in ${legacyDir}`);
+  return config;
+}
 
 // ─── Real-git migration tests (issue #374 P1-3) ─────────────────────────────
 //
@@ -395,6 +432,73 @@ describe('runMigration', () => {
     expect(await fse.pathExists(path.join(partition, 'sentinel'))).toBe(true);
   });
 
+  it.each([
+    ['planned retire-only', 'retire-only'],
+    ['a partition built after planning', 'full'],
+  ])("moves a checkout's queue into the built partition before it retires the rest, %s (#808)", async (_label, mode) => {
+    await seedLegacyLayout();
+    const partition = projectDataHome(repoRoot);
+    if (mode === 'retire-only') await writePartitionConfig(partition);
+    const plan = await planMigration(repoRoot);
+    expect(plan?.mode).toBe(mode);
+    if (mode === 'full') await writePartitionConfig(partition);
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'wt-note-2026-01-01-aaaaaa.md'), '# wt\n');
+    await fse.outputFile(path.join(partition, 'pending-learnings', 'root-note-2026-01-01-bbbbbb.md'), '# root\n');
+
+    expect(await runMigration(plan!)).toBe('migrated');
+
+    const queue = path.join(partition, 'pending-learnings');
+    expect(await fse.readFile(path.join(queue, 'wt-note-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# wt\n');
+    expect(await fse.readFile(path.join(queue, 'root-note-2026-01-01-bbbbbb.md'), 'utf-8')).toBe('# root\n');
+    expect(await fse.pathExists(path.join(`${legacyDir}.bak`, 'pending-learnings'))).toBe(false);
+  });
+
+  it('never retires a learning queued with the old config into .teamai.bak (#823 item 11)', async () => {
+    await seedLegacyLayout();
+    const partition = projectDataHome(repoRoot);
+    await writePartitionConfig(partition);
+    const config = await checkoutConfig();
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'retire-only') throw new Error('expected a retire-only plan');
+
+    // Between the last queue check and the rename, a contribute that loaded the
+    // checkout's config queues a learning.
+    let late: { result: Promise<QueueWrite> } | undefined;
+    const rename = fse.rename.bind(fse);
+    const spy = vi.spyOn(fse, 'rename').mockImplementation(async (src: fs.PathLike, dest: fs.PathLike) => {
+      if (src === legacyDir && !late) late = await startBeside(() => savePendingLearning(config, 'late.md', '# late\n'));
+      return rename(src, dest);
+    });
+    try {
+      expect(await runMigration(plan)).toBe('migrated');
+    } finally {
+      spy.mockRestore();
+    }
+
+    const result = await late?.result;
+    expect(await fse.pathExists(path.join(`${legacyDir}.bak`, 'pending-learnings', 'late.md'))).toBe(false);
+    expect(await fse.pathExists(legacyDir)).toBe(false);
+    expect(result?.status).toBe('changed');
+  });
+
+  it("keeps the legacy dir while its queue cannot move into the built partition (#808)", async () => {
+    await seedLegacyLayout();
+    const partition = projectDataHome(repoRoot);
+    await writePartitionConfig(partition);
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'note-2026-01-01-aaaaaa.md'), '# mine\n');
+    await fse.outputFile(path.join(partition, 'pending-learnings', 'note-2026-01-01-aaaaaa.md'), '# theirs\n');
+
+    const plan = await planMigration(repoRoot);
+    expect(plan?.mode).toBe('retire-only');
+    expect(await runMigration(plan!)).toBe('skipped');
+
+    expect(await fse.readFile(path.join(legacyDir, 'pending-learnings', 'note-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# mine\n');
+    expect(await fse.pathExists(`${legacyDir}.bak`)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Kept 1 queued learning(s) in ${path.join(legacyDir, 'pending-learnings')}`),
+    );
+  });
+
   it('aborts without touching the source when the staged clone is corrupt', async () => {
     // A team-repo whose .git is present but not a real repo → verify's rev-parse
     // smoke-check must fail, leaving the source intact and no partition/.bak.
@@ -528,6 +632,18 @@ describe('self mode migration (P2)', () => {
     await fse.writeFile(path.join(legacyDir, 'reports-wt', 'x'), 'wt\n');
   }
 
+  /** A self config in the partition that detection loads, as a relocated checkout left it. */
+  async function writeSelfPartitionConfig(partition: string, username = 'tester'): Promise<void> {
+    await fse.outputFile(
+      path.join(partition, 'config.yaml'),
+      YAML.stringify({
+        repo: { localPath: legacyDir, remote: 'git@example.com:t/r.git', kind: 'self', businessRepoRoot: repoRoot },
+        username,
+        scope: 'project',
+      }),
+    );
+  }
+
   it('relocates A1 machine data to the partition and leaves class-B knowledge in the repo', async () => {
     await seedSelfLayout();
     const plan = await planMigration(repoRoot);
@@ -537,10 +653,14 @@ describe('self mode migration (P2)', () => {
 
     const partition = projectDataHome(repoRoot);
     // A1 moved to the partition...
-    for (const a1 of ['config.yaml', 'state.json', 'env.local', 'env.sh', 'search-index.json']) {
+    for (const a1 of ['config.yaml', 'state.json', 'env.local', 'env.sh']) {
       expect(await fse.pathExists(path.join(partition, a1))).toBe(true);
       expect(await fse.pathExists(path.join(legacyDir, a1))).toBe(false);
     }
+    // The old shared index is dropped, not moved: each checkout's index lives
+    // under workspaces/<id>/ and is rebuilt (#808).
+    expect(await fse.pathExists(path.join(partition, 'search-index.json'))).toBe(false);
+    expect(await fse.pathExists(path.join(legacyDir, 'search-index.json'))).toBe(false);
     expect(await fse.pathExists(path.join(partition, 'workspaces', 'ws1', 'managed-mcp.json'))).toBe(true);
     expect(await fse.pathExists(path.join(legacyDir, 'workspaces'))).toBe(false);
 
@@ -574,11 +694,11 @@ describe('self mode migration (P2)', () => {
     // Simulate a prior partial run: config already in the partition (authoritative),
     // but a stale copy also lingers in the repo.
     await fse.ensureDir(partition);
-    await fse.writeFile(path.join(partition, 'config.yaml'), 'repo:\n  kind: self\nAUTHORITATIVE: true\n');
+    await writeSelfPartitionConfig(partition, 'authoritative');
 
     await runMigration((await planMigration(repoRoot))!);
     // The authoritative partition config was NOT overwritten by the repo's copy.
-    expect(await fse.readFile(path.join(partition, 'config.yaml'), 'utf-8')).toContain('AUTHORITATIVE');
+    expect(await fse.readFile(path.join(partition, 'config.yaml'), 'utf-8')).toContain('username: authoritative');
     // The stale repo copy was removed.
     expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(false);
     // A second plan is null — nothing left to relocate.
@@ -599,7 +719,7 @@ describe('self mode migration (P2)', () => {
     await fse.ensureDir(path.join(legacyDir, 'workspaces', 'wsB'));
     await fse.writeFile(path.join(legacyDir, 'workspaces', 'wsB', 'managed-mcp.json'), '{"b":2}');
     // also give partition an authoritative config so the run reaches the merge branch
-    await fse.writeFile(path.join(partition, 'config.yaml'), 'repo:\n  kind: self\n');
+    await writeSelfPartitionConfig(partition);
 
     await runMigration((await planMigration(repoRoot))!);
 
@@ -620,7 +740,7 @@ describe('self mode migration (P2)', () => {
     // partition already has ws1 with authoritative content — merge must keep it.
     await fse.ensureDir(path.join(partition, 'workspaces', 'ws1'));
     await fse.writeFile(path.join(partition, 'workspaces', 'ws1', 'managed-mcp.json'), '{"authoritative":true}');
-    await fse.writeFile(path.join(partition, 'config.yaml'), 'repo:\n  kind: self\n');
+    await writeSelfPartitionConfig(partition);
 
     await runMigration((await planMigration(repoRoot))!);
 
@@ -655,6 +775,225 @@ describe('self mode migration (P2)', () => {
     expect(await planMigration(repoRoot)).toBeNull();
   });
 
+  /** A self install already relocated to the partition, as every checkout after P2 sees it. */
+  async function seedRelocatedSelfInstall(): Promise<string> {
+    const partition = projectDataHome(repoRoot);
+    await fse.ensureDir(partition);
+    await fse.writeFile(
+      path.join(partition, 'config.yaml'),
+      YAML.stringify({
+        repo: { localPath: legacyDir, remote: 'git@example.com:t/r.git', kind: 'self', businessRepoRoot: repoRoot },
+        username: 'tester',
+        scope: 'project',
+      }),
+    );
+    await fse.ensureDir(legacyDir);
+    await fse.writeFile(path.join(legacyDir, 'teamai.yaml'), 'team: t\nmode: self\n');
+    return partition;
+  }
+
+  it("moves a checkout's queued learnings into the shared partition queue (#808)", async () => {
+    const partition = await seedRelocatedSelfInstall();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    const queue = path.join(partition, 'pending-learnings');
+    await fse.outputFile(path.join(oldQueue, 'root-note-2026-01-01-aaaaaa.md'), '# root\n');
+    await fse.outputFile(path.join(oldQueue, 'alpha', 'ns-note-2026-01-01-bbbbbb.md'), '# ns\n');
+    // Another checkout already queued into the same namespace.
+    await fse.outputFile(path.join(queue, 'alpha', 'other-2026-01-01-cccccc.md'), '# other\n');
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    expect(plan.mode).toBe('self');
+    await runMigration(plan);
+
+    expect(await fse.readFile(path.join(queue, 'root-note-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# root\n');
+    expect(await fse.readFile(path.join(queue, 'alpha', 'ns-note-2026-01-01-bbbbbb.md'), 'utf-8')).toBe('# ns\n');
+    expect(await fse.readFile(path.join(queue, 'alpha', 'other-2026-01-01-cccccc.md'), 'utf-8')).toBe('# other\n');
+    expect(await fse.pathExists(oldQueue)).toBe(false);
+    expect(await planMigration(repoRoot)).toBeNull();
+  });
+
+  it("keeps every piece of a checkout's machine data while the partition config cannot be read (#808)", async () => {
+    await seedSelfLayout();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    await fse.outputFile(path.join(oldQueue, 'kept-2026-01-01-aaaaaa.md'), '# kept\n');
+    const legacyConfig = await fse.readFile(path.join(legacyDir, 'config.yaml'), 'utf-8');
+    const partition = projectDataHome(repoRoot);
+    await fse.ensureDir(partition);
+    await fse.writeFile(path.join(partition, 'config.yaml'), ':::not yaml:::\n');
+
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(repoRoot);
+    try {
+      await maybeMigrate();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await fse.readFile(path.join(legacyDir, 'config.yaml'), 'utf-8')).toBe(legacyConfig);
+    for (const a1 of ['state.json', 'env.local', 'env.sh', 'search-index.json', 'workspaces']) {
+      expect(await fse.pathExists(path.join(legacyDir, a1)), a1).toBe(true);
+    }
+    expect(await fse.readFile(path.join(oldQueue, 'kept-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# kept\n');
+    expect(await fse.readdir(partition)).toEqual(['config.yaml']);
+    expect(await fse.readFile(path.join(partition, 'config.yaml'), 'utf-8')).toBe(':::not yaml:::\n');
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Kept the machine data in ${legacyDir}: ${path.join(partition, 'config.yaml')} cannot be read`),
+    );
+    // The command goes on with the checkout's own config.
+    const { detectProjectConfig } = await import('../config.js');
+    expect((await detectProjectConfig(repoRoot))?.repo.kind).toBe('self');
+  });
+
+  it("keeps the checkout's config.yaml while its queue cannot move, so the next run settles it (#808)", async () => {
+    await seedSelfLayout();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    await fse.outputFile(path.join(oldQueue, 'kept-2026-01-01-aaaaaa.md'), '# kept\n');
+    // Another checkout's init switched the partition to a git install.
+    const partition = projectDataHome(repoRoot);
+    await fse.outputFile(path.join(partition, 'config.yaml'), YAML.stringify({
+      repo: { localPath: path.join(partition, 'team-repo'), remote: 'git@example.com:team/repo.git', kind: 'git' },
+      username: 'tester',
+      scope: 'project',
+    }));
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'self') throw new Error('expected a self plan');
+
+    const lock = await queueLockPath(partition);
+    expect(await acquireLock(lock)).toBe(true);
+    try {
+      expect(await runMigration(plan)).toBe('skipped');
+    } finally {
+      await releaseLock(lock);
+    }
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(true);
+    expect(await fse.readFile(path.join(oldQueue, 'kept-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# kept\n');
+
+    const retry = await planMigration(repoRoot);
+    if (retry?.mode !== 'self') throw new Error('expected the retry to take the self path again');
+    expect(await runMigration(retry)).toBe('migrated');
+    expect(await fse.readFile(path.join(partition, 'pending-learnings.self', 'kept-2026-01-01-aaaaaa.md'), 'utf-8')).toBe('# kept\n');
+    expect(await fse.pathExists(oldQueue)).toBe(false);
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(false);
+  });
+
+  it("drops every checkout's search index when it moves queued learnings, and nothing else (#808)", async () => {
+    const partition = await seedRelocatedSelfInstall();
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'moved-2026-01-01-aaaaaa.md'), '# moved\n');
+    for (const id of ['aaaaaaaaaaaa', 'bbbbbbbbbbbb']) {
+      await fse.outputJson(path.join(partition, 'workspaces', id, 'search-index.json'), { version: 1 });
+      await fse.outputJson(path.join(partition, 'workspaces', id, 'managed-mcp.json'), {});
+    }
+    // A stray file beside the checkout directories is not one of them.
+    await fse.outputFile(path.join(partition, 'workspaces', '.DS_Store'), '');
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await runMigration(plan);
+
+    for (const id of ['aaaaaaaaaaaa', 'bbbbbbbbbbbb']) {
+      // Recall rebuilds a missing index, now with the moved learning.
+      expect(await fse.pathExists(path.join(partition, 'workspaces', id, 'search-index.json'))).toBe(false);
+      expect(await fse.pathExists(path.join(partition, 'workspaces', id, 'managed-mcp.json'))).toBe(true);
+    }
+  });
+
+  it("drops every checkout's search index when an earlier run already placed the learning (#808)", async () => {
+    const partition = await seedRelocatedSelfInstall();
+    // A run that crashed after renaming it into the partition queue, before it
+    // dropped the indexes, left the same file in both queues.
+    for (const queue of [legacyDir, partition]) {
+      await fse.outputFile(path.join(queue, 'pending-learnings', 'placed-2026-01-01-aaaaaa.md'), '# placed\n');
+    }
+    await fse.outputJson(path.join(partition, 'workspaces', 'aaaaaaaaaaaa', 'search-index.json'), { version: 1 });
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await runMigration(plan);
+
+    expect(await fse.pathExists(path.join(legacyDir, 'pending-learnings'))).toBe(false);
+    expect(await fse.pathExists(path.join(partition, 'workspaces', 'aaaaaaaaaaaa', 'search-index.json'))).toBe(false);
+  });
+
+  it("keeps a checkout's queue out of the live queue of a kind init switches to while it drains (#823 item 11)", async () => {
+    const partition = await seedRelocatedSelfInstall();
+    const moved = 'drained-2026-01-01-aaaaaa.md';
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', moved), '# drained\n');
+    const self = await readConfigFrom(partition, repoRoot);
+    if (!self) throw new Error('expected the partition config');
+    const git = { ...self, repo: { localPath: path.join(partition, 'team-repo'), remote: 'git@example.com:team/repo.git', kind: 'git' as const } };
+
+    // Another checkout's init switches the project to git mode while this
+    // migration drains the checkout's self queue into the partition.
+    let switched: Promise<unknown> | undefined;
+    listing.after = async () => {
+      switched = setAsideQueueOnModeSwitch(self, git, () =>
+        fse.writeFile(path.join(partition, 'config.yaml'), YAML.stringify({ repo: git.repo, username: 'tester', scope: 'project' })));
+      await Promise.race([switched, new Promise((resolve) => setTimeout(resolve, 300))]);
+    };
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await runMigration(plan);
+    await switched;
+
+    expect(await fse.pathExists(path.join(partition, 'pending-learnings', moved))).toBe(false);
+    expect(await fse.readFile(path.join(partition, 'pending-learnings.self', moved), 'utf-8')).toBe('# drained\n');
+  });
+
+  it('skips a queued learning another drain moved while this one ran (#808)', async () => {
+    const partition = await seedRelocatedSelfInstall();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    const moved = 'raced-2026-01-01-aaaaaa.md';
+    await fse.outputFile(path.join(oldQueue, moved), '# raced\n');
+    // A contribute beside this pull moves it first.
+    listing.after = () => {
+      fs.mkdirSync(path.join(partition, 'pending-learnings'), { recursive: true });
+      fs.renameSync(path.join(oldQueue, moved), path.join(partition, 'pending-learnings', moved));
+    };
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await expect(runMigration(plan)).resolves.toBe('migrated');
+
+    expect(await fse.readFile(path.join(partition, 'pending-learnings', moved), 'utf-8')).toBe('# raced\n');
+  });
+
+  it('keeps a learning queued in the old queue while it was being drained (#808)', async () => {
+    const partition = await seedRelocatedSelfInstall();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    await fse.outputFile(path.join(oldQueue, 'first-2026-01-01-aaaaaa.md'), '# first\n');
+    const late = path.join(oldQueue, 'late-2026-01-01-bbbbbb.md');
+    listing.after = () => fs.writeFileSync(late, '# late\n');
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await runMigration(plan);
+
+    expect(await fse.pathExists(path.join(partition, 'pending-learnings', 'first-2026-01-01-aaaaaa.md'))).toBe(true);
+    expect(await fse.readFile(late, 'utf-8')).toBe('# late\n');
+  });
+
+  it('keeps a queued learning whose name the partition queue holds with other content (#808)', async () => {
+    const partition = await seedRelocatedSelfInstall();
+    const oldQueue = path.join(legacyDir, 'pending-learnings');
+    const queue = path.join(partition, 'pending-learnings');
+    await fse.outputFile(path.join(oldQueue, 'same-2026-01-01-aaaaaa.md'), '# same\n');
+    await fse.outputFile(path.join(queue, 'same-2026-01-01-aaaaaa.md'), '# same\n');
+    await fse.outputFile(path.join(oldQueue, 'edited-2026-01-01-bbbbbb.md'), '# edited here\n');
+    await fse.outputFile(path.join(queue, 'edited-2026-01-01-bbbbbb.md'), '# edited there\n');
+    vi.mocked(log.warn).mockClear();
+
+    const plan = await planMigration(repoRoot);
+    if (!plan) throw new Error('expected a self migration plan');
+    await runMigration(plan);
+
+    // The copy that already moved is dropped; neither side of the conflict is lost.
+    expect(await fse.pathExists(path.join(oldQueue, 'same-2026-01-01-aaaaaa.md'))).toBe(false);
+    expect(await fse.readFile(path.join(oldQueue, 'edited-2026-01-01-bbbbbb.md'), 'utf-8')).toBe('# edited here\n');
+    expect(await fse.readFile(path.join(queue, 'edited-2026-01-01-bbbbbb.md'), 'utf-8')).toBe('# edited there\n');
+    expect(vi.mocked(log.warn).mock.calls.flat().join('\n')).toContain('edited-2026-01-01-bbbbbb.md');
+  });
+
   it('dry-run relocates nothing', async () => {
     await seedSelfLayout();
     const result = await runMigration((await planMigration(repoRoot))!, { dryRun: true });
@@ -685,6 +1024,134 @@ describe('self mode migration (P2)', () => {
     // Knowledge and the dir are intact — nothing was renamed away.
     expect(await fse.pathExists(path.join(legacyDir, 'skills', 'team-skill.md'))).toBe(true);
     expect(await fse.pathExists(`${legacyDir}.bak`)).toBe(false);
+  });
+});
+
+describe('superseded install (#808)', () => {
+  /** A git install beside the self knowledge another checkout's `init --self` committed. */
+  async function seedSupersededInstall(): Promise<void> {
+    await writeLegacyConfig();
+    await fse.writeJson(path.join(legacyDir, 'state.json'), { lastSync: 'x' });
+    await fse.writeFile(path.join(legacyDir, 'env'), 'TEAM_TOKEN=s3cret\n');
+    await fse.outputFile(path.join(legacyDir, 'team-repo', 'README'), 'team\n');
+    await fse.writeFile(path.join(legacyDir, 'teamai.yaml'), 'team: t\nmode: self\n');
+    await fse.outputFile(path.join(legacyDir, 'skills', 'team-skill.md'), '# team\n');
+    const partition = projectDataHome(repoRoot);
+    await fse.ensureDir(partition);
+    await fse.writeFile(
+      path.join(partition, 'config.yaml'),
+      YAML.stringify({
+        repo: { localPath: legacyDir, remote: 'git@example.com:t/r.git', kind: 'self', businessRepoRoot: repoRoot },
+        username: 'tester',
+        scope: 'project',
+      }),
+    );
+  }
+
+  it('keeps config.yaml in place when a move fails partway, so the next run finishes the job', async () => {
+    await seedSupersededInstall();
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
+
+    // As Windows refuses to move a directory another process has open.
+    const move = fse.move.bind(fse);
+    const spy = vi.spyOn(fse, 'move').mockImplementation(async (src: string, dest: string) => {
+      if (path.basename(src) === 'team-repo') throw new Error('EBUSY: resource busy or locked');
+      return move(src, dest);
+    });
+    try {
+      await expect(runMigration(plan)).rejects.toThrow(/EBUSY/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(true);
+
+    const retry = await planMigration(repoRoot);
+    if (retry?.mode !== 'superseded') throw new Error('expected the retry to take the superseded path again');
+    expect(await runMigration(retry)).toBe('migrated');
+
+    for (const name of ['config.yaml', 'state.json', 'env', 'team-repo']) {
+      expect(await fse.pathExists(path.join(legacyDir, name)), name).toBe(false);
+    }
+    const backups = (await fse.readdir(repoRoot)).filter((n) => n.startsWith('.teamai.bak'));
+    const inBackups = [];
+    for (const b of backups) inBackups.push(...(await fse.readdir(path.join(repoRoot, b))));
+    expect(inBackups).toEqual(expect.arrayContaining(['config.yaml', 'state.json', 'env', 'team-repo']));
+    expect(await fse.readFile(path.join(legacyDir, 'skills', 'team-skill.md'), 'utf-8')).toBe('# team\n');
+    expect(await planMigration(repoRoot)).toBeNull();
+  });
+
+  it('keeps config.yaml beside a learning queued after its queue was set aside, so the next run sets that one aside too', async () => {
+    await seedSupersededInstall();
+    const queue = path.join(legacyDir, 'pending-learnings');
+    await fse.outputFile(path.join(queue, 'early.md'), '# early\n');
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
+
+    // As an older `contribute` running beside the migration queues one.
+    const move = fse.move.bind(fse);
+    const spy = vi.spyOn(fse, 'move').mockImplementation(async (src: string, dest: string) => {
+      await move(src, dest);
+      if (src === queue) await fse.outputFile(path.join(queue, 'late.md'), '# late\n');
+    });
+    try {
+      expect(await runMigration(plan)).toBe('skipped');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(true);
+    expect(await fse.readFile(path.join(queue, 'late.md'), 'utf-8')).toBe('# late\n');
+
+    const retry = await planMigration(repoRoot);
+    if (retry?.mode !== 'superseded') throw new Error('expected the retry to take the superseded path again');
+    expect(await runMigration(retry)).toBe('migrated');
+
+    const partition = projectDataHome(repoRoot);
+    const asideDirs = (await fse.readdir(partition)).filter((n) => n.startsWith('pending-learnings.git'));
+    const aside = [];
+    for (const d of asideDirs) aside.push(...(await fse.readdir(path.join(partition, d))));
+    expect(aside.sort()).toEqual(['early.md', 'late.md']);
+    expect(await fse.pathExists(path.join(partition, 'pending-learnings', 'late.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(false);
+    expect(await planMigration(repoRoot)).toBeNull();
+  });
+
+  it('retires an old queue that holds no learning, only another file', async () => {
+    await seedSupersededInstall();
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'notes.txt'), 'scratch\n');
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
+
+    expect(await runMigration(plan)).toBe('migrated');
+
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(false);
+  });
+
+  it('never leaves a learning queued with the old config beside the self knowledge without its config.yaml (#823 item 11)', async () => {
+    await seedSupersededInstall();
+    const config = await checkoutConfig();
+    const plan = await planMigration(repoRoot);
+    if (plan?.mode !== 'superseded') throw new Error('expected a superseded plan');
+
+    // Between the last queue check and the config.yaml move.
+    let late: { result: Promise<QueueWrite> } | undefined;
+    const move = fse.move.bind(fse);
+    const spy = vi.spyOn(fse, 'move').mockImplementation(async (src: string, dest: string) => {
+      if (src === path.join(legacyDir, 'config.yaml') && !late) {
+        late = await startBeside(() => savePendingLearning(config, 'late.md', '# late\n'));
+      }
+      return move(src, dest);
+    });
+    try {
+      expect(await runMigration(plan)).toBe('migrated');
+    } finally {
+      spy.mockRestore();
+    }
+
+    const result = await late?.result;
+    expect(await fse.pathExists(path.join(legacyDir, 'pending-learnings', 'late.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(legacyDir, 'config.yaml'))).toBe(false);
+    expect(result?.status).toBe('changed');
   });
 });
 
@@ -771,5 +1238,30 @@ describe('maybeMigrate', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('queueKeptInCheckout', () => {
+  async function keptFrom(cwd: string): Promise<string | null> {
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      return await queueKeptInCheckout(undefined);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("stops on a queue an older teamai left in a checkout's .teamai/ (#808)", async () => {
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'old-2026-01-01-aaaaaa.md'), '# Old\n');
+
+    expect(await keptFrom(repoRoot)).toContain(path.join(legacyDir, 'pending-learnings'));
+  });
+
+  it("leaves the user scope's queue alone when the home itself is a git repo", async () => {
+    // A dotfiles repo at ~: its `.teamai/` is the user scope's data home.
+    vi.stubEnv('HOME', repoRoot);
+    await fse.outputFile(path.join(legacyDir, 'pending-learnings', 'user-2026-01-01-aaaaaa.md'), '# User\n');
+
+    expect(await keptFrom(repoRoot)).toBeNull();
   });
 });

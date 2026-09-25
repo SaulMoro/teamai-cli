@@ -1,10 +1,16 @@
 import path from 'node:path';
+import { readdir, rm } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import matter from 'gray-matter';
 import { readFileSafe, readJson, writeJson, listFiles, listFilesRecursive, listDirs, pathExists } from './fs.js';
 import { tokenize, wordSegments, MAX_TOKENIZE_CHARS } from './tokenizer.js';
 import { log } from './logger.js';
 import {
   SEARCH_INDEX_VERSION,
+  getDataHome,
+  getProjectSearchIndexPath,
+  isSelfMode,
+  type LocalConfig,
   type KnowledgeDomain,
   type LearningDocMeta,
   type SearchIndex,
@@ -15,6 +21,51 @@ import {
 } from '../types.js';
 import { getUserHome } from './home.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
+
+/**
+ * Self mode keeps one index per checkout, but every checkout shares the
+ * learnings checkout and the queue, so a rebuild in one leaves the others'
+ * indexes without what it just published or pulled (#808). Drop the other
+ * checkouts' indexes in this partition; recall rebuilds a missing one from
+ * that checkout's own roots. Only `search-index.json` files are touched.
+ */
+export async function dropOtherCheckoutIndexes(localConfig: LocalConfig): Promise<void> {
+  if (!isSelfMode(localConfig)) return;
+  await dropCheckoutIndexes(getDataHome(localConfig), getProjectSearchIndexPath(localConfig));
+}
+
+/**
+ * Drop every per-checkout index under a self-mode data home, except `keep`.
+ * Also used when the migration moves queued learnings into the shared queue.
+ */
+export async function dropCheckoutIndexes(dataHome: string, keep?: string): Promise<void> {
+  const workspaces = path.join(dataHome, 'workspaces');
+  let entries: Dirent[];
+  try {
+    entries = await readdir(workspaces, { withFileTypes: true });
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return;
+    throw e;
+  }
+  await Promise.all(
+    entries
+      // One directory per checkout; a stray file (`.DS_Store`) has no index.
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(workspaces, entry.name, 'search-index.json'))
+      .filter((indexPath) => indexPath !== keep)
+      .map((indexPath) => rm(indexPath, { force: true })),
+  );
+}
+
+/**
+ * Drop every project search index in a data home: the shared one and each
+ * checkout's. For a re-init that changes the install's kind, which keeps the
+ * data home but not the repository its indexes were built from (#808).
+ */
+export async function dropAllSearchIndexes(dataHome: string): Promise<void> {
+  await rm(path.join(dataHome, 'search-index.json'), { force: true });
+  await dropCheckoutIndexes(dataHome);
+}
 
 /** Resolve search index path dynamically (respects HOME changes in tests). */
 function getSearchIndexPath(): string {

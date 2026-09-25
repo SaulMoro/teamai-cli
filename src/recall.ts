@@ -6,7 +6,7 @@ import type { SearchResult } from './utils/search-index.js';
 import { readFileSafe, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions, SearchIndex, LocalConfig } from './types.js';
-import { getDataHome, getTeamaiHome, getVotesDir } from './types.js';
+import { getProjectSearchIndexPath, getUserSearchIndexPath, getVotesDir } from './types.js';
 import { queryCodeKnowledge } from './code-knowledge-recall.js';
 import type { CodeKnowledgeResult, SourceAnchor } from './code-knowledge-recall.js';
 import { recordRecallQuality } from './recall-quality.js';
@@ -272,7 +272,7 @@ export async function autoUpvote(
  * Load or build a search index for a given scope config.
  *
  * - user scope: learnings 在 pull 时同步到 ~/.teamai/learnings/，索引存 ~/.teamai/search-index.json
- * - project scope: learnings 只存在于 git repo 中（pull 不同步），索引存 <projectRoot>/.teamai/search-index.json
+ * - project scope: learnings live only in the git repo (pull does not mirror them); the index is at getProjectSearchIndexPath
  *
  * 返回索引和 learnings 文件的实际基础路径（供 formatResults 输出正确的 File: 路径）。
  */
@@ -280,16 +280,15 @@ async function loadOrBuildScopeIndex(
   localConfig: LocalConfig,
   scopeLabel: 'user' | 'project',
 ): Promise<{ index: SearchIndex; learningsBase: string } | null> {
-  // Route the project branch through getDataHome (so P1-2's partition redirect
-  // applies), but preserve the historical fallback to ~/.teamai when a project
-  // scope config lacks projectRoot: getDataHome → getTeamaiHome throws in that
+  // Route the project branch through getProjectSearchIndexPath (partition-aware,
+  // per checkout in self mode), but preserve the historical fallback to ~/.teamai
+  // when a project scope config lacks projectRoot: getDataHome → getTeamaiHome throws in that
   // case, and here the exception surfaces as a misleading "No learnings
   // available". A ~/.teamai/config.yaml with scope:project but no projectRoot is
   // permitted by LocalConfigSchema and not backfilled by loadLocalConfig.
-  const teamaiHome = localConfig.scope === 'project' && localConfig.projectRoot
-    ? getDataHome(localConfig)
-    : getTeamaiHome('user');
-  const indexPath = path.join(teamaiHome, 'search-index.json');
+  const indexPath = localConfig.scope === 'project' && localConfig.projectRoot
+    ? getProjectSearchIndexPath(localConfig)
+    : getUserSearchIndexPath();
 
   // Learnings come from several roots: what is queued but not published yet,
   // what is on the learnings branch, the machine-local mirror, and the corpus
@@ -319,9 +318,10 @@ async function loadOrBuildScopeIndex(
     // If it isn't materialized yet, votesExist is false and vote-weighted
     // ranking is simply skipped (graceful degradation — leftover default-branch
     // votes/ are not used).
-    const { getReportsDir } = await import('./types.js');
-    const votesDir = path.join(getReportsDir(localConfig), 'votes');
-    const votesExist = await pathExists(votesDir);
+    // Not another repository's reports checkout (#808).
+    const { indexableVotesDir } = await import('./utils/reports-branch.js');
+    const votesDir = await indexableVotesDir(localConfig);
+    const votesExist = votesDir !== undefined && await pathExists(votesDir);
     const docsDir = path.join(localConfig.repo.localPath, 'docs');
     const rulesDir = path.join(localConfig.repo.localPath, 'rules');
     const repoCodebaseDir = path.join(localConfig.repo.localPath, 'docs', 'team-codebase');
@@ -339,8 +339,12 @@ async function loadOrBuildScopeIndex(
 
     try {
       const { deliveredIndexSources } = await import('./resources/desired.js');
+      // Without another repository's learnings checkout, if one sits where
+      // this project's would (#808). The probe runs only here, when an index
+      // is built, never on a plain recall.
+      const { indexableLearningsRoots } = await import('./utils/learnings-roots.js');
       await buildIndex({
-        learningsDirs: indexLearningsDirs,
+        learningsDirs: [pendingLearningsDir(localConfig), ...await indexableLearningsRoots(localConfig)],
         learningsNamespaces,
         docsDir: await pathExists(docsDir) ? docsDir : undefined,
         rulesDir: await pathExists(rulesDir) ? rulesDir : undefined,

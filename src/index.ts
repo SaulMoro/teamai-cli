@@ -4,6 +4,7 @@ import { setVerbose, setSilent, log } from './utils/logger.js';
 import { applyNonInteractiveGitEnv } from './utils/git-env.js';
 import { ensureBundledRuntimeOnPath } from './bundled-runtime.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
+import type { MaintenancePaths } from './maintenance/paths.js';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { registerPackagesCommand } from './pkg/register-command.js';
 
@@ -11,6 +12,39 @@ import { registerPackagesCommand } from './pkg/register-command.js';
 // run (issue #374 P1-3). Only write commands trigger it; read-only commands rely
 // on the double-read fallback, and hook-dispatch is excluded outright (see below).
 const MIGRATION_TRIGGER_COMMANDS = new Set(['init', 'pull', 'push']);
+
+/**
+ * Whether this command queues learnings, which an unmigrated checkout would
+ * keep in its own `.teamai/`, deleted with a linked worktree (#808). `import`
+ * queues them only with --from-mr; its other modes leave the queue alone, and
+ * `--cache-status --json` must print nothing but its JSON. `contribute --scope
+ * user` queues in the user install, and `import --from-mr --output` writes
+ * drafts only.
+ */
+function queuesLearnings(command: Command): boolean {
+  const name = command.name();
+  const opts = command.opts();
+  return (
+    (name === 'contribute' && opts.scope !== 'user') ||
+    (name === 'import' && opts.fromMr !== undefined && opts.output === undefined)
+  );
+}
+
+/**
+ * Whether this command stops while this checkout's queue would stay in its
+ * `.teamai/`: one that queues learnings there, and a project `teamai init`
+ * (not `roles init`), which would set the project up and leave that queue to
+ * be deleted with the worktree (#808).
+ */
+function needsQueueOutOfCheckout(command: Command): boolean {
+  const projectInit = command.name() === 'init' && command.parent?.parent === null && command.opts().scope !== 'user';
+  return queuesLearnings(command) || projectInit;
+}
+
+/** Whether this command migrates first. */
+function triggersMigration(command: Command): boolean {
+  return MIGRATION_TRIGGER_COMMANDS.has(command.name()) || queuesLearnings(command);
+}
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -49,16 +83,17 @@ program
     if (opts.verbose) setVerbose(true);
 
     // Auto-migrate a legacy `<repo>/.teamai/` into the partition before the
-    // command runs, so init/pull/push (and every path resolver they call) see
-    // the migrated layout. Narrowed twice: hook-dispatch is a high-frequency
+    // command runs, so the trigger commands (and every path resolver they call)
+    // see the migrated layout. Narrowed twice: hook-dispatch is a high-frequency
     // silent path that must never move 12MB, and only write commands trigger a
     // move (read-only commands use the double-read fallback). Dry-run previews.
     const name = actionCommand.name();
     if (TEAMAI_HOOK_SUBCOMMANDS.includes(name as (typeof TEAMAI_HOOK_SUBCOMMANDS)[number])) return;
-    if (!MIGRATION_TRIGGER_COMMANDS.has(name)) return;
-    const { maybeMigrate } = await import('./migrate.js');
+    if (!triggersMigration(actionCommand)) return;
+    const { maybeMigrate, queueKeptInCheckout } = await import('./migrate.js');
+    let migration;
     try {
-      await maybeMigrate({ dryRun: !!opts.dryRun });
+      migration = await maybeMigrate({ dryRun: !!opts.dryRun });
     } catch (e) {
       // A failed migration must not proceed into the command on stale/partial
       // state. Surface a clean message and exit — the copy→verify→rename design
@@ -67,6 +102,15 @@ program
       log.error(`Auto-migration failed: ${(e as Error).message}`);
       log.error('Your original .teamai data is unchanged. Re-run the command to retry.');
       process.exit(1);
+    }
+    // A learning queued in this checkout would go with it when the worktree is
+    // removed (#808).
+    if (needsQueueOutOfCheckout(actionCommand)) {
+      const kept = await queueKeptInCheckout(migration);
+      if (kept) {
+        log.error(kept);
+        process.exit(1);
+      }
     }
   });
 
@@ -1223,10 +1267,11 @@ recallCmd
 
     const { autoDetectInit } = await import('./config.js');
     const { localConfig } = await autoDetectInit();
-    const { resolveMaintenancePaths } = await import('./maintenance/index.js');
+    const paths = await maintenancePathsOrExit(localConfig);
+    if (!paths) return;
     const {
       repoPath, votesDir, learningsReadDirs, learningsWriteDir,
-    } = await resolveMaintenancePaths(localConfig);
+    } = paths;
 
     if (cmdOpts.confidenceWriteback) {
       const { computeAllConfidence, writeBackConfidence } = await import('./maintenance/index.js');
@@ -1303,13 +1348,14 @@ recallCmd
     const { autoDetectInit } = await import('./config.js');
     const { localConfig } = await autoDetectInit();
     const {
-      resolveMaintenancePaths,
       findPromotionCandidates,
       executePromotion,
     } = await import('./maintenance/index.js');
+    const paths = await maintenancePathsOrExit(localConfig);
+    if (!paths) return;
     const {
       repoPath, votesDir, learningsReadDirs, learningsWriteDir,
-    } = await resolveMaintenancePaths(localConfig);
+    } = paths;
     const { log } = await import('./utils/logger.js');
 
     const candidates = await findPromotionCandidates(learningsReadDirs, votesDir);
@@ -1344,6 +1390,31 @@ recallCmd
     }
   });
 
+
+/**
+ * The maintenance paths, or undefined with exit code 1 when teamai refuses a
+ * side-branch checkout (#808): another repository's, whose learnings
+ * maintenance would rewrite, or an old one in the way of the shared checkout it
+ * would write into, which the next publish would then delete. The refusal names
+ * the checkout and the way out, and has already been printed. Also when the
+ * reports or learnings lock cannot be taken, so the checkout cannot be checked.
+ */
+async function maintenancePathsOrExit(localConfig: LocalConfig): Promise<MaintenancePaths | undefined> {
+  const { CheckoutLockedError, CheckoutUnavailableError, resolveMaintenancePaths } = await import('./maintenance/index.js');
+  const { CheckoutRefusedError } = await import('./utils/branch-worktree.js');
+  try {
+    return await resolveMaintenancePaths(localConfig);
+  } catch (e) {
+    if (e instanceof CheckoutLockedError || e instanceof CheckoutUnavailableError) {
+      const { log } = await import('./utils/logger.js');
+      log.error(e.message);
+    } else if (!(e instanceof CheckoutRefusedError)) {
+      throw e;
+    }
+    process.exitCode = 1;
+    return undefined;
+  }
+}
 
 /**
  * Publish what a maintenance command just changed in the learnings worktree.

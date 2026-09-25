@@ -10,7 +10,7 @@ import { requireInit, loadState, saveState, detectProjectConfig, describeUnreada
 import { pullRepo, getHeadRev, createGit, getDefaultBranch, listWorktrees } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
-import { learningsRoots } from './utils/learnings-roots.js';
+import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
@@ -36,6 +36,7 @@ import {
   resolveToolBaseDir,
   resolveHookScope,
   getDataHome,
+  getProjectSearchIndexPath,
   isRecallEnabled,
   isAgentExcluded,
   scopedToolPaths,
@@ -733,9 +734,8 @@ async function pullForScope(
     reportsReadRoot ??= (async () => {
       if (!usesBranchWorktree(localConfig)) return localConfig.repo.localPath;
       try {
-        const { ensureReportsWorktree, refreshReportsWorktree } = await import('./utils/reports-branch.js');
-        await refreshReportsWorktree(localConfig, { pushIfCreated: false });
-        return await ensureReportsWorktree(localConfig, { pushIfCreated: false });
+        const { readableReportsWorktree } = await import('./utils/reports-branch.js');
+        return await readableReportsWorktree(localConfig);
       } catch (e) {
         log.debug(`reports worktree unavailable: ${(e as Error).message}`);
         return undefined;
@@ -775,13 +775,17 @@ async function pullForScope(
       // materializes a local view and never publishes the branch.
       try {
         const { learningsBranch } = await import('./utils/learnings-branch.js');
-        await learningsBranch.refresh(localConfig, { pushIfCreated: false });
+        const refreshed = await learningsBranch.refresh(localConfig, { pushIfCreated: false });
+        // Busy or failed: index what is there.
+        if (refreshed.status === 'failed') log.debug(`learnings worktree unavailable: ${refreshed.reason}`);
       } catch (e) {
         log.debug(`learnings worktree unavailable: ${(e as Error).message}`);
       }
 
-      const roots = learningsRoots(localConfig);
-      const publishedRoots = roots.read;
+      // Without another repository's learnings checkout, if one sits where
+      // this project's would (#808): the refusal was warned, and everything
+      // else this project has stays indexed.
+      const publishedRoots = await indexableLearningsRoots(localConfig);
       const docsRepoDir = path.join(localConfig.repo.localPath, 'docs');
       const rulesRepoDir = path.join(localConfig.repo.localPath, 'rules');
       const skillsRepoDir = path.join(localConfig.repo.localPath, 'skills');
@@ -854,9 +858,9 @@ async function pullForScope(
 
       if (hasAnySource || effectiveCodebaseDir) {
         const votesExist = votesDir ? await pathExists(votesDir) : false;
-        const teamaiHome = getDataHome(localConfig);
-        const indexPath = path.join(teamaiHome, 'search-index.json');
-        const { buildIndex } = await import('./utils/search-index.js');
+        const indexPath = getProjectSearchIndexPath(localConfig);
+        const { buildIndex, dropOtherCheckoutIndexes } = await import('./utils/search-index.js');
+        await dropOtherCheckoutIndexes(localConfig);
         const elapsed = await buildIndex({
           // The queue comes first: a contribution that could not be published
           // yet stays recallable, and a queued edit wins over the published copy.
@@ -1337,6 +1341,20 @@ async function pullForScope(
       }
     } catch {
       // Recommendations are optional — don't fail pull
+    }
+  }
+
+  // Every checkout of the repo keeps `workspaces/<id>/` in the shared data home
+  // (search index, managed MCP, resource cache), and a removed worktree's stays
+  // behind. A full sync drops those; the fast path never lists worktrees (#808).
+  if (localConfig.scope === 'project' && localConfig.projectRoot && !options.dryRun) {
+    try {
+      const { listWorktrees } = await import('./utils/git.js');
+      const { pruneWorkspaceDirs } = await import('./utils/partition.js');
+      const removed = await pruneWorkspaceDirs(getDataHome(localConfig), await listWorktrees(localConfig.projectRoot));
+      if (removed.length > 0) log.debug(`[${scopeLabel}] removed ${removed.length} directory(ies) of removed worktrees`);
+    } catch (e) {
+      log.debug(`[${scopeLabel}] workspace prune skipped: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
