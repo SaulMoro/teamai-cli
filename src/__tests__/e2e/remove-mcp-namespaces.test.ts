@@ -149,6 +149,38 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
     expect(onBranch('mcp/mcp.yaml')).toContain('https://db.example.com');
   });
 
+  /** Commit `content` as `file` on the remote's main, and bring the clone up to it. */
+  const publish = (file: string, content: string): void => {
+    const other = path.join(sandbox, 'other');
+    git(`clone -q -b main ${remote} ${other}`, sandbox);
+    write(other, file, content);
+    git('commit -qam break', other);
+    git('push -q origin main', other);
+    git('pull -q', clone);
+  };
+
+  it('removes nothing by bare name while the root file does not parse', async () => {
+    publish('mcp/mcp.yaml', 'servers:\n  - name: db\n    transport: [\n');
+
+    const result = await runCLI(['remove', 'mcp', 'db', '--force'], env, homeDir);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('mcp/mcp.yaml');
+    expect(result.output).toContain('Nothing was removed.');
+    expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
+  });
+
+  it('removes nothing by bare name while a namespace file that may define it does not parse', async () => {
+    publish('mcp/billing/mcp.yaml', 'servers:\n  - name: orders\n    transport: [\n');
+
+    const result = await runCLI(['remove', 'mcp', 'orders', '--force'], env, homeDir);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('mcp/billing/mcp.yaml');
+    expect(result.output).toContain('Nothing was removed.');
+    expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
+  });
+
   it('finds a name defined in one namespace file alone without a flag', async () => {
     const result = await runCLI(['remove', 'mcp', 'invoices', '--force'], env, homeDir);
 

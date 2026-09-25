@@ -341,6 +341,17 @@ async function mcpRemovalTarget(
     return candidates.includes(wanted) ? wanted : null;
   }
   if (candidates.includes(name)) return name;
+  // The team scan skips a file that does not parse, so the candidates may miss
+  // the root server this name removes by default, or a second namespace that
+  // makes it ambiguous. Picking from what is left would remove the wrong one.
+  const unreadable = await unreadableMcpFiles(localConfig.repo.localPath);
+  if (unreadable.length > 0) {
+    log.error(
+      `Cannot tell which MCP file defines "${name}": ${unreadable.join(', ')} does not parse. `
+      + 'Fix it in the team repo, or pass --role <ns> or --project <id> to name the file.',
+    );
+    return 'ambiguous';
+  }
   if (candidates.length > 1) {
     const files = candidates.map((candidate) => `mcp/${candidate.slice(0, candidate.lastIndexOf('/'))}/mcp.yaml`);
     log.error(
@@ -350,4 +361,16 @@ async function mcpRemovalTarget(
     return 'ambiguous';
   }
   return candidates[0] ?? null;
+}
+
+/** The MCP files, root and namespace, that exist and cannot be read or parsed. */
+async function unreadableMcpFiles(repoPath: string): Promise<string[]> {
+  const { listEntryFiles } = await import('./namespaced-entries.js');
+  const { mcpEntryReader } = await import('./resources/mcp.js');
+  const unreadable: string[] = [];
+  for (const { relativePath, absolutePath } of await listEntryFiles(repoPath, 'mcp')) {
+    const read = await mcpEntryReader.read(absolutePath, relativePath);
+    if (read?.ok === false) unreadable.push(relativePath);
+  }
+  return unreadable;
 }
