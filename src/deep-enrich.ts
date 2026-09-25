@@ -624,7 +624,7 @@ async function runPhaseAiGraph(
   ctx: EnrichContext,
   docsDir: string,
 ): Promise<{ g5Generated: boolean; g6Generated: boolean }> {
-  const { project, evidenceDir } = opts;
+  const { project } = opts;
   log.info(`deep-enrich[${project}]: Phase 4 — Generating AI graph docs (G5/G6)`);
 
   await mkdir(docsDir, { recursive: true });

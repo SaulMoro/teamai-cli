@@ -356,16 +356,8 @@ export function mergeWithAnchors(
     }
 
     // 解析旧文件
-    let oldPrelude: string;
-    let oldSections: ManagedSection[];
-    try {
-        const parsed = parseSections(oldFile);
-        oldPrelude = parsed.prelude;
-        oldSections = parsed.sections;
-    } catch (err) {
-        // 解析失败（如未闭合锚点）：重新抛出，由调用方（import-repo）决定是否备份后 fallback
-        throw err;
-    }
+    // A parse failure (e.g. an unclosed anchor) throws; the caller (import-repo) decides whether to back up and fall back.
+    const { prelude: oldPrelude, sections: oldSections } = parseSections(oldFile);
 
     // 无旧锚点：视为首次写入
     if (oldSections.length === 0) {

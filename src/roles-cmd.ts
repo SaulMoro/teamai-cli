@@ -139,7 +139,7 @@ export async function rolesInit(options: GlobalOptions): Promise<void> {
 
 // ─── roles list ─────────────────────────────────────────
 
-export async function rolesList(options: GlobalOptions): Promise<void> {
+export async function rolesList(): Promise<void> {
     const { localConfig } = await autoDetectInit();
     const repoPath = localConfig.repo.localPath;
 

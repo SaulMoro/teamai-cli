@@ -47,7 +47,7 @@ async function saveTagsScopeConfig(localConfig: LocalConfig): Promise<void> {
  * List all available tags from the team repo's tags.yaml.
  * Shows tag name, skill count, and rule count.
  */
-export async function tagsList(options: GlobalOptions): Promise<void> {
+export async function tagsList(): Promise<void> {
     const localConfig = await resolveTagsScope();
     const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
 
@@ -85,7 +85,6 @@ export async function tagsList(options: GlobalOptions): Promise<void> {
     }
 
     const totalSkills = Object.keys(tagsConfig.skills).length;
-    const totalRules = Object.keys(tagsConfig.rules).length;
     const allTeamSkills = await getTeamSkillCount(localConfig.repo.localPath);
     const untaggedSkills = allTeamSkills - totalSkills;
 

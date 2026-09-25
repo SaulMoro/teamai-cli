@@ -644,7 +644,7 @@ async function removeSkillFromToolPaths(skillName: string, teamConfig: TeamaiCon
     return;
   }
 
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+  for (const toolPath of Object.values(scopedToolPaths(teamConfig, localConfig))) {
     if (!toolPath.skills) continue;
     const skillDir = path.join(baseDir, toolPath.skills, skillName);
     if (await pathExists(skillDir)) {

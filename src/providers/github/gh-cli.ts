@@ -8,13 +8,6 @@ import { isInteractive } from '../../utils/prompt.js';
 
 const GITHUB_API = 'https://api.github.com';
 
-// ─── Shell helpers ───────────────────────────────────────
-
-/** Shell-quote a string using single quotes. */
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
 // ─── gh CLI detection ────────────────────────────────────
 
 /**

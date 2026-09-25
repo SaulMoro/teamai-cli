@@ -110,7 +110,6 @@ describe('importFromRepo — AI narrative appended to overview.md', () => {
     it('AI 叙事追加到 teamwiki evidence overview.md 末尾', async () => {
         await importFromRepo({
             url: TEST_URL,
-            interactive: false,
         });
 
         const overviewPath = path.join(
@@ -132,7 +131,6 @@ describe('importFromRepo — AI narrative appended to overview.md', () => {
     it('docs/team-codebase/repos/ 不再被创建', async () => {
         await importFromRepo({
             url: TEST_URL,
-            interactive: false,
         });
 
         const oldPath = path.join(
@@ -146,7 +144,6 @@ describe('importFromRepo — AI narrative appended to overview.md', () => {
     it('skipEnrich 时不追加 AI 叙事', async () => {
         await importFromRepo({
             url: TEST_URL,
-            interactive: false,
             skipEnrich: true,
         });
 
@@ -163,7 +160,7 @@ describe('importFromRepo — AI narrative appended to overview.md', () => {
     it('retries extraction after a failed import of the same commit', async () => {
         vi.mocked(extractCodebase).mockRejectedValueOnce(new Error('write failed'));
         vi.mocked(shallowFetch).mockResolvedValue({ sha: CLONE_SHA });
-        const options = { url: TEST_URL, incremental: true, interactive: false, skipEnrich: true, skipAutoPush: true };
+        const options = { url: TEST_URL, incremental: true, skipEnrich: true, skipAutoPush: true };
         const lastSyncPath = path.join(workdir, 'cache', 'github', 'owner', 'mergetest', 'LAST_SYNC');
         await fs.ensureDir(path.join(path.dirname(lastSyncPath), '.git'));
         await fs.writeFile(lastSyncPath, 'previous-sha\n2024-01-01T00:00:00.000Z\n');
@@ -192,7 +189,7 @@ describe('importFromRepo — AI narrative appended to overview.md', () => {
             await fs.writeJson(manifestPath, { headSha: CLONE_SHA, files: [] });
         });
 
-        const options = { url: TEST_URL, incremental: true, interactive: false, skipEnrich: true, skipAutoPush: true };
+        const options = { url: TEST_URL, incremental: true, skipEnrich: true, skipAutoPush: true };
         const cacheDir = path.join(workdir, 'cache', 'github', 'owner', 'mergetest');
         const lastSyncPath = path.join(cacheDir, 'LAST_SYNC');
         const publishedManifest = path.join(workdir, '.teamai', 'team-repo', 'teamwiki', 'source-manifest.json');

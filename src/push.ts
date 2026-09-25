@@ -848,7 +848,6 @@ async function pushCore(
   result?: { completed: boolean },
 ): Promise<void> {
   const selfMode = localConfig.repo.kind === 'self';
-  const scopeLabel = localConfig.scope;
 
   // Pull latest default branch BEFORE scanning so detection runs against up-to-date repo.
   // The team repo may be in various broken states from previous failed pushes:

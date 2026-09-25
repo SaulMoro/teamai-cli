@@ -747,7 +747,7 @@ async function localAgentFetch<T>(
   const url = `${config.endpoint}${resolveRoute(config, route)}`;
   const headers: Record<string, string> = {
     ...authHeaders(config, init?.body !== undefined),
-    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+    ...(init?.headers as Record<string, string> | undefined),
   };
   logHttpRequest(tag, method, url, headers, init?.body);
 
