@@ -172,6 +172,10 @@ and push it with git. `teamai doctor` lists each override.
 - Per-entry `projects:` (and `roles:` on env) no longer works: such an entry reaches
   nobody. `roles:` on hooks and MCP still filters for one more minor release. Pull
   and `teamai doctor` name the namespace file each entry belongs in; move it there.
+- An env, hook or MCP entry with a key its schema does not know (a mistyped `role:`)
+  also reaches nobody. Pull and `teamai doctor` name the file, entry and key; correct
+  the key or remove it. A key a later teamai version adds is unknown to an older one,
+  so upgrade every member before the team uses a new entry key.
 - Team model profiles work the same way: `models/<ns>/models.yaml`, declared under
   `resources.models`, replaces the root profile with the same `id` for members who
   have `<ns>` active. A member's API key is bound to the profile's gateway origin:

@@ -976,6 +976,12 @@ The per-entry keys these files replace:
 There is no automatic migration: move each entry into the namespace file the
 warning names, and drop the key.
 
+An entry with any other key its schema does not know, such as a mistyped `role:`,
+reaches nobody as well, and pull and `teamai doctor` name the file, the entry and
+the key. Correct the key or remove it. A key that a later teamai version adds is
+unknown to an older one too, so upgrade every member before the team uses a new
+entry key.
+
 ### Env (environment variables)
 
 ```bash

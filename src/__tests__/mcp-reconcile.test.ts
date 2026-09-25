@@ -534,6 +534,84 @@ servers:
         + 'so it reaches nobody. Move it to mcp/checkout/mcp.yaml and drop the key.',
       ));
     });
+
+    // A typo of a scoping key (#822) must not widen who gets the server.
+    const warningsAbout = async (file: string, server: string): Promise<string[]> => {
+      const { log } = await import('../utils/logger.js');
+      return vi.mocked(log.warn).mock.calls.map(([m]) => String(m))
+        .filter((m) => m.includes(file) && m.includes(`"${server}"`));
+    };
+
+    it('installs no server that carries a key MCP does not know, and names the file, server and key', async () => {
+      await writeMcpYaml(`
+servers:
+  - name: fe-db
+    transport: http
+    url: https://example.com/fe-db
+    role: [frontend]
+  - name: shared
+    transport: http
+    url: https://example.com/shared
+`);
+      const { log } = await import('../utils/logger.js');
+      vi.mocked(log.warn).mockClear();
+      resetWarnOnce();
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['billing'] });
+
+      expect(Object.keys(await claudeServers()).sort()).toEqual(['shared']);
+      const warnings = await warningsAbout('mcp/mcp.yaml', 'fe-db');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/\brole\b/);
+    });
+
+    it('keeps the root server when the active namespace copy of it carries an unknown key', async () => {
+      await writeNamespaceMcp('checkout', `
+servers:
+  - name: db
+    transport: http
+    url: https://checkout.example.com/db
+    role: [frontend]
+`);
+      const { log } = await import('../utils/logger.js');
+      vi.mocked(log.warn).mockClear();
+      resetWarnOnce();
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['checkout'] });
+
+      expect((await claudeServers()).db?.url).toBe('https://example.com/db');
+      const warnings = await warningsAbout('mcp/checkout/mcp.yaml', 'db');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/\brole\b/);
+    });
+
+    it('installs a server with every key MCP knows, with no warning beyond the roles: deprecation', async () => {
+      await writeMcpYaml(`
+servers:
+  - name: full
+    description: every known key
+    transport: stdio
+    command: node
+    args: [server.js]
+    url: https://example.com/unused
+    headers: { X-Team: t }
+    env: { LEVEL: debug }
+    timeout: 30
+    requires: [node]
+    tools: [claude]
+    roles: [frontend]
+`);
+      const { log } = await import('../utils/logger.js');
+      vi.mocked(log.warn).mockClear();
+      resetWarnOnce();
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, projects: ['billing'] });
+
+      expect(Object.keys(await claudeServers())).toEqual(['full']);
+      const warnings = await warningsAbout('mcp/mcp.yaml', 'full');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('is scoped with per-entry `roles:`, which is deprecated');
+    });
   });
 
   it('does not prune managed servers in http mode (install_mcp survives second sync)', async () => {

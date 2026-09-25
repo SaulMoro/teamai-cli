@@ -895,6 +895,11 @@ projects:
 
 没有自动迁移：把每个条目移到警告给出的 namespace 文件中，并删掉该 key。
 
+条目若带有其 schema 不认识的其他 key（例如拼错的 `role:`），同样不会下发给任何人；
+pull 与 `teamai doctor` 会指出文件、条目和该 key。请改正或删除这个 key。
+较新版本 teamai 新增的 key 对旧版本同样是未知 key，因此团队使用新的条目 key 之前，
+请先让所有成员升级。
+
 ### Env（环境变量）
 
 ```bash

@@ -7,7 +7,7 @@ import { TEAMAI_CUSTOM_HOOK_PREFIX, areTeamHooksDisabled, getHooksSharing } from
 import { pathExists } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, readEntryFileText, reportEntryResolution, resolveEntriesFor,
+  entryFilePath, readEntryFileText, reportEntryResolution, resolveEntriesFor, unknownEntryKeys,
   type EntryReader, type EntryResolution,
 } from '../namespaced-entries.js';
 
@@ -60,7 +60,9 @@ export function teamHooksYamlPath(repoPath: string): string {
 }
 
 /** One hooks file, parsed, or why it cannot be used. */
-type HooksFileRead = { ok: true; yaml: HooksYaml; declaresBuiltin: boolean } | { ok: false; reason: string };
+type HooksFileRead =
+  | { ok: true; yaml: HooksYaml; declaresBuiltin: boolean; unknownKeys: ReadonlyMap<TeamHook, readonly string[]> }
+  | { ok: false; reason: string };
 
 /** Read one hooks file; null when it does not exist. */
 async function readHooksFile(absolutePath: string, relativePath: string): Promise<HooksFileRead | null> {
@@ -71,7 +73,8 @@ async function readHooksFile(absolutePath: string, relativePath: string): Promis
   try {
     const raw: unknown = YAML.parse(content);
     const declaresBuiltin = !!raw && typeof raw === 'object' && 'builtin' in raw;
-    return { ok: true, yaml: HooksYamlSchema.parse(raw ?? {}), declaresBuiltin };
+    const yaml = HooksYamlSchema.parse(raw ?? {});
+    return { ok: true, yaml, declaresBuiltin, unknownKeys: unknownEntryKeys(raw, 'hooks', yaml.hooks, TeamHookSchema) };
   } catch (e) {
     return { ok: false, reason: `${relativePath} does not parse: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -89,7 +92,7 @@ export const hooksEntryReader: EntryReader<TeamHook> = {
     const notes = read.declaresBuiltin && relativePath !== entryFilePath('hooks', null)
       ? [`${relativePath}: \`builtin:\` is ignored outside hooks/hooks.yaml; built-in hook overrides apply to the whole team. Move it there.`]
       : [];
-    return { ok: true, entries: read.yaml.hooks, notes };
+    return { ok: true, entries: read.yaml.hooks, notes, unknownKeys: read.unknownKeys };
   },
   nameOf: (hook) => hook.id,
   scopeOf: (hook) => hook,
