@@ -331,14 +331,21 @@ async function mcpRemovalTarget(
   options: RemoveOptions,
 ): Promise<string | 'ambiguous' | null> {
   if (options.role !== undefined || options.project !== undefined) {
-    const { entryNamespaceFromFlags } = await import('./namespaced-entries.js');
+    const { entryFilePath, entryNamespaceFromFlags } = await import('./namespaced-entries.js');
     const target = await entryNamespaceFromFlags(localConfig.repo.localPath, 'mcp', options);
     if (!target.ok) {
       log.error(target.message);
       return 'ambiguous';
     }
     const wanted = target.namespace === null ? name : `${target.namespace}/${name}`;
-    return candidates.includes(wanted) ? wanted : null;
+    if (candidates.includes(wanted)) return wanted;
+    // The team scan skipped the named file, so "not found" would be a guess.
+    const file = entryFilePath('mcp', target.namespace);
+    if ((await unreadableMcpFiles(localConfig.repo.localPath)).includes(file)) {
+      log.error(`${file} does not parse, so "${name}" cannot be found in it. Fix it in the team repo, then retry.`);
+      return 'ambiguous';
+    }
+    return null;
   }
   if (candidates.includes(name)) return name;
   // The team scan skips a file that does not parse, so the candidates may miss

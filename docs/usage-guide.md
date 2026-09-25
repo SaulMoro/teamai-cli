@@ -1033,7 +1033,8 @@ server from `mcp/mcp.yaml` when that file defines it, otherwise from the one
 namespace file instead, and is required only when several namespace files, and
 not the root, define the name. While an MCP file does not parse, a bare name the
 root file does not define removes nothing, because the broken file may define
-it; fix the file or pass `--role` / `--project`.
+it; fix the file or pass `--role` / `--project`. A flag that names the broken
+file says so instead of reporting the name as not found.
 
 Where each tool's servers land:
 

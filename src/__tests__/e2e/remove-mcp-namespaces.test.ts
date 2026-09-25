@@ -181,6 +181,18 @@ describe('teamai remove mcp across namespace files (e2e, #707)', () => {
     expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
   });
 
+  it('says the file --project names does not parse, not that the name is missing', async () => {
+    publish('mcp/checkout/mcp.yaml', 'servers:\n  - name: db\n    transport: [\n');
+
+    const result = await runCLI(['remove', 'mcp', 'db', '--project', 'checkout', '--force'], env, homeDir);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('mcp/checkout/mcp.yaml does not parse, so "db" cannot be found in it');
+    expect(result.output).not.toContain('Not found');
+    expect(result.output).toContain('Nothing was removed.');
+    expect(git("for-each-ref refs/heads/teamai", remote).trim()).toBe('');
+  });
+
   it('finds a name defined in one namespace file alone without a flag', async () => {
     const result = await runCLI(['remove', 'mcp', 'invoices', '--force'], env, homeDir);
 
