@@ -539,7 +539,7 @@ teamai pull --dry-run    # 试运行，不实际修改
 - rule 按第一层文件名替换：`rules/<ns>/<name>.md` 替换 `rules/<name>.md`，Hermes 的 `SOUL.md` 区块同样如此。更深的路径（如 `rules/<ns>/<dir>/<name>.md`）不替换任何文件，被你的标签订阅排除的 namespace rule 也不替换。在与你自己的 rule 共用的目录中（JoyCode、OMP、Pi、Copilot），被替换的根 rule 副本只在仍是 teamai 所下发的内容（当前的根 rule，或你上次 pull 时的版本）时删除；你改过的副本会保留，且每次 pull 都会点名它，因为工具会把它与 namespace rule 一起加载。
 - `claudemd/<ns>/<name>.md` 在托管区块中替换 `claudemd/<name>.md`。
 
-该 namespace 不再活跃后，下一次 pull 会重新下发根目录条目。两个活跃 namespace 定义同名 skill 或 agent 时，它们会争用同一个安装文件，因此 pull 会报错并列出两个文件，本次运行不更新该类型，已安装的内容保持不变（skills 在 recall 中已有的索引也保持不变）；其他资源类型照常同步。两个活跃 namespace 定义同名 rule 或共享指令时，两者都会下发，因为它们各有自己的位置（本地的 `rules/<ns>/`、区块中各自的一段）；只有根目录的那一份会让位。`push` 会把被替换条目的修改写回其 namespace，而不会写到根目录；recall 只索引你实际收到的 skills，而不是仓库中的所有 skills。`teamai doctor` 会以提示的形式列出每一处替换。未配置角色或项目时行为不变：所有 namespace 与根目录并列下发，`doctor` 会列出团队仓库中重复定义的每个名称。
+该 namespace 不再活跃后，下一次 pull 会重新下发根目录条目。两个活跃 namespace 定义同名 skill 或 agent 时，它们会争用同一个安装文件，因此 pull 会报错并列出两个文件，本次运行不更新该类型，已安装的内容保持不变（skills 在 recall 中已有的索引也保持不变）；其他资源类型照常同步。两个活跃 namespace 定义同名 rule 或共享指令时，两者都会下发，因为它们各有自己的位置（本地的 `rules/<ns>/`、区块中各自的一段）；只有根目录的那一份会让位。`push` 会把被替换条目的修改写回其 namespace，而不会写到根目录；recall 只索引你实际收到的 skills 和 rules，而不是仓库中的全部内容。`teamai doctor` 会以提示的形式列出每一处替换。未配置角色或项目时行为不变：所有 namespace 与根目录并列下发，`doctor` 会列出团队仓库中重复定义的每个名称。
 
 项目可能需要覆盖的共享内容应放在根目录，而不是放在每个角色都会激活的 namespace 中：根目录条目会让位给活跃的 namespace，namespace 条目则不会。例如，公司的 `rules/code-style.md` 放在根目录；需要不同规范的 checkout 项目添加 `rules/checkout/code-style.md`。激活了 `checkout` 的成员拿到项目版本，其他人仍使用共享版本。如果共享规则放在 `rules/common/code-style.md`，checkout 成员就会同时收到两份。
 
@@ -851,7 +851,7 @@ projects:
   `Already synced`）会恢复被覆盖的根条目并移除仅属于该 namespace 的条目。即使
   `env/env.yaml` 不存在或为空，`env.sh` 也会被重写。
 - **目录名**与声明的 namespace 按忽略大小写的方式匹配，与 docs 相同：`env: [checkout]`
-  在任何文件系统上都会读取 `env/Checkout/env.yaml`。
+  在任何文件系统上都会读取 `env/Checkout/env.yaml`，`env add --project checkout` 也会写入这个文件。
 - **MCP 的 `${VAR}`** 从同一份解析后的环境变量集合取值。
 - **旧模式**（成员没有角色，且团队没有 `projects.yaml`）只读取根目录文件，行为不变；
   `teamai doctor` 会列出根文件中重复的名字。
@@ -965,6 +965,8 @@ namespace 的成员，并替换根目录中的同名 server。按 namespace 划�
 `teamai remove mcp <name>` 与 `push` 采用同一约定：`mcp/mcp.yaml` 定义了该名字时从这个文件移除，
 否则从唯一定义了它的 `mcp/<ns>/mcp.yaml` 移除。`--role <ns>` 或 `--project <id>` 可改为指定某个
 namespace 文件；只有当根文件未定义、而多个 namespace 文件都定义了该名字时，才必须指定。
+有 MCP 文件无法解析时，根文件未定义的裸名字不会移除任何内容，因为无法解析的文件可能定义了它；
+请修复该文件，或传入 `--role` / `--project`。
 
 各工具的落点：
 

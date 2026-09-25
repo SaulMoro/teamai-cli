@@ -411,8 +411,11 @@ project namespaces, and `push` picks up a change to any `env/<ns>/env.yaml`.
 `teamai env add|remove` take `--role` / `--project`. `teamai remove mcp <name>`
 removes from the root file when it defines the name, otherwise from the one
 namespace file that does, and asks for `--role` / `--project` only when several
-namespace files and not the root define it; removing a root server that a
-namespace overrides leaves that namespace's members with their override.
+namespace files and not the root define it, and removes nothing by a bare name
+the root does not define while any MCP file does not parse; removing a root
+server that a namespace overrides leaves that namespace's members with their
+override. `--role` / `--project` write into the existing directory the
+namespace matches case-folded, the file pull reads.
 
 `doctor` lists each override as a note (information, not a failed check), and in
 legacy mode each repeated name. `teamai env|mcp|hooks|models list`,

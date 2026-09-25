@@ -584,7 +584,7 @@ With role-based skills enabled, `pull`'s skill sync source becomes the contents 
 - A rule replaces the root rule of the same first-level file name: `rules/<ns>/<name>.md` replaces `rules/<name>.md`, in Hermes' `SOUL.md` block too. Deeper paths such as `rules/<ns>/<dir>/<name>.md` replace nothing, and neither does a namespace rule your tag subscriptions leave out. In rule directories you share with rules of your own (JoyCode, OMP, Pi, Copilot), the replaced root rule's copy is removed only while it is what teamai delivered (the current root rule, or the one of your last pull); an edited copy stays, and each pull names it, since the tool loads it beside the namespace rule.
 - A `claudemd/<ns>/<name>.md` file replaces `claudemd/<name>.md` in the managed block.
 
-When the namespace stops being active, the next pull delivers the root item again. If two active namespaces define the same skill or agent name, they compete for one installed file, so pull reports an error that names both files, does not update that type in that run, and keeps what is installed (for skills, recall keeps the ones it had indexed too); the other resource types still sync. Two active namespaces with the same rule or shared-instructions name are both delivered, because each keeps its own place (`rules/<ns>/` locally, its own section of the block); only the root one gives way. `push` writes an edit of a replaced item back to its namespace, never to the root, and recall indexes the skills you receive rather than every skill in the repo. `teamai doctor` lists each replacement as a note. Without roles or projects nothing changes: every namespace is delivered beside the root, and `doctor` lists each name the team repo defines more than once.
+When the namespace stops being active, the next pull delivers the root item again. If two active namespaces define the same skill or agent name, they compete for one installed file, so pull reports an error that names both files, does not update that type in that run, and keeps what is installed (for skills, recall keeps the ones it had indexed too); the other resource types still sync. Two active namespaces with the same rule or shared-instructions name are both delivered, because each keeps its own place (`rules/<ns>/` locally, its own section of the block); only the root one gives way. `push` writes an edit of a replaced item back to its namespace, never to the root, and recall indexes the skills and rules you receive rather than every one in the repo. `teamai doctor` lists each replacement as a note. Without roles or projects nothing changes: every namespace is delivered beside the root, and `doctor` lists each name the team repo defines more than once.
 
 Put shared content that a project may need to override at the root, not in a namespace every role activates. A root item gives way to an active namespace; a namespace item never does. For example, keep the company's `rules/code-style.md` at the root, and a checkout project that needs different conventions adds `rules/checkout/code-style.md`. Members with `checkout` active get the project's version, and everyone else keeps the shared one. Had the shared rule lived in `rules/common/code-style.md`, a checkout member would receive both.
 
@@ -907,7 +907,8 @@ projects:
   the next pull, `Already synced` included. `env.sh` is rewritten even when
   `env/env.yaml` is missing or empty.
 - **Directory names** match a declared namespace case-folded, as for docs:
-  `env: [checkout]` reads `env/Checkout/env.yaml` on every filesystem.
+  `env: [checkout]` reads `env/Checkout/env.yaml` on every filesystem, and
+  `env add --project checkout` writes to that file.
 - **MCP `${VAR}`** resolves from the same resolved env set.
 - **Legacy mode** (a member with no role and a team without `projects.yaml`)
   reads the root files only, as before; `teamai doctor` lists a name the root file
@@ -1030,7 +1031,9 @@ fifteen server processes and fifteen tool lists in the context of every session.
 server from `mcp/mcp.yaml` when that file defines it, otherwise from the one
 `mcp/<ns>/mcp.yaml` that does. `--role <ns>` or `--project <id>` picks a
 namespace file instead, and is required only when several namespace files, and
-not the root, define the name.
+not the root, define the name. While an MCP file does not parse, a bare name the
+root file does not define removes nothing, because the broken file may define
+it; fix the file or pass `--role` / `--project`.
 
 Where each tool's servers land:
 
