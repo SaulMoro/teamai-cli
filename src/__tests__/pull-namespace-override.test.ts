@@ -180,6 +180,20 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(index.entries.map((entry) => entry.filename)).toContain('lint.md');
     });
 
+    // A replacement that does not parse delivers nothing, so it must not take
+    // the root agent it would replace away with it.
+    it('keeps the root agent while the namespace agent replacing it does not parse', async () => {
+      await team('agents/reviewer.yaml', 'name: reviewer\ndescription: Shared\ninstructions: Review for everyone.\n');
+      as(['devops']);
+      await pull({});
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
+
+      await team('agents/devops/reviewer.yaml', 'name: reviewer\ndescription: [\n');
+      await pull({ force: true });
+
+      expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
+    });
+
     it('names the one namespace and both files when an agent is defined twice inside it', async () => {
       await team('agents/frontend/reviewer.yaml', 'name: reviewer\ndescription: Front\ninstructions: Review the front end.\n');
       await team('agents/frontend/reviewer.md', '---\nname: reviewer\ndescription: Legacy\n---\nReview, the old way.\n');
@@ -404,6 +418,21 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(
         `Kept ${path.join(homeDir, '.claude/skills/review/front-only.md')}`,
       ));
+    });
+
+    // A directory without SKILL.md is not a skill: it must neither replace the
+    // root skill nor strip the installed one of its SKILL.md.
+    it('keeps delivering the root skill while the namespace directory of its name has no SKILL.md', async () => {
+      as(['devops'], { subscribedTags: ['ui'] });
+      await pull({});
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Shared review');
+
+      await team('skills/devops/review/notes.md', 'draft notes\n');
+      await pull({ force: true });
+
+      expect(await read('.claude/skills/review/SKILL.md')).toContain('Shared review');
+      expect(await exists('.claude/skills/review/notes.md')).toBe(false);
+      expect(logged('warn', /skills\/devops\/review has no SKILL\.md/)).toBe(true);
     });
 
     it('indexes for recall the skills pull delivers, not every skill in the repo', async () => {

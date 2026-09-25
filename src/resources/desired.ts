@@ -18,6 +18,7 @@ import type { LocalConfig, ResourceItem, TeamaiConfig } from '../types.js';
 import { listDirs, listFiles, pathExists, readFileSafe } from '../utils/fs.js';
 import type { BuildIndexOptions, IndexedSkills } from '../utils/search-index.js';
 import { filterByTags, loadTagsConfig } from '../utils/tags.js';
+import { warnOnce } from '../utils/warn-once.js';
 import { resolveAgentsForDirectory } from './agents.js';
 import { resolveDocsForDirectory } from './docs.js';
 import { getHandler } from './index.js';
@@ -177,6 +178,23 @@ export function filterAgentsByNamespaces(
   };
 }
 
+/**
+ * The items that are skills: a directory without SKILL.md is not one, so it
+ * neither replaces the root skill of its name nor is installed over it, which
+ * would strip the installed copy of its SKILL.md. Each one is named once a run.
+ */
+async function withSkillMd(items: ResourceItem[]): Promise<ResourceItem[]> {
+  const skills: ResourceItem[] = [];
+  for (const item of items) {
+    if (await pathExists(path.join(item.sourcePath, 'SKILL.md'))) {
+      skills.push(item);
+    } else {
+      warnOnce(`${item.relativePath} has no SKILL.md, so it is not delivered as a skill. Add SKILL.md to it in the team repo, or remove it.`);
+    }
+  }
+  return skills;
+}
+
 export async function scanRoleAwareSkills(
   localConfig: LocalConfig,
   namespaces: ResourceNamespaces,
@@ -197,7 +215,7 @@ export async function scanRoleAwareSkills(
     }
   }
 
-  const resolution = resolveNamespacedItems(items.map(itemCandidate), namespaces.skills);
+  const resolution = resolveNamespacedItems((await withSkillMd(items)).map(itemCandidate), namespaces.skills);
   if (resolution.kind === 'conflict') return { kind: 'conflict', type: 'skill', conflict: resolution };
   return { kind: 'resolved', items: resolution.items.map((item) => item.value) };
 }
@@ -237,10 +255,10 @@ export async function resolveDesiredSkills(
     if (scanned.kind === 'conflict') return scanned;
     directoryItems = scanned.items;
   } else {
-    directoryItems = await handler.scanTeamForPull(teamConfig, localConfig);
+    directoryItems = await withSkillMd(await handler.scanTeamForPull(teamConfig, localConfig));
   }
 
-  const teamItems = await handler.scanTeamForPull(teamConfig, localConfig);
+  const teamItems = await withSkillMd(await handler.scanTeamForPull(teamConfig, localConfig));
 
   // Tag channel: only augment when subscriptions are actually active
   const hasActiveTagSubscriptions = tagsConfig != null

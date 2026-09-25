@@ -279,6 +279,13 @@ or edited stays, because push never counts such extras as changes and they may
 never have been pushed, and one at a path another version has is named on each
 pull.
 
+An item that cannot be used replaces nothing. A skill directory without
+`SKILL.md` is not a skill: it is left out of the desired set, so the root skill
+of its name is still delivered and its installed `SKILL.md` is never removed as
+a leftover, and pull names the directory once a run. While a namespace agent
+file cannot be read or parsed it delivers nothing, and cleanup keeps the root
+agent it would replace.
+
 Overridable shared content belongs at the root, not in a namespace every role
 activates (`common/`): a root item gives way to an active namespace, a namespace
 item never does. `rules/code-style.md` is replaced by `rules/checkout/code-style.md`

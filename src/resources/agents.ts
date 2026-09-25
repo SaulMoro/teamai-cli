@@ -803,6 +803,12 @@ export class AgentsHandler extends ResourceHandler {
       (item) => !kept.has(item.relativePath) && !BUILTIN_AGENT_NAMES.has(item.name),
     );
     if (inactive.length === 0) return;
+    // A replacement that cannot be read or parsed delivers nothing, so the
+    // agent it replaces stays until the team repo fixes it.
+    const unusable = new Set<string>();
+    for (const item of active) {
+      if (!await this.parsesAsAgent(item)) unusable.add(item.name);
+    }
 
     for (const { tool, dir: destDir } of await this.agentToolDirs(teamConfig, localConfig)) {
       const activeDestinations = new Set<string>();
@@ -811,6 +817,7 @@ export class AgentsHandler extends ResourceHandler {
         if (rendered) activeDestinations.add(`${item.name}${rendered.ext}`);
       }
       for (const item of inactive) {
+        if (unusable.has(item.name)) continue;
         const expected = await this.renderedForTool(item, tool);
         if (!expected || activeDestinations.has(`${item.name}${expected.ext}`)) continue;
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
@@ -894,6 +901,13 @@ export class AgentsHandler extends ResourceHandler {
    * is not a target (legacy `.md` only reaches LEGACY_MD_TOOLS, a YAML spec
    * honours `targets`, an unparsable spec is skipped like pull skips it).
    */
+  /** Whether `item`'s team file can be read and, for a YAML spec, parses. */
+  private async parsesAsAgent(item: AgentResourceItem): Promise<boolean> {
+    const content = await readFileSafe(item.sourcePath);
+    if (content === null) return false;
+    return isLegacyAgent(item) || parseAgentYaml(content, `${item.name}.yaml`).ok;
+  }
+
   private async renderedForTool(item: AgentResourceItem, tool: ToolName): Promise<RenderResult | null> {
     const content = await readFileSafe(item.sourcePath);
     if (content === null) return null;
