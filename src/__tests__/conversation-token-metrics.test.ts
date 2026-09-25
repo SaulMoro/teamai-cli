@@ -410,6 +410,20 @@ describe('aggregateSessionMetrics', () => {
       .toEqual({ prompts: 2, tokens: tokensB });
   });
 
+  it('keeps a Codex rollout\'s latest Stop, whatever order the Stops come in', () => {
+    // A background handler appended the older scan after the newer one.
+    const cost = (costMicros: number) => ({ '2026-09-01': {
+      pricedRequests: 1, costMicros, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1',
+    } });
+    const stop = (timestamp: string, prompts: number, costMicros: number, toolReject: number): DashboardEvent => ({
+      type: 'stop', timestamp, sessionId: 's1', tool: 'codex', transcriptPath: '/rollouts/a.jsonl',
+      prompts, requestDaily: cost(costMicros), interventions: { interrupt: 0, toolReject },
+    });
+    const rollout = aggregateSessionMetrics([stop('2026-09-01T10:10:00Z', 3, 100, 2), stop('2026-09-01T10:05:00Z', 2, 40, 1)])
+      .get('s1')?.segments?.['/rollouts/a.jsonl'];
+    expect(rollout).toMatchObject({ prompts: 3, toolReject: 2, requestDaily: cost(100) });
+  });
+
   it('counts a Codex session\'s prompts across its rollouts', () => {
     const stop = (path: string, prompts: number): DashboardEvent => ({
       type: 'stop', timestamp: new Date().toISOString(), sessionId: 's1', tool: 'codex',

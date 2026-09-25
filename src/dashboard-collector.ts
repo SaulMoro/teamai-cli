@@ -1846,6 +1846,7 @@ export function aggregateSessionMetrics(
   const transcriptCorrections = new Map<string, Map<string, number>>();
   const transcriptErrors = new Map<string, Set<string>>();
   const transcriptSubmits = new Map<string, Map<string, number>>();
+  const stopAt = new Map<string, Map<string, number>>();
   const transcriptSince = new Map<string, Map<string, string>>();
   const lastTranscript = new Map<string, string>();
   const timeline = new Map<string, Array<{ at: number; transcript: string | undefined }>>();
@@ -1880,7 +1881,18 @@ export function aggregateSessionMetrics(
     }
     if (event.type === 'stop' && typeof event.transcriptPath === 'string') {
       const rollout = event.transcriptPath;
+      // The latest Stop by its timestamp, as for tokens: background Stop
+      // handlers may append an older scan after a newer one.
+      const at = Date.parse(event.timestamp);
+      const latest = stopAt.get(event.sessionId) ?? new Map<string, number>();
+      const seen = latest.get(rollout);
+      const newest = seen === undefined || !Number.isFinite(at) || !Number.isFinite(seen) || at >= seen;
+      if (newest) {
+        latest.set(rollout, at);
+        stopAt.set(event.sessionId, latest);
+      }
       const record = <T>(maps: Map<string, Map<string, T>>, value: T) => {
+        if (!newest) return;
         const perRollout = maps.get(event.sessionId) ?? new Map<string, T>();
         perRollout.set(rollout, value);
         maps.set(event.sessionId, perRollout);
