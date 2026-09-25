@@ -178,6 +178,18 @@ export async function activeEntryNamespaces(
 }
 
 /**
+ * The directory under `<type>/` that holds `namespace`. A declared namespace
+ * names its directory case-folded, as docs does, so a `<type>/Checkout/` is
+ * `checkout` on every filesystem, not only the case-insensitive ones. An exact
+ * match wins on one that has both; with neither, the name itself.
+ */
+function namespaceDir(dirs: readonly string[], namespace: string): string {
+  return dirs.includes(namespace)
+    ? namespace
+    : dirs.find((dir) => caseFoldKey(dir) === caseFoldKey(namespace)) ?? namespace;
+}
+
+/**
  * Read the root file and every active namespace file of one type, and resolve
  * them into the entries this member receives.
  */
@@ -192,19 +204,13 @@ export async function resolveEntries<E>(
   const notices: EntryNotice[] = [];
   const targets = new TargetFiles(repoPath, type);
 
-  // A declared namespace names its directory case-folded, as docs does, so a
-  // `<type>/Checkout/` is `checkout` on every filesystem, not only the
-  // case-insensitive ones. An exact match wins on one that has both.
   const dirs = active && active.length > 0 ? await listDirs(path.join(repoPath, type)) : [];
-  const dirOf = (namespace: string): string => (dirs.includes(namespace)
-    ? namespace
-    : dirs.find((dir) => caseFoldKey(dir) === caseFoldKey(namespace)) ?? namespace);
 
   const candidates: NamespaceCandidate<E>[] = [];
   // Entries still scoped by the deprecated per-entry `roles:`.
   const roleScoped = new Set<NamespaceCandidate<E>>();
   for (const namespace of places) {
-    const dir = namespace === null ? null : dirOf(namespace);
+    const dir = namespace === null ? null : namespaceDir(dirs, namespace);
     const source = entryFilePath(type, dir);
     const read = await reader.read(entryFileAbsolutePath(repoPath, type, dir), source);
     if (read === null) continue;
@@ -496,8 +502,10 @@ export function describeEntryNotes(type: EntryType, resolution: EntryResolution<
  * The namespace `--role <ns>` or `--project <id>` points a write at, or null
  * for the root file when neither is given. `--role` names the namespace itself,
  * as it does for `push`; `--project` is looked up in that project's own
- * `resources.<type>`. Phrased for the CLI user on failure. `--role` warns when
- * no role or project declares the namespace: its file would reach nobody.
+ * `resources.<type>`. The namespace is spelled as its existing directory is,
+ * which is the file pull reads. Phrased for the CLI user on failure. `--role`
+ * warns when no role or project declares the namespace: its file would reach
+ * nobody.
  */
 export async function entryNamespaceFromFlags(
   repoPath: string,
@@ -518,7 +526,7 @@ export async function entryNamespaceFromFlags(
         + 'manifest/projects.yaml.',
       );
     }
-    return { ok: true, namespace: flags.role };
+    return { ok: true, namespace: namespaceDir(await listDirs(path.join(repoPath, type)), flags.role) };
   }
   if (flags.project === undefined) return { ok: true, namespace: null };
 
@@ -532,7 +540,9 @@ export async function entryNamespaceFromFlags(
   const project = findProject(manifest, flags.project);
   if (!project) return { ok: false, message: unknownProjectMessage(manifest, flags.project) };
   const namespaces = project.resources[type] ?? [];
-  if (namespaces.length === 1 && namespaces[0] !== undefined) return { ok: true, namespace: namespaces[0] };
+  if (namespaces.length === 1 && namespaces[0] !== undefined) {
+    return { ok: true, namespace: namespaceDir(await listDirs(path.join(repoPath, type)), namespaces[0]) };
+  }
   return {
     ok: false,
     message: namespaces.length === 0

@@ -364,6 +364,20 @@ scope: 'user',
       expect(YAML.parse(await fse.readFile(nsFile('checkout-env'), 'utf-8')).variables).toEqual([{ key: 'API_BASE', value: 'x' }]);
     });
 
+    // Pull reads a declared namespace from its directory case-folded. A write
+    // into a new exact-case directory would shadow that one on a
+    // case-sensitive filesystem, and its variables would stop being delivered.
+    it('env add --project writes into the existing directory whose name differs only in case', async () => {
+      await writeProjects();
+      await fse.outputFile(nsFile('Checkout-Env'), YAML.stringify({ variables: [{ key: 'DB_URL', value: 'db' }] }));
+
+      await envAdd('API_BASE', 'x', { project: 'checkout' });
+
+      expect(log.success).toHaveBeenCalledWith('Added env variable in env/Checkout-Env/env.yaml: API_BASE=x');
+      expect(YAML.parse(await fse.readFile(nsFile('Checkout-Env'), 'utf-8')).variables)
+        .toEqual([{ key: 'DB_URL', value: 'db' }, { key: 'API_BASE', value: 'x' }]);
+    });
+
     it('env add --project refuses a project that declares no env namespace, and writes nothing', async () => {
       await writeProjects();
 
