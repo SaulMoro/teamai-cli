@@ -429,7 +429,7 @@ Upgrading from the per-checkout layout:
   migrated still says `kind: self`, and its queue would publish to the new
   repository. It is set aside instead, as a mode switch does (below), to
   `pending-learnings.self` beside the partition queue, with a warning naming
-  it; `contribute` and `import --from-mr` take the same step before they queue.
+  it.
   A queue with no `config.yaml` beside it is one an older self install left
   after its config had moved to the partition; once the project serves another
   install no plan covers it, so every migrating command sets it aside the same
@@ -494,7 +494,22 @@ Upgrading from the per-checkout layout:
   linked worktree works with no pull first. One with uncommitted changes stays:
   the side-branch step fails with an error naming the path and the next step
   (commit or move the changes, or delete the path by hand), and the queue keeps
-  the learnings until then. The error is also printed as a warning, because
+  the learnings until then. What `import --from-mr` in 0.25.0 to 0.26.0-beta.3 left there is not
+  such a change (#823 item 7): it wrote `learnings/<YYYY-MM-DD>-<title>.md` with
+  `source_mr` in the frontmatter and never committed it. `publishQueuedLearnings`
+  first finds the branch's one registered checkout (`git worktree list` of the
+  owning repo, so the shared one or the old `.teamai/<dirname>`, never another
+  repository's), and queues each untracked file of exactly that shape, directly
+  under `learnings/`, into the active namespace with `contribute`'s name, then
+  deletes the original. A file the branch (tracked, any namespace) or the queue
+  already has, by `source_mr` or by content, is deleted without queueing. The
+  branch is the checkout's tracked files plus what `origin/teamai-learnings`
+  has that the checkout's commit lacks, fetched first: the old checkout is
+  never synced again, so it may miss a teammate's later import of the same MR
+  (#823 item 21). It runs only under the sync lock, before the queue is listed,
+  and never on a dry run, which publishes nothing from the queue either and
+  `pull` reports as `Would publish N queued learning(s)` (#823 item 20); any
+  other file in the checkout is left alone. The error is also printed as a warning, because
   several callers treat a side-branch failure as non-fatal and log it at debug
   only; a silent (hook) run prints nothing. `refresh` does not swallow it:
   `recall maintenance` and `recall promote` stop with exit code 1 and write
@@ -511,7 +526,10 @@ Upgrading from the per-checkout layout:
   reader (`members`, `projects members`, `digest`, `pull`, `stats` and `viz`,
   through `readableReportsWorktree`) uses the local copy and never ensures it,
   after the same ownership probe as `indexableVotesDir` (below): another
-  repository's copy is refused with `ForeignCheckoutError`. The
+  repository's copy is refused with `ForeignCheckoutError`. A refresh that
+  failed is tried once more, under the lock, and a second failure throws its
+  cause: a reader never creates the checkout without the lock, which a writer
+  that took it meanwhile may be creating (#823 item 15). The
   checkout there may be another repository's, or not created yet, so
   `recall maintenance` and `recall promote` stop with exit code 1 and write
   nothing when either the reports lock (they rank by its votes) or the
@@ -571,6 +589,15 @@ exists but cannot be read names no owner: the loaders return null for it as for
 a fresh install, so `init` checks for the file, and with learnings queued moves
 them to `pending-learnings.unknown` the same way, the warning naming that config;
 queued or not, it drops the search indexes, as on an owner change.
+When `init` is about to clone another owner's team repository where the old
+install's clone was, it settles the old install right then, before the clone,
+the same way (queue set aside, indexes dropped), and moves the old
+`config.yaml` to the first free `config.yaml.previous[.<n>]` instead of saving
+(#823 item 17). The save at the end still compares with the old install
+loaded before the clone, finds nothing left to set aside, and writes the new
+config. An `init` that stops in between (an unknown `--role`, a busy queue lock, a
+prompt left) leaves no config naming the old team beside the new clone, so every
+command asks for `teamai init`; nothing is deleted.
 A self install whose
 business repository moved to another URL (renamed or transferred) is another
 owner too: `init` sets its queue aside, and the warning names the directory to

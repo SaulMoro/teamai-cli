@@ -245,10 +245,8 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       if (!opts.dryRun && !opts.output) assertNotReadOnly(localConfig, 'teamai import --from-mr');
       // As contribute: into the active project's learnings namespace when there
       // is exactly one, else the shared root.
-      const { drainCheckoutQueue, resolveLearningsSubdir } = await import('./contribute.js');
+      const { resolveLearningsSubdir } = await import('./contribute.js');
       const learningsSubdir = opts.dryRun || opts.output ? '' : await resolveLearningsSubdir(localConfig);
-      // As contribute, before the extraction dedupes against the queue it writes into.
-      if (!opts.dryRun && !opts.output) await drainCheckoutQueue(localConfig);
 
       const tasks = new Listr([
         {
