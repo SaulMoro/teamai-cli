@@ -467,6 +467,24 @@ scope: 'user',
     expect(await fse.pathExists(path.join(repoSkills, 'review', 'root-only.md'))).toBe(true);
   });
 
+  // Pull does not deliver a directory without SKILL.md (#707), so push must
+  // not take it for the member's copy: that would publish the root skill into
+  // it, and make it a namespace skill that replaces the root one.
+  it('does not map a skill to a role namespace directory that has no SKILL.md', async () => {
+    localConfig.primaryRole = 'hai';
+    localConfig.additionalRoles = [];
+    const repoSkills = path.join(localConfig.repo.localPath, 'skills');
+    await fse.outputFile(path.join(repoSkills, 'review', 'SKILL.md'), '# Root review');
+    await fse.outputFile(path.join(repoSkills, 'hai', 'review', 'notes.md'), 'draft notes');
+    await fse.outputFile(path.join(homeDir, '.claude/skills', 'review', 'SKILL.md'), '# Root review');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    const item = items.find((i) => i.name === 'review');
+    expect(item?.status).not.toBe('modified');
+    expect(item?.relativePath).not.toBe('skills/hai/review');
+  });
+
   it('scans project skill namespaces as well as role ones', async () => {
     const repoPath = localConfig.repo.localPath;
     await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), [

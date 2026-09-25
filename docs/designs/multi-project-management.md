@@ -282,7 +282,8 @@ pull.
 An item that cannot be used replaces nothing. A skill directory without
 `SKILL.md` is not a skill: it is left out of the desired set, so the root skill
 of its name is still delivered and its installed `SKILL.md` is never removed as
-a leftover, and pull names the directory once a run. While a namespace agent
+a leftover, and pull names the directory once a run; push does not take it for
+the member's copy of that skill either. While a namespace agent
 file cannot be read or parsed it delivers nothing, and cleanup keeps the root
 agent it would replace.
 

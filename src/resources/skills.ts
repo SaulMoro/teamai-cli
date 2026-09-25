@@ -460,13 +460,15 @@ export class SkillsHandler extends ResourceHandler {
 
       // Second pass: load skills from allowed namespaces. A namespace skill
       // replaces the root skill of its name, as pull delivers it (#707), so an
-      // edit goes back to the namespace; the first namespace keeps a name.
+      // edit goes back to the namespace; the first namespace keeps a name. A
+      // directory without SKILL.md is not a skill and replaces nothing, as in pull.
       for (const namespace of scopedNamespaces) {
         const teamSkillsNsDir = path.join(allSkillsDir, namespace);
         const names = await listDirs(teamSkillsNsDir);
         for (const name of names) {
-          if (!teamSkills.get(name)?.namespace) {
-            teamSkills.set(name, { dir: path.join(teamSkillsNsDir, name), namespace });
+          const dir = path.join(teamSkillsNsDir, name);
+          if (!teamSkills.get(name)?.namespace && await pathExists(path.join(dir, SKILL_MD))) {
+            teamSkills.set(name, { dir, namespace });
           }
         }
       }
