@@ -657,6 +657,31 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect((await stats()).prompts).toBe(7);
   });
 
+  it('a tcodex rollout with no token record is kept per rollout too', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    write([event('rollout-a.jsonl', 'stop', 0, { tool: 'tcodex', prompts: 5 })]);
+    await stats();
+    write([event('rollout-b.jsonl', 'stop', 30, { tool: 'tcodex', prompts: 2 })]);
+
+    expect((await stats()).prompts).toBe(7);
+  });
+
+  it('a Codex rollout whose Stop records its cost as requestMetrics keeps that cost', async () => {
+    const { project } = await setup();
+    const { event, write } = await codexLog(project);
+    // An older Stop: its cost as one request record, on the Stop's day.
+    write([event('rollout-a.jsonl', 'stop', 0, {
+      prompts: 1, requestMetrics: { pricedRequests: 1, costMicros: 40, cacheReadTokens: 0, cacheEligibleInputTokens: 0, priceVersion: 'v1' },
+    })]);
+    const reported = await report(project);
+    const days = reported && typeof reported === 'object' && 'daily' in reported && reported.daily && typeof reported.daily === 'object'
+      ? Object.values(reported.daily) : [];
+
+    expect(days.reduce((sum: number, d: unknown) =>
+      sum + (d && typeof d === 'object' && 'costMicros' in d && typeof d.costMicros === 'number' ? d.costMicros : 0), 0)).toBe(40);
+  });
+
   it('a dropped Codex rollout keeps its corrections', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);

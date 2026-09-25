@@ -1863,7 +1863,7 @@ export function aggregateSessionMetrics(
       transcriptSince.set(event.sessionId, since);
       lastTranscript.set(event.sessionId, event.transcriptPath);
     }
-    if (event.tokenScope === 'transcript' || (event.tool === 'codex' && typeof event.transcriptPath === 'string')) {
+    if (event.tokenScope === 'transcript' || (isCodexTool(event.tool) && typeof event.transcriptPath === 'string')) {
       rolloutSessions.add(event.sessionId);
     }
     const events = timeline.get(event.sessionId) ?? [];
@@ -1889,7 +1889,9 @@ export function aggregateSessionMetrics(
       if (event.interventions) {
         record(transcriptInterventions, { interrupt: event.interventions.interrupt, toolReject: event.interventions.toolReject });
       }
+      // An older Stop records its cost as one request, on its own day.
       if (event.requestDaily) record(transcriptRequests, event.requestDaily);
+      else if (event.requestMetrics) record(transcriptRequests, { [event.timestamp.slice(0, 10)]: event.requestMetrics });
     }
 
     if (event.type === 'stop') {
