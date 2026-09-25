@@ -642,7 +642,11 @@ async function collectSkillEntries(
  */
 export type IndexedSkills =
   | { readonly kind: 'dirs'; readonly dirs: readonly string[] }
-  | { readonly kind: 'keep-indexed' };
+  | {
+    readonly kind: 'keep-indexed';
+    /** Why the set cannot be resolved, for a build with no index to keep them from. */
+    readonly reason: string;
+  };
 
 /**
  * Entries for an explicit list of skill directories, each `<dir>/SKILL.md`,
