@@ -886,8 +886,9 @@ teamai push
 （见 [Env、hooks 与 MCP server 按 namespace 划分](#envhooks-与-mcp-server-按-namespace-划分)）。`teamai env add` 与
 `teamai env remove` 编辑根文件，加上 `--role <ns>` / `--project <id>` 时编辑对应
 namespace 的文件；`--project` 使用该项目声明的唯一 env namespace；`--role` 指定的 namespace
-若没有任何角色或项目声明，会给出警告，因为该文件不会送达任何人。`teamai push` 会带上
-其中任何一个文件的改动。
+若没有任何角色或项目声明，会给出警告，因为该文件不会送达任何人。两个命令都不会编辑无法解析的文件；
+团队仓库无法刷新时 `--project` 不做任何修改，因为过期的 `manifest/projects.yaml` 可能指向错误的 namespace。
+`teamai push` 会带上其中任何一个文件的改动。
 
 ```yaml
 variables:

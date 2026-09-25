@@ -378,6 +378,46 @@ scope: 'user',
         .toEqual([{ key: 'DB_URL', value: 'db' }, { key: 'API_BASE', value: 'x' }]);
     });
 
+    // --project resolves through manifest/projects.yaml: a stale copy may name
+    // a namespace the project no longer uses, and push would publish that file.
+    it('env add --project changes nothing when the team repo cannot be refreshed', async () => {
+      await writeProjects();
+      vi.mocked(pullRepo).mockRejectedValueOnce(new Error('network down'));
+
+      await envAdd('API_BASE', 'x', { project: 'checkout' });
+
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('network down'));
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'));
+      expect(await fse.pathExists(nsFile('checkout-env'))).toBe(false);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = 0;
+    });
+
+    // Writing the parsed result back would replace every variable the file had.
+    it('env add refuses to write into a namespace file that does not parse, and leaves it as it was', async () => {
+      const broken = 'API_BASE: root\nDB_URL: db\n';
+      await fse.outputFile(nsFile('checkout'), broken);
+
+      await envAdd('NEW_KEY', 'x', { role: 'checkout' });
+
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('env/checkout/env.yaml'));
+      expect(await fse.readFile(nsFile('checkout'), 'utf-8')).toBe(broken);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = 0;
+    });
+
+    it('env remove refuses to write into a namespace file that does not parse, and leaves it as it was', async () => {
+      const broken = 'variables:\n  - key: API_BASE\n    value: [\n';
+      await fse.outputFile(nsFile('checkout'), broken);
+
+      await envRemove('API_BASE', { role: 'checkout' });
+
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('env/checkout/env.yaml'));
+      expect(await fse.readFile(nsFile('checkout'), 'utf-8')).toBe(broken);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = 0;
+    });
+
     it('env add --project refuses a project that declares no env namespace, and writes nothing', async () => {
       await writeProjects();
 

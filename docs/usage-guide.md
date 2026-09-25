@@ -948,8 +948,10 @@ Variables live in the team repo's `env/env.yaml`, and per namespace in
 `teamai env add` and `teamai env remove` edit the root file, or with
 `--role <ns>` / `--project <id>` that namespace's file; `--project` uses the one
 env namespace the project declares, and `--role` warns when no role or project
-declares that namespace, since its file then reaches nobody. `teamai push` picks
-up a change to any of them.
+declares that namespace, since its file then reaches nobody. Neither command
+edits a file that does not parse, and `--project` changes nothing when the team
+repo cannot be refreshed, since a stale `manifest/projects.yaml` may name the
+wrong namespace. `teamai push` picks up a change to any of them.
 
 ```yaml
 variables:

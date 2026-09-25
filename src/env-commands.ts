@@ -2,9 +2,9 @@ import { requireInit, detectProjectConfig } from './config.js';
 import { pullRepo } from './utils/git.js';
 import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
-import { EnvHandler, maskEnvValue, ENV_KEY_RE, envEntryReader } from './resources/env.js';
+import { EnvHandler, maskEnvValue, ENV_KEY_RE, envEntryReader, type EnvYaml } from './resources/env.js';
 import { describeEntryFailure, describeOrigin, entryFileAbsolutePath, entryFilePath, entryNamespaceFromFlags, resolveEntriesFor } from './namespaced-entries.js';
-import type { GlobalOptions } from './types.js';
+import type { GlobalOptions, LocalConfig } from './types.js';
 import { isSelfMode } from './types.js';
 
 const envHandler = new EnvHandler();
@@ -73,23 +73,15 @@ export async function envAdd(
   const localConfig = projectConfig ?? (await requireInit()).localConfig;
   const repoPath = localConfig.repo.localPath;
 
-  // Pull latest
-  if (!isSelfMode(localConfig)) {
-    const pullSpin = spinner('Pulling latest...').start();
-    try {
-      await pullRepo(repoPath);
-      pullSpin.succeed('Up to date');
-    } catch (e) {
-      pullSpin.warn(`Pull failed: ${(e as Error).message}`);
-    }
-  }
+  if (!await refreshTeamRepo(localConfig, options.project)) return;
 
   const target = await envFileFromFlags(repoPath, options);
   if (!target) return;
   const { envYamlPath, where } = target;
 
-  // Parse the target env.yaml (or create new)
-  const envConfig = await envHandler.parseEnvYaml(envYamlPath);
+  // The target env.yaml, or a new one when it does not exist.
+  const envConfig = await readEnvFileForEdit(envYamlPath);
+  if (!envConfig) return;
 
   // Check if key already exists
   const existingIdx = envConfig.variables.findIndex(v => v.key === key);
@@ -130,16 +122,7 @@ export async function envRemove(key: string, options: GlobalOptions & { role?: s
   const localConfig = projectConfig ?? (await requireInit()).localConfig;
   const repoPath = localConfig.repo.localPath;
 
-  // Pull latest
-  if (!isSelfMode(localConfig)) {
-    const pullSpin = spinner('Pulling latest...').start();
-    try {
-      await pullRepo(repoPath);
-      pullSpin.succeed('Up to date');
-    } catch (e) {
-      pullSpin.warn(`Pull failed: ${(e as Error).message}`);
-    }
-  }
+  if (!await refreshTeamRepo(localConfig, options.project)) return;
 
   const target = await envFileFromFlags(repoPath, options);
   if (!target) return;
@@ -150,7 +133,8 @@ export async function envRemove(key: string, options: GlobalOptions & { role?: s
     return;
   }
 
-  const envConfig = await envHandler.parseEnvYaml(envYamlPath);
+  const envConfig = await readEnvFileForEdit(envYamlPath);
+  if (!envConfig) return;
   const idx = envConfig.variables.findIndex(v => v.key === key);
 
   if (idx === -1) {
@@ -168,6 +152,46 @@ export async function envRemove(key: string, options: GlobalOptions & { role?: s
 
   log.success(`Removed env variable${where}: ${key}`);
   log.info('Run `teamai push` to sync to team repo.');
+}
+
+/**
+ * Pull the team repo before an edit. A failure only warns, except with
+ * `--project`: that resolves through manifest/projects.yaml, and a stale copy
+ * may name a namespace the project no longer uses, whose file push would then
+ * publish. Returns false when the edit must not go ahead.
+ */
+async function refreshTeamRepo(localConfig: LocalConfig, project: string | undefined): Promise<boolean> {
+  if (isSelfMode(localConfig)) return true;
+  const pullSpin = spinner('Pulling latest...').start();
+  try {
+    await pullRepo(localConfig.repo.localPath);
+    pullSpin.succeed('Up to date');
+    return true;
+  } catch (e) {
+    if (project === undefined) {
+      pullSpin.warn(`Pull failed: ${(e as Error).message}`);
+      return true;
+    }
+    pullSpin.fail(`Pull failed: ${(e as Error).message}`);
+    log.error(
+      `The team repo could not be refreshed (${(e as Error).message}), so the env namespace of project "${project}" `
+      + 'may be out of date. Nothing was changed. Fix the pull (run `teamai pull` to see why) and retry, or pass --role <ns>.',
+    );
+    process.exitCode = 1;
+    return false;
+  }
+}
+
+/**
+ * The env file to edit, or null when it does not parse: writing back what
+ * could be read would replace every variable it has.
+ */
+async function readEnvFileForEdit(envYamlPath: string): Promise<EnvYaml | null> {
+  const read = await envHandler.readEnvYaml(envYamlPath);
+  if (read.ok) return { variables: read.variables };
+  log.error(`${read.reason}. Nothing was changed. Fix the file in the team repo, then retry.`);
+  process.exitCode = 1;
+  return null;
 }
 
 /**
