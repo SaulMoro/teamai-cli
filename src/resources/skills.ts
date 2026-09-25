@@ -3,7 +3,7 @@ import YAML from 'yaml';
 import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths } from '../types.js';
-import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
+import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { isCliOwnedSkillName } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
@@ -373,9 +373,10 @@ async function scanSkillsRecursively(dirPath: string): Promise<Map<string, strin
 
 /**
  * Every file another team copy of `item`'s skill name tracks: the root skill,
- * or the skill of that name in any namespace, other than `item` itself.
+ * or the skill of that name in any namespace, other than `item` itself. Each
+ * relative path maps to that file in every copy that has it.
  */
-async function otherVersionFiles(repoPath: string, item: ResourceItem): Promise<Set<string>> {
+async function otherVersionFiles(repoPath: string, item: ResourceItem): Promise<Map<string, string[]>> {
   const skillsDir = path.join(repoPath, 'skills');
   const copies: string[] = [];
   for (const dir of await listDirs(skillsDir)) {
@@ -386,29 +387,40 @@ async function otherVersionFiles(repoPath: string, item: ResourceItem): Promise<
       copies.push(path.join(dirPath, item.name));
     }
   }
-  const files = new Set<string>();
+  const files = new Map<string, string[]>();
   for (const copy of copies) {
     if (path.resolve(copy) === path.resolve(item.sourcePath)) continue;
-    for (const file of await listFilesRecursive(copy)) files.add(file);
+    for (const file of await listFilesRecursive(copy)) files.set(file, [...(files.get(file) ?? []), path.join(copy, file)]);
   }
   return files;
 }
 
 /**
  * Install replaces the whole skill (#707): after `source` is copied over
- * `dest`, a file `source` does not have is removed when another team version
- * of the skill tracks it, so switching between the root skill and a namespace
- * skill of that name leaves nothing of the previous one behind. A file no
- * team version has is the member's own, and stays: push does not count such
- * an extra as a change, so it may never have been pushed.
+ * `dest`, a file `source` does not have is removed when it is byte for byte
+ * that file of another team version of the skill, so switching between the
+ * root skill and a namespace skill of that name leaves nothing of the previous
+ * one behind. Any other file is the member's own, and stays: push does not
+ * count such an extra as a change, so it may never have been pushed. One at a
+ * path another version has is named, since it may be an edited leftover.
  */
-async function removeLeftoverVersionFiles(source: string, dest: string, otherVersions: Set<string>): Promise<void> {
+async function removeLeftoverVersionFiles(source: string, dest: string, otherVersions: Map<string, string[]>): Promise<void> {
   if (otherVersions.size === 0) return;
   const sourceFiles = new Set(await listFilesRecursive(source));
   let removed = false;
   for (const file of await listFilesRecursive(dest)) {
-    if (sourceFiles.has(file) || !otherVersions.has(file)) continue;
-    await remove(path.join(dest, file));
+    const versions = otherVersions.get(file);
+    if (sourceFiles.has(file) || !versions) continue;
+    const installed = path.join(dest, file);
+    const leftover = (await Promise.all(versions.map((version) => fileContentEqual(installed, version)))).some(Boolean);
+    if (!leftover) {
+      log.warn(
+        `Kept ${installed}: another team version of this skill has a file at that path with different content, `
+        + 'so it may be yours or an edited copy. Delete it if you do not need it.',
+      );
+      continue;
+    }
+    await remove(installed);
     removed = true;
   }
   if (removed) await pruneEmptyDirs(dest);

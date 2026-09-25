@@ -391,6 +391,21 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(await read('.claude/skills/review/my-notes.md')).toBe('mine\n');
     });
 
+    // A path another team version has is not enough to call a file a leftover:
+    // the member may have added a file of that name, in a namespace they never had.
+    it('keeps a file the member added at a path another version has, and names it', async () => {
+      as(['devops'], { subscribedTags: ['ui'] });
+      await pull({});
+      await fse.outputFile(path.join(homeDir, '.claude/skills/review/front-only.md'), 'my own notes\n');
+
+      await pull({ force: true });
+
+      expect(await read('.claude/skills/review/front-only.md')).toBe('my own notes\n');
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(
+        `Kept ${path.join(homeDir, '.claude/skills/review/front-only.md')}`,
+      ));
+    });
+
     it('indexes for recall the skills pull delivers, not every skill in the repo', async () => {
       await team('skills/devops/deploy/SKILL.md', skillMd('deploy', 'Deploy things'));
 

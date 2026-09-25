@@ -273,9 +273,11 @@ catalog and is not delivered by default. A root skill that arrives through a
 subscribed tag is replaced by an active namespace skill of the same name, and
 among tag matches the root skill wins over one in an inactive namespace. Installing
 a skill removes the files that another team version of that skill (root or any
-namespace) has and the new one lacks, so switching versions leaves no team file
-behind; a file the member added stays, because push never counts such extras as
-changes and they may never have been pushed.
+namespace) has and the new one lacks, when they match that version byte for
+byte, so switching versions leaves no team file behind; a file the member added
+or edited stays, because push never counts such extras as changes and they may
+never have been pushed, and one at a path another version has is named on each
+pull.
 
 Overridable shared content belongs at the root, not in a namespace every role
 activates (`common/`): a root item gives way to an active namespace, a namespace
