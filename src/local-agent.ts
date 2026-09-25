@@ -73,7 +73,6 @@ import {
   type ManagedMcpRecord,
   type McpServerDef,
   type McpTransport,
-  type Scope,
   type TeamaiConfig,
 } from './types.js';
 import { getUserHome } from './utils/home.js';

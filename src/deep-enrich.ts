@@ -410,7 +410,7 @@ async function runPhaseComponents(
     let results: string[];
     try {
       results = await callClaudeParallel(tasks, BATCH);
-    } catch (err) {
+    } catch {
       // AggregateError — 部分可能成功，graceful fallback
       log.warn(`deep-enrich[${project}]: batch[${i}] partially failed, falling back to sequential`);
       results = await Promise.all(

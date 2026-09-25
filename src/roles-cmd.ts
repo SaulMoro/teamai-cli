@@ -1,12 +1,12 @@
 import path from 'node:path';
 import YAML from 'yaml';
-import { autoDetectInit, loadLocalConfig, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadStateForScope, saveStateForScope } from './config.js';
-import { loadRolesManifest, saveRolesManifest, findRole, describeRoles, listRoleIds } from './roles.js';
+import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, loadStateForScope, saveStateForScope } from './config.js';
+import { loadRolesManifest, saveRolesManifest, findRole, listRoleIds } from './roles.js';
 import type { RolesManifest, TeamRole } from './roles.js';
-import { ensureDir, pathExists, writeFile, expandHome } from './utils/fs.js';
+import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { pullLatest, runManifestEdit, pushManifestChange } from './manifest-edit.js';
-import type { GlobalOptions, LocalConfig } from './types.js';
+import type { GlobalOptions } from './types.js';
 import { askQuestion, askConfirmation } from './utils/prompt.js';
 
 /**

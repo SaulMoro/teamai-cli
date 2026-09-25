@@ -1,5 +1,4 @@
 import path from 'node:path';
-import YAML from 'yaml';
 import {
     requireInit,
     saveLocalConfig,
@@ -10,8 +9,7 @@ import {
 } from './config.js';
 import { loadTagsConfig, collectTagStats, saveTagsConfig } from './utils/tags.js';
 import { log } from './utils/logger.js';
-import { readFileSafe } from './utils/fs.js';
-import type { GlobalOptions, LocalConfig, TagsConfig } from './types.js';
+import type { GlobalOptions, LocalConfig } from './types.js';
 
 /**
  * Resolve the active scope for tag operations: project scope when the cwd has

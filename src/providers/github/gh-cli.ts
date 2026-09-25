@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
-import { log, spinner } from '../../utils/logger.js';
+import { log } from '../../utils/logger.js';
 import { resolveCliPath } from '../../utils/cli-path.js';
 import { isInteractive } from '../../utils/prompt.js';
 

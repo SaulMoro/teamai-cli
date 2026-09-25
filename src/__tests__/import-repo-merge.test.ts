@@ -35,7 +35,6 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 import { importFromRepo } from '../import-repo.js';
 import { shallowClone, shallowFetch } from '../clone.js';
-import { generateCodebaseMd } from '../codebase.js';
 import { extractCodebase } from '../codebase-extract.js';
 
 // ─── Constants ──────────────────────────────────────────
