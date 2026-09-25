@@ -839,6 +839,27 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     expect((await stats()).prompts).toBe(2);
   });
 
+  it('a whole entry from before covers what its report read, not what came in during its push', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    const today = new Date().toISOString().slice(0, 10);
+    // That release read the log (A 5, B 1), wrote the team stats file, pushed, then its snapshot.
+    writeSharedSnapshots({ 'codex-s': 6 }, today, project);
+    const dir = path.join(getDataHome(project), 'dashboard');
+    const teamStats = path.join(path.dirname(project.repo.localPath), 'reports-wt', 'stats', 'tester.yaml');
+    fs.mkdirSync(path.dirname(teamStats), { recursive: true });
+    fs.writeFileSync(teamStats, YAML.stringify({ username: 'tester', skills: {} }));
+    const read = new Date(Date.now() - 25 * 60_000);
+    const pushed = new Date(Date.now() - 15 * 60_000);
+    fs.utimesSync(teamStats, read, read);
+    for (const name of SNAPSHOTS) fs.utimesSync(path.join(dir, `reported-${name}.json`), pushed, pushed);
+    // A was compacted; B reached 2 during that push and has 3 now.
+    write([event('rollout-b.jsonl', 'stop', 30, { prompts: 1 }), event('rollout-b.jsonl', 'stop', 40, { prompts: 2 }),
+      event('rollout-b.jsonl', 'stop', 55, { prompts: 3 })]);
+
+    expect((await stats()).prompts).toBe(2);
+  });
+
   it('reading the baselines without persisting them, as teamai stats does, does not move the time they cover', async () => {
     const { project } = await setup();
     const { event, write, stats } = await codexLog(project);
@@ -1031,6 +1052,38 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
 
     expect(await report(project)).toBeNull();
     expect(await report(projectQ)).toBeNull();
+  });
+
+  it('main split a session with the same prompts in each part: the owner still credits every part\'s active time', async () => {
+    const { root, project } = await setup();
+    const { rootQ, projectQ } = await setupQ();
+    const p = getDataHome(project);
+    const q = getDataHome(projectQ);
+    const tokens = (input: number) => ({ input, output: 0, cacheRead: 0, cacheCreation: 0 });
+    const at = (minute: number, type: string, cwd: string, dataHome: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+      type, timestamp: new Date(Date.now() - 3_600_000 + minute * 60_000).toISOString(), sessionId: 'split', tool: 'claude', cwd, dataHome, ...extra,
+    });
+    const log = path.join(teamaiHome(), 'dashboard', 'events.jsonl');
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    // One prompt. P's part was active 4 minutes; Q's, after a pause, 3 more, with no new prompt.
+    fs.writeFileSync(log, [
+      at(0, 'prompt_submit', root, p), at(4, 'stop', root, p, { prompts: 1, tokens: tokens(100) }),
+      at(10, 'tool_use', rootQ, q), at(12, 'tool_use', rootQ, q), at(13, 'stop', rootQ, q, { prompts: 1, tokens: tokens(150) }),
+    ].join('\n') + '\n');
+    const date = new Date(Date.now() - 3_600_000).toISOString().slice(0, 10);
+    for (const [config, input, minutes] of [[project, 100, 4], [projectQ, 150, 3]] as const) {
+      const dir = path.join(getDataHome(config), 'dashboard');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'reported-prompt-tokens.json'), JSON.stringify({ split: { prompts: 1, tokens: tokens(input) } }));
+      fs.writeFileSync(path.join(dir, 'reported-interventions.json'), JSON.stringify({ split: { interrupt: 0, toolReject: 0, correction: 0 } }));
+      fs.writeFileSync(path.join(dir, 'reported-daily-sessions.json'), JSON.stringify({ split: {
+        date, prompts: 1, durationMs: minutes * 60_000, succeeded: 1, corrected: 0, requestDaily: {},
+      } }));
+    }
+
+    // Both parts already reported their time: the owner sends none of it again.
+    expect(await report(projectQ)).toBeNull();
+    expect(await report(project)).toBeNull();
   });
 
   it('main split a session whose parts each ended in a cumulative Stop: a new prompt is reported once', async () => {

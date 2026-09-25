@@ -18,7 +18,7 @@ import { log } from './utils/logger.js';
 import type {
   UserStats, UserInterventionStats, SessionMetrics, TokenUsage, DashboardEvent, LocalConfig, RequestCostMetrics,
 } from './types.js';
-import { getVotesDir, getDataHome, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
+import { getVotesDir, getDataHome, getReportsDir, emptyTokenUsage, addTokenUsage, usesBranchWorktree } from './types.js';
 import { filterEventsByScope, runsOfLog } from './dashboard-scope.js';
 import {
   creditedPrompts, interventionsEntry, promptTokensEntry, readOwnerCredits, recordSessionOwners, reportedBeyondShared, reportedSize,
@@ -647,11 +647,11 @@ async function creditSplitRuns(
       // Placed by the transcript where it can tell what the parts overlapped.
       const transcripts = runEvents.flatMap((e) => (typeof e.transcriptPath === 'string' ? [e.transcriptPath] : []));
       const prompts = (await creditedPrompts(credit, transcripts)) ?? credit.promptTokens.prompts;
-      if (reportedSize(result.promptTokens[runId]).prompts >= prompts) continue;
-      result.promptTokens[runId] = { ...credit.promptTokens, prompts };
-      result.interventions[runId] = credit.interventions;
-      if (credit.daily) result.daily[runId] = { ...credit.daily, prompts };
-      result.changed = true;
+      result.changed = raiseToCredit(result, runId, {
+        promptTokens: { ...credit.promptTokens, prompts },
+        interventions: credit.interventions,
+        daily: credit.daily ? { ...credit.daily, prompts } : undefined,
+      }) || result.changed;
       continue;
     }
     if (homes.size < 2) continue;
@@ -676,15 +676,76 @@ async function creditSplitRuns(
     if (union.length === 0) continue;
     const metrics = aggregateSessionMetrics(union);
     const promptTokens = computePromptTokenDelta(metrics, {}).nextReported[runId];
-    if (!promptTokens || reportedSize(result.promptTokens[runId]).prompts >= promptTokens.prompts) continue;
-    result.promptTokens[runId] = promptTokens;
-    const interventions = interventionCounts(metrics).get(runId);
-    if (interventions) result.interventions[runId] = interventions;
-    const daily = computeDailyStatsDelta(aggregateDailySessions(union), {}).nextReported[runId];
-    if (daily) result.daily[runId] = daily;
-    result.changed = true;
+    if (!promptTokens) continue;
+    result.changed = raiseToCredit(result, runId, {
+      promptTokens,
+      interventions: interventionCounts(metrics).get(runId),
+      daily: computeDailyStatsDelta(aggregateDailySessions(union), {}).nextReported[runId],
+    }) || result.changed;
   }
   return result;
+}
+
+/**
+ * Raises a run's baselines to at least `credit`, counter by counter: a part
+ * may have reported more time, tokens or costs with no more prompts. Flags
+ * and dates stay the run's own where it has an entry. Whether anything moved.
+ */
+function raiseToCredit(
+  result: { interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions },
+  runId: string,
+  credit: {
+    promptTokens: ReportedPromptTokens[string];
+    interventions: ReportedInterventions[string] | undefined;
+    daily: DailySessionSnapshot | undefined;
+  },
+): boolean {
+  const before = JSON.stringify([result.promptTokens[runId], result.interventions[runId], result.daily[runId]]);
+  const own = result.promptTokens[runId];
+  const ownTokens = promptTokensEntry(own);
+  const greater = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+    input: Math.max(a.input, b.input), output: Math.max(a.output, b.output),
+    cacheRead: Math.max(a.cacheRead, b.cacheRead), cacheCreation: Math.max(a.cacheCreation, b.cacheCreation),
+  });
+  result.promptTokens[runId] = {
+    ...(own ?? {}),
+    prompts: Math.max(ownTokens.prompts, credit.promptTokens.prompts),
+    tokens: greater(ownTokens.tokens, credit.promptTokens.tokens),
+  };
+  if (credit.interventions) {
+    const iv = interventionsEntry(result.interventions[runId]);
+    result.interventions[runId] = {
+      interrupt: Math.max(iv.interrupt, credit.interventions.interrupt),
+      toolReject: Math.max(iv.toolReject, credit.interventions.toolReject),
+      correction: Math.max(iv.correction, credit.interventions.correction),
+    };
+  }
+  if (credit.daily) {
+    const day = parseDailySnapshot(result.daily[runId]);
+    if (!day) {
+      result.daily[runId] = credit.daily;
+    } else {
+      const requestDaily = { ...day.requestDaily };
+      for (const [date, request] of Object.entries(credit.daily.requestDaily)) {
+        const mine = requestDaily[date];
+        requestDaily[date] = mine ? {
+          ...mine,
+          pricedRequests: Math.max(mine.pricedRequests, request.pricedRequests), costMicros: Math.max(mine.costMicros, request.costMicros),
+          cacheReadTokens: Math.max(mine.cacheReadTokens, request.cacheReadTokens),
+          cacheEligibleInputTokens: Math.max(mine.cacheEligibleInputTokens, request.cacheEligibleInputTokens),
+        } : request;
+      }
+      result.daily[runId] = {
+        ...day,
+        prompts: Math.max(day.prompts, credit.daily.prompts),
+        durationMs: Math.max(day.durationMs, credit.daily.durationMs),
+        sessionCacheReadTokens: Math.max(day.sessionCacheReadTokens ?? 0, credit.daily.sessionCacheReadTokens ?? 0),
+        sessionCacheEligibleTokens: Math.max(day.sessionCacheEligibleTokens ?? 0, credit.daily.sessionCacheEligibleTokens ?? 0),
+        requestDaily,
+      };
+    }
+  }
+  return JSON.stringify([result.promptTokens[runId], result.interventions[runId], result.daily[runId]]) !== before;
 }
 
 /** The metrics of `events` up to `at`, what an entry written then saw; undefined without `at`. */
@@ -698,14 +759,14 @@ export function metricsAsOf(events: DashboardEvent[], at: number | undefined): M
  * entry an earlier release left covers what that release had seen by then.
  */
 export async function snapshotWrittenAt(config: LocalConfig | undefined): Promise<number | undefined> {
-  for (const file of [scopeSnapshotPath('prompt-tokens', config), sharedSnapshotPath('prompt-tokens')]) {
-    try {
-      return (await fs.promises.stat(file)).mtimeMs;
-    } catch {
-      // Not written yet: try the next.
-    }
-  }
-  return undefined;
+  const mtime = (file: string) => fs.promises.stat(file).then((stat) => stat.mtimeMs, () => undefined);
+  const own = await mtime(scopeSnapshotPath('prompt-tokens', config));
+  if (own === undefined) return mtime(sharedSnapshotPath('prompt-tokens'));
+  // An earlier release wrote the snapshot after its push, and the team stats
+  // file in this scope's reports checkout before it, after reading the log: the
+  // earlier of the two is nearer what that report had read.
+  const stats = config ? await mtime(path.join(getReportsDir(config), 'stats', `${config.username}.yaml`)) : undefined;
+  return stats === undefined ? own : Math.min(own, stats);
 }
 
 /**

@@ -411,8 +411,9 @@ snapshots already hold it; else it is decided as before (a fork under a new ID,
 a tool whose transcript records no start). A session main split across scopes
 per event, whose events are still in the log with each part's `dataHome`, is
 credited once with every part reported: for each scope, the shortest prefix of
-its events whose metrics reach its snapshot, and the owner takes the metrics of
-their union as reported when they exceed its own entry, so parts counted before
+its events whose metrics reach its snapshot, and the owner's entry is raised,
+counter by counter, to at least the metrics of their union (a part may have
+reported more time, tokens or costs with no more prompts), so parts counted before
 any Stop carried the transcript's total are neither lost nor sent twice.
 A Codex session (any Codex variant: `codex`, `codex-internal`, `tcodex`) is kept
 per rollout, with or without a token record, and when
@@ -431,7 +432,10 @@ keeps the session unsuccessful, so a later rollout is reported in full and does
 not turn it into a success. An entry
 written before rollouts were kept is one total: an earlier release rewrote every
 session in the log on each report, so it covers the rollouts begun by the time
-its file was last written (read before this report writes it; a seed keeps the
+its file was last written, or, earlier, when that report wrote the team stats
+file in this scope's reports checkout (after reading the log, before its push;
+the snapshot came after the push). That is read before this report writes
+anything; a seed keeps the
 shared file's time, and `teamai stats`, which only reads, writes no seed). Those still in
 the log consume it in order, as far as each had got by that time, what is left is the dropped rollouts', kept as one
 prior rollout, and a rollout begun later is new.
