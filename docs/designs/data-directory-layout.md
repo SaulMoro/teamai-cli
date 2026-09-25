@@ -93,7 +93,15 @@ through. Every full sync keeps only the
 entries of checkouts `git worktree list` still reports, so a deleted or
 re-created worktree's entry goes with the next full sync in any checkout. A
 state.json written before this field has no entry, so each checkout does one
-full sync after the upgrade.
+full sync after the upgrade. The user scope's pull records its one checkout,
+HOME, the same way, for push's bases alone: its fast path still reads the
+shared fields, and an install with no entry yet (upgraded, and not fully
+synced since) compares with `lastPullRev`, which only HOME moves, so push
+does not stop there. A project pull that inherits the user scope
+(`inheritUserScope`) moves HOME's skills, rules and agents too, so it adds its
+revision to that entry's push bases, creating the entry from `lastPullRev` if
+there is none, and leaves the entry's `rev` alone. Like a full pull, an
+inherited pull already synced at the team's revision writes nothing (#823).
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

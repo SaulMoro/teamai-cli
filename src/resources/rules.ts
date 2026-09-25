@@ -125,12 +125,13 @@ export class RulesHandler extends ResourceHandler {
               ? copilotInstructionsBodyEqualsTeamMd(localRule, teamRule)
             : await fileContentEqual(localFilePath, teamFilePath);
           if (equal) continue; // This tool dir's copy is identical, skip
-          // Single-repo mode: nothing refreshes the author's `.teamai/rules`
-          // copy of a rule placed under a namespace — pull deploys to tool
-          // dirs and the pre-push sync covers those — so a copy equal to an
-          // OLDER version of the team file is one nobody edited, and pushing
-          // it would revert whoever changed the rule since (#649 review).
-          if (tool === SELF_KNOWLEDGE_SCAN_KEY && teamFileName === placedName
+          // Single-repo mode: nothing refreshes the active tree's
+          // `.teamai/rules` — pull deploys to tool dirs and the pre-push sync
+          // covers those — and a branch behind the default branch holds its
+          // older copies. A copy equal to an OLDER version of the team file is
+          // one nobody edited, and pushing it would revert whoever changed the
+          // rule since (#649 review, #823).
+          if (tool === SELF_KNOWLEDGE_SCAN_KEY
             && await isPastVersionOf(localConfig.repo.localPath, localFilePath, teamRelPath)) {
             log.warn(
               `[rules] Skipped ${name}: ${path.relative(resolveToolBaseDir(tool, localConfig), localFilePath)} is an `

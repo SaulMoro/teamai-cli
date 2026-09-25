@@ -207,12 +207,8 @@ export class AgentsHandler extends ResourceHandler {
     // in another checkout moves lastPullRev past a copy this one still holds
     // unedited (#812, #823).
     const checkoutBases = async (): Promise<string[]> => {
-      const { checkoutKey, checkoutBaseRevs } = await import('../pull.js');
-      const key = localConfig.scope === 'project' && localConfig.projectRoot
-        ? await checkoutKey(localConfig.projectRoot)
-        : undefined;
-      const bases = checkoutBaseRevs(key ? lastPullByWorkspace?.[key] : undefined);
-      return bases.length > 0 ? bases : lastPullRev ? [lastPullRev] : [];
+      const { resolveCheckoutBases } = await import('../pull.js');
+      return (await resolveCheckoutBases(localConfig, { lastPullRev, lastPullByWorkspace })).revs;
     };
     // Agents this machine placed in a namespace and has awaiting review: the
     // open PR is their destination, not "no active source".
