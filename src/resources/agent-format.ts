@@ -262,7 +262,7 @@ function isManagedKiroSessionHook(value: unknown): boolean {
  * Kiro-private fields and hook entries from `tool_extras.kiro`.
  */
 export function renderForKiro(spec: AgentSpec): RenderResult {
-  const extras = { ...(spec.tool_extras?.['kiro'] ?? {}) };
+  const extras = { ...spec.tool_extras?.['kiro'] };
   const existingHooks = isRecord(extras['hooks']) ? { ...extras['hooks'] } : {};
   const existingAgentSpawn = Array.isArray(existingHooks['agentSpawn'])
     ? existingHooks['agentSpawn'].filter((entry) => !isManagedKiroSessionHook(entry))

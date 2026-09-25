@@ -62,14 +62,14 @@ export function ghExec(
   if (options?.inheritStdio) {
     const result = crossSpawn.sync(ghPath, args, {
       stdio: 'inherit',
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: { ...process.env, ...options.env },
       cwd: options.cwd,
     });
     return { stdout: '', stderr: '', status: result.status ?? 1 };
   }
 
   const result = crossSpawn.sync(ghPath, args, {
-    env: { ...process.env, ...(options?.env ?? {}) },
+    env: { ...process.env, ...options?.env },
     encoding: 'utf-8',
     maxBuffer: 10 * 1024 * 1024,
     cwd: options?.cwd,

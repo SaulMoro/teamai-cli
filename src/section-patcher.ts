@@ -25,7 +25,7 @@ export interface ManagedSection {
  * 重复 slug 在调用处处理（加 -2 / -3 后缀）。
  */
 function slugify(title: string): string {
-    return title.trim().replace(/\s+/g, '-').replace(/[\/\\:]/g, '_');
+    return title.trim().replace(/\s+/g, '-').replace(/[/\\:]/g, '_');
 }
 
 /**
@@ -76,7 +76,7 @@ export function splitToSections(md: string): { prelude: string; sections: Manage
     // 找出所有 ## 标题的行号
     const headerIndices: number[] = [];
     for (let i = 0; i < lines.length; i++) {
-        if (/^## /.test(lines[i])) {
+        if (lines[i].startsWith('## ')) {
             headerIndices.push(i);
         }
     }
@@ -209,7 +209,7 @@ export function parseSections(md: string): { prelude: string; sections: ManagedS
             if (innerLines[i].trim() === '') {
                 continue;
             }
-            if (/^## /.test(innerLines[i])) {
+            if (innerLines[i].startsWith('## ')) {
                 titleLine = innerLines[i].replace(/^## /, '').trim();
                 bodyStartLine = i + 1;
             }
@@ -292,7 +292,7 @@ export function patchManagedSection(
     const oldInner = md.slice(openEnd, closeStart);
     let title = '';
     for (const line of oldInner.split('\n')) {
-        if (/^## /.test(line)) {
+        if (line.startsWith('## ')) {
             title = line.replace(/^## /, '').trim();
             break;
         }
