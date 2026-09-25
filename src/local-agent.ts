@@ -1103,6 +1103,39 @@ export async function bindWorkspaceToProject(
   return binding;
 }
 
+const SESSION_MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Claim the once-per-session marker for `kind` + `key`; false when it is
+ * already claimed. Markers live in the per-user local-agent home rather than
+ * the machine-wide os.tmpdir(), and are created exclusively, so a file or
+ * symlink planted at the path is never written through (#823). Any error
+ * other than EEXIST also counts as claimed: failing quiet beats repeating the
+ * prompt on every event. A new claim prunes markers older than 7 days.
+ */
+function claimSessionMarker(kind: 'session' | 'hint', key: string): boolean {
+  let dir: string;
+  try {
+    dir = path.join(getLocalAgentHome(), 'session-markers');
+    fs.mkdirSync(dir, { recursive: true });
+    // The key comes from the host: keep it to one filename-safe segment.
+    fs.writeFileSync(path.join(dir, `${kind}-${key.replace(/[^a-zA-Z0-9._-]/g, '_')}`), '', { flag: 'wx' });
+  } catch (e) {
+    if (!(e instanceof Error && 'code' in e && e.code === 'EEXIST')) {
+      log.debug(`local-agent: failed to write ${kind} marker: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return false;
+  }
+  const cutoff = Date.now() - SESSION_MARKER_MAX_AGE_MS;
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      const p = path.join(dir, name);
+      try { if (fs.lstatSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch {}
+    }
+  } catch {}
+  return true;
+}
+
 async function ensureWorkspaceBinding(
   config: LocalAgentConfig,
   workspacePath: string,
@@ -1113,10 +1146,7 @@ async function ensureWorkspaceBinding(
   // A worktree inherits its main checkout's binding/skip decision — never prompt.
   if (await inheritWorktreeBinding(config, cwd, workspacePath)) return;
 
-  const markerKey = sessionId || `ppid-${process.ppid}`;
-  const hintMarker = path.join(os.tmpdir(), `teamai-bind-session-${markerKey}`);
-  if (fs.existsSync(hintMarker)) return;
-  try { fs.writeFileSync(hintMarker, ''); } catch {}
+  if (!claimSessionMarker('session', sessionId || `ppid-${process.ppid}`)) return;
 
   let projects: LocalAgentProject[];
   try {
@@ -1187,11 +1217,8 @@ async function emitBindingHint(
   // A worktree inherits its main checkout's binding/skip decision — never hint.
   if (await inheritWorktreeBinding(config, cwd, workspacePath)) return;
 
-  // Only hint once per session — use a temp marker file keyed by sessionId
-  const markerKey = sessionId || `ppid-${process.ppid}`;
-  const hintMarker = path.join(os.tmpdir(), `teamai-bind-hint-${markerKey}`);
-  if (fs.existsSync(hintMarker)) return;
-  try { fs.writeFileSync(hintMarker, ''); } catch {}
+  // Only hint once per session — use a marker file keyed by sessionId
+  if (!claimSessionMarker('hint', sessionId || `ppid-${process.ppid}`)) return;
 
   let projects: LocalAgentProject[];
   try {

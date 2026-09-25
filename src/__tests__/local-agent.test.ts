@@ -21,8 +21,8 @@ let origHome: string | undefined;
 let origCopilotHome: string | undefined;
 let origPpid: number;
 
-// The hint markers are machine-wide files in os.tmpdir() keyed by session id,
-// so a fixed id let overlapping runs of this file delete each other's (#823).
+// Session markers live under the per-test HOME, but some tests plant legacy
+// markers in the machine-wide os.tmpdir(), so keep the id unique per run (#823).
 const TEST_SESSION_ID = `test-session-${randomUUID()}`;
 
 beforeEach(async () => {
@@ -33,9 +33,6 @@ beforeEach(async () => {
   origPpid = process.ppid;
   // Bind prompt is on by default — start each test from that baseline.
   delete process.env.TEAMAI_BIND_PROMPT_ENABLED;
-  // Clean hint markers (both old ppid-based and new sessionId-based)
-  await fse.remove(path.join(os.tmpdir(), `teamai-bind-hint-${TEST_SESSION_ID}`));
-  await fse.remove(path.join(os.tmpdir(), `teamai-bind-session-${TEST_SESSION_ID}`));
 });
 
 afterEach(async () => {
@@ -43,8 +40,6 @@ afterEach(async () => {
   if (origCopilotHome === undefined) delete process.env.COPILOT_HOME;
   else process.env.COPILOT_HOME = origCopilotHome;
   delete process.env.TEAMAI_BIND_PROMPT_ENABLED;
-  await fse.remove(path.join(os.tmpdir(), `teamai-bind-hint-${TEST_SESSION_ID}`));
-  await fse.remove(path.join(os.tmpdir(), `teamai-bind-session-${TEST_SESSION_ID}`));
   await fse.remove(tmpDir);
   vi.restoreAllMocks();
 });
@@ -671,6 +666,159 @@ describe('local-agent: emitBindingHint via reportAndSyncLocalAgent', () => {
     const ctx = parsed.hookSpecificOutput.additionalContext as string;
     expect(ctx).toContain('当前工作区尚未绑定项目');
     expect(ctx).toContain('teamai bind-project');
+  });
+});
+
+describe('local-agent: bind-hint session markers (#823)', () => {
+  const HINT = 'ClawPro项目 绑定提示';
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const markersDir = () => path.join(tmpDir, '.teamai', 'local-agent', 'session-markers');
+
+  async function runHook(type: 'prompt_submit' | 'session_start', sessionId = TEST_SESSION_ID): Promise<string> {
+    process.env.TEAMAI_BIND_PROMPT_ENABLED = '1';
+    await setupConfig();
+    const projectDir = path.join(tmpDir, 'marker-project');
+    await fse.ensureDir(projectDir);
+    const { execFileSync } = await import('node:child_process');
+    execFileSync('git', ['init'], { cwd: projectDir, stdio: 'ignore' });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/api/projects/mine')) {
+        return new Response(JSON.stringify({ ok: true, projects: [{ id: 1, name: 'proj' }] }));
+      }
+      return new Response(JSON.stringify({ ok: true }));
+    }));
+
+    const chunks: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      const { reportAndSyncLocalAgent } = await import('../local-agent.js');
+      await reportAndSyncLocalAgent({
+        cwd: projectDir,
+        tool: 'codebuddy',
+        event: { type, timestamp: new Date().toISOString(), sessionId, tool: 'codebuddy' },
+      });
+    } finally {
+      write.mockRestore();
+    }
+    return chunks.join('');
+  }
+
+  it('keeps the hint marker under ~/.teamai/local-agent/session-markers, not os.tmpdir()', async () => {
+    const output = await runHook('prompt_submit');
+
+    expect(output).toContain(HINT);
+    expect(fs.existsSync(path.join(markersDir(), `hint-${TEST_SESSION_ID}`))).toBe(true);
+    expect(fs.existsSync(path.join(os.tmpdir(), `teamai-bind-hint-${TEST_SESSION_ID}`))).toBe(false);
+  });
+
+  it('keeps the session marker under ~/.teamai/local-agent/session-markers, not os.tmpdir()', async () => {
+    const output = await runHook('session_start');
+
+    expect(output).toContain('hookSpecificOutput');
+    expect(fs.existsSync(path.join(markersDir(), `session-${TEST_SESSION_ID}`))).toBe(true);
+    expect(fs.existsSync(path.join(os.tmpdir(), `teamai-bind-session-${TEST_SESSION_ID}`))).toBe(false);
+  });
+
+  it('ignores and keeps a legacy marker in os.tmpdir()', async () => {
+    const legacy = path.join(os.tmpdir(), `teamai-bind-hint-${TEST_SESSION_ID}`);
+    await fse.writeFile(legacy, '');
+    try {
+      const output = await runHook('prompt_submit');
+
+      expect(output).toContain(HINT);
+      expect(fs.existsSync(legacy)).toBe(true);
+    } finally {
+      await fse.remove(legacy);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('does not write through a symlink planted at the marker path', async () => {
+    const target = path.join(tmpDir, 'victim.txt');
+    await fse.writeFile(target, 'keep me');
+    await fse.ensureDir(markersDir());
+    await fs.promises.symlink(target, path.join(markersDir(), `hint-${TEST_SESSION_ID}`));
+
+    const output = await runHook('prompt_submit');
+
+    expect(await fse.readFile(target, 'utf8')).toBe('keep me');
+    expect(output).not.toContain(HINT);
+  });
+
+  it.skipIf(process.platform === 'win32')('does not create the target of a dangling symlink planted at the marker path', async () => {
+    const target = path.join(tmpDir, 'planted.txt');
+    await fse.ensureDir(markersDir());
+    await fs.promises.symlink(target, path.join(markersDir(), `hint-${TEST_SESSION_ID}`));
+    // The pre-#823 location in os.tmpdir() must not be written through either.
+    const legacy = path.join(os.tmpdir(), `teamai-bind-hint-${TEST_SESSION_ID}`);
+    await fs.promises.symlink(target, legacy);
+    try {
+      await runHook('prompt_submit');
+
+      expect(fs.existsSync(target)).toBe(false);
+    } finally {
+      await fse.remove(legacy);
+    }
+  });
+
+  it('keeps a session id with path separators inside the markers directory', async () => {
+    const output = await runHook('prompt_submit', 'x/../../../escaped');
+
+    expect(output).toContain(HINT);
+    expect(fs.existsSync(path.join(tmpDir, '.teamai', 'escaped'))).toBe(false);
+    expect(fs.readdirSync(markersDir())).toHaveLength(1);
+  });
+
+  // Root ignores directory permissions, and win32 has no POSIX modes.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('does not emit the hint when the marker cannot be written', async () => {
+    await fse.ensureDir(markersDir());
+    await fs.promises.chmod(markersDir(), 0o555);
+    try {
+      const output = await runHook('prompt_submit');
+
+      expect(output).not.toContain(HINT);
+    } finally {
+      await fs.promises.chmod(markersDir(), 0o755);
+    }
+  });
+
+  it('prunes markers older than 7 days when it takes a claim', async () => {
+    await fse.ensureDir(markersDir());
+    const stale = path.join(markersDir(), 'hint-stale');
+    const fresh = path.join(markersDir(), 'hint-fresh');
+    await fse.writeFile(stale, '');
+    await fse.writeFile(fresh, '');
+    const eightDaysAgo = new Date(Date.now() - 8 * DAY_MS);
+    const oneDayAgo = new Date(Date.now() - DAY_MS);
+    await fs.promises.utimes(stale, eightDaysAgo, eightDaysAgo);
+    await fs.promises.utimes(fresh, oneDayAgo, oneDayAgo);
+
+    const output = await runHook('prompt_submit');
+
+    expect(output).toContain(HINT);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it('still emits the hint and prunes the rest when an old entry cannot be pruned', async () => {
+    // Named to sort before the stale file, so readdir on APFS visits it first.
+    const stuck = path.join(markersDir(), 'hint-a-stuck');
+    const stale = path.join(markersDir(), 'hint-z-stale');
+    await fse.ensureDir(stuck);
+    await fse.writeFile(path.join(stuck, 'child'), '');
+    await fse.writeFile(stale, '');
+    const eightDaysAgo = new Date(Date.now() - 8 * DAY_MS);
+    await fs.promises.utimes(stuck, eightDaysAgo, eightDaysAgo);
+    await fs.promises.utimes(stale, eightDaysAgo, eightDaysAgo);
+
+    const output = await runHook('prompt_submit');
+
+    expect(output).toContain(HINT);
+    expect(fs.existsSync(stuck)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(false);
   });
 });
 
