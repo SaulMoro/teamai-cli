@@ -122,6 +122,11 @@ export async function tagsSubscribe(tags: string[], options: GlobalOptions): Pro
         return;
     }
 
+    if (options.dryRun) {
+        log.info(`[dry-run] Would subscribe to: ${newTags.join(', ')}`);
+        return;
+    }
+
     const updatedConfig = {
         ...localConfig,
         subscribedTags: [...existing].sort(),
@@ -153,6 +158,11 @@ export async function tagsUnsubscribe(tags: string[], options: GlobalOptions): P
 
     if (removed.length === 0) {
         log.info('Not subscribed to any of the specified tags.');
+        return;
+    }
+
+    if (options.dryRun) {
+        log.info(`[dry-run] Would unsubscribe from: ${removed.join(', ')}`);
         return;
     }
 

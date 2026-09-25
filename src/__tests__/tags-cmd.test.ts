@@ -28,6 +28,7 @@ import {
   saveStateForScope,
 } from '../config.js';
 import { tagsSubscribe, tagsUnsubscribe } from '../tags.js';
+import { log } from '../utils/logger.js';
 import type { LocalConfig } from '../types.js';
 
 const userConfig: LocalConfig = {
@@ -103,6 +104,29 @@ describe('tag subscription commands', () => {
     await tagsUnsubscribe(['testing'], {});
 
     expect(saveLocalConfig).not.toHaveBeenCalled();
+    expect(saveStateForScope).not.toHaveBeenCalled();
+  });
+
+  it('previews subscribe under --dry-run without writing config or state', async () => {
+    await tagsSubscribe(['testing'], { dryRun: true });
+
+    expect(log.info).toHaveBeenCalledWith('[dry-run] Would subscribe to: testing');
+    expect(saveLocalConfig).not.toHaveBeenCalled();
+    expect(saveLocalConfigForScope).not.toHaveBeenCalled();
+    expect(saveStateForScope).not.toHaveBeenCalled();
+  });
+
+  it('previews unsubscribe under --dry-run without writing config or state', async () => {
+    vi.mocked(requireInit).mockResolvedValue({
+      localConfig: { ...userConfig, subscribedTags: ['frontend'] },
+      teamConfig: {} as never,
+    });
+
+    await tagsUnsubscribe(['frontend'], { dryRun: true });
+
+    expect(log.info).toHaveBeenCalledWith('[dry-run] Would unsubscribe from: frontend');
+    expect(saveLocalConfig).not.toHaveBeenCalled();
+    expect(saveLocalConfigForScope).not.toHaveBeenCalled();
     expect(saveStateForScope).not.toHaveBeenCalled();
   });
 });
