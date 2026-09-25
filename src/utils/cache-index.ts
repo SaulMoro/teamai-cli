@@ -305,7 +305,7 @@ export async function gcCache(opts?: GcOptions): Promise<GcResult> {
                     removed.push({ key: entry.key, size_bytes: entry.size_bytes, reason: 'stale' });
                 } catch (err) {
                     log.debug(`[gc] 删除失败，跳过 ${entry.key}: ${String(err)}`);
-                    skipped.push({ key: entry.key, reason: `删除失败: ${String(err)}` });
+                    skipped.push({ key: entry.key, reason: `failed to delete: ${String(err)}` });
                     remaining.push(entry);
                 }
             } else {
@@ -339,7 +339,7 @@ export async function gcCache(opts?: GcOptions): Promise<GcResult> {
                     currentTotal -= entry.size_bytes;
                 } catch (err) {
                     log.debug(`[gc] 删除失败，跳过 ${entry.key}: ${String(err)}`);
-                    skipped.push({ key: entry.key, reason: `删除失败: ${String(err)}` });
+                    skipped.push({ key: entry.key, reason: `failed to delete: ${String(err)}` });
                     toKeep.push(entry);
                 }
             } else {

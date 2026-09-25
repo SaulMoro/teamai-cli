@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as nodeFs } from 'node:fs';
 
 import fs from 'fs-extra';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     gcCache,
@@ -180,5 +180,21 @@ describe('cache-gc', () => {
         // 索引已持久化
         const saved = await loadCacheIndex();
         expect(saved.entries).toHaveLength(1);
+    });
+
+    it('reports a failed deletion with an English reason', async () => {
+        await makeRepoDir(tmpDir, 'github/owner/stale', 100);
+        await saveCacheIndex({
+            version: 1,
+            updated_at: new Date().toISOString(),
+            entries: [{ key: 'github/owner/stale', size_bytes: 100, last_used: daysAgo(60) }],
+        });
+        const removeSpy = vi.spyOn(fs, 'remove').mockRejectedValueOnce(new Error('EPERM'));
+        try {
+            const result = await gcCache({ staleDays: 30 });
+            expect(result.skipped).toEqual([{ key: 'github/owner/stale', reason: 'failed to delete: Error: EPERM' }]);
+        } finally {
+            removeSpy.mockRestore();
+        }
     });
 });
