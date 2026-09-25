@@ -1219,6 +1219,8 @@ export interface SessionMetrics {
    * its transcript path: a rollout's counters restart, so the session sums them.
    * `since` is the rollout's first event.
    */
+  /** Its tokens come from one counter that spans its rollouts (Codex's thread-level counter). */
+  tokensSpanRollouts?: true;
   segments?: Record<string, {
     prompts: number; tokens: TokenUsage; interrupt: number; toolReject: number; correction: number;
     durationMs: number; requestDaily: Record<string, RequestCostMetrics>; since: string;

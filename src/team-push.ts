@@ -176,6 +176,7 @@ async function readSnapshot<T>(
   name: ReportedSnapshotName,
   config: LocalConfig | undefined,
   split: (events: DashboardEvent[]) => Promise<{ current: Record<string, T>; take: TakeReported<T> }>,
+  persist = true,
 ): Promise<Record<string, T> | null> {
   const own = scopeSnapshotPath(name, config);
   if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
@@ -194,8 +195,14 @@ async function readSnapshot<T>(
   for (const [id, entry] of Object.entries(adopted)) {
     if (!id.startsWith('pid-') || ownRuns.has(id)) seed[id] = entry;
   }
+  // A read-only caller (`teamai stats`) leaves the seed to the report.
+  if (!persist) return seed;
   try {
     await writeJson(own, seed);
+    // The seed covers what the shared file had by its last write, and a later
+    // report reads that from this file's time (see droppedRollouts).
+    const sharedTime = await fs.promises.stat(sharedSnapshotPath(name)).then((stat) => stat.mtime, () => undefined);
+    if (sharedTime) await fs.promises.utimes(own, sharedTime, sharedTime);
   } catch (e) {
     // Seeded again next time: the shared file is not written any more.
     log.debug(`Could not seed ${own}: ${(e as Error).message}`);
@@ -203,11 +210,11 @@ async function readSnapshot<T>(
   return seed;
 }
 
-export async function readReportedInterventions(config: LocalConfig | undefined): Promise<ReportedInterventions> {
+export async function readReportedInterventions(config: LocalConfig | undefined, persist = true): Promise<ReportedInterventions> {
   const parsed = await readSnapshot('interventions', config, async (events) => ({
     current: Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))),
     take: takeInterventions(await sharedCoverage(events)),
-  }));
+  }), persist);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -339,11 +346,11 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //  Separate snapshot from interventions so each metric stays independently idempotent.
 //
 
-export async function readReportedPromptTokens(config: LocalConfig | undefined): Promise<ReportedPromptTokens> {
+export async function readReportedPromptTokens(config: LocalConfig | undefined, persist = true): Promise<ReportedPromptTokens> {
   const parsed = await readSnapshot('prompt-tokens', config, async (events) => ({
     current: computePromptTokenDelta(aggregateSessionMetrics(events), {}).nextReported,
     take: takePromptTokens,
-  }));
+  }), persist);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -469,6 +476,8 @@ export function droppedRollouts(
       // What that release counted as the session's outcome stays with its part.
       if (anyLeft) gone.push({ key: 'prior', ...left, failed: day?.succeeded === 0 });
     }
+    // A thread-level counter already holds every rollout's tokens.
+    if (cur.tokensSpanRollouts) for (const rollout of gone) rollout.tokens = emptyTokenUsage();
     if (gone.length > 0) dropped.set(sid, gone);
   }
   return dropped;
@@ -581,11 +590,11 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
     || d.tokens.cacheRead > 0 || d.tokens.cacheCreation > 0;
 }
 
-async function readReportedDailySessions(config: LocalConfig | undefined): Promise<ReportedDailySessions> {
+async function readReportedDailySessions(config: LocalConfig | undefined, persist = true): Promise<ReportedDailySessions> {
   return (await readSnapshot('daily-sessions', config, async (events) => ({
     current: computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported,
     take: takeDaily(await sharedCoverage(events)),
-  }))) ?? {};
+  }), persist)) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -707,12 +716,12 @@ export async function reportedBaselines(
   persist: boolean,
 ): Promise<{ interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions }> {
   const adopt = async <T>(
-    read: (config: LocalConfig | undefined) => Promise<Record<string, T>>,
+    read: (config: LocalConfig | undefined, persist: boolean) => Promise<Record<string, T>>,
     write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
     current: Record<string, T>,
     take: TakeReported<T>,
   ): Promise<Record<string, T>> => {
-    const stored = await read(config);
+    const stored = await read(config, persist);
     const adopted = adoptBareKeys(stored, events, current, take);
     if (persist && adopted !== stored) await write(adopted, config);
     return adopted;

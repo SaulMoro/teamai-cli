@@ -416,7 +416,8 @@ their union as reported when they exceed its own entry, so parts counted before
 any Stop carried the transcript's total are neither lost nor sent twice.
 A Codex session is kept per rollout, with or without a token record, and when
 its tokens come from a thread-level counter that already spans rollouts (then
-no rollout holds tokens of its own); a rollout's prompts are its Stop's count or
+no rollout holds tokens of its own, nor does the prior rollout an entry from
+before leaves); a rollout's prompts are its Stop's count or
 else its submits. A
 rollout's counters restart, and compaction drops its events, so its prompt-token
 entry holds each rollout's reported prompts, tokens, interruptions, rejections,
@@ -429,7 +430,8 @@ keeps the session unsuccessful, so a later rollout is reported in full and does
 not turn it into a success. An entry
 written before rollouts were kept is one total: an earlier release rewrote every
 session in the log on each report, so it covers the rollouts begun by the time
-its file was last written (read before this report writes it). Those still in
+its file was last written (read before this report writes it; a seed keeps the
+shared file's time, and `teamai stats`, which only reads, writes no seed). Those still in
 the log consume it in order, what is left is the dropped rollouts', kept as one
 prior rollout, and a rollout begun later is new.
 Compaction also keeps a session whose tool process is still running, so a run

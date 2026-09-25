@@ -731,9 +731,14 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     const after = await stats();
     const reported = await report(project);
     const tokens = reported && typeof reported === 'object' && 'tokens' in reported ? reported.tokens : undefined;
+    // Costs go to their request's day, which need not be the session's.
+    const days = reported && typeof reported === 'object' && 'daily' in reported && reported.daily && typeof reported.daily === 'object'
+      ? Object.values(reported.daily) : [];
+    const costMicros = days.reduce((sum: number, d: unknown) =>
+      sum + (d && typeof d === 'object' && 'costMicros' in d && typeof d.costMicros === 'number' ? d.costMicros : 0), 0);
 
     expect(after.prompts).toBe(7);
-    expect(after.day).toMatchObject({ costMicros: 120 });
+    expect(costMicros).toBe(120);
     expect(tokens).toMatchObject({ input: 530 });
   });
 
@@ -747,6 +752,46 @@ describe('each scope keeps its own reported snapshot (#786)', () => {
     write([event('rollout-b.jsonl', 'prompt_submit', 30), event('rollout-b.jsonl', 'stop', 31)]);
 
     expect((await stats()).prompts).toBe(4);
+  });
+
+  it('a whole entry an earlier release left adds no tokens to a counter that spans rollouts', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    // That release reported rollout A as one entry: 5 prompts, the counter at 500.
+    writeSharedSnapshots({ 'codex-s': 5 }, new Date().toISOString().slice(0, 10), project);
+    const file = path.join(getDataHome(project), 'dashboard', 'reported-prompt-tokens.json');
+    fs.writeFileSync(file, JSON.stringify({ 'codex-s': { prompts: 5, tokens: { input: 500, output: 0, cacheRead: 0, cacheCreation: 0 } } }));
+    const past = new Date(Date.now() - 2 * 3_600_000);
+    for (const name of SNAPSHOTS) fs.utimesSync(path.join(getDataHome(project), 'dashboard', `reported-${name}.json`), past, past);
+    // A was compacted; rollout B, begun later, shows the thread-level counter at 530.
+    write([event('rollout-b.jsonl', 'stop', 30, {
+      prompts: 2, tokenScope: 'session', tokens: { input: 530, output: 0, cacheRead: 0, cacheCreation: 0 },
+    })]);
+    await stats();
+    const reported = await report(project);
+    const tokens = reported && typeof reported === 'object' && 'tokens' in reported ? reported.tokens : undefined;
+
+    expect(tokens).toMatchObject({ input: 30 });
+  });
+
+  it('reading the baselines without persisting them, as teamai stats does, does not move the time they cover', async () => {
+    const { project } = await setup();
+    const { event, write, stats } = await codexLog(project);
+    // An earlier release reported rollout A into the shared snapshot, then compaction dropped it.
+    writeSharedSnapshots({ 'codex-s': 5 }, new Date().toISOString().slice(0, 10));
+    const past = new Date(Date.now() - 2 * 3_600_000);
+    for (const name of SNAPSHOTS) fs.utimesSync(shared(name), past, past);
+    // Rollout B began after that, and the baselines are read before the next pull.
+    write([event('rollout-b.jsonl', 'stop', 30, { prompts: 2 })]);
+    const { reportedBaselines } = await import('../team-push.js');
+    const { filterEventsByScope } = await import('../dashboard-scope.js');
+    const { readEvents, aggregateSessionMetrics } = await import('../dashboard-collector.js');
+    const { aggregateDailySessions } = await import('../session-trends.js');
+    const events = await filterEventsByScope(await readEvents(), project);
+    await reportedBaselines(events, aggregateSessionMetrics(events), aggregateDailySessions(events), project, false);
+
+    expect(fs.existsSync(path.join(getDataHome(project), 'dashboard', 'reported-prompt-tokens.json'))).toBe(false);
+    expect((await stats()).prompts).toBe(2);
   });
 
   it('a rollout\'s intervention change alone still updates its kept totals', async () => {

@@ -1951,6 +1951,7 @@ export function aggregateSessionMetrics(
     if (sessionSnapshot) {
       // The newer thread-level counter already spans rollout files.
       m.tokens = { ...sessionSnapshot.tokens };
+      m.tokensSpanRollouts = true;
     } else if (segments && segments.size > 0) {
       let total = emptyTokenUsage();
       for (const segment of segments.values()) total = addTokenUsage(total, segment.tokens);
