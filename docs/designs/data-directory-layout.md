@@ -66,7 +66,10 @@ resets nothing, since a checkout recorded at an older revision already misses
 the fast path. `push` needs that entry too: before scanning, it syncs each rule
 and skill the member never edited, and "never edited" means equal to the
 version at a revision *this* checkout synced, not the shared `lastPullRev`
-another checkout may have moved (#812). That sync brings the unedited copies up
+another checkout may have moved (#812). A placed agent, which push does not
+sync, is held when the team file has changed since any of those revisions, or
+since it was added if one of them predates it (#823). That sync brings the
+unedited copies up
 to the team repo, so when push has refreshed the team repo it adds the
 revision it synced to the entry's `pushBaseRevs`, newest first, even under
 `--dry-run`, since the sync has already written the files, and even when the

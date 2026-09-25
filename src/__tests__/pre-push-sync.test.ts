@@ -130,7 +130,7 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     // the next push sends it over the teammate's update.
     const content = await fse.readFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'utf-8');
     expect(content).toBe('teammate v2');
-    expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', 'rules/fe-know/my-rule.md');
+    expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', './rules/fe-know/my-rule.md');
   });
 
   it('syncs a placement that landed after the last pull from the version it was added with', async () => {
@@ -165,7 +165,7 @@ describe('syncTeamUpdatesToLocal — rules', () => {
 
     expect(await fse.readFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'utf-8'))
       .toBe('teammate v2');
-    expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', 'rules/fe-know/my-rule.md');
+    expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', './rules/fe-know/my-rule.md');
   });
 
   it('leaves a root rule alone when no record maps it to a namespaced team rule', async () => {
@@ -300,7 +300,7 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     expect(mockGetFileContentAtRev).toHaveBeenCalledWith(
       repoPath,
       'abc1234',
-      'rules/python/tencent_standard.md',
+      './rules/python/tencent_standard.md',
     );
   });
 
@@ -620,6 +620,41 @@ describe('syncTeamUpdatesToLocal — skills', () => {
 
     expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v2 skill');
     expect(await fse.readFile(path.join(localSkillDir, 'notes.md'), 'utf-8')).toBe('v1 notes');
+  });
+
+  it('keeps files only the member has when it syncs a skill (#823)', async () => {
+    const teamSkillDir = path.join(repoPath, 'skills', 'my-skill');
+    await fse.outputFile(path.join(teamSkillDir, 'SKILL.md'), 'v2 skill');
+    const skillsDir = path.join(homeDir, '.claude/skills');
+    const localSkillDir = path.join(skillsDir, 'my-skill');
+    await fse.outputFile(path.join(localSkillDir, 'SKILL.md'), 'v1 skill');
+    await fse.outputFile(path.join(localSkillDir, 'scratch', 'mine.md'), 'my notes');
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 skill'));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
+
+    expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v2 skill');
+    expect(await fse.readFile(path.join(localSkillDir, 'scratch', 'mine.md'), 'utf-8')).toBe('my notes');
+    expect(await fse.readdir(skillsDir)).toEqual(['my-skill']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('leaves a read-only skill as it was, with nothing beside it (#823)', async () => {
+    const teamSkillDir = path.join(repoPath, 'skills', 'my-skill');
+    await fse.outputFile(path.join(teamSkillDir, 'SKILL.md'), 'v2 skill');
+    const skillsDir = path.join(homeDir, '.claude/skills');
+    const localSkillDir = path.join(skillsDir, 'my-skill');
+    await fse.outputFile(path.join(localSkillDir, 'SKILL.md'), 'v1 skill');
+    await fse.chmod(path.join(localSkillDir, 'SKILL.md'), 0o444);
+    await fse.chmod(localSkillDir, 0o555);
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 skill'));
+
+    try {
+      await expect(syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234')).rejects.toThrow();
+      expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v1 skill');
+      expect(await fse.readdir(skillsDir)).toEqual(['my-skill']);
+    } finally {
+      await fse.chmod(localSkillDir, 0o755);
+    }
   });
 
   it('should skip skills that only exist locally (not in team repo)', async () => {

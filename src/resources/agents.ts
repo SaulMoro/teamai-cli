@@ -201,7 +201,19 @@ export class AgentsHandler extends ResourceHandler {
     // namespace this directory need not have activated. Without the record it
     // would read as "no active source" and the author could never edit the
     // agent they just created (#649 review).
-    const { placedAgents, lastPullRev, pendingPushes } = await loadStateForScope(localConfig);
+    const { placedAgents, lastPullRev, lastPullByWorkspace, pendingPushes } = await loadStateForScope(localConfig);
+    // The revisions THIS checkout's copies can be at, with the same fallback
+    // as the pre-push sync: state.json is shared by every worktree, and a pull
+    // in another checkout moves lastPullRev past a copy this one still holds
+    // unedited (#812, #823).
+    const checkoutBases = async (): Promise<string[]> => {
+      const { checkoutKey, checkoutBaseRevs } = await import('../pull.js');
+      const key = localConfig.scope === 'project' && localConfig.projectRoot
+        ? await checkoutKey(localConfig.projectRoot)
+        : undefined;
+      const bases = checkoutBaseRevs(key ? lastPullByWorkspace?.[key] : undefined);
+      return bases.length > 0 ? bases : lastPullRev ? [lastPullRev] : [];
+    };
     // Agents this machine placed in a namespace and has awaiting review: the
     // open PR is their destination, not "no active source".
     const pendingPlacedAgents = new Set((pendingPushes ?? []).flatMap((entry) => entry.items)
@@ -447,7 +459,7 @@ export class AgentsHandler extends ResourceHandler {
       // author's own merged edit included — has nothing to overwrite with.
       if (located && candidates === recorded) {
         const recordedPath = `agents/${located.namespace}/${stem}${located.ext}`;
-        if (await recordedAgentMovedOn(localConfig.repo.localPath, recordedPath, lastPullRev)) {
+        if (await recordedAgentMovedOn(localConfig.repo.localPath, recordedPath, await checkoutBases())) {
           items.push({ name: stem, type: 'agents', sourcePath: teamAgentsDir,
             relativePath: recordedPath, status: 'modified', namespace: located.namespace,
             skipReason: staleRecordedAgentReason(stem, recordedPath) });
@@ -949,23 +961,33 @@ type TeamAgentFile = { path: string; ext: '.yaml' | '.md'; namespace?: string };
 
 /**
  * Whether a team agent reached through this machine's placement record has
- * changed since this machine's copy of it was current: the version at the last
- * pull, or — for a placement that landed after it — the version it was added
- * with. Agents have no pre-push sync, so a teammate's edit made before the
- * author's next pull would otherwise be overwritten by the stale local copy
- * (#649 review). A guard, not a merge: `pull` delivers the recorded agent and
- * moves the baseline, after which the edit can be pushed.
+ * changed since this checkout's copy of it was current: the version at any of
+ * the checkout's bases, or — for a placement that landed after one of them —
+ * the version it was added with. Agents have no pre-push sync, so a teammate's
+ * edit made before the author's next pull would otherwise be overwritten by the
+ * stale local copy (#649 review). The copy stays at the revision pull delivered
+ * while push bases move on (push records the team HEAD before the scan), so a
+ * difference from any of those versions counts. A guard, not a merge: `pull`
+ * delivers the recorded agent and resets the bases, after which the edit can be
+ * pushed.
  */
-async function recordedAgentMovedOn(repoPath: string, relPath: string, lastPullRev: string | null): Promise<boolean> {
+async function recordedAgentMovedOn(repoPath: string, relPath: string, bases: readonly string[]): Promise<boolean> {
   const current = await readFileSafe(path.join(repoPath, relPath));
   if (current === null) return false;
-  const baseline = (lastPullRev ? await getFileContentAtRev(repoPath, lastPullRev, `./${relPath}`) : null)
-    ?? await getFileContentWhenAdded(repoPath, relPath);
-  return baseline !== null && baseline.toString('utf-8') !== current;
+  const baselines: Buffer[] = [];
+  for (const rev of bases) {
+    const content = await getFileContentAtRev(repoPath, rev, `./${relPath}`);
+    if (content !== null) baselines.push(content);
+  }
+  if (baselines.length < bases.length || bases.length === 0) {
+    const added = await getFileContentWhenAdded(repoPath, relPath);
+    if (added !== null) baselines.push(added);
+  }
+  return baselines.some((baseline) => baseline.toString('utf-8') !== current);
 }
 
 function staleRecordedAgentReason(stem: string, relPath: string): string {
-  return `Agent "${stem}" (${relPath}) changed on the team since this machine last synced it, `
+  return `Agent "${stem}" (${relPath}) changed on the team since this checkout last synced it, `
     + 'so pushing your copy would overwrite that change. `teamai pull` replaces your copy with the team version, '
     + 'so first copy your edit aside, then pull, reapply it, and push again.';
 }

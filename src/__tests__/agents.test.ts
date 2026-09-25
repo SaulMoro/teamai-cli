@@ -337,7 +337,7 @@ projects:
     expect(await handler.scanLocalForPush(teamConfig, localConfig)).toEqual([]);
   });
 
-  it('holds a recorded agent that changed on the team since this machine last synced it', async () => {
+  it('holds a recorded agent that changed on the team since this checkout last synced it', async () => {
     // Agents have no pre-push sync: a teammate's edit made before the author's
     // next pull would be overwritten by the stale local copy (#649 review).
     await nothingActive();
@@ -353,7 +353,7 @@ projects:
     const items = await handler.scanLocalForPush(teamConfig, localConfig);
 
     expect(items).toHaveLength(1);
-    expect(items[0]?.skipReason).toContain('changed on the team since this machine last synced it');
+    expect(items[0]?.skipReason).toContain('changed on the team since this checkout last synced it');
     expect(mockGetFileContentAtRev).toHaveBeenCalledWith(repoPath, 'abc1234', './agents/fe-agents/reviewer.yaml');
   });
 

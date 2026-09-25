@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
+import fse from 'fs-extra';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 import { resolveBaseDir, scopedToolPaths } from '../types.js';
 import {
@@ -128,7 +130,7 @@ async function syncRulesToLocal(
       const baseVersions = async (): Promise<Buffer[]> => {
         const atBases: Buffer[] = [];
         for (const rev of bases) {
-          const content = await getFileContentAtRev(repoPath, rev, teamRelPath);
+          const content = await getFileContentAtRev(repoPath, rev, `./${teamRelPath}`);
           if (content !== null) atBases.push(content);
         }
         if (atBases.length > 0 || !viaRecord) return atBases;
@@ -234,12 +236,66 @@ async function syncSkillsToLocal(
       for (const base of bases) {
         if (await skillAtBase(repoPath, localSkillDir, teamSkillDir, teamFiles, base)) {
           // All differing files match that base → team updated, user didn't → sync
-          await copyDir(teamSkillDir, localSkillDir);
+          await replaceSkillDir(teamSkillDir, localSkillDir);
           log.debug(`Pre-push sync: updated ${tool} skill ${skillName} to match team repo`);
           break;
         }
       }
     }
+  }
+}
+
+/**
+ * Bring a local skill to the team version, or leave it as it was. A copy that
+ * failed partway mixed files from two revisions, matched no base, and the next
+ * push listed the skill as modified (#823). The update is built in a hidden
+ * sibling, starting from the local copy so files only the member has survive
+ * as they would a copy over it, and renamed into place.
+ */
+async function replaceSkillDir(teamSkillDir: string, localSkillDir: string): Promise<void> {
+  const parent = path.dirname(localSkillDir);
+  const tag = `${path.basename(localSkillDir)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  const staged = path.join(parent, `.${tag}.teamai-sync`);
+  const previous = path.join(parent, `.${tag}.teamai-prev`);
+  try {
+    await fse.copy(localSkillDir, staged);
+    await copyDir(teamSkillDir, staged);
+    await fse.rename(localSkillDir, previous);
+  } catch (error) {
+    await removeLeftover(staged);
+    throw error;
+  }
+  try {
+    await fse.rename(staged, localSkillDir);
+  } catch (error) {
+    const restored = await fse.rename(previous, localSkillDir).then(() => true, () => false);
+    await removeLeftover(staged);
+    if (!restored) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; the previous version of the skill `
+        + `could not be put back and is at ${previous}. Move it back to ${localSkillDir}.`);
+    }
+    throw error;
+  }
+  await removeLeftover(previous);
+}
+
+/**
+ * Remove a directory replaceSkillDir left beside the skill. It carries the
+ * local skill's modes, so a read-only one is made writable first; a symlink is
+ * removed without touching its target. Tools may read a leftover as a skill,
+ * so one that cannot be removed is reported.
+ */
+async function removeLeftover(dir: string): Promise<void> {
+  try {
+    const stat = await fse.lstat(dir).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (stat === null) return;
+    if (stat.isDirectory()) await fse.chmod(dir, 0o700);
+    await fse.remove(dir);
+  } catch (error) {
+    log.warn(`Could not remove ${dir} (${error instanceof Error ? error.message : String(error)}). Delete it by hand.`);
   }
 }
 
@@ -266,7 +322,7 @@ async function skillAtBase(
 
     if (!await pathExists(localFile)) {
       // File is new in team repo — check if it existed at base
-      const oldContent = await getFileContentAtRev(repoPath, base, relFromRepo);
+      const oldContent = await getFileContentAtRev(repoPath, base, `./${relFromRepo}`);
       // Existed at base but is missing locally — ambiguous, skip sync
       if (oldContent !== null) return false;
       // New file added by teammate since base → safe to sync
@@ -278,7 +334,7 @@ async function skillAtBase(
 
     anyDiffers = true;
 
-    const oldContent = await getFileContentAtRev(repoPath, base, relFromRepo);
+    const oldContent = await getFileContentAtRev(repoPath, base, `./${relFromRepo}`);
     // Can't determine old version — ambiguous, don't sync
     if (oldContent === null) return false;
     // Local differs from old version → user edited this file
