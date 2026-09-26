@@ -277,6 +277,46 @@ servers:
     expect(after.mcpServers.temp).toBeUndefined();
   });
 
+  // #822: `server:` for `servers:` parsed as "no servers" and uninstalled every
+  // team server for every member, with no warning.
+  it('keeps every installed server when mcp.yaml has no top-level servers: key, and names the file and key', async () => {
+    const temp = `
+  - name: temp
+    transport: http
+    url: https://example.com/mcp
+    tools: [claude]
+`;
+    await writeMcpYaml(`servers:${temp}`);
+    await reconcileMcpForConfig(teamConfig, localConfig);
+    const { log } = await import('../utils/logger.js');
+    vi.mocked(log.warn).mockClear();
+
+    await writeMcpYaml(`server:${temp}`);
+    const { changes } = await reconcileMcpForConfig(teamConfig, localConfig);
+
+    expect(changes).toEqual([]);
+    expect((await fse.readJson(path.join(homeDir, '.claude.json'))).mcpServers.temp).toBeDefined();
+    const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => String(m));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('mcp/mcp.yaml');
+    expect(warnings[0]).toContain('`server`');
+    expect(warnings[0]).toContain('`servers:`');
+  });
+
+  it('still installs the servers of an mcp.yaml that carries an extra top-level key', async () => {
+    await writeMcpYaml(`
+version: 1
+servers:
+  - name: temp
+    transport: http
+    url: https://example.com/mcp
+    tools: [claude]
+`);
+    await reconcileMcpForConfig(teamConfig, localConfig);
+
+    expect((await fse.readJson(path.join(homeDir, '.claude.json'))).mcpServers.temp).toBeDefined();
+  });
+
   // roles: on a server shipped in 0.25.0 and keeps filtering for one minor
   // release (#707); the warning names the namespace file it belongs in.
   describe('deprecated roles filter', () => {

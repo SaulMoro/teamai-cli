@@ -900,6 +900,10 @@ pull 与 `teamai doctor` 会指出文件、条目和该 key。请改正或删除
 较新版本 teamai 新增的 key 对旧版本同样是未知 key，因此团队使用新的条目 key 之前，
 请先让所有成员升级。
 
+hooks 或 MCP 文件若没有任何一个应有的顶层 key（例如把 `servers:` 写成 `server:`），
+按无法解析的文件处理：pull 保留已安装的 server 或 hook，pull 与 `teamai doctor`
+会指出文件、实际找到的 key 和应有的 key。`servers:` 或 `hooks:` 旁多出的顶层 key 会被忽略。
+
 ### Env（环境变量）
 
 ```bash

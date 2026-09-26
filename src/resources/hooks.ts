@@ -7,7 +7,7 @@ import { TEAMAI_CUSTOM_HOOK_PREFIX, areTeamHooksDisabled, getHooksSharing } from
 import { pathExists } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFilePath, readEntryFileText, reportEntryResolution, resolveEntriesFor, unknownEntryKeys,
+  entryFilePath, missingTopLevelKeyReason, readEntryFileText, reportEntryResolution, resolveEntriesFor, unknownEntryKeys,
   type EntryReader, type EntryResolution,
 } from '../namespaced-entries.js';
 
@@ -72,6 +72,8 @@ async function readHooksFile(absolutePath: string, relativePath: string): Promis
   if (content === null) return null;
   try {
     const raw: unknown = YAML.parse(content);
+    const shapeProblem = missingTopLevelKeyReason(raw, HooksYamlSchema);
+    if (shapeProblem) return { ok: false, reason: `${relativePath} does not parse: ${shapeProblem}` };
     const declaresBuiltin = !!raw && typeof raw === 'object' && 'builtin' in raw;
     const yaml = HooksYamlSchema.parse(raw ?? {});
     return { ok: true, yaml, declaresBuiltin, unknownKeys: unknownEntryKeys(raw, 'hooks', yaml.hooks, TeamHookSchema) };

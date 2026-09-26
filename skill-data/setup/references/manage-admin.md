@@ -168,7 +168,8 @@ and push it with git. `teamai doctor` lists each override.
 
 - A name twice in one file, in two active namespaces, or an active file that does
   not parse: that type is not applied for affected members and their installed
-  state is kept. Fix the file the warning names.
+  state is kept. Fix the file the warning names. A hooks or MCP file with none of
+  its top-level keys (`server:` for `servers:`) counts as one that does not parse.
 - Per-entry `projects:` (and `roles:` on env) no longer works: such an entry reaches
   nobody. `roles:` on hooks and MCP still filters for one more minor release. Pull
   and `teamai doctor` name the namespace file each entry belongs in; move it there.

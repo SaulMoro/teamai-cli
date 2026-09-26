@@ -416,7 +416,11 @@ the file, the entry and the key (#822); `env add`, `env remove` and `remove mcp`
 keep such a key when they rewrite the file. A key that a later version adds is
 unknown to this one as well, so an entry that uses it is not delivered to a member
 still on this version: every member has to upgrade before the team uses a new
-entry key, as for a new `resources:` key. `pull --dry-run` resolves the hooks
+entry key, as for a new `resources:` key. A hooks or MCP file with none of its
+top-level keys (`server:` for `servers:`, `hook:` for `hooks:`) used to read as
+empty and remove every installed server or hook; it now fails like a file that
+does not parse, naming the keys it found, as `env.yaml` has since #662. An extra
+top-level key beside a known one is still ignored. `pull --dry-run` resolves the hooks
 and MCP entries and reports their warnings (an unknown id, a per-entry key, a file
 that does not parse) without writing, so a maintainer can see them before a real
 pull applies them. There is no automatic migration.

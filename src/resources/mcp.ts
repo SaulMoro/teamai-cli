@@ -5,7 +5,7 @@ import type { ResourceItem, TeamaiConfig, LocalConfig, McpServerDef } from '../t
 import { readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import {
-  entryFileAbsolutePath, entryFilePath, listEntryFiles, readEntryFileText, unknownEntryKeys,
+  entryFileAbsolutePath, entryFilePath, listEntryFiles, missingTopLevelKeyReason, readEntryFileText, unknownEntryKeys,
   type EntryReader,
 } from '../namespaced-entries.js';
 
@@ -69,6 +69,8 @@ function parseMcpContent(content: string | null): McpYamlRead {
   if (!content) return { ok: true, yaml: null, unknownKeys: new Map() };
   try {
     const raw: unknown = YAML.parse(content);
+    const shapeProblem = missingTopLevelKeyReason(raw, McpYamlSchema);
+    if (shapeProblem) return { ok: false, reason: shapeProblem };
     const yaml = McpYamlSchema.parse(raw);
     return { ok: true, yaml, unknownKeys: unknownEntryKeys(raw, 'servers', yaml.servers, TeamMcpServerFields) };
   } catch (e) {

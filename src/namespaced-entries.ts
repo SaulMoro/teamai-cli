@@ -125,6 +125,22 @@ export function unknownEntryKeys<E>(
   return byEntry;
 }
 
+/**
+ * Why a file that has none of its schema's top-level keys cannot be read, or
+ * null when it has one (or is not a non-empty mapping). zod defaults the
+ * missing list to empty and drops the key it does not know, so `server:` for
+ * `servers:` read as "no entries" and removed every installed one (#822). An
+ * extra key beside a known one stays permitted, as for env.yaml (#662).
+ */
+export function missingTopLevelKeyReason(document: unknown, schema: { readonly shape: object }): string | null {
+  if (document === null || typeof document !== 'object' || Array.isArray(document)) return null;
+  const found = Object.keys(document);
+  const expected = Object.keys(schema.shape);
+  if (found.length === 0 || found.some((key) => expected.includes(key))) return null;
+  const quote = (keys: string[], suffix = ''): string => keys.map((key) => `\`${key}${suffix}\``).join(', ');
+  return `it has no top-level ${quote(expected, ':').replace(/, (?=[^,]*$)/, ' or ')} key, only ${quote(found)}`;
+}
+
 /** How one type's files are read. */
 /**
  * The text of one type file, null when it does not exist. Any other read error
