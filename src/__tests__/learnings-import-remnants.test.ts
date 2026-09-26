@@ -390,6 +390,35 @@ describe('publishing what maintenance changed (#823)', () => {
     expect((await publishedFiles(origin)).filter((f) => f.endsWith('.md')).sort()).toEqual(['learnings/b*.md']);
   });
 
+  it('commits only what maintenance changed, leaving a file someone else staged in the checkout staged', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    plant(checkout, 'staged-by-hand.md', 'not maintenance\n');
+    await simpleGit(checkout).add(['learnings/staged-by-hand.md']);
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]);
+
+    expect(result).toEqual({ status: 'published' });
+    expect(await publishedFiles(origin)).not.toContain('learnings/staged-by-hand.md');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('learnings/staged-by-hand.md\n');
+  });
+
+  it('commits nothing when maintenance has nothing to stage, even with a file someone else staged in the checkout', async () => {
+    const { config, origin, checkout } = await setUp();
+    plant(checkout, 'staged-by-hand.md', 'not maintenance\n');
+    await simpleGit(checkout).add(['learnings/staged-by-hand.md']);
+    const prunedUntracked = path.join(checkout, 'learnings', 'draft.md');
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [prunedUntracked]);
+
+    expect(result).toEqual({ status: 'already-present' });
+    expect(await publishedFiles(origin)).not.toContain('learnings/staged-by-hand.md');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('learnings/staged-by-hand.md\n');
+  });
+
   it('publishes a change another write kept it from publishing on the next publish, with nothing queued', async () => {
     const { config, origin, checkout } = await setUp();
     await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');

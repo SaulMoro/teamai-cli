@@ -550,9 +550,12 @@ async function commitAndPushAt(
 
   // Literal: a filename with `[` or `*` would otherwise stage whatever it matches as a pattern.
   await git.raw(['--literal-pathspecs', 'add', '--', ...files]);
-  const status = await git.status();
-  // simple-git lists a staged rename (an archived learning) under `renamed`, not `staged`.
-  const staged = status.staged.length + status.renamed.length;
+  // Only `files`: the checkout may hold a file someone else staged, and it must
+  // neither count as a change nor ride along in this commit. No paths would be the whole index.
+  const staged = files.length === 0
+    ? 0
+    : (await git.raw(['--literal-pathspecs', 'diff', '--cached', '--no-renames', '--name-only', '-z', '--', ...files]))
+      .split('\0').filter(Boolean).length;
   if (staged === 0 && !options.pushIfUnchanged && await nothingLeftToPush(git, spec)) {
     // Nothing to commit AND nothing to deliver. Those are two different things:
     // an earlier attempt may have committed exactly this content and failed to
@@ -564,7 +567,7 @@ async function commitAndPushAt(
 
   // A retry may reconstruct the same tree as a previously committed
   // but unconfirmed push. It still needs a push, without an empty commit.
-  if (staged > 0) await commitSkippingHooks(git, message);
+  if (staged > 0) await commitSkippingHooks(git, message, files);
 
   // Push with fetch+rebase retry. Each member only writes <user>.yaml, so
   // rebase conflicts are effectively impossible; retries handle the pure
