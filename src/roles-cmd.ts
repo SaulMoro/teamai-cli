@@ -210,11 +210,6 @@ export async function rolesSet(
         }
     }
 
-    if (options.dryRun) {
-        log.info(`[dry-run] Would set primary role to: ${primaryRole}, additional roles: ${additionalRoles.join(', ') || 'none'}`);
-        return;
-    }
-
     // Update local config
     const updatedConfig = {
         ...localConfig,
