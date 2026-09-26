@@ -237,7 +237,7 @@ export GITLAB_TOKEN=glpat-xxx
 ### 自托管实例检测
 
 - **公有 gitlab.com**：URL host 直接命中，自动选择 gitlab provider。
-- **自托管实例**：设置 `GITLAB_URL` 后，URL host 与 `GITLAB_URL` 的 host 相同时自动识别为 gitlab；也可用 `TEAMAI_GITLAB_HOST` 直接指定 host。仓库参数需使用完整 HTTP(S) 或 SSH URL：
+- **自托管实例**：设置 `GITLAB_URL` 后，URL host 与 `GITLAB_URL` 的 host 相同时自动识别为 gitlab；也可用 `TEAMAI_GITLAB_HOST` 直接指定 host，未设 `GITLAB_URL` 时 API 指向 `https://<该 host>`。两者同时设置但 host 不同时，teamai 会在发送 token 前报错停止。仓库参数需使用完整 HTTP(S) 或 SSH URL：
   ```bash
   export GITLAB_URL=https://git.example.com
   teamai init https://git.example.com/yourgroup/yourrepo     # → gitlab

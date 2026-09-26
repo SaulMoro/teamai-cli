@@ -443,8 +443,9 @@ export function resolveInitProvider(raw: string | undefined): ProviderName | und
  */
 async function selectInitProvider(input: string, forced: ProviderName | undefined): Promise<string> {
   if (!forced) return detectProviderForInit(input);
-  // The GitLab API client targets GITLAB_URL (default gitlab.com), not the repo
-  // URL's host, so on an unconfigured host it would send the token elsewhere.
+  // The GitLab API client targets GITLAB_URL or TEAMAI_GITLAB_HOST (default
+  // gitlab.com), not the repo URL's host, so on an unconfigured host it would
+  // send the token elsewhere.
   if (forced === 'gitlab' && detectProvider(input) === 'git') {
     throw new Error(
       '--provider gitlab needs this GitLab instance configured. Set GITLAB_URL to its base URL '
