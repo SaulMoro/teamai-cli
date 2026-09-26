@@ -687,8 +687,9 @@ export const StateSchema = z.object({
    * unedited rules and skills to since its last pull, newest first, the bases
    * its next push compares with; a pull's record drops them, since the pull
    * delivers `rev` (#812). A forced full sync elsewhere leaves `rev` empty
-   * (`FORCED_FULL_SYNC_REV` in pull.ts). The user scope's entry is HOME's, and
-   * an inherited pull adds its revision to these bases (#823).
+   * (`FORCED_FULL_SYNC_REV` in pull.ts). The user scope's entry is HOME's. An
+   * inherited pull, and a pull whose docs mirror or submodule update fails, add
+   * the revision they delivered to these bases and keep `rev` (#823).
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),

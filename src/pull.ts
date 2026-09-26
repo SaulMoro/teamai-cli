@@ -613,7 +613,8 @@ async function checkoutRecordKey(localConfig: LocalConfig): Promise<string | und
  * lastPullRev stands in. `unrecorded` marks a project checkout no pull has
  * recorded, where that revision may be another checkout's (#812). The user
  * scope has one checkout, HOME, so an install from before its record keeps
- * lastPullRev until a push or pull creates the record (see userScopeRecord).
+ * the revisions of its last full and inherited pulls (see homeRevs) until a
+ * push or pull creates the record (see userScopeRecord).
  */
 export type CheckoutBases =
   | { source: 'checkout'; record: CheckoutRecord; revs: string[] }
@@ -621,7 +622,7 @@ export type CheckoutBases =
 
 export async function resolveCheckoutBases(
   localConfig: LocalConfig,
-  state: Pick<State, 'lastPullRev' | 'lastPullByWorkspace'>,
+  state: Pick<State, 'lastPullRev' | 'lastInheritedPullRev' | 'lastPullByWorkspace'>,
 ): Promise<CheckoutBases> {
   const key = await checkoutRecordKey(localConfig);
   const record = key ? state.lastPullByWorkspace?.[key] : undefined;
@@ -629,20 +630,33 @@ export async function resolveCheckoutBases(
   if (record && revs.length > 0) return { source: 'checkout', record, revs };
   return {
     source: 'shared',
-    revs: state.lastPullRev ? [state.lastPullRev] : [],
+    revs: localConfig.scope === 'user' ? homeRevs(state) : state.lastPullRev ? [state.lastPullRev] : [],
     unrecorded: localConfig.scope === 'project' && key !== undefined && !record,
   };
 }
 
 /**
+ * The revisions HOME's copies may hold in a user-scope install without a
+ * record: the last full pull's and the last inherited pull's, as either may
+ * have run last and nothing records which. A copy at either is unedited (#823).
+ */
+function homeRevs(state: Pick<State, 'lastPullRev' | 'lastInheritedPullRev'>): string[] {
+  return [...new Set([state.lastPullRev, state.lastInheritedPullRev])]
+    .filter((rev): rev is string => typeof rev === 'string' && rev !== FORCED_FULL_SYNC_REV);
+}
+
+/**
  * HOME's record in the user scope's `state`, added from the shared fields when
  * an install from before the record has none: HOME is the scope's only
- * checkout, so lastPullRev is its own revision (#823).
+ * checkout, so lastPullRev is its own revision, and the last inherited pull's
+ * one of its push bases (#823).
  */
 export async function userScopeRecord(state: State): Promise<CheckoutRecord> {
   const key = await checkoutKey(getUserHome());
+  const rev = state.lastPullRev ?? FORCED_FULL_SYNC_REV;
+  const pushBaseRevs = homeRevs(state).filter((base) => base !== rev);
   const record = state.lastPullByWorkspace?.[key]
-    ?? { rev: state.lastPullRev ?? FORCED_FULL_SYNC_REV, targets: state.lastPullTargets ?? [] };
+    ?? { rev, targets: state.lastPullTargets ?? [], ...(pushBaseRevs.length > 0 ? { pushBaseRevs } : {}) };
   state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [key]: record };
   return record;
 }
@@ -1330,34 +1344,40 @@ async function pullForScope(
   // a chance to run. Inherited pulls use an independent marker so a partial,
   // safe sync can never suppress a later full user-scope pull.
   // A failed docs mirror must be retried even when the team revision is unchanged.
-  if (!options.dryRun && !docsSyncFailed) {
+  if (!options.dryRun) {
     const state = await loadStateForScope(localConfig);
-    if (revisionField === 'lastPullRev') {
-      state.lastPull = new Date().toISOString();
-    }
-    const previousRev = state[revisionField];
-    // A failed submodule update keeps the previous rev so the next pull
-    // retries the update (see refreshTeamRepo).
-    if (!submodulesFailed) {
-      if (currentRev !== null) {
-        state[revisionField] = currentRev;
-      } else {
-        try {
-          state[revisionField] = await getHeadRev(localConfig.repo.localPath);
-        } catch {
-          state[revisionField] = null;
-        }
+    let deliveredRev = currentRev;
+    if (deliveredRev === null) {
+      try {
+        deliveredRev = await getHeadRev(localConfig.repo.localPath);
+      } catch {
+        deliveredRev = null;
       }
     }
+    const previousRev = state[revisionField];
     const syncedTargets = currentTargets
       ?? await getInstalledResourceTargets(freshConfig, localConfig);
-    state[targetsField] = syncedTargets;
-    const syncedRev = state[revisionField];
-    if (recordKey && !submodulesFailed && syncedRev && revisionField === 'lastInheritedPullRev') {
-      // An inherited pull moves HOME's skills, rules and agents, not the rest:
-      // add its revision to HOME's push bases and keep the full pull's.
-      addPushBaseRev(await userScopeRecord(state), syncedRev);
-    } else if (recordKey && !submodulesFailed && syncedRev) {
+    if (!docsSyncFailed) {
+      if (revisionField === 'lastPullRev') {
+        state.lastPull = new Date().toISOString();
+      }
+      // A failed submodule update keeps the previous rev so the next pull
+      // retries the update (see refreshTeamRepo).
+      if (!submodulesFailed) state[revisionField] = deliveredRev;
+      state[targetsField] = syncedTargets;
+    }
+    const complete = !docsSyncFailed && !submodulesFailed;
+    if (recordKey && deliveredRev && (!complete || revisionField === 'lastInheritedPullRev')) {
+      // An inherited pull moves HOME's skills, rules and agents, not the rest,
+      // and an incomplete one keeps its marker for a retry, yet both delivered
+      // those at deliveredRev: add it to the push bases and keep the record's
+      // rev, or push reads the untouched copies as edits (#823).
+      const record = localConfig.scope === 'user'
+        ? await userScopeRecord(state)
+        : state.lastPullByWorkspace?.[recordKey] ?? { rev: FORCED_FULL_SYNC_REV, targets: syncedTargets };
+      addPushBaseRev(record, deliveredRev);
+      state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [recordKey]: record };
+    } else if (recordKey && deliveredRev) {
       // A forced full sync (lastPullRev cleared) leaves every other checkout
       // out of date too: reset their records so each one does its own full
       // sync, instead of only the first checkout to pull, keeping the base its
@@ -1371,7 +1391,7 @@ async function pullForScope(
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
       state.lastPullByWorkspace = {
         ...others,
-        [recordKey]: { rev: syncedRev, targets: syncedTargets },
+        [recordKey]: { rev: deliveredRev, targets: syncedTargets },
       };
     }
     await saveStateForScope(state, localConfig);

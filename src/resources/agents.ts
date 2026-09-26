@@ -201,14 +201,14 @@ export class AgentsHandler extends ResourceHandler {
     // namespace this directory need not have activated. Without the record it
     // would read as "no active source" and the author could never edit the
     // agent they just created (#649 review).
-    const { placedAgents, lastPullRev, lastPullByWorkspace, pendingPushes } = await loadStateForScope(localConfig);
+    const { placedAgents, lastPullRev, lastInheritedPullRev, lastPullByWorkspace, pendingPushes } = await loadStateForScope(localConfig);
     // The revisions THIS checkout's copies can be at, with the same fallback
     // as the pre-push sync: state.json is shared by every worktree, and a pull
     // in another checkout moves lastPullRev past a copy this one still holds
     // unedited (#812, #823).
     const checkoutBases = async (): Promise<string[]> => {
       const { resolveCheckoutBases } = await import('../pull.js');
-      return (await resolveCheckoutBases(localConfig, { lastPullRev, lastPullByWorkspace })).revs;
+      return (await resolveCheckoutBases(localConfig, { lastPullRev, lastInheritedPullRev, lastPullByWorkspace })).revs;
     };
     // Agents this machine placed in a namespace and has awaiting review: the
     // open PR is their destination, not "no active source".

@@ -17,7 +17,9 @@
  * last pull delivered and offered it back over the teammate's next update.
  *
  * Item 19: a project pull that inherits the user scope moves HOME's copies
- * without moving the user scope's push bases, with the same result.
+ * without moving the user scope's push bases, with the same result. So did a
+ * pull whose docs mirror failed, and an upgraded install whose last inherited
+ * pull an older CLI ran.
  *
  * Item 10: in single-repo mode the active tree's .teamai/rules and
  * .teamai/skills are push sources themselves. On a branch behind the default
@@ -330,15 +332,18 @@ describe('push base in user scope (#823 item 4)', () => {
     expect(records[0]?.pushBaseRevs).toHaveLength(2);
   });
 
+  const dropUserRecord = (): void => {
+    const { lastPullByWorkspace: _dropped, ...rest } = userState();
+    fs.writeFileSync(path.join(home, '.teamai', 'state.json'), `${JSON.stringify(rest, null, 2)}\n`);
+  };
+
   it.each([
-    ['a user-scope pull recorded HOME', false],
-    ['no pull has recorded HOME (upgraded install)', true],
-  ])('compares the next push with the revision an inheriting project\'s pull moved HOME\'s copy to, when %s (#823 item 19)', async (_case, unrecorded) => {
+    ['a user-scope pull recorded HOME', 'never'],
+    ['no pull has recorded HOME (upgraded install)', 'before'],
+    ['a CLI that kept no record ran that pull (upgraded install)', 'after'],
+  ] as const)('compares the next push with the revision an inheriting project\'s pull moved HOME\'s copy to, when %s (#823 item 19)', async (_case, dropRecord) => {
     await run(['pull']);
-    if (unrecorded) {
-      const { lastPullByWorkspace: _dropped, ...rest } = userState();
-      fs.writeFileSync(path.join(home, '.teamai', 'state.json'), `${JSON.stringify(rest, null, 2)}\n`);
-    }
+    if (dropRecord === 'before') dropUserRecord();
     const project = path.join(sandbox, 'project');
     const projectTeamRepo = path.join(project, '.teamai', 'team-repo');
     git(['clone', '-q', path.join(sandbox, 'team-remote.git'), projectTeamRepo], sandbox);
@@ -360,12 +365,43 @@ describe('push base in user scope (#823 item 4)', () => {
     const inherited = await runCLI(['pull'], project, home);
     expect(inherited.code, inherited.output).toBe(0);
     expect(fs.readFileSync(localRule(), 'utf8'), inherited.output).toContain('Version two');
+    // lastPullRev still names R1 and lastInheritedPullRev R2, the revision
+    // HOME's copy is at.
+    if (dropRecord === 'after') dropUserRecord();
     const R3 = '# Team rule\n\nVersion three, from a teammate.\n';
     teammatePublishes(R3);
 
     const push = await run(['--dry-run', 'push']);
     expect(push).not.toContain('team-rule (modified)');
     expect(fs.readFileSync(localRule(), 'utf8'), push).toBe(R3);
+  });
+
+  it('compares the next push with the revision a pull moved HOME\'s copy to when its docs mirror failed', async () => {
+    fs.mkdirSync(path.join(teammate, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(teammate, 'docs', 'guide.md'), '# Guide\n');
+    git(['add', '-A'], teammate);
+    git(['commit', '-q', '-m', 'docs'], teammate);
+    git(['push', '-q', 'origin', 'main'], teammate);
+    await run(['pull']);
+    expect(fs.readFileSync(localRule(), 'utf8')).toBe(R1);
+
+    // The next pull updates the rule to a teammate's R2, then fails to mirror
+    // the docs (a file stands where the docs directory goes); a teammate then
+    // publishes R3 before any other pull.
+    fs.rmSync(path.join(home, '.teamai', 'docs'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(home, '.teamai', 'docs'), 'not a directory\n');
+    teammatePublishes('# Team rule\n\nVersion two, from a teammate.\n');
+    const pull = await runCLI(['pull'], work, home);
+    expect(pull.output).toContain('Failed to sync docs');
+    expect(fs.readFileSync(localRule(), 'utf8'), pull.output).toContain('Version two');
+    const R3 = '# Team rule\n\nVersion three, from a teammate.\n';
+    teammatePublishes(R3);
+
+    const push = await run(['--dry-run', 'push']);
+    expect(push).not.toContain('team-rule (modified)');
+    expect(fs.readFileSync(localRule(), 'utf8'), push).toBe(R3);
+    // The failed mirror still leaves the revision marker cleared for a retry.
+    expect(userState().lastPullRev).toBeNull();
   });
 
   it('keeps comparing with the last pull\'s revision in an install no pull has recorded', async () => {
