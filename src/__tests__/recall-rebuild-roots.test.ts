@@ -350,4 +350,22 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(index.entries).toHaveLength(100);
     expect(warnings()).toContainEqual(expect.stringContaining('Index rebuild skipped'));
   });
+
+  // Root writes through the read-only bit, so the rebuild would succeed.
+  it.skipIf(process.getuid?.() === 0)('searches nothing, not the older index, when the partial index cannot be written', async () => {
+    fs.chmodSync(indexPath(), 0o444);
+    const out: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+    try {
+      await recall('retry budget', {});
+    } finally {
+      write.mockRestore();
+      fs.chmodSync(indexPath(), 0o644);
+    }
+
+    expect(out.join('')).not.toContain('stale');
+    expect(warnings()).toContainEqual(expect.stringMatching(
+      /Recall could not build the user search index: .*EACCES[\s\S]*skips[\s\S]*teamai pull/,
+    ));
+  });
 });

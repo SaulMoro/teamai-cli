@@ -367,6 +367,8 @@ async function loadOrBuildScopeIndex(
       log.warn(`Skills stay out of recall: ${delivered.skills.reason}. Fix the collision and run \`teamai pull\`.`);
     }
 
+    // Smaller by design: an older index kept by the shrink guard would serve what the warning left out.
+    const partial = delivered === nothingDelivered;
     try {
       // Without another repository's learnings checkout, if one sits where
       // this project's would (#808). The probe runs only here, when an index
@@ -382,12 +384,19 @@ async function loadOrBuildScopeIndex(
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,
-        // Smaller by design: an older index kept by the shrink guard would serve what the warning left out.
-        partial: delivered === nothingDelivered,
+        partial,
       });
       index = await loadIndex(indexPath);
     } catch (e) {
-      log.warn(`Recall could not build the ${scopeLabel} search index: ${e instanceof Error ? e.message : String(e)}`);
+      const cause = e instanceof Error ? e.message : String(e);
+      if (partial && index) {
+        // The index on disk predates the broken manifest and holds what the warning above left out.
+        log.warn(`Recall could not build the ${scopeLabel} search index: ${cause}. `
+          + `Recall skips the older index at ${indexPath}, which would return what the manifest error leaves out. `
+          + 'Resolve that error, fix the manifest, and run `teamai pull` to rebuild it.');
+        return 'build-failed';
+      }
+      log.warn(`Recall could not build the ${scopeLabel} search index: ${cause}`);
       if (!index) return 'build-failed';
     }
   }
