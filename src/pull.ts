@@ -613,7 +613,7 @@ async function checkoutRecordKey(localConfig: LocalConfig): Promise<string | und
  * lastPullRev stands in. `unrecorded` marks a project checkout no pull has
  * recorded, where that revision may be another checkout's (#812). The user
  * scope has one checkout, HOME, so an install from before its record keeps
- * lastPullRev until its next full pull.
+ * lastPullRev until a push or pull creates the record (see userScopeRecord).
  */
 export type CheckoutBases =
   | { source: 'checkout'; record: CheckoutRecord; revs: string[] }
@@ -632,6 +632,19 @@ export async function resolveCheckoutBases(
     revs: state.lastPullRev ? [state.lastPullRev] : [],
     unrecorded: localConfig.scope === 'project' && key !== undefined && !record,
   };
+}
+
+/**
+ * HOME's record in the user scope's `state`, added from the shared fields when
+ * an install from before the record has none: HOME is the scope's only
+ * checkout, so lastPullRev is its own revision (#823).
+ */
+export async function userScopeRecord(state: State): Promise<CheckoutRecord> {
+  const key = await checkoutKey(getUserHome());
+  const record = state.lastPullByWorkspace?.[key]
+    ?? { rev: state.lastPullRev ?? FORCED_FULL_SYNC_REV, targets: state.lastPullTargets ?? [] };
+  state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [key]: record };
+  return record;
 }
 
 /** `records` after a forced full sync: see FORCED_FULL_SYNC_REV. */
@@ -1343,10 +1356,7 @@ async function pullForScope(
     if (recordKey && !submodulesFailed && syncedRev && revisionField === 'lastInheritedPullRev') {
       // An inherited pull moves HOME's skills, rules and agents, not the rest:
       // add its revision to HOME's push bases and keep the full pull's.
-      const record = state.lastPullByWorkspace?.[recordKey]
-        ?? { rev: state.lastPullRev ?? FORCED_FULL_SYNC_REV, targets: state.lastPullTargets ?? [] };
-      addPushBaseRev(record, syncedRev);
-      state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [recordKey]: record };
+      addPushBaseRev(await userScopeRecord(state), syncedRev);
     } else if (recordKey && !submodulesFailed && syncedRev) {
       // A forced full sync (lastPullRev cleared) leaves every other checkout
       // out of date too: reset their records so each one does its own full

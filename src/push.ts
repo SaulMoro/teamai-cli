@@ -1014,7 +1014,7 @@ async function pushCore(
     // Compare with the revisions THIS checkout synced: state.json is shared by
     // every worktree, and a pull in another checkout moves the shared
     // lastPullRev past a copy this checkout still holds unedited (#812).
-    const { resolveCheckoutBases, addPushBaseRev } = await import('./pull.js');
+    const { resolveCheckoutBases, addPushBaseRev, userScopeRecord } = await import('./pull.js');
     const bases = await resolveCheckoutBases(localConfig, state);
     unrecordedCheckout = bases.source === 'shared' && bases.unrecorded;
     placedRules = state.placedRules;
@@ -1031,12 +1031,14 @@ async function pushCore(
     // (the copies it did not reach still match an older base) and even under
     // --dry-run (the sync has already written the files). The pull record's
     // `rev` stays, or the next pull would skip the docs and agents of this
-    // revision.
-    const syncedRev = bases.source === 'checkout' && !teamRepoStale
+    // revision. HOME gets a record here if it has none yet; an unrecorded
+    // project checkout does not, as its fallback base may be another's.
+    const recordsBase = bases.source === 'checkout' || localConfig.scope === 'user';
+    const syncedRev = recordsBase && !teamRepoStale
       ? await getHeadCommit(localConfig.repo.localPath)
       : null;
-    if (bases.source === 'checkout' && syncedRev) {
-      addPushBaseRev(bases.record, syncedRev);
+    if (syncedRev) {
+      addPushBaseRev(bases.source === 'checkout' ? bases.record : await userScopeRecord(state), syncedRev);
       try {
         await saveStateForScope(state, localConfig);
       } catch (e) {

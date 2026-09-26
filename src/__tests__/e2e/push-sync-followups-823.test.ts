@@ -382,13 +382,35 @@ describe('push base in user scope (#823 item 4)', () => {
     expect(push).not.toContain('team-rule (modified)');
     expect(push).not.toContain('no pull record yet');
     expect(fs.readFileSync(localRule(), 'utf8'), push).toBe(R2);
-    expect(userState().lastPullByWorkspace).toBeUndefined();
 
     // HOME is the user scope's only checkout, so lastPullRev is its own: an
     // edit is pushed, not refused as it is in an unrecorded project checkout.
     fs.writeFileSync(localRule(), `${R2}\nA local edit.\n`);
     const edited = await run(['--dry-run', 'push']);
     expect(edited).toContain('[rules] team-rule (modified)');
+  });
+
+  it('records the revision a push synced HOME\'s copy to in an install no pull has recorded', async () => {
+    await run(['pull']);
+    const { lastPullByWorkspace: _dropped, ...unrecorded } = userState();
+    fs.writeFileSync(path.join(home, '.teamai', 'state.json'), `${JSON.stringify(unrecorded, null, 2)}\n`);
+
+    // The first push syncs the unedited copy from R1 to a teammate's R2; a
+    // teammate then publishes R3 before any pull.
+    teammatePublishes('# Team rule\n\nVersion two, from a teammate.\n');
+    await run(['--dry-run', 'push']);
+    expect(fs.readFileSync(localRule(), 'utf8')).toContain('Version two');
+    const R3 = '# Team rule\n\nVersion three, from a teammate.\n';
+    teammatePublishes(R3);
+
+    const push = await run(['--dry-run', 'push']);
+    expect(push).not.toContain('team-rule (modified)');
+    expect(fs.readFileSync(localRule(), 'utf8'), push).toBe(R3);
+    // The record starts from the last pull's revision and keeps both pushes'.
+    const records = Object.values(userState().lastPullByWorkspace ?? {});
+    expect(records).toHaveLength(1);
+    expect(records[0]?.rev).toBe(unrecorded.lastPullRev);
+    expect(records[0]?.pushBaseRevs).toHaveLength(2);
   });
 });
 
