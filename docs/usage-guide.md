@@ -552,7 +552,8 @@ teamai init https://gitlab.example.com/yourgroup/yourrepo --provider git
 ```
 
 - `--provider` skips auto-detection and uses the named provider: `tgit`, `github`, `cnb`, `gitlab`, `gitcode`, or `git`. `git` runs no platform login or token check.
-- The choice is saved in this machine's local config only. The team's `teamai.yaml` is unchanged, so other members keep auto-detection.
+- The choice is saved in this machine's local config only. An existing `teamai.yaml` is not changed, so other members keep the team's provider. When `init` creates a new `teamai.yaml`, `--provider git` still records the provider detected from the URL.
+- `--provider gitlab` on a self-hosted instance still needs `GITLAB_URL` (and `GITLAB_TOKEN`). Without it `init` stops, because the GitLab API would otherwise target gitlab.com.
 - `pull` works as usual. `push` pushes the branch but cannot open a PR/MR, so open it on the Git host yourself; the command exits non-zero because that step did not run.
 - Re-running `teamai init` without `--provider` returns to auto-detection.
 

@@ -5,7 +5,7 @@ import { saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConf
 import { describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig } from './hooks.js';
 import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward } from './utils/git.js';
 import { pushRepoDirectly } from './utils/git.js';
-import { getProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
+import { getProvider, detectProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
 import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
 import { queueOwner, sameQueueOwner, setAsideQueueOnModeSwitch } from './utils/pending-learnings.js';
@@ -434,6 +434,25 @@ export function resolveInitProvider(raw: string | undefined): ProviderName | und
     );
   }
   return parsed.data;
+}
+
+/**
+ * The provider init uses for `input`: the `--provider` choice when given, else
+ * auto-detection.
+ */
+async function selectInitProvider(input: string, forced: ProviderName | undefined): Promise<string> {
+  if (!forced) return detectProviderForInit(input);
+  // The GitLab API client targets GITLAB_URL (default gitlab.com), not the repo
+  // URL's host, so on an unconfigured host it would send the token elsewhere.
+  if (forced === 'gitlab' && detectProvider(input) === 'git') {
+    throw new Error(
+      '--provider gitlab needs this GitLab instance configured. Set GITLAB_URL to its base URL '
+      + '(for example https://gitlab.example.com) and GITLAB_TOKEN, then run teamai init again. '
+      + 'To use your existing Git authentication without a token, pass --provider git.',
+    );
+  }
+  log.info(`Provider: ${forced} (--provider; auto-detection skipped)`);
+  return forced;
 }
 
 function printScopeSummary(
@@ -965,15 +984,14 @@ export async function initSelfRepo(options: GlobalOptions & {
   }
   let providerName: string;
   try {
-    providerName = options.provider ?? await detectProviderForInit(remoteUrl);
+    providerName = await selectInitProvider(remoteUrl, options.provider);
   } catch (e) {
     log.error((e as Error).message);
     process.exit(1);
     return;
   }
   const provider = getProvider(providerName);
-  if (options.provider) log.info(`Provider: ${providerName} (--provider; auto-detection skipped)`);
-  else log.debug(`Detected provider: ${providerName} (from ${redactGitCredentials(remoteUrl)})`);
+  if (!options.provider) log.debug(`Detected provider: ${providerName} (from ${redactGitCredentials(remoteUrl)})`);
 
   let repoInfo;
   try {
@@ -1020,7 +1038,8 @@ export async function initSelfRepo(options: GlobalOptions & {
       mode: 'self',
       description: 'TeamAI single-repo (knowledge on main, reports on teamai-reports)',
       repo: repoInfo.httpsUrl,
-      provider: providerName,
+      // `--provider git` opts out of the platform API on this machine only.
+      provider: options.provider === 'git' ? detectProvider(remoteUrl) : providerName,
       sharing: {
         rules: { enforced: [] },
         docs: { localDir: './.teamai/docs' },
@@ -1365,15 +1384,14 @@ export async function init(options: GlobalOptions & {
   // Step 1b: Detect and initialize provider from URL
   let providerName: string;
   try {
-    providerName = forcedProvider ?? await detectProviderForInit(repoInput);
+    providerName = await selectInitProvider(repoInput, forcedProvider);
   } catch (e) {
     log.error((e as Error).message);
     process.exit(1);
     return;
   }
   const provider = getProvider(providerName);
-  if (forcedProvider) log.info(`Provider: ${providerName} (--provider; auto-detection skipped)`);
-  else log.debug(`Detected provider: ${providerName}`);
+  if (!forcedProvider) log.debug(`Detected provider: ${providerName}`);
 
   let repoInfo;
   try {
@@ -1585,7 +1603,8 @@ export async function init(options: GlobalOptions & {
       team: 'my-team',
       description: 'TeamAI shared resources',
       repo: repoInfo.httpsUrl,
-      provider: providerName,
+      // `--provider git` opts out of the platform API on this machine only.
+      provider: forcedProvider === 'git' ? detectProvider(repoInput) : providerName,
       sharing: {
         rules: { enforced: [] },
         docs: { localDir: scope === 'project' ? './.teamai/docs' : '~/.teamai/docs' },

@@ -1220,6 +1220,51 @@ describe('init --provider', () => {
     expect(saveLocalConfig).toHaveBeenCalledWith(expect.objectContaining({ provider: 'git' }));
   });
 
+  it('refuses --provider gitlab for a host with no configured GitLab instance', async () => {
+    // The GitLab API would default to gitlab.com and receive this host's token.
+    vi.stubEnv('GITLAB_TOKEN', 'company-token');
+    const { log } = await import('../utils/logger.js');
+
+    await init({ repo: GITLAB_REPO, provider: 'gitlab', scope: 'user', role: 'hai' });
+
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('Set GITLAB_URL'));
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('--provider git'));
+    expect(GitLabProvider.prototype.isAuthenticated).not.toHaveBeenCalled();
+    expect(GitLabProvider.prototype.authenticate).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts --provider gitlab once the instance is configured', async () => {
+    vi.stubEnv('GITLAB_URL', 'https://gitlab.example.test');
+    spies.push(
+      vi.spyOn(GitLabProvider.prototype, 'ensureInstalled').mockResolvedValue(undefined),
+      vi.spyOn(GitLabProvider.prototype, 'cloneRepo').mockImplementation(() => { cloned = true; }),
+    );
+    vi.mocked(GitLabProvider.prototype.isAuthenticated).mockReturnValue(true);
+    vi.mocked(GitLabProvider.prototype.authenticate).mockResolvedValue('gitlab-member');
+
+    await init({ repo: GITLAB_REPO, provider: 'gitlab', scope: 'user', role: 'hai' });
+
+    expect(mockExit).not.toHaveBeenCalled();
+    expect(saveLocalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'gitlab', username: 'gitlab-member' }),
+    );
+  });
+
+  it('writes the team provider, not the member\'s git override, into a new teamai.yaml', async () => {
+    vi.stubEnv('GITLAB_URL', 'https://gitlab.example.test');
+    const { loadTeamConfig } = await import('../config.js');
+    const { writeFile } = await import('../utils/fs.js');
+    vi.mocked(loadTeamConfig).mockResolvedValue(null);
+
+    await init({ repo: GITLAB_REPO, provider: 'git', scope: 'user', role: 'hai' });
+
+    const teamYaml = vi.mocked(writeFile).mock.calls.find(([p]) => String(p).endsWith('teamai.yaml'));
+    expect(teamYaml?.[1]).toContain('"provider":"gitlab"');
+    expect(saveLocalConfig).toHaveBeenCalledWith(expect.objectContaining({ provider: 'git' }));
+  });
+
   it('records no provider when the flag is omitted, so later runs follow the team repo', async () => {
     await init({ repo: GITLAB_REPO, scope: 'user', role: 'hai' });
 
@@ -1246,6 +1291,10 @@ describe('init --provider', () => {
 
     expect(mockExit).not.toHaveBeenCalled();
     expect(GitLabProvider.prototype.authenticate).not.toHaveBeenCalled();
+    // A new committed .teamai/teamai.yaml keeps the host's provider for teammates.
+    const { writeFile } = await import('../utils/fs.js');
+    const teamYaml = vi.mocked(writeFile).mock.calls.find(([p]) => String(p).endsWith('teamai.yaml'));
+    expect(teamYaml?.[1]).toContain('"provider":"gitlab"');
     expect(saveLocalConfigForScope).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'git', username: 'plain-member' }),
       'project',
