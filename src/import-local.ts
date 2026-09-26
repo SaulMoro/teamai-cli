@@ -440,13 +440,12 @@ export async function interactiveReview(
 
     process.stdout.write('\n');
     process.stdout.write(`[${currentIndex}/${total}] 📄 ${title} (${itemType})\n`);
-    process.stdout.write(`  路径: ${sessionItem.sourcePath ?? ''}\n`);
-    process.stdout.write(`  摘要: ${summary}\n`);
+    process.stdout.write(`  Path: ${sessionItem.sourcePath ?? ''}\n`);
+    process.stdout.write(`  Summary: ${summary}\n`);
     process.stdout.write(`  Tags: ${tags.join(', ')}\n`);
 
     let answered = false;
     while (!answered) {
-      // eslint-disable-next-line no-await-in-loop
       const input = await question('[A]ccept  [E]dit  [S]kip  > ');
       const choice = input.trim().toLowerCase();
 
@@ -457,8 +456,7 @@ export async function interactiveReview(
         sessionItem.status = 'skipped';
         answered = true;
       } else if (choice === 'e') {
-        // eslint-disable-next-line no-await-in-loop
-        const newTitle = await question('  新标题: ');
+        const newTitle = await question('  New title: ');
         const trimmedTitle = newTitle.trim();
         if (trimmedTitle.length > 0 && sessionItem.learningDraft) {
           sessionItem.learningDraft.title = trimmedTitle;
@@ -470,14 +468,13 @@ export async function interactiveReview(
         sessionItem.status = 'edited';
         answered = true;
       } else {
-        process.stdout.write('  请输入 A（接受）、E（编辑）或 S（跳过）\n');
+        process.stdout.write('  Enter A (accept), E (edit) or S (skip)\n');
       }
     }
 
     processedCount++;
     session.progress = processedCount;
     // 每次选择后立即持久化，支持中断恢复
-    // eslint-disable-next-line no-await-in-loop
     await persistSession(session, sessionPath);
   }
 
@@ -547,10 +544,10 @@ export async function pushAccepted(
     try {
       await ensureDir(destDir);
       await writeFile(destPath, draft.content);
-      log.info(`已写入: ${destPath}`);
+      log.info(`Wrote: ${destPath}`);
       pushed++;
     } catch (err: unknown) {
-      log.error(`写入失败 [${destPath}]: ${String(err)}`);
+      log.error(`Failed to write [${destPath}]: ${String(err)}`);
       skipped++;
     }
   }

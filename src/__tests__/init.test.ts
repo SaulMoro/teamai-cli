@@ -234,7 +234,7 @@ const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as
 import { init, resolveInitProvider } from '../init.js';
 import { GenericGitProvider } from '../providers/git/index.js';
 import { GitLabProvider } from '../providers/gitlab/index.js';
-import { RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from '../providers/types.js';
+import { RepoNotFoundError, RepoCreatePermissionError } from '../providers/types.js';
 import { CnbRepoNotFoundError } from '../providers/cnb/cnb-cli.js';
 import { saveLocalConfig, loadLocalConfigForScope } from '../config.js';
 import fse from 'fs-extra';

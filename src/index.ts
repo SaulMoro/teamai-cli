@@ -335,9 +335,8 @@ const rolesCmd = program
   .description('Manage team roles and resource namespaces')
   .action(async () => {
     // Default action: list roles
-    const globalOpts = program.opts() as GlobalOptions;
     const { rolesList } = await import('./roles-cmd.js');
-    await rolesList(globalOpts);
+    await rolesList();
   });
 
 rolesCmd
@@ -353,9 +352,8 @@ rolesCmd
   .command('list')
   .description('List all defined roles and your current role')
   .action(async () => {
-    const globalOpts = program.opts() as GlobalOptions;
     const { rolesList } = await import('./roles-cmd.js');
-    await rolesList(globalOpts);
+    await rolesList();
   });
 
 rolesCmd
@@ -480,18 +478,16 @@ const tagsCmd = program
   .description('Manage tag-based skill/rule filtering')
   .action(async () => {
     // Default action: list tags
-    const globalOpts = program.opts() as GlobalOptions;
     const { tagsList } = await import('./tags.js');
-    await tagsList(globalOpts);
+    await tagsList();
   });
 
 tagsCmd
   .command('list')
   .description('List all available tags and subscription status')
   .action(async () => {
-    const globalOpts = program.opts() as GlobalOptions;
     const { tagsList } = await import('./tags.js');
-    await tagsList(globalOpts);
+    await tagsList();
   });
 
 tagsCmd
@@ -560,7 +556,6 @@ const sourceCmd = program
   .command('source')
   .description('Manage cross-team skill sources')
   .action(async () => {
-    const globalOpts = program.opts() as GlobalOptions;
     const { sourceList } = await import('./source.js');
     await sourceList();
   });
@@ -935,9 +930,8 @@ program
   .command('digest')
   .description('Generate weekly team activity digest')
   .action(async () => {
-    const globalOpts = program.opts() as GlobalOptions;
     const { generateDigest } = await import('./digest.js');
-    await generateDigest(globalOpts);
+    await generateDigest();
   });
 
 // ─── Dashboard commands ─────────────────────────────────
