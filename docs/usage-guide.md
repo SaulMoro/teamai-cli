@@ -1244,7 +1244,7 @@ After `--update-quality`, review the generated `.draft.md` files and rename them
 
 While another teamai command holds the learnings or reports checkout's lock, `recall maintenance` and `recall promote` exit 1 without writing anything (`The learnings checkout is locked: …`). Run them again when that command finishes.
 
-Maintenance and promote publish only the learnings they changed. A file in the learnings checkout that nobody committed stays out of their commit.
+Maintenance and promote publish only the learnings they changed. A file in the learnings checkout that nobody committed stays out of their commit. When the publish cannot run or push (`Maintenance changes stay local for now: …`), the next `teamai pull` or `contribute` publishes the change, even with no learning queued.
 
 ### Promoting Learnings
 

@@ -9,6 +9,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import type { SimpleGit } from 'simple-git';
+import { z } from 'zod';
 
 import { ensureDir } from './fs.js';
 import { parseFrontmatter } from './frontmatter.js';
@@ -108,6 +109,14 @@ async function publishUnderSyncLock(
       throw new Error(`Unhandled queue listing: ${JSON.stringify(unhandled)}`);
     }
   }
+  // What a maintenance run changed and could not publish goes first, and
+  // whether or not anything is queued: rerunning maintenance finds nothing to change.
+  if (locked && !dryRun) {
+    const maintenance = await publishRecordedMaintenance(localConfig);
+    if (maintenance.status === 'published') log.success('Published earlier maintenance changes to the learnings branch');
+    else if (maintenance.status !== 'already-present') log.debug(`[learnings] recorded maintenance changes stay local: ${maintenance.status}`);
+  }
+
   const queued = listing.queued;
   if (queued.length === 0) {
     return { published: [], remaining: 0 };
@@ -214,8 +223,11 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
     }
     // The checkout may be behind origin: the one an older teamai left in
     // `.teamai/` is never synced again (#823 item 21). What a teammate published
-    // since counts too.
-    for (const rel of await publishedSinceCheckout(git)) {
+    // since counts too, so without a current origin every remnant stays for a
+    // later run: a stale one would queue what a teammate already published.
+    const sinceCheckout = await publishedSinceCheckout(git);
+    if (sinceCheckout === null) return;
+    for (const rel of sinceCheckout) {
       const content = await git.show([`origin/${learningsBranch.branch}:${rel}`]).catch(() => null);
       if (content !== null) known.push({ label: rel, content, mr: sourceMr(parseFrontmatter(content).data) });
     }
@@ -256,39 +268,36 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
 
 /**
  * The learnings origin has and the checkout's commit lacks or holds another
- * version of, after a best-effort fetch. None when origin cannot be read.
+ * version of, fetched just now. Null when origin cannot be fetched or compared.
  */
-async function publishedSinceCheckout(git: SimpleGit): Promise<string[]> {
+async function publishedSinceCheckout(git: SimpleGit): Promise<string[] | null> {
   try {
     await fetchTrackingRef(git, learningsBranch.branch);
-  } catch (e) {
-    log.debug(`[learnings] fetch failed, comparing with the last fetched ${learningsBranch.branch}: ${failureReason(e)}`);
-  }
-  try {
     const diff = await git.raw(['diff', '-z', '--name-only', '--no-renames', '--diff-filter=AM', 'HEAD', `origin/${learningsBranch.branch}`, '--', 'learnings']);
     return diff.split('\0').filter((f) => f.endsWith('.md'));
   } catch (e) {
-    log.debug(`[learnings] cannot compare the checkout with origin/${learningsBranch.branch}: ${failureReason(e)}`);
-    return [];
+    log.debug(`[learnings] cannot compare the checkout with origin/${learningsBranch.branch}; leaving what an older import --from-mr left for a later run: ${failureReason(e)}`);
+    return null;
   }
 }
 
 /**
- * Publish whatever maintenance just changed in the learnings worktree.
+ * Publish whatever maintenance just changed in the learnings worktree, and
+ * whatever an earlier run changed and could not publish.
  *
  * Pruning, promotion and confidence write-backs used to mutate a checkout
  * nothing pushes, so their result reached no teammate and the next realign
  * could undo it. They now write into the worktree, and this is what makes the
- * change leave the machine.
+ * change leave the machine. The files are changed before the branch lock is
+ * taken, and a rerun finds nothing left to change, so each run records what it
+ * changed first and the record goes only once origin has it: a busy lock or a
+ * failed push leaves it for the next publish, contributions and pulls included.
  */
 export async function publishLearningsMaintenance(
   localConfig: LocalConfig,
   message: string,
   changed: readonly string[],
 ): Promise<PublishResult> {
-  // Only the files maintenance wrote or removed, never all of `learnings/`: the
-  // checkout may hold files nobody committed, such as a learning an older
-  // import --from-mr left there, and they would ride along in this commit (#823).
   const checkout = learningsBranch.dir(localConfig);
   const inCheckout = changed
     .map((file) => path.relative(checkout, file))
@@ -296,8 +305,79 @@ export async function publishLearningsMaintenance(
   if (inCheckout.length < changed.length) {
     log.debug(`[learnings] maintenance changed files outside ${checkout}; not publishing those`);
   }
-  // A removed file git never tracked has nothing to stage, and naming it would
-  // fail the whole `git add`, publishing nothing of this run.
+  if (!learningsBranch.enabled(localConfig)) {
+    // kind: 'http' has no branch to retry against.
+    return inCheckout.length === 0 ? { status: 'already-present' } : commitMaintenance(localConfig, message, inCheckout);
+  }
+  if (inCheckout.length > 0) {
+    try {
+      await recordMaintenance(checkout, { message, files: inCheckout });
+    } catch (e) {
+      log.debug(`[learnings] cannot record maintenance changes for a retry: ${failureReason(e)}`);
+      return commitMaintenance(localConfig, message, inCheckout);
+    }
+  }
+  return publishRecordedMaintenance(localConfig);
+}
+
+/** What one maintenance run changed, relative to the learnings checkout. */
+const MaintenanceRecord = z.object({ message: z.string(), files: z.array(z.string()) });
+type MaintenanceRecord = z.infer<typeof MaintenanceRecord>;
+
+/**
+ * Where maintenance records wait: in the checkout's own git directory, which
+ * git never shows or commits and which goes with the checkout, and with the
+ * changes they describe. One file per run, so a publish removes only what it read.
+ */
+async function maintenanceRecordsDir(checkout: string): Promise<string> {
+  const gitPath = (await createGit(checkout).raw(['rev-parse', '--git-path', 'teamai-maintenance'])).trim();
+  return path.resolve(checkout, gitPath);
+}
+
+async function recordMaintenance(checkout: string, record: MaintenanceRecord): Promise<void> {
+  const dir = await maintenanceRecordsDir(checkout);
+  await ensureDir(dir);
+  const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.json`;
+  await fs.promises.writeFile(path.join(dir, name), JSON.stringify(record), 'utf-8');
+}
+
+/** Publish every recorded maintenance change, dropping the records once origin has them. Never throws. */
+async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<PublishResult> {
+  const checkout = learningsBranch.dir(localConfig);
+  try {
+    if (!fs.existsSync(checkout)) return { status: 'already-present' };
+    const dir = await maintenanceRecordsDir(checkout);
+    const records: Array<MaintenanceRecord & { file: string }> = [];
+    for (const name of await fs.promises.readdir(dir).catch(() => [])) {
+      const file = path.join(dir, name);
+      const parsed = MaintenanceRecord.safeParse(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
+      if (parsed.success) records.push({ ...parsed.data, file });
+      else log.debug(`[learnings] skipping unreadable maintenance record ${file}`);
+    }
+    if (records.length === 0) return { status: 'already-present' };
+    const message = records.length === 1 ? records[0].message : `[teamai] Publish ${records.length} learnings maintenance runs`;
+    const result = await commitMaintenance(localConfig, message, [...new Set(records.flatMap((r) => r.files))]);
+    if (result.status === 'published' || result.status === 'already-present') {
+      for (const record of records) await fs.promises.rm(record.file, { force: true });
+    }
+    return result;
+  } catch (e) {
+    return { status: 'failed', reason: failureReason(e) };
+  }
+}
+
+/**
+ * Commit and push `files`, relative to the learnings checkout. Also pushes what
+ * an earlier attempt committed, when none of them is left to stage.
+ */
+async function commitMaintenance(localConfig: LocalConfig, message: string, inCheckout: string[]): Promise<PublishResult> {
+  // Only the files maintenance wrote or removed, never all of `learnings/`: the
+  // checkout may hold files nobody committed, such as a learning an older
+  // import --from-mr left there, and they would ride along in this commit (#823).
+  const checkout = learningsBranch.dir(localConfig);
+  // A removed file git does not track has nothing to stage, and naming it would
+  // fail the whole `git add`, publishing nothing of this run: one it never
+  // tracked, or one an earlier attempt already committed the removal of.
   const removed = inCheckout.filter((rel) => !fs.existsSync(path.join(checkout, rel)));
   let tracked = new Set<string>();
   if (removed.length > 0) {
@@ -310,7 +390,8 @@ export async function publishLearningsMaintenance(
     }
   }
   const files = inCheckout.filter((rel) => !removed.includes(rel) || tracked.has(rel.split(path.sep).join('/')));
-  if (files.length === 0) return { status: 'already-present' };
+  // kind: 'http' has no branch an earlier attempt could have committed to.
+  if (files.length === 0 && !learningsBranch.enabled(localConfig)) return { status: 'already-present' };
   // `commitAndPush`, not `update`: maintenance already wrote into the worktree
   // before this call, and `update` syncs with origin first, which can carry
   // those uncommitted files into a rebase or leave them behind.

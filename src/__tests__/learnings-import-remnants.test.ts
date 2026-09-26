@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 
-import { getDataHome, SYNC_LOCK_FILENAME, type LocalConfig } from '../types.js';
+import { getDataHome, LEARNINGS_LOCK_FILENAME, SYNC_LOCK_FILENAME, type LocalConfig } from '../types.js';
 import { learningsBranch } from '../utils/learnings-branch.js';
 import { listPendingLearnings, savePendingLearning } from '../utils/pending-learnings.js';
 import { publishLearningsMaintenance, publishQueuedLearnings } from '../utils/learnings-publish.js';
@@ -104,6 +104,35 @@ function plant(checkout: string, relPath: string, content: string): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
   return file;
+}
+
+/** Run `fn` with origin unreachable, as when the member is offline. */
+async function offline<T>(origin: string, fn: () => Promise<T>): Promise<T> {
+  fs.renameSync(origin, `${origin}.offline`);
+  try {
+    return await fn();
+  } finally {
+    fs.renameSync(`${origin}.offline`, origin);
+  }
+}
+
+/** Hold the learnings branch lock, as a publish running in another command does. */
+function holdLearningsLock(config: LocalConfig): () => void {
+  const lock = path.join(path.dirname(learningsBranch.dir(config)), LEARNINGS_LOCK_FILENAME);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: 'a publish' }));
+  return () => fs.rmSync(lock, { force: true });
+}
+
+/** A teammate publishes `rel` under `learnings/` from their own clone. */
+async function teammatePublishes(origin: string, rel: string, content: string): Promise<void> {
+  const teammate = path.join(tmp, 'teammate');
+  await simpleGit().clone(origin, teammate, ['--branch', 'teamai-learnings']);
+  await configureGit(teammate);
+  fs.mkdirSync(path.dirname(path.join(teammate, 'learnings', rel)), { recursive: true });
+  fs.writeFileSync(path.join(teammate, 'learnings', rel), content);
+  await simpleGit(teammate).add(['.']);
+  await simpleGit(teammate).commit('teammate');
+  await simpleGit(teammate).push('origin', 'teamai-learnings');
 }
 
 /** What was warned from now on, one line per call. */
@@ -211,6 +240,26 @@ describe('a learning an older import --from-mr left untracked in the learnings c
     expect(warned()).toContain('learnings/alpha/quokka-2026-09-21-ddd444.md');
   });
 
+  it('is kept, not queued, while origin cannot be fetched, so a teammate\'s import of the same merge request is still seen', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'first-2026-09-19-aaa000.md', '---\ntitle: First\n---\nFirst.\n');
+    await publishQueuedLearnings(config, 'alice');
+    await teammatePublishes(origin, 'alpha/quokka-2026-09-21-ddd444.md', remnant('https://github.com/acme/app/pull/42', 'Quokka, by a teammate'));
+    const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
+
+    await offline(origin, () => publishQueuedLearnings(config, 'alice'));
+
+    expect(fs.existsSync(file)).toBe(true);
+    expect(await listPendingLearnings(config)).toEqual([]);
+
+    const before = await publishedFiles(origin);
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedFiles(origin)).toEqual(before);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await listPendingLearnings(config)).toEqual([]);
+  });
+
   it('is removed, and published once, when the queue already holds the same content', async () => {
     const { config, origin, checkout } = await setUp();
     await savePendingLearning(config, 'quokka-copy-2026-09-21-bbb222.md', remnant('https://github.com/acme/app/pull/77'));
@@ -294,6 +343,37 @@ describe('publishing what maintenance changed (#823)', () => {
 
     expect(result).toEqual({ status: 'published' });
     expect((await publishedFiles(origin)).filter((f) => f.endsWith('.md')).sort()).toEqual(['learnings/b*.md']);
+  });
+
+  it('publishes a change another write kept it from publishing on the next publish, with nothing queued', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    const release = holdLearningsLock(config);
+    const busy = await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]);
+    release();
+    expect(busy).toEqual({ status: 'busy' });
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
+    expect(await simpleGit(checkout).raw(['status', '--porcelain'])).toBe('');
+  });
+
+  it('pushes a change it committed and could not push on the next publish, with nothing queued', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'stale-2026-01-01-aaa111.md', '---\ntitle: Stale\n---\nStale.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const pruned = path.join(checkout, 'learnings', 'stale-2026-01-01-aaa111.md');
+    fs.rmSync(pruned);
+    const failed = await offline(origin, () => publishLearningsMaintenance(config, '[teamai] Prune 1 learning(s)', [pruned]));
+    expect(failed.status).toBe('failed');
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedFiles(origin)).not.toContain('learnings/stale-2026-01-01-aaa111.md');
   });
 });
 

@@ -1149,7 +1149,7 @@ teamai recall maintenance --update-quality
 
 另一个 teamai 命令持有 learnings 或 reports checkout 的锁时，`recall maintenance` 与 `recall promote` 会以退出码 1 停止，不写入任何内容（`The learnings checkout is locked: …`）。待该命令结束后再运行。
 
-maintenance 与 promote 只发布它们改动过的 learning。learnings 检出中无人提交的文件不会进入它们的提交。
+maintenance 与 promote 只发布它们改动过的 learning。learnings 检出中无人提交的文件不会进入它们的提交。发布无法进行或推送失败时（`Maintenance changes stay local for now: …`），下一次 `teamai pull` 或 `contribute` 会发布这些改动，即使队列中没有 learning。
 
 ### 晋升 Learnings
 
