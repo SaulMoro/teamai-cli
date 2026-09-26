@@ -19,6 +19,7 @@ vi.mock('../utils/logger.js', () => ({
     error: vi.fn(),
     info: vi.fn(),
     success: vi.fn(),
+    warn: vi.fn(),
   },
 }));
 
@@ -220,5 +221,19 @@ describe('tags list', () => {
     await tagsList({});
 
     expect(log.dim).toHaveBeenCalledWith('  1 skill(s) have no tags and are always synced.');
+  });
+
+  it('still lists tags and warns when manifest/roles.yaml is malformed', async () => {
+    addSkill('hai', 'a');
+    mkdirSync(path.join(repoPath, 'manifest'));
+    writeFileSync(path.join(repoPath, 'manifest', 'roles.yaml'), 'roles: [\n');
+    writeFileSync(path.join(repoPath, 'tags.yaml'), 'skills:\n  a: [frontend]\nrules: {}\n');
+    useConfig({ primaryRole: 'hai' });
+
+    await expect(tagsList({})).resolves.toBeUndefined();
+
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('frontend'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Could not count untagged skills'));
+    expect(log.dim).not.toHaveBeenCalled();
   });
 });

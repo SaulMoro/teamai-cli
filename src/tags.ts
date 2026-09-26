@@ -274,13 +274,20 @@ export async function tagsRemove(
  * add skills from elsewhere. So an untagged skill is synced exactly when pull
  * delivers it, and asking pull's own resolver keeps roles, exclusions and
  * same-name skills counted the way pull counts them. Null when pull would stop
- * on a delivery conflict, or the team config is missing, so there is no count
- * to show.
+ * on a delivery conflict, the team config is missing, or the resolver fails
+ * (for example on a malformed manifest), so there is no count to show. The
+ * count is only a hint, so a resolver failure warns instead of aborting the
+ * listing that is already on screen.
  */
 async function countUntaggedDeliveredSkills(localConfig: LocalConfig, tagsConfig: TagsConfig): Promise<number | null> {
     const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
     if (!teamConfig) return null;
-    const desired = await resolveDesiredSkills(teamConfig, localConfig, await buildRolePullContext(localConfig));
-    if (desired.kind !== 'resolved') return null;
-    return desired.items.filter((item) => !tagsConfig.skills[item.name]?.length).length;
+    try {
+        const desired = await resolveDesiredSkills(teamConfig, localConfig, await buildRolePullContext(localConfig));
+        if (desired.kind !== 'resolved') return null;
+        return desired.items.filter((item) => !tagsConfig.skills[item.name]?.length).length;
+    } catch (e) {
+        log.warn(`Could not count untagged skills: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+    }
 }
