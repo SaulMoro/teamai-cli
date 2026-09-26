@@ -292,6 +292,10 @@ scope: 'user',
 
       const parsed = YAML.parse(await fse.readFile(path.join(repoPath, 'env', 'env.yaml'), 'utf-8'));
       expect(parsed.variables).toEqual([{ key: 'DB_URL', value: 'new', role: ['frontend'] }]);
+      expect(log.warn).toHaveBeenCalledWith(
+        'env/env.yaml: variable "DB_URL" has unknown key `role:`, so pull does not deliver it. '
+          + 'Correct the key or remove it in env/env.yaml.',
+      );
     });
 
     it('preserves the scope of other variables when adding a new one', async () => {

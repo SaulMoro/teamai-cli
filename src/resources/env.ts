@@ -37,6 +37,11 @@ const EnvYamlSchema = z.object({
 export type EnvVariable = z.infer<typeof EnvVariableSchema>;
 export type EnvYaml = z.infer<typeof EnvYamlSchema>;
 
+/** The keys `variable` was written with that env.yaml does not know: pull does not deliver it (#822). */
+export function unknownEnvVariableKeys(variable: object): string[] {
+  return Object.keys(variable).filter((key) => !Object.hasOwn(EnvVariableSchema.shape, key));
+}
+
 /** A parsed env.yaml, or the reason it declares nothing. See `readEnvYaml`. */
 export type EnvYamlRead =
   | { ok: true; variables: EnvVariable[] }
