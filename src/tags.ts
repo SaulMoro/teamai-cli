@@ -22,7 +22,7 @@ import type { GlobalOptions, LocalConfig, TagsConfig } from './types.js';
  * instead of always reading/writing ~/.teamai/config.yaml (#85).
  */
 async function resolveTagsScope(options: GlobalOptions = {}): Promise<LocalConfig> {
-    const projectConfig = await detectProjectConfig();
+    const projectConfig = await detectProjectConfig(undefined, undefined, options);
     return projectConfig ?? (await requireInit(options)).localConfig;
 }
 
