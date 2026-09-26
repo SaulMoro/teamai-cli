@@ -13,6 +13,7 @@ import {
     saveCacheIndex,
     type CacheIndex,
 } from '../utils/cache-index.js';
+import { _resetState, _setLogFilePath, setVerbose } from '../utils/logger.js';
 
 // ─── Helpers ────────────────────────────────────────────
 
@@ -196,5 +197,65 @@ describe('cache-gc', () => {
         } finally {
             removeSpy.mockRestore();
         }
+    });
+
+    describe('verbose output', () => {
+        const CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
+        let lines: string[];
+
+        beforeEach(() => {
+            _setLogFilePath(path.join(tmpDir, 'debug.log'));
+            setVerbose(true);
+            lines = [];
+            vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+                lines.push(args.join(' '));
+            });
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+            setVerbose(false);
+            _resetState();
+        });
+
+        it('explains a failed deletion in English under -v', async () => {
+            await makeRepoDir(tmpDir, 'github/owner/stale', 100);
+            await saveCacheIndex({
+                version: 1,
+                updated_at: new Date().toISOString(),
+                entries: [{ key: 'github/owner/stale', size_bytes: 100, last_used: daysAgo(60) }],
+            });
+            vi.spyOn(fs, 'remove').mockRejectedValueOnce(new Error('EPERM'));
+
+            await gcCache({ staleDays: 30 });
+
+            const output = lines.join('\n');
+            expect(output).toContain('[gc] Failed to delete github/owner/stale, skipping: Error: EPERM');
+            expect(output).not.toMatch(CJK);
+        });
+
+        it('explains a pruned missing entry in English under -v', async () => {
+            await saveCacheIndex({
+                version: 1,
+                updated_at: new Date().toISOString(),
+                entries: [{ key: 'github/owner/gone', size_bytes: 200, last_used: daysAgo(0) }],
+            });
+
+            await getCacheStatus();
+
+            const output = lines.join('\n');
+            expect(output).toContain('[cache-status] github/owner/gone is no longer on disk; removed it from the index');
+            expect(output).not.toMatch(CJK);
+        });
+
+        it('explains an unreadable index in English under -v', async () => {
+            await fs.writeFile(path.join(tmpDir, '.cache-index.json'), '{"version":2}', 'utf8');
+
+            await loadCacheIndex();
+
+            const output = lines.join('\n');
+            expect(output).toContain('[cache-index] Unrecognized index format; using an empty index');
+            expect(output).not.toMatch(CJK);
+        });
     });
 });
