@@ -507,7 +507,10 @@ Upgrading from the per-checkout layout:
   has that the checkout's commit lacks, fetched first: the old checkout is
   never synced again, so it may miss a teammate's later import of the same MR
   (#823 item 21). When that fetch fails, every such file stays where it is
-  until a run can fetch, so a stale ref never queues a duplicate. It runs only under the sync lock, before the queue is listed,
+  until a run can fetch, so a stale ref never queues a duplicate; when
+  `git ls-remote` shows origin has no such branch (an offline first publish
+  never pushed it), origin adds nothing and the files are queued. A file of
+  that shape that cannot be read is skipped, never holding back the rest. It runs only under the sync lock, before the queue is listed,
   and never on a dry run, which publishes nothing from the queue either and
   `pull` reports as `Would publish N queued learning(s)` (#823 item 20); any
   other file in the checkout is left alone. The error is also printed as a warning, because

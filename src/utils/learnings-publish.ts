@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import type { SimpleGit } from 'simple-git';
 import { z } from 'zod';
 
-import { ensureDir } from './fs.js';
+import { ensureDir, writeFileAtomic } from './fs.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { createGit } from './git.js';
 import { learningsBranch } from './learnings-branch.js';
@@ -205,7 +205,12 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
       const named = IMPORT_REMNANT_NAME.exec(path.posix.basename(rel));
       if (!named) continue;
       const file = path.join(checkout, rel);
-      const content = await fs.promises.readFile(file, 'utf-8');
+      // One that cannot be read, such as a dangling link, must not hold back the rest on every run.
+      const content = await fs.promises.readFile(file, 'utf-8').catch((e: unknown) => {
+        log.debug(`[learnings] cannot read ${file}: ${failureReason(e)}`);
+        return null;
+      });
+      if (content === null) continue;
       const { data } = parseFrontmatter(content);
       const mr = sourceMr(data);
       if (mr === null) continue;
@@ -244,7 +249,7 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
     for (const remnant of remnants) {
       const covered = known.find((k) => k.content === remnant.content || k.mr === remnant.mr);
       if (covered) {
-        await fs.promises.rm(remnant.file, { force: true });
+        if (!await removeRemnant(remnant.file)) continue;
         log.warn(`Removed ${remnant.file}, which an older teamai import --from-mr left unpublished: ${covered.label} already has it.`);
         continue;
       }
@@ -254,7 +259,8 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
         log.debug(`[learnings] could not queue ${remnant.file}: ${saved.status}`);
         break;
       }
-      await fs.promises.rm(remnant.file, { force: true });
+      // Queued even when it cannot go: the next run finds the queued copy and removes it then.
+      await removeRemnant(remnant.file);
       queued.push(remnant.file);
       known.push({ label: `the contribution queue (${relPath})`, content: remnant.content, mr: remnant.mr });
     }
@@ -266,13 +272,32 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
   }
 }
 
+/** Whether the remnant is gone; a failure is logged and left for a later run. */
+async function removeRemnant(file: string): Promise<boolean> {
+  try {
+    await fs.promises.rm(file, { force: true });
+    return true;
+  } catch (e) {
+    log.debug(`[learnings] cannot remove ${file}: ${failureReason(e)}`);
+    return false;
+  }
+}
+
 /**
  * The learnings origin has and the checkout's commit lacks or holds another
- * version of, fetched just now. Null when origin cannot be fetched or compared.
+ * version of, fetched just now. None when origin has no learnings branch, as
+ * after an offline first publish. Null when origin cannot be reached or compared.
  */
 async function publishedSinceCheckout(git: SimpleGit): Promise<string[] | null> {
   try {
-    await fetchTrackingRef(git, learningsBranch.branch);
+    try {
+      await fetchTrackingRef(git, learningsBranch.branch);
+    } catch (e) {
+      // A fetch of a branch origin lacks fails too; ls-remote tells the two
+      // apart, succeeding with no output only when origin answered without it.
+      if ((await git.raw(['ls-remote', '--heads', 'origin', `refs/heads/${learningsBranch.branch}`])).trim() !== '') throw e;
+      return [];
+    }
     const diff = await git.raw(['diff', '-z', '--name-only', '--no-renames', '--diff-filter=AM', 'HEAD', `origin/${learningsBranch.branch}`, '--', 'learnings']);
     return diff.split('\0').filter((f) => f.endsWith('.md'));
   } catch (e) {
@@ -336,9 +361,9 @@ async function maintenanceRecordsDir(checkout: string): Promise<string> {
 
 async function recordMaintenance(checkout: string, record: MaintenanceRecord): Promise<void> {
   const dir = await maintenanceRecordsDir(checkout);
-  await ensureDir(dir);
   const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.json`;
-  await fs.promises.writeFile(path.join(dir, name), JSON.stringify(record), 'utf-8');
+  // Atomic: a record cut short by a crash would otherwise be read on every publish.
+  await writeFileAtomic(path.join(dir, name), JSON.stringify(record));
 }
 
 /** Publish every recorded maintenance change, dropping the records once origin has them. Never throws. */
@@ -348,11 +373,26 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
     if (!fs.existsSync(checkout)) return { status: 'already-present' };
     const dir = await maintenanceRecordsDir(checkout);
     const records: Array<MaintenanceRecord & { file: string }> = [];
-    for (const name of await fs.promises.readdir(dir).catch(() => [])) {
+    // `.json` only: an interrupted atomic write leaves a `.tmp` copy beside them.
+    for (const name of (await fs.promises.readdir(dir).catch(() => [])).filter((n) => n.endsWith('.json'))) {
       const file = path.join(dir, name);
-      const parsed = MaintenanceRecord.safeParse(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
-      if (parsed.success) records.push({ ...parsed.data, file });
-      else log.debug(`[learnings] skipping unreadable maintenance record ${file}`);
+      let problem: string;
+      try {
+        const parsed = MaintenanceRecord.safeParse(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
+        if (parsed.success) {
+          records.push({ ...parsed.data, file });
+          continue;
+        }
+        problem = 'not a maintenance record';
+      } catch (e) {
+        problem = failureReason(e);
+      }
+      // One bad record must not hold back the others on every later publish.
+      await fs.promises.rm(file, { force: true }).catch(() => undefined);
+      log.warn(
+        `Removed unreadable maintenance record ${file} (${problem}). A maintenance change it described ` +
+          `that is not on the learnings branch stays uncommitted in ${checkout}; check with git -C "${checkout}" status.`,
+      );
     }
     if (records.length === 0) return { status: 'already-present' };
     const message = records.length === 1 ? records[0].message : `[teamai] Publish ${records.length} learnings maintenance runs`;

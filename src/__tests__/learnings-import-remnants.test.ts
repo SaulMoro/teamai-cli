@@ -260,6 +260,29 @@ describe('a learning an older import --from-mr left untracked in the learnings c
     expect(await listPendingLearnings(config)).toEqual([]);
   });
 
+  it('is queued and published when origin has no learnings branch, as after an offline first publish', async () => {
+    const { config, origin, checkout } = await setUp();
+    await simpleGit(origin).raw(['branch', '-D', 'teamai-learnings']);
+    const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect((await publishedFiles(origin)).filter((f) => QUEUED_NAME.test(f))).toHaveLength(1);
+    expect(await listPendingLearnings(config)).toEqual([]);
+  });
+
+  it('is queued even when another file of the same shape cannot be read', async () => {
+    const { config, origin, checkout } = await setUp();
+    const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
+    fs.symlinkSync(path.join(tmp, 'nowhere.md'), path.join(checkout, 'learnings', '2026-09-19-Broken.md'));
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect((await publishedFiles(origin)).filter((f) => QUEUED_NAME.test(f))).toHaveLength(1);
+  });
+
   it('is removed, and published once, when the queue already holds the same content', async () => {
     const { config, origin, checkout } = await setUp();
     await savePendingLearning(config, 'quokka-copy-2026-09-21-bbb222.md', remnant('https://github.com/acme/app/pull/77'));
@@ -360,6 +383,27 @@ describe('publishing what maintenance changed (#823)', () => {
 
     expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
     expect(await simpleGit(checkout).raw(['status', '--porcelain'])).toBe('');
+  });
+
+  it('publishes the readable records and removes, naming it, one a crash left truncated', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    const release = holdLearningsLock(config);
+    expect(await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten])).toEqual({ status: 'busy' });
+    release();
+    const records = path.resolve(checkout, (await simpleGit(checkout).raw(['rev-parse', '--git-path', 'teamai-maintenance'])).trim());
+    const truncated = path.join(records, '0-truncated.json');
+    fs.writeFileSync(truncated, '{"message":"[teamai] Prune","fi');
+    const warned = watchWarnings();
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
+    expect(fs.readdirSync(records)).toEqual([]);
+    expect(warned()).toContain(truncated);
   });
 
   it('pushes a change it committed and could not push on the next publish, with nothing queued', async () => {
