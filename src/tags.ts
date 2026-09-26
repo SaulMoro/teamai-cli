@@ -97,7 +97,7 @@ export async function tagsList(): Promise<void> {
 /**
  * Subscribe to one or more tags.
  */
-export async function tagsSubscribe(tags: string[], options: GlobalOptions): Promise<void> {
+export async function tagsSubscribe(tags: string[], _options: GlobalOptions): Promise<void> {
     if (tags.length === 0) {
         log.error('Please specify at least one tag. Example: teamai tags subscribe hai gpu');
         return;
@@ -131,7 +131,7 @@ export async function tagsSubscribe(tags: string[], options: GlobalOptions): Pro
 /**
  * Unsubscribe from one or more tags.
  */
-export async function tagsUnsubscribe(tags: string[], options: GlobalOptions): Promise<void> {
+export async function tagsUnsubscribe(tags: string[], _options: GlobalOptions): Promise<void> {
     if (tags.length === 0) {
         log.error('Please specify at least one tag. Example: teamai tags unsubscribe hai');
         return;
