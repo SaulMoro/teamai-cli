@@ -105,8 +105,10 @@ skills, rules and agents too, so it adds its revision to that entry's push
 bases, creating the entry the same way if there is none, and leaves the entry's
 `rev` alone. So does any pull whose docs mirror or submodule update fails: it
 leaves its revision marker for the retry, but the skills, rules and agents it
-delivered are at the new revision. Like a full pull, an inherited pull already
-synced at the team's revision writes nothing (#823).
+delivered are at the new revision. A full pull that holds skills or agents on a
+namespace collision writes its revision as `rev` but keeps the entry's earlier
+bases as push bases, since the held copies stay at them. Like a full pull, an
+inherited pull already synced at the team's revision writes nothing (#823).
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

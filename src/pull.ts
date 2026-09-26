@@ -1053,6 +1053,8 @@ async function pullForScope(
   // Set when two active namespaces collide on a skill: skills are neither
   // installed nor cleaned up this run.
   let skillsHeld = false;
+  // Set on the same collision among agents.
+  let agentsHeld = false;
   let knownRepoSkillNames: Set<string> | null = null;
   // name → team-repo source dir, for the data-safety check in Step 3b cleanup.
   let knownRepoSkillSources: Map<string, string> | null = null;
@@ -1154,6 +1156,7 @@ async function pullForScope(
         // Only agents stop; the revocation pass below sees the same collision
         // and leaves them alone too.
         log.warn(`[${scopeLabel}] ${describeDeliveryConflict(desired)}. Agents were not updated this run; the installed ones are kept.`);
+        agentsHeld = true;
         continue;
       }
       items = desired.items;
@@ -1355,6 +1358,15 @@ async function pullForScope(
       }
     }
     const previousRev = state[revisionField];
+    // Skills or agents a collision held stay at the revisions push compared
+    // them with before this pull: read those before the marker moves below, so
+    // the new record keeps them, as push keeps its own (#823).
+    const heldBases = (skillsHeld || agentsHeld) && recordKey
+      ? await resolveCheckoutBases(localConfig, state)
+      : undefined;
+    const keptBases = heldBases && (heldBases.source === 'checkout' || localConfig.scope === 'user')
+      ? heldBases.revs.filter((rev) => rev !== deliveredRev).slice(0, MAX_PUSH_BASE_REVS)
+      : [];
     const syncedTargets = currentTargets
       ?? await getInstalledResourceTargets(freshConfig, localConfig);
     if (!docsSyncFailed) {
@@ -1389,9 +1401,10 @@ async function pullForScope(
         ? await liveCheckoutRecords(localConfig.projectRoot, state.lastPullByWorkspace)
         : undefined;
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
+      const record: CheckoutRecord = { rev: deliveredRev, targets: syncedTargets };
       state.lastPullByWorkspace = {
         ...others,
-        [recordKey]: { rev: deliveredRev, targets: syncedTargets },
+        [recordKey]: keptBases.length > 0 ? { ...record, pushBaseRevs: keptBases } : record,
       };
     }
     await saveStateForScope(state, localConfig);
