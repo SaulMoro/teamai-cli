@@ -35,6 +35,12 @@ git@git.example.com:group/repo.git      → 检查 GitLab，未确认则 git
 
 初始化成功后，provider 选择会写入 team 仓库的 `teamai.yaml` 的 `provider` 字段，后续 `push` / `pull` 都按这个值来。探测不会自动修改已有的 provider。
 
+### 手动指定 provider（`--provider`）
+
+`teamai init <input> --provider <name>` 跳过上面的自动检测（包括 GitLab 探测），直接使用指定的 provider，取值与 `teamai.yaml` 的 `provider` 相同：`tgit`、`github`、`cnb`、`gitlab`、`gitcode`、`git`。典型用法是团队仓库在自建 GitLab 上、但成员只需要普通 Git：`--provider git` 不做平台登录、不检查 `GITLAB_TOKEN`，clone/pull/push 走已有的 Git 凭据。
+
+该选择写入成员本机的本地配置（`provider` 字段），只影响这台机器：创建 PR/MR（`push`、`remove` 等）和 `doctor` 的 provider 检查优先使用它，团队仓库的 `teamai.yaml` 不变。不带 `--provider` 重新运行 `init` 即恢复自动检测。
+
 ## 通用 Git Provider（自建/私有仓库）
 
 完整 HTTPS 或 SSH URL 的 host 若不在已知列表、不匹配显式 GitLab 配置，且探测未确认 GitLab，就会选择 `git` provider。例如：

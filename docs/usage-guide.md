@@ -114,6 +114,8 @@ teamai init https://git.example.com/yourgroup/yourrepo
 
 For an unknown host, `init` makes an anonymous GitLab sign-in page check with a three-second total timeout. If confirmed as GitLab, it stops before authentication, cloning, or writing configuration and asks you to set the instance URL and token, then retry. The check does not send tokens or follow redirects. If it cannot confirm GitLab, initialization continues with the generic `git` provider, which supports Git transport but cannot create repos or PRs/MRs automatically. Set `GITLAB_URL` explicitly for instances behind SSO, deployed under a subpath, or otherwise inaccessible to the check.
 
+Members who only sync and never need the CLI to open merge requests can skip the token: see [plain Git with `--provider git`](#member-onboarding).
+
 **Already initialized with `provider: git`?** Set the variables above and change `provider` to `gitlab` in the team repo's `teamai.yaml`. Setting the environment variables alone does not change an existing provider selection. A failed `teamai push` may already have pushed the branch; if its diagnostic detects GitLab, it prints these recovery steps. See [provider configuration](providers.md#gitlab-provider含自托管).
 
 ### Project Scope (default)
@@ -540,6 +542,19 @@ teamai init https://github.com/yourorg/yourrepo
 npm install -g teamai-cli
 teamai init https://github.com/yourorg/yourrepo --scope user
 ```
+
+**Plain Git, no platform token (`--provider git`):**
+
+When the team repo is on a platform whose provider needs a token (for example self-hosted GitLab and `GITLAB_TOKEN`), a member who never needs the CLI to open PRs/MRs can use their existing Git authentication (SSH key or credential helper) instead:
+
+```bash
+teamai init https://gitlab.example.com/yourgroup/yourrepo --provider git
+```
+
+- `--provider` skips auto-detection and uses the named provider: `tgit`, `github`, `cnb`, `gitlab`, `gitcode`, or `git`. `git` runs no platform login or token check.
+- The choice is saved in this machine's local config only. The team's `teamai.yaml` is unchanged, so other members keep auto-detection.
+- `pull` works as usual. `push` pushes the branch but cannot open a PR/MR, so open it on the Git host yourself; the command exits non-zero because that step did not run.
+- Re-running `teamai init` without `--provider` returns to auto-detection.
 
 **HTTP mode (read-only consumer):**
 
