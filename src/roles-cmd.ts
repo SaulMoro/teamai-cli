@@ -181,7 +181,7 @@ export async function rolesSet(
     primaryRole: string,
     options: GlobalOptions & { add?: string[] },
 ): Promise<void> {
-    const { localConfig } = await autoDetectInit();
+    const { localConfig } = await autoDetectInit(undefined, options);
     const repoPath = localConfig.repo.localPath;
 
     let manifest;

@@ -21,9 +21,9 @@ import type { GlobalOptions, LocalConfig, TagsConfig } from './types.js';
  * so `tags list/subscribe/unsubscribe` agree with what `recall` actually queries
  * instead of always reading/writing ~/.teamai/config.yaml (#85).
  */
-async function resolveTagsScope(): Promise<LocalConfig> {
+async function resolveTagsScope(options: GlobalOptions = {}): Promise<LocalConfig> {
     const projectConfig = await detectProjectConfig();
-    return projectConfig ?? (await requireInit()).localConfig;
+    return projectConfig ?? (await requireInit(options)).localConfig;
 }
 
 /**
@@ -106,7 +106,7 @@ export async function tagsSubscribe(tags: string[], options: GlobalOptions): Pro
         return;
     }
 
-    const localConfig = await resolveTagsScope();
+    const localConfig = await resolveTagsScope(options);
     const existing = new Set(localConfig.subscribedTags ?? []);
 
     const newTags: string[] = [];
@@ -145,7 +145,7 @@ export async function tagsUnsubscribe(tags: string[], options: GlobalOptions): P
         return;
     }
 
-    const localConfig = await resolveTagsScope();
+    const localConfig = await resolveTagsScope(options);
     const existing = new Set(localConfig.subscribedTags ?? []);
 
     const removed: string[] = [];

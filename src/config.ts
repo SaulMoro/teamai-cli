@@ -24,7 +24,14 @@ import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
 import { log } from './utils/logger.js';
 import { loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 
-async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string): Promise<LocalConfig> {
+/** Loads that serve a --dry-run keep the legacy role migration in memory. */
+type LoadOptions = { dryRun?: boolean };
+
+async function migrateLegacyRoleConfig(
+  config: LocalConfig,
+  configPath: string,
+  options: LoadOptions = {},
+): Promise<LocalConfig> {
   if (config.primaryRole) {
     return config;
   }
@@ -56,6 +63,10 @@ async function migrateLegacyRoleConfig(config: LocalConfig, configPath: string):
     resourceProfileVersion: manifest.version,
   };
 
+  if (options.dryRun) {
+    log.info('[dry-run] Would migrate legacy teamai config to default role profile: hai');
+    return migrated;
+  }
   await writeFileAtomic(expandHome(configPath), YAML.stringify(migrated));
   log.info('Migrated legacy teamai config to default role profile: hai');
   return migrated;
@@ -82,14 +93,14 @@ export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | n
 /**
  * Load the local config (~/.teamai/config.yaml)
  */
-export async function loadLocalConfig(): Promise<LocalConfig | null> {
+export async function loadLocalConfig(options: LoadOptions = {}): Promise<LocalConfig | null> {
   const configPath = expandHome(getUserConfigPath());
   const content = await readFileSafe(configPath);
   if (!content) return null;
   try {
     const raw = YAML.parse(content);
     const parsed = LocalConfigSchema.parse(raw);
-    return await migrateLegacyRoleConfig(parsed, configPath);
+    return await migrateLegacyRoleConfig(parsed, configPath, options);
   } catch (e) {
     log.error(`Invalid local config: ${describeConfigError(e)}`);
     return null;
@@ -159,8 +170,8 @@ export function describeUnreadableConfig(problem: string): string {
 /**
  * Require that teamai is initialized (local config exists)
  */
-export async function requireInit(): Promise<TeamaiInit> {
-  const localConfig = await loadLocalConfig();
+export async function requireInit(options: LoadOptions = {}): Promise<TeamaiInit> {
+  const localConfig = await loadLocalConfig(options);
   if (!localConfig) return throwMissingOrInvalid(expandHome(getUserConfigPath()));
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
   if (!teamConfig) return throwTeamConfigMissingOrInvalid(localConfig.repo.localPath);
@@ -598,12 +609,12 @@ export async function requireInitForScope(
  * If cwd has a project-scope config, uses that; otherwise falls back to user scope.
  * This is the recommended entry point for commands that support both scopes.
  */
-export async function autoDetectInit(cwd?: string): Promise<TeamaiInit> {
+export async function autoDetectInit(cwd?: string, options: LoadOptions = {}): Promise<TeamaiInit> {
   const projectConfig = await detectProjectConfig(cwd);
   if (projectConfig) {
     const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
     if (!teamConfig) return throwTeamConfigMissingOrInvalid(projectConfig.repo.localPath);
     return { localConfig: projectConfig, teamConfig };
   }
-  return requireInit();
+  return requireInit(options);
 }
