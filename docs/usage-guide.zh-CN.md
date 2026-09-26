@@ -493,7 +493,7 @@ teamai init https://gitlab.example.com/yourgroup/yourrepo --provider git
 ```
 
 - `--provider` 跳过自动检测，直接使用指定的 provider：`tgit`、`github`、`cnb`、`gitlab`、`gitcode` 或 `git`。`git` 不做平台登录，也不检查 token。
-- 该选择只保存在本机的本地配置中。已有的 `teamai.yaml` 不变，其他成员仍使用团队的 provider。`init` 新建 `teamai.yaml` 时，`--provider git` 写入的仍是按 URL 检测到的 provider。
+- 该选择只保存在本机的本地配置中。已有的 `teamai.yaml` 不变，其他成员仍使用团队的 provider。`init` 新建 `teamai.yaml` 时，`--provider git` 写入的仍是 `init` 不带该参数时检测到的 provider；若 host 是尚未配置的自建 GitLab，`init` 会停止并提示设置 `GITLAB_URL`，而不是写入 `git`。
 - 自建 GitLab 使用 `--provider gitlab` 时仍需设置 `GITLAB_URL`（以及 `GITLAB_TOKEN`）。未设置时 `init` 会直接停止，否则 GitLab API 会指向 gitlab.com。
 - `pull` 照常工作。`push` 会推送分支，但无法创建 PR/MR，需要到 Git 平台上手动创建；由于这一步没有完成，命令以非零退出码结束。
 - 不带 `--provider` 重新运行 `teamai init` 即恢复自动检测。
