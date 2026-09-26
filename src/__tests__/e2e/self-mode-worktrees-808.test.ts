@@ -1569,6 +1569,44 @@ describe('a checkout an older git-mode install left (#808)', () => {
     expect(git(['log', '--all', '--name-only', '--format='], teamB.bare)).not.toContain('team-a-note-');
   });
 
+  it("moves team A's config aside when init reuses a clone of team B an earlier init left beside it and then fails, and carries its settings on the rerun (#823 item 17)", async () => {
+    const install = setUpGitInstall();
+    const { home, projectRoot } = install;
+    const teamA = serveTeamRepo(install, 'team-a');
+    const teamB = serveTeamRepo(install, 'team-b');
+
+    const initA = await runCLI(['init', teamA.url, '--scope', 'project', '--force', '--agent', 'claude'], projectRoot, home);
+    expect(initA.code, initA.output).toBe(0);
+    const partition = partitionOf(install);
+    const config = path.join(partition, 'config.yaml');
+    // What an init that recloned team B and stopped before saving left: team A's config beside team B's clone.
+    const clone = path.join(partition, 'team-repo');
+    fs.rmSync(clone, { recursive: true, force: true });
+    git(['clone', '-q', teamB.bare, clone], install.sandbox);
+    git(['remote', 'set-url', 'origin', teamB.url], clone);
+    // Without team B's rewrite the clone names team B itself, so init reuses it,
+    // and with HTTPS refused its refresh fails.
+    const gitconfig = path.join(home, '.gitconfig');
+    const rewrites = fs.readFileSync(gitconfig, 'utf8');
+    fs.writeFileSync(gitconfig, rewrites.replace(`[url "${teamB.bare}"]\n\tinsteadOf = ${teamB.url}\n`, ''));
+
+    const failed = await runCLI(['init', teamB.url, '--scope', 'project', '--force'], projectRoot, home, { GIT_ALLOW_PROTOCOL: 'file' });
+
+    expect(failed.code, failed.output).toBe(1);
+    expect(failed.output).toContain('using existing clone');
+    expect(failed.output).toContain('Failed to refresh existing clone');
+    expect(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '', failed.output).not.toContain(teamA.url);
+    expect(fs.readFileSync(`${config}.previous`, 'utf8')).toContain(teamA.url);
+    fs.writeFileSync(gitconfig, rewrites);
+
+    const initB = await runCLI(['init', teamB.url, '--scope', 'project', '--force'], projectRoot, home);
+
+    expect(initB.code, initB.output).toBe(0);
+    const saved = fs.readFileSync(config, 'utf8');
+    expect(saved).toContain(teamB.url);
+    expect(saved).toMatch(/enabledAgents:\n\s+- claude\n/);
+  });
+
   it("carries the set-aside config's settings into the init that reruns after the replacement clone failed (#823 item 17)", async () => {
     const install = setUpGitInstall();
     const { home, projectRoot } = install;

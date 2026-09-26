@@ -428,7 +428,7 @@ against another team repository of the same kind does the same, to
 `pending-learnings.<kind>-<repo>` (for example
 `pending-learnings.git-github.com-org-team-a`); the same repository written
 another way (with or without `.git`, SSH or HTTPS) keeps the queue. Before it
-clones the other team repository, `init` moves the old `config.yaml` to
+clones the other team repository, or reuses a clone of it an earlier `init` left, `init` moves the old `config.yaml` to
 `config.yaml.previous` beside it and says so: if `init` stops before it saves
 the new config, every command asks for `teamai init` instead of running the old
 team's config against the new clone. Run `init` again: it carries that config's

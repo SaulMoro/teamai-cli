@@ -21,6 +21,7 @@ import {
   dropPendingLearning,
   listPendingForInstall,
   listPendingLearnings,
+  readPendingForInstall,
   readPendingLearning,
   savePendingLearning,
 } from './pending-learnings.js';
@@ -227,11 +228,16 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
     // lost. Without a current origin every remnant stays for a later run.
     const known = await learningsOnOrigin(git);
     if (known === null) return;
-    for (const rel of await listPendingLearnings(localConfig)) {
-      const content = await readPendingLearning(localConfig, rel);
-      if (content !== null) {
-        known.push({ label: `the contribution queue (${rel})`, content, mr: sourceMr(parseFrontmatter(content).data) });
-      }
+    // The queue only while it is still this install's: after init switched the
+    // project to another team repository, it holds that install's learnings, and
+    // a remnant removed against one of them never reached this one's repository.
+    const queue = await readPendingForInstall(localConfig);
+    if (queue.status !== 'read') {
+      log.debug(`[learnings] leaving what an older import --from-mr left for a later run: the queue is ${queue.status}`);
+      return;
+    }
+    for (const { relPath, content } of queue.queued) {
+      known.push({ label: `the contribution queue (${relPath})`, content, mr: sourceMr(parseFrontmatter(content).data) });
     }
 
     const { generateFilename, resolveLearningsSubdir } = await import('../contribute.js');

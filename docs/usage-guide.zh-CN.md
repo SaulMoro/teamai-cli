@@ -382,7 +382,7 @@ git 同一分支只能在一个 worktree 中检出，所以仓库的所有检出
 learning 会被移到同一数据目录下的 `pending-learnings.<旧类型>`，新安装不会发布它们；`init`
 会说明数量和位置，并删除为旧仓库构建的搜索索引（下一次 `recall` 会重建）。以同一类型对另一个团队仓库重新运行 `init`
 也同样处理，队列移到 `pending-learnings.<类型>-<仓库>`（例如 `pending-learnings.git-github.com-org-team-a`）；
-同一仓库换一种写法（带或不带 `.git`、SSH 或 HTTPS）不会移动队列。克隆另一个团队仓库之前，
+同一仓库换一种写法（带或不带 `.git`、SSH 或 HTTPS）不会移动队列。克隆另一个团队仓库之前（或复用之前某次 `init` 留下的该仓库克隆之前），
 `init` 会把旧的 `config.yaml` 移到旁边的 `config.yaml.previous` 并给出提示：若 `init` 在保存新配置前停止，
 所有命令都会要求先运行 `teamai init`，而不会用旧团队的配置操作新的克隆。重新运行 `init` 即可：它会从 `config.yaml.previous` 沿用该配置的设置（agent、工具根目录）。若旧安装的 `config.yaml` 存在但无法读取，
 就无从得知队列属于谁：`init` 会把它移到 `pending-learnings.unknown`，指出该文件，并删除搜索索引。尚未升级的检出中的旧队列也同样处理：

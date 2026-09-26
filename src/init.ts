@@ -1441,6 +1441,24 @@ export async function init(options: GlobalOptions & {
   // Step 3: Clone or link repo
   const defaultLocalPath = path.join(teamaiHome, 'team-repo');
   const localPath = expandHome(defaultLocalPath);
+  // The clone init uses is another install's than the config beside it, whether
+  // it clones it now or reuses one an earlier init left: settle that install
+  // now, as the config save below would, instead of leaving its config to run
+  // against this clone should init stop first.
+  const settleReplacedInstall = async (): Promise<void> => {
+    const next: LocalConfig = {
+      repo: { localPath, remote: repoInfo.httpsUrl },
+      username,
+      scope,
+      projectRoot,
+      additionalRoles: [],
+      ...(scope === 'project' ? { dataHome: teamaiHome } : {}),
+    };
+    const replacesAnother = existingLocalConfig
+      ? !sameQueueOwner(queueOwner(existingLocalConfig), queueOwner(next))
+      : await pathExists(existingConfigPath);
+    if (replacesAnother) await settleModeSwitch(existingLocalConfig, next, () => moveConfigAside(existingConfigPath, next));
+  };
 
   if (await pathExists(localPath)) {
     if (await isGitRepo(localPath)) {
@@ -1474,6 +1492,7 @@ export async function init(options: GlobalOptions & {
         }
       } else {
         log.info(`Repo already exists at ${localPath}, using existing clone`);
+        await settleReplacedInstall();
         // Refresh before resolveActiveProjects so selectors like `--project all`
         // expand against the current remote manifest, not a stale local snapshot
         // (re-running init after a new project is added would otherwise keep the
@@ -1507,21 +1526,7 @@ export async function init(options: GlobalOptions & {
   }
 
   if (!await pathExists(localPath)) {
-    // The clone about to land here is another install's than the config beside
-    // it: settle that install now, as the config save below would, instead of
-    // leaving its config to run against this clone should init stop first.
-    const next: LocalConfig = {
-      repo: { localPath, remote: repoInfo.httpsUrl },
-      username,
-      scope,
-      projectRoot,
-      additionalRoles: [],
-      ...(scope === 'project' ? { dataHome: teamaiHome } : {}),
-    };
-    const replacesAnother = existingLocalConfig
-      ? !sameQueueOwner(queueOwner(existingLocalConfig), queueOwner(next))
-      : await pathExists(existingConfigPath);
-    if (replacesAnother) await settleModeSwitch(existingLocalConfig, next, () => moveConfigAside(existingConfigPath, next));
+    await settleReplacedInstall();
 
     const cloneSpin = spinner('Cloning team repo...').start();
     const cloneTarget = provider.name === 'git'

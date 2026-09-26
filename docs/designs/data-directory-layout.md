@@ -534,7 +534,12 @@ Upgrading from the per-checkout layout:
   until a run can fetch, so a stale ref never queues a duplicate; when
   `git ls-remote` shows origin has no such branch (an offline first publish
   never pushed it), origin adds nothing and the files are queued. A file of
-  that shape that cannot be read is skipped, never holding back the rest. It runs only under the sync lock, before the queue is listed,
+  that shape that cannot be read is skipped, never holding back the rest. The
+  queue is read under the queue lock, and only while the data home's config
+  still names the install the command loaded (`readPendingForInstall`, the
+  check `listPendingForInstall` makes): after `init` switched the project to
+  another team repository the queue holds that install's learnings, so while it
+  does, or while the lock stays busy, every such file stays where it is. It runs only under the sync lock, before the queue is listed,
   and never on a dry run, which publishes nothing from the queue either and
   `pull` reports as `Would publish N queued learning(s)` (#823 item 20); any
   other file in the checkout is left alone. The error is also printed as a warning, because
@@ -618,7 +623,8 @@ a fresh install, so `init` checks for the file, and with learnings queued moves
 them to `pending-learnings.unknown` the same way, the warning naming that config;
 queued or not, it drops the search indexes, as on an owner change.
 When `init` is about to clone another owner's team repository where the old
-install's clone was, it settles the old install right then, before the clone,
+install's clone was, or reuses a clone of it that an earlier `init` left there,
+it settles the old install right then, before the clone or the refresh,
 the same way (queue set aside, indexes dropped), and moves the old
 `config.yaml` to the first free `config.yaml.previous[.<n>]` instead of saving
 (#823 item 17). The save at the end still compares with the old install

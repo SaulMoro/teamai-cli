@@ -317,6 +317,22 @@ describe('a learning an older import --from-mr left untracked in the learnings c
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  it('is left where it is when init switched the install after this command loaded its config, even though the new queue has the same merge request', async () => {
+    const { config, origin, checkout } = await setUp();
+    const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
+    // What init to another team repo leaves: its config, and a learning its install queued.
+    const other: LocalConfig = { ...config, repo: { ...config.repo, remote: path.join(tmp, 'other.git') } };
+    writeInstallConfig(other);
+    await savePendingLearning(other, 'quokka-2026-09-21-ccc444.md', remnant('https://github.com/acme/app/pull/42', 'Quokka, the other team'));
+
+    const report = await publishQueuedLearnings(config, 'alice');
+
+    expect(report.installChanged).toBeDefined();
+    expect(fs.readFileSync(file, 'utf8')).toBe(remnant());
+    expect(await listPendingLearnings(other)).toEqual(['quokka-2026-09-21-ccc444.md']);
+    expect((await publishedFiles(origin)).filter((f) => f.endsWith('.md'))).toEqual([]);
+  });
+
   it('is left where it is while another command holds the sync lock, which would queue it twice', async () => {
     const { config, origin, checkout } = await setUp();
     const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
