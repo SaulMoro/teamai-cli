@@ -585,8 +585,13 @@ async function commitAndPushAt(
         log.debug(`[${spec.logTag}] push failed after ${attempt} attempts: ${(pushErr as Error).message}`);
         return { status: 'failed', reason: (pushErr as Error).message };
       }
+      // The commit took only `files`: anything else staged or modified would
+      // make git refuse to rebase, on this attempt and every later one.
+      let carried: string | null = null;
       try {
         await fetchTrackingRef(git, spec.branch);
+        carried = await snapshotDirtyTree(git);
+        if (carried) await git.raw(['reset', '--hard', 'HEAD']);
         await git.rebase([`origin/${spec.branch}`]);
       } catch (rebaseErr) {
         log.debug(`[${spec.logTag}] rebase failed, retrying: ${(rebaseErr as Error).message}`);
@@ -597,6 +602,7 @@ async function commitAndPushAt(
           // no rebase in progress
         }
       }
+      if (carried) await applyDirtySnapshot(spec, git, carried);
     }
   }
   return { status: 'failed', reason: `push did not land after ${MAX_PUSH_RETRIES} attempts` };
@@ -748,9 +754,15 @@ async function snapshotDirtyTree(git: SimpleGit): Promise<string | null> {
 
 async function applyDirtySnapshot(spec: BranchWorktreeSpec, git: SimpleGit, sha: string): Promise<void> {
   try {
-    await git.raw(['stash', 'apply', sha]);
+    // `--index` keeps what was staged staged. It refuses, touching nothing,
+    // when the staged changes no longer apply; then restore the files alone.
+    await git.raw(['stash', 'apply', '--index', sha]);
   } catch {
-    // apply conflicts leave UU paths; restoreConflictedFiles recovers them
+    try {
+      await git.raw(['stash', 'apply', sha]);
+    } catch {
+      // apply conflicts leave UU paths; restoreConflictedFiles recovers them
+    }
   }
   await restoreConflictedFiles(spec, git);
 }

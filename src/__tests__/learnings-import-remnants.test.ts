@@ -406,6 +406,46 @@ describe('publishing what maintenance changed (#823)', () => {
     expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('learnings/staged-by-hand.md\n');
   });
 
+  it('publishes after a teammate pushed first, leaving a file someone else staged in the checkout staged', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    plant(checkout, 'staged-by-hand.md', 'not maintenance\n');
+    await simpleGit(checkout).add(['learnings/staged-by-hand.md']);
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    // The push is non-fast-forward, so the publish rebases, which git refuses with anything staged.
+    await teammatePublishes(origin, 'bob-2026-01-02-bbb222.md', '---\ntitle: Bob\n---\nBob.\n');
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]);
+
+    expect(result).toEqual({ status: 'published' });
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
+    expect(await publishedFiles(origin)).toContain('learnings/bob-2026-01-02-bbb222.md');
+    expect(await publishedFiles(origin)).not.toContain('learnings/staged-by-hand.md');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('learnings/staged-by-hand.md\n');
+    expect(fs.readFileSync(path.join(checkout, 'learnings', 'staged-by-hand.md'), 'utf8')).toBe('not maintenance\n');
+  });
+
+  it('refreshes an unpushed commit onto a teammate\'s push, leaving a file someone else staged in the checkout staged', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    expect((await offline(origin, () => publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]))).status).toBe('failed');
+    // An edit to a tracked file, which a plain `stash apply` restores unstaged (a new file it stages again).
+    fs.writeFileSync(path.join(checkout, '.gitignore'), 'edited by hand\n');
+    await simpleGit(checkout).add(['.gitignore']);
+    await teammatePublishes(origin, 'bob-2026-01-02-bbb222.md', '---\ntitle: Bob\n---\nBob.\n');
+
+    await learningsBranch.refresh(config, { pushIfCreated: false });
+
+    expect(fs.existsSync(path.join(checkout, 'learnings', 'bob-2026-01-02-bbb222.md'))).toBe(true);
+    expect(await simpleGit(checkout).raw(['rev-list', '--count', 'origin/teamai-learnings..HEAD'])).toBe('1\n');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('.gitignore\n');
+  });
+
   it('commits nothing when maintenance has nothing to stage, even with a file someone else staged in the checkout', async () => {
     const { config, origin, checkout } = await setUp();
     plant(checkout, 'staged-by-hand.md', 'not maintenance\n');
