@@ -708,6 +708,12 @@ export interface BuildIndexOptions {
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
+  /**
+   * The caller left sources out on purpose (a team manifest it cannot read):
+   * write the index even when it is far smaller than the one on disk, which
+   * would otherwise stay and serve what was left out (#823).
+   */
+  partial?: boolean;
 }
 
 /**
@@ -789,7 +795,7 @@ export async function buildIndex(
   // Guard: don't overwrite a healthy index with a significantly smaller one
   const targetPath = opts.indexPath ?? getSearchIndexPath();
   const existingIndex = await loadIndex(targetPath);
-  if (existingIndex && existingIndex.entries.length > 5 && entries.length < existingIndex.entries.length * 0.2) {
+  if (!opts.partial && existingIndex && existingIndex.entries.length > 5 && entries.length < existingIndex.entries.length * 0.2) {
     log.warn(`Index rebuild skipped: new index (${entries.length}) is <20% of existing (${existingIndex.entries.length}), likely partial failure`);
     return elapsed;
   }

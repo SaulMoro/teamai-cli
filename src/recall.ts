@@ -382,6 +382,8 @@ async function loadOrBuildScopeIndex(
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,
+        // Smaller by design: an older index kept by the shrink guard would serve what the warning left out.
+        partial: delivered === nothingDelivered,
       });
       index = await loadIndex(indexPath);
     } catch (e) {

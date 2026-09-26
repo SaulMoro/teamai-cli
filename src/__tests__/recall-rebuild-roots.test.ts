@@ -289,3 +289,65 @@ describe('recall rebuilding a missing index with a team manifest it cannot read 
       .not.toContainEqual(expect.stringContaining('No learnings available'));
   });
 });
+
+/**
+ * An older-format index as large as a full corpus used to survive the partial
+ * rebuild: the new index was under 20% of it, buildIndex's shrink guard kept
+ * the old file, and recall searched its docs, rules and skills, which the
+ * warning said were left out (#823).
+ */
+describe('recall rebuilding an older-format index with a team manifest it cannot read (#823)', () => {
+  const repo = (): string => path.join(tmp, '.teamai', 'team-repo');
+  const indexPath = (): string => path.join(tmp, '.teamai', 'search-index.json');
+  const warnings = (): string[] => vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-recall-stale-'));
+    process.env.HOME = tmp;
+    vi.mocked(log.warn).mockClear();
+    fs.mkdirSync(path.join(repo(), 'learnings'), { recursive: true });
+    for (let i = 0; i < 10; i++) {
+      fs.writeFileSync(path.join(repo(), 'learnings', `note-${i}.md`), `---\ntitle: note ${i}\n---\nretry budget for the gateway`);
+    }
+    fs.mkdirSync(path.join(repo(), 'manifest'), { recursive: true });
+    fs.writeFileSync(path.join(repo(), 'manifest', 'roles.yaml'), 'roles: [unclosed\n');
+    fs.mkdirSync(path.join(repo(), 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(repo(), 'rules', 'style.md'), '# retry budget\nretry budget for the gateway');
+    const stale = Array.from({ length: 100 }, (_, i) => ({
+      filename: `stale-${i}.md`, title: `stale ${i}`, type: ['docs', 'rules', 'skills'][i % 3],
+      tags: [], tokens: ['retry', 'budget'], date: '', author: '', votes: 0,
+    }));
+    fs.mkdirSync(path.dirname(indexPath()), { recursive: true });
+    fs.writeFileSync(indexPath(), JSON.stringify({ version: 1, entries: stale }));
+    vi.mocked(loadTeamConfig).mockResolvedValue({
+      team: 't', description: '', repo: 'r', provider: 'git', reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: {},
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(loadTeamConfig).mockResolvedValue(null);
+    process.env.HOME = realHome;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('replaces the older index with the learnings it rebuilt', async () => {
+    await recall('retry budget', {});
+
+    const index = JSON.parse(fs.readFileSync(indexPath(), 'utf8'));
+    expect(index.entries.map((e: { filename: string }) => e.filename).sort())
+      .toEqual(Array.from({ length: 10 }, (_, i) => `note-${i}.md`).sort());
+    expect(warnings()).toContainEqual(expect.stringContaining('Recall indexed learnings only'));
+    expect(warnings()).not.toContainEqual(expect.stringContaining('Index rebuild skipped'));
+  });
+  it('keeps the shrink guard when the manifest reads and the rebuild is not partial', async () => {
+    fs.rmSync(path.join(repo(), 'manifest', 'roles.yaml'));
+
+    await recall('retry budget', {});
+
+    const index = JSON.parse(fs.readFileSync(indexPath(), 'utf8'));
+    expect(index.entries).toHaveLength(100);
+    expect(warnings()).toContainEqual(expect.stringContaining('Index rebuild skipped'));
+  });
+});
