@@ -83,14 +83,16 @@ async function findPendingBootstrap(
 /**
  * The config a bootstrap would write, worked out without writing anything.
  * Null when the bootstrap cannot finish non-interactively (no remote, not
- * authenticated, no team config).
+ * authenticated, no team config). A dry run makes no provider auth call, so its
+ * config carries no username.
  */
 async function planSelfBootstrap(
   businessRepoRoot: string,
   partitionHome: string,
   marker: SelfModeMarker,
   silent: boolean,
-): Promise<{ localConfig: LocalConfig; teamConfig: TeamaiConfig; username: string } | null> {
+  dryRun: boolean,
+): Promise<{ localConfig: LocalConfig; teamConfig: TeamaiConfig; username: string; providerName: string } | null> {
   const localPath = path.join(businessRepoRoot, '.teamai');
 
   // Derive provider/remote: prefer the business repo origin, fall back to the
@@ -105,23 +107,29 @@ async function planSelfBootstrap(
   const providerName = marker.provider ?? detectProvider(remoteUrl);
   const provider = getProvider(providerName);
 
-  // Non-interactive gate: only proceed if already authenticated. Never trigger
-  // an interactive login from a hook — degrade to skip and let an explicit
-  // `teamai init .` handle first-time auth.
-  if (!provider.isAuthenticated()) {
-    if (!silent) {
-      log.warn('This is a teamai single-repo project, but you are not authenticated yet.');
-      log.warn(`Run \`teamai init .\` (or authenticate with your git provider) to finish setup.`);
+  // A dry run skips both auth calls: isAuthenticated() only checks that a token
+  // is present, so with a stale one authenticate() falls through to an
+  // interactive login that stores credentials (`gh auth login --web`, GitCode's
+  // token prompt).
+  let username = '';
+  if (!dryRun) {
+    // Non-interactive gate: only proceed if already authenticated. Never trigger
+    // an interactive login from a hook — degrade to skip and let an explicit
+    // `teamai init .` handle first-time auth.
+    if (!provider.isAuthenticated()) {
+      if (!silent) {
+        log.warn('This is a teamai single-repo project, but you are not authenticated yet.');
+        log.warn(`Run \`teamai init .\` (or authenticate with your git provider) to finish setup.`);
+      }
+      return null;
     }
-    return null;
-  }
 
-  let username: string;
-  try {
-    username = await provider.authenticate();
-  } catch {
-    log.debug('[bootstrap] could not resolve username; skipping');
-    return null;
+    try {
+      username = await provider.authenticate();
+    } catch {
+      log.debug('[bootstrap] could not resolve username; skipping');
+      return null;
+    }
   }
 
   let repoInfo;
@@ -179,23 +187,25 @@ async function planSelfBootstrap(
     if (!(error instanceof RolesManifestNotFoundError)) throw error;
   }
 
-  return { localConfig, teamConfig, username };
+  return { localConfig, teamConfig, username, providerName };
 }
 
 /**
  * What `bootstrapSelfRepo` would set up, for a --dry-run: the config it would
- * write, kept in memory, and one line saying what it would do. Writes, locks
- * and registers nothing. Null when it would not bootstrap.
+ * write, kept in memory, and one line saying what it would do. Writes, locks,
+ * registers and authenticates nothing, so the config has no username. Null when
+ * it would not bootstrap.
  */
 export async function previewSelfBootstrap(dir?: string): Promise<LocalConfig | null> {
   const businessRepoRoot = dir ?? process.cwd();
   const pending = await findPendingBootstrap(businessRepoRoot, true);
   if (typeof pending === 'string') return null;
-  const plan = await planSelfBootstrap(businessRepoRoot, pending.partitionHome, pending.marker, true);
+  const plan = await planSelfBootstrap(businessRepoRoot, pending.partitionHome, pending.marker, true, true);
   if (!plan) return null;
   log.info(
-    `[dry-run] Would bootstrap this single-repo project for ${plan.username}: write its config and state to ` +
-      `${pending.partitionHome}, seed tool dirs, inject hooks and register the member`,
+    `[dry-run] Would bootstrap this single-repo project if you are authenticated with ${plan.providerName} ` +
+      `(not checked in a dry run): look up your username, write its config and state to ` +
+      `${pending.partitionHome}, seed tool dirs, inject hooks and register you as a member`,
   );
   return plan.localConfig;
 }
@@ -230,7 +240,7 @@ export async function bootstrapSelfRepo(
     // Re-check under the lock — a concurrent run may have finished.
     if (await pathExists(configPath)) return 'already';
 
-    const plan = await planSelfBootstrap(businessRepoRoot, pending.partitionHome, pending.marker, silent);
+    const plan = await planSelfBootstrap(businessRepoRoot, pending.partitionHome, pending.marker, silent, false);
     if (!plan) return 'skip';
     const { localConfig, teamConfig, username } = plan;
     const localPath = localConfig.repo.localPath;

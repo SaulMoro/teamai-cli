@@ -377,7 +377,9 @@ stays in the checkout's `.teamai/`.
   (`roles set`, `tags subscribe`, `tags unsubscribe`) previews the bootstrap
   instead (`previewSelfBootstrap`): it builds the config it would write, keeps it
   in memory, and prints `[dry-run] Would bootstrap ...` without locking, writing,
-  injecting hooks or registering the member.
+  injecting hooks or registering the member. It makes no provider auth call
+  either (a stale token can send `authenticate()` into an interactive login), so
+  the preview names the provider but not the username.
 - **migration** (`migrate.ts`, `mode: 'self'`): self CANNOT use the git-mode whole
   directory copy→rename (that would carry the knowledge off and rename `.teamai` to
   `.bak`, breaking "knowledge on main"). Instead it selectively relocates the A1

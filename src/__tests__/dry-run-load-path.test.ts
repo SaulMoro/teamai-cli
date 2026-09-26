@@ -5,13 +5,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// Bootstrap asks the provider who the member is; answer without a network call.
+// A dry run may parse the remote, but any other provider call can prompt, open
+// a browser, store credentials or reach the network. Record and refuse them all.
+const providerCalls = vi.hoisted((): string[] => []);
 vi.mock('../providers/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../providers/index.js')>()),
-  getProvider: vi.fn(() => ({
-    isAuthenticated: () => true,
-    authenticate: async () => 'dev',
-    parseRepoInput: () => ({ httpsUrl: 'https://github.com/acme/app.git' }),
+  getProvider: vi.fn(() => new Proxy({}, {
+    get: (_target, prop) => {
+      if (prop === 'name') return 'github';
+      if (prop === 'parseRepoInput') return () => ({ httpsUrl: 'https://github.com/acme/app.git' });
+      if (prop === 'then') return undefined;
+      return () => {
+        providerCalls.push(String(prop));
+        throw new Error(`provider.${String(prop)}() called under --dry-run`);
+      };
+    },
   })),
 }));
 
@@ -139,14 +147,17 @@ describe.each(FIXTURES)('--dry-run on %s', (_fixture, setup) => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.mocked(updateReports).mockClear();
+    providerCalls.length = 0;
     vi.unstubAllEnvs();
     process.chdir(originalCwd);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(COMMANDS)('%s writes no file and registers no member', async (_command, run) => {
+  it.each(COMMANDS)('%s writes no file, registers no member and makes no provider call', async (_command, run) => {
     const before = snapshotTree(root);
-    await run();
+    const error = await run().then(() => null, (e: unknown) => e);
+    expect(providerCalls).toEqual([]);
+    expect(error).toBeNull();
     expect(snapshotTree(root)).toEqual(before);
     expect(updateReports).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining('[dry-run] Would'));
