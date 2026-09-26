@@ -123,6 +123,12 @@ interface VizPaths {
   /** Every learnings root to read, highest precedence first. */
   learningsDirs: readonly string[];
   /**
+   * The roots a temporary index is built from: learningsDirs plus the
+   * contribution queue, as recall's index. Promotion and pruning keep to
+   * learningsDirs: a queued learning has not reached the team yet.
+   */
+  indexLearningsDirs: readonly string[];
+  /**
    * The active projects' learnings namespaces an index built here reads, as
    * recall's and pull's do; why none, when manifest/projects.yaml cannot be read.
    */
@@ -155,6 +161,8 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
       learningsDir: path.join(root, 'learnings'),
       // learnings-root ok: same explicit --repo path
       learningsDirs: [path.join(root, 'learnings')],
+      // learnings-root ok: same explicit --repo path
+      indexLearningsDirs: [path.join(root, 'learnings')],
       learningsNamespaces: { ok: true, namespaces: [] },
       statsDir: path.join(root, 'stats'),
       indexPath: undefined,
@@ -197,6 +205,8 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
     const learningsDirs = useProjectScope
       ? await indexableLearningsRoots(config)
       : [getUserLearningsDir(), ...await indexableLearningsRoots(config)];
+    const { pendingLearningsDir } = await import('./utils/pending-learnings.js');
+    const indexLearningsDirs = [pendingLearningsDir(config), ...learningsDirs];
     const { resolveActiveLearningsNamespaces } = await import('./projects.js');
     const learningsNamespaces: VizPaths['learningsNamespaces'] = await resolveActiveLearningsNamespaces(config.repo.localPath, config.projects ?? [])
       .then((namespaces) => ({ ok: true as const, namespaces }))
@@ -210,6 +220,7 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
       votesDir: path.join(reportsRoot, 'votes'),
       learningsDir,
       learningsDirs,
+      indexLearningsDirs,
       learningsNamespaces,
       statsDir: path.join(reportsRoot, 'stats'),
       indexPath,
@@ -225,6 +236,7 @@ export async function resolveVizRoot(opts: VizOptions): Promise<VizPaths> {
     votesDir: getUserVotesDir(),
     learningsDir: getUserLearningsDir(),
     learningsDirs: [getUserLearningsDir()],
+    indexLearningsDirs: [getUserLearningsDir()],
     learningsNamespaces: { ok: true, namespaces: [] },
     statsDir: path.join(teamaiHome, 'stats'),
     indexPath: getUserSearchIndexPath(),
@@ -305,7 +317,7 @@ async function loadEntries(paths: VizPaths): Promise<SearchIndexEntry[]> {
     }
     try {
       await buildIndex({
-        learningsDirs: paths.learningsDirs,
+        learningsDirs: paths.indexLearningsDirs,
         learningsNamespaces: namespaces.ok ? namespaces.namespaces : [],
         docsDir: path.join(paths.knowledgeRoot, 'docs'),
         rulesDir: path.join(paths.knowledgeRoot, 'rules'),

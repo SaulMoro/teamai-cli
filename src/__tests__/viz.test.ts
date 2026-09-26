@@ -360,4 +360,16 @@ describe('buildVizData without a prebuilt index', () => {
     expect(titles(data)).not.toContain('Alpha learning');
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/shared learnings only: Invalid projects manifest YAML/));
   });
+
+  it('shows a queued learning, as recall finds it, but leaves the queue out of promotion and pruning (#823 item 16)', async () => {
+    const queue = path.join(tmp, 'pending-learnings');
+    await fs.mkdir(queue, { recursive: true });
+    await fs.writeFile(path.join(queue, 'queued.md'), '---\ntitle: "Queued learning"\nauthor: alice\n---\n\nBody.\n', 'utf-8');
+
+    const paths = await resolveVizRoot({ config: configFor('user') });
+    const data = await buildVizData(paths);
+
+    expect(titles(data)).toContain('Queued learning');
+    expect(paths.learningsDirs).not.toContain(queue);
+  });
 });
