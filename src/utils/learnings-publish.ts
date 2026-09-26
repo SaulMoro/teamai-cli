@@ -186,7 +186,7 @@ function sourceMr(frontmatter: Record<string, unknown>): string | null {
  * Only that exact shape moves: untracked, directly under `learnings/`, named
  * `<date>-<title>.md`, with `source_mr` in its frontmatter. Nothing else in the
  * checkout is touched; a learning on the branch is tracked, edited or not, so it
- * never is. One is removed instead when the branch or the queue already has one
+ * never is. One is removed instead when origin's branch or the queue already has one
  * from the same merge request (a later import of it) or with the same content. The copy is queued before the original goes, so
  * a failure leaves it where it was. Never throws.
  */
@@ -219,23 +219,14 @@ async function queueImportRemnants(localConfig: LocalConfig): Promise<void> {
     }
     if (remnants.length === 0) return;
 
-    // What already covers a remnant: a learning on the branch, in any
-    // namespace, or one in the queue.
-    const known: Array<{ label: string; content: string; mr: string | null }> = [];
-    for (const rel of (await lsFiles([])).filter((f) => f.endsWith('.md'))) {
-      const content = await fs.promises.readFile(path.join(checkout, rel), 'utf-8').catch(() => null);
-      if (content !== null) known.push({ label: rel, content, mr: sourceMr(parseFrontmatter(content).data) });
-    }
-    // The checkout may be behind origin: the one an older teamai left in
-    // `.teamai/` is never synced again (#823 item 21). What a teammate published
-    // since counts too, so without a current origin every remnant stays for a
-    // later run: a stale one would queue what a teammate already published.
-    const sinceCheckout = await publishedSinceCheckout(git);
-    if (sinceCheckout === null) return;
-    for (const rel of sinceCheckout) {
-      const content = await git.show([`origin/${learningsBranch.branch}:${rel}`]).catch(() => null);
-      if (content !== null) known.push({ label: rel, content, mr: sourceMr(parseFrontmatter(content).data) });
-    }
+    // What already covers a remnant: a learning on origin, in any namespace,
+    // or one in the queue. Origin itself, fetched just now, not the checkout:
+    // the one an older teamai left in `.teamai/` is never synced again (#823
+    // item 21), so it may lack what a teammate published since, or still track
+    // a copy origin has deleted, and a remnant removed against that copy is
+    // lost. Without a current origin every remnant stays for a later run.
+    const known = await learningsOnOrigin(git);
+    if (known === null) return;
     for (const rel of await listPendingLearnings(localConfig)) {
       const content = await readPendingLearning(localConfig, rel);
       if (content !== null) {
@@ -283,12 +274,20 @@ async function removeRemnant(file: string): Promise<boolean> {
   }
 }
 
+/** A learning that already covers a remnant, and where it is. */
+interface KnownLearning {
+  label: string;
+  content: string;
+  mr: string | null;
+}
+
 /**
- * The learnings origin has and the checkout's commit lacks or holds another
- * version of, fetched just now. None when origin has no learnings branch, as
- * after an offline first publish. Null when origin cannot be reached or compared.
+ * Every learning on origin's learnings branch, fetched just now. None when
+ * origin has no learnings branch, as after an offline first publish. Null when
+ * origin cannot be reached or read.
  */
-async function publishedSinceCheckout(git: SimpleGit): Promise<string[] | null> {
+async function learningsOnOrigin(git: SimpleGit): Promise<KnownLearning[] | null> {
+  const ref = `origin/${learningsBranch.branch}`;
   try {
     try {
       await fetchTrackingRef(git, learningsBranch.branch);
@@ -298,10 +297,15 @@ async function publishedSinceCheckout(git: SimpleGit): Promise<string[] | null> 
       if ((await git.raw(['ls-remote', '--heads', 'origin', `refs/heads/${learningsBranch.branch}`])).trim() !== '') throw e;
       return [];
     }
-    const diff = await git.raw(['diff', '-z', '--name-only', '--no-renames', '--diff-filter=AM', 'HEAD', `origin/${learningsBranch.branch}`, '--', 'learnings']);
-    return diff.split('\0').filter((f) => f.endsWith('.md'));
+    const files = (await git.raw(['ls-tree', '-r', '-z', '--name-only', ref, '--', 'learnings'])).split('\0').filter((f) => f.endsWith('.md'));
+    const learnings: KnownLearning[] = [];
+    for (const rel of files) {
+      const content = await git.show([`${ref}:${rel}`]);
+      learnings.push({ label: rel, content, mr: sourceMr(parseFrontmatter(content).data) });
+    }
+    return learnings;
   } catch (e) {
-    log.debug(`[learnings] cannot compare the checkout with origin/${learningsBranch.branch}; leaving what an older import --from-mr left for a later run: ${failureReason(e)}`);
+    log.debug(`[learnings] cannot read ${ref}; leaving what an older import --from-mr left for a later run: ${failureReason(e)}`);
     return null;
   }
 }
@@ -376,9 +380,17 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
     // `.json` only: an interrupted atomic write leaves a `.tmp` copy beside them.
     for (const name of (await fs.promises.readdir(dir).catch(() => [])).filter((n) => n.endsWith('.json'))) {
       const file = path.join(dir, name);
+      let text: string;
+      try {
+        text = await fs.promises.readFile(file, 'utf-8');
+      } catch (e) {
+        // A failed read says nothing about the record: keep it for a later publish.
+        log.warn(`Cannot read maintenance record ${file} (${failureReason(e)}); it stays for the next publish.`);
+        continue;
+      }
       let problem: string;
       try {
-        const parsed = MaintenanceRecord.safeParse(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
+        const parsed = MaintenanceRecord.safeParse(JSON.parse(text));
         if (parsed.success) {
           records.push({ ...parsed.data, file });
           continue;
@@ -387,7 +399,8 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
       } catch (e) {
         problem = failureReason(e);
       }
-      // One bad record must not hold back the others on every later publish.
+      // Read and malformed, so no later publish can use it either, and it must
+      // not hold back the others on every one.
       await fs.promises.rm(file, { force: true }).catch(() => undefined);
       log.warn(
         `Removed unreadable maintenance record ${file} (${problem}). A maintenance change it described ` +

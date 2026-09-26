@@ -501,12 +501,12 @@ Upgrading from the per-checkout layout:
   owning repo, so the shared one or the old `.teamai/<dirname>`, never another
   repository's), and queues each untracked file of exactly that shape, directly
   under `learnings/`, into the active namespace with `contribute`'s name, then
-  deletes the original. A file the branch (tracked, any namespace) or the queue
+  deletes the original. A file the branch (any namespace) or the queue
   already has, by `source_mr` or by content, is deleted without queueing. The
-  branch is the checkout's tracked files plus what `origin/teamai-learnings`
-  has that the checkout's commit lacks, fetched first: the old checkout is
-  never synced again, so it may miss a teammate's later import of the same MR
-  (#823 item 21). When that fetch fails, every such file stays where it is
+  branch is the tree of `origin/teamai-learnings`, fetched first, never the
+  checkout's tracked files: the old checkout is never synced again, so it may
+  miss a teammate's later import of the same MR, or still track one origin has
+  since deleted (#823 item 21). When that fetch fails, every such file stays where it is
   until a run can fetch, so a stale ref never queues a duplicate; when
   `git ls-remote` shows origin has no such branch (an offline first publish
   never pushed it), origin adds nothing and the files are queued. A file of

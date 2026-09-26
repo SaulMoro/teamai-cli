@@ -240,6 +240,28 @@ describe('a learning an older import --from-mr left untracked in the learnings c
     expect(warned()).toContain('learnings/alpha/quokka-2026-09-21-ddd444.md');
   });
 
+  it('is queued and published, not removed, when origin has since deleted the learning from the same merge request that the checkout still tracks', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'alpha/quokka-2026-09-21-aaa111.md', remnant('https://github.com/acme/app/pull/42', 'Quokka, reimported'));
+    await publishQueuedLearnings(config, 'alice');
+    // A teammate deletes it on origin; this checkout still tracks its old copy.
+    const teammate = path.join(tmp, 'teammate');
+    await simpleGit().clone(origin, teammate, ['--branch', 'teamai-learnings']);
+    await configureGit(teammate);
+    await simpleGit(teammate).rm(['learnings/alpha/quokka-2026-09-21-aaa111.md']);
+    await simpleGit(teammate).commit('teammate prunes');
+    await simpleGit(teammate).push('origin', 'teamai-learnings');
+    const file = plant(checkout, '2026-09-20-Quokka-cache-warmup-before-deploy.md', remnant());
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(fs.existsSync(file)).toBe(false);
+    const published = (await publishedFiles(origin)).filter((f) => QUEUED_NAME.test(f));
+    expect(published, (await publishedFiles(origin)).join('\n')).toHaveLength(1);
+    expect(await publishedContent(origin, published[0])).toBe(remnant());
+    expect(await listPendingLearnings(config)).toEqual([]);
+  });
+
   it('is kept, not queued, while origin cannot be fetched, so a teammate\'s import of the same merge request is still seen', async () => {
     const { config, origin, checkout } = await setUp();
     await savePendingLearning(config, 'first-2026-09-19-aaa000.md', '---\ntitle: First\n---\nFirst.\n');
@@ -404,6 +426,34 @@ describe('publishing what maintenance changed (#823)', () => {
     expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
     expect(fs.readdirSync(records)).toEqual([]);
     expect(warned()).toContain(truncated);
+  });
+
+  it('keeps, and warns about, a record it cannot read, while the readable records publish', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    const release = holdLearningsLock(config);
+    expect(await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten])).toEqual({ status: 'busy' });
+    release();
+    const records = path.resolve(checkout, (await simpleGit(checkout).raw(['rev-parse', '--git-path', 'teamai-maintenance'])).trim());
+    // A read that fails, as on a permission or I/O error, says nothing about the record itself.
+    const unreadable = path.join(records, '0-unreadable.json');
+    fs.writeFileSync(unreadable, JSON.stringify({ message: '[teamai] Prune', files: [] }));
+    const readFile = fs.promises.readFile;
+    vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, options) => {
+      if (file === unreadable) throw Object.assign(new Error(`EACCES: permission denied, open '${unreadable}'`), { code: 'EACCES' });
+      return readFile(file, options);
+    });
+    const warned = watchWarnings();
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
+    expect(fs.readdirSync(records)).toEqual(['0-unreadable.json']);
+    expect(warned()).toContain(unreadable);
+    expect(warned()).not.toContain('Removed');
   });
 
   it('pushes a change it committed and could not push on the next publish, with nothing queued', async () => {
