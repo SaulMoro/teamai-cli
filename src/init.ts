@@ -1817,6 +1817,10 @@ export async function init(options: GlobalOptions & {
     const prev = carriedConfig?.enabledAgents ?? [];
     localConfig.enabledAgents = [...new Set([...prev, ...requestedAgents])];
     localConfig.disabledAgents = (carriedConfig?.disabledAgents ?? []).filter((t) => !requestedAgents.includes(t));
+  } else {
+    // No --agent: the lists stand as they were, `uninstall --agent`'s exclusion included.
+    if (carriedConfig?.enabledAgents) localConfig.enabledAgents = [...carriedConfig.enabledAgents];
+    if (carriedConfig?.disabledAgents) localConfig.disabledAgents = [...carriedConfig.disabledAgents];
   }
 
   // Carry the member's recorded tool roots across a re-init. `init` is

@@ -296,3 +296,22 @@ describe('publishing what maintenance changed (#823)', () => {
     expect((await publishedFiles(origin)).filter((f) => f.endsWith('.md')).sort()).toEqual(['learnings/b*.md']);
   });
 });
+
+describe('publishing what maintenance changed for an HTTP install (#823)', () => {
+  it('reports a failed publish, not a throw, after a prune removed a file from the HTTP cache', async () => {
+    const cache = path.join(tmp, 'http-cache');
+    const removed = path.join(cache, 'learnings', 'stale-2026-01-01-aaa111.md');
+    fs.mkdirSync(path.dirname(removed), { recursive: true });
+    const config: LocalConfig = {
+      repo: { localPath: cache, remote: 'https://team.example/api', kind: 'http', url: 'https://team.example/api' },
+      username: 'alice',
+      scope: 'user',
+      additionalRoles: [],
+    };
+    writeInstallConfig(config);
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [removed]);
+
+    expect(result.status).toBe('failed');
+  });
+});

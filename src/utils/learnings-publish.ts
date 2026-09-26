@@ -299,8 +299,16 @@ export async function publishLearningsMaintenance(
   // A removed file git never tracked has nothing to stage, and naming it would
   // fail the whole `git add`, publishing nothing of this run.
   const removed = inCheckout.filter((rel) => !fs.existsSync(path.join(checkout, rel)));
-  const tracked = removed.length === 0 ? new Set<string>()
-    : new Set((await createGit(checkout).raw(['--literal-pathspecs', 'ls-files', '-z', '--', ...removed])).split('\0').filter(Boolean));
+  let tracked = new Set<string>();
+  if (removed.length > 0) {
+    try {
+      tracked = new Set((await createGit(checkout).raw(['--literal-pathspecs', 'ls-files', '-z', '--', ...removed])).split('\0').filter(Boolean));
+    } catch (e) {
+      // Not a checkout git can read, such as an HTTP install's cache: the same
+      // non-fatal result commitAndPush gives, never a throw after the removal.
+      return { status: 'failed', reason: failureReason(e) };
+    }
+  }
   const files = inCheckout.filter((rel) => !removed.includes(rel) || tracked.has(rel.split(path.sep).join('/')));
   if (files.length === 0) return { status: 'already-present' };
   // `commitAndPush`, not `update`: maintenance already wrote into the worktree

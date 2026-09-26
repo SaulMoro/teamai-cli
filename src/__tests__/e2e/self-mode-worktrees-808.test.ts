@@ -1596,6 +1596,35 @@ describe('a checkout an older git-mode install left (#808)', () => {
     expect(saved).toMatch(/enabledAgents:\n\s+- claude\n\s+- codex\n/);
   });
 
+  it('keeps the agent lists of the set-aside config when the rerun after a failed replacement clone names no --agent (#823 item 17)', async () => {
+    const install = setUpGitInstall();
+    const { home, projectRoot } = install;
+    const teamA = serveTeamRepo(install, 'team-a');
+    const teamB = serveTeamRepo(install, 'team-b');
+
+    const initA = await runCLI(['init', teamA.url, '--scope', 'project', '--force', '--agent', 'claude'], projectRoot, home);
+    expect(initA.code, initA.output).toBe(0);
+    const config = path.join(partitionOf(install), 'config.yaml');
+    // What `uninstall --agent codex` records.
+    const written = fs.readFileSync(config, 'utf8');
+    expect(written).toContain('disabledAgents: []\n');
+    fs.writeFileSync(config, written.replace('disabledAgents: []\n', 'disabledAgents:\n  - codex\n'));
+
+    fs.renameSync(teamB.bare, `${teamB.bare}.offline`);
+    const failed = await runCLI(['init', teamB.url, '--scope', 'project', '--force'], projectRoot, home);
+    expect(failed.code, failed.output).toBe(1);
+    expect(fs.existsSync(config)).toBe(false);
+    fs.renameSync(`${teamB.bare}.offline`, teamB.bare);
+
+    const initB = await runCLI(['init', teamB.url, '--scope', 'project', '--force'], projectRoot, home);
+
+    expect(initB.code, initB.output).toBe(0);
+    const saved = fs.readFileSync(config, 'utf8');
+    expect(saved).toContain(teamB.url);
+    expect(saved).toMatch(/enabledAgents:\n\s+- claude\n/);
+    expect(saved).toMatch(/disabledAgents:\n\s+- codex\n/);
+  });
+
   it("sets aside the queue under an unknown owner when init replaces a config it cannot read, and the next pull publishes none of it", async () => {
     const install = setUpGitInstall();
     const { home, projectRoot } = install;
