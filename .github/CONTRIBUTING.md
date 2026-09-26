@@ -21,6 +21,8 @@ npx vitest run --coverage
 npm run test:e2e       # E2E tests (optional, requires a live test repo)
 ```
 
+`npm run lint` needs Node ^20.19 or >=22.12 (oxlint's requirement); the CLI itself still supports Node 20.
+
 ### Running your local build
 
 ```bash
