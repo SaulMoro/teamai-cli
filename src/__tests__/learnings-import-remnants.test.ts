@@ -276,4 +276,23 @@ describe('publishing what maintenance changed (#823)', () => {
     expect(result).toEqual({ status: 'published' });
     expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
   });
+
+  it('stages a filename with [ or * as itself, not as a pattern that sweeps in stray files', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'a[1].md', '---\ntitle: A\n---\nA.\n');
+    await publishQueuedLearnings(config, 'alice');
+    // Maintenance removed a tracked `a[1].md` and wrote a new `b*.md`. The strays
+    // match those names as glob patterns and nobody committed them.
+    const removed = path.join(checkout, 'learnings', 'a[1].md');
+    fs.rmSync(removed);
+    const written = path.join(checkout, 'learnings', 'b*.md');
+    fs.writeFileSync(written, '---\ntitle: B\n---\nB.\n');
+    fs.writeFileSync(path.join(checkout, 'learnings', 'a1.md'), 'stray\n');
+    fs.writeFileSync(path.join(checkout, 'learnings', 'bee.md'), 'stray\n');
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [removed, written]);
+
+    expect(result).toEqual({ status: 'published' });
+    expect((await publishedFiles(origin)).filter((f) => f.endsWith('.md')).sort()).toEqual(['learnings/b*.md']);
+  });
 });

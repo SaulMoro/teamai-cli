@@ -384,7 +384,7 @@ learning 会被移到同一数据目录下的 `pending-learnings.<旧类型>`，
 也同样处理，队列移到 `pending-learnings.<类型>-<仓库>`（例如 `pending-learnings.git-github.com-org-team-a`）；
 同一仓库换一种写法（带或不带 `.git`、SSH 或 HTTPS）不会移动队列。克隆另一个团队仓库之前，
 `init` 会把旧的 `config.yaml` 移到旁边的 `config.yaml.previous` 并给出提示：若 `init` 在保存新配置前停止，
-所有命令都会要求先运行 `teamai init`，而不会用旧团队的配置操作新的克隆。重新运行 `init` 即可。若旧安装的 `config.yaml` 存在但无法读取，
+所有命令都会要求先运行 `teamai init`，而不会用旧团队的配置操作新的克隆。重新运行 `init` 即可：它会从 `config.yaml.previous` 沿用该配置的设置（agent、工具根目录）。若旧安装的 `config.yaml` 存在但无法读取，
 就无从得知队列属于谁：`init` 会把它移到 `pending-learnings.unknown`，指出该文件，并删除搜索索引。尚未升级的检出中的旧队列也同样处理：
 在该检出运行的下一个命令会把它移到 `pending-learnings.self` 并给出路径。反过来，当某个检出的 `init --self`
 把 git 模式项目切换为单仓库模式，而另一个仍保留旧安装的检出从 main 取得了知识时，在那里运行的下一个

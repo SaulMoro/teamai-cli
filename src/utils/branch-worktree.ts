@@ -548,7 +548,8 @@ async function commitAndPushAt(
 ): Promise<PublishResult> {
   const git = createGit(wt);
 
-  await git.add(files);
+  // Literal: a filename with `[` or `*` would otherwise stage whatever it matches as a pattern.
+  await git.raw(['--literal-pathspecs', 'add', '--', ...files]);
   const status = await git.status();
   // simple-git lists a staged rename (an archived learning) under `renamed`, not `staged`.
   const staged = status.staged.length + status.renamed.length;

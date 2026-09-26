@@ -52,6 +52,23 @@ async function moveConfigAside(configPath: string, next: LocalConfig): Promise<v
       `${redactGitCredentials(next.repo.remote)}. If init stops before it finishes, run it again.`,
   );
 }
+
+/**
+ * The config {@link moveConfigAside} set aside last. An init that stopped after
+ * it (a failed clone, an unknown --role) saved no config, so the rerun reads
+ * this one for the settings a re-init carries forward instead of dropping them.
+ */
+async function loadConfigSetAside(configPath: string): Promise<LocalConfig | null> {
+  let latest: string | undefined;
+  for (let n = 0, aside = `${configPath}.previous`; await pathExists(aside); aside = `${configPath}.previous.${++n}`) latest = aside;
+  if (!latest) return null;
+  try {
+    return LocalConfigSchema.parse(YAML.parse(await readFileSafe(latest) ?? ''));
+  } catch (e) {
+    log.debug(`Not carrying settings from ${latest}: ${(e as Error).message}`);
+    return null;
+  }
+}
 import { log, spinner } from './utils/logger.js';
 import {
   CLAUDE_TOOL_ID,
@@ -64,6 +81,7 @@ import {
   REPORTS_BRANCH,
   type GlobalOptions,
   type LocalConfig,
+  LocalConfigSchema,
   type Scope,
   getTeamaiHome,
   getConfigPath,
@@ -1317,12 +1335,20 @@ export async function init(options: GlobalOptions & {
     return;
   }
   const existingLocalConfig = await loadLocalConfigForScope(scope, projectRoot);
+  const teamaiHome = scope === 'project' && projectRoot
+    ? (existingLocalConfig?.dataHome ?? await resolveProjectDataHome(projectRoot))
+    : getTeamaiHome(scope, projectRoot);
+  const existingConfigPath = path.join(teamaiHome, 'config.yaml');
+  // The settings this re-init carries forward: the live config's, or, when an
+  // init stopped after moving it aside, the one it set aside (#823 item 17).
+  const carriedConfig = existingLocalConfig
+    ?? (await pathExists(existingConfigPath) ? null : await loadConfigSetAside(existingConfigPath));
   let inheritUserScope: boolean | undefined;
   try {
     inheritUserScope = resolveInheritUserScope(
       scope,
       options.inheritUserScope,
-      existingLocalConfig?.inheritUserScope,
+      carriedConfig?.inheritUserScope,
     );
   } catch (e) {
     log.error((e as Error).message);
@@ -1332,9 +1358,6 @@ export async function init(options: GlobalOptions & {
   if (fallbackReason) {
     log.warn(fallbackReason);
   }
-  const teamaiHome = scope === 'project' && projectRoot
-    ? (existingLocalConfig?.dataHome ?? await resolveProjectDataHome(projectRoot))
-    : getTeamaiHome(scope, projectRoot);
   printScopeSummary(scope, projectRoot, explicit);
 
   if (scope === 'project' && !(await isInsideGitRepo(process.cwd()))) {
@@ -1342,7 +1365,6 @@ export async function init(options: GlobalOptions & {
   }
 
   // Step 0.5: Re-init guard — warn if config already exists
-  const existingConfigPath = path.join(teamaiHome, 'config.yaml');
   if (await pathExists(existingConfigPath)) {
     log.warn(`teamai is already initialized for ${scope} scope at ${existingConfigPath}`);
     if (options.force) {
@@ -1792,9 +1814,9 @@ export async function init(options: GlobalOptions & {
   const requestedAgents = normalizeAgentList(options.agent);
   if (requestedAgents.length > 0) {
     // As loaded before the clone: that config may have been moved aside since.
-    const prev = existingLocalConfig?.enabledAgents ?? [];
+    const prev = carriedConfig?.enabledAgents ?? [];
     localConfig.enabledAgents = [...new Set([...prev, ...requestedAgents])];
-    localConfig.disabledAgents = (existingLocalConfig?.disabledAgents ?? []).filter((t) => !requestedAgents.includes(t));
+    localConfig.disabledAgents = (carriedConfig?.disabledAgents ?? []).filter((t) => !requestedAgents.includes(t));
   }
 
   // Carry the member's recorded tool roots across a re-init. `init` is
@@ -1804,11 +1826,11 @@ export async function init(options: GlobalOptions & {
   // entry when the variable IS set.
   // A project-scope config with no record of its own starts from the user-scope
   // one: the root is a fact about this machine, and project hooks land in HOME.
-  const carriedToolRoots = existingLocalConfig?.toolRoots
+  const carriedToolRoots = carriedConfig?.toolRoots
     ?? (scope === 'project' ? (await loadLocalConfigForScope('user'))?.toolRoots : undefined);
   if (carriedToolRoots) localConfig.toolRoots = { ...carriedToolRoots };
   recordClaudeConfigRoot(localConfig);
-  await releasePreviousClaudeRoot(currentConfig, existingLocalConfig, localConfig);
+  await releasePreviousClaudeRoot(currentConfig, carriedConfig, localConfig);
 
   await ensureDir(teamaiHome);
   if (scope !== 'project') await ensureDir(getTeamaiHomeDir());

@@ -431,7 +431,8 @@ another way (with or without `.git`, SSH or HTTPS) keeps the queue. Before it
 clones the other team repository, `init` moves the old `config.yaml` to
 `config.yaml.previous` beside it and says so: if `init` stops before it saves
 the new config, every command asks for `teamai init` instead of running the old
-team's config against the new clone. Run `init` again. When the old
+team's config against the new clone. Run `init` again: it carries that config's
+settings (agents, tool roots) from `config.yaml.previous`. When the old
 install's `config.yaml` exists but cannot be read, nothing says whose the queue is:
 `init` moves it to `pending-learnings.unknown`, names that file and deletes the search indexes. A checkout that had
 not been upgraded yet keeps its old queue the same way: the next command there

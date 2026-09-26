@@ -597,7 +597,9 @@ the same way (queue set aside, indexes dropped), and moves the old
 loaded before the clone, finds nothing left to set aside, and writes the new
 config. An `init` that stops in between (an unknown `--role`, a busy queue lock, a
 prompt left) leaves no config naming the old team beside the new clone, so every
-command asks for `teamai init`; nothing is deleted.
+command asks for `teamai init`; nothing is deleted. The rerun finds no
+`config.yaml`, so it reads the last `config.yaml.previous[.<n>]` for the
+settings a re-init carries forward (`inheritUserScope`, agents, tool roots).
 A self install whose
 business repository moved to another URL (renamed or transferred) is another
 owner too: `init` sets its queue aside, and the warning names the directory to

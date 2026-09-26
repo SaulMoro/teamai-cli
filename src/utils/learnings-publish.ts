@@ -300,7 +300,7 @@ export async function publishLearningsMaintenance(
   // fail the whole `git add`, publishing nothing of this run.
   const removed = inCheckout.filter((rel) => !fs.existsSync(path.join(checkout, rel)));
   const tracked = removed.length === 0 ? new Set<string>()
-    : new Set((await createGit(checkout).raw(['ls-files', '-z', '--', ...removed])).split('\0').filter(Boolean));
+    : new Set((await createGit(checkout).raw(['--literal-pathspecs', 'ls-files', '-z', '--', ...removed])).split('\0').filter(Boolean));
   const files = inCheckout.filter((rel) => !removed.includes(rel) || tracked.has(rel.split(path.sep).join('/')));
   if (files.length === 0) return { status: 'already-present' };
   // `commitAndPush`, not `update`: maintenance already wrote into the worktree
