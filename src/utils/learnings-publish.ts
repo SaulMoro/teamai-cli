@@ -453,7 +453,7 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
       log.warn(
         `Not publishing the edit to ${editedSince.join(', ')}: it was made after the maintenance run that changed ` +
           `the file, so it is not part of that run, and no later teamai run publishes it. It stays uncommitted in ` +
-          `${checkout}; review it with git -C "${checkout}" diff HEAD, then share it as a learning or discard it.`,
+          `${checkout}; find it with git -C "${checkout}" status, then share it as a learning or discard it.`,
       );
     }
     const message = records.length === 1 ? records[0].message : `[teamai] Publish ${records.length} learnings maintenance runs`;
