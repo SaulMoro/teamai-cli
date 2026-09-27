@@ -112,7 +112,11 @@ export GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxx
 teamai init https://git.example.com/yourgroup/yourrepo
 ```
 
+`TEAMAI_GITLAB_HOST=git.example.com` also works without `GITLAB_URL`: the API then goes to `https://git.example.com`. When both are set they must name the same host, otherwise teamai stops before sending the token.
+
 For an unknown host, `init` makes an anonymous GitLab sign-in page check with a three-second total timeout. If confirmed as GitLab, it stops before authentication, cloning, or writing configuration and asks you to set the instance URL and token, then retry. The check does not send tokens or follow redirects. If it cannot confirm GitLab, initialization continues with the generic `git` provider, which supports Git transport but cannot create repos or PRs/MRs automatically. Set `GITLAB_URL` explicitly for instances behind SSO, deployed under a subpath, or otherwise inaccessible to the check.
+
+Members who only sync and never need the CLI to open merge requests can skip the token: see [plain Git with `--provider git`](#member-onboarding).
 
 **Already initialized with `provider: git`?** Set the variables above and change `provider` to `gitlab` in the team repo's `teamai.yaml`. Setting the environment variables alone does not change an existing provider selection. A failed `teamai push` may already have pushed the branch; if its diagnostic detects GitLab, it prints these recovery steps. See [provider configuration](providers.md#gitlab-provider含自托管).
 
@@ -551,6 +555,20 @@ teamai init https://github.com/yourorg/yourrepo
 npm install -g teamai-cli
 teamai init https://github.com/yourorg/yourrepo --scope user
 ```
+
+**Plain Git, no platform token (`--provider git`):**
+
+When the team repo is on a platform whose provider needs a token (for example self-hosted GitLab and `GITLAB_TOKEN`), a member who never needs the CLI to open PRs/MRs can use their existing Git authentication (SSH key or credential helper) instead:
+
+```bash
+teamai init https://gitlab.example.com/yourgroup/yourrepo --provider git
+```
+
+- `--provider` skips auto-detection and uses the named provider: `tgit`, `github`, `cnb`, `gitlab`, `gitcode`, or `git`. `git` runs no platform login or token check.
+- The choice is saved in this machine's local config only. An existing `teamai.yaml` is not changed, so other members keep the team's provider. When `init` creates a new `teamai.yaml`, `--provider git` still records the provider `init` would detect without it. If the host is a self-hosted GitLab that is not configured, `init` stops and asks for `GITLAB_URL` rather than record `git` as the team default.
+- `--provider gitlab` on a self-hosted instance still needs `GITLAB_URL` or `TEAMAI_GITLAB_HOST` (and `GITLAB_TOKEN`). Without either `init` stops, because the GitLab API would otherwise target gitlab.com.
+- `pull` works as usual. `push` pushes the branch but cannot open a PR/MR, so open it on the Git host yourself; the command exits non-zero because that step did not run.
+- Re-running `teamai init` without `--provider` returns to auto-detection.
 
 **HTTP mode (read-only consumer):**
 
@@ -1594,7 +1612,7 @@ For GitLab behind an API gateway, set `GITLAB_URL` and `GITLAB_API_PREFIX=api/gi
 
 The graph stores components, interfaces, configs, and cross-repo dependencies. `teamai recall` uses the graph for BM25 + graph-boosted ranking.
 
-Dependency edges are extracted by two parallel tracks: a WASM tree-sitter **AST track** (TypeScript/JavaScript, Python, Go) that resolves imports, calls, and TS `implements` clauses to precise file-to-file edges (`code-ast`), and a regex **heuristic track** (all languages, `code-heuristic`) that also covers languages the AST track does not. AST results win on overlap. The AST parser needs no native toolchain; on load failure, extraction falls back to heuristics and records an `AST_UNAVAILABLE` gap. Set `TEAMAI_SKIP_AST=1` to force heuristic-only extraction.
+Dependency edges are extracted by two parallel tracks: a WASM tree-sitter **AST track** (TypeScript/JavaScript, Python, Go, Swift) that resolves imports, calls, and TS `implements` clauses to precise file-to-file edges (`code-ast`), and a regex **heuristic track** (all languages, `code-heuristic`) that also covers languages the AST track does not. AST results win on overlap. The AST parser needs no native toolchain; on load failure, extraction falls back to heuristics and records an `AST_UNAVAILABLE` gap. Set `TEAMAI_SKIP_AST=1` to force heuristic-only extraction.
 
 ```bash
 # Extract code facts and the graph from a local repo (writes <repo>/teamwiki/)
@@ -1867,6 +1885,8 @@ For canonical YAML agents, push compares each local file with the corresponding 
 **Hooks & Manual Sync**: JoyCode currently does not provide a lifecycle hooks mechanism or dedicated launcher/startup adapter (no `settings.json` hook array or `hooks.json` format). Consequently, opening JoyCode does not fire TeamAI's `SessionStart` event, and cannot trigger background `teamai pull`, telemetry reporting (`teamai track`), or auto-update checks. Users working with JoyCode must run `teamai pull` manually in the terminal to synchronize team resources, and `teamai push` to contribute changes. If JoyCode adds hooks or extension lifecycle events in future releases, a dedicated hook adapter can be connected.
 
 ### Cursor
+
+Cursor subagents deploy to `.cursor/agents/*.md` with YAML frontmatter carrying `agent_id` (the team agent's name), `description`, `tools`, and the agent's `model` when it declares one, plus any `tool_extras.cursor` fields; `reverseFromCursor` reads the same fields back, so a `pull` → `push` round-trip keeps the model.
 
 Cursor project rules must live in `.cursor/rules/` as **`.mdc`** files with YAML frontmatter — a plain `.md` file there is silently ignored by Cursor. teamai therefore writes rules to Cursor as `<name>.mdc` (every other tool still gets a plain `.md`), deriving the frontmatter from the team rule:
 

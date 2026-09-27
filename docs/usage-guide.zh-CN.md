@@ -111,7 +111,11 @@ export GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxx
 teamai init https://git.example.com/yourgroup/yourrepo
 ```
 
+也可以不设 `GITLAB_URL`，只设 `TEAMAI_GITLAB_HOST=git.example.com`：此时 API 指向 `https://git.example.com`。两者同时设置时必须是同一个 host，否则 teamai 会在发送 token 前停止。
+
 对于未知 host，`init` 会匿名检查 GitLab 登录页，总超时为三秒。确认是 GitLab 后，会在认证、克隆或写入配置前停止，提示设置实例地址和 token 后重试。探测不发送 token，也不跟随重定向。无法确认时，初始化继续使用通用 `git` provider；它支持 Git 传输，但不能自动建仓或创建 PR/MR。实例若由 SSO 遮蔽、部署在子路径下，或无法被探测访问，请显式设置 `GITLAB_URL`。
+
+只同步资源、从不需要 CLI 创建 MR 的成员可以不配 token：见[成员接入](#成员接入)中的 `--provider git`。
 
 **已经初始化为 `provider: git`？** 设置上述环境变量，并把团队仓库 `teamai.yaml` 中的 `provider` 改为 `gitlab`。仅设置环境变量不会改变已有 provider 选择。失败的 `teamai push` 可能已经推送了分支；若其诊断探测到 GitLab，会输出这些修复步骤。详见 [Provider 配置](providers.md#gitlab-provider含自托管)。
 
@@ -486,6 +490,20 @@ teamai init https://github.com/yourorg/yourrepo
 npm install -g teamai-cli
 teamai init https://github.com/yourorg/yourrepo --scope user
 ```
+
+**纯 Git、无需平台 token（`--provider git`）：**
+
+团队仓库所在平台的 provider 需要 token 时（例如自建 GitLab 需要 `GITLAB_TOKEN`），从不需要 CLI 创建 PR/MR 的成员可以改用已有的 Git 认证（SSH Key 或 Credential Helper）：
+
+```bash
+teamai init https://gitlab.example.com/yourgroup/yourrepo --provider git
+```
+
+- `--provider` 跳过自动检测，直接使用指定的 provider：`tgit`、`github`、`cnb`、`gitlab`、`gitcode` 或 `git`。`git` 不做平台登录，也不检查 token。
+- 该选择只保存在本机的本地配置中。已有的 `teamai.yaml` 不变，其他成员仍使用团队的 provider。`init` 新建 `teamai.yaml` 时，`--provider git` 写入的仍是 `init` 不带该参数时检测到的 provider；若 host 是尚未配置的自建 GitLab，`init` 会停止并提示设置 `GITLAB_URL`，而不是写入 `git`。
+- 自建 GitLab 使用 `--provider gitlab` 时仍需设置 `GITLAB_URL` 或 `TEAMAI_GITLAB_HOST`（以及 `GITLAB_TOKEN`）。两者都未设置时 `init` 会直接停止，否则 GitLab API 会指向 gitlab.com。
+- `pull` 照常工作。`push` 会推送分支，但无法创建 PR/MR，需要到 Git 平台上手动创建；由于这一步没有完成，命令以非零退出码结束。
+- 不带 `--provider` 重新运行 `teamai init` 即恢复自动检测。
 
 **HTTP 模式（只读消费者）：**
 
@@ -1484,7 +1502,7 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 图谱存储组件、接口、配置和跨仓库依赖关系。`teamai recall` 利用图谱进行 BM25 + graph-boost 增强排名。
 
-依赖边由两条并行轨道提取：WASM tree-sitter **AST 轨**（TypeScript/JavaScript、Python、Go），将 import、调用、以及 TS `implements` 子句解析为精确的文件到文件边（`code-ast`）；以及正则 **启发式轨**（所有语言，`code-heuristic`），同时覆盖 AST 轨未支持的语言。重叠时 AST 结果优先。AST 解析器无需原生编译工具链；加载失败时提取会降级到启发式并记录一条 `AST_UNAVAILABLE` gap。设置 `TEAMAI_SKIP_AST=1` 可强制仅用启发式提取。
+依赖边由两条并行轨道提取：WASM tree-sitter **AST 轨**（TypeScript/JavaScript、Python、Go、Swift），将 import、调用、以及 TS `implements` 子句解析为精确的文件到文件边（`code-ast`）；以及正则 **启发式轨**（所有语言，`code-heuristic`），同时覆盖 AST 轨未支持的语言。重叠时 AST 结果优先。AST 解析器无需原生编译工具链；加载失败时提取会降级到启发式并记录一条 `AST_UNAVAILABLE` gap。设置 `TEAMAI_SKIP_AST=1` 可强制仅用启发式提取。
 
 ```bash
 # 从本地仓库提取代码事实与图谱（写入 <repo>/teamwiki/）
@@ -1755,6 +1773,8 @@ JoyCode 规则清理采用保守策略：不在团队规则列表中的本地 `.
 **Hooks 与手动同步**：JoyCode 当前没有提供生命周期 Hooks 机制或专用启动适配器（无类似 `settings.json` hooks 数组或 `hooks.json` 的事件配置）。因此，打开或启动 JoyCode 不会触发 TeamAI 的 `SessionStart` 事件，无法进行后台自动拉取、使用指标上报（`teamai track`）或自动更新检测。JoyCode 用户需要通过在终端手动运行 `teamai pull` 来同步团队最新技能、规则与 Agent，通过 `teamai push` 贡献变更。若 JoyCode 后续版本提供了 Hooks 或插件生命周期机制，将通过专用适配器接入。
 
 ### Cursor
+
+Cursor 的子代理部署到 `.cursor/agents/*.md`，YAML frontmatter 携带 `agent_id`（团队代理名）、`description`、`tools`，以及团队代理声明了的 `model`，外加所有 `tool_extras.cursor` 字段；`reverseFromCursor` 按同样字段读回，因此 `pull` → `push` 往返不会丢 model。
 
 Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` 下，且带 YAML frontmatter——放在那里的纯 `.md` 会被 Cursor 直接忽略。因此 teamai 向 Cursor 写规则时用 `<name>.mdc`（其他工具仍写纯 `.md`），并从团队规则派生 frontmatter：
 

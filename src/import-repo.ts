@@ -96,7 +96,7 @@ export function detectCrossRepoEdges(
     for (const edge of overlay.edges) {
         if (edge.relation !== 'imports') continue;
         const segments = edge.to.split('/');
-        const fileName = segments[segments.length - 1]?.replace(/\.(ts|tsx|js|jsx|py|go|rs|java)$/, '') ?? '';
+        const fileName = segments[segments.length - 1]?.replace(/\.(ts|tsx|js|jsx|py|go|rs|java|swift)$/, '') ?? '';
         const pascalName = fileName.split(/[-_]/).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
         const match = existingIndex.get(pascalName.toLowerCase());
@@ -117,7 +117,7 @@ export function detectCrossRepoEdges(
     for (const edge of existing.edges) {
         if (edge.relation !== 'imports') continue;
         const segments = edge.to.split('/');
-        const fileName = segments[segments.length - 1]?.replace(/\.(ts|tsx|js|jsx|py|go|rs|java)$/, '') ?? '';
+        const fileName = segments[segments.length - 1]?.replace(/\.(ts|tsx|js|jsx|py|go|rs|java|swift)$/, '') ?? '';
         const pascalName = fileName.split(/[-_]/).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
 
         const match = overlayIndex.get(pascalName.toLowerCase());
@@ -284,14 +284,14 @@ export async function importFromRepo(opts: ImportFromRepoOptions): Promise<void>
     let teamRepoDir: string;
     let teamRepoRemote = '';
     let mrTeamConfig: { repo: string; provider?: string; reviewers?: string[] } | null = null;
-    let mrLocalConfig: { repo: { remote: string; localPath: string }; username: string } | null = null;
+    let mrLocalConfig: { repo: { remote: string; localPath: string }; username: string; provider?: string } | null = null;
     try {
         const { autoDetectInit } = await import('./config.js');
         const { localConfig: lc, teamConfig: tc } = await autoDetectInit();
         teamRepoDir = lc.repo.localPath;
         teamRepoRemote = lc.repo.remote;
         mrTeamConfig = { repo: tc.repo, provider: tc.provider, reviewers: tc.reviewers };
-        mrLocalConfig = { repo: lc.repo, username: lc.username };
+        mrLocalConfig = { repo: lc.repo, username: lc.username, provider: lc.provider };
     } catch {
         teamRepoDir = path.join(process.cwd(), '.teamai', 'team-repo');
     }
