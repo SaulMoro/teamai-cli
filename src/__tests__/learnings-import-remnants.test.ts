@@ -462,6 +462,60 @@ describe('publishing what maintenance changed (#823)', () => {
     expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('.gitignore\n');
   });
 
+  it('keeps a file someone else staged staged when a teammate changed the same lines of it and the publish has to rebase', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await savePendingLearning(config, 'shared-2026-01-01-ccc333.md', 'one\ntwo\nthree\n');
+    await publishQueuedLearnings(config, 'alice');
+    const shared = path.join(checkout, 'learnings', 'shared-2026-01-01-ccc333.md');
+    fs.writeFileSync(shared, 'one\ntwo by hand\nthree\n');
+    await simpleGit(checkout).add(['learnings/shared-2026-01-01-ccc333.md']);
+    // Staged in part, and a file the teammate did not touch: it keeps exactly that staging.
+    const gitignore = path.join(checkout, '.gitignore');
+    const stagedIgnore = `${fs.readFileSync(gitignore, 'utf8')}staged-by-hand\n`;
+    fs.writeFileSync(gitignore, stagedIgnore);
+    await simpleGit(checkout).add(['.gitignore']);
+    fs.writeFileSync(gitignore, `${stagedIgnore}not staged\n`);
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    // The staged edit no longer applies on top of the teammate's, so `stash apply --index` refuses.
+    await teammatePublishes(origin, 'shared-2026-01-01-ccc333.md', 'one\ntwo by bob\nthree\n');
+    const warned = watchWarnings();
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]);
+
+    expect(result).toEqual({ status: 'published' });
+    expect(await publishedContent(origin, 'learnings/shared-2026-01-01-ccc333.md')).toBe('one\ntwo by bob\nthree\n');
+    expect(fs.readFileSync(shared, 'utf8')).toBe('one\ntwo by hand\nthree\n');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('.gitignore\nlearnings/shared-2026-01-01-ccc333.md\n');
+    expect(await simpleGit(checkout).raw(['show', ':learnings/shared-2026-01-01-ccc333.md'])).toBe('one\ntwo by hand\nthree\n');
+    expect(await simpleGit(checkout).raw(['show', ':.gitignore'])).toBe(stagedIgnore);
+    expect(fs.readFileSync(gitignore, 'utf8')).toBe(`${stagedIgnore}not staged\n`);
+    expect(warned()).toBe('');
+  });
+
+  it('warns, naming it, when a file someone else staged merged with a teammate\'s change and can no longer be staged as it was', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await savePendingLearning(config, 'shared-2026-01-01-ccc333.md', 'one\ntwo\nthree\nfour\nfive\n');
+    await publishQueuedLearnings(config, 'alice');
+    const shared = path.join(checkout, 'learnings', 'shared-2026-01-01-ccc333.md');
+    fs.writeFileSync(shared, 'one\ntwo by hand\nthree\nfour\nfive\n');
+    await simpleGit(checkout).add(['learnings/shared-2026-01-01-ccc333.md']);
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    // Inside the staged patch's context, so it no longer applies, and one line apart, so the files still merge.
+    await teammatePublishes(origin, 'shared-2026-01-01-ccc333.md', 'one\ntwo\nthree\nfour by bob\nfive\n');
+    const warned = watchWarnings();
+
+    const result = await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten]);
+
+    expect(result).toEqual({ status: 'published' });
+    expect(fs.readFileSync(shared, 'utf8')).toBe('one\ntwo by hand\nthree\nfour by bob\nfive\n');
+    expect(await simpleGit(checkout).raw(['diff', '--cached', '--name-only'])).toBe('');
+    expect(warned()).toContain('learnings/shared-2026-01-01-ccc333.md');
+  });
+
   it('commits nothing when maintenance has nothing to stage, even with a file someone else staged in the checkout', async () => {
     const { config, origin, checkout } = await setUp();
     plant(checkout, 'staged-by-hand.md', 'not maintenance\n');
@@ -490,6 +544,65 @@ describe('publishing what maintenance changed (#823)', () => {
 
     expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
     expect(await simpleGit(checkout).raw(['status', '--porcelain'])).toBe('');
+  });
+
+  it('does not publish, as that maintenance run, an edit made by hand after another write kept it from publishing', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await savePendingLearning(config, 'other-2026-01-01-bbb222.md', '---\ntitle: Other\nconfidence: 0.5\n---\nOther.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    const other = path.join(checkout, 'learnings', 'other-2026-01-01-bbb222.md');
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    fs.writeFileSync(other, '---\ntitle: Other\nconfidence: 0.9\n---\nOther.\n');
+    const release = holdLearningsLock(config);
+    expect(await publishLearningsMaintenance(config, '[teamai] Maintenance', [rewritten, other])).toEqual({ status: 'busy' });
+    release();
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nEdited by hand.\n');
+    const warned = watchWarnings();
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).not.toContain('Edited by hand');
+    expect(await publishedContent(origin, 'learnings/other-2026-01-01-bbb222.md')).toContain('confidence: 0.9');
+    expect(fs.readFileSync(rewritten, 'utf8')).toContain('Edited by hand');
+    expect(warned()).toContain(path.join('learnings', 'kept-2026-01-01-aaa111.md'));
+    const records = path.resolve(checkout, (await simpleGit(checkout).raw(['rev-parse', '--git-path', 'teamai-maintenance'])).trim());
+    expect(fs.readdirSync(records)).toEqual([]);
+  });
+
+  it('publishes an edit a newer maintenance run recorded over an older record of the same file', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    const rewritten = path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md');
+    const release = holdLearningsLock(config);
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    expect(await publishLearningsMaintenance(config, '[teamai] Confidence', [rewritten])).toEqual({ status: 'busy' });
+    fs.writeFileSync(rewritten, '---\ntitle: Kept\nconfidence: 0.95\n---\nKept.\n');
+    expect(await publishLearningsMaintenance(config, '[teamai] Confidence', [rewritten])).toEqual({ status: 'busy' });
+    release();
+    const warned = watchWarnings();
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.95');
+    expect(warned()).toBe('');
+  });
+
+  it('publishes a record written before records held content hashes, as before', async () => {
+    const { config, origin, checkout } = await setUp();
+    await savePendingLearning(config, 'kept-2026-01-01-aaa111.md', '---\ntitle: Kept\nconfidence: 0.5\n---\nKept.\n');
+    await publishQueuedLearnings(config, 'alice');
+    fs.writeFileSync(path.join(checkout, 'learnings', 'kept-2026-01-01-aaa111.md'), '---\ntitle: Kept\nconfidence: 0.9\n---\nKept.\n');
+    const records = path.resolve(checkout, (await simpleGit(checkout).raw(['rev-parse', '--git-path', 'teamai-maintenance'])).trim());
+    fs.mkdirSync(records, { recursive: true });
+    fs.writeFileSync(path.join(records, '0-legacy.json'), JSON.stringify({ message: '[teamai] Maintenance', files: [path.join('learnings', 'kept-2026-01-01-aaa111.md')] }));
+
+    await publishQueuedLearnings(config, 'alice');
+
+    expect(await publishedContent(origin, 'learnings/kept-2026-01-01-aaa111.md')).toContain('confidence: 0.9');
+    expect(fs.readdirSync(records)).toEqual([]);
   });
 
   it('publishes the readable records and removes, naming it, one a crash left truncated', async () => {

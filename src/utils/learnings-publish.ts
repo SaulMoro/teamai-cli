@@ -6,6 +6,7 @@
  * the team later instead of being lost. A queue entry is dropped only once its
  * content is confirmed on origin, so a failure of any kind is always safe.
  */
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { SimpleGit } from 'simple-git';
@@ -346,7 +347,9 @@ export async function publishLearningsMaintenance(
   }
   if (inCheckout.length > 0) {
     try {
-      await recordMaintenance(checkout, { message, files: inCheckout });
+      const contents: Record<string, string | null> = {};
+      for (const rel of inCheckout) contents[rel] = await contentDigest(path.join(checkout, rel));
+      await recordMaintenance(checkout, { message, files: inCheckout, contents });
     } catch (e) {
       log.debug(`[learnings] cannot record maintenance changes for a retry: ${failureReason(e)}`);
       return commitMaintenance(localConfig, message, inCheckout);
@@ -355,9 +358,22 @@ export async function publishLearningsMaintenance(
   return publishRecordedMaintenance(localConfig);
 }
 
-/** What one maintenance run changed, relative to the learnings checkout. */
-const MaintenanceRecord = z.object({ message: z.string(), files: z.array(z.string()) });
+/**
+ * What one maintenance run changed, relative to the learnings checkout, and
+ * what it left in each file: a sha256, or null for a removal. Records from
+ * before `contents` existed publish their files as they are.
+ */
+const MaintenanceRecord = z.object({
+  message: z.string(),
+  files: z.array(z.string()),
+  contents: z.record(z.string(), z.string().nullable()).optional(),
+});
 type MaintenanceRecord = z.infer<typeof MaintenanceRecord>;
+
+async function contentDigest(file: string): Promise<string | null> {
+  if (!fs.existsSync(file)) return null;
+  return createHash('sha256').update(await fs.promises.readFile(file)).digest('hex');
+}
 
 /**
  * Where maintenance records wait: in the checkout's own git directory, which
@@ -414,8 +430,26 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
       );
     }
     if (records.length === 0) return { status: 'already-present' };
+    // A file publishes only as the newest run that changed it left it: an edit
+    // made since is someone's own, not this maintenance, and stays uncommitted.
+    // Names start with the time they were written.
+    records.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+    const expected = new Map<string, string | null | undefined>();
+    for (const record of records) for (const rel of record.files) expected.set(rel, record.contents?.[rel]);
+    const files: string[] = [];
+    const editedSince: string[] = [];
+    for (const [rel, digest] of expected) {
+      if (digest === undefined || (await contentDigest(path.join(checkout, rel))) === digest) files.push(rel);
+      else editedSince.push(rel);
+    }
+    if (editedSince.length > 0) {
+      log.warn(
+        `Not publishing the edit to ${editedSince.join(', ')}: it was made after the maintenance run that changed ` +
+          `the file, so it is not part of that run. It stays uncommitted in ${checkout}; check with git -C "${checkout}" diff.`,
+      );
+    }
     const message = records.length === 1 ? records[0].message : `[teamai] Publish ${records.length} learnings maintenance runs`;
-    const result = await commitMaintenance(localConfig, message, [...new Set(records.flatMap((r) => r.files))]);
+    const result = await commitMaintenance(localConfig, message, files);
     if (result.status === 'published' || result.status === 'already-present') {
       for (const record of records) await fs.promises.rm(record.file, { force: true });
     }
