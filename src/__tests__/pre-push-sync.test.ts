@@ -28,6 +28,7 @@ vi.mock('../utils/git.js', () => ({
 }));
 
 import { syncTeamUpdatesToLocal } from '../utils/pre-push-sync.js';
+import { fileHash } from '../utils/fs.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
 describe('syncTeamUpdatesToLocal — rules', () => {
@@ -98,6 +99,21 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     // Local should now have v2
     const content = await fse.readFile(path.join(homeDir, '.claude/rules', 'my-rule.md'), 'utf-8');
     expect(content).toBe('v2 content');
+  });
+
+  it('records the rule it syncs as delivered, and leaves an edited one on record (#822)', async () => {
+    await fse.writeFile(path.join(repoPath, 'rules', 'synced.md'), 'v2 content');
+    await fse.writeFile(path.join(repoPath, 'rules', 'edited.md'), 'v2 content');
+    const synced = path.join(homeDir, '.claude/rules', 'synced.md');
+    const edited = path.join(homeDir, '.claude/rules', 'edited.md');
+    await fse.writeFile(synced, 'v1 content');
+    await fse.writeFile(edited, 'local edit');
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 content'));
+    const delivered: Record<string, string> = { [synced]: 'hash-of-v1', [edited]: 'hash-of-v1' };
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234', undefined, delivered);
+
+    expect(delivered).toEqual({ [synced]: await fileHash(synced), [edited]: 'hash-of-v1' });
   });
 
   it('syncs a local rule at any of several bases, and keeps one at none (#812)', async () => {
@@ -520,6 +536,21 @@ describe('syncTeamUpdatesToLocal — skills', () => {
     // Local should now have v2
     const content = await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8');
     expect(content).toBe('v2 skill');
+  });
+
+  it('records the team files of a skill it syncs as delivered, not the member\'s own (#822)', async () => {
+    const teamSkillDir = path.join(repoPath, 'skills', 'my-skill');
+    await fse.outputFile(path.join(teamSkillDir, 'SKILL.md'), 'v2 skill');
+    await fse.outputFile(path.join(teamSkillDir, 'CONTRIBUTORS'), 'alice\n');
+    const localSkillDir = path.join(homeDir, '.claude/skills', 'my-skill');
+    await fse.outputFile(path.join(localSkillDir, 'SKILL.md'), 'v1 skill');
+    await fse.outputFile(path.join(localSkillDir, 'notes.md'), 'mine');
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 skill'));
+    const delivered: Record<string, string> = { [path.join(localSkillDir, 'SKILL.md')]: 'hash-of-v1' };
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234', undefined, delivered);
+
+    expect(delivered).toEqual({ [path.join(localSkillDir, 'SKILL.md')]: await fileHash(path.join(localSkillDir, 'SKILL.md')) });
   });
 
   it('should NOT sync skill dir when user edited any file', async () => {
