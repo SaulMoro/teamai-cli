@@ -370,6 +370,11 @@ const MaintenanceRecord = z.object({
 });
 type MaintenanceRecord = z.infer<typeof MaintenanceRecord>;
 
+async function hasUncommittedChange(checkout: string, rel: string): Promise<boolean> {
+  const status = await createGit(checkout).raw(['--literal-pathspecs', 'status', '--porcelain', '-z', '--untracked-files=all', '--', rel]);
+  return status.length > 0;
+}
+
 async function contentDigest(file: string): Promise<string | null> {
   if (!fs.existsSync(file)) return null;
   return createHash('sha256').update(await fs.promises.readFile(file)).digest('hex');
@@ -440,12 +445,15 @@ async function publishRecordedMaintenance(localConfig: LocalConfig): Promise<Pub
     const editedSince: string[] = [];
     for (const [rel, digest] of expected) {
       if (digest === undefined || (await contentDigest(path.join(checkout, rel))) === digest) files.push(rel);
+      // Nothing uncommitted: an earlier attempt committed the run's change, and a refresh merged origin's into it.
+      else if (!(await hasUncommittedChange(checkout, rel))) files.push(rel);
       else editedSince.push(rel);
     }
     if (editedSince.length > 0) {
       log.warn(
         `Not publishing the edit to ${editedSince.join(', ')}: it was made after the maintenance run that changed ` +
-          `the file, so it is not part of that run. It stays uncommitted in ${checkout}; check with git -C "${checkout}" diff.`,
+          `the file, so it is not part of that run, and no later teamai run publishes it. It stays uncommitted in ` +
+          `${checkout}; review it with git -C "${checkout}" diff HEAD, then share it as a learning or discard it.`,
       );
     }
     const message = records.length === 1 ? records[0].message : `[teamai] Publish ${records.length} learnings maintenance runs`;
