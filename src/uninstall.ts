@@ -1230,6 +1230,13 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
           removedTotal += changes.filter((c) => c.action === 'removed').length;
         }
         if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
+        // Every worktree shares one info/exclude, so it goes once they are all clean.
+        if (localConfig.scope === 'project' && localConfig.projectRoot) {
+          const { removeMcpGitExclude } = await import('./mcp-git-exclude.js');
+          if (await removeMcpGitExclude(localConfig.projectRoot)) {
+            log.info('Removed teamai\'s MCP config entries from .git/info/exclude');
+          }
+        }
       } catch (e) {
         log.warn(`Failed to remove MCP servers: ${(e as Error).message}`);
       }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -694,6 +695,36 @@ describe('uninstall', () => {
     const after = await fse.readJson(path.join(homeDir, '.claude.json'));
     expect(after.mcpServers['team-mcp']).toBeUndefined();
     expect(after.mcpServers['my-own']).toEqual({ command: 'my-server' });
+  });
+
+  it('project-scope uninstall removes only the teamai block from .git/info/exclude (#882)', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.outputFile(path.join(projectRoot, '.claude', 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
+    await fse.writeFile(excludeFile, [
+      '# my own',
+      'scratch/',
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/.mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '*.local',
+      '',
+    ].join('\n'));
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe('# my own\nscratch/\n*.local\n');
   });
 
   it('移除 OpenClaw 系 agent 的 HOOK.md 目录（无 settings 路径）', async () => {

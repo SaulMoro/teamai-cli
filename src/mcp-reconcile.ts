@@ -44,6 +44,7 @@ import {
 import { log } from './utils/logger.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
+import { carriesResolvedValue, excludeFromGit } from './mcp-git-exclude.js';
 
 // ─── Reconcile engine ────────────────────────────────────────
 //
@@ -196,7 +197,7 @@ function requirementsMet(def: McpServerDef, lookPath?: LookPathOptions): string 
 
 // ─── Tool targeting ──────────────────────────────────────────
 
-interface McpTarget {
+export interface McpTarget {
   tool: string;
   format: McpFormat;
   /** Absolute path of the config file to edit. */
@@ -582,6 +583,11 @@ export async function reconcileMcpForConfig(
 
     if (nextRecords.length > 0) manifest[manifestKey] = nextRecords;
     else delete manifest[manifestKey];
+
+    // A resolved ${VAR} in a project file is plaintext in the business repo.
+    if (!removeAll && !options.dryRun && carriesResolvedValue(target, teamDefs, nextRecords.map((r) => r.name))) {
+      await excludeFromGit(target.file);
+    }
   }
 
   if (!options.dryRun && wrote) {

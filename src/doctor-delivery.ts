@@ -500,6 +500,46 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 }
 
 /**
+ * A project MCP config holding a resolved `${VAR}` that git would commit
+ * (#882). Pull lists such a file in `.git/info/exclude`; this is the standing
+ * check for a file that is tracked already, or a repo whose exclude could not
+ * be written. Read-only: `git check-ignore` changes nothing.
+ */
+export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig || localConfig.scope !== 'project' || localConfig.repo.kind === 'http') return [];
+
+  const { resolveMcpTargets, mcpTargetExcluded, installedMcpEntries } = await import('./mcp-reconcile.js');
+  const { carriesResolvedValue, gitWouldTrack } = await import('./mcp-git-exclude.js');
+  const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
+  const { resolveEntriesFor } = await import('./namespaced-entries.js');
+
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
+  if (resolution.kind === 'failed') return [];
+  const teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+
+  const tracked: string[] = [];
+  let holding = 0;
+  for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
+    if (mcpTargetExcluded(localConfig, target)) continue;
+    const installed = await installedMcpEntries(target);
+    if (!installed || !carriesResolvedValue(target, teamDefs, installed.keys())) continue;
+    holding += 1;
+    if (await gitWouldTrack(target.file)) tracked.push(target.file);
+  }
+  if (holding === 0) return [];
+
+  return [{
+    name: 'Project MCP configs with resolved values are kept out of git',
+    source: 'local',
+    check: async () => tracked.length === 0,
+    fix: `${tracked.join(', ')} hold MCP variables resolved to plaintext, and git would commit them. `
+      + 'Run `teamai pull` to list them in .git/info/exclude. If git already tracks one, run '
+      + '`git rm --cached <file>` and rotate the values it held.',
+  }];
+}
+
+/**
  * Env, hook and MCP entries carrying a key to fix: the per-entry `roles:` /
  * `projects:` keys that namespace files replace (#707), or a key the entry's
  * schema does not know (#822). An entry with an unknown key or `projects:` (and

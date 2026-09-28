@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -228,5 +229,51 @@ describe('doctor — MCP servers delivered on disk', () => {
     await (await mcpCheck()).check();
 
     expect(await fse.readFile(file, 'utf8')).toBe(before);
+  });
+
+  describe('project MCP config holding a resolved value (#882)', () => {
+    const NAME = 'Project MCP configs with resolved values are kept out of git';
+    let projectRoot: string;
+
+    beforeEach(async () => {
+      projectRoot = path.join(tempDir, 'business-repo');
+      await fse.ensureDir(path.join(projectRoot, '.claude', 'skills'));
+      execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+      Object.assign(localConfig, { scope: 'project', projectRoot });
+      teamConfig.toolPaths = { claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' } };
+      await writeTeamMcp(
+        'servers:\n  - name: jira\n    transport: http\n    url: https://jira.example/mcp\n'
+        + '    headers:\n      Authorization: "Bearer ${JIRA_TOKEN}"\n',
+      );
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), {
+        mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer t0ken' } } },
+      });
+    });
+
+    async function excludeCheck(): Promise<Check | undefined> {
+      return (await checks()).find((c) => c.name === NAME);
+    }
+
+    it('fails while git would track the file, and names it', async () => {
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
+      expect(check.fix).toContain('teamai pull');
+    });
+
+    it('passes once git ignores the file', async () => {
+      await fse.appendFile(path.join(projectRoot, '.git', 'info', 'exclude'), '/.mcp.json\n');
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(true);
+    });
+
+    it('emits no check when the installed servers carry no resolved value', async () => {
+      await writeTeamMcp('servers:\n  - name: jira\n    transport: http\n    url: https://jira.example/mcp\n');
+
+      expect(await excludeCheck()).toBeUndefined();
+    });
   });
 });
