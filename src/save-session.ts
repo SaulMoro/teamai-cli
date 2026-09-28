@@ -59,7 +59,7 @@ export async function saveSession(options: SaveSessionOptions): Promise<void> {
   }
 
   const sessionId =
-    options.sessionId || agentSessionIdFromEnv() || mostRecentSessionId(events);
+    options.sessionId || (await agentSessionIdFromEnv()) || mostRecentSessionId(events);
   if (!sessionId) {
     log.error('Could not determine a session id. Pass --session-id <id>.');
     return;

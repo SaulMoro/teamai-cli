@@ -249,7 +249,7 @@ export async function contribute(
   // it reaches origin: the queue always retries, and re-contributing the same
   // session would add a second copy of the same knowledge rather than fix
   // anything. `pull` and `doctor` are what tell the user it is still queued.
-  const sessionId = options.sessionId || agentSessionIdFromEnv() || '';
+  const sessionId = options.sessionId || (await agentSessionIdFromEnv()) || '';
   if (sessionId) {
     await markContributed(sessionId);
   }

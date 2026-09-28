@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { AGENT_SESSION_ENV, agentSessionIdFromEnv, deriveSessionId } from '../utils/session-id.js';
 
@@ -90,29 +93,76 @@ describe('agentSessionIdFromEnv', () => {
             'CODEBUDDY_SESSION_ID',
             'COPILOT_AGENT_SESSION_ID',
             'CURSOR_CONVERSATION_ID',
-            'PI_SESSION_ID',
             'CLAUDE_SESSION_ID',
         ]);
     });
 
-    it.each(AGENT_SESSION_ENV)('returns %s', (name) => {
-        vi.stubEnv(name, 'env-session');
-        expect(agentSessionIdFromEnv()).toBe('env-session');
+    // Pi's hook bridge sends no session id, so its hooks record under the
+    // pid fallback; PI_SESSION_ID would name a session with no events.
+    it('ignores PI_SESSION_ID, which Pi hooks never receive', async () => {
+        vi.stubEnv('PI_SESSION_ID', 'pi-session');
+        expect(await agentSessionIdFromEnv()).toBeUndefined();
     });
 
-    it('prefers CODEBUDDY_SESSION_ID over the CLAUDE_SESSION_ID alias CodeBuddy also sets', () => {
+    it.each(AGENT_SESSION_ENV)('returns %s', async (name) => {
+        vi.stubEnv(name, 'env-session');
+        expect(await agentSessionIdFromEnv()).toBe('env-session');
+    });
+
+    it('prefers CODEBUDDY_SESSION_ID over the CLAUDE_SESSION_ID alias CodeBuddy also sets', async () => {
         vi.stubEnv('CLAUDE_SESSION_ID', 'alias-session');
         vi.stubEnv('CODEBUDDY_SESSION_ID', 'codebuddy-session');
-        expect(agentSessionIdFromEnv()).toBe('codebuddy-session');
+        expect(await agentSessionIdFromEnv()).toBe('codebuddy-session');
     });
 
-    it('skips an empty variable', () => {
+    it('skips an empty variable', async () => {
         vi.stubEnv('CLAUDE_CODE_SESSION_ID', '');
         vi.stubEnv('CODEX_SESSION_ID', 'codex-session');
-        expect(agentSessionIdFromEnv()).toBe('codex-session');
+        expect(await agentSessionIdFromEnv()).toBe('codex-session');
     });
 
-    it('returns undefined when no agent variable is set', () => {
-        expect(agentSessionIdFromEnv()).toBeUndefined();
+    it('returns undefined when no agent variable is set', async () => {
+        expect(await agentSessionIdFromEnv()).toBeUndefined();
+    });
+
+    describe('in a nested agent session', () => {
+        let home: string;
+
+        function writeEvents(events: { sessionId: string; timestamp: string }[]): void {
+            const dir = path.join(home, '.teamai', 'dashboard');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(
+                path.join(dir, 'events.jsonl'),
+                events.map((e) => JSON.stringify({ type: 'prompt_submit', tool: 'test', ...e })).join('\n') + '\n',
+            );
+        }
+
+        afterEach(() => {
+            if (home) fs.rmSync(home, { recursive: true, force: true });
+        });
+
+        // Codex started from Claude Code's shell inherits CLAUDE_CODE_SESSION_ID
+        // and sets its own CODEX_SESSION_ID; Codex's hooks record under the latter.
+        it('picks the inner agent: the session with the latest hook event', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+            vi.stubEnv('CODEX_SESSION_ID', 'inner-codex');
+            writeEvents([
+                { sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z' },
+                { sessionId: 'inner-codex', timestamp: '2026-09-28T10:05:00.000Z' },
+                { sessionId: 'unrelated', timestamp: '2026-09-28T10:09:00.000Z' },
+            ]);
+            expect(await agentSessionIdFromEnv()).toBe('inner-codex');
+        });
+
+        it('falls back to the variable order when no set session has events', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+            vi.stubEnv('CODEX_SESSION_ID', 'inner-codex');
+            writeEvents([{ sessionId: 'unrelated', timestamp: '2026-09-28T10:09:00.000Z' }]);
+            expect(await agentSessionIdFromEnv()).toBe('outer-claude');
+        });
     });
 });

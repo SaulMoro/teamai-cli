@@ -636,7 +636,7 @@ export async function recall(
   // Record quality signal for contribute-check's knowledge-gap detection.
   // Best-effort and independent of dry-run/verbosity — misses matter too.
   if (process.env.TEAMAI_RECALL_DISABLED !== '1') {
-    recordRecallQuality(agentSessionIdFromEnv() ?? deriveSessionId({}), topResults);
+    recordRecallQuality((await agentSessionIdFromEnv()) ?? deriveSessionId({}), topResults);
   }
 
   if (topResults.length === 0) {
