@@ -46,6 +46,20 @@ describe('gitBinary', () => {
     expect(gitBinary({ pathEnv: onPath(b, a), platform: 'darwin' })).toBe(path.join(b, 'git'));
   });
 
+  posixIt('looks PATH up again when the resolved git is removed or loses execute permission', () => {
+    const later = gitDir();
+
+    const removed = gitDir();
+    expect(gitBinary({ pathEnv: onPath(removed, later), platform: 'darwin' })).toBe(path.join(removed, 'git'));
+    fs.rmSync(path.join(removed, 'git'));
+    expect(gitBinary({ pathEnv: onPath(removed, later), platform: 'darwin' })).toBe(path.join(later, 'git'));
+
+    const unexecutable = gitDir();
+    expect(gitBinary({ pathEnv: onPath(unexecutable, later), platform: 'darwin' })).toBe(path.join(unexecutable, 'git'));
+    fs.chmodSync(path.join(unexecutable, 'git'), 0o644);
+    expect(gitBinary({ pathEnv: onPath(unexecutable, later), platform: 'darwin' })).toBe('git');
+  });
+
   it('falls back to the bare name when git is not on PATH', () => {
     expect(gitBinary({ pathEnv: onPath(tempDir()), platform: 'darwin' })).toBe('git');
   });

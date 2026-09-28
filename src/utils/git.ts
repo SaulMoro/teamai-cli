@@ -19,7 +19,7 @@ let resolvedGit: { pathEnv: string; binary: string } | undefined;
  * in turn, and every miss costs milliseconds. Under npm scripts or a long shell
  * PATH that adds 30-60 ms to each of the dozens of git calls a pull or push
  * makes. Resolved once per PATH value, so a PATH the process changes later is
- * looked up again.
+ * looked up again, as is a resolved `git` that is gone or no longer executable.
  *
  * The first `git` found is spawned once (`git --version`) to confirm it
  * starts. Keeps the bare name, and so today's lookup and errors, when that
@@ -35,8 +35,21 @@ export function gitBinary(
 ): string {
   if ((options.platform ?? process.platform) === 'win32') return 'git';
   const pathEnv = options.pathEnv ?? process.env.PATH ?? '';
-  if (resolvedGit?.pathEnv !== pathEnv) resolvedGit = { pathEnv, binary: lookUpGit(pathEnv) };
+  if (resolvedGit?.pathEnv !== pathEnv || !stillExecutable(resolvedGit.binary)) {
+    resolvedGit = { pathEnv, binary: lookUpGit(pathEnv) };
+  }
   return resolvedGit.binary;
+}
+
+/** One access(2) per call, where a bare-name spawn would walk PATH again. */
+function stillExecutable(binary: string): boolean {
+  if (binary === 'git') return true;
+  try {
+    fs.accessSync(binary, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function lookUpGit(pathEnv: string): string {
