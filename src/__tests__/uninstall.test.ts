@@ -727,6 +727,40 @@ describe('uninstall', () => {
     expect(await fse.readFile(excludeFile, 'utf8')).toBe('# my own\nscratch/\n*.local\n');
   });
 
+  it('project-scope uninstall removes the .git/info/exclude block when it is all teamai left (#882)', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    await fse.ensureDir(homeDir);
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.ensureDir(projectRoot);
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
+    await fse.writeFile(excludeFile, [
+      'scratch/',
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/.mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '',
+    ].join('\n'));
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    const { log } = await import('../utils/logger.js');
+    vi.mocked(log.info).mockClear();
+
+    await uninstall({ force: true });
+
+    expect(log.info).not.toHaveBeenCalledWith('Nothing to uninstall');
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe('scratch/\n');
+  });
+
   it('移除 OpenClaw 系 agent 的 HOOK.md 目录（无 settings 路径）', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

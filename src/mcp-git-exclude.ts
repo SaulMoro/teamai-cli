@@ -97,13 +97,24 @@ export async function excludeFromGit(file: string): Promise<void> {
   }
 }
 
-/** Remove teamai's block from the `.git/info/exclude` of the repository at `root`. */
-export async function removeMcpGitExclude(root: string): Promise<boolean> {
+/** teamai's block in the `.git/info/exclude` of the repository at `root`, with the file holding it. */
+async function readBlock(root: string): Promise<{ excludeFile: string; block: NonNullable<ReturnType<typeof splitBlock>> } | null> {
   const location = await gitExcludeFile(root);
-  if (!location) return false;
+  if (!location) return null;
   const content = await readFileSafe(location.excludeFile);
   const block = content === null ? null : splitBlock(content);
-  if (!block) return false;
-  await fse.writeFile(location.excludeFile, block.before + block.after);
+  return block ? { excludeFile: location.excludeFile, block } : null;
+}
+
+/** Whether the `.git/info/exclude` of the repository at `root` holds teamai's block. */
+export async function hasMcpGitExclude(root: string): Promise<boolean> {
+  return await readBlock(root) !== null;
+}
+
+/** Remove teamai's block from the `.git/info/exclude` of the repository at `root`. */
+export async function removeMcpGitExclude(root: string): Promise<boolean> {
+  const found = await readBlock(root);
+  if (!found) return false;
+  await fse.writeFile(found.excludeFile, found.block.before + found.block.after);
   return true;
 }
