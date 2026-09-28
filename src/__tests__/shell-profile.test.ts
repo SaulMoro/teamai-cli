@@ -659,6 +659,12 @@ describe('envBlockReferencesDataHome', () => {
     expect(envBlockReferencesDataHome(block, '/home/me/.teamai/env.sh')).toBe(false);
     expect(envBlockReferencesDataHome(`[ -f ${other} ] && source ${other}`, '/home/me/.teamai/env.sh')).toBe(false);
   });
+
+  it('does not match a path that only starts with this env.sh', () => {
+    const other = '/home/me/.teamai/env.sh.bak';
+    expect(envBlockReferencesDataHome(`[ -f ${other} ] && source ${other}`, '/home/me/.teamai/env.sh')).toBe(false);
+    expect(envBlockReferencesDataHome('[ -f /home/me/.teamai/env.sh ]; source /home/me/.teamai/env.sh', '/home/me/.teamai/env.sh')).toBe(true);
+  });
 });
 
 describe('findEnvBlockFor', () => {

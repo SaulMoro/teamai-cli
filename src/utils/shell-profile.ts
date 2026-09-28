@@ -209,14 +209,17 @@ function candidateSpellings(envShPath: string): string[] {
 }
 
 /**
- * Whether `spelling` occurs in `text` where a path starts: at the start of
- * the text, or after whitespace or a quote. A longer path that merely ends in
- * it (`/data/home/me/.teamai/env.sh` for `/home/me/.teamai/env.sh`) names
- * another scope's env.sh (#876).
+ * Whether `spelling` occurs in `text` as a whole path: starting at the start
+ * of the text or after whitespace or a quote, and ending at the end of the
+ * text or before whitespace, a quote or `;`. A longer path that merely ends
+ * or starts with it (`/data/home/me/.teamai/env.sh` or
+ * `/home/me/.teamai/env.sh.bak` for `/home/me/.teamai/env.sh`) names another
+ * file (#876).
  */
 function includesAsPath(text: string, spelling: string): boolean {
   for (let at = text.indexOf(spelling); at !== -1; at = text.indexOf(spelling, at + 1)) {
-    if (at === 0 || /[\s'"]/.test(text[at - 1])) return true;
+    const after = at + spelling.length;
+    if ((at === 0 || /[\s'"]/.test(text[at - 1])) && (after === text.length || /[\s'";]/.test(text[after]))) return true;
   }
   return false;
 }
