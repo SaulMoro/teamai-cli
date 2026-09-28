@@ -194,9 +194,9 @@ async function updateExclude(excludeFile: string, edit: (content: string) => str
  * The `.git/info/exclude` files holding teamai's block, one per repository
  * among those `dirs` are in (a config inside a nested repository or submodule
  * is excluded from that repository, not from the project root's), each with
- * the absolute paths its block protects in the checkouts `dirs` reach.
+ * its patterns and the absolute paths each protects in the checkouts `dirs` reach.
  */
-export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<string, string[]>> {
+export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<string, Array<{ pattern: string; files: string[] }>>> {
   const roots = new Map<string, Set<string>>();
   for (const dir of new Set(dirs)) {
     const location = await gitExcludeFile(dir);
@@ -204,7 +204,7 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
     const seen = roots.get(location.excludeFile) ?? new Set<string>();
     roots.set(location.excludeFile, seen.add(location.root));
   }
-  const found = new Map<string, string[]>();
+  const found = new Map<string, Array<{ pattern: string; files: string[] }>>();
   for (const [excludeFile, checkouts] of roots) {
     const content = await readFileSafe(excludeFile);
     const block = content === null ? null : splitBlock(content);
@@ -213,16 +213,25 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
     const [anyCheckout] = checkouts;
     if (anyCheckout) for (const worktree of await listWorktrees(anyCheckout)) checkouts.add(worktree);
     // Each pattern is `/<path from the root>`, glob characters escaped (see excludeFromGit).
-    const rels = block.patterns.map((p) => p.replace(/^\//, '').replace(/\\(.)/g, '$1'));
-    found.set(excludeFile, [...checkouts].flatMap((root) => rels.map((rel) => path.join(root, rel))));
+    found.set(excludeFile, block.patterns.map((pattern) => {
+      const rel = pattern.replace(/^\//, '').replace(/\\(.)/g, '$1');
+      return { pattern, files: [...checkouts].map((root) => path.join(root, rel)) };
+    }));
   }
   return found;
 }
 
-/** Remove teamai's block from `excludeFile`, one `findMcpGitExcludes` returned. */
-export async function removeMcpGitExclude(excludeFile: string): Promise<ExcludeUpdate> {
+/**
+ * Remove `patterns` from teamai's block in `excludeFile` (one `findMcpGitExcludes`
+ * returned), and the block with its last pattern.
+ */
+export async function removeMcpGitExclude(excludeFile: string, patterns: string[]): Promise<ExcludeUpdate> {
   return updateExclude(excludeFile, (content) => {
     const block = splitBlock(content);
-    return block ? block.before + block.after : null;
+    if (!block) return null;
+    const kept = block.patterns.filter((p) => !patterns.includes(p));
+    if (kept.length === block.patterns.length) return null;
+    const body = kept.length > 0 ? `${[MCP_EXCLUDE_START, ...kept, MCP_EXCLUDE_END].join('\n')}\n` : '';
+    return block.before + body + block.after;
   });
 }

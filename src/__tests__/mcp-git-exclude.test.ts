@@ -108,14 +108,24 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('teamai pull'));
     });
 
-    it('does not remove the block', async () => {
+    it('does not remove patterns', async () => {
       const content = `${MCP_EXCLUDE_START}\n/.mcp.json\n${MCP_EXCLUDE_END}\n`;
       await fse.outputFile(excludeFile, content);
 
-      expect(await removeMcpGitExclude(excludeFile)).toBe('locked');
+      expect(await removeMcpGitExclude(excludeFile, ['/.mcp.json'])).toBe('locked');
 
       expect(await fse.readFile(excludeFile, 'utf8')).toBe(content);
     });
+  });
+
+  it('removes only the patterns asked for, and the block with its last one', async () => {
+    await fse.outputFile(excludeFile, `mine/\n${MCP_EXCLUDE_START}\n/a.json\n/b.json\n${MCP_EXCLUDE_END}\n`);
+
+    expect(await removeMcpGitExclude(excludeFile, ['/a.json'])).toBe('written');
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe(`mine/\n${MCP_EXCLUDE_START}\n/b.json\n${MCP_EXCLUDE_END}\n`);
+
+    expect(await removeMcpGitExclude(excludeFile, ['/b.json'])).toBe('written');
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe('mine/\n');
   });
 
   it('stays quiet outside any repository', async () => {
@@ -133,7 +143,7 @@ describe('teamai block in .git/info/exclude (#882)', () => {
     await fse.writeJson(path.join(repo, '.mcp.json'), {});
 
     await excludeFromGit(path.join(repo, '.mcp.json'));
-    expect(await removeMcpGitExclude(excludeFile)).toBe('written');
+    expect(await removeMcpGitExclude(excludeFile, ['/.mcp.json'])).toBe('written');
 
     expect(await fse.readFile(excludeFile, 'utf8')).toBe(`${MCP_EXCLUDE_START}\n/old.json\nscratch/\n`);
   });
