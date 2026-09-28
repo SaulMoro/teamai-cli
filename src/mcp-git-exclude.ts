@@ -137,7 +137,7 @@ export async function excludeFromGit(file: string): Promise<void> {
   // Anchored at the working tree root, glob characters escaped.
   const pattern = `/${location.prefix}${path.basename(file)}`.replace(/[\\*?[\]!#]/g, '\\$&');
   try {
-    const added = await updateExclude(excludeFile, (content) => {
+    const result = await updateExclude(excludeFile, (content) => {
       const block = splitBlock(content);
       if (block?.patterns.includes(pattern)) return null;
       const head = block ? block.before : content;
@@ -146,7 +146,13 @@ export async function excludeFromGit(file: string): Promise<void> {
       const sep = head === '' || head.endsWith('\n') ? '' : '\n';
       return `${head}${sep}${body}\n${block?.after ?? ''}`;
     });
-    if (added) log.debug(`Added ${pattern} to ${excludeFile}`);
+    if (result === 'written') log.debug(`Added ${pattern} to ${excludeFile}`);
+    if (result === 'locked') {
+      log.warn(
+        `${file} holds a resolved MCP variable and is not excluded from git yet: another teamai command held ${excludeFile} past the wait. `
+        + 'Run `teamai pull` again, and do not commit the file meanwhile.',
+      );
+    }
   } catch (e) {
     log.warn(
       `${file} holds a resolved MCP variable, and adding it to ${excludeFile} failed: ${e instanceof Error ? e.message : String(e)}. `
@@ -155,14 +161,17 @@ export async function excludeFromGit(file: string): Promise<void> {
   }
 }
 
+/** How `updateExclude` left the file: `locked` wrote nothing, another command held it past the wait. */
+export type ExcludeUpdate = 'written' | 'unchanged' | 'locked';
+
 /**
  * Rewrite `excludeFile` with `edit` (null: leave it as it is), holding a lock
  * across the read and an atomic write: the worktrees of a repository share the
  * file, so two commands adding different paths must not drop each other's.
- * A lock still held after the wait is passed over rather than skipping the
- * write, which would leave the path unprotected.
+ * A lock still held after the wait writes nothing: an unlocked write could drop
+ * the holder's pattern, leaving that path unprotected.
  */
-async function updateExclude(excludeFile: string, edit: (content: string) => string | null): Promise<boolean> {
+async function updateExclude(excludeFile: string, edit: (content: string) => string | null): Promise<ExcludeUpdate> {
   const { acquireLock, releaseLock } = await import('./update.js');
   const lockPath = `${excludeFile}.teamai-lock`;
   let held = false;
@@ -170,14 +179,14 @@ async function updateExclude(excludeFile: string, edit: (content: string) => str
     held = await acquireLock(lockPath);
     if (!held) await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  if (!held) log.debug(`${lockPath} is still held; updating ${excludeFile} without it`);
+  if (!held) return 'locked';
   try {
     const next = edit((await readFileSafe(excludeFile)) ?? '');
-    if (next === null) return false;
+    if (next === null) return 'unchanged';
     await writeFileAtomic(excludeFile, next);
-    return true;
+    return 'written';
   } finally {
-    if (held) await releaseLock(lockPath);
+    await releaseLock(lockPath);
   }
 }
 
@@ -211,7 +220,7 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
 }
 
 /** Remove teamai's block from `excludeFile`, one `findMcpGitExcludes` returned. */
-export async function removeMcpGitExclude(excludeFile: string): Promise<boolean> {
+export async function removeMcpGitExclude(excludeFile: string): Promise<ExcludeUpdate> {
   return updateExclude(excludeFile, (content) => {
     const block = splitBlock(content);
     return block ? block.before + block.after : null;

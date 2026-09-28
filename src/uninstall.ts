@@ -1336,8 +1336,12 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
                 `Kept teamai's block in ${excludeFile}, since these files may still hold MCP values teamai resolved to plaintext: `
                 + `${still.join('; ')}. Remove any such value, or confirm the file is safe to commit, then delete the block yourself.`,
               );
-            } else if (await removeMcpGitExclude(excludeFile)) {
-              log.info(`Removed teamai's MCP config entries from ${excludeFile}`);
+              continue;
+            }
+            const result = await removeMcpGitExclude(excludeFile);
+            if (result === 'written') log.info(`Removed teamai's MCP config entries from ${excludeFile}`);
+            if (result === 'locked') {
+              log.warn(`Kept teamai's block in ${excludeFile}: another teamai command held it past the wait. Delete the block yourself.`);
             }
           }
         }
