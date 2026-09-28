@@ -799,6 +799,67 @@ describe('uninstall', () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`Kept teamai's block in ${await fse.realpath(excludeFile)}`));
   });
 
+  describe('the block protects a config holding a resolved value (#882)', () => {
+    const block = [
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/.mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '',
+    ].join('\n');
+    const jira = { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer t0ken' } };
+
+    async function setup(): Promise<{ projectRoot: string; excludeFile: string; localConfig: LocalConfig }> {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      const projectRoot = path.join(tmpDir, 'business-repo');
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      await fse.outputFile(path.join(repoPath, 'mcp', 'mcp.yaml'), [
+        'servers:',
+        '  - name: jira',
+        '    transport: http',
+        '    url: https://jira.example/mcp',
+        '    headers:',
+        '      Authorization: "Bearer ${JIRA_TOKEN}"',
+        '',
+      ].join('\n'));
+      await fse.ensureDir(path.join(projectRoot, '.claude', 'skills'));
+      execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+      const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
+      await fse.writeFile(excludeFile, block);
+      const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot });
+      const teamConfig = makeTeamConfig({
+        toolPaths: { claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' } },
+      });
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+      return { projectRoot, excludeFile, localConfig };
+    }
+
+    it('keeps the block when managed-mcp.json is gone and the token is still in .mcp.json', async () => {
+      const { projectRoot, excludeFile } = await setup();
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira } });
+      const { log } = await import('../utils/logger.js');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readJson(path.join(projectRoot, '.mcp.json'))).toEqual({ mcpServers: { jira } });
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`Kept teamai's block in ${await fse.realpath(excludeFile)}`));
+    });
+
+    it('removes the block once uninstall has taken teamai\'s servers out of .mcp.json', async () => {
+      const { projectRoot, excludeFile, localConfig } = await setup();
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira, mine: { command: 'mine' } } });
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+      });
+
+      await uninstall({ force: true });
+
+      expect(await fse.readJson(path.join(projectRoot, '.mcp.json'))).toEqual({ mcpServers: { mine: { command: 'mine' } } });
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe('');
+    });
+  });
+
   it('project-scope uninstall removes the block from a nested repository holding an MCP config (#882)', async () => {
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(tmpDir, 'team-repo');

@@ -35,16 +35,19 @@ export function carriesResolvedValue(
     && !supportsEnvExpansion(target.format, target.projectScope, def));
 }
 
-/** The `info/exclude` git reads for `dir`'s checkout (worktrees and submodules included), and `dir`'s path from its root. */
-async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; prefix: string } | null> {
-  const result = await execCommand('git', ['rev-parse', '--show-prefix', '--git-path', 'info/exclude'], { cwd: dir, timeoutMs: 10_000 })
+/**
+ * The `info/exclude` git reads for `dir`'s checkout (worktrees and submodules
+ * included), the checkout's root, and `dir`'s path from it.
+ */
+async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; root: string; prefix: string } | null> {
+  const result = await execCommand('git', ['rev-parse', '--show-toplevel', '--show-prefix', '--git-path', 'info/exclude'], { cwd: dir, timeoutMs: 10_000 })
     .catch(() => null);
   if (!result || result.code !== 0) return null;
-  const [prefix = '', gitPath = ''] = result.stdout.split(/\r?\n/);
-  if (!gitPath) return null;
+  const [root = '', prefix = '', gitPath = ''] = result.stdout.split(/\r?\n/);
+  if (!root || !gitPath) return null;
   // Real path, so one repository reached through a symlink (macOS /var) is one file.
   const base = await fse.realpath(dir).catch(() => dir);
-  return { excludeFile: path.resolve(base, gitPath), prefix };
+  return { excludeFile: path.resolve(base, gitPath), root, prefix };
 }
 
 /**
@@ -105,18 +108,28 @@ export async function excludeFromGit(file: string): Promise<void> {
 
 /**
  * The `.git/info/exclude` files holding teamai's block, one per repository
- * among those `dirs` are in: a config inside a nested repository or submodule
- * is excluded from that repository, not from the project root's.
+ * among those `dirs` are in (a config inside a nested repository or submodule
+ * is excluded from that repository, not from the project root's), each with
+ * the absolute paths its block protects in the checkouts `dirs` reach.
  */
-export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<string[]> {
-  const found = new Set<string>();
+export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<string, string[]>> {
+  const roots = new Map<string, Set<string>>();
   for (const dir of new Set(dirs)) {
     const location = await gitExcludeFile(dir);
-    if (!location || found.has(location.excludeFile)) continue;
-    const content = await readFileSafe(location.excludeFile);
-    if (content !== null && splitBlock(content)) found.add(location.excludeFile);
+    if (!location) continue;
+    const seen = roots.get(location.excludeFile) ?? new Set<string>();
+    roots.set(location.excludeFile, seen.add(location.root));
   }
-  return [...found];
+  const found = new Map<string, string[]>();
+  for (const [excludeFile, checkouts] of roots) {
+    const content = await readFileSafe(excludeFile);
+    const block = content === null ? null : splitBlock(content);
+    if (!block) continue;
+    // Each pattern is `/<path from the root>`, glob characters escaped (see excludeFromGit).
+    const rels = block.patterns.map((p) => p.replace(/^\//, '').replace(/\\(.)/g, '$1'));
+    found.set(excludeFile, [...checkouts].flatMap((root) => rels.map((rel) => path.join(root, rel))));
+  }
+  return found;
 }
 
 /** Remove teamai's block from `excludeFile`, one `findMcpGitExcludes` returned. */
