@@ -1852,6 +1852,8 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 用户级 `updatePolicy` 始终优先于团队级 `autoUpdate`。
 
+自更新只会重装由 npm 管理的副本。当 teamai 从 `node_modules` 之外的检出目录运行（例如通过 `npm link` 链接）时，自动更新和 `teamai update` 都会跳过安装并打印警告，因为 `npm install -g` 会用已发布的包替换该链接。要更新它，请重新构建该检出目录。
+
 在 Windows 上，更新检查、安装和 hooks 刷新均不会弹出命令行窗口。
 
 ### 使用统计上报

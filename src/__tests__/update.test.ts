@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock, type MockInstance } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach, type Mock, type MockInstance } from 'vitest';
 
 // ─── Mocks ──────────────────────────────────────────────
 
@@ -90,12 +90,14 @@ vi.mock('../utils/prompt.js', () => ({
 
 import fse from 'fs-extra';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig } from '../config.js';
 import { log } from '../utils/logger.js';
 
 import {
   getCurrentVersion,
+  getCurrentPackageName,
   compareVersions,
   isCacheValid,
   acquireLock,
@@ -145,9 +147,24 @@ const defaultState = {
   availableUpdate: null,
 };
 
+// A real npm-managed global layout (<prefix>/lib/node_modules/<pkg>) so doUpdate
+// has an install target. Without one — as when the suite runs from this
+// checkout — doUpdate refuses to install (see the linked-checkout test).
+let globalPrefix: string;
+beforeAll(() => {
+  globalPrefix = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-update-prefix-'));
+  fs.mkdirSync(path.join(globalPrefix, 'lib', 'node_modules', getCurrentPackageName()), { recursive: true });
+});
+afterAll(() => {
+  fs.rmSync(globalPrefix, { recursive: true, force: true });
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   readlineAnswer = 'n';
+  fileURLToPathMock.mockReturnValue(
+    path.join(globalPrefix, 'lib', 'node_modules', getCurrentPackageName(), 'dist', 'index.js'),
+  );
   mockedLoadState.mockResolvedValue({ ...defaultState });
   mockedSaveState.mockResolvedValue(undefined);
   mockedLoadLocalConfig.mockResolvedValue({
@@ -969,6 +986,22 @@ describe('self-update install-target safety', () => {
       expect.arrayContaining(['install']),
       expect.anything(),
     );
+  });
+
+  it('refuses to run npm when the running CLI is a linked checkout', async () => {
+    fileURLToPathMock.mockReturnValue(path.join('/home', 'u', 'dev', 'teamai-cli', 'dist', 'index.js'));
+    mockedExecSync.mockResolvedValue({ stdout: '99.0.0\n', stderr: '' });
+
+    await doUpdate();
+
+    // `npm install -g` without a prefix lands in npm's default global prefix,
+    // which is exactly where `npm link` put its symlink — installing would
+    // swap the checkout for the registry copy instead of updating it.
+    expect(mockedExecSync).toHaveBeenCalledTimes(1); // the version check only
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining(
+      `teamai is running from ${path.join('/home', 'u', 'dev', 'teamai-cli')}, which npm does not manage`,
+    ));
+    expect(mockedLog.success).not.toHaveBeenCalled();
   });
 
   it('warns when the post-update verification finds the running install stale', async () => {

@@ -1964,6 +1964,8 @@ Auto-update runs in the Stop hook and is controlled by two tiers:
 
 The user-level `updatePolicy` always takes priority over the team-level `autoUpdate`.
 
+Self-update only reinstalls a copy that npm manages. When teamai runs from a checkout outside `node_modules`, such as one linked with `npm link`, both auto-update and `teamai update` skip the install and print a warning, because `npm install -g` would replace the link with the published package. Rebuild the checkout to update it.
+
 On Windows, the update check, installation, and hook refresh run without opening console windows.
 
 ### Usage reporting
