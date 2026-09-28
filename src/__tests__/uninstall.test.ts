@@ -48,7 +48,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { uninstall } from '../uninstall.js';
-import { TeamaiConfigSchema } from '../types.js';
+import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
@@ -758,6 +758,80 @@ describe('uninstall', () => {
     await uninstall({ force: true });
 
     expect(log.info).not.toHaveBeenCalledWith('Nothing to uninstall');
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe('scratch/\n');
+  });
+
+  it('project-scope uninstall keeps the .git/info/exclude block while a config still holds teamai servers (#882)', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.ensureDir(path.join(projectRoot, '.claude', 'skills'));
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    // Hand-edited into invalid JSON: uninstall cannot take the resolved token out.
+    await fse.writeFile(path.join(projectRoot, '.mcp.json'), '{ "mcpServers": { "jira": { "headers": { "Authorization": "Bearer t0ken" } } },\n');
+    const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
+    const block = [
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/.mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '',
+    ].join('\n');
+    await fse.writeFile(excludeFile, block);
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+      [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+    });
+    const teamConfig = makeTeamConfig({
+      toolPaths: { claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' } },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    const { log } = await import('../utils/logger.js');
+
+    await uninstall({ force: true });
+
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`Kept teamai's block in ${await fse.realpath(excludeFile)}`));
+  });
+
+  it('project-scope uninstall removes the block from a nested repository holding an MCP config (#882)', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    await fse.ensureDir(homeDir);
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const cursorDir = path.join(projectRoot, '.cursor');
+    await fse.ensureDir(path.join(cursorDir, 'skills'));
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    execFileSync('git', ['init', '-q'], { cwd: cursorDir });
+    const excludeFile = path.join(cursorDir, '.git', 'info', 'exclude');
+    await fse.writeFile(excludeFile, [
+      'scratch/',
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '',
+    ].join('\n'));
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    const teamConfig = makeTeamConfig({
+      toolPaths: { cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' } },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
     expect(await fse.readFile(excludeFile, 'utf8')).toBe('scratch/\n');
   });
 

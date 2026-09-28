@@ -2,8 +2,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
-import { getDataHome, getMcpSharing, isAgentExcluded } from './types.js';
-import type { DeliveryTarget, LocalConfig, ResourceItem, TeamaiConfig } from './types.js';
+import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey } from './types.js';
+import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryResolution, EntryType } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
@@ -507,16 +507,19 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
  */
 export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
-  if (!teamConfig || localConfig.scope !== 'project' || localConfig.repo.kind === 'http') return [];
+  const { projectRoot } = localConfig;
+  if (!teamConfig || localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return [];
 
   const { resolveMcpTargets, mcpTargetExcluded, installedMcpEntries } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue, gitWouldTrack } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');
+  const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
 
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   if (resolution.kind === 'failed') return [];
   const teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  let manifest: ManagedMcpManifest | undefined;
 
   const tracked: string[] = [];
   let holding = 0;
@@ -524,6 +527,10 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     if (mcpTargetExcluded(localConfig, target)) continue;
     const installed = await installedMcpEntries(target);
     if (!installed || !carriesResolvedValue(target, teamDefs, installed.keys())) continue;
+    // Only servers teamai owns: a member's own server under a team name holds no value teamai resolved.
+    manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+    const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
+    if (!carriesResolvedValue(target, teamDefs, owned.filter((name) => installed.has(name)))) continue;
     holding += 1;
     if (await gitWouldTrack(target.file)) tracked.push(target.file);
   }

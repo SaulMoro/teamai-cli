@@ -42,7 +42,9 @@ async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; prefi
   if (!result || result.code !== 0) return null;
   const [prefix = '', gitPath = ''] = result.stdout.split(/\r?\n/);
   if (!gitPath) return null;
-  return { excludeFile: path.resolve(dir, gitPath), prefix };
+  // Real path, so one repository reached through a symlink (macOS /var) is one file.
+  const base = await fse.realpath(dir).catch(() => dir);
+  return { excludeFile: path.resolve(base, gitPath), prefix };
 }
 
 /**
@@ -56,9 +58,13 @@ export async function gitWouldTrack(file: string): Promise<boolean> {
   return result?.code === 1;
 }
 
-/** teamai's block and what surrounds it; null without both markers, so a damaged block never takes the member's lines with it. */
+/**
+ * teamai's block and what surrounds it; null without both markers, so a damaged
+ * block never takes the member's lines with it. The last start marker opens it:
+ * one that lost its end marker is left behind, not paired with the next block's end.
+ */
 function splitBlock(content: string): { before: string; patterns: string[]; after: string } | null {
-  const start = content.indexOf(MCP_EXCLUDE_START);
+  const start = content.lastIndexOf(MCP_EXCLUDE_START);
   const endAt = start === -1 ? -1 : content.indexOf(MCP_EXCLUDE_END, start);
   if (endAt === -1) return null;
   const patterns = content.slice(start + MCP_EXCLUDE_START.length, endAt)
@@ -97,24 +103,27 @@ export async function excludeFromGit(file: string): Promise<void> {
   }
 }
 
-/** teamai's block in the `.git/info/exclude` of the repository at `root`, with the file holding it. */
-async function readBlock(root: string): Promise<{ excludeFile: string; block: NonNullable<ReturnType<typeof splitBlock>> } | null> {
-  const location = await gitExcludeFile(root);
-  if (!location) return null;
-  const content = await readFileSafe(location.excludeFile);
+/**
+ * The `.git/info/exclude` files holding teamai's block, one per repository
+ * among those `dirs` are in: a config inside a nested repository or submodule
+ * is excluded from that repository, not from the project root's.
+ */
+export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<string[]> {
+  const found = new Set<string>();
+  for (const dir of new Set(dirs)) {
+    const location = await gitExcludeFile(dir);
+    if (!location || found.has(location.excludeFile)) continue;
+    const content = await readFileSafe(location.excludeFile);
+    if (content !== null && splitBlock(content)) found.add(location.excludeFile);
+  }
+  return [...found];
+}
+
+/** Remove teamai's block from `excludeFile`, one `findMcpGitExcludes` returned. */
+export async function removeMcpGitExclude(excludeFile: string): Promise<boolean> {
+  const content = await readFileSafe(excludeFile);
   const block = content === null ? null : splitBlock(content);
-  return block ? { excludeFile: location.excludeFile, block } : null;
-}
-
-/** Whether the `.git/info/exclude` of the repository at `root` holds teamai's block. */
-export async function hasMcpGitExclude(root: string): Promise<boolean> {
-  return await readBlock(root) !== null;
-}
-
-/** Remove teamai's block from the `.git/info/exclude` of the repository at `root`. */
-export async function removeMcpGitExclude(root: string): Promise<boolean> {
-  const found = await readBlock(root);
-  if (!found) return false;
-  await fse.writeFile(found.excludeFile, found.block.before + found.block.after);
+  if (!block) return false;
+  await fse.writeFile(excludeFile, block.before + block.after);
   return true;
 }

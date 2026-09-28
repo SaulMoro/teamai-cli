@@ -20,7 +20,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { buildChecks, resolveDoctorContext, type Check } from '../doctor.js';
-import type { LocalConfig, TeamaiConfig } from '../types.js';
+import { getDataHome, managedMcpManifestKey, managedMcpManifestPath, type LocalConfig, type TeamaiConfig } from '../types.js';
 
 /**
  * The MCP half of the delivery check (#624). A server lands as an entry inside
@@ -248,6 +248,9 @@ describe('doctor — MCP servers delivered on disk', () => {
       await fse.writeJson(path.join(projectRoot, '.mcp.json'), {
         mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer t0ken' } } },
       });
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+      });
     });
 
     async function excludeCheck(): Promise<Check | undefined> {
@@ -268,6 +271,12 @@ describe('doctor — MCP servers delivered on disk', () => {
       const check = await excludeCheck();
       if (!check) throw new Error('no git exclude check');
       expect(await check.check()).toBe(true);
+    });
+
+    it('emits no check when the server of that name is the member\'s own, not teamai\'s', async () => {
+      await fse.remove(managedMcpManifestPath(getDataHome(localConfig), projectRoot));
+
+      expect(await excludeCheck()).toBeUndefined();
     });
 
     it('emits no check when the installed servers carry no resolved value', async () => {

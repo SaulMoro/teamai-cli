@@ -92,6 +92,8 @@ export interface McpReconcileResult {
    * parse, a name twice): nothing was changed, and the reason was reported.
    */
   unresolved?: true;
+  /** Config files still holding servers teamai manages, left in place because they do not parse. */
+  leftInPlace?: string[];
 }
 
 // ─── Manifest ────────────────────────────────────────────────
@@ -560,6 +562,7 @@ export async function reconcileMcpForConfig(
   if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
+  const leftInPlace: string[] = [];
 
   for (const target of targets) {
     // Same enabledAgents / disabledAgents gate as the other resource syncs. The
@@ -578,7 +581,9 @@ export async function reconcileMcpForConfig(
     if (target.format === 'codex') {
       wrote = await applyCodex(target, desired, ownedNames, nextRecords, changes, options) || wrote;
     } else {
-      wrote = await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options) || wrote;
+      const applied = await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options);
+      if (applied === null && ownedNames.size > 0) leftInPlace.push(target.file);
+      wrote = applied === true || wrote;
     }
 
     if (nextRecords.length > 0) manifest[manifestKey] = nextRecords;
@@ -593,11 +598,12 @@ export async function reconcileMcpForConfig(
   if (!options.dryRun && wrote) {
     await writeJsonAtomic(manifestPath, manifest);
   }
-  return { changes, wrote };
+  return { changes, wrote, ...(leftInPlace.length > 0 ? { leftInPlace } : {}) };
 }
 
 // ─── Appliers ────────────────────────────────────────────────
 
+/** Whether the file was written; null when it does not parse and was left as it is. */
 async function applyJson(
   target: McpTarget,
   desired: Map<string, { entry: unknown; hash: string }>,
@@ -606,13 +612,13 @@ async function applyJson(
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
   options: McpReconcileOptions,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
   const doc = await readJsonDoc(target.file, serverKey, allowBare);
   if (!doc) {
     log.warn(`Could not parse ${target.file} — skipping MCP injection for ${target.tool}`);
-    return false;
+    return null;
   }
 
   const ownedHash = new Map(owned.map((r) => [r.name, r.hash]));
