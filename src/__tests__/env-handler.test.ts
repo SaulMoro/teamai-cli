@@ -759,6 +759,160 @@ scope: 'user',
     });
   });
 
+  // ─── a user and a project scope in one profile (#876) ────
+
+  describe('writeResolvedEnv with a user scope and a project scope (#876)', () => {
+    let userHome: string;
+    let projectConfig: LocalConfig;
+    let otherProjectConfig: LocalConfig;
+    const shared = (value: string) => [{ key: 'SHARED', value }];
+    const sourceLines = (profile: string) => profile.split('\n').filter((line) => line.startsWith('[ -f '));
+
+    const projectScope = (slug: string): LocalConfig => ({
+      ...localConfig,
+      scope: 'project',
+      projectRoot: path.join(homeDir, 'work', slug),
+      dataHome: path.join(homeDir, '.teamai', 'projects', slug),
+    });
+
+    beforeEach(async () => {
+      userHome = path.join(homeDir, '.teamai');
+      // The user scope is configured: a project pull recognises its block by
+      // the env.sh this config resolves to.
+      await fse.writeFile(path.join(userHome, 'config.yaml'), YAML.stringify(localConfig));
+      projectConfig = projectScope('api');
+      otherProjectConfig = projectScope('web');
+    });
+
+    const pulls = {
+      user: () => handler.writeResolvedEnv(shared('user'), teamConfig, localConfig),
+      project: () => handler.writeResolvedEnv(shared('project'), teamConfig, projectConfig),
+    };
+
+    it.each([
+      [['user', 'project']],
+      [['project', 'user']],
+      [['user', 'project', 'user']],
+      [['project', 'user', 'project']],
+    ] as const)('keeps the user block ahead of the project block after pulls in order %j', async (order) => {
+      for (const scope of order) await pulls[scope]();
+
+      const profile = await fse.readFile(path.join(homeDir, '.bashrc'), 'utf-8');
+      expect(sourceLines(profile)).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    it('keeps both blocks in an explicit sharing.env.shellProfilePath', async () => {
+      const customPath = path.join(tmpDir, 'custom_profile');
+      teamConfig.sharing.env.shellProfilePath = customPath;
+
+      await pulls.user();
+      await pulls.project();
+      await pulls.user();
+
+      expect(sourceLines(await fse.readFile(customPath, 'utf-8'))).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    it('lets a second project take over the first project\'s block and keeps the user block', async () => {
+      await pulls.user();
+      await pulls.project();
+      await handler.writeResolvedEnv(shared('web'), teamConfig, otherProjectConfig);
+
+      const profile = await fse.readFile(path.join(homeDir, '.bashrc'), 'utf-8');
+      expect(sourceLines(profile)).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(otherProjectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    it('inserts the user block right before a project block, leaving the rest of the profile alone', async () => {
+      const bashrcPath = path.join(homeDir, '.bashrc');
+      await fse.writeFile(bashrcPath, '# before\n');
+      await pulls.project();
+      await fse.appendFile(bashrcPath, '# after\n');
+
+      await pulls.user();
+
+      const profile = await fse.readFile(bashrcPath, 'utf-8');
+      expect(profile.startsWith('# before\n')).toBe(true);
+      expect(profile.endsWith('# after\n')).toBe(true);
+      expect(sourceLines(profile)).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    it('takes over the first non-user block of a hand-edited profile and leaves the others alone', async () => {
+      await pulls.user();
+      await handler.writeResolvedEnv(shared('web'), teamConfig, otherProjectConfig);
+      const bashrcPath = path.join(homeDir, '.bashrc');
+      const stray = handler.generateShellBlock(path.join(homeDir, '.teamai', 'projects', 'stray'));
+      await fse.appendFile(bashrcPath, `\n${stray}\n`);
+
+      await pulls.project();
+
+      expect(sourceLines(await fse.readFile(bashrcPath, 'utf-8'))).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+        expectedSourceLine(path.join(homeDir, '.teamai', 'projects', 'stray')),
+      ]);
+    });
+
+    it('treats every other block as a project block when no user scope is configured', async () => {
+      await pulls.user();
+      await fse.remove(path.join(userHome, 'config.yaml'));
+
+      await pulls.project();
+
+      expect(sourceLines(await fse.readFile(path.join(homeDir, '.bashrc'), 'utf-8'))).toEqual([
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    const cannotRevokeWrite = process.platform === 'win32' || process.getuid?.() === 0;
+    it.skipIf(cannotRevokeWrite)('leaves the profile unwritten on repeat pulls of either scope', async () => {
+      const bashrcPath = path.join(homeDir, '.bashrc');
+      await pulls.user();
+      await pulls.project();
+      const first = await fse.readFile(bashrcPath, 'utf-8');
+
+      // Read-only, so a rewrite throws rather than merely bumping a timestamp.
+      await fse.chmod(bashrcPath, 0o444);
+      try {
+        await pulls.project();
+        await pulls.user();
+        await pulls.project();
+      } finally {
+        await fse.chmod(bashrcPath, 0o644);
+      }
+      expect(await fse.readFile(bashrcPath, 'utf-8')).toBe(first);
+    });
+
+    // The Git for Windows chain: the user block sits in .bashrc, which the
+    // .bash_profile a login shell reads sources. Run in a real bash, since the
+    // question is which value a new shell ends up with.
+    it.skipIf(process.platform === 'win32')('lets the project value win on a shared key when the user block is in a sourced .bashrc', async () => {
+      vi.stubEnv('SHELL', '');
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+      const bashProfilePath = path.join(homeDir, '.bash_profile');
+
+      await pulls.user();
+      await fse.writeFile(bashProfilePath, '# generated by Git for Windows\ntest -f ~/.bashrc && . ~/.bashrc\n');
+      await pulls.project();
+      await pulls.user();
+
+      const value = execFileSync('bash', ['-c', '. ~/.bash_profile; printf %s "$SHARED"'], {
+        env: { HOME: homeDir, PATH: process.env.PATH ?? '' },
+      }).toString();
+      expect(value).toBe('project');
+    });
+  });
+
   // ─── removeItem ──────────────────────────────────────────
 
   describe('removeItem', () => {
