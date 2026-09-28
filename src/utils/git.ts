@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,12 +21,14 @@ let resolvedGit: { pathEnv: string; binary: string } | undefined;
  * makes. Resolved once per PATH value, so a PATH the process changes later is
  * looked up again.
  *
- * Keeps the bare name, and so today's lookup and errors, when that cannot pick
- * the same file: git is not on PATH, an earlier `git` is not an executable
- * file, PATH has an entry a spawn resolves against its cwd (empty or
- * relative), or the path has characters simple-git refuses as a binary. Also
- * on Windows, where the OS lookup is cheap and PATHEXT applies. (lookpath.ts
- * skips empty entries and non-executables; a spawn does not, hence its own walk.)
+ * The first `git` found is spawned once (`git --version`) to confirm it
+ * starts. Keeps the bare name, and so today's lookup and errors, when that
+ * cannot pick the same file: git is not on PATH, the first `git` found is not
+ * a file or does not start (no execute permission, a missing interpreter),
+ * PATH has an entry a spawn resolves against its cwd (empty or relative), or
+ * the path has characters simple-git refuses as a binary. Also on Windows,
+ * where the OS lookup is cheap and PATHEXT applies. (lookpath.ts skips empty
+ * entries and non-executables; a spawn does not, hence its own walk.)
  */
 export function gitBinary(
   options: { pathEnv?: string; platform?: NodeJS.Platform } = {},
@@ -49,15 +52,21 @@ function lookUpGit(pathEnv: string): string {
       if (typeof e === 'object' && e !== null && 'code' in e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) continue;
       return 'git';
     }
-    try {
-      if (!stat.isFile()) return 'git';
-      fs.accessSync(candidate, fs.constants.X_OK);
-    } catch {
-      return 'git';
-    }
-    return SIMPLE_GIT_SAFE_BINARY.test(candidate) ? candidate : 'git';
+    if (!stat.isFile() || !SIMPLE_GIT_SAFE_BINARY.test(candidate)) return 'git';
+    return spawnsByPath(candidate) ? candidate : 'git';
   }
   return 'git';
+}
+
+/**
+ * Whether spawning `candidate` by its path starts it. A bare-name lookup moves
+ * past a PATH entry whose spawn fails, e.g. a script whose interpreter is gone
+ * (ENOENT) or a file without execute permission, while a spawn by path just
+ * fails. Only a candidate that starts is the one the lookup would run; its exit
+ * status does not matter.
+ */
+function spawnsByPath(candidate: string): boolean {
+  return spawnSync(candidate, ['--version'], { stdio: 'ignore', timeout: 10_000 }).error === undefined;
 }
 
 /**

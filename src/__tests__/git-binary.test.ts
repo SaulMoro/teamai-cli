@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,8 +28,10 @@ describe('gitBinary', () => {
   }
 
   const onPath = (...entries: string[]) => entries.join(path.delimiter);
+  /** Cases that rely on POSIX execute bits and shebangs, which Windows lacks. */
+  const posixIt = it.skipIf(process.platform === 'win32');
 
-  it('resolves the first executable git in PATH order', () => {
+  posixIt('resolves the first executable git in PATH order', () => {
     const empty = tempDir();
     const first = gitDir();
     const second = gitDir();
@@ -36,7 +39,7 @@ describe('gitBinary', () => {
       .toBe(path.join(first, 'git'));
   });
 
-  it('looks PATH up again when it changes', () => {
+  posixIt('looks PATH up again when it changes', () => {
     const a = gitDir();
     const b = gitDir();
     expect(gitBinary({ pathEnv: onPath(a, b), platform: 'darwin' })).toBe(path.join(a, 'git'));
@@ -47,11 +50,30 @@ describe('gitBinary', () => {
     expect(gitBinary({ pathEnv: onPath(tempDir()), platform: 'darwin' })).toBe('git');
   });
 
-  it('falls back to the bare name when an earlier git is not executable, leaving that case to the spawn\'s own lookup', () => {
+  posixIt('falls back to the bare name when an earlier git is not executable, leaving that case to the spawn\'s own lookup', () => {
     expect(gitBinary({ pathEnv: onPath(gitDir(0o644), gitDir()), platform: 'darwin' })).toBe('git');
   });
 
-  it('falls back to the bare name when an earlier git cannot be read, such as a symlink loop', () => {
+  posixIt('falls back to the bare name when the first git cannot be spawned, which a bare-name lookup skips', async () => {
+    const broken = tempDir();
+    fs.writeFileSync(path.join(broken, 'git'), '#!/nonexistent/sh\n');
+    fs.chmodSync(path.join(broken, 'git'), 0o755);
+    const realGit = path.dirname(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim());
+    const pathEnv = onPath(broken, realGit);
+    expect(gitBinary({ pathEnv, platform: 'darwin' })).toBe('git');
+
+    const savedPath = process.env.PATH;
+    process.env.PATH = pathEnv;
+    try {
+      const repo = tempDir();
+      await createGit(repo).init();
+      expect(fs.existsSync(path.join(repo, '.git'))).toBe(true);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  posixIt('falls back to the bare name when an earlier git cannot be read, such as a symlink loop', () => {
     const loop = tempDir();
     fs.symlinkSync(path.join(loop, 'git'), path.join(loop, 'git'));
     expect(gitBinary({ pathEnv: onPath(loop, gitDir()), platform: 'darwin' })).toBe('git');
