@@ -291,6 +291,41 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
     });
 
+    it.each([
+      ['its server has left mcp.yaml and its tool is disabled', async () => {
+        await writeTeamMcp('servers:\n  - name: docs\n    transport: http\n    url: https://docs.example/mcp\n');
+        localConfig.disabledAgents = ['claude', 'tclaude'];
+      }],
+      ['the team dropped its tool from toolPaths', async () => {
+        teamConfig.toolPaths = { cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' } };
+      }],
+      ['the team\'s mcp.yaml does not parse', async () => {
+        await writeTeamMcp('servers: [unclosed\n');
+      }],
+    ])('still fails, naming the file once, when %s', async (_label, arrange) => {
+      await arrange();
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(false);
+      expect((check.fix ?? '').split(path.join(projectRoot, '.mcp.json'))).toHaveLength(2);
+    });
+
+    it('names a file two tools share once', async () => {
+      teamConfig.toolPaths = {
+        claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' },
+        codebuddy: { skills: '.codebuddy/skills', mcp: '.codebuddy/mcp.json', mcpProject: '.mcp.json' },
+      };
+      vi.stubEnv('JIRA_TOKEN', 'long-t0ken-value-7c1');
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), {
+        mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer long-t0ken-value-7c1' } } },
+      });
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect((check.fix ?? '').split(path.join(projectRoot, '.mcp.json'))).toHaveLength(2);
+    });
+
     it('still fails when the manifest is gone but the resolved value is in the file', async () => {
       vi.stubEnv('JIRA_TOKEN', 'long-t0ken-value-7c1');
       await fse.writeJson(path.join(projectRoot, '.mcp.json'), {

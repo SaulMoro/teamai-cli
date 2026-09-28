@@ -510,46 +510,39 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   const { projectRoot } = localConfig;
   if (!teamConfig || localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return [];
 
-  const { resolveMcpTargets, installedMcpEntries, buildVarTable } = await import('./mcp-reconcile.js');
-  const { carriesResolvedValue, gitTracking, holdsResolvedValue } = await import('./mcp-git-exclude.js');
+  const { resolveMcpTargets, resolvedValueEvidence, buildVarTable } = await import('./mcp-reconcile.js');
+  const { gitTracking } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');
   const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
 
+  // Unreadable team servers still leave teamai's entries on disk: judged by the manifest, as pull does.
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
-  if (resolution.kind === 'failed') return [];
-  const teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   let manifest: ManagedMcpManifest | undefined;
   let vars: Record<string, string> | undefined;
 
+  const holding = new Set<string>();
   const tracked: string[] = [];
-  let holding = 0;
-  // Every tool's file, delivery on or off: a disabled or undetected tool's file keeps what a pull wrote.
+  // Every tool's file, delivery on or off, the same files and evidence pull protects. Two tools may share one.
   for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) {
-    const raw = await readFileSafe(target.file);
-    if (raw === null) continue;
-    const installed = await installedMcpEntries(target);
-    // Only servers teamai owns: a member's own server under a team name holds no value teamai resolved.
-    // A file that does not parse is judged by what the manifest says teamai put there, and the value
-    // itself is found without the manifest, which can be lost.
+    if (holding.has(target.file) || !await pathExists(target.file)) continue;
     manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+    vars ??= await buildVarTable(localConfig);
     const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
-    if (!carriesResolvedValue(target, teamDefs, installed ? owned.filter((name) => installed.has(name)) : owned)) {
-      vars ??= await buildVarTable(localConfig);
-      if (!holdsResolvedValue(target, teamDefs, vars, raw)) continue;
-    }
-    holding += 1;
+    if (!await resolvedValueEvidence(target, teamDefs, owned, vars)) continue;
+    holding.add(target.file);
     const tracking = await gitTracking(target.file);
     if (tracking.kind === 'would-commit') tracked.push(target.file);
     else if (tracking.kind === 'unknown') tracked.push(`${target.file} (git failed: ${tracking.error})`);
   }
-  if (holding === 0) return [];
+  if (holding.size === 0) return [];
 
   return [{
     name: 'Project MCP configs with resolved values are kept out of git',
     source: 'local',
     check: async () => tracked.length === 0,
-    fix: `${tracked.join(', ')} hold MCP variables resolved to plaintext, and git would commit them or cannot say. `
+    fix: `${tracked.join(', ')} may hold MCP variables resolved to plaintext, and git would commit them or cannot say. `
       + 'Fix any git error shown, then run `teamai pull` to list them in .git/info/exclude. If git already tracks one, run '
       + '`git rm --cached <file>` and rotate the values it held.',
   }];

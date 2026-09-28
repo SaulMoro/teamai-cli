@@ -4,7 +4,8 @@ import type { McpServerDef } from './types.js';
 import type { McpTarget } from './mcp-reconcile.js';
 import { referencedVars, supportsEnvExpansion } from './resources/mcp-format.js';
 import { execCommand } from './utils/exec.js';
-import { pathExists, readFileSafe } from './utils/fs.js';
+import { pathExists, readFileSafe, writeFileAtomic } from './utils/fs.js';
+import { listWorktrees } from './utils/git.js';
 import { log } from './utils/logger.js';
 
 // ─── Project MCP configs and git ─────────────────────────────
@@ -36,23 +37,27 @@ export function carriesResolvedValue(
 }
 
 /**
- * Whether `raw`, a project file's text, holds a value teamai resolves into
- * `target`: the value in `vars` (8+ characters, shorter ones turn up anywhere)
- * of a variable one of `teamDefs` references and the tool does not expand
- * itself. Needs no ownership manifest.
+ * The variable whose value, resolved by teamai into `target`, `raw` (a project
+ * file's text) holds, or null: one `teamDefs` references that the tool does not
+ * expand itself, with a value in `vars` of 8+ characters (shorter ones turn up
+ * anywhere). Needs no ownership manifest.
  */
-export function holdsResolvedValue(
+export function resolvedVariableIn(
   target: McpTarget,
   teamDefs: McpServerDef[],
   vars: Record<string, string>,
   raw: string,
-): boolean {
-  if (!target.projectScope) return false;
-  return teamDefs.some((def) => !supportsEnvExpansion(target.format, target.projectScope, def)
-    && referencedVars(def).some((name) => {
+): string | null {
+  if (!target.projectScope) return null;
+  for (const def of teamDefs) {
+    if (supportsEnvExpansion(target.format, target.projectScope, def)) continue;
+    const found = referencedVars(def).find((name) => {
       const value = vars[name];
       return value !== undefined && value.length >= 8 && raw.includes(value);
-    }));
+    });
+    if (found) return found;
+  }
+  return null;
 }
 
 /**
@@ -132,20 +137,47 @@ export async function excludeFromGit(file: string): Promise<void> {
   // Anchored at the working tree root, glob characters escaped.
   const pattern = `/${location.prefix}${path.basename(file)}`.replace(/[\\*?[\]!#]/g, '\\$&');
   try {
-    const content = (await readFileSafe(excludeFile)) ?? '';
-    const block = splitBlock(content);
-    if (block?.patterns.includes(pattern)) return;
-    const head = block ? block.before : content;
-    const patterns = [...(block?.patterns ?? []), pattern];
-    const body = [MCP_EXCLUDE_START, ...patterns, MCP_EXCLUDE_END].join('\n');
-    const sep = head === '' || head.endsWith('\n') ? '' : '\n';
-    await fse.outputFile(excludeFile, `${head}${sep}${body}\n${block?.after ?? ''}`);
-    log.debug(`Added ${pattern} to ${excludeFile}`);
+    const added = await updateExclude(excludeFile, (content) => {
+      const block = splitBlock(content);
+      if (block?.patterns.includes(pattern)) return null;
+      const head = block ? block.before : content;
+      const patterns = [...(block?.patterns ?? []), pattern];
+      const body = [MCP_EXCLUDE_START, ...patterns, MCP_EXCLUDE_END].join('\n');
+      const sep = head === '' || head.endsWith('\n') ? '' : '\n';
+      return `${head}${sep}${body}\n${block?.after ?? ''}`;
+    });
+    if (added) log.debug(`Added ${pattern} to ${excludeFile}`);
   } catch (e) {
     log.warn(
       `${file} holds a resolved MCP variable, and adding it to ${excludeFile} failed: ${e instanceof Error ? e.message : String(e)}. `
       + `Add \`${pattern}\` to that file yourself so git does not commit the value.`,
     );
+  }
+}
+
+/**
+ * Rewrite `excludeFile` with `edit` (null: leave it as it is), holding a lock
+ * across the read and an atomic write: the worktrees of a repository share the
+ * file, so two commands adding different paths must not drop each other's.
+ * A lock still held after the wait is passed over rather than skipping the
+ * write, which would leave the path unprotected.
+ */
+async function updateExclude(excludeFile: string, edit: (content: string) => string | null): Promise<boolean> {
+  const { acquireLock, releaseLock } = await import('./update.js');
+  const lockPath = `${excludeFile}.teamai-lock`;
+  let held = false;
+  for (let attempt = 0; attempt < 25 && !held; attempt++) {
+    held = await acquireLock(lockPath);
+    if (!held) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!held) log.debug(`${lockPath} is still held; updating ${excludeFile} without it`);
+  try {
+    const next = edit((await readFileSafe(excludeFile)) ?? '');
+    if (next === null) return false;
+    await writeFileAtomic(excludeFile, next);
+    return true;
+  } finally {
+    if (held) await releaseLock(lockPath);
   }
 }
 
@@ -168,6 +200,9 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
     const content = await readFileSafe(excludeFile);
     const block = content === null ? null : splitBlock(content);
     if (!block) continue;
+    // Every checkout sharing the file, including a nested repository's linked worktrees elsewhere.
+    const [anyCheckout] = checkouts;
+    if (anyCheckout) for (const worktree of await listWorktrees(anyCheckout)) checkouts.add(worktree);
     // Each pattern is `/<path from the root>`, glob characters escaped (see excludeFromGit).
     const rels = block.patterns.map((p) => p.replace(/^\//, '').replace(/\\(.)/g, '$1'));
     found.set(excludeFile, [...checkouts].flatMap((root) => rels.map((rel) => path.join(root, rel))));
@@ -177,9 +212,8 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
 
 /** Remove teamai's block from `excludeFile`, one `findMcpGitExcludes` returned. */
 export async function removeMcpGitExclude(excludeFile: string): Promise<boolean> {
-  const content = await readFileSafe(excludeFile);
-  const block = content === null ? null : splitBlock(content);
-  if (!block) return false;
-  await fse.writeFile(excludeFile, block.before + block.after);
-  return true;
+  return updateExclude(excludeFile, (content) => {
+    const block = splitBlock(content);
+    return block ? block.before + block.after : null;
+  });
 }

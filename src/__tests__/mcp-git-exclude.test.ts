@@ -21,6 +21,20 @@ vi.mock('../utils/exec.js', async (importOriginal) => {
   };
 });
 
+// Widens the read-modify-write window on the exclude file, as a slow disk or a second process would.
+const slowExcludeRead = vi.hoisted(() => ({ on: false }));
+vi.mock('../utils/fs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/fs.js')>();
+  return {
+    ...actual,
+    readFileSafe: async (file: string) => {
+      const content = await actual.readFileSafe(file);
+      if (slowExcludeRead.on && file.endsWith(path.join('info', 'exclude'))) await new Promise((r) => setTimeout(r, 30));
+      return content;
+    },
+  };
+});
+
 import { MCP_EXCLUDE_START, excludeFromGit, removeMcpGitExclude } from '../mcp-git-exclude.js';
 import { log } from '../utils/logger.js';
 
@@ -36,6 +50,7 @@ describe('teamai block in .git/info/exclude (#882)', () => {
 
   afterEach(async () => {
     failCheckIgnore.on = false;
+    slowExcludeRead.on = false;
     vi.mocked(log.warn).mockClear();
     await fse.remove(repo);
   });
@@ -59,6 +74,17 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(path.join(repo, '.mcp.json')));
       expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/config/));
     });
+  });
+
+  it('keeps every pattern when several writers add to the same exclude file at once', async () => {
+    const files = ['a', 'b', 'c', 'd', 'e'].map((name) => path.join(repo, `${name}.json`));
+    for (const file of files) await fse.writeJson(file, {});
+    slowExcludeRead.on = true;
+
+    await Promise.all(files.map((file) => excludeFromGit(file)));
+
+    const content = await fse.readFile(excludeFile, 'utf8');
+    for (const name of ['a', 'b', 'c', 'd', 'e']) expect(content).toMatch(new RegExp(`^/${name}\\.json$`, 'm'));
   });
 
   it('stays quiet outside any repository', async () => {

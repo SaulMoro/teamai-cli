@@ -858,6 +858,33 @@ describe('uninstall', () => {
       expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
     });
 
+    it('names the variable whose value keeps the block', async () => {
+      const { projectRoot, excludeFile } = await setup();
+      vi.stubEnv('TEAM_BASE_URL', 'https://base.example');
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { mine: { url: 'https://base.example/mcp' } } });
+      const { log } = await import('../utils/logger.js');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('$TEAM_BASE_URL'));
+    });
+
+    it('keeps the block while a tool uninstall no longer reaches still holds teamai\'s server', async () => {
+      const { repoPath, projectRoot, excludeFile, localConfig } = await setup();
+      // The server left mcp.yaml, its variable is not set here, and Claude is no longer detected.
+      await fse.outputFile(path.join(repoPath, 'mcp', 'mcp.yaml'), 'servers:\n  - name: docs\n    transport: http\n    url: https://docs.example/mcp\n');
+      await fse.remove(path.join(projectRoot, '.claude'));
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira } });
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+      });
+
+      await uninstall({ force: true });
+
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
+    });
+
     it('removes the block once uninstall has taken teamai\'s servers out of .mcp.json', async () => {
       const { homeDir, projectRoot, excludeFile, localConfig } = await setup();
       // A path and the login name are in the environment and in ordinary configs: neither holds the block.
@@ -873,6 +900,46 @@ describe('uninstall', () => {
       expect(await fse.readJson(path.join(projectRoot, '.mcp.json'))).toEqual({ mcpServers: { mine } });
       expect(await fse.readFile(excludeFile, 'utf8')).toBe('');
     });
+  });
+
+  it('project-scope uninstall keeps a nested repository\'s block while its linked worktree holds a token (#882)', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    await fse.ensureDir(homeDir);
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const cursorDir = path.join(projectRoot, '.cursor');
+    await fse.ensureDir(path.join(cursorDir, 'skills'));
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    execFileSync('git', ['init', '-q'], { cwd: cursorDir });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: cursorDir });
+    const linked = path.join(tmpDir, 'cursor-linked');
+    execFileSync('git', ['worktree', 'add', '-q', linked], { cwd: cursorDir });
+    await fse.writeJson(path.join(linked, 'mcp.json'), { mcpServers: { jira: { headers: { Authorization: 'Bearer t0ken' } } } });
+    const excludeFile = path.join(cursorDir, '.git', 'info', 'exclude');
+    const block = [
+      '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+      '/mcp.json',
+      '# [teamai:mcp-exclude:end]',
+      '',
+    ].join('\n');
+    await fse.writeFile(excludeFile, block);
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    const teamConfig = makeTeamConfig({
+      toolPaths: { cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' } },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
+    expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
   });
 
   it('project-scope uninstall removes the block from a nested repository holding an MCP config (#882)', async () => {

@@ -985,6 +985,26 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      it('when its server has left mcp.yaml and its tool is disabled', async () => {
+        await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+        // Claude's copy was cleaned by this pull, so nothing of teamai's is left to protect there.
+        expect(await excludeOf(projectRoot)).not.toMatch(/^\/\.mcp\.json$/m);
+      });
+
+      it.each([
+        ['drops the tool', { claude: TOOL_PATHS.claude }],
+        ['moves its project MCP file', { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } }],
+      ])('when the team %s', async (_label, toolPaths) => {
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths } as TeamaiConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      });
+
       it('when the team\'s mcp.yaml does not parse', async () => {
         await writeMcpYaml('servers: [unclosed\n');
 
