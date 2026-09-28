@@ -5,6 +5,57 @@ import fse from 'fs-extra';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import { log } from './logger.js';
 
+/** What simple-git accepts as a custom binary without its unsafe opt-in. */
+const SIMPLE_GIT_SAFE_BINARY = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i;
+
+let resolvedGit: { pathEnv: string; binary: string } | undefined;
+
+/**
+ * The git executable createGit spawns: the absolute path of the `git` a
+ * bare-name spawn would run, i.e. the first one on PATH.
+ *
+ * On macOS, Node looks a bare name up by trying a spawn in each PATH directory
+ * in turn, and every miss costs milliseconds. Under npm scripts or a long shell
+ * PATH that adds 30-60 ms to each of the dozens of git calls a pull or push
+ * makes. Resolved once per PATH value, so a PATH the process changes (see
+ * ensureBundledRuntimeOnPath) is looked up again.
+ *
+ * Keeps the bare name, and so today's lookup and errors, when that cannot pick
+ * the same file: git is not on PATH, an earlier `git` is not an executable
+ * file, PATH has an entry a spawn resolves against its cwd (empty or
+ * relative), or the path has characters simple-git refuses as a binary. Also
+ * on Windows, where the OS lookup is cheap and PATHEXT applies.
+ */
+export function gitBinary(
+  options: { pathEnv?: string; platform?: NodeJS.Platform } = {},
+): string {
+  if ((options.platform ?? process.platform) === 'win32') return 'git';
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? '';
+  if (resolvedGit?.pathEnv !== pathEnv) resolvedGit = { pathEnv, binary: lookUpGit(pathEnv) };
+  return resolvedGit.binary;
+}
+
+function lookUpGit(pathEnv: string): string {
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) return 'git';
+    const candidate = path.join(dir, 'git');
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(candidate);
+    } catch {
+      continue;
+    }
+    try {
+      if (!stat.isFile()) return 'git';
+      fs.accessSync(candidate, fs.constants.X_OK);
+    } catch {
+      return 'git';
+    }
+    return SIMPLE_GIT_SAFE_BINARY.test(candidate) ? candidate : 'git';
+  }
+  return 'git';
+}
+
 /**
  * Create a SimpleGit instance for a given base path.
  *
@@ -13,9 +64,9 @@ import { log } from './logger.js';
  */
 export function createGit(basePath?: string): SimpleGit {
   if (basePath) {
-    return simpleGit({ baseDir: basePath });
+    return simpleGit({ baseDir: basePath, binary: gitBinary() });
   }
-  return simpleGit();
+  return simpleGit({ binary: gitBinary() });
 }
 
 /**
@@ -59,7 +110,7 @@ export async function isGitRepo(localPath: string): Promise<boolean> {
  */
 export async function initRepo(remote: string, localPath: string): Promise<void> {
   await fse.ensureDir(localPath);
-  const git = simpleGit({ baseDir: localPath });
+  const git = createGit(localPath);
   await git.init();
   await git.addRemote('origin', remote);
 }
