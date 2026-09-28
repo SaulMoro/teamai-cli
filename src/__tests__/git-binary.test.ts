@@ -47,8 +47,14 @@ describe('gitBinary', () => {
     expect(gitBinary({ pathEnv: onPath(tempDir()), platform: 'darwin' })).toBe('git');
   });
 
-  it('falls back to the bare name when an earlier git is not executable, so the spawn fails as it does today', () => {
+  it('falls back to the bare name when an earlier git is not executable, leaving that case to the spawn\'s own lookup', () => {
     expect(gitBinary({ pathEnv: onPath(gitDir(0o644), gitDir()), platform: 'darwin' })).toBe('git');
+  });
+
+  it('falls back to the bare name when an earlier git cannot be read, such as a symlink loop', () => {
+    const loop = tempDir();
+    fs.symlinkSync(path.join(loop, 'git'), path.join(loop, 'git'));
+    expect(gitBinary({ pathEnv: onPath(loop, gitDir()), platform: 'darwin' })).toBe('git');
   });
 
   it('falls back to the bare name when PATH has an entry a spawn resolves against its cwd', () => {
@@ -69,7 +75,7 @@ describe('gitBinary', () => {
     expect(gitBinary({ pathEnv: onPath(gitDir()), platform: 'win32' })).toBe('git');
   });
 
-  it('runs git through createGit with the resolved binary', async () => {
+  it('builds a createGit that simple-git accepts with the binary resolved from this PATH', async () => {
     const repo = tempDir();
     await createGit(repo).init();
     expect(fs.realpathSync((await createGit(repo).revparse(['--show-toplevel'])).trim())).toBe(repo);

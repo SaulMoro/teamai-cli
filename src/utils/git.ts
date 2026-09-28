@@ -17,14 +17,15 @@ let resolvedGit: { pathEnv: string; binary: string } | undefined;
  * On macOS, Node looks a bare name up by trying a spawn in each PATH directory
  * in turn, and every miss costs milliseconds. Under npm scripts or a long shell
  * PATH that adds 30-60 ms to each of the dozens of git calls a pull or push
- * makes. Resolved once per PATH value, so a PATH the process changes (see
- * ensureBundledRuntimeOnPath) is looked up again.
+ * makes. Resolved once per PATH value, so a PATH the process changes later is
+ * looked up again.
  *
  * Keeps the bare name, and so today's lookup and errors, when that cannot pick
  * the same file: git is not on PATH, an earlier `git` is not an executable
  * file, PATH has an entry a spawn resolves against its cwd (empty or
  * relative), or the path has characters simple-git refuses as a binary. Also
- * on Windows, where the OS lookup is cheap and PATHEXT applies.
+ * on Windows, where the OS lookup is cheap and PATHEXT applies. (lookpath.ts
+ * skips empty entries and non-executables; a spawn does not, hence its own walk.)
  */
 export function gitBinary(
   options: { pathEnv?: string; platform?: NodeJS.Platform } = {},
@@ -42,8 +43,11 @@ function lookUpGit(pathEnv: string): string {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(candidate);
-    } catch {
-      continue;
+    } catch (e) {
+      // A miss moves on, as the spawn's own lookup does; anything else (a
+      // symlink loop, say) is left to that lookup and the error it gives.
+      if (typeof e === 'object' && e !== null && 'code' in e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) continue;
+      return 'git';
     }
     try {
       if (!stat.isFile()) return 'git';
