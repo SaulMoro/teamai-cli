@@ -3,7 +3,7 @@ import { z } from 'zod';
 import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
 import type { ResourceItem, TeamaiConfig, LocalConfig, Scope } from '../types.js';
-import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, isSelfMode } from '../types.js';
+import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, getTeamaiHome, getUserConfigPath, isSelfMode } from '../types.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -220,7 +220,10 @@ const SOURCES_ENV_SH = /(?:^|[\s;&|])(?:source|\.)\s[^\n;&|]*env\.sh/m;
  */
 async function userScopeEnvShPath(): Promise<string | null> {
   const userConfig = await loadLocalConfigForScope('user');
-  return userConfig ? path.join(getDataHome(userConfig), 'env.sh') : null;
+  if (userConfig) return path.join(getDataHome(userConfig), 'env.sh');
+  // A config that exists but does not parse is still a configured user scope:
+  // keep the block at its default env.sh rather than taking it over.
+  return await pathExists(getUserConfigPath()) ? path.join(getTeamaiHome('user'), 'env.sh') : null;
 }
 
 // ─── Handler ─────────────────────────────────────────────
@@ -496,13 +499,17 @@ export class EnvHandler extends ResourceHandler {
 
     // An unclosed block has no end to replace up to, so it is left as it is.
     const blocks = findEnvBlocks(content).filter((b): b is EnvBlock & { end: number } => b.end !== null);
-    const userEnvShPath = scope === 'user' ? envShPath : await userScopeEnvShPath();
-    // A block that sources no env.sh is the inline-export format from before
-    // env.sh and project scopes existed: the user scope's too.
-    const isUserBlock = (b: EnvBlock): boolean => !SOURCES_ENV_SH.test(b.text)
-      || (userEnvShPath !== null && envBlockReferencesDataHome(b.text, userEnvShPath));
-    const target = blocks.find((b) => envBlockReferencesDataHome(b.text, envShPath))
-      ?? blocks.find((b) => (scope === 'user' ? isUserBlock(b) : !isUserBlock(b)));
+    let target = blocks.find((b) => envBlockReferencesDataHome(b.text, envShPath));
+    if (!target) {
+      // Only now does a project pull need the user config, so a steady-state
+      // pull never reads it.
+      const userEnvShPath = scope === 'user' ? envShPath : await userScopeEnvShPath();
+      // A block that sources no env.sh is the inline-export format from before
+      // env.sh and project scopes existed: the user scope's too.
+      const isUserBlock = (b: EnvBlock): boolean => !SOURCES_ENV_SH.test(b.text)
+        || (userEnvShPath !== null && envBlockReferencesDataHome(b.text, userEnvShPath));
+      target = blocks.find((b) => (scope === 'user' ? isUserBlock(b) : !isUserBlock(b)));
+    }
 
     if (target) {
       // Replace existing block

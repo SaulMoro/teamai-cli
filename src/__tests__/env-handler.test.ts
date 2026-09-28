@@ -874,6 +874,30 @@ scope: 'user',
       ]);
     });
 
+    it('keeps the user block when the user config is present but does not parse', async () => {
+      await pulls.user();
+      await fse.writeFile(path.join(userHome, 'config.yaml'), 'scope: [unclosed\n');
+
+      await pulls.project();
+
+      expect(sourceLines(await fse.readFile(path.join(homeDir, '.bashrc'), 'utf-8'))).toEqual([
+        expectedSourceLine(userHome),
+        expectedSourceLine(projectConfig.dataHome ?? ''),
+      ]);
+    });
+
+    it('does not read the user config when the project already has its own block', async () => {
+      await pulls.user();
+      await pulls.project();
+      await fse.writeFile(path.join(userHome, 'config.yaml'), 'scope: [unclosed\n');
+      const { log } = await import('../utils/logger.js');
+      vi.mocked(log.error).mockClear();
+
+      await pulls.project();
+
+      expect(log.error).not.toHaveBeenCalled();
+    });
+
     const cannotRevokeWrite = process.platform === 'win32' || process.getuid?.() === 0;
     it.skipIf(cannotRevokeWrite)('leaves the profile unwritten on repeat pulls of either scope', async () => {
       const bashrcPath = path.join(homeDir, '.bashrc');
