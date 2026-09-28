@@ -1596,7 +1596,7 @@ Dashboard 和 digest 会比较最近 7 个 UTC 自然日与此前 7 天。Dashbo
 `teamai session save` 把 dashboard 已有的**单次会话事件流**（工具调用序列、prompt 轮次、干预记录）折叠成一份精简、脱敏的 markdown 摘要——不调用 LLM，也不新增采集路径。
 
 ```bash
-teamai session save                    # 存档最近一次会话（本地）
+teamai session save                    # 存档当前 agent 会话（否则为最近一次会话，本地）
 teamai session save --session-id <id>  # 存档指定会话
 teamai session save --push             # 把「有价值」的会话推送到团队仓库
 teamai session save --push --force     # 即便是琐碎会话也推送

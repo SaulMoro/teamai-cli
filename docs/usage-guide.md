@@ -1706,7 +1706,7 @@ Daily aggregates are added to `stats/<user>.yaml` during `teamai pull`; existing
 `teamai session save` folds the dashboard's existing per-session event stream (tool sequence, prompt turns, interventions) into a compact, privacy-scrubbed markdown summary — no LLM call, no new collection path.
 
 ```bash
-teamai session save                    # record the most-recent session locally
+teamai session save                    # record the current agent session (else the most recent) locally
 teamai session save --session-id <id>  # record a specific session
 teamai session save --push             # also push a "valuable" session to the team repo
 teamai session save --push --force     # push even a trivial session

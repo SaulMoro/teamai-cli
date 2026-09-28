@@ -10,7 +10,7 @@ import { getProjectSearchIndexPath, getUserSearchIndexPath, getVotesDir } from '
 import { queryCodeKnowledge } from './code-knowledge-recall.js';
 import type { SourceAnchor } from './code-knowledge-recall.js';
 import { recordRecallQuality } from './recall-quality.js';
-import { deriveSessionId } from './utils/session-id.js';
+import { agentSessionIdFromEnv, deriveSessionId } from './utils/session-id.js';
 
 /** Relevance threshold for codebase graph hits.
  *  These are log-compressed to a bounded [0,10] range (see `queryCodeKnowledge`
@@ -636,7 +636,7 @@ export async function recall(
   // Record quality signal for contribute-check's knowledge-gap detection.
   // Best-effort and independent of dry-run/verbosity — misses matter too.
   if (process.env.TEAMAI_RECALL_DISABLED !== '1') {
-    recordRecallQuality(deriveSessionId({}), topResults);
+    recordRecallQuality(agentSessionIdFromEnv() ?? deriveSessionId({}), topResults);
   }
 
   if (topResults.length === 0) {

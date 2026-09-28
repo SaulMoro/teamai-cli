@@ -26,6 +26,7 @@ import { detectProjectConfig, loadLocalConfigForScope, requireInit } from '../co
 import { buildIndex } from '../utils/search-index.js';
 import { getTeamaiHome, type LocalConfig } from '../types.js';
 import { readRecallQuality } from '../recall-quality.js';
+import { applyPhase2Adjustments } from '../contribute-check.js';
 import { queryCodeKnowledge } from '../code-knowledge-recall.js';
 import { incrementRecalled } from '../votes.js';
 
@@ -233,5 +234,19 @@ describe('recall scope isolation (issue #73)', () => {
     expect(readRecallQuality('recall-quality-miss-session')).toEqual(
       expect.objectContaining({ hitCount: 0, missCount: 1 }),
     );
+  });
+
+  it('records recall quality under the agent session, where contribute-check reads it for the Stop hook (#883)', async () => {
+    // Claude Code sets CLAUDE_CODE_SESSION_ID to the session_id its hooks receive.
+    const hookSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    vi.stubEnv('CLAUDE_CODE_SESSION_ID', hookSessionId);
+    vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
+
+    await recall('completely unrelated gibberish query xyzzy', { dryRun: true });
+
+    expect(readRecallQuality(hookSessionId)).toEqual(
+      expect.objectContaining({ hitCount: 0, missCount: 1 }),
+    );
+    expect(applyPhase2Adjustments(0, hookSessionId).isKnowledgeGap).toBe(true);
   });
 });
