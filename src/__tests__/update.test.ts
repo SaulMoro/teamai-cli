@@ -54,6 +54,7 @@ vi.mock('../utils/logger.js', () => ({
     error: vi.fn(),
     debug: vi.fn(),
     dim: vi.fn(),
+    persist: vi.fn(),
   },
 }));
 
@@ -94,6 +95,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig } from '../config.js';
 import { log } from '../utils/logger.js';
+import { askConfirmation } from '../utils/prompt.js';
 
 import {
   getCurrentVersion,
@@ -133,6 +135,7 @@ const mockedLog = log as unknown as {
   error: Mock;
   debug: Mock;
   dim: Mock;
+  persist: Mock;
 };
 
 // ─── Test setup ─────────────────────────────────────────
@@ -998,10 +1001,35 @@ describe('self-update install-target safety', () => {
     // which is exactly where `npm link` put its symlink — installing would
     // swap the checkout for the registry copy instead of updating it.
     expect(mockedExecSync).toHaveBeenCalledTimes(1); // the version check only
-    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining(
-      `teamai is running from ${path.join('/home', 'u', 'dev', 'teamai-cli')}, which npm does not manage`,
-    ));
+    const skipped = expect.stringContaining(
+      `teamai is running from ${path.join('/home', 'u', 'dev', 'teamai-cli')}, which is not an npm install`,
+    );
+    expect(mockedLog.warn).toHaveBeenCalledWith(skipped);
+    // Hooks send stderr to /dev/null; debug.log is where the warning survives.
+    expect(mockedLog.persist).toHaveBeenCalledWith(skipped);
     expect(mockedLog.success).not.toHaveBeenCalled();
+  });
+
+  it('refuses a linked checkout before asking to confirm under the prompt policy', async () => {
+    const origIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    try {
+      mockedLoadLocalConfig.mockResolvedValue({
+        repo: { localPath: '/tmp/repo', remote: 'https://...' },
+        username: 'testuser',
+        updatePolicy: 'prompt',
+      });
+      fileURLToPathMock.mockReturnValue(path.join('/home', 'u', 'dev', 'teamai-cli', 'dist', 'index.js'));
+      mockedExecSync.mockResolvedValue({ stdout: '99.0.0\n', stderr: '' });
+
+      await doUpdate();
+
+      expect(askConfirmation).not.toHaveBeenCalled();
+      expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining('Self-update skipped'));
+      expect(mockedExecSync).toHaveBeenCalledTimes(1); // the version check only
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: origIsTTY, configurable: true });
+    }
   });
 
   it('warns when the post-update verification finds the running install stale', async () => {

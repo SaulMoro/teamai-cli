@@ -525,6 +525,39 @@ export async function doUpdate(): Promise<void> {
     return;
   }
 
+  // Refuse unsupported install layouts before prompting, so nobody confirms
+  // an update that is then skipped.
+  const pkgName = getCurrentPackageName();
+  const registry = resolveRegistryForPackage(pkgName);
+  const target = resolveInstallPrefix();
+  if (!target) {
+    // A prefix-less `npm install -g` would land in npm's default global
+    // prefix — for an `npm link` checkout that replaces the symlink with the
+    // registry copy, so the checkout silently stops being the CLI that runs.
+    // Hooks discard stderr, so debug.log keeps the record.
+    const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+    const message =
+      `Self-update skipped: teamai is running from ${root}, which is not an npm install ` +
+      'it can update in place (for example an `npm link` checkout). For a checkout, pull ' +
+      'and rebuild it; to switch to the published package, run ' +
+      `"npm install -g ${pkgName} --registry=${registry}".`;
+    log.warn(message);
+    log.persist(message);
+    return;
+  }
+  if (!target.global) {
+    // POSIX vendored (flat) layouts cannot be reinstalled by npm without
+    // destroying the tree: a non-global install reconciles <prefix> as a
+    // project and prunes every undeclared sibling in <prefix>/node_modules
+    // (including a co-located npm), while -g always lands in
+    // <prefix>/lib. Stay out and let the user update manually.
+    log.warn(
+      `Self-update is not supported for the vendored install at ${target.prefix} ` +
+      '(npm would relocate or prune the runtime tree) — update manually.',
+    );
+    return;
+  }
+
   if (policy === 'prompt') {
     if (!isInteractive()) {
       log.info(`Update available: v${result.current} → v${result.latest}. Run "teamai update" to upgrade.`);
@@ -547,34 +580,7 @@ export async function doUpdate(): Promise<void> {
   }
 
   try {
-    const pkgName = getCurrentPackageName();
-    const registry = resolveRegistryForPackage(pkgName);
     const npm = resolveNpmCommand();
-    const target = resolveInstallPrefix();
-    if (!target) {
-      // A prefix-less `npm install -g` would land in npm's default global
-      // prefix — for an `npm link` checkout that replaces the symlink with the
-      // registry copy, so the checkout silently stops being the CLI that runs.
-      const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-      log.warn(
-        `Self-update skipped: teamai is running from ${root}, which npm does not manage ` +
-        '(for example an `npm link` checkout). Rebuild that checkout to update it, ' +
-        `or run "npm install -g ${pkgName}" to switch to the published package.`,
-      );
-      return;
-    }
-    if (!target.global) {
-      // POSIX vendored (flat) layouts cannot be reinstalled by npm without
-      // destroying the tree: a non-global install reconciles <prefix> as a
-      // project and prunes every undeclared sibling in <prefix>/node_modules
-      // (including a co-located npm), while -g always lands in
-      // <prefix>/lib. Stay out and let the user update manually.
-      log.warn(
-        `Self-update is not supported for the vendored install at ${target.prefix} ` +
-        '(npm would relocate or prune the runtime tree) — update manually.',
-      );
-      return;
-    }
     await execFileAsync(
       npm.cmd,
       [
