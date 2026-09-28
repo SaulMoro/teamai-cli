@@ -42,10 +42,14 @@ export const BRIDGE_AGENT_ENV = ['PI_SESSION_ID', 'OPENCODE'] as const;
  * Under a bridge agent marker it returns undefined, so the caller's own
  * fallback applies; an agent started from a Pi or OpenCode shell then falls
  * back too. An agent started from another agent's shell inherits the outer
- * agent's variable next to its own, so when several are set the session that
- * started last wins: its first hook event is the latest, as the inner agent
- * starts after the outer one. With no events for any of them, the variable
- * order decides.
+ * agent's variable next to its own, so when several are set the session whose
+ * current run started last wins, as the inner agent starts after the outer one.
+ * A run starts at the session's latest session_start event: the SessionStart
+ * hook also fires on resume, so a resumed session started days ago still
+ * counts from now. A session with no session_start event counts from its first
+ * event. SessionStart also fires on compaction, so an outer agent that compacts
+ * while the inner one runs (a background call) counts as started later. With
+ * no events for any of them, the variable order decides.
  */
 export async function agentSessionIdFromEnv(): Promise<string | undefined> {
     if (BRIDGE_AGENT_ENV.some((name) => process.env[name])) return undefined;
@@ -54,16 +58,21 @@ export async function agentSessionIdFromEnv(): Promise<string | undefined> {
 
     // Loaded here: dashboard-collector imports this module.
     const { readEvents } = await import('../dashboard-collector.js');
-    const started = new Map<string, string>();
-    for (const { sessionId, timestamp } of await readEvents()) {
-        const first = started.get(sessionId);
-        if (ids.includes(sessionId) && (!first || timestamp < first)) started.set(sessionId, timestamp);
+    const firstEvent = new Map<string, string>();
+    const lastStart = new Map<string, string>();
+    for (const { sessionId, timestamp, type } of await readEvents()) {
+        if (!ids.includes(sessionId)) continue;
+        const first = firstEvent.get(sessionId);
+        if (!first || timestamp < first) firstEvent.set(sessionId, timestamp);
+        const start = lastStart.get(sessionId);
+        if (type === 'session_start' && (!start || timestamp > start)) lastStart.set(sessionId, timestamp);
     }
-    let latest: [string, string] | undefined;
-    for (const entry of started) {
-        if (!latest || entry[1] > latest[1]) latest = entry;
+    let latest: { id: string; runStart: string } | undefined;
+    for (const [id, first] of firstEvent) {
+        const runStart = lastStart.get(id) ?? first;
+        if (!latest || runStart > latest.runStart) latest = { id, runStart };
     }
-    return latest?.[0] ?? ids[0];
+    return latest?.id ?? ids[0];
 }
 
 export interface DeriveSessionIdOptions {

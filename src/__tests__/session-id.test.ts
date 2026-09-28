@@ -140,7 +140,7 @@ describe('agentSessionIdFromEnv', () => {
     describe('in a nested agent session', () => {
         let home: string;
 
-        function writeEvents(events: { sessionId: string; timestamp: string }[]): void {
+        function writeEvents(events: { sessionId: string; timestamp: string; type?: string }[]): void {
             const dir = path.join(home, '.teamai', 'dashboard');
             fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(
@@ -181,6 +181,24 @@ describe('agentSessionIdFromEnv', () => {
                 { sessionId: 'outer-claude', timestamp: '2026-09-28T10:07:00.000Z' },
             ]);
             expect(await agentSessionIdFromEnv()).toBe('inner-codex');
+        });
+
+        // `claude --resume` from a new Codex session: Claude's session began
+        // yesterday, but its SessionStart hook fires again on resume.
+        it('picks the resumed inner agent by its latest session start, not its first event', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('CODEX_SESSION_ID', 'outer-codex');
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'inner-claude');
+            writeEvents([
+                { sessionId: 'inner-claude', timestamp: '2026-09-27T09:00:00.000Z', type: 'session_start' },
+                { sessionId: 'inner-claude', timestamp: '2026-09-27T09:01:00.000Z' },
+                { sessionId: 'outer-codex', timestamp: '2026-09-28T10:00:00.000Z', type: 'session_start' },
+                { sessionId: 'outer-codex', timestamp: '2026-09-28T10:01:00.000Z' },
+                { sessionId: 'inner-claude', timestamp: '2026-09-28T10:05:00.000Z', type: 'session_start' },
+                { sessionId: 'outer-codex', timestamp: '2026-09-28T10:07:00.000Z' },
+            ]);
+            expect(await agentSessionIdFromEnv()).toBe('inner-claude');
         });
 
         it('falls back to the variable order when no set session has events', async () => {
