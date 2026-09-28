@@ -26,6 +26,12 @@ export const AGENT_SESSION_ENV = [
     'CLAUDE_SESSION_ID',         // CodeBuddy's alias and older setups
 ] as const;
 
+// Set in the shell of an agent whose hook bridge sends no session id (Pi's
+// bash tool sets PI_SESSION_ID, OpenCode sets OPENCODE=1). Its hooks record
+// under the pid fallback, and any AGENT_SESSION_ENV value it sees is inherited
+// from the agent that started it. OMP exports no marker.
+export const BRIDGE_AGENT_ENV = ['PI_SESSION_ID', 'OPENCODE'] as const;
+
 /**
  * The running agent's session id from its environment, or undefined when none
  * is set. For CLI commands an agent runs from its shell (`recall`,
@@ -33,25 +39,31 @@ export const AGENT_SESSION_ENV = [
  * deriveSessionId: a bridge that sends no session_id (OpenCode, Pi, OMP) can
  * inherit another agent's variable when started from that agent's shell.
  *
- * An agent started from another agent's shell inherits the outer agent's
- * variable next to its own, so when several are set the one whose session has
- * the latest hook event wins: the inner agent's hooks fire while the outer
- * agent waits on the tool call that runs it. With no events for any of them,
- * the variable order decides.
+ * Under a bridge agent marker it returns undefined, so the caller's own
+ * fallback applies; an agent started from a Pi or OpenCode shell then falls
+ * back too. An agent started from another agent's shell inherits the outer
+ * agent's variable next to its own, so when several are set the session that
+ * started last wins: its first hook event is the latest, as the inner agent
+ * starts after the outer one. With no events for any of them, the variable
+ * order decides.
  */
 export async function agentSessionIdFromEnv(): Promise<string | undefined> {
+    if (BRIDGE_AGENT_ENV.some((name) => process.env[name])) return undefined;
     const ids = [...new Set(AGENT_SESSION_ENV.map((name) => process.env[name]).filter((v) => !!v))];
     if (ids.length <= 1) return ids[0];
 
     // Loaded here: dashboard-collector imports this module.
     const { readEvents } = await import('../dashboard-collector.js');
-    let latest: { sessionId: string; timestamp: string } | undefined;
-    for (const event of await readEvents()) {
-        if (ids.includes(event.sessionId) && (!latest || event.timestamp > latest.timestamp)) {
-            latest = event;
-        }
+    const started = new Map<string, string>();
+    for (const { sessionId, timestamp } of await readEvents()) {
+        const first = started.get(sessionId);
+        if (ids.includes(sessionId) && (!first || timestamp < first)) started.set(sessionId, timestamp);
     }
-    return latest?.sessionId ?? ids[0];
+    let latest: [string, string] | undefined;
+    for (const entry of started) {
+        if (!latest || entry[1] > latest[1]) latest = entry;
+    }
+    return latest?.[0] ?? ids[0];
 }
 
 export interface DeriveSessionIdOptions {

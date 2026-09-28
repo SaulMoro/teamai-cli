@@ -125,6 +125,18 @@ describe('agentSessionIdFromEnv', () => {
         expect(await agentSessionIdFromEnv()).toBeUndefined();
     });
 
+    // Pi and OpenCode export none of AGENT_SESSION_ENV, and their hooks record
+    // under the pid fallback. Started from Claude Code's shell, they inherit
+    // its variable, which would file their work under the Claude session.
+    it.each([
+        ['PI_SESSION_ID', 'pi-session'],
+        ['OPENCODE', '1'],
+    ])('returns undefined under a bridge agent marker (%s), even with an inherited variable', async (marker, value) => {
+        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+        vi.stubEnv(marker, value);
+        expect(await agentSessionIdFromEnv()).toBeUndefined();
+    });
+
     describe('in a nested agent session', () => {
         let home: string;
 
@@ -152,6 +164,21 @@ describe('agentSessionIdFromEnv', () => {
                 { sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z' },
                 { sessionId: 'inner-codex', timestamp: '2026-09-28T10:05:00.000Z' },
                 { sessionId: 'unrelated', timestamp: '2026-09-28T10:09:00.000Z' },
+            ]);
+            expect(await agentSessionIdFromEnv()).toBe('inner-codex');
+        });
+
+        // A background `codex exec` or a parallel subagent keeps the outer
+        // session firing hooks after the inner one starts.
+        it('picks the inner agent even when the outer session has the latest event', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+            vi.stubEnv('CODEX_SESSION_ID', 'inner-codex');
+            writeEvents([
+                { sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z' },
+                { sessionId: 'inner-codex', timestamp: '2026-09-28T10:05:00.000Z' },
+                { sessionId: 'outer-claude', timestamp: '2026-09-28T10:07:00.000Z' },
             ]);
             expect(await agentSessionIdFromEnv()).toBe('inner-codex');
         });

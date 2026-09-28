@@ -249,4 +249,14 @@ describe('recall scope isolation (issue #73)', () => {
     );
     expect(applyPhase2Adjustments(0, hookSessionId).isKnowledgeGap).toBe(true);
   });
+
+  it('leaves the outer session alone when recall runs from a Pi shell started by Claude Code', async () => {
+    vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+    vi.stubEnv('PI_SESSION_ID', 'pi-session');
+    vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
+
+    await recall('completely unrelated gibberish query xyzzy', { dryRun: true });
+
+    expect(readRecallQuality('outer-claude')).toBeNull();
+  });
 });
