@@ -36,6 +36,26 @@ export function carriesResolvedValue(
 }
 
 /**
+ * Whether `raw`, a project file's text, holds a value teamai resolves into
+ * `target`: the value in `vars` (8+ characters, shorter ones turn up anywhere)
+ * of a variable one of `teamDefs` references and the tool does not expand
+ * itself. Needs no ownership manifest.
+ */
+export function holdsResolvedValue(
+  target: McpTarget,
+  teamDefs: McpServerDef[],
+  vars: Record<string, string>,
+  raw: string,
+): boolean {
+  if (!target.projectScope) return false;
+  return teamDefs.some((def) => !supportsEnvExpansion(target.format, target.projectScope, def)
+    && referencedVars(def).some((name) => {
+      const value = vars[name];
+      return value !== undefined && value.length >= 8 && raw.includes(value);
+    }));
+}
+
+/**
  * The `info/exclude` git reads for `dir`'s checkout (worktrees and submodules
  * included), the checkout's root, and `dir`'s path from it.
  */
@@ -51,14 +71,27 @@ async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; root:
 }
 
 /**
- * Whether git would put `file` in a commit: in a repository, and tracked or
- * untracked without an ignore rule. Read-only.
+ * Whether git would put a file in a commit. `unknown` is a repository git could
+ * not answer for (unsafe ownership, a bad config): never read it as safe.
  */
-export async function gitWouldTrack(file: string): Promise<boolean> {
-  const result = await execCommand('git', ['check-ignore', '-q', '--', path.basename(file)], { cwd: path.dirname(file), timeoutMs: 10_000 })
-    .catch(() => null);
-  // 0: ignored. 1: not ignored (or tracked). 128: not a repository, or git failed.
-  return result?.code === 1;
+export type GitTracking =
+  | { kind: 'ignored' }
+  | { kind: 'would-commit' }
+  | { kind: 'outside-repo' }
+  | { kind: 'unknown'; error: string };
+
+/** Whether git would put `file` in a commit: tracked, or untracked without an ignore rule. Read-only. */
+export async function gitTracking(file: string): Promise<GitTracking> {
+  const dir = path.dirname(file);
+  const result = await execCommand('git', ['check-ignore', '-q', '--', path.basename(file)], { cwd: dir, timeoutMs: 10_000 })
+    .catch((e: unknown) => ({ code: -1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
+  if (result.code === 0) return { kind: 'ignored' };
+  if (result.code === 1) return { kind: 'would-commit' };
+  // Anything else is no repository at all, or git failing inside one.
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    if (await pathExists(path.join(d, '.git'))) return { kind: 'unknown', error: result.stderr.trim() || `git exited with ${result.code}` };
+    if (path.dirname(d) === d) return { kind: 'outside-repo' };
+  }
 }
 
 /**
@@ -77,14 +110,24 @@ function splitBlock(content: string): { before: string; patterns: string[]; afte
 }
 
 /**
- * Add `file` to its repository's `.git/info/exclude` when git would otherwise
- * track it. Idempotent; a path already ignored, or outside any repository,
- * adds nothing. A failure warns rather than failing the sync that wrote the file.
+ * Add `file` to its repository's `.git/info/exclude` unless git ignores it
+ * already. Idempotent; a path already ignored, or outside any repository, adds
+ * nothing, and one git cannot answer for is added all the same. A failure warns
+ * rather than failing the sync that wrote the file.
  */
 export async function excludeFromGit(file: string): Promise<void> {
-  if (!await pathExists(file) || !await gitWouldTrack(file)) return;
+  if (!await pathExists(file)) return;
+  const tracking = await gitTracking(file);
+  if (tracking.kind === 'ignored' || tracking.kind === 'outside-repo') return;
   const location = await gitExcludeFile(path.dirname(file));
-  if (!location) return;
+  if (!location) {
+    const reason = tracking.kind === 'unknown' ? tracking.error : 'git could not locate .git/info/exclude';
+    log.warn(
+      `${file} holds a resolved MCP variable, and teamai could not keep it out of git: ${reason}. `
+      + 'Fix the repository, or add the file to its .git/info/exclude yourself, so git does not commit the value.',
+    );
+    return;
+  }
   const { excludeFile } = location;
   // Anchored at the working tree root, glob characters escaped.
   const pattern = `/${location.prefix}${path.basename(file)}`.replace(/[\\*?[\]!#]/g, '\\$&');

@@ -512,12 +512,14 @@ async function projectWorktreeConfigs(localConfig: LocalConfig): Promise<LocalCo
 
 /**
  * The `files` not proven free of a value teamai resolved (#882). A missing file
- * is clean; so is one a detected tool reads that parses and holds none of the
- * team's servers that need a resolved `${VAR}` there. Anything else (no tool
- * reads it, it does not parse, the team's servers cannot be read) is not.
+ * is clean; so is one a tool reads that parses, holds none of the team's
+ * servers that need a resolved `${VAR}` there, and contains none of the values
+ * such a variable has in this environment (which still finds a server since
+ * dropped from mcp.yaml). Anything else (no tool reads it, it does not parse,
+ * the team's servers cannot be read) is not.
  */
 async function mcpConfigsNotProvenClean(teamConfig: TeamaiConfig, localConfig: LocalConfig, files: string[]): Promise<string[]> {
-  const { resolveMcpTargets, installedMcpEntries } = await import('./mcp-reconcile.js');
+  const { resolveMcpTargets, installedMcpEntries, buildVarTable } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');
@@ -526,17 +528,24 @@ async function mcpConfigsNotProvenClean(teamConfig: TeamaiConfig, localConfig: L
   // Keyed by real path: the protected paths come from git, which resolves symlinks (macOS /var).
   const targets = new Map<string, McpTarget>();
   for (const cfg of await projectWorktreeConfigs(localConfig)) {
-    for (const target of await resolveMcpTargets(teamConfig, cfg)) {
+    for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) {
       const dir = await fs.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
       targets.set(path.join(dir, path.basename(target.file)), target);
     }
   }
+  // Short values, paths and the login name turn up in ordinary configs, so they prove nothing.
+  const identity = new Set(['USER', 'LOGNAME', 'USERNAME']);
+  const values = Object.entries(await buildVarTable(localConfig))
+    .filter(([name, value]) => value.length >= 8 && !identity.has(name) && !/^([/~]|[A-Za-z]:[\\/])/.test(value))
+    .map(([, value]) => value);
   const held: string[] = [];
   for (const file of files) {
     if (!await pathExists(file)) continue;
     const target = targets.get(file);
     const installed = target ? await installedMcpEntries(target) : null;
-    if (!target || !installed || !teamDefs || carriesResolvedValue(target, teamDefs, installed.keys())) held.push(file);
+    const raw = (await readFileSafe(file)) ?? '';
+    if (!target || !installed || !teamDefs || carriesResolvedValue(target, teamDefs, installed.keys())
+      || values.some((value) => raw.includes(value))) held.push(file);
   }
   return held;
 }
@@ -777,7 +786,7 @@ async function buildRemovalPlan(
       const dirs: string[] = [];
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         if (cfg.projectRoot) dirs.push(cfg.projectRoot);
-        for (const target of await resolveMcpTargets(teamConfig, cfg)) dirs.push(path.dirname(target.file));
+        for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) dirs.push(path.dirname(target.file));
       }
       plan.gitExcludes = await findMcpGitExcludes(dirs);
     }

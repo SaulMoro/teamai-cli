@@ -44,7 +44,7 @@ import {
 import { log } from './utils/logger.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
-import { carriesResolvedValue, excludeFromGit } from './mcp-git-exclude.js';
+import { carriesResolvedValue, excludeFromGit, holdsResolvedValue } from './mcp-git-exclude.js';
 
 // ─── Reconcile engine ────────────────────────────────────────
 //
@@ -216,6 +216,8 @@ export interface McpTarget {
 export async function resolveMcpTargets(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
+  /** Also the tools not detected here: a file an earlier pull wrote outlives its tool. */
+  options: { includeUndetected?: boolean } = {},
 ): Promise<McpTarget[]> {
   const projectScope = localConfig.scope === 'project';
   const targets: McpTarget[] = [];
@@ -239,7 +241,7 @@ export async function resolveMcpTargets(
 
     const probe = paths.skills ?? paths.settings ?? paths.agents;
     if (!probe) continue;
-    if (!await isToolInstalledForConfig(tool, probe, localConfig, file)) {
+    if (!options.includeUndetected && !await isToolInstalledForConfig(tool, probe, localConfig, file)) {
       log.debug(`Skipping MCP sync for ${tool}: tool not installed`);
       continue;
     }
@@ -508,6 +510,54 @@ export async function reconcileMcpForConfig(
   localConfig: LocalConfig,
   options: McpReconcileOptions = {},
 ): Promise<McpReconcileResult> {
+  try {
+    return await reconcileTargets(teamConfig, localConfig, options);
+  } finally {
+    // Also after a failed write: what earlier pulls wrote is on disk either way.
+    if (!options.removeAll && !options.dryRun) await protectResolvedMcpConfigs(teamConfig, localConfig);
+  }
+}
+
+/**
+ * List each project MCP config holding a value teamai resolved in
+ * `.git/info/exclude` (#882). It covers what is on disk, whether or not this
+ * run delivered to it: the file of a disabled or undetected tool, or one
+ * written before the team turned delivery off, still holds what a pull wrote.
+ */
+async function protectResolvedMcpConfigs(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  const { projectRoot } = localConfig;
+  if (localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return;
+  try {
+    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot);
+  } catch (e) {
+    log.warn(
+      `Could not check this project's MCP configs for resolved values to keep out of git: ${e instanceof Error ? e.message : String(e)}. `
+      + 'Run `teamai doctor` to see whether git would commit one.',
+    );
+  }
+}
+
+async function protectProjectMcpConfigs(teamConfig: TeamaiConfig, localConfig: LocalConfig, projectRoot: string): Promise<void> {
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
+  const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
+  const vars = teamDefs ? await buildVarTable(localConfig) : {};
+  for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) {
+    const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
+    // Team servers that cannot be read say nothing either way: any teamai entry may hold one.
+    // The value itself is found without the manifest, which can be lost.
+    const holds = teamDefs
+      ? carriesResolvedValue(target, teamDefs, owned) || holdsResolvedValue(target, teamDefs, vars, (await readFileSafe(target.file)) ?? '')
+      : owned.length > 0;
+    if (holds) await excludeFromGit(target.file);
+  }
+}
+
+async function reconcileTargets(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  options: McpReconcileOptions,
+): Promise<McpReconcileResult> {
   const changes: McpChange[] = [];
   let wrote = false;
 
@@ -583,11 +633,6 @@ export async function reconcileMcpForConfig(
 
     if (nextRecords.length > 0) manifest[manifestKey] = nextRecords;
     else delete manifest[manifestKey];
-
-    // A resolved ${VAR} in a project file is plaintext in the business repo.
-    if (!removeAll && !options.dryRun && carriesResolvedValue(target, teamDefs, nextRecords.map((r) => r.name))) {
-      await excludeFromGit(target.file);
-    }
   }
 
   if (!options.dryRun && wrote) {

@@ -934,6 +934,66 @@ servers:
       expect(git(worktree, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/ (\.mcp\.json|\.cursor\/)/);
     });
 
+    describe('a config an earlier pull wrote is protected even when this pull delivers nothing to it', () => {
+      beforeEach(async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+        // As if written before this release: the token is on disk, nothing excludes it.
+        await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+      });
+
+      it('when its tool is disabled', async () => {
+        await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      });
+
+      it('when the team turned automatic MCP delivery off', async () => {
+        const manual = { ...teamConfig, sharing: { ...teamConfig.sharing, mcp: { autoApply: false } } } as TeamaiConfig;
+
+        await reconcileMcpForConfig(manual, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      });
+
+      it('when its tool is no longer detected', async () => {
+        await fse.remove(path.join(projectRoot, '.claude'));
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
+      it.skipIf(process.getuid?.() === 0)('when writing another tool\'s config fails', async () => {
+        await writeMcpYaml(`${withSecret}  - name: added-later\n    transport: http\n    url: https://example.com/later\n`);
+        await fse.chmod(path.join(projectRoot, '.cursor'), 0o555);
+
+        await expect(reconcileMcpForConfig(teamConfig, projectConfig)).rejects.toThrow();
+        await fse.chmod(path.join(projectRoot, '.cursor'), 0o755);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      });
+
+      it('when its ownership manifest is gone', async () => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
+      it('when the team\'s mcp.yaml does not parse', async () => {
+        await writeMcpYaml('servers: [unclosed\n');
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+    });
+
     it('leaves .git/info/exclude alone on a dry run', async () => {
       await writeMcpYaml(withSecret);
 
