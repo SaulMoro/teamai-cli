@@ -111,12 +111,45 @@ export function shellQuoteValue(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** The TeamAI-managed block of a shell profile, or null when it is absent. */
-export function extractEnvBlock(profileContent: string): string | null {
-  const start = profileContent.indexOf(TEAMAI_ENV_START);
-  if (start === -1) return null;
-  const end = profileContent.indexOf(TEAMAI_ENV_END, start);
-  return end === -1 ? profileContent.slice(start) : profileContent.slice(start, end);
+/** One TeamAI-managed block of a shell profile. */
+export interface EnvBlock {
+  /** From the start marker up to the end marker, or to the end of the file when the block is never closed. */
+  text: string;
+  /** Offset of the start marker. */
+  start: number;
+  /** Offset just past the end marker; null when the block is never closed. */
+  end: number | null;
+}
+
+/**
+ * Every TeamAI-managed block of a shell profile, in file order. A profile
+ * carries one per scope that injected into it (#876): the user scope's, and
+ * a project scope's.
+ */
+export function findEnvBlocks(profileContent: string): EnvBlock[] {
+  const blocks: EnvBlock[] = [];
+  let from = 0;
+  for (;;) {
+    const start = profileContent.indexOf(TEAMAI_ENV_START, from);
+    if (start === -1) return blocks;
+    const endMarker = profileContent.indexOf(TEAMAI_ENV_END, start);
+    if (endMarker === -1) {
+      blocks.push({ text: profileContent.slice(start), start, end: null });
+      return blocks;
+    }
+    const end = endMarker + TEAMAI_ENV_END.length;
+    blocks.push({ text: profileContent.slice(start, endMarker), start, end });
+    from = end;
+  }
+}
+
+/**
+ * The block that belongs to the scope whose env file is `envShPath`, or null
+ * when no block in the profile sources it. Ownership, not correctness: see
+ * `envBlockReferencesDataHome`.
+ */
+export function findEnvBlockFor(profileContent: string, envShPath: string): EnvBlock | null {
+  return findEnvBlocks(profileContent).find((block) => envBlockReferencesDataHome(block.text, envShPath)) ?? null;
 }
 
 /**
@@ -165,7 +198,11 @@ export function envBlockSourcesPath(block: string, envShPath: string): boolean {
  * them permanently invisible to both `doctor` and `uninstall` (#693 review).
  */
 function candidateSpellings(envShPath: string): string[] {
-  const spellings = new Set<string>([envShPath, toGeneratedForm(envShPath)]);
+  // The all-backslash form is #661's raw write whatever separator this host
+  // uses, so a block that differs from `envShPath` only in separator
+  // direction is still found as this scope's (#876: doctor judges only the
+  // block it owns, and must keep giving #661's diagnosis for this one).
+  const spellings = new Set<string>([envShPath, toGeneratedForm(envShPath), envShPath.replace(/\//g, '\\')]);
 
   const drive = /^([A-Za-z]):[\\/](.*)$/.exec(envShPath);
   if (drive) {
@@ -391,9 +428,8 @@ export async function resolveActiveShellProfile(
     visited.add(current);
 
     const content = await readFileSafe(current);
-    const block = content ? extractEnvBlock(content) : null;
-    if (block && envBlockReferencesDataHome(block, envShPath)) return current;
     if (!content) continue;
+    if (findEnvBlockFor(content, envShPath)) return current;
 
     for (const name of SHELL_PROFILE_CANDIDATE_NAMES) {
       const candidate = path.join(home, name);

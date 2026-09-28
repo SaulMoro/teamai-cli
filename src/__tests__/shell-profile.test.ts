@@ -6,6 +6,7 @@ import {
   detectShellProfile,
   envBlockSourcesPath,
   envBlockReferencesDataHome,
+  findEnvBlockFor,
   resolveActiveShellProfile,
   sameFile,
   shellQuoteValue,
@@ -177,6 +178,16 @@ describe('resolveActiveShellProfile', () => {
     );
     await fse.writeFile(path.join(homeDir, '.profile'), '');
     expect(await resolveActiveShellProfile(envShPath, 'win32')).toBe(path.join(homeDir, '.profile'));
+  });
+
+  // #876: a user-scope block and a project-scope block can share one file,
+  // and this scope's may be the second of them.
+  it('finds this scope\'s block when another scope\'s block comes first in the file', async () => {
+    const otherPosix = path.join(homeDir, '.teamai', 'projects', 'api', 'env.sh').split(path.sep).join('/');
+    const otherBlock = `# [teamai:env:start]\n# DO NOT EDIT\n[ -f ${shellQuoteValue(otherPosix)} ] && source ${shellQuoteValue(otherPosix)}\n# [teamai:env:end]\n`;
+    await fse.writeFile(path.join(homeDir, '.bashrc'), otherBlock + teamaiBlock());
+    await fse.writeFile(path.join(homeDir, '.bash_profile'), 'test -f ~/.bashrc && . ~/.bashrc\n');
+    expect(await resolveActiveShellProfile(envShPath, 'win32')).toBe(path.join(homeDir, '.bashrc'));
   });
 
   // Regression (#693 review round 9): a bare substring search matched a
@@ -625,11 +636,35 @@ describe('envBlockReferencesDataHome', () => {
     expect(envBlockReferencesDataHome(block, envShPath)).toBe(true);
   });
 
+  it('matches a path that differs only in separator direction (#661 raw form)', () => {
+    const block = '[ -f \\home\\me\\.teamai\\env.sh ] && source \\home\\me\\.teamai\\env.sh';
+    expect(envBlockReferencesDataHome(block, '/home/me/.teamai/env.sh')).toBe(true);
+  });
+
   it('does not match a different scope\'s env.sh', () => {
     const envShPath = 'D:\\Users\\me\\.teamai\\env.sh';
     const otherPosix = 'D:/some-other-project/.teamai/env.sh';
     const block = `[ -f ${shellQuoteValue(otherPosix)} ] && source ${shellQuoteValue(otherPosix)}`;
     expect(envBlockReferencesDataHome(block, envShPath)).toBe(false);
+  });
+});
+
+describe('findEnvBlockFor', () => {
+  const userEnvSh = '/home/me/.teamai/env.sh';
+  const projectEnvSh = '/home/me/.teamai/projects/api/env.sh';
+  const block = (envSh: string): string =>
+    `# [teamai:env:start]\n# DO NOT EDIT\n[ -f ${shellQuoteValue(envSh)} ] && source ${shellQuoteValue(envSh)}\n# [teamai:env:end]`;
+  const profile = `# mine\n${block(userEnvSh)}\n\n${block(projectEnvSh)}\n# tail\n`;
+
+  it('returns the block that sources the given env.sh, wherever it sits in the file', () => {
+    for (const envSh of [userEnvSh, projectEnvSh]) {
+      const found = findEnvBlockFor(profile, envSh);
+      expect(found && profile.slice(found.start, found.end ?? undefined)).toBe(block(envSh));
+    }
+  });
+
+  it('returns null when only another scope\'s block is present', () => {
+    expect(findEnvBlockFor(block(userEnvSh), projectEnvSh)).toBeNull();
   });
 });
 

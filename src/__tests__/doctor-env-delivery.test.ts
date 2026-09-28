@@ -328,6 +328,65 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).toContain('carries no TeamAI env block');
   });
 
+  // #876: a member with a user scope and a project scope carries one block
+  // for each in the same profile. Each scope's doctor reads its own block,
+  // not the first one in the file.
+  describe('with a user-scope and a project-scope block in one profile', () => {
+    let userEnvSh: string;
+    let projectEnvSh: string;
+
+    function scopeBlock(envSh: string): string {
+      const posix = envSh.split(path.sep).join('/');
+      return `# [teamai:env:start]\n# DO NOT EDIT\n[ -f '${posix}' ] && source '${posix}'\n# [teamai:env:end]\n`;
+    }
+
+    function useProjectScope(): void {
+      const projectRoot = path.join(tempDir, 'work', 'api');
+      const dataHome = path.join(homeDir, '.teamai', 'projects', 'api');
+      vi.mocked(loadLocalConfig).mockResolvedValue({ ...localConfig, scope: 'project', projectRoot, dataHome });
+      envShPath = path.join(dataHome, 'env.sh');
+    }
+
+    beforeEach(async () => {
+      userEnvSh = envShPath;
+      projectEnvSh = path.join(homeDir, '.teamai', 'projects', 'api', 'env.sh');
+      for (const envSh of [userEnvSh, projectEnvSh]) {
+        await fse.outputFile(envSh, "export JIRA_PASSWORD='s3cret'\n");
+      }
+    });
+
+    it('passes in each scope', async () => {
+      await fse.writeFile(profilePath, scopeBlock(userEnvSh) + scopeBlock(projectEnvSh));
+
+      expect(await (await envCheck()).check()).toBe(true);
+      useProjectScope();
+      expect(await (await envCheck()).check()).toBe(true);
+    });
+
+    it('reports a missing block for this env.sh, not a backslash, when only the other scope\'s block is present', async () => {
+      await fse.writeFile(profilePath, scopeBlock(userEnvSh));
+      useProjectScope();
+
+      const check = await envCheck();
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(`${profilePath} carries no TeamAI env block for ${projectEnvSh}`);
+      expect(check.fix).not.toContain('backslash');
+    });
+
+    it('still reports the backslash for this scope\'s own legacy block behind the other scope\'s (#661)', async () => {
+      const windowsStyle = projectEnvSh.replace(/\//g, '\\');
+      await fse.writeFile(
+        profilePath,
+        `${scopeBlock(userEnvSh)}# [teamai:env:start]\n[ -f ${windowsStyle} ] && source ${windowsStyle}\n# [teamai:env:end]\n`,
+      );
+      useProjectScope();
+
+      const check = await envCheck();
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(`does not load ${projectEnvSh}`);
+    });
+  });
+
   it('passes when the team opted out of shell-profile injection', async () => {
     teamConfig.sharing.env = { injectShellProfile: false };
 
