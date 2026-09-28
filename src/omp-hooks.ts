@@ -134,8 +134,9 @@ export default function teamaiHooks(pi) {
 
 /**
  * Inject (or refresh) the teamai OMP extension. Idempotent — writes and
- * reports the extension file only when its content changes. The install gate (~/.omp must exist) lives in the
- * reconcile caller, so this never creates an OMP config dir on its own.
+ * reports the extension file only when its content changes. The install gate
+ * (~/.omp must exist) lives in the reconcile caller, so this never creates an
+ * OMP config dir on its own.
  */
 export async function injectOmpHooks(): Promise<void> {
   const file = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
