@@ -210,6 +210,9 @@ function envPushItem(relativePath: string, sourcePath: string): ResourceItem {
   return { name: relativePath.slice('env/'.length), type: 'env', sourcePath, relativePath };
 }
 
+/** A `source` or `.` command naming a file called env.sh. */
+const SOURCES_ENV_SH = /(?:^|[\s;&|])(?:source|\.)\s[^\n;&|]*env\.sh/m;
+
 /**
  * The env.sh a user-scope pull writes, or null when no user scope is
  * configured. How a project pull recognises the user scope's profile block,
@@ -493,15 +496,13 @@ export class EnvHandler extends ResourceHandler {
 
     // An unclosed block has no end to replace up to, so it is left as it is.
     const blocks = findEnvBlocks(content).filter((b): b is EnvBlock & { end: number } => b.end !== null);
-    let target = blocks.find((b) => envBlockReferencesDataHome(b.text, envShPath));
-    if (!target && scope === 'user') {
-      // A block that sources no env.sh is the inline-export format from
-      // before env.sh and project scopes existed: the user scope's own.
-      target = blocks.find((b) => !b.text.includes('env.sh'));
-    } else if (!target) {
-      const userEnvShPath = await userScopeEnvShPath();
-      target = blocks.find((b) => userEnvShPath === null || !envBlockReferencesDataHome(b.text, userEnvShPath));
-    }
+    const userEnvShPath = scope === 'user' ? envShPath : await userScopeEnvShPath();
+    // A block that sources no env.sh is the inline-export format from before
+    // env.sh and project scopes existed: the user scope's too.
+    const isUserBlock = (b: EnvBlock): boolean => !SOURCES_ENV_SH.test(b.text)
+      || (userEnvShPath !== null && envBlockReferencesDataHome(b.text, userEnvShPath));
+    const target = blocks.find((b) => envBlockReferencesDataHome(b.text, envShPath))
+      ?? blocks.find((b) => (scope === 'user' ? isUserBlock(b) : !isUserBlock(b)));
 
     if (target) {
       // Replace existing block

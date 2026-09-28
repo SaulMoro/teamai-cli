@@ -11,6 +11,7 @@ import {
   sameFile,
   shellQuoteValue,
 } from '../utils/shell-profile.js';
+import { EnvHandler } from '../resources/env.js';
 
 /**
  * `platform` is passed explicitly to every call below rather than relying on
@@ -183,9 +184,17 @@ describe('resolveActiveShellProfile', () => {
   // #876: a user-scope block and a project-scope block can share one file,
   // and this scope's may be the second of them.
   it('finds this scope\'s block when another scope\'s block comes first in the file', async () => {
-    const otherPosix = path.join(homeDir, '.teamai', 'projects', 'api', 'env.sh').split(path.sep).join('/');
-    const otherBlock = `# [teamai:env:start]\n# DO NOT EDIT\n[ -f ${shellQuoteValue(otherPosix)} ] && source ${shellQuoteValue(otherPosix)}\n# [teamai:env:end]\n`;
-    await fse.writeFile(path.join(homeDir, '.bashrc'), otherBlock + teamaiBlock());
+    const otherBlock = new EnvHandler().generateShellBlock(path.join(homeDir, '.teamai', 'projects', 'api'));
+    await fse.writeFile(path.join(homeDir, '.bashrc'), `${otherBlock}\n${teamaiBlock()}`);
+    await fse.writeFile(path.join(homeDir, '.bash_profile'), 'test -f ~/.bashrc && . ~/.bashrc\n');
+    expect(await resolveActiveShellProfile(envShPath, 'win32')).toBe(path.join(homeDir, '.bashrc'));
+  });
+
+  // #876: with no block of its own anywhere along the chain, this scope goes
+  // where the other scope's block is, so injection can order the two.
+  it('picks the file along the chain holding another scope\'s block when this scope has none', async () => {
+    const otherBlock = new EnvHandler().generateShellBlock(path.join(homeDir, '.teamai', 'projects', 'api'));
+    await fse.writeFile(path.join(homeDir, '.bashrc'), `${otherBlock}\n`);
     await fse.writeFile(path.join(homeDir, '.bash_profile'), 'test -f ~/.bashrc && . ~/.bashrc\n');
     expect(await resolveActiveShellProfile(envShPath, 'win32')).toBe(path.join(homeDir, '.bashrc'));
   });
@@ -636,24 +645,26 @@ describe('envBlockReferencesDataHome', () => {
     expect(envBlockReferencesDataHome(block, envShPath)).toBe(true);
   });
 
-  it('matches a path that differs only in separator direction (#661 raw form)', () => {
-    const block = '[ -f \\home\\me\\.teamai\\env.sh ] && source \\home\\me\\.teamai\\env.sh';
-    expect(envBlockReferencesDataHome(block, '/home/me/.teamai/env.sh')).toBe(true);
-  });
-
   it('does not match a different scope\'s env.sh', () => {
     const envShPath = 'D:\\Users\\me\\.teamai\\env.sh';
     const otherPosix = 'D:/some-other-project/.teamai/env.sh';
     const block = `[ -f ${shellQuoteValue(otherPosix)} ] && source ${shellQuoteValue(otherPosix)}`;
     expect(envBlockReferencesDataHome(block, envShPath)).toBe(false);
   });
+
+  // #876: a longer path that merely ends in this one is another scope's.
+  it('does not match a path that only ends in this env.sh', () => {
+    const other = '/data/home/me/.teamai/env.sh';
+    const block = `[ -f ${shellQuoteValue(other)} ] && source ${shellQuoteValue(other)}`;
+    expect(envBlockReferencesDataHome(block, '/home/me/.teamai/env.sh')).toBe(false);
+    expect(envBlockReferencesDataHome(`[ -f ${other} ] && source ${other}`, '/home/me/.teamai/env.sh')).toBe(false);
+  });
 });
 
 describe('findEnvBlockFor', () => {
   const userEnvSh = '/home/me/.teamai/env.sh';
   const projectEnvSh = '/home/me/.teamai/projects/api/env.sh';
-  const block = (envSh: string): string =>
-    `# [teamai:env:start]\n# DO NOT EDIT\n[ -f ${shellQuoteValue(envSh)} ] && source ${shellQuoteValue(envSh)}\n# [teamai:env:end]`;
+  const block = (envSh: string): string => new EnvHandler().generateShellBlock(path.posix.dirname(envSh));
   const profile = `# mine\n${block(userEnvSh)}\n\n${block(projectEnvSh)}\n# tail\n`;
 
   it('returns the block that sources the given env.sh, wherever it sits in the file', () => {

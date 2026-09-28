@@ -47,6 +47,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { uninstall } from '../uninstall.js';
+import { EnvHandler } from '../resources/env.js';
 import { TeamaiConfigSchema } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
@@ -370,10 +371,7 @@ describe('uninstall', () => {
   // Uninstalling either scope removes its own block and leaves the other one
   // exactly as it was, wherever each sits in the file.
   describe('with a user-scope and a project-scope block in one profile', () => {
-    function scopeBlock(envSh: string): string {
-      const posix = envSh.split(path.sep).join('/');
-      return [TEAMAI_ENV_START, '# DO NOT EDIT', `[ -f '${posix}' ] && source '${posix}'`, TEAMAI_ENV_END].join('\n');
-    }
+    const scopeBlock = (envSh: string): string => new EnvHandler().generateShellBlock(path.dirname(envSh));
 
     async function setupTwoBlocks() {
       const fixture = await setupFixture(tmpDir);

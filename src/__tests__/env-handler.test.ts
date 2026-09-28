@@ -911,6 +911,66 @@ scope: 'user',
       }).toString();
       expect(value).toBe('project');
     });
+
+    // The reverse chain: a block already sits in the sourced .bashrc and this
+    // scope's first pull comes after Git for Windows generated .bash_profile.
+    describe('when another scope\'s block is in a .bashrc that .bash_profile sources', () => {
+      const loginShell = (key: string) => execFileSync('bash', ['-c', `. ~/.bash_profile; printf %s "$${key}"`], {
+        env: { HOME: homeDir, PATH: process.env.PATH ?? '' },
+      }).toString();
+
+      beforeEach(() => {
+        vi.stubEnv('SHELL', '');
+        vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+      });
+
+      async function gitForWindowsGeneratesBashProfile(): Promise<void> {
+        await fse.writeFile(path.join(homeDir, '.bash_profile'), 'test -f ~/.bashrc && . ~/.bashrc\n');
+      }
+
+      it.skipIf(process.platform === 'win32')('lets the project value win when the user scope pulls first after the project', async () => {
+        await pulls.project();
+        await gitForWindowsGeneratesBashProfile();
+        await pulls.user();
+
+        expect(loginShell('SHARED')).toBe('project');
+      });
+
+      it.skipIf(process.platform === 'win32')('leaves only the last project\'s block live', async () => {
+        await handler.writeResolvedEnv([{ key: 'API_ONLY', value: 'api' }], teamConfig, projectConfig);
+        await gitForWindowsGeneratesBashProfile();
+        await handler.writeResolvedEnv([{ key: 'WEB_ONLY', value: 'web' }], teamConfig, otherProjectConfig);
+
+        expect([loginShell('API_ONLY'), loginShell('WEB_ONLY')]).toEqual(['', 'web']);
+      });
+    });
+
+    // The inline-export block from before env.sh existed is the user scope's,
+    // whichever scope pulls.
+    describe('with a block from before env.sh', () => {
+      const bashrcPath = () => path.join(homeDir, '.bashrc');
+      const inlineBlock = (value: string) => [TEAMAI_ENV_START, `export OLD_VAR='${value}'`, TEAMAI_ENV_END].join('\n');
+
+      it('keeps it on a project pull', async () => {
+        await fse.writeFile(bashrcPath(), `${inlineBlock('old')}\n`);
+
+        await pulls.project();
+
+        const profile = await fse.readFile(bashrcPath(), 'utf-8');
+        expect(profile).toContain(inlineBlock('old'));
+        expect(sourceLines(profile)).toEqual([expectedSourceLine(projectConfig.dataHome ?? '')]);
+      });
+
+      it('replaces it on a user pull even when a value mentions env.sh', async () => {
+        await fse.writeFile(bashrcPath(), `${inlineBlock('see env.sh')}\n`);
+
+        await pulls.user();
+
+        const profile = await fse.readFile(bashrcPath(), 'utf-8');
+        expect(profile).not.toContain('OLD_VAR');
+        expect(sourceLines(profile)).toEqual([expectedSourceLine(userHome)]);
+      });
+    });
   });
 
   // ─── removeItem ──────────────────────────────────────────

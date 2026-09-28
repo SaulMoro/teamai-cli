@@ -198,11 +198,7 @@ export function envBlockSourcesPath(block: string, envShPath: string): boolean {
  * them permanently invisible to both `doctor` and `uninstall` (#693 review).
  */
 function candidateSpellings(envShPath: string): string[] {
-  // The all-backslash form is #661's raw write whatever separator this host
-  // uses, so a block that differs from `envShPath` only in separator
-  // direction is still found as this scope's (#876: doctor judges only the
-  // block it owns, and must keep giving #661's diagnosis for this one).
-  const spellings = new Set<string>([envShPath, toGeneratedForm(envShPath), envShPath.replace(/\//g, '\\')]);
+  const spellings = new Set<string>([envShPath, toGeneratedForm(envShPath)]);
 
   const drive = /^([A-Za-z]):[\\/](.*)$/.exec(envShPath);
   if (drive) {
@@ -210,6 +206,19 @@ function candidateSpellings(envShPath: string): string[] {
   }
 
   return [...spellings];
+}
+
+/**
+ * Whether `spelling` occurs in `text` where a path starts: at the start of
+ * the text, or after whitespace or a quote. A longer path that merely ends in
+ * it (`/data/home/me/.teamai/env.sh` for `/home/me/.teamai/env.sh`) names
+ * another scope's env.sh (#876).
+ */
+function includesAsPath(text: string, spelling: string): boolean {
+  for (let at = text.indexOf(spelling); at !== -1; at = text.indexOf(spelling, at + 1)) {
+    if (at === 0 || /[\s'"]/.test(text[at - 1])) return true;
+  }
+  return false;
 }
 
 /**
@@ -229,7 +238,7 @@ function candidateSpellings(envShPath: string): string[] {
 export function envBlockReferencesDataHome(block: string, envShPath: string): boolean {
   for (const spelling of candidateSpellings(envShPath)) {
     if (
-      block.includes(spelling)
+      includesAsPath(block, spelling)
       || block.includes(shellQuoteValue(spelling))
       || block.includes(`"${spelling}"`)
     ) {
@@ -412,6 +421,12 @@ async function referencesCandidate(content: string, name: string): Promise<boole
  * following the chain it opens, injecting a second block there would leave
  * the still-loading `.bashrc` one reported as a stray leftover, even though
  * nothing ever stopped working.
+ *
+ * With no block of this scope's along the chain, the first file along it
+ * that holds another scope's block wins over the order-based pick, so
+ * injection orders the two in one file (#876). Appended after the `source`
+ * line in the order-based pick instead, a first user block would override the
+ * project on a shared key, and a second project's would leave the first live.
  */
 export async function resolveActiveShellProfile(
   envShPath: string,
@@ -422,6 +437,7 @@ export async function resolveActiveShellProfile(
 
   const visited = new Set<string>();
   const queue: string[] = [activePick];
+  let firstWithBlock: string | null = null;
   while (queue.length > 0) {
     const current = queue.shift() as string;
     if (visited.has(current)) continue;
@@ -430,6 +446,7 @@ export async function resolveActiveShellProfile(
     const content = await readFileSafe(current);
     if (!content) continue;
     if (findEnvBlockFor(content, envShPath)) return current;
+    if (firstWithBlock === null && findEnvBlocks(content).length > 0) firstWithBlock = current;
 
     for (const name of SHELL_PROFILE_CANDIDATE_NAMES) {
       const candidate = path.join(home, name);
@@ -439,5 +456,5 @@ export async function resolveActiveShellProfile(
     }
   }
 
-  return activePick;
+  return firstWithBlock ?? activePick;
 }
