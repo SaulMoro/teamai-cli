@@ -551,10 +551,11 @@ export async function doUpdate(): Promise<void> {
     // project and prunes every undeclared sibling in <prefix>/node_modules
     // (including a co-located npm), while -g always lands in
     // <prefix>/lib. Stay out and let the user update manually.
-    log.warn(
+    const message =
       `Self-update is not supported for the vendored install at ${target.prefix} ` +
-      '(npm would relocate or prune the runtime tree) — update manually.',
-    );
+      '(npm would relocate or prune the runtime tree) — update manually.';
+    log.warn(message);
+    log.persist(message);
     return;
   }
 

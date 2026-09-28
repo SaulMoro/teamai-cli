@@ -983,6 +983,8 @@ describe('self-update install-target safety', () => {
     // undeclared siblings (including a co-located npm); -g lands in
     // <prefix>/lib. Neither may touch the vendored tree — stay out entirely.
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Self-update is not supported'));
+    // The Stop hook discards stderr; debug.log is where the refusal survives.
+    expect(mockedLog.persist).toHaveBeenCalledWith(expect.stringContaining('Self-update is not supported'));
     expect(mockedExecSync).toHaveBeenCalledTimes(1); // the version check only
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.any(String),
