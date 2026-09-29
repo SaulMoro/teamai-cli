@@ -92,8 +92,33 @@ export type GitTracking =
   | { kind: 'outside-repo' }
   | { kind: 'unknown'; error: string };
 
-/** Whether git would put `file` in a commit: tracked, or untracked without an ignore rule. Read-only. */
+/** Where a write to `file` lands (see realFilePath): the path every check here judges. */
+async function landingPath(file: string): Promise<string> {
+  const { realFilePath } = await import('./mcp-reconcile.js');
+  return realFilePath(file);
+}
+
+/**
+ * `file` as a message names it, and the path to give git for it: the one a
+ * write lands in, named with `file`, when a directory inside its checkout is a
+ * symlink (#886), where git refuses `file` ("beyond a symbolic link"). A
+ * symlink above the checkout (macOS /var) changes no path git uses.
+ */
+export async function gitPathOf(file: string): Promise<{ label: string; path: string }> {
+  const landed = await landingPath(file);
+  if (landed === file) return { label: file, path: file };
+  const location = await gitExcludeFile(await existingAncestor(landed));
+  const inCheckout = location ? path.relative(location.root, landed) : '';
+  if (inCheckout && !inCheckout.startsWith('..') && file.endsWith(`${path.sep}${inCheckout}`)) return { label: file, path: file };
+  return { label: `${landed} (where ${file} is written)`, path: landed };
+}
+
+/**
+ * Whether git would put `file` in a commit: tracked, or untracked without an
+ * ignore rule. Judged where a write to it lands. Read-only.
+ */
 export async function gitTracking(file: string): Promise<GitTracking> {
+  file = await landingPath(file);
   const dir = await existingAncestor(file);
   const result = await execCommand('git', ['check-ignore', '-q', '--', path.relative(dir, file)], { cwd: dir, timeoutMs: 10_000 })
     .catch((e: unknown) => ({ code: -1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
@@ -112,6 +137,7 @@ export async function gitTracking(file: string): Promise<GitTracking> {
  * answer: never read it as untracked.
  */
 async function gitTracks(file: string): Promise<{ kind: 'tracked' } | { kind: 'untracked' } | { kind: 'unknown'; error: string }> {
+  file = await landingPath(file);
   // The file, or even its directory, may be gone from disk and still be in the index.
   const dir = await existingAncestor(file);
   const result = await execCommand('git', ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path.relative(dir, file)], { cwd: dir, timeoutMs: 10_000 })
@@ -160,16 +186,20 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
   const tracking = await gitTracking(file);
   if (tracking.kind === 'ignored' || tracking.kind === 'outside-repo') return { kind: 'excluded', added: false };
   const repair = 'Fix the repository, or add the file to its .git/info/exclude yourself, then run `teamai pull` again.';
-  const tracked: GitExclusion = {
-    kind: 'failed',
-    reason: `git already tracks ${file}`,
-    fix: `Run \`git rm --cached ${file}\` (rotate any value a commit of it holds), then \`teamai pull\` again.`,
+  const tracked = async (): Promise<GitExclusion> => {
+    const named = await gitPathOf(file);
+    return {
+      kind: 'failed',
+      reason: `git already tracks ${named.label}`,
+      fix: `Run \`git rm --cached ${named.path}\` (rotate any value a commit of it holds), then \`teamai pull\` again.`,
+    };
   };
   const inIndex = await gitTracks(file);
-  if (inIndex.kind === 'tracked') return tracked;
+  if (inIndex.kind === 'tracked') return tracked();
   if (inIndex.kind === 'unknown') return { kind: 'failed', reason: inIndex.error, fix: repair };
-  // `file` and its directory need not exist yet: git is asked from the nearest one that does.
-  const dir = await existingAncestor(file);
+  // Where the write lands. It and its directory need not exist yet: git is asked from the nearest one that does.
+  const landed = await landingPath(file);
+  const dir = await existingAncestor(landed);
   const location = await gitExcludeFile(dir);
   if (!location) {
     return {
@@ -180,7 +210,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
   }
   const { excludeFile } = location;
   // Anchored at the working tree root, glob characters escaped.
-  const rel = path.relative(dir, file).split(path.sep).join('/');
+  const rel = path.relative(dir, landed).split(path.sep).join('/');
   const pattern = `/${location.prefix}${rel}`.replace(/[\\*?[\]!#]/g, '\\$&');
   const retry = `Make it writable, or add \`${pattern}\` to it yourself, then run \`teamai pull\` again.`;
   // A read-only exclude file is the member's choice; the atomic write would replace it all the same.
@@ -216,7 +246,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
     };
   }
   if (result === 'written') log.debug(`Added ${pattern} to ${excludeFile}`);
-  return (await gitTracking(file)).kind === 'would-commit' ? tracked : { kind: 'excluded', added: result === 'written' };
+  return (await gitTracking(file)).kind === 'would-commit' ? tracked() : { kind: 'excluded', added: result === 'written' };
 }
 
 /**

@@ -1031,8 +1031,13 @@ async function releaseMcpGitExcludes(
   }
 }
 
-/** `file` with the real path of its closest existing directory. */
-async function realFilePath(file: string): Promise<string> {
+/**
+ * Where a write to `file` lands: the real path of its closest existing
+ * directory, the rest appended. The appliers replace the file itself (tmp +
+ * rename) but follow its directories, so every check of whether git would
+ * commit the file judges this path (#886), and reads keep `file`.
+ */
+export async function realFilePath(file: string): Promise<string> {
   const dir = await existingAncestor(file);
   const real = await fse.realpath(dir).catch(() => dir);
   return path.join(real, path.relative(dir, file));
