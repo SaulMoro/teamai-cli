@@ -356,7 +356,14 @@ export interface JsonDoc {
   servers: Record<string, unknown>;
   /** The existing document stores server names directly at the top level. */
   bare: boolean;
+  /**
+   * A Copilot project file holding `serverKey` as well: the servers at its top level beside it, which a bare
+   * write left before another tool added the key (#882). Read and removed, never written to.
+   */
+  beside?: Record<string, unknown>;
 }
+
+const SERVER_KEYS = new Set<string>(Object.values(MCP_SERVER_KEY));
 
 /**
  * Read a JSON MCP config. Returns null when the file exists but cannot be
@@ -379,7 +386,9 @@ export async function readJsonDoc(
     const bare = allowBare && !(serverKey in data);
     const servers = bare ? data : (data[serverKey] as Record<string, unknown>) ?? {};
     if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null;
-    return { data, servers: { ...servers }, bare };
+    const beside = allowBare && !bare ? Object.fromEntries(Object.entries(data).filter(([key, value]) =>
+      !SERVER_KEYS.has(key) && typeof value === 'object' && value !== null && !Array.isArray(value))) : {};
+    return { data, servers: { ...servers }, bare, ...Object.keys(beside).length > 0 ? { beside } : {} };
   } catch {
     return null;
   }
@@ -574,11 +583,17 @@ export function desiredMcpForTarget(
  * team's server arrived: the appliers refuse to overwrite an entry teamai does
  * not own, so an unrelated server of the same name leaves the key there and the
  * team's definition undelivered. Only the value tells those two apart.
+ * A Copilot project file's bare servers beside `mcpServers` count as well
+ * (#882): what the file holds, not only what the tool reads.
  *
  * Read-only. An MCP server is an entry inside a tool's config rather than a
  * file of its own, so this, not a destination path, is what "delivered" means.
  */
-export async function installedMcpEntries(target: McpTarget): Promise<Map<string, unknown> | null> {
+export async function installedMcpEntries(
+  target: McpTarget,
+  /** Only the servers under the format's key, as the tool reads them: not a Copilot file's bare ones beside it. */
+  options: { underKeyOnly?: boolean } = {},
+): Promise<Map<string, unknown> | null> {
   if (target.format === 'codex') {
     const raw = await readFileSafe(target.file);
     if (raw === null) return new Map();
@@ -587,7 +602,8 @@ export async function installedMcpEntries(target: McpTarget): Promise<Map<string
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
   const doc = await readJsonDoc(target.file, serverKey, allowBare);
-  return doc === null ? null : new Map(Object.entries(doc.servers));
+  if (doc === null) return null;
+  return new Map([...options.underKeyOnly ? [] : Object.entries(doc.beside ?? {}), ...Object.entries(doc.servers)]);
 }
 
 /**
@@ -1586,6 +1602,11 @@ async function applyJson(
     if (desired.has(name)) continue;
     if (doc.servers[name] !== undefined) {
       delete doc.servers[name];
+      dirty = true;
+    }
+    // One a bare write left before another tool added the key goes too (#882).
+    if (doc.beside?.[name] !== undefined) {
+      delete doc.data[name];
       dirty = true;
     }
     changes.push({ tool: target.tool, server: name, action: 'removed' });

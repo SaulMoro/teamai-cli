@@ -1072,6 +1072,49 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
     });
 
+    describe('a bare Copilot config another tool then writes mcpServers into (Copilot and Claude on .mcp.json)', () => {
+      const shared = (): TeamaiConfig => ({
+        ...teamConfig,
+        toolPaths: { ...TOOL_PATHS, copilot: { skills: '.github/skills', mcp: '.copilot/mcp-config.json', mcpProject: '.mcp.json' } },
+      } as TeamaiConfig);
+      const open = 'servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n';
+
+      beforeEach(async () => {
+        await fse.ensureDir(path.join(projectRoot, '.github', 'skills'));
+        // An empty file reads as Copilot's bare map: its first write stays bare.
+        await fse.writeFile(path.join(projectRoot, '.mcp.json'), '');
+        await writeMcpYaml(`${withSecret}    tools: [copilot]\n`);
+        await reconcileMcpForConfig(shared(), projectConfig);
+        const first = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+        expect(first['with-secret']).toEqual(expect.objectContaining({ headers: { Authorization: 'Bearer super-secret-value' } }));
+        expect(first.mcpServers).toBeUndefined();
+      });
+
+      it('keeps its line, pull after pull, while Copilot\'s bare entry holds the value beside the mcpServers Claude wrote', async () => {
+        await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
+        // No longer set: only the entry, not a scan for the value, says what the file holds.
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(shared(), { ...projectConfig, disabledAgents: ['copilot'] } as LocalConfig);
+        await reconcileMcpForConfig(shared(), { ...projectConfig, disabledAgents: ['copilot'] } as LocalConfig);
+
+        const after = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+        expect(after.mcpServers).toEqual({ open: expect.objectContaining({ url: 'https://example.com/open' }) });
+        expect(JSON.stringify(after)).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
+      it('removes Copilot\'s bare entry once the team drops it, leaving the mcpServers Claude wrote', async () => {
+        await writeMcpYaml(open);
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(shared(), projectConfig);
+
+        const after = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+        expect(after).toEqual({ mcpServers: { open: expect.objectContaining({ url: 'https://example.com/open' }) } });
+      });
+    });
+
     describe('a config two tools share (Claude and CodeBuddy on .mcp.json)', () => {
       const shared = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codebuddy: { ...TOOL_PATHS.codebuddy, mcpProject: '.mcp.json' } } } as TeamaiConfig;
       const open = '  - name: open\n    transport: http\n    url: https://example.com/open\n';

@@ -159,6 +159,26 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(document).toEqual({ 'user-server': userServer });
   });
 
+  it('uninstalls a bare Copilot project entry once another tool has written mcpServers into the file', async () => {
+    const workspacePath = path.join(tmpDir, 'copilot-shared-project');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    const userServer = { type: 'http', url: 'https://user.example.com/mcp' };
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeJson(configFile, { 'user-server': userServer });
+    const command = { scope: 'workspace', workspace_path: workspacePath, slug: COPILOT_SERVER, version: '1.0.0' };
+    let acks = await runResponse({
+      cmds: [{ id: 8995, type: 'install_mcp', ...command, mcp_config: { transport: 'http', url: 'https://copilot.example.com/mcp' } }],
+    }, 'copilot');
+    expect(acks[0].status).toBe('success');
+    const other = { mcpServers: { claude: { type: 'http', url: 'https://claude.example.com/mcp' } } };
+    await fse.writeJson(configFile, { ...await fse.readJson(configFile), ...other });
+
+    acks = await runResponse({ cmds: [{ id: 8996, type: 'uninstall_mcp', ...command }] }, 'copilot');
+
+    expect(acks[0].status).toBe('success');
+    expect(await fse.readJson(configFile)).toEqual({ 'user-server': userServer, ...other });
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');

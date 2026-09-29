@@ -3002,8 +3002,10 @@ async function uninstallMcpServer(
     const serverKey = MCP_SERVER_KEY[format];
     const allowBare = format === 'copilot' && projectScope;
     const doc = await readJsonDoc(targetFile, serverKey, allowBare);
-    if (doc && doc.servers[slug] !== undefined) {
+    // Also a bare entry another tool's mcpServers now sits beside (#882).
+    if (doc && (doc.servers[slug] !== undefined || doc.beside?.[slug] !== undefined)) {
       delete doc.servers[slug];
+      if (doc.beside?.[slug] !== undefined) delete doc.data[slug];
       await writeJsonDoc(targetFile, serverKey, doc);
     }
   }

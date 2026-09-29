@@ -502,7 +502,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     const problems: string[] = [];
     // Its fix is the exclusion's own, not another pull (#882).
     let withheld: string | undefined;
-    const installed = await installedMcpEntries(target);
+    const installed = await installedMcpEntries(target, { underKeyOnly: true });
     if (installed === null) {
       problems.push(`${target.file} could not be parsed, so no server was injected`);
     } else {
