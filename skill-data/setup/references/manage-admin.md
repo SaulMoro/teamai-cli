@@ -50,7 +50,7 @@ once its file no longer holds a resolved value; `teamai uninstall` does so in
 every worktree. A file written under a `toolPaths.<tool>.mcpProject` the team
 later changes or removes stays listed until it is deleted or holds no server;
 for one an older teamai wrote, the first pull finds the path in the team repo's
-history of `teamai.yaml`.
+history of `teamai.yaml`, or among the built-in paths teamai has since changed.
 
 ## Invite a member
 

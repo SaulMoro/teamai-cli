@@ -596,13 +596,20 @@ export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): 
   return recorded;
 }
 
+// Built-in mcpProject defaults an older teamai wrote to and no longer maps:
+// no teamai.yaml revision names them.
+const EARLIER_BUILTIN_MCP_PROJECT = {
+  codebuddy: { mcpProject: '.codebuddy/mcp.json' }, // before 57636a27
+};
+
 /**
  * The files earlier revisions of the team's teamai.yaml mapped a tool's
  * project MCP config to (`toolPaths.<tool>.mcpProject`) that exist under the
  * project root, and that no target in `known` and no file `cfg`'s worktree
  * recorded is (#882): a teamai from before managed-mcp-files.json may have
  * written a resolved value there, under a mapping the team changed before
- * this member's first pull on a teamai that records one. Read from the team
+ * this member's first pull on a teamai that records one, plus those under a
+ * built-in default teamai has since changed. Read from the team
  * repo's history of teamai.yaml, as far as the clone has it (a shallow clone
  * has less). Null when git cannot read it: not a repository, no commits, a
  * git error.
@@ -623,12 +630,14 @@ export async function earlierMappedMcpTargets(cfg: LocalConfig, known: McpTarget
     [...known.map((target) => target.file), ...Object.keys((await readResolvedMcpFiles(cfg)).files)].map(realFilePath),
   ));
   const found = new Map<string, McpTarget>();
-  for (const revision of revisions) {
-    let toolPaths: unknown;
-    try {
-      toolPaths = (YAML.parse((await getFileContentAtRev(repoPath, revision, './teamai.yaml'))?.toString() ?? '') as { toolPaths?: unknown } | null)?.toolPaths;
-    } catch {
-      continue;
+  for (const revision of [null, ...revisions]) {
+    let toolPaths: unknown = EARLIER_BUILTIN_MCP_PROJECT;
+    if (revision !== null) {
+      try {
+        toolPaths = (YAML.parse((await getFileContentAtRev(repoPath, revision, './teamai.yaml'))?.toString() ?? '') as { toolPaths?: unknown } | null)?.toolPaths;
+      } catch {
+        continue;
+      }
     }
     if (typeof toolPaths !== 'object' || toolPaths === null) continue;
     for (const [tool, paths] of Object.entries(toolPaths)) {

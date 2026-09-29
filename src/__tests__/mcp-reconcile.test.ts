@@ -1231,6 +1231,20 @@ servers:
         expect(Object.keys((await ledger()).files)).not.toContain(customFile());
       });
 
+      it('also finds one under a built-in default teamai has since changed (CodeBuddy\'s .codebuddy/mcp.json)', async () => {
+        const today = { ...TOOL_PATHS, codebuddy: { ...TOOL_PATHS.codebuddy, mcpProject: '.mcp.json' } };
+        await fse.remove(path.join(repoPath, '.git'));
+        git(repoPath, 'init', '-q');
+        await commitTeamYaml(today);
+        const oldDefault = path.join(projectRoot, '.codebuddy', 'mcp.json');
+        await fse.outputFile(oldDefault, await fse.readFile(customFile(), 'utf-8'));
+
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths: today } as TeamaiConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.codebuddy\/mcp\.json$/m);
+        expect((await ledger()).files[oldDefault]).toEqual({ tools: ['codebuddy'] });
+      });
+
       it('leaves a mapped path outside the project root alone', async () => {
         const outside = path.join(tmpDir, 'outside', 'mcp.json');
         await fse.outputFile(outside, await fse.readFile(customFile(), 'utf-8'));
