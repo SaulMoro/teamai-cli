@@ -1580,6 +1580,92 @@ servers:
       expect((await fse.stat(resolvedMcpFilesPath(projectConfig) ?? '')).mode & 0o777).toBe(0o600);
     });
 
+    describe('without a usable managed-mcp-files.json, as before it existed', () => {
+      const mcpJson = (): string => path.join(projectRoot, '.mcp.json');
+      const claudeOnly = (): LocalConfig => ({ ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+      const open = 'servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n';
+      const sidecarFile = async (): Promise<string> => {
+        const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+        return resolvedMcpFilesPath(projectConfig) ?? '';
+      };
+      const loseManifest = async (): Promise<void> => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+      };
+
+      it('keeps the line of a config under a changed mapping it can no longer find, even holding no server', async () => {
+        const custom = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } };
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths: custom } as TeamaiConfig, projectConfig);
+        await fse.remove(await sidecarFile());
+        await fse.writeJson(path.join(projectRoot, '.cursor', 'team-mcp.json'), { mcpServers: {} });
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        // No tool reads it any more, and nothing says teamai wrote it: the line stays, as before.
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/team-mcp\.json$/m);
+      });
+
+      it('rewrites one that does not parse', async () => {
+        await fse.outputFile(await sidecarFile(), '{ "version": 1, "files": ');
+        await writeMcpYaml(withSecret);
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        expect(Object.keys((await readResolvedMcpFiles(projectConfig)).files)).toEqual([mcpJson()]);
+      });
+
+      it('still writes the config while another command holds its lock, and records it on the next pull', async () => {
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        const lock = `${await sidecarFile()}.teamai-lock`;
+        await fse.ensureDir(path.dirname(lock));
+        expect(await acquireLock(lock)).toBe(true);
+        await writeMcpYaml(withSecret);
+        try {
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+        } finally {
+          await releaseLock(lock);
+        }
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        expect((await readResolvedMcpFiles(projectConfig)).files).toEqual({});
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(Object.keys((await readResolvedMcpFiles(projectConfig)).files)).toEqual([mcpJson()]);
+      }, 30_000);
+
+      it.each([
+        ['it is deleted after a pull rebuilt the lost record', async () => {
+          await writeMcpYaml(withSecret);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          await loseManifest();
+          await writeMcpYaml(open);
+          vi.stubEnv('SECRET_TOKEN', '');
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          await fse.remove(await sidecarFile());
+        }],
+        ['an older teamai, which kept none, wrote the config and rebuilt the lost record', async () => {
+          await writeMcpYaml(withSecret);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          await fse.remove(await sidecarFile());
+          await loseManifest();
+          await writeMcpYaml(open);
+          vi.stubEnv('SECRET_TOKEN', '');
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+        }],
+      ])('releases the line of a stale entry whose value is no longer set when %s', async (_label, arrange) => {
+        await arrange();
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        // The documented limit: without the note, the stale entry looks like the member's own.
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).not.toContain('teamai');
+      });
+    });
+
     it('records a config an older teamai wrote a resolved value to on the first pull that finds it', async () => {
       const { readResolvedMcpFiles, resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
       await writeMcpYaml(withSecret);
