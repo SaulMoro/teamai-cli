@@ -1077,6 +1077,20 @@ servers:
         expect(vi.mocked(log.debug).mock.calls.flat().join('\n')).toMatch(/\/\.mcp\.json/);
       });
 
+      it('but one this pull listed stays when it wrote the value and then failed to record it', async () => {
+        // Shorter than eight characters: no scan of the file can find it again.
+        vi.stubEnv('SECRET_TOKEN', 'short');
+        await writeMcpYaml(withSecret);
+        beforeJsonWrite.run = async (file) => {
+          if (path.basename(file) === 'managed-mcp.json') throw new Error('disk full');
+        };
+
+        await expect(reconcileMcpForConfig(teamConfig, claudeOnly())).rejects.toThrow('disk full');
+
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('Bearer short');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
       it('but one an earlier pull listed stays while the config cannot be proven clean', async () => {
         await writeMcpYaml(withSecret);
         await reconcileMcpForConfig(teamConfig, claudeOnly());

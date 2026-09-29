@@ -664,14 +664,16 @@ export async function reconcileMcpForConfig(
 ): Promise<McpReconcileResult> {
   // Each project config's exclusion from git, established before a resolved value is written into it.
   const exclusions = new Map<string, GitExclusion>();
+  // The project configs this run wrote: a line it added for one stays, whatever fails after.
+  const written = new Set<string>();
   const protect = !options.removeAll && !options.dryRun;
   // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
   const before = protect && localConfig.projectRoot ? await readProjectMcpManifest(localConfig, localConfig.projectRoot) : undefined;
   try {
-    return await reconcileTargets(teamConfig, localConfig, options, exclusions);
+    return await reconcileTargets(teamConfig, localConfig, options, exclusions, written);
   } finally {
     // Also after a failed write: what earlier pulls wrote is on disk either way.
-    if (protect) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions, before);
+    if (protect) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions, written, before);
   }
 }
 
@@ -686,12 +688,13 @@ async function protectResolvedMcpConfigs(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   exclusions: Map<string, GitExclusion>,
+  written: Set<string>,
   before: ManagedMcpManifest | undefined,
 ): Promise<void> {
   const { projectRoot } = localConfig;
   if (localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return;
   try {
-    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions, before);
+    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions, written, before);
   } catch (e) {
     log.warn(
       `Could not check this project's MCP configs for resolved values to keep out of git: ${e instanceof Error ? e.message : String(e)}. `
@@ -705,6 +708,7 @@ async function protectProjectMcpConfigs(
   localConfig: LocalConfig,
   projectRoot: string,
   exclusions: Map<string, GitExclusion>,
+  written: Set<string>,
   before: ManagedMcpManifest | undefined,
 ): Promise<void> {
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
@@ -722,10 +726,11 @@ async function protectProjectMcpConfigs(
   }
   // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
   for (const file of holding) await excludeFromGit(file);
-  // A line this run added for a file it then wrote no value into restores the file's state before the run.
+  // A line this run added for a file it then did not write restores the file's state before the run.
+  // One it wrote holds the value even when no scan finds it (shorter than eight characters).
   const addedNow = [...unproven].filter((file) => {
     const exclusion = exclusions.get(file);
-    return !holding.has(file) && exclusion?.kind === 'excluded' && exclusion.added;
+    return !holding.has(file) && !written.has(file) && exclusion?.kind === 'excluded' && exclusion.added;
   });
   await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, addedNow, before);
 }
@@ -802,6 +807,7 @@ async function reconcileTargets(
   localConfig: LocalConfig,
   options: McpReconcileOptions,
   exclusions: Map<string, GitExclusion>,
+  written: Set<string>,
 ): Promise<McpReconcileResult> {
   const changes: McpChange[] = [];
   let wrote = false;
@@ -886,11 +892,11 @@ async function reconcileTargets(
       }
     }
 
-    if (target.format === 'codex') {
-      wrote = await applyCodex(target, desired, ownedNames, nextRecords, changes, options) || wrote;
-    } else {
-      wrote = await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options) || wrote;
-    }
+    const wroteTarget = target.format === 'codex'
+      ? await applyCodex(target, desired, ownedNames, nextRecords, changes, options)
+      : await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options);
+    if (wroteTarget) written.add(target.file);
+    wrote = wroteTarget || wrote;
 
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
