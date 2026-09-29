@@ -405,6 +405,30 @@ describe('doctor — MCP servers delivered on disk', () => {
         // .mcp.json is listed, so nothing is left to fail on.
         if (check) expect(await check.check()).toBe(true);
       });
+
+      describe('recorded as tracked by a pull that found git tracking it', () => {
+        beforeEach(async () => {
+          const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+          await fse.outputJson(resolvedMcpFilesPath(localConfig) ?? '', {
+            version: 1, files: { [old()]: { tools: ['cursor'], tracked: true } }, earlierMappingsRead: true,
+          });
+        });
+
+        it('does not name it while git tracks it', async () => {
+          execFileSync('git', ['add', '-f', '.cursor/team-mcp.json'], { cwd: projectRoot });
+
+          const check = await excludeCheck();
+          if (check) expect(check.fix).not.toContain(old());
+          if (check) expect(await check.check()).toBe(true);
+        });
+
+        it('fails, naming it, once git no longer tracks it', async () => {
+          const check = await excludeCheck();
+          if (!check) throw new Error('no git exclude check');
+          expect(await check.check()).toBe(false);
+          expect((check.fix ?? '').split(old())).toHaveLength(2);
+        });
+      });
     });
 
     it('fails for a server that was in the file when a pull rebuilt the lost record, after it left mcp.yaml', async () => {

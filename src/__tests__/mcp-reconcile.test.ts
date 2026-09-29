@@ -1255,18 +1255,56 @@ servers:
         expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'] });
       });
 
-      it('leaves a file git tracks alone: an exclude line does nothing for it', async () => {
+      it('lists nothing for a file git tracks, and records it as tracked: an exclude line does nothing for it', async () => {
         await fse.writeJson(customFile(), { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
         git(projectRoot, 'add', '-f', '.cursor/team-mcp.json');
         git(projectRoot, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'mine');
         vi.mocked(log.warn).mockClear();
 
         await reconcileMcpForConfig(teamConfig, projectConfig);
+        await reconcileMcpForConfig(teamConfig, projectConfig);
 
         expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
-        expect(Object.keys((await ledger()).files)).not.toContain(customFile());
+        expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'], tracked: true });
         expect(vi.mocked(log.warn).mock.calls.flat().join('\n')).not.toMatch(/team-mcp\.json/);
         expect((await ledger()).earlierMappingsRead).toBe(true);
+      });
+
+      describe('once git tracks it', () => {
+        const commitIt = (): void => {
+          git(projectRoot, 'add', '-f', '.cursor/team-mcp.json');
+          git(projectRoot, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'old');
+        };
+
+        it('is listed and recorded as any other on the first pull after the member stops git tracking it', async () => {
+          commitIt();
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          git(projectRoot, 'rm', '-q', '--cached', '.cursor/team-mcp.json');
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(await fse.readFile(customFile(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/team-mcp\.json$/m);
+          expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/\?\? .*team-mcp\.json/);
+          expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'] });
+        });
+
+        // A checkout brings back what git holds, so only a file gone from both is forgotten.
+        it('keeps its record while git tracks it, whatever the file holds, and forgets it once it is gone from git and disk', async () => {
+          commitIt();
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await fse.writeJson(customFile(), { mcpServers: {} });
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await fse.remove(customFile());
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'], tracked: true });
+          git(projectRoot, 'rm', '-q', '--cached', '.cursor/team-mcp.json');
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(Object.keys((await ledger()).files)).not.toContain(customFile());
+          expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
+        });
       });
 
       it('leaves a file that holds no server alone', async () => {

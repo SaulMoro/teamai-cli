@@ -201,5 +201,22 @@ describe('managed-mcp-files.json', () => {
         { file: other, tool: 'claude', state: { kind: 'parsed', servers: ['open'] }, holding: false, owned: ['open'] },
       ])).toBe('unchanged');
     });
+
+    it('records a file git tracks as tracked, and keeps it whatever it holds while git does', async () => {
+      const old = path.join(tmp, 'project', '.cursor', 'team-mcp.json');
+
+      await settleResolvedMcpFiles(cfg, [{ file: old, tool: 'cursor', state: { kind: 'parsed', servers: ['mine'] }, holding: false, owned: [], tracked: true }]);
+      await settleResolvedMcpFiles(cfg, [{ file: old, tool: 'cursor', state: { kind: 'missing' }, holding: false, owned: [], tracked: true }]);
+
+      expect((await readResolvedMcpFiles(cfg)).files[old]).toEqual({ tools: ['cursor'], tracked: true });
+    });
+
+    it('makes a tracked record an ordinary one once git no longer tracks the file', async () => {
+      await fse.outputJson(sidecar, { version: 1, files: { [custom()]: { tools: ['claude'], tracked: true } } });
+
+      await settleResolvedMcpFiles(cfg, [{ file: custom(), tool: 'claude', state: { kind: 'parsed', servers: ['jira'] }, holding: true, owned: [], tracked: false }]);
+
+      expect((await readResolvedMcpFiles(cfg)).files[custom()]).toEqual({ tools: ['claude'] });
+    });
   });
 });

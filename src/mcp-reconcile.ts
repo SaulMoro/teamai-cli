@@ -577,22 +577,29 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
   return () => value ??= load();
 }
 
+/** A file `recordedMcpTargets` returns. */
+export interface RecordedMcpFile {
+  /** A target per tool it was written for. */
+  targets: McpTarget[];
+  /** Recorded as one git tracked (managed-mcp-files.json): no line protects it while git does. */
+  tracked: boolean;
+}
+
 /**
  * The files `cfg`'s worktree recorded writing a resolved value to (#882) that
  * no target in `known` is: the team has since changed or removed the
- * toolPaths mapping they were written under. Each with a target per tool it
- * was written for.
+ * toolPaths mapping they were written under.
  */
-export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): Promise<Map<string, McpTarget[]>> {
+export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): Promise<Map<string, RecordedMcpFile>> {
   const mapped = new Set(await Promise.all(known.map((target) => realFilePath(target.file))));
-  const recorded = new Map<string, McpTarget[]>();
-  for (const [file, { tools }] of Object.entries((await readResolvedMcpFiles(cfg)).files)) {
+  const recorded = new Map<string, RecordedMcpFile>();
+  for (const [file, entry] of Object.entries((await readResolvedMcpFiles(cfg)).files)) {
     if (mapped.has(await realFilePath(file))) continue;
-    const targets = tools.flatMap((tool): McpTarget[] => {
+    const targets = entry.tools.flatMap((tool): McpTarget[] => {
       const format = detectMcpFormat(tool);
       return format ? [{ tool, format, file, projectScope: true }] : [];
     });
-    if (targets.length > 0) recorded.set(file, targets);
+    if (targets.length > 0) recorded.set(file, { targets, tracked: entry.tracked === true });
   }
   return recorded;
 }
@@ -606,9 +613,9 @@ const EARLIER_BUILTIN_MCP_PROJECT = {
 /**
  * The files earlier revisions of the team's teamai.yaml mapped a tool's
  * project MCP config to (`toolPaths.<tool>.mcpProject`) that exist under the
- * project root, that git does not track (no exclude line applies to one it
- * does), and that no target in `known` and no file `cfg`'s worktree
- * recorded is (#882): a teamai from before managed-mcp-files.json may have
+ * project root, and that no target in `known` and no file `cfg`'s worktree
+ * recorded is (#882), each saying whether git tracks it (no exclude line
+ * applies to one it does): a teamai from before managed-mcp-files.json may have
  * written a resolved value there, under a mapping the team changed before
  * this member's first pull on a teamai that records one, plus those under a
  * built-in default teamai has since changed. Read from the team
@@ -616,7 +623,10 @@ const EARLIER_BUILTIN_MCP_PROJECT = {
  * has less). Null when git cannot read it: not a repository, no commits, a
  * git error.
  */
-export async function earlierMappedMcpTargets(cfg: LocalConfig, known: McpTarget[]): Promise<McpTarget[] | null> {
+export async function earlierMappedMcpTargets(
+  cfg: LocalConfig,
+  known: McpTarget[],
+): Promise<Array<McpTarget & { tracked: boolean }> | null> {
   const { projectRoot } = cfg;
   if (!projectRoot) return [];
   const repoPath = cfg.repo.localPath;
@@ -631,7 +641,7 @@ export async function earlierMappedMcpTargets(cfg: LocalConfig, known: McpTarget
   const reached = new Set(await Promise.all(
     [...known.map((target) => target.file), ...Object.keys((await readResolvedMcpFiles(cfg)).files)].map(realFilePath),
   ));
-  const found = new Map<string, McpTarget>();
+  const found = new Map<string, McpTarget & { tracked: boolean }>();
   for (const revision of [null, ...revisions]) {
     let toolPaths: unknown = EARLIER_BUILTIN_MCP_PROJECT;
     if (revision !== null) {
@@ -652,8 +662,8 @@ export async function earlierMappedMcpTargets(cfg: LocalConfig, known: McpTarget
       const real = await realFilePath(file);
       const inside = path.relative(root, real);
       if (inside === '' || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) continue;
-      if (reached.has(real) || !await pathExists(file) || (await gitTracks(file)).kind === 'tracked') continue;
-      found.set(key, { tool, format, file, projectScope: true });
+      if (reached.has(real) || !await pathExists(file)) continue;
+      found.set(key, { tool, format, file, projectScope: true, tracked: (await gitTracks(file)).kind === 'tracked' });
     }
   }
   return [...found.values()];
@@ -702,7 +712,8 @@ export async function earlierMappedMcpFileEvidence(
 /**
  * What each of this worktree's project MCP configs holds, for
  * `settleResolvedMcpFiles`: each of `targets`' files, judged by `holds`, and
- * each file `recordedMcpTargets` returns, by `recordedMcpFileEvidence`.
+ * each file `recordedMcpTargets` returns, by `recordedMcpFileEvidence`, but
+ * for one recorded as tracked that git still tracks: no line protects it.
  */
 async function observeMcpConfigs(
   localConfig: LocalConfig,
@@ -716,10 +727,11 @@ async function observeMcpConfigs(
     const state = await mcpFileState([target]);
     observations.push({ file: target.file, tool: target.tool, state, holding: await holds(target, owned), owned: owned.map((r) => r.name) });
   }
-  for (const [file, group] of await recordedMcpTargets(localConfig, targets)) {
-    const holding = await recordedMcpFileEvidence(group) !== null;
+  for (const [file, { targets: group, tracked }] of await recordedMcpTargets(localConfig, targets)) {
     const state = await mcpFileState(group);
-    for (const { tool } of group) observations.push({ file, tool, state, holding, owned: [] });
+    const stillTracked = tracked && (await gitTracks(file)).kind === 'tracked';
+    const holding = !stillTracked && await recordedMcpFileEvidence(group) !== null;
+    for (const { tool } of group) observations.push({ file, tool, state, holding, owned: [], ...tracked ? { tracked: stillTracked } : {} });
   }
   return observations;
 }
@@ -827,7 +839,7 @@ export async function mcpConfigsNotProvenClean(
   // Files a pull wrote under a mapping since changed, in any worktree: nothing but the file itself can judge them.
   const recorded = new Map<string, McpTarget[]>();
   for (const [cfg, cfgTargets] of recordedBy) {
-    for (const [file, group] of await recordedMcpTargets(cfg, cfgTargets)) {
+    for (const [file, { targets: group }] of await recordedMcpTargets(cfg, cfgTargets)) {
       const key = await realFilePath(file);
       if (!targets.has(key)) recorded.set(key, group);
     }
@@ -965,9 +977,11 @@ async function protectProjectMcpConfigs(
     log.debug(`Did not read the MCP configs earlier toolPaths mappings reach: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   });
-  for (const target of earlier ?? []) {
-    const holding = await earlierMappedMcpFileEvidence(target, teamDefs, vars, ctx) !== null;
-    observations.push({ file: target.file, tool: target.tool, state: await mcpFileState([target]), holding, owned: [] });
+  for (const { tracked, ...target } of earlier ?? []) {
+    const state = await mcpFileState([target]);
+    // No line protects a file git tracks: recorded as tracked, whatever it holds, and judged once git no longer tracks it.
+    if (tracked) observations.push({ file: target.file, tool: target.tool, state, holding: false, owned: [], tracked });
+    else observations.push({ file: target.file, tool: target.tool, state, holding: await earlierMappedMcpFileEvidence(target, teamDefs, vars, ctx) !== null, owned: [] });
   }
   const holding = new Set(observations.filter((o) => o.holding).map((o) => o.file));
   const unproven = new Set(observations.filter((o) => !o.holding).map((o) => o.file));

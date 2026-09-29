@@ -529,7 +529,7 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     earlierMappedMcpTargets, earlierMappedMcpFileEvidence,
   } = await import('./mcp-reconcile.js');
   const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
-  const { gitPathOf, gitTracking } = await import('./mcp-git-exclude.js');
+  const { gitPathOf, gitTracking, gitTracks } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');
   const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
@@ -561,17 +561,19 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     const owned = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
     if (await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, desired)) await hold(target.file);
   }
-  // And a file a pull wrote under a mapping the team has since changed.
-  for (const [file, group] of await recordedMcpTargets(localConfig, targets)) {
+  // And a file a pull wrote under a mapping the team has since changed, but one recorded as tracked while git
+  // tracks it: no line protects it.
+  for (const [file, { targets: group, tracked }] of await recordedMcpTargets(localConfig, targets)) {
+    if (tracked && (await gitTracks(file)).kind === 'tracked') continue;
     if (await recordedMcpFileEvidence(group)) await hold(file);
   }
   // And, until a pull on this version reads them, those an older teamai wrote under a mapping an earlier
   // teamai.yaml made. Read-only: the record of that read is pull's. Unreadable history skips them.
   if (!(await readResolvedMcpFiles(localConfig)).earlierMappingsRead) {
     const earlier = await earlierMappedMcpTargets(localConfig, targets).catch(() => null) ?? [];
-    for (const target of earlier) {
+    for (const { tracked, ...target } of earlier) {
       vars ??= await buildVarTable(localConfig);
-      if (!holding.has(target.file) && await earlierMappedMcpFileEvidence(target, teamDefs, vars, desired)) await hold(target.file);
+      if (!tracked && !holding.has(target.file) && await earlierMappedMcpFileEvidence(target, teamDefs, vars, desired)) await hold(target.file);
     }
   }
   if (holding.size === 0) return [];
