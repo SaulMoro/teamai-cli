@@ -9,6 +9,7 @@ import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
 import type { DesiredMcpContext } from './mcp-reconcile.js';
+import type { ResolvedMcpFile } from './mcp-resolved-files.js';
 import {
   findEnvBlockFor,
   envBlockSourcesPath,
@@ -526,6 +527,7 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   const {
     resolveMcpTargets, resolvedValueEvidence, buildVarTable, buildDesiredMcpContext, recordedMcpTargets, recordedMcpFileEvidence,
   } = await import('./mcp-reconcile.js');
+  const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
   const { gitTracking } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');
@@ -536,6 +538,7 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   let manifest: ManagedMcpManifest | undefined;
   let vars: Record<string, string> | undefined;
+  let ledger: Record<string, ResolvedMcpFile> | undefined;
   let desiredContext: Promise<DesiredMcpContext> | undefined;
   const desired = (): Promise<DesiredMcpContext> => desiredContext ??= buildDesiredMcpContext(teamConfig, localConfig);
 
@@ -553,8 +556,9 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     if (holding.has(target.file) || !await pathExists(target.file)) continue;
     manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
     vars ??= await buildVarTable(localConfig);
+    ledger ??= (await readResolvedMcpFiles(localConfig)).files;
     const owned = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
-    if (await resolvedValueEvidence(target, teamDefs, owned, vars, desired)) await hold(target.file);
+    if (await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, desired)) await hold(target.file);
   }
   // And a file a pull wrote under a mapping the team has since changed.
   for (const [file, group] of await recordedMcpTargets(localConfig, targets)) {

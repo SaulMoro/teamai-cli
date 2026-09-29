@@ -1002,6 +1002,27 @@ describe('uninstall', () => {
       expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
     });
 
+    it('keeps the block, naming the server, while the config holds one that was there when a pull rebuilt the lost record', async () => {
+      const { repoPath, projectRoot, excludeFile, localConfig } = await setup();
+      await fse.outputFile(path.join(repoPath, 'mcp', 'mcp.yaml'), 'servers:\n  - name: docs\n    transport: http\n    url: https://docs.example/mcp\n');
+      const file = path.join(projectRoot, '.mcp.json');
+      await fse.writeJson(file, { mcpServers: { jira, docs: { type: 'http', url: 'https://docs.example/mcp' } } });
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: 'h' }],
+      });
+      const { trackResolvedMcpFiles, recordUnverifiedMcpServers } = await import('../mcp-resolved-files.js');
+      await trackResolvedMcpFiles(localConfig, [{ tool: 'claude', file }]);
+      expect(await recordUnverifiedMcpServers(localConfig, [{ file, names: ['jira'] }])).toBe('written');
+      const { log } = await import('../utils/logger.js');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readJson(file)).toEqual({ mcpServers: { jira } });
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
+      const warning = vi.mocked(log.warn).mock.calls.map(([message]) => String(message)).find((m) => m.includes('/.mcp.json'));
+      expect(warning).toContain('jira');
+    });
+
     describe('for a config a pull wrote under a mcpProject the team has since changed', () => {
       const oldBlock = block.replace('/.mcp.json', '/.cursor/team-mcp.json');
 

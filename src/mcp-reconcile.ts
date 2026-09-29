@@ -59,6 +59,7 @@ import {
 import { listWorktrees } from './utils/git.js';
 import {
   readResolvedMcpFiles,
+  recordUnverifiedMcpServers,
   settleResolvedMcpFiles,
   trackResolvedMcpFiles,
   type McpFileObservation,
@@ -527,21 +528,25 @@ export async function installedMcpEntries(target: McpTarget): Promise<Map<string
  * (`owned`: the records it holds for the file's tool), never by delivery: an
  * owned entry whose definition cannot be read, or has left the team's servers,
  * is unproven, and so is one still as a pull wrote it with a resolved value,
- * whatever its definition says now. A file that does not parse is judged by
- * `owned` alone. `ctx` is asked for only by a record an older teamai wrote.
+ * whatever its definition says now. So is a server `unverified` names
+ * (managed-mcp-files.json): one in the file when teamai rebuilt its lost
+ * record. A file that does not parse is judged by the ledger alone. `ctx` is
+ * asked for only by a record an older teamai wrote.
  */
 export async function resolvedValueEvidence(
   target: McpTarget,
   teamDefs: McpServerDef[] | null,
-  owned: ManagedMcpRecord[],
+  ledger: { owned: ManagedMcpRecord[]; unverified?: string[] },
   vars: Record<string, string>,
   ctx: () => Promise<DesiredMcpContext>,
 ): Promise<string | null> {
   const raw = await readFileSafe(target.file);
   if (raw === null) return null;
   const installed = await installedMcpEntries(target);
-  const records = installed ? owned.filter((record) => installed.has(record.name)) : owned;
+  const records = installed ? ledger.owned.filter((record) => installed.has(record.name)) : ledger.owned;
   const present = records.map((record) => record.name);
+  const unverified = (ledger.unverified ?? []).find((name) => !installed || installed.has(name));
+  if (unverified) return `${unverified}, which was in the file when teamai rebuilt its lost record, so teamai cannot tell whether a pull wrote it`;
   if (!teamDefs) return present.length > 0 ? `teamai's ${present.join(', ')}, and the team's MCP servers cannot be read` : null;
   const dropped = present.find((name) => !teamDefs.some((def) => def.name === name));
   if (dropped) return `teamai's ${dropped}, which has left the team's MCP servers`;
@@ -701,7 +706,7 @@ export async function mcpConfigsNotProvenClean(
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   // Keyed by real path: the protected paths come from git, which resolves symlinks (macOS /var).
-  const targets = new Map<string, { target: McpTarget; owned: ManagedMcpRecord[]; recorded: boolean; foreign: boolean }>();
+  const targets = new Map<string, { target: McpTarget; owned: ManagedMcpRecord[]; unverified: string[]; recorded: boolean; foreign: boolean }>();
   const realRoot = (root: string | undefined): Promise<string | undefined> =>
     root ? fse.realpath(root).catch(() => root) : Promise.resolve(undefined);
   const ownRoot = await realRoot(localConfig.projectRoot);
@@ -714,6 +719,7 @@ export async function mcpConfigsNotProvenClean(
     const foreign = cfg !== localConfig && await realRoot(cfg.projectRoot) !== ownRoot;
     const cfgTargets = await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true });
     recordedBy.set(cfg, cfgTargets);
+    const { files: ledger } = await readResolvedMcpFiles(cfg);
     for (const target of cfgTargets) {
       const dir = await fse.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
       const key = path.join(dir, path.basename(target.file));
@@ -725,6 +731,7 @@ export async function mcpConfigsNotProvenClean(
       targets.set(key, {
         target,
         owned: [...seen?.owned ?? [], ...owned],
+        unverified: [...seen?.unverified ?? [], ...ledger[target.file]?.unverified ?? []],
         recorded: recorded || seen?.recorded === true,
         foreign: foreign || seen?.foreign === true,
       });
@@ -760,7 +767,7 @@ export async function mcpConfigsNotProvenClean(
         continue;
       }
       const known = targets.get(file)
-        ?? (sibling && nested ? { target: { ...sibling.target, file }, owned: [], recorded: false, foreign: true, nested } : undefined);
+        ?? (sibling && nested ? { target: { ...sibling.target, file }, owned: [], unverified: [], recorded: false, foreign: true, nested } : undefined);
       const installed = known ? await installedMcpEntries(known.target) : null;
       const raw = (await readFileSafe(file)) ?? '';
       const named = known && installed && teamDefs
@@ -773,7 +780,7 @@ export async function mcpConfigsNotProvenClean(
         : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
         : !teamDefs ? 'the team\'s MCP servers cannot be read'
         : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
-        : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars, ctx).then((e) => e && `it holds ${e}`)
+        : await resolvedValueEvidence(known.target, teamDefs, known, vars, ctx).then((e) => e && `it holds ${e}`)
           ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
           ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse or has no entry for it');
       if (why) held.set(file, why);
@@ -857,8 +864,9 @@ async function protectProjectMcpConfigs(
   // Tried before its write this run, and reported there.
   const targets = (await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }))
     .filter((target) => exclusions.get(target.file)?.kind !== 'failed');
-  const observations = await observeMcpConfigs(localConfig, targets, manifest,
-    async (target, owned) => await resolvedValueEvidence(target, teamDefs, owned, vars, ctx) !== null);
+  const { files: ledger } = await readResolvedMcpFiles(localConfig);
+  const observations = await observeMcpConfigs(localConfig, targets, manifest, async (target, owned) =>
+    await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, ctx) !== null);
   const holding = new Set(observations.filter((o) => o.holding).map((o) => o.file));
   const unproven = new Set(observations.filter((o) => !o.holding).map((o) => o.file));
   // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
@@ -1004,6 +1012,9 @@ async function reconcileTargets(
   if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
+  // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
+  const listed = projectScope && !options.dryRun ? new Set(Object.keys((await readResolvedMcpFiles(localConfig)).files)) : new Set<string>();
+  const rebuilt: Array<{ target: McpTarget; recorded: string[] }> = [];
 
   for (const target of targets) {
     // Same enabledAgents / disabledAgents gate as the other resource syncs. The
@@ -1046,6 +1057,9 @@ async function reconcileTargets(
     // Whether each entry holds a resolved value: once its definition stops
     // needing one, what this pull wrote still does (#882).
     if (target.projectScope) for (const record of nextRecords) record.resolved ??= carriesResolvedValue(target, teamDefs, [record.name]);
+    if (listed.has(target.file) && manifest[manifestKey] === undefined && nextRecords.length > 0) {
+      rebuilt.push({ target, recorded: nextRecords.map((record) => record.name) });
+    }
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
     if (nextRecords.length > 0 || (target.projectScope && manifest[manifestKey] !== undefined)) manifest[manifestKey] = nextRecords;
@@ -1053,9 +1067,36 @@ async function reconcileTargets(
   }
 
   if (!options.dryRun && wrote) {
+    // Before the manifest: once it is written, nothing says the record was rebuilt.
+    await noteUnverifiedMcpServers(localConfig, rebuilt);
     await writeJsonAtomic(manifestPath, manifest);
   }
   return { changes, wrote };
+}
+
+/**
+ * Note, for each file whose lost record this run rebuilt, the servers in it
+ * the new record does not claim: a stale entry teamai wrote looks like the
+ * member's own once its value is no longer set (#882). A failure does not
+ * stop the manifest write, which the next pull needs to own what this one wrote.
+ */
+async function noteUnverifiedMcpServers(localConfig: LocalConfig, rebuilt: Array<{ target: McpTarget; recorded: string[] }>): Promise<void> {
+  if (rebuilt.length === 0) return;
+  const found: Array<{ file: string; names: string[] }> = [];
+  for (const { target, recorded } of rebuilt) {
+    const installed = await installedMcpEntries(target);
+    found.push({ file: target.file, names: [...installed?.keys() ?? []].filter((name) => !recorded.includes(name)) });
+  }
+  const result = await recordUnverifiedMcpServers(localConfig, found).catch((e: unknown) => e instanceof Error ? e.message : String(e));
+  if (result === 'written' || result === 'unchanged') return;
+  const files = found.filter((f) => f.names.length > 0).map((f) => f.file);
+  if (files.length === 0) return;
+  log.warn(
+    `Could not note the MCP servers teamai found in ${files.join(', ')} while rebuilding its lost record of them: `
+    + `${result === 'locked' ? 'another teamai command held managed-mcp-files.json past the wait' : result}. `
+    + 'A later pull may take the file out of .git/info/exclude while a server an earlier pull wrote there is still in it: '
+    + 'remove the servers you did not add yourself, and do not commit the file meanwhile.',
+  );
 }
 
 /**

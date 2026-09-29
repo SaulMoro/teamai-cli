@@ -1241,6 +1241,22 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      it('and every pull after the one that rewrote the manifest it had lost', async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+        await writeMcpYaml(open);
+        vi.stubEnv('SECRET_TOKEN', '');
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
       describe.each([
         ['empty', ''],
         ['truncated', '{ "claude:project": [ { "name": "with-sec'],
@@ -1272,6 +1288,53 @@ servers:
           expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
           expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
         });
+
+        it('and a later pull runs after one rebuilt the record for another server', async () => {
+          await writeMcpYaml(open);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+          expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        });
+
+        it('and `teamai mcp remove` runs after a pull rebuilt the record for another server', async () => {
+          await writeMcpYaml(open);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+          await reconcileMcpForConfig(teamConfig, claudeOnly(), { removeAll: true });
+          await releaseCleanMcpGitExcludes(teamConfig, claudeOnly());
+
+          expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        });
+
+        it('until the member takes that server out of the config', async () => {
+          await writeMcpYaml(open);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          const doc = await fse.readJson(mcpJson()) as { mcpServers: Record<string, unknown> };
+          delete doc.mcpServers['with-secret'];
+          await fse.writeJson(mcpJson(), doc);
+
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+          expect(await excludeOf(projectRoot)).not.toContain('teamai');
+        });
+      });
+
+      it('when a server of the member\'s own was in the config before teamai first wrote to it', async () => {
+        await fse.writeJson(mcpJson(), { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        await writeMcpYaml(open);
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(await fse.readJson(mcpJson())).toEqual({
+          mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' }, open: expect.anything() },
+        });
+        expect(await excludeOf(projectRoot)).not.toContain('teamai');
       });
 
       it('when `teamai mcp remove` takes teamai\'s servers out of a config that also holds the member\'s own', async () => {
