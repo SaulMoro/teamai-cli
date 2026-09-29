@@ -2451,6 +2451,74 @@ servers:
           expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/\.cursor\/mcp\.json/);
         });
 
+        it('keeps the line of a config holding a stale entry on the pulls after one that could not note it, and notes it once it can', async () => {
+          const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+          await writeMcpYaml(open);
+          const lock = `${await sidecarFile()}.teamai-lock`;
+          await fse.ensureDir(path.dirname(lock));
+          expect(await acquireLock(lock)).toBe(true);
+          try {
+            await reconcileMcpForConfig(teamConfig, projectConfig);
+          } finally {
+            await releaseLock(lock);
+          }
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(await fse.readFile(cursorJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+          expect((await readResolvedMcpFiles(projectConfig)).files[cursorJson()]?.unverified).toEqual(['with-secret']);
+          const doc = await fse.readJson(cursorJson()) as { mcpServers: Record<string, unknown> };
+          delete doc.mcpServers['with-secret'];
+          await fse.writeJson(cursorJson(), doc);
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          expect(await excludeOf(projectRoot)).not.toMatch(/\.cursor\/mcp\.json/);
+        }, 30_000);
+
+        it('keeps that line through a pull that rewrites the record while the note still cannot land', async () => {
+          const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+          await writeMcpYaml(open);
+          const lock = `${await sidecarFile()}.teamai-lock`;
+          await fse.ensureDir(path.dirname(lock));
+          expect(await acquireLock(lock)).toBe(true);
+          try {
+            await reconcileMcpForConfig(teamConfig, projectConfig);
+            await writeMcpYaml(`${open}  - name: more\n    transport: http\n    url: https://example.com/more\n`);
+            await reconcileMcpForConfig(teamConfig, projectConfig);
+          } finally {
+            await releaseLock(lock);
+          }
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(await fse.readFile(cursorJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+          expect((await readResolvedMcpFiles(projectConfig)).files[cursorJson()]?.unverified).toEqual(['with-secret']);
+        }, 30_000);
+
+        it('keeps that line through a pull that empties the record while the note still cannot land', async () => {
+          await writeMcpYaml(open);
+          const lock = `${await sidecarFile()}.teamai-lock`;
+          await fse.ensureDir(path.dirname(lock));
+          expect(await acquireLock(lock)).toBe(true);
+          try {
+            await reconcileMcpForConfig(teamConfig, projectConfig);
+            await writeMcpYaml(`${open}    tools: [claude]\n`);
+            await reconcileMcpForConfig(teamConfig, projectConfig);
+          } finally {
+            await releaseLock(lock);
+          }
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(await fse.readFile(cursorJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+        }, 30_000);
+
         // The cost: a first pull in a new worktree cannot tell a member's own server from a stale one of teamai's.
         it('lists a config holding only a server of the member\'s own at the first pull in a worktree, until it leaves', async () => {
           await fse.writeJson(cursorJson(), { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
