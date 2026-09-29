@@ -463,7 +463,7 @@ export class RulesHandler extends ResourceHandler {
     // OpenCode glob deactivation above still runs, so the (now unmanaged) rules
     // stop being auto-loaded.
     if (rules.length === 0) {
-      await this.reclaimUnselectedTeamRules(teamConfig, localConfig);
+      await this.reclaimUnselectedTeamRules(teamConfig, localConfig, ledger);
       return;
     }
 
@@ -678,6 +678,7 @@ export class RulesHandler extends ResourceHandler {
   private async reclaimUnselectedTeamRules(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
+    ledger: DeliveryLedger | undefined,
   ): Promise<void> {
     const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
     if (teamRules.length === 0) return;
@@ -691,6 +692,7 @@ export class RulesHandler extends ResourceHandler {
         if (supersedes) continue;
         if (!await isDeliveredRender(tool, dest, item, localConfig.repo.localPath, deliveredRevs)) continue;
         await remove(dest);
+        if (ledger) forgetDelivered(ledger.hashes, dest);
         touchedDirs.add(path.join(resolveToolBaseDir(tool, localConfig), scopedToolPaths(teamConfig, localConfig)[tool].rules!));
         log.debug(`Removed unselected team rule ${item.name} from ${tool}`);
       }
