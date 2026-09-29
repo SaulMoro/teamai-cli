@@ -398,8 +398,8 @@ stays in the checkout's `.teamai/`.
   it back FROM the partition (`selfHealAndReadPartition`). A pre-P2 install whose
   config still sits in `<repo>/.teamai` is read via the legacy branch (double-read
   compat) until migration relocates it. A `--dry-run` detection (a command that
-  forwards `--dry-run` to its loader, or a read-only one such as `status`, `list`
-  or a `* list` subcommand, which loads this way unconditionally) previews the bootstrap
+  forwards `--dry-run` to its loader, or a read-only one such as `status`, `list`,
+  `doctor` or `mcp list`, which loads this way unconditionally) previews the bootstrap
   instead (`previewSelfBootstrap`): it builds the config it would write, keeps it
   in memory, and prints `[dry-run] Would bootstrap ...` without locking, writing,
   injecting hooks or registering the member. It makes no provider auth call
