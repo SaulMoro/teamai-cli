@@ -760,12 +760,17 @@ async function releaseMcpGitExcludes(
     before,
   );
   for (const [excludeFile, entries] of excludes) {
-    const clean = entries
-      .filter((entry) => entry.files.every((file) => !held.has(file) || exempt.has(file)))
-      .map((entry) => entry.pattern);
+    const cleanEntries = entries.filter((entry) => entry.files.every((file) => !held.has(file) || exempt.has(file)));
+    const clean = cleanEntries.map((entry) => entry.pattern);
     if (clean.length === 0) continue;
     const result = await removeMcpGitExclude(excludeFile, clean);
-    if (result === 'written') log.info(`Removed ${clean.join(', ')} from ${excludeFile}: no MCP config there holds a value teamai resolved.`);
+    if (result === 'written') {
+      // A line this run added and took back out is no change the member saw.
+      const rolledBack = cleanEntries.filter((entry) => entry.files.some((file) => exempt.has(file))).map((entry) => entry.pattern);
+      const released = clean.filter((pattern) => !rolledBack.includes(pattern));
+      if (released.length > 0) log.info(`Removed ${released.join(', ')} from ${excludeFile}: no MCP config there holds a value teamai resolved.`);
+      if (rolledBack.length > 0) log.debug(`Took ${rolledBack.join(', ')} back out of ${excludeFile}: this run wrote no resolved value there.`);
+    }
     // Left as it is: the next pull tries again.
     if (result === 'locked') log.debug(`Kept ${clean.join(', ')} in ${excludeFile}: another teamai command held it past the wait.`);
   }

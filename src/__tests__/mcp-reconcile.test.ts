@@ -1050,6 +1050,11 @@ servers:
       const claudeOnly = (): LocalConfig => ({ ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
       const open = 'servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n';
 
+      beforeEach(() => {
+        vi.mocked(log.info).mockClear();
+        vi.mocked(log.debug).mockClear();
+      });
+
       afterEach(() => {
         beforeJsonWrite.run = null;
       });
@@ -1067,6 +1072,9 @@ servers:
 
         expect(await fse.readFile(mcpJson(), 'utf-8')).not.toContain('super-secret-value');
         expect(await excludeOf(projectRoot)).not.toContain('teamai');
+        // The member never saw the line go in, so its rollback is not news.
+        expect(vi.mocked(log.info).mock.calls.flat().join('\n')).not.toMatch(/Removed/);
+        expect(vi.mocked(log.debug).mock.calls.flat().join('\n')).toMatch(/\/\.mcp\.json/);
       });
 
       it('but one an earlier pull listed stays while the config cannot be proven clean', async () => {
@@ -1108,6 +1116,7 @@ servers:
         expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('https://example.com/open');
         expect(await excludeOf(projectRoot)).not.toContain('teamai');
         expect(await excludeOf(projectRoot)).toMatch(/^mine\/$/m);
+        expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/^Removed \/\.mcp\.json from /));
       });
 
       it('when `teamai mcp remove` takes teamai\'s servers out', async () => {
