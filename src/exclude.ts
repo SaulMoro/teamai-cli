@@ -9,7 +9,7 @@ import {
 import { log } from './utils/logger.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 
-async function resolveExcludeScope(options: { dryRun?: boolean } = {}): Promise<LocalConfig> {
+async function resolveExcludeScope(options: GlobalOptions = {}): Promise<LocalConfig> {
   const projectConfig = await detectProjectConfig(undefined, undefined, options);
   return projectConfig ?? (await requireInit(options)).localConfig;
 }

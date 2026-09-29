@@ -147,8 +147,8 @@ export async function loadWebhookConfig(localConfig?: LocalConfig): Promise<Webh
  * List all configured webhook endpoints.
  */
 export async function listWebhooks(): Promise<WebhookEndpoint[]> {
-  const config = await loadWebhookConfig();
-  return config.endpoints;
+  // Read-only: the load never persists a migration (#893).
+  return getWebhookSharing((await autoDetectInit(undefined, { dryRun: true })).teamConfig).endpoints;
 }
 
 /**
