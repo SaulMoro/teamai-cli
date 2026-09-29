@@ -1034,6 +1034,69 @@ servers:
 
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
+
+      describe('when its server\'s ${VAR} has since become a literal and the variable is gone', () => {
+        beforeEach(async () => {
+          await writeMcpYaml(withSecret.replace('${SECRET_TOKEN}', 'published-literal'));
+          vi.stubEnv('SECRET_TOKEN', '');
+        });
+
+        it('and its tool is disabled', async () => {
+          await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+          expect(await fse.readFile(path.join(projectRoot, '.cursor', 'mcp.json'), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+          // Claude's copy now holds the literal: nothing resolved is left there.
+          expect(await excludeOf(projectRoot)).not.toMatch(/^\/\.mcp\.json$/m);
+        });
+
+        it('and the team turned automatic MCP delivery off', async () => {
+          const manual = { ...teamConfig, sharing: { ...teamConfig.sharing, mcp: { autoApply: false } } } as TeamaiConfig;
+
+          await reconcileMcpForConfig(manual, projectConfig);
+
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        });
+
+        it('and its tool is disabled, recorded by an older teamai that did not note resolved values', async () => {
+          const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+          const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+          const manifest = await fse.readJson(manifestFile) as Record<string, Array<Record<string, unknown>>>;
+          await fse.writeJson(manifestFile, Object.fromEntries(Object.entries(manifest).map(([key, records]) =>
+            [key, records.map(({ name, hash }) => ({ name, hash }))])));
+
+          await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+        });
+      });
+    });
+
+    it('adds nothing for a disabled tool\'s config whose server never held a resolved value, after its definition changed', async () => {
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/v2\n');
+
+      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(path.join(projectRoot, '.cursor', 'mcp.json'), 'utf-8')).toContain('https://example.com/open');
+      expect(await excludeOf(projectRoot)).not.toContain('teamai');
+    });
+
+    it('keeps listing a Codex project config after its server\'s ${VAR} became a literal and Codex was disabled', async () => {
+      const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
+      await writeMcpYaml(`${withSecret}    tools: [codex]\n`);
+      await reconcileMcpForConfig(withCodex, projectConfig);
+      expect(await fse.readFile(path.join(projectRoot, '.codex', 'config.toml'), 'utf-8')).toContain('super-secret-value');
+      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+      await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'published-literal')}    tools: [codex]\n`);
+      vi.stubEnv('SECRET_TOKEN', '');
+
+      await reconcileMcpForConfig(withCodex, { ...projectConfig, disabledAgents: ['codex'] } as LocalConfig);
+
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
     });
 
     it('lists the config in .git/info/exclude before writing the value into it', async () => {

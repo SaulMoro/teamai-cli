@@ -517,27 +517,49 @@ export async function installedMcpEntries(target: McpTarget): Promise<Map<string
 /**
  * Why `target`'s file may hold a value teamai resolved (#882), or null when it
  * is missing or proven not to. Judged by what is on disk and in the manifest
- * (`owned`: the names it records for the file's tool), never by delivery: an
+ * (`owned`: the records it holds for the file's tool), never by delivery: an
  * owned entry whose definition cannot be read, or has left the team's servers,
- * is unproven. A file that does not parse is judged by `owned` alone.
+ * is unproven, and so is one still as a pull wrote it with a resolved value,
+ * whatever its definition says now. A file that does not parse is judged by
+ * `owned` alone. `ctx` is asked for only by a record an older teamai wrote.
  */
 export async function resolvedValueEvidence(
   target: McpTarget,
   teamDefs: McpServerDef[] | null,
-  owned: string[],
+  owned: ManagedMcpRecord[],
   vars: Record<string, string>,
+  ctx: () => Promise<DesiredMcpContext>,
 ): Promise<string | null> {
   const raw = await readFileSafe(target.file);
   if (raw === null) return null;
   const installed = await installedMcpEntries(target);
-  const present = installed ? owned.filter((name) => installed.has(name)) : owned;
+  const records = installed ? owned.filter((record) => installed.has(record.name)) : owned;
+  const present = records.map((record) => record.name);
   if (!teamDefs) return present.length > 0 ? `teamai's ${present.join(', ')}, and the team's MCP servers cannot be read` : null;
   const dropped = present.find((name) => !teamDefs.some((def) => def.name === name));
   if (dropped) return `teamai's ${dropped}, which has left the team's MCP servers`;
   const needing = present.find((name) => carriesResolvedValue(target, teamDefs, [name]));
   if (needing) return `teamai's ${needing}, which needs a resolved \${VAR}`;
+  // An entry as a pull wrote it holds what that pull resolved, whatever its definition says now.
+  let desired: Map<string, DesiredMcpEntry> | undefined;
+  for (const record of installed ? records : []) {
+    if (entryHash(installed?.get(record.name)) !== record.hash) continue;
+    if (record.resolved === true) return `teamai's ${record.name}, as a pull wrote it with a resolved \${VAR}`;
+    if (record.resolved !== undefined) continue;
+    // An older teamai did not note it: stale, unless today's definition writes the same entry.
+    desired ??= desiredMcpForTarget(target, teamDefs, await ctx()).desired;
+    if (desired.get(record.name)?.hash !== record.hash) {
+      return `teamai's ${record.name}, which an earlier pull wrote and its current definition no longer produces`;
+    }
+  }
   const variable = resolvedVariableIn(target, teamDefs, vars, raw);
   return variable ? `the value of $${variable}` : null;
+}
+
+/** `load`, run once, on the first call. */
+function once<T>(load: () => Promise<T>): () => Promise<T> {
+  let value: Promise<T> | undefined;
+  return () => value ??= load();
 }
 
 /**
@@ -590,7 +612,7 @@ export async function mcpConfigsNotProvenClean(
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   // Keyed by real path: the protected paths come from git, which resolves symlinks (macOS /var).
-  const targets = new Map<string, { target: McpTarget; owned: string[]; recorded: boolean; foreign: boolean }>();
+  const targets = new Map<string, { target: McpTarget; owned: ManagedMcpRecord[]; recorded: boolean; foreign: boolean }>();
   const realRoot = (root: string | undefined): Promise<string | undefined> =>
     root ? fse.realpath(root).catch(() => root) : Promise.resolve(undefined);
   const ownRoot = await realRoot(localConfig.projectRoot);
@@ -605,7 +627,7 @@ export async function mcpConfigsNotProvenClean(
       const key = path.join(dir, path.basename(target.file));
       const records = manifest[managedMcpManifestKey(target.tool, true)];
       const recorded = Array.isArray(records);
-      const owned = recorded ? records.map((record) => record.name) : [];
+      const owned = recorded ? records : [];
       // One file reached twice (two tools share it, or a checkout through a symlink) merges what each says.
       const seen = targets.get(key);
       targets.set(key, {
@@ -619,6 +641,7 @@ export async function mcpConfigsNotProvenClean(
   // Short values, paths and the login name turn up in ordinary configs, so they prove nothing.
   const identity = new Set(['USER', 'LOGNAME', 'USERNAME']);
   const vars = await buildVarTable(localConfig);
+  const ctx = once(() => buildDesiredMcpContext(teamConfig, localConfig));
   const values = Object.entries(vars)
     .filter(([name, value]) => value.length >= 8 && !identity.has(name) && !/^([/~]|[A-Za-z]:[\\/])/.test(value));
   const held = new Map<string, string>();
@@ -636,7 +659,7 @@ export async function mcpConfigsNotProvenClean(
       : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
       : !teamDefs ? 'the team\'s MCP servers cannot be read'
       : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
-      : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars).then((e) => e && `it holds ${e}`)
+      : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars, ctx).then((e) => e && `it holds ${e}`)
         ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
         ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse or has no entry for it');
     if (why) held.set(file, why);
@@ -715,13 +738,14 @@ async function protectProjectMcpConfigs(
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
   const vars = await buildVarTable(localConfig);
+  const ctx = once(() => buildDesiredMcpContext(teamConfig, localConfig));
   const holding = new Set<string>();
   const unproven = new Set<string>();
   for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) {
     // Tried before its write this run, and reported there.
     if (exclusions.get(target.file)?.kind === 'failed') continue;
-    const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
-    if (await resolvedValueEvidence(target, teamDefs, owned, vars)) holding.add(target.file);
+    const owned = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
+    if (await resolvedValueEvidence(target, teamDefs, owned, vars, ctx)) holding.add(target.file);
     else unproven.add(target.file);
   }
   // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
@@ -898,6 +922,9 @@ async function reconcileTargets(
     if (wroteTarget) written.add(target.file);
     wrote = wroteTarget || wrote;
 
+    // Whether each entry holds a resolved value: once its definition stops
+    // needing one, what this pull wrote still does (#882).
+    if (target.projectScope) for (const record of nextRecords) record.resolved ??= carriesResolvedValue(target, teamDefs, [record.name]);
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
     if (nextRecords.length > 0 || (target.projectScope && manifest[manifestKey] !== undefined)) manifest[manifestKey] = nextRecords;
