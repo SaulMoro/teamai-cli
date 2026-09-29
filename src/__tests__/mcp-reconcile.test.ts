@@ -1738,6 +1738,41 @@ servers:
       expect((await fse.stat(resolvedMcpFilesPath(projectConfig) ?? '')).mode & 0o777).toBe(0o600);
     });
 
+    describe('forgets a config it recorded before a write that did not happen', () => {
+      const custom = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } };
+      const customFile = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');
+      const mine = { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } };
+
+      afterEach(async () => {
+        await fse.chmod(path.join(projectRoot, '.cursor'), 0o755);
+      });
+
+      // Root writes into a read-only directory.
+      it.skipIf(process.getuid?.() === 0).each([
+        ['its write fails', async () => {
+          await fse.writeJson(customFile(), mine);
+          await fse.chmod(path.join(projectRoot, '.cursor'), 0o555);
+          await expect(reconcileMcpForConfig({ ...teamConfig, toolPaths: custom } as TeamaiConfig, projectConfig)).rejects.toThrow();
+          await fse.chmod(path.join(projectRoot, '.cursor'), 0o755);
+        }],
+        ['it does not parse', async () => {
+          await fse.writeFile(customFile(), '{ "mcpServers": ');
+          await reconcileMcpForConfig({ ...teamConfig, toolPaths: custom } as TeamaiConfig, projectConfig);
+          await fse.writeJson(customFile(), mine);
+        }],
+      ])('so a config of the member\'s own there is not kept listed once the mapping changes, when %s', async (_label, arrange) => {
+        await writeMcpYaml(withSecret);
+        await arrange();
+        expect(await fse.readJson(customFile())).toEqual(mine);
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        expect(Object.keys((await readResolvedMcpFiles(projectConfig)).files)).not.toContain(customFile());
+      });
+    });
+
     describe('without a usable managed-mcp-files.json, as before it existed', () => {
       const mcpJson = (): string => path.join(projectRoot, '.mcp.json');
       const claudeOnly = (): LocalConfig => ({ ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);

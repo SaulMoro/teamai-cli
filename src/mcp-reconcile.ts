@@ -63,6 +63,7 @@ import {
   recordUnverifiedMcpServers,
   settleResolvedMcpFiles,
   trackResolvedMcpFiles,
+  untrackResolvedMcpFiles,
   type McpFileObservation,
 } from './mcp-resolved-files.js';
 
@@ -871,12 +872,17 @@ export async function reconcileMcpForConfig(
   const exclusions = new Map<string, GitExclusion>();
   // The project configs this run wrote: a line it added for one stays, whatever fails after.
   const written = new Set<string>();
+  // The project configs managed-mcp-files.json first recorded this run, before their write.
+  const recorded: McpTarget[] = [];
   const protect = !options.removeAll && !options.dryRun;
   // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
   const before = protect && localConfig.projectRoot ? await readProjectMcpManifest(localConfig, localConfig.projectRoot) : undefined;
   try {
-    return await reconcileTargets(teamConfig, localConfig, options, exclusions, written);
+    return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded);
   } finally {
+    // A record this run added for a file it then did not write goes, as its exclude line does. The settle
+    // below records the file again if it holds a resolved value all the same (an earlier pull wrote it).
+    await forgetUnwrittenMcpConfigs(localConfig, recorded.filter((target) => !written.has(target.file)));
     // Also after a failed write: what earlier pulls wrote is on disk either way.
     if (protect) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions, written, before);
   }
@@ -1029,6 +1035,7 @@ async function reconcileTargets(
   options: McpReconcileOptions,
   exclusions: Map<string, GitExclusion>,
   written: Set<string>,
+  recorded: McpTarget[],
 ): Promise<McpReconcileResult> {
   const changes: McpChange[] = [];
   let wrote = false;
@@ -1115,7 +1122,10 @@ async function reconcileTargets(
         continue;
       }
       // Recorded before the write, so a later change to toolPaths still finds the file.
-      if (!options.dryRun) await recordResolvedMcpFile(localConfig, target);
+      if (!options.dryRun) {
+        await recordResolvedMcpFile(localConfig, target);
+        if (!listed.has(target.file)) recorded.push(target);
+      }
     }
 
     const wroteTarget = target.format === 'codex'
@@ -1189,6 +1199,18 @@ async function recordResolvedMcpFile(localConfig: LocalConfig, target: McpTarget
   const result = await trackResolvedMcpFiles(localConfig, [target]).catch((e: unknown) => e instanceof Error ? e.message : String(e));
   if (result !== 'written' && result !== 'unchanged') {
     log.debug(`Did not record ${target.file} in managed-mcp-files.json: ${result === 'locked' ? 'another teamai command held it past the wait' : result}. The next pull records it.`);
+  }
+}
+
+/**
+ * `untrackResolvedMcpFiles`. A failure leaves the record, and the file its
+ * line while it holds a server once no mapping reaches it.
+ */
+async function forgetUnwrittenMcpConfigs(localConfig: LocalConfig, targets: McpTarget[]): Promise<void> {
+  if (targets.length === 0) return;
+  const result = await untrackResolvedMcpFiles(localConfig, targets).catch((e: unknown) => e instanceof Error ? e.message : String(e));
+  if (result !== 'written' && result !== 'unchanged') {
+    log.debug(`Did not take ${targets.map((t) => t.file).join(', ')} back out of managed-mcp-files.json: ${result === 'locked' ? 'another teamai command held it past the wait' : result}.`);
   }
 }
 

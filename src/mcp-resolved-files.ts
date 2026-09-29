@@ -115,6 +115,22 @@ export function trackResolvedMcpFiles(cfg: LocalConfig, targets: Array<{ tool: s
   });
 }
 
+/** Take back what `trackResolvedMcpFiles` recorded for a file it was not written to after all. */
+export function untrackResolvedMcpFiles(cfg: LocalConfig, targets: Array<{ tool: string; file: string }>): Promise<ExcludeUpdate> {
+  return updateResolvedMcpFiles(cfg, (files) => {
+    let changed = false;
+    for (const { tool, file } of targets) {
+      const entry = files[file];
+      if (!entry?.tools.includes(tool)) continue;
+      const tools = entry.tools.filter((t) => t !== tool);
+      if (tools.length > 0) files[file] = { ...entry, tools };
+      else delete files[file];
+      changed = true;
+    }
+    return changed;
+  });
+}
+
 /**
  * Note `names`, servers found in a file whose lost record teamai rebuilt, as
  * possibly teamai's: only for a file already recorded as holding a resolved value.

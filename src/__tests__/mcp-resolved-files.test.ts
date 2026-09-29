@@ -13,6 +13,7 @@ import {
   resolvedMcpFilesPath,
   settleResolvedMcpFiles,
   trackResolvedMcpFiles,
+  untrackResolvedMcpFiles,
 } from '../mcp-resolved-files.js';
 import { acquireLock, releaseLock } from '../update.js';
 import type { LocalConfig } from '../types.js';
@@ -123,6 +124,15 @@ describe('managed-mcp-files.json', () => {
     await recordUnverifiedMcpServers(cfg, [{ file: cursor(), names: ['jira'] }, { file: custom(), names: ['mine'] }]);
 
     expect((await readResolvedMcpFiles(cfg)).files).toEqual({ [cursor()]: { tools: ['cursor'], unverified: ['jira'] } });
+  });
+
+  it('takes back only the tool a record was added for, and the file with its last tool', async () => {
+    await trackResolvedMcpFiles(cfg, [{ tool: 'claude', file: custom() }, { tool: 'codebuddy', file: custom() }, { tool: 'cursor', file: cursor() }]);
+
+    expect(await untrackResolvedMcpFiles(cfg, [{ tool: 'codebuddy', file: custom() }, { tool: 'cursor', file: cursor() }])).toBe('written');
+
+    expect((await readResolvedMcpFiles(cfg)).files).toEqual({ [custom()]: { tools: ['claude'] } });
+    expect(await untrackResolvedMcpFiles(cfg, [{ tool: 'cursor', file: cursor() }])).toBe('unchanged');
   });
 
   it('writes nothing to note when a file lists no servers', async () => {
