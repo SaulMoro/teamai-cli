@@ -1072,6 +1072,39 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
     });
 
+    // No pull writes an HTTP team's servers, but one lists what an older local agent's install_mcp left unlisted.
+    describe('for an HTTP-backed team, a config an older local agent wrote a credential into', () => {
+      let httpConfig: LocalConfig;
+      const file = (): string => path.join(projectRoot, '.mcp.json');
+      const written = { mcpServers: { clawpro: { type: 'http', url: 'https://clawpro.example.com/mcp', headers: { Authorization: 'Bearer bmcp-old-token' } } } };
+
+      beforeEach(async () => {
+        httpConfig = { ...projectConfig, repo: { ...projectConfig.repo, kind: 'http', url: 'https://teamai.example' } } as LocalConfig;
+        await fse.writeJson(file(), written);
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        // Without the `resolved` note an install on this version adds.
+        await fse.outputJson(managedMcpManifestPath(getDataHome(httpConfig), projectRoot), { 'claude:project': [{ name: 'clawpro', hash: 'h' }] });
+      });
+
+      it('lists it in .git/info/exclude on a pull, and records it in managed-mcp-files.json', async () => {
+        await reconcileMcpForConfig(teamConfig, httpConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toBe('');
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        expect((await readResolvedMcpFiles(httpConfig)).files).toEqual({ [file()]: { tools: ['claude'] } });
+        expect(await fse.readJson(file())).toEqual(written);
+      });
+
+      it('writes nothing on a dry run', async () => {
+        await reconcileMcpForConfig(teamConfig, httpConfig, { dryRun: true });
+
+        expect(await excludeOf(projectRoot)).not.toMatch(/\.mcp\.json/);
+        const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+        expect(await fse.pathExists(resolvedMcpFilesPath(httpConfig) ?? '')).toBe(false);
+      });
+    });
+
     describe('a bare Copilot config another tool then writes mcpServers into (Copilot and Claude on .mcp.json)', () => {
       const shared = (): TeamaiConfig => ({
         ...teamConfig,

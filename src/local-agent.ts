@@ -3214,6 +3214,8 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
 
   const tag = localAgentTag(context);
   log.debug(`${tag} run: endpoint=${config.endpoint}`);
+  // Set when the server asked to uninstall teamai: its cleanup is not undone afterwards.
+  let uninstalling = false;
 
   // Report-side bookkeeping (plugin reconcile + binding prune + tool stamp) is
   // tied to the report path and must stay skipped inside the CloudStudio sandbox,
@@ -3270,6 +3272,7 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     const commands = cmds && cmds.length > 0 ? cmds : (syncResponse.commands ?? []);
     if (commands.length > 0) {
       log.debug(`${tag} sync returned ${commands.length} command(s): ${commands.map((c) => `${c.type}#${c.id}`).join(', ')}`);
+      uninstalling = commands.some((c) => c.type === 'uninstall_teamai');
       const modelConfigApplied = await processCommands(config, commands, context);
       if (modelConfigApplied && !skipReport) {
         const reportPayload = await buildReportPayload(config, context);
@@ -3286,8 +3289,34 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     log.error(`${tag} sync FAILED: ${error}`);
     await appendErrorLog({ error, context });
   }
+  // Also when the sync failed: what an install wrote is on disk either way.
+  if (!uninstalling) await protectWorkspaceMcpConfigs(config, context.cwd);
 
   return true;
+}
+
+/**
+ * List in `.git/info/exclude` each MCP config of the current workspace that
+ * may hold a credential an install wrote (#882). An older local agent wrote
+ * one without listing it, and the server sends no install again for a server
+ * already in place. The workspace and its files resolve as `install_mcp`
+ * resolves them.
+ */
+async function protectWorkspaceMcpConfigs(config: LocalAgentConfig, cwd?: string): Promise<void> {
+  const workspacePath = await resolveWorkspacePath(cwd);
+  if (!workspacePath) return;
+  try {
+    const { resolveDataHomeForScope } = await import('./config.js');
+    const dataHome = await resolveDataHomeForScope('project', workspacePath);
+    const localConfig = await createResourceLocalConfig(config, 'project', getUserHome(), workspacePath);
+    const { protectLocalAgentMcpConfigs } = await import('./mcp-reconcile.js');
+    await protectLocalAgentMcpConfigs(createLocalAgentTeamConfig(config.endpoint), { ...localConfig, dataHome });
+  } catch (e) {
+    log.warn(
+      `Could not check ${workspacePath}'s MCP configs for a credential to keep out of git: ${e instanceof Error ? e.message : String(e)}. `
+      + 'The next session checks again; do not commit them meanwhile.',
+    );
+  }
 }
 
 function statusFromEvent(event?: DashboardEvent): string {

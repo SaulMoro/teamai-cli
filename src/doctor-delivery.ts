@@ -561,7 +561,7 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   if (!teamConfig || localConfig.scope !== 'project' || !projectRoot) return [];
 
   const {
-    resolveMcpTargets, resolvedValueEvidence, buildVarTable, buildDesiredMcpContext, recordedMcpTargets, recordedMcpFileEvidence, installedMcpEntries,
+    resolveMcpTargets, resolvedValueEvidence, buildVarTable, buildDesiredMcpContext, recordedMcpTargets, recordedMcpFileEvidence, localAgentCredentialFiles,
     earlierMappedMcpTargets, earlierMappedMcpFileEvidence, ownedByMappers, unrecordedMcpTool, unmappedMcpDefaults, unrecordedUnmappedMcpDefaults, unclaimedMcpServers,
   } = await import('./mcp-reconcile.js');
   const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
@@ -600,30 +600,9 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     fix: `${tracked.join(', ')} may hold ${held}, and git would commit them or cannot say. ${next}`,
   }];
   if (localConfig.repo.kind === 'http') {
-    // No mcp.yaml to judge by: a server its install recorded as carrying a credential, or an older install's
-    // entry carrying one (a header, env value, argument or URL). Also in a file recorded under a mapping another
-    // teamai.yaml made. With no record of the tool at all, a file managed-mcp-files.json lists holds while it
-    // holds any server, or doesn't parse: nothing says which of them the local agent wrote.
-    const { carriesLocalAgentCredential } = await import('./mcp-git-exclude.js');
-    manifest = (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
-    ledger = (await readResolvedMcpFiles(localConfig)).files;
-    const recorded = [...(await recordedMcpTargets(localConfig, targets)).values()].flatMap((file) => file.targets);
-    for (const target of [...targets, ...recorded]) {
-      if (holding.has(target.file) || !await pathExists(target.file)) continue;
-      const installed = await installedMcpEntries(target);
-      const records = manifest[managedMcpManifestKey(target.tool, true)];
-      if (records === undefined && ledger[target.file] !== undefined && (installed === null || installed.size > 0)) {
-        await hold(target.file);
-        continue;
-      }
-      const recordedNames = new Set((records ?? []).map((record) => record.name));
-      const credential = (records ?? []).some((record) => installed === null
-        ? record.resolved !== false
-        : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))))
-        // One whose record was lost while another server's remains: judged by the entry itself.
-        || (records !== undefined && installed !== null && [...installed]
-          .some(([name, entry]) => !recordedNames.has(name) && carriesLocalAgentCredential(entry)));
-      if (credential) await hold(target.file);
+    // No mcp.yaml to judge by: the files that may hold a credential the local agent wrote.
+    for (const { file } of await localAgentCredentialFiles(localConfig, targets)) {
+      if (!holding.has(file)) await hold(file);
     }
     return report('MCP credentials in plaintext', 'Fix any git error shown, then add each to .git/info/exclude. If git already tracks one, run '
       + '`git rm --cached <file>` and rotate the values it held.');

@@ -48,6 +48,7 @@ import { log } from './utils/logger.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
 import {
+  carriesLocalAgentCredential,
   carriesResolvedValue,
   ensureExcludedFromGit,
   excludeFromGit,
@@ -1140,7 +1141,9 @@ export async function reconcileMcpForConfig(
  * `.git/info/exclude` (#882), and take out the line of one proven clean. It
  * covers what is on disk, whether or not this run delivered to it: the file of
  * a disabled or undetected tool, or one written before the team turned
- * delivery off, still holds what a pull wrote.
+ * delivery off, still holds what a pull wrote. For an HTTP-backed team, whose
+ * servers no pull writes, each config that may hold a credential its local
+ * agent wrote (`protectLocalAgentMcpConfigs`).
  */
 async function protectResolvedMcpConfigs(
   teamConfig: TeamaiConfig,
@@ -1150,14 +1153,74 @@ async function protectResolvedMcpConfigs(
   before: ManagedMcpManifest | undefined,
 ): Promise<void> {
   const { projectRoot } = localConfig;
-  if (localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return;
+  if (localConfig.scope !== 'project' || !projectRoot) return;
   try {
-    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions, written, before);
+    await (localConfig.repo.kind === 'http'
+      ? protectLocalAgentMcpConfigs(teamConfig, localConfig)
+      : protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions, written, before));
   } catch (e) {
     log.warn(
       `Could not check this project's MCP configs for resolved values to keep out of git: ${e instanceof Error ? e.message : String(e)}. `
       + 'Run `teamai doctor` to see whether git would commit one.',
     );
+  }
+}
+
+/**
+ * The targets among `targets`, and those managed-mcp-files.json recorded under
+ * a mapping another teamai.yaml made, whose project MCP config may hold a
+ * credential an HTTP-backed team's local agent wrote (#882). No mcp.yaml to
+ * judge by: a server its install recorded as carrying a credential, or an
+ * older install's entry carrying one (a header, env value, argument or URL),
+ * or one whose record was lost while another server's remains. With no record
+ * of the tool at all, a file managed-mcp-files.json lists holds while it holds
+ * any server, or doesn't parse: nothing says which of them the local agent
+ * wrote. A file two tools map may appear once for each. Read-only.
+ */
+export async function localAgentCredentialFiles(localConfig: LocalConfig, targets: McpTarget[]): Promise<McpTarget[]> {
+  const { projectRoot } = localConfig;
+  if (localConfig.scope !== 'project' || !projectRoot) return [];
+  const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
+  const ledger = (await readResolvedMcpFiles(localConfig)).files;
+  const recorded = [...(await recordedMcpTargets(localConfig, targets)).values()].flatMap((file) => file.targets);
+  const held: McpTarget[] = [];
+  for (const target of [...targets, ...recorded]) {
+    if (!await pathExists(target.file)) continue;
+    const installed = await installedMcpEntries(target);
+    const records = manifest[managedMcpManifestKey(target.tool, true)];
+    if (records === undefined) {
+      if (ledger[target.file] !== undefined && (installed === null || installed.size > 0)) held.push(target);
+      continue;
+    }
+    const recordedNames = new Set(records.map((record) => record.name));
+    const credential = records.some((record) => installed === null
+      ? record.resolved !== false
+      : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))))
+      || (installed !== null && [...installed].some(([name, entry]) => !recordedNames.has(name) && carriesLocalAgentCredential(entry)));
+    if (credential) held.push(target);
+  }
+  return held;
+}
+
+/**
+ * For an HTTP-backed team: list in `.git/info/exclude` each project MCP
+ * config that may hold a credential its local agent wrote
+ * (`localAgentCredentialFiles`), and record it in managed-mcp-files.json
+ * (#882). An older local agent wrote one without listing it, and no install
+ * runs again for a server already in place. Only `teamai uninstall` takes
+ * such a line out. The caller skips a dry run.
+ */
+export async function protectLocalAgentMcpConfigs(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  const mapped = await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true });
+  const unmapped = await unmappedMcpDefaults(mapped);
+  const held = await localAgentCredentialFiles(localConfig, mapped.filter((target) => !unmapped.has(target)));
+  if (held.length === 0) return;
+  for (const file of new Set(held.map((target) => target.file))) await excludeFromGit(file);
+  // A failure does not undo the line: the exclusion protects the file.
+  const result = await trackResolvedMcpFiles(localConfig, held.map(({ tool, file }) => ({ tool, file })))
+    .catch((e: unknown) => e instanceof Error ? e.message : String(e));
+  if (result !== 'written' && result !== 'unchanged') {
+    log.debug(`Did not record ${held.map((target) => target.file).join(', ')} in managed-mcp-files.json: ${result === 'locked' ? 'another teamai command held it past the wait' : result}.`);
   }
 }
 

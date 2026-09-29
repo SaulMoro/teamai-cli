@@ -50,6 +50,7 @@ async function setupConfig(bindings: Record<string, unknown> = {}): Promise<void
 async function runResponse(
   body: Record<string, unknown>,
   tool: string = 'codebuddy',
+  cwd: string = tmpDir,
 ): Promise<Array<Record<string, unknown>>> {
   // 确保 tool 目录存在，使 isToolInstalled 检查通过
   await fse.ensureDir(path.join(tmpDir, `.${tool}`, 'skills'));
@@ -67,7 +68,7 @@ async function runResponse(
   });
   vi.stubGlobal('fetch', fetchMock);
   const { reportAndSyncLocalAgent } = await import('../local-agent.js');
-  await reportAndSyncLocalAgent({ cwd: tmpDir, tool, status: 'running' });
+  await reportAndSyncLocalAgent({ cwd, tool, status: 'running' });
   return acks;
 }
 
@@ -622,6 +623,26 @@ describe('local-agent: MCP install/uninstall commands', () => {
 
       expect(acks[0].status).toBe('success');
       expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).not.toMatch(/\.mcp\.json/);
+    });
+
+    it('lists a config an older install wrote a credential into on the next sync in the workspace, with no command to run', async () => {
+      await install(9104, bearer);
+      // As an older local agent left it: no line, no managed-mcp-files.json, no note on the record.
+      await fse.writeFile(path.join(wsPath, '.git', 'info', 'exclude'), '');
+      await fse.remove(await workspaceFile('managed-mcp-files.json'));
+      const manifestFile = await workspaceFile('managed-mcp.json');
+      const manifest = await fse.readJson(manifestFile) as Record<string, Array<{ name: string; hash: string }>>;
+      manifest['codebuddy:project'] = manifest['codebuddy:project'].map(({ name, hash }) => ({ name, hash }));
+      await fse.writeJson(manifestFile, manifest);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).not.toBe('');
+
+      await runResponse({ cmds: [] }, 'codebuddy', wsPath);
+
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.mcp\.json$/m);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toBe('');
+      const sidecar = await fse.readJson(await workspaceFile('managed-mcp-files.json')) as { files: Record<string, { tools: string[] }> };
+      expect(Object.entries(sidecar.files)).toEqual([[expect.stringMatching(/\.mcp\.json$/), { tools: ['codebuddy'] }]]);
+      expect(await fse.readFile(path.join(wsPath, '.mcp.json'), 'utf-8')).toContain('bmcp-test-token');
     });
   });
 
