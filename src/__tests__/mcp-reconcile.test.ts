@@ -2293,6 +2293,40 @@ servers:
       expect((await fse.stat(resolvedMcpFilesPath(projectConfig) ?? '')).mode & 0o777).toBe(0o600);
     });
 
+    // An empty record says teamai owns nothing left in the file, which a pull that could not read it cannot say.
+    it('keeps a tool\'s record as it was when this pull could not read its config, so a stale entry keeps its line once repaired', async () => {
+      const cursorJson = path.join(projectRoot, '.cursor', 'mcp.json');
+      await writeMcpYaml(withSecret);
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+      const repaired = await fse.readFile(cursorJson, 'utf-8');
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+      await fse.writeFile(cursorJson, '{ "mcpServers": ');
+      vi.stubEnv('SECRET_TOKEN', '');
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+
+      await fse.writeFile(cursorJson, repaired);
+      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(cursorJson, 'utf-8')).toContain('super-secret-value');
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/\.cursor\/mcp\.json/);
+    });
+
+    it('takes back a tool it recorded before a write that did not happen, in a file another tool recorded', async () => {
+      const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+      const mcpJson = path.join(projectRoot, '.mcp.json');
+      await writeMcpYaml(`${withSecret}    tools: [claude]\n`);
+      await reconcileMcpForConfig(unmovedConfig(), projectConfig);
+      expect((await readResolvedMcpFiles(projectConfig)).files[mcpJson]).toEqual({ tools: ['claude'] });
+      await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
+      await writeMcpYaml(withSecret);
+      await fse.writeFile(mcpJson, '{ "mcpServers": ');
+
+      await reconcileMcpForConfig(unmovedConfig(), projectConfig);
+
+      expect((await readResolvedMcpFiles(projectConfig)).files[mcpJson]).toEqual({ tools: ['claude'] });
+    });
+
     describe('forgets a config it recorded before a write that did not happen', () => {
       const custom = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } };
       const customFile = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');

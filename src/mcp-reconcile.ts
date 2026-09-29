@@ -1032,7 +1032,7 @@ export async function reconcileMcpForConfig(
   const exclusions = new Map<string, GitExclusion>();
   // The project configs this run wrote: a line it added for one stays, whatever fails after.
   const written = new Set<string>();
-  // The project configs managed-mcp-files.json first recorded this run, before their write.
+  // The (file, tool) pairs managed-mcp-files.json first recorded this run, before their write.
   const recorded: McpTarget[] = [];
   const protect = !options.removeAll && !options.dryRun;
   // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
@@ -1292,7 +1292,8 @@ async function reconcileTargets(
   const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
   if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
   // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
-  const listed = localConfig.scope === 'project' && !options.dryRun ? new Set(Object.keys((await readResolvedMcpFiles(localConfig)).files)) : new Set<string>();
+  const ledger = localConfig.scope === 'project' && !options.dryRun ? (await readResolvedMcpFiles(localConfig)).files : {};
+  const listed = new Set(Object.keys(ledger));
   const rebuilt: Array<{ target: McpTarget; records: ManagedMcpRecord[] }> = [];
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
@@ -1328,7 +1329,7 @@ async function reconcileTargets(
       // Recorded before the write, so a later change to toolPaths still finds the file.
       if (!options.dryRun) {
         await recordResolvedMcpFile(localConfig, target);
-        if (!listed.has(target.file)) recorded.push(target);
+        if (!ledger[target.file]?.tools.includes(target.tool)) recorded.push(target);
       }
     }
 
@@ -1337,6 +1338,8 @@ async function reconcileTargets(
       : await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options);
     if (wroteTarget) written.add(target.file);
     wrote = wroteTarget || wrote;
+    // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
+    if (wroteTarget === null) continue;
 
     // Whether each entry holds a resolved value: once its definition stops
     // needing one, what this pull wrote still does (#882).
@@ -1420,6 +1423,7 @@ async function forgetUnwrittenMcpConfigs(localConfig: LocalConfig, targets: McpT
 
 // ─── Appliers ────────────────────────────────────────────────
 
+/** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
 async function applyJson(
   target: McpTarget,
   desired: Map<string, { entry: unknown; hash: string }>,
@@ -1428,13 +1432,13 @@ async function applyJson(
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
   options: McpReconcileOptions,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
   const doc = await readJsonDoc(target.file, serverKey, allowBare);
   if (!doc) {
     log.warn(`Could not parse ${target.file} — skipping MCP injection for ${target.tool}`);
-    return false;
+    return null;
   }
 
   const ownedHash = new Map(owned.map((r) => [r.name, r.hash]));
