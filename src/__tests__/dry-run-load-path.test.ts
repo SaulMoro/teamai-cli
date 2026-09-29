@@ -38,6 +38,7 @@ import { excludeList } from '../exclude.js';
 import { hooksList } from '../hooks-cmd.js';
 import { importCmd } from '../import.js';
 import { mcpInject, mcpList } from '../mcp-cmd.js';
+import { maybeMigrate, queueKeptInCheckout } from '../migrate.js';
 import { modelsList, modelsSwitch } from '../models-cmd.js';
 import { pkgInstall } from '../pkg/commands.js';
 import { listMembers } from '../members.js';
@@ -49,8 +50,8 @@ import { recallStatus } from '../recall-toggle.js';
 import { remove } from '../remove.js';
 import { rolesAdd, rolesInit, rolesList, rolesRemove, rolesSet, rolesUpdate } from '../roles-cmd.js';
 import { skillList, skillShow } from '../skill-cmd.js';
+import { skillGet, skillPath } from '../skill-content.js';
 import { sourceAdd, sourceAddHttp, sourceBrowse, sourceList, sourceRemove } from '../source.js';
-import { showStats } from '../stats.js';
 import { list, status } from '../status.js';
 import { tagsAdd, tagsList, tagsRemove, tagsSubscribe, tagsUnsubscribe } from '../tags.js';
 import { uninstall } from '../uninstall.js';
@@ -282,7 +283,9 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['hooks list', () => hooksList({})],
     ['exclude list', () => excludeList({})],
     ['recall status', () => recallStatus({})],
-    ['doctor', async () => { await resolveDoctorContext(); }],
+    ['doctor (its loader)', async () => { await resolveDoctorContext(); }],
+    ['skill get share', () => skillGet(['share'])],
+    ['skill path share', () => skillPath('share')],
     ['models list', () => modelsList()],
     ['codebase --status', () => codebaseCmd({ status: true })],
     ['uninstall --dry-run', () => uninstall({ dryRun: true, force: true })],
@@ -339,6 +342,7 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['codebase --reconcile', (dryRun) => codebaseCmd({ reconcile: true, dryRun })],
     ['projects update', (dryRun) => projectsUpdate('checkout', { dryRun, description: 'x' })],
     ['projects remove', (dryRun) => projectsRemove('checkout', { dryRun })],
+    // No candidates on this fixture: covers the scan's load, not the one after review.
     ['import --from-claude', (dryRun) => importCmd({ fromClaude: true, all: true, dryRun })],
     ['codebase --deep-enrich', (dryRun) => codebaseCmd({ deepEnrich: true, project: 'x', dryRun })],
     ['models switch', (dryRun) => modelsSwitch('p', { dryRun })],
@@ -374,13 +378,11 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     });
   });
 
-  // Read-only commands that, past the load, fail on this fixture (there is no
-  // reports branch to read members from) or keep state of their own (`stats`
-  // indexes session owners for the dashboard). Only the load is asserted.
+  // Read-only commands that, past the load, fail on this fixture: there is no
+  // reports branch to read members from. Only the load is asserted.
   const READ_ONLY_PAST_THE_LOAD: Array<[string, () => Promise<unknown>]> = [
     ['members', () => listMembers({})],
     ['projects members', () => projectsMembers('checkout', {})],
-    ['stats', () => showStats()],
   ];
 
   it.each(READ_ONLY_PAST_THE_LOAD)('%s migrates nothing it loads (#893)', async (_command, run) => {
@@ -415,6 +417,11 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['pull --dry-run', () => pull({ dryRun: true })],
     ['status', () => status({})],
     ['list', () => list(undefined, {})],
+    // What the CLI's preAction hook runs before `pull`/`push --dry-run`, which
+    // calling `pull()` directly skips.
+    ['the pre-command migration under --dry-run', async () => {
+      await queueKeptInCheckout(await maybeMigrate({ dryRun: true }), { dryRun: true });
+    }],
   ];
 
   it.each(PROJECT_SCOPE_COMMANDS)('%s adopts no legacy partition on a git project (#850)', async (_command, run) => {
