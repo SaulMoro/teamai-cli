@@ -601,19 +601,27 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   }];
   if (localConfig.repo.kind === 'http') {
     // No mcp.yaml to judge by: a server its install recorded as carrying a credential, or an older install's
-    // entry holding a header or env value. Also in a file recorded under a mapping another teamai.yaml made.
+    // entry carrying one (a header, env value, argument or URL). Also in a file recorded under a mapping another
+    // teamai.yaml made. With no record of the tool at all, a file managed-mcp-files.json lists holds while it
+    // holds any server, or doesn't parse: nothing says which of them the local agent wrote.
     const { carriesLocalAgentCredential } = await import('./mcp-git-exclude.js');
     manifest = (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+    ledger = (await readResolvedMcpFiles(localConfig)).files;
     const recorded = [...(await recordedMcpTargets(localConfig, targets)).values()].flatMap((file) => file.targets);
     for (const target of [...targets, ...recorded]) {
       if (holding.has(target.file) || !await pathExists(target.file)) continue;
       const installed = await installedMcpEntries(target);
-      const credential = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).some((record) => installed === null
+      const records = manifest[managedMcpManifestKey(target.tool, true)];
+      if (records === undefined && ledger[target.file] !== undefined && (installed === null || installed.size > 0)) {
+        await hold(target.file);
+        continue;
+      }
+      const credential = (records ?? []).some((record) => installed === null
         ? record.resolved !== false
         : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))));
       if (credential) await hold(target.file);
     }
-    return report('MCP headers or env values in plaintext', 'Fix any git error shown, then add each to .git/info/exclude. If git already tracks one, run '
+    return report('MCP credentials in plaintext', 'Fix any git error shown, then add each to .git/info/exclude. If git already tracks one, run '
       + '`git rm --cached <file>` and rotate the values it held.');
   }
   for (const target of targets) {

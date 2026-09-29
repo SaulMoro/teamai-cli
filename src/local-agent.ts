@@ -2973,7 +2973,7 @@ async function keepCredentialOutOfGit(
   const exclusion = await ensureExcludedFromGit(file, { rerun: 'install the MCP server again' });
   if (exclusion.kind === 'failed') {
     throw new Error(
-      `install_mcp: withheld "${slug}" from ${file}: it carries a header or env value, and teamai could not keep the file `
+      `install_mcp: withheld "${slug}" from ${file}: it may carry a credential (a header, env value, argument or URL), and teamai could not keep the file `
       + `out of git: ${exclusion.reason}. The file is left as it was. ${exclusion.fix}`,
     );
   }

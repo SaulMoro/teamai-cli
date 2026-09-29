@@ -616,8 +616,9 @@ describe('local-agent: MCP install/uninstall commands', () => {
       }
     });
 
-    it('adds no line for a server with neither header nor env value', async () => {
-      const acks = await install(9103, { transport: 'http', url: 'https://clawpro.example.com/mcp' });
+    // Any URL counts (a token can sit in its path), so only a bare stdio command carries none.
+    it('adds no line for a server that carries no credential: a bare stdio command', async () => {
+      const acks = await install(9103, { transport: 'stdio', command: 'clawpro-mcp' });
 
       expect(acks[0].status).toBe('success');
       expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).not.toMatch(/\.mcp\.json/);

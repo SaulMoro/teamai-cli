@@ -40,9 +40,10 @@ export function carriesResolvedValue(
 /**
  * Whether a JSON MCP entry the local agent installs for an HTTP-backed team
  * carries a credential (#882): a header, env value or argument of any kind, a
- * URL with a user or a query, or a command line with arguments in it. Its
- * payload holds the values themselves, not `${VAR}` references teamai
- * resolves, so nothing tells a token from a plain setting: every one counts.
+ * URL (a token can sit in its path, as well as in a user or a query), or a
+ * command line with arguments in it. Its payload holds the values themselves,
+ * not `${VAR}` references teamai resolves, so nothing tells a token from a
+ * plain setting: every one counts. Only a bare stdio command does not.
  */
 export function carriesLocalAgentCredential(entry: unknown): boolean {
   if (typeof entry !== 'object' || entry === null) return false;
@@ -52,16 +53,7 @@ export function carriesLocalAgentCredential(entry: unknown): boolean {
   // OpenCode keeps env under `environment`, and a stdio command with its arguments under `command`.
   if (['headers', 'env', 'environment', 'args'].some((key) => nonEmpty(fields[key]))) return true;
   if (Array.isArray(fields.command) ? fields.command.length > 1 : typeof fields.command === 'string' && /\s/.test(fields.command.trim())) return true;
-  return ['url', 'serverUrl', 'httpUrl'].some((key) => {
-    const value = fields[key];
-    if (typeof value !== 'string') return false;
-    try {
-      const url = new URL(value);
-      return url.username !== '' || url.password !== '' || url.search !== '';
-    } catch {
-      return false;
-    }
-  });
+  return ['url', 'serverUrl', 'httpUrl'].some((key) => typeof fields[key] === 'string' && fields[key].trim() !== '');
 }
 
 /**

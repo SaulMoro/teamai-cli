@@ -365,13 +365,14 @@ describe('a local agent install that carries a credential (#882)', () => {
     ['an argument', { command: 'npx', args: ['-y', 'server', '--token', 't'] }],
     ['a URL with a user', { type: 'http', url: 'https://user:t@x.example/mcp' }],
     ['a URL with a query', { type: 'http', url: 'https://x.example/mcp?key=t' }],
+    ['a URL with a token in its path', { type: 'http', url: 'https://x.example/mcp/bmcp-t0ken' }],
+    ['any URL: nothing tells a token in its path from a plain one', { type: 'http', url: 'https://x.example/mcp' }],
     ['a whole command line', { command: 'server --token t' }],
   ])('counts %s', (_, entry) => {
     expect(carriesLocalAgentCredential(entry)).toBe(true);
   });
 
   it.each([
-    ['a plain URL', { type: 'http', url: 'https://x.example/mcp' }],
     ['a bare command', { command: 'npx' }],
   ])('does not count %s', (_, entry) => {
     expect(carriesLocalAgentCredential(entry)).toBe(false);

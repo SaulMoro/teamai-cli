@@ -401,6 +401,17 @@ describe('doctor — MCP servers delivered on disk', () => {
         expect(await check.check()).toBe(true);
       });
 
+      it('still fails for a file managed-mcp-files.json lists, holding a server, while the manifest has no record for it', async () => {
+        const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(localConfig), projectRoot));
+        expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'claude', file: path.join(projectRoot, '.mcp.json') }])).toBe('written');
+
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(false);
+        expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
+      });
+
       it('has nothing to say of a file whose recorded server carries neither header nor env value', async () => {
         await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp' } } });
         await writeRecord({ name: 'jira', hash: 'h', resolved: false });
