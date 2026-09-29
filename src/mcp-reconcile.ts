@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
+import YAML from 'yaml';
 import type {
   LocalConfig,
   TeamaiConfig,
@@ -56,7 +57,7 @@ import {
   resolvedVariableIn,
   type GitExclusion,
 } from './mcp-git-exclude.js';
-import { listWorktrees } from './utils/git.js';
+import { createGit, getFileContentAtRev, listWorktrees } from './utils/git.js';
 import {
   readResolvedMcpFiles,
   recordUnverifiedMcpServers,
@@ -594,6 +595,58 @@ export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): 
   return recorded;
 }
 
+/**
+ * The files earlier revisions of the team's teamai.yaml mapped a tool's
+ * project MCP config to (`toolPaths.<tool>.mcpProject`) that exist under the
+ * project root, and that no target in `known` and no file `cfg`'s worktree
+ * recorded is (#882): a teamai from before managed-mcp-files.json may have
+ * written a resolved value there, under a mapping the team changed before
+ * this member's first pull on a teamai that records one. Read from the team
+ * repo's history of teamai.yaml, as far as the clone has it (a shallow clone
+ * has less). Null when git cannot read it: not a repository, no commits, a
+ * git error.
+ */
+export async function earlierMappedMcpTargets(cfg: LocalConfig, known: McpTarget[]): Promise<McpTarget[] | null> {
+  const { projectRoot } = cfg;
+  if (!projectRoot) return [];
+  const repoPath = cfg.repo.localPath;
+  let revisions: string[];
+  try {
+    revisions = (await createGit(repoPath).raw(['log', '--format=%H', 'HEAD', '--', 'teamai.yaml'])).split('\n').filter(Boolean);
+  } catch (e) {
+    log.debug(`Could not read the history of teamai.yaml in ${repoPath}: ${e instanceof Error ? e.message : String(e)}. The next pull tries again.`);
+    return null;
+  }
+  const root = await realFilePath(projectRoot);
+  const reached = new Set(await Promise.all(
+    [...known.map((target) => target.file), ...Object.keys((await readResolvedMcpFiles(cfg)).files)].map(realFilePath),
+  ));
+  const found = new Map<string, McpTarget>();
+  for (const revision of revisions) {
+    let toolPaths: unknown;
+    try {
+      toolPaths = (YAML.parse((await getFileContentAtRev(repoPath, revision, './teamai.yaml'))?.toString() ?? '') as { toolPaths?: unknown } | null)?.toolPaths;
+    } catch {
+      continue;
+    }
+    if (typeof toolPaths !== 'object' || toolPaths === null) continue;
+    for (const [tool, paths] of Object.entries(toolPaths)) {
+      const rel: unknown = typeof paths === 'object' && paths !== null ? (paths as { mcpProject?: unknown }).mcpProject : undefined;
+      const format = detectMcpFormat(tool);
+      if (typeof rel !== 'string' || !format) continue;
+      const file = path.resolve(resolveToolBaseDir(tool, cfg), rel);
+      const key = `${tool}\0${file}`;
+      if (found.has(key)) continue;
+      const real = await realFilePath(file);
+      const inside = path.relative(root, real);
+      if (inside === '' || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) continue;
+      if (reached.has(real) || !await pathExists(file)) continue;
+      found.set(key, { tool, format, file, projectScope: true });
+    }
+  }
+  return [...found.values()];
+}
+
 /** What one file, read in the format of each of `targets` (all for that file), holds. */
 async function mcpFileState(targets: McpTarget[]): Promise<McpFileObservation['state']> {
   const servers = new Set<string>();
@@ -645,8 +698,12 @@ async function observeMcpConfigs(
 }
 
 /** `settleResolvedMcpFiles`, which only ever brings the record closer to the disk: a failure waits for the next pull. */
-async function settleRecordedMcpConfigs(localConfig: LocalConfig, observations: McpFileObservation[]): Promise<void> {
-  const result = await settleResolvedMcpFiles(localConfig, observations).catch((e: unknown) => e instanceof Error ? e.message : String(e));
+async function settleRecordedMcpConfigs(
+  localConfig: LocalConfig,
+  observations: McpFileObservation[],
+  options?: { earlierMappingsRead?: boolean },
+): Promise<void> {
+  const result = await settleResolvedMcpFiles(localConfig, observations, options).catch((e: unknown) => e instanceof Error ? e.message : String(e));
   if (result !== 'written' && result !== 'unchanged') {
     log.debug(`Did not update managed-mcp-files.json: ${result === 'locked' ? 'another teamai command held it past the wait' : result}. The next pull tries again.`);
   }
@@ -862,12 +919,22 @@ async function protectProjectMcpConfigs(
   const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
   const vars = await buildVarTable(localConfig);
   const ctx = once(() => buildDesiredMcpContext(teamConfig, localConfig));
+  const mapped = await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true });
   // Tried before its write this run, and reported there.
-  const targets = (await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }))
-    .filter((target) => exclusions.get(target.file)?.kind !== 'failed');
-  const { files: ledger } = await readResolvedMcpFiles(localConfig);
-  const observations = await observeMcpConfigs(localConfig, targets, manifest, async (target, owned) =>
-    await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, ctx) !== null);
+  const targets = mapped.filter((target) => exclusions.get(target.file)?.kind !== 'failed');
+  const { files: ledger, earlierMappingsRead } = await readResolvedMcpFiles(localConfig);
+  const holds = async (target: McpTarget, owned: ManagedMcpRecord[]): Promise<boolean> =>
+    await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, ctx) !== null;
+  const observations = await observeMcpConfigs(localConfig, targets, manifest, holds);
+  // Once per worktree, what a teamai that kept no record of paths wrote under a mapping the team has since changed.
+  const earlier = earlierMappingsRead ? [] : await earlierMappedMcpTargets(localConfig, mapped).catch((e: unknown) => {
+    log.debug(`Did not read the MCP configs earlier toolPaths mappings reach: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
+  for (const target of earlier ?? []) {
+    const owned = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
+    observations.push({ file: target.file, tool: target.tool, state: await mcpFileState([target]), holding: await holds(target, owned), owned: [] });
+  }
   const holding = new Set(observations.filter((o) => o.holding).map((o) => o.file));
   const unproven = new Set(observations.filter((o) => !o.holding).map((o) => o.file));
   // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
@@ -880,7 +947,7 @@ async function protectProjectMcpConfigs(
   });
   await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, addedNow, before);
   // After the release, which reads the files recorded before this run; also lists one an older teamai wrote.
-  await settleRecordedMcpConfigs(localConfig, observations);
+  await settleRecordedMcpConfigs(localConfig, observations, { earlierMappingsRead: !earlierMappingsRead && earlier !== null });
 }
 
 /**

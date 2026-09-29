@@ -175,6 +175,15 @@ describe('managed-mcp-files.json', () => {
       expect((await readResolvedMcpFiles(cfg)).files[other]).toEqual({ tools: ['claude'] });
     });
 
+    it('remembers that the files earlier teamai.yaml mappings reach were read, through later settles', async () => {
+      expect((await readResolvedMcpFiles(cfg)).earlierMappingsRead).toBeUndefined();
+
+      await settleResolvedMcpFiles(cfg, [], { earlierMappingsRead: true });
+      await settleResolvedMcpFiles(cfg, [{ file: custom(), tool: 'claude', state: { kind: 'missing' }, holding: false, owned: [] }]);
+
+      expect(await readResolvedMcpFiles(cfg)).toEqual({ version: 1, files: { [cursor()]: expect.anything() }, earlierMappingsRead: true });
+    });
+
     it('leaves a file it does not list alone when nothing holds a value there', async () => {
       const other = path.join(tmp, 'project', '.mcp.json');
 
