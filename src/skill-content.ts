@@ -196,7 +196,8 @@ export async function contributeHintAllowed(cwd?: string): Promise<boolean> {
 /** What makes this skill unusable right now, or null. */
 async function blockReason(name: string, team?: TeamDetection): Promise<SkillBlock | null> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
-  return (team ? await gateFor(team) : await shareGate()).block;
+  // `skill get` / `skill path` only read; the Stop hook asks shareGate itself (#893).
+  return (await gateFor(team ?? await detectTeam(undefined, { dryRun: true }))).block;
 }
 
 /** A skill directory that ships inside the npm package. */
