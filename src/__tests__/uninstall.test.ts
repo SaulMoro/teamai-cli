@@ -1059,6 +1059,64 @@ describe('uninstall', () => {
     expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
   });
 
+  describe('a nested repository\'s linked worktree (#882)', () => {
+    async function setupNestedLinked(content: unknown): Promise<{ excludeFile: string; linked: string; cursorDir: string }> {
+      const homeDir = path.join(tmpDir, 'home');
+      const repoPath = path.join(tmpDir, 'team-repo');
+      const projectRoot = path.join(tmpDir, 'business-repo');
+      await fse.ensureDir(homeDir);
+      await fse.ensureDir(repoPath);
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const cursorDir = path.join(projectRoot, '.cursor');
+      await fse.ensureDir(path.join(cursorDir, 'skills'));
+      execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+      execFileSync('git', ['init', '-q'], { cwd: cursorDir });
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: cursorDir });
+      const linked = path.join(tmpDir, 'cursor-linked');
+      execFileSync('git', ['worktree', 'add', '-q', linked], { cwd: cursorDir });
+      await fse.writeJson(path.join(linked, 'mcp.json'), content);
+      const excludeFile = path.join(cursorDir, '.git', 'info', 'exclude');
+      await fse.writeFile(excludeFile, [
+        'scratch/',
+        '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+        '/mcp.json',
+        '# [teamai:mcp-exclude:end]',
+        '',
+      ].join('\n'));
+      const localConfig = makeLocalConfig(homeDir, repoPath, {
+        scope: 'project',
+        projectRoot,
+        repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+      });
+      const teamConfig = makeTeamConfig({
+        toolPaths: { cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' } },
+      });
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+      return { excludeFile, linked, cursorDir };
+    }
+
+    it('removes the block when the config there holds no server', async () => {
+      const { excludeFile } = await setupNestedLinked({ mcpServers: {} });
+
+      await uninstall({ force: true });
+
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe('scratch/\n');
+    });
+
+    it('keeps the block while the config there holds a server, saying teamai cannot judge it', async () => {
+      const { excludeFile, linked, cursorDir } = await setupNestedLinked({ mcpServers: { mine: { url: 'https://mine.example/mcp' } } });
+      const { log } = await import('../utils/logger.js');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readFile(excludeFile, 'utf8')).toContain('/mcp.json');
+      const warning = vi.mocked(log.warn).mock.calls.map(([message]) => String(message)).find((m) => m.includes('/mcp.json'));
+      expect(warning).toContain(path.join(await fse.realpath(linked), 'mcp.json'));
+      expect(warning).toContain(`in a linked worktree of the repository at ${await fse.realpath(cursorDir)}`);
+    });
+  });
+
   it('project-scope uninstall removes the block from a nested repository holding an MCP config (#882)', async () => {
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(tmpDir, 'team-repo');

@@ -51,6 +51,7 @@ import {
   excludeFromGit,
   existingAncestor,
   findMcpGitExcludes,
+  mcpExcludePatternPath,
   removeMcpGitExclude,
   resolvedVariableIn,
   type GitExclusion,
@@ -584,9 +585,11 @@ async function readProjectMcpManifest(cfg: LocalConfig, projectRoot: string): Pr
 }
 
 /**
- * The `files` not proven free of a value teamai resolved (#882), each with why.
- * A missing file is clean; so is one a tool reads that parses and holds no
- * server at all. One holding servers is clean only when its worktree's manifest
+ * The files of `groups` (the checkouts of one exclude line) not proven free of
+ * a value teamai resolved (#882), each with why. A missing file is clean; so is
+ * one a tool reads that parses and holds no server at all, and one in a nested
+ * repository's linked worktree, read as the file of its line this project maps
+ * is, that parses and holds none. One holding servers is clean only when its worktree's manifest
  * records what teamai wrote to that tool's file (an empty list once teamai took
  * its last server out), and the file holds none of the team's servers that need
  * a resolved `${VAR}` there, none of teamai's own entries the manifest records
@@ -605,7 +608,7 @@ async function readProjectMcpManifest(cfg: LocalConfig, projectRoot: string): Pr
 export async function mcpConfigsNotProvenClean(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  files: string[],
+  groups: Array<{ pattern: string; files: string[] }>,
   options: { before?: ManagedMcpManifest; otherWorktrees?: 'judged' | 'empty' } = {},
 ): Promise<Map<string, string>> {
   const { before, otherWorktrees = 'judged' } = options;
@@ -645,24 +648,33 @@ export async function mcpConfigsNotProvenClean(
   const values = Object.entries(vars)
     .filter(([name, value]) => value.length >= 8 && !identity.has(name) && !/^([/~]|[A-Za-z]:[\\/])/.test(value));
   const held = new Map<string, string>();
-  for (const file of files) {
-    if (!await pathExists(file)) continue;
-    const known = targets.get(file);
-    const installed = known ? await installedMcpEntries(known.target) : null;
-    const raw = (await readFileSafe(file)) ?? '';
-    const named = known && installed && teamDefs
-      ? [...installed.keys()].find((name) => carriesResolvedValue(known.target, teamDefs, [name]))
-      : undefined;
-    const why = !known ? 'no tool teamai knows reads it'
-      : !installed ? 'it does not parse'
-      : installed.size === 0 ? undefined
-      : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
-      : !teamDefs ? 'the team\'s MCP servers cannot be read'
-      : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
-      : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars, ctx).then((e) => e && `it holds ${e}`)
-        ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
-        ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse or has no entry for it');
-    if (why) held.set(file, why);
+  for (const { pattern, files } of groups) {
+    // A file no worktree of this project maps, in a checkout of the same repository as
+    // one it does: a nested repository's linked worktree, read as that one is.
+    const siblingFile = files.find((file) => targets.has(file));
+    const sibling = siblingFile === undefined ? undefined : targets.get(siblingFile);
+    const nested = siblingFile && path.join(siblingFile, ...mcpExcludePatternPath(pattern).split('/').map(() => '..'));
+    for (const file of files) {
+      if (!await pathExists(file)) continue;
+      const known = targets.get(file)
+        ?? (sibling && nested ? { target: { ...sibling.target, file }, owned: [], recorded: false, foreign: true, nested } : undefined);
+      const installed = known ? await installedMcpEntries(known.target) : null;
+      const raw = (await readFileSafe(file)) ?? '';
+      const named = known && installed && teamDefs
+        ? [...installed.keys()].find((name) => carriesResolvedValue(known.target, teamDefs, [name]))
+        : undefined;
+      const why = !known ? 'no tool teamai knows reads it'
+        : !installed ? 'it does not parse'
+        : installed.size === 0 ? undefined
+        : 'nested' in known ? `it holds MCP servers in a linked worktree of the repository at ${known.nested}, which teamai cannot judge`
+        : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
+        : !teamDefs ? 'the team\'s MCP servers cannot be read'
+        : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
+        : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars, ctx).then((e) => e && `it holds ${e}`)
+          ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
+          ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse or has no entry for it');
+      if (why) held.set(file, why);
+    }
   }
   return held;
 }
@@ -799,7 +811,7 @@ async function releaseMcpGitExcludes(
   const held = await mcpConfigsNotProvenClean(
     teamConfig,
     localConfig,
-    [...excludes.values()].flatMap((entries) => entries.flatMap((entry) => entry.files)),
+    [...excludes.values()].flat(),
     { before, otherWorktrees: 'empty' },
   );
   for (const [excludeFile, entries] of excludes) {

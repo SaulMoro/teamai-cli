@@ -285,13 +285,17 @@ export async function findMcpGitExcludes(dirs: Iterable<string>): Promise<Map<st
     // Every checkout sharing the file, including a nested repository's linked worktrees elsewhere.
     const [anyCheckout] = checkouts;
     if (anyCheckout) for (const worktree of await listWorktrees(anyCheckout)) checkouts.add(worktree);
-    // Each pattern is `/<path from the root>`, glob characters escaped (see excludeFromGit).
     found.set(excludeFile, block.patterns.map((pattern) => {
-      const rel = pattern.replace(/^\//, '').replace(/\\(.)/g, '$1');
+      const rel = mcpExcludePatternPath(pattern);
       return { pattern, files: [...checkouts].map((root) => path.join(root, rel)) };
     }));
   }
   return found;
+}
+
+/** The path from its checkout's root one of teamai's patterns stands for: `/<path>`, glob characters escaped (see ensureExcludedFromGit). */
+export function mcpExcludePatternPath(pattern: string): string {
+  return pattern.replace(/^\//, '').replace(/\\(.)/g, '$1');
 }
 
 /**

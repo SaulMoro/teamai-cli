@@ -1251,6 +1251,26 @@ servers:
         expect(await excludeOf(projectRoot)).not.toContain('teamai');
       });
 
+      it('when `teamai mcp remove` finds a nested repository\'s linked worktree holding no server', async () => {
+        const cursorDir = path.join(projectRoot, '.cursor');
+        git(cursorDir, 'init', '-q');
+        git(cursorDir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+        const linked = path.join(tmpDir, 'cursor-linked');
+        git(cursorDir, 'worktree', 'add', '-q', linked);
+        await fse.writeJson(path.join(linked, 'mcp.json'), { mcpServers: {} });
+        await fse.writeFile(path.join(cursorDir, '.git', 'info', 'exclude'), [
+          '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',
+          '/mcp.json',
+          '# [teamai:mcp-exclude:end]',
+          '',
+        ].join('\n'));
+        await writeMcpYaml(withSecret);
+
+        await releaseCleanMcpGitExcludes(teamConfig, projectConfig);
+
+        expect(await excludeOf(cursorDir)).not.toContain('teamai');
+      });
+
       it('but not while another worktree\'s copy of the config still holds one', async () => {
         git(projectRoot, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
         const worktree = path.join(await fse.realpath(tmpDir), 'business-wt');
