@@ -75,6 +75,8 @@ directories do not authorize writes to rules excluded by the local configuration
 For Copilot updates that only change `paths`, it compares the entire local file
 with the rendered recorded versions before refreshing `applyTo`, preserving
 locally edited headers rather than overwriting them on a body match alone.
+Each copy it writes, in any format, is recorded in the checkout's `delivered`
+(#822), so the next pull does not keep it as the member's edit.
 A placed agent, which push does not
 sync, is held when the team file has changed since any of those revisions, or
 since it was added if one of them predates it (#823). That sync brings the
