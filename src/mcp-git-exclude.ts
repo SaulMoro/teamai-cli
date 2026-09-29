@@ -76,7 +76,7 @@ async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; root:
 }
 
 /** The closest directory above `file` that exists. */
-async function existingAncestor(file: string): Promise<string> {
+export async function existingAncestor(file: string): Promise<string> {
   let dir = path.dirname(path.resolve(file));
   while (!await pathExists(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir);
   return dir;
@@ -137,11 +137,11 @@ function splitBlock(content: string): { before: string; patterns: string[]; afte
 
 /**
  * Whether `file` is kept out of git, or why teamai could not keep it out and
- * what the member does about it. `pending`: a dry run found nothing in the way
- * of listing it.
+ * what the member does about it. `added`: this call listed it. `pending`: a dry
+ * run found nothing in the way of listing it.
  */
 export type GitExclusion =
-  | { kind: 'excluded' }
+  | { kind: 'excluded'; added: boolean }
   | { kind: 'pending' }
   | { kind: 'failed'; reason: string; fix: string };
 
@@ -156,7 +156,7 @@ export type GitExclusion =
  */
 export async function ensureExcludedFromGit(file: string, options: { dryRun?: boolean } = {}): Promise<GitExclusion> {
   const tracking = await gitTracking(file);
-  if (tracking.kind === 'ignored' || tracking.kind === 'outside-repo') return { kind: 'excluded' };
+  if (tracking.kind === 'ignored' || tracking.kind === 'outside-repo') return { kind: 'excluded', added: false };
   // `file` and its directory need not exist yet: git is asked from the nearest one that does.
   const dir = await existingAncestor(file);
   const location = await gitExcludeFile(dir);
@@ -212,7 +212,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
     };
   }
   if (result === 'written') log.debug(`Added ${pattern} to ${excludeFile}`);
-  return (await gitTracking(file)).kind === 'would-commit' ? tracked : { kind: 'excluded' };
+  return (await gitTracking(file)).kind === 'would-commit' ? tracked : { kind: 'excluded', added: result === 'written' };
 }
 
 /**

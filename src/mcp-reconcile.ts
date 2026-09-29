@@ -45,7 +45,17 @@ import {
 import { log } from './utils/logger.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
-import { carriesResolvedValue, ensureExcludedFromGit, excludeFromGit, resolvedVariableIn, type GitExclusion } from './mcp-git-exclude.js';
+import {
+  carriesResolvedValue,
+  ensureExcludedFromGit,
+  excludeFromGit,
+  existingAncestor,
+  findMcpGitExcludes,
+  removeMcpGitExclude,
+  resolvedVariableIn,
+  type GitExclusion,
+} from './mcp-git-exclude.js';
+import { listWorktrees } from './utils/git.js';
 
 // ─── Reconcile engine ────────────────────────────────────────
 //
@@ -530,6 +540,83 @@ export async function resolvedValueEvidence(
   return variable ? `the value of $${variable}` : null;
 }
 
+/**
+ * `localConfig` and, in project scope, one config per other linked worktree:
+ * each worktree has its own MCP configs and managed-mcp manifest.
+ */
+export async function projectWorktreeConfigs(localConfig: LocalConfig): Promise<LocalConfig[]> {
+  const configs: LocalConfig[] = [localConfig];
+  if (localConfig.scope === 'project' && localConfig.projectRoot) {
+    const { resolveProjectDataHome } = await import('./config.js');
+    for (const wt of await listWorktrees(localConfig.projectRoot)) {
+      if (wt === localConfig.projectRoot) continue;
+      configs.push({ ...localConfig, projectRoot: wt, dataHome: await resolveProjectDataHome(wt) });
+    }
+  }
+  return configs;
+}
+
+/**
+ * The `files` not proven free of a value teamai resolved (#882), each with why.
+ * A missing file is clean; so is one a tool reads that parses and holds no
+ * server at all. One holding servers is clean only when its worktree's manifest
+ * is there to say what teamai wrote, and the file holds none of the team's
+ * servers that need a resolved `${VAR}` there, none of teamai's own entries the
+ * manifest records and cleanup left (their definition may have left mcp.yaml),
+ * and none of the values of the variables set in this environment. Anything
+ * else (no tool reads it, it does not parse, the team's servers cannot be read,
+ * the manifest is lost) is not: a server teamai wrote, since dropped from
+ * mcp.yaml, with a value no longer set, looks like the member's own.
+ */
+export async function mcpConfigsNotProvenClean(teamConfig: TeamaiConfig, localConfig: LocalConfig, files: string[]): Promise<Map<string, string>> {
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
+  const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  // Keyed by real path: the protected paths come from git, which resolves symlinks (macOS /var).
+  const targets = new Map<string, { target: McpTarget; owned: string[]; recorded: boolean }>();
+  for (const cfg of await projectWorktreeConfigs(localConfig)) {
+    let manifest: ManagedMcpManifest = {};
+    let recorded = false;
+    if (cfg.projectRoot) {
+      const loaded = await loadProjectMcpManifest(getDataHome(cfg), cfg.projectRoot, { dryRun: true });
+      manifest = loaded.manifest;
+      recorded = Object.keys(manifest).length > 0 || await pathExists(loaded.manifestPath);
+    }
+    for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) {
+      const dir = await fse.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
+      const key = path.join(dir, path.basename(target.file));
+      const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
+      // One file reached twice (two tools share it, or a checkout through a symlink) merges what each says.
+      const seen = targets.get(key);
+      targets.set(key, { target, owned: [...seen?.owned ?? [], ...owned], recorded: recorded || seen?.recorded === true });
+    }
+  }
+  // Short values, paths and the login name turn up in ordinary configs, so they prove nothing.
+  const identity = new Set(['USER', 'LOGNAME', 'USERNAME']);
+  const vars = await buildVarTable(localConfig);
+  const values = Object.entries(vars)
+    .filter(([name, value]) => value.length >= 8 && !identity.has(name) && !/^([/~]|[A-Za-z]:[\\/])/.test(value));
+  const held = new Map<string, string>();
+  for (const file of files) {
+    if (!await pathExists(file)) continue;
+    const known = targets.get(file);
+    const installed = known ? await installedMcpEntries(known.target) : null;
+    const raw = (await readFileSafe(file)) ?? '';
+    const named = known && installed && teamDefs
+      ? [...installed.keys()].find((name) => carriesResolvedValue(known.target, teamDefs, [name]))
+      : undefined;
+    const why = !known ? 'no tool teamai knows reads it'
+      : !installed ? 'it does not parse'
+      : installed.size === 0 ? undefined
+      : !teamDefs ? 'the team\'s MCP servers cannot be read'
+      : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
+      : await resolvedValueEvidence(known.target, teamDefs, known.owned, vars).then((e) => e && `it holds ${e}`)
+        ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
+        ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone');
+    if (why) held.set(file, why);
+  }
+  return held;
+}
+
 // ─── Main entry ──────────────────────────────────────────────
 
 export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): boolean {
@@ -560,9 +647,10 @@ export async function reconcileMcpForConfig(
 
 /**
  * List each project MCP config holding a value teamai resolved in
- * `.git/info/exclude` (#882). It covers what is on disk, whether or not this
- * run delivered to it: the file of a disabled or undetected tool, or one
- * written before the team turned delivery off, still holds what a pull wrote.
+ * `.git/info/exclude` (#882), and take out the line of one proven clean. It
+ * covers what is on disk, whether or not this run delivered to it: the file of
+ * a disabled or undetected tool, or one written before the team turned
+ * delivery off, still holds what a pull wrote.
  */
 async function protectResolvedMcpConfigs(
   teamConfig: TeamaiConfig,
@@ -591,12 +679,83 @@ async function protectProjectMcpConfigs(
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
   const vars = await buildVarTable(localConfig);
+  const holding = new Set<string>();
+  const unproven = new Set<string>();
   for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) {
-    // Tried before its write this run, and reported there when it failed.
-    if (exclusions.has(target.file)) continue;
+    // Tried before its write this run, and reported there.
+    if (exclusions.get(target.file)?.kind === 'failed') continue;
     const owned = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).map((record) => record.name);
-    if (await resolvedValueEvidence(target, teamDefs, owned, vars)) await excludeFromGit(target.file);
+    if (await resolvedValueEvidence(target, teamDefs, owned, vars)) holding.add(target.file);
+    else unproven.add(target.file);
   }
+  // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
+  for (const file of holding) await excludeFromGit(file);
+  // A line this run added for a file it then wrote no value into restores the file's state before the run.
+  const addedNow = [...unproven].filter((file) => {
+    const exclusion = exclusions.get(file);
+    return !holding.has(file) && exclusion?.kind === 'excluded' && exclusion.added;
+  });
+  await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, addedNow);
+}
+
+/**
+ * Take out of teamai's block in `.git/info/exclude` the line of each project
+ * MCP config proven free of a value teamai resolved (#882), in every worktree
+ * sharing it: `teamai mcp remove` leaves nothing of teamai's to protect. A
+ * config not proven clean keeps its line.
+ */
+export async function releaseCleanMcpGitExcludes(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  const { projectRoot } = localConfig;
+  if (localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return;
+  try {
+    await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, []);
+  } catch (e) {
+    log.warn(
+      `Could not check whether this project's MCP configs still need their .git/info/exclude lines: ${e instanceof Error ? e.message : String(e)}. `
+      + 'The lines stay; `teamai uninstall` removes them.',
+    );
+  }
+}
+
+/**
+ * Remove each line of teamai's block whose files are all proven clean or in
+ * `addedNow`: files this run listed and holds no evidence for, whose line it
+ * takes back out even when they cannot be proven clean (one that does not parse).
+ */
+async function releaseMcpGitExcludes(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  projectRoot: string,
+  addedNow: string[],
+): Promise<void> {
+  const dirs = [projectRoot];
+  for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) dirs.push(path.dirname(target.file));
+  const excludes = await findMcpGitExcludes(dirs);
+  if (excludes.size === 0) return;
+  // Keyed as findMcpGitExcludes keys them: by real path (macOS /var).
+  const exempt = new Set(await Promise.all(addedNow.map(realFilePath)));
+  const held = await mcpConfigsNotProvenClean(
+    teamConfig,
+    localConfig,
+    [...excludes.values()].flatMap((entries) => entries.flatMap((entry) => entry.files)),
+  );
+  for (const [excludeFile, entries] of excludes) {
+    const clean = entries
+      .filter((entry) => entry.files.every((file) => !held.has(file) || exempt.has(file)))
+      .map((entry) => entry.pattern);
+    if (clean.length === 0) continue;
+    const result = await removeMcpGitExclude(excludeFile, clean);
+    if (result === 'written') log.info(`Removed ${clean.join(', ')} from ${excludeFile}: no MCP config there holds a value teamai resolved.`);
+    // Left as it is: the next pull tries again.
+    if (result === 'locked') log.debug(`Kept ${clean.join(', ')} in ${excludeFile}: another teamai command held it past the wait.`);
+  }
+}
+
+/** `file` with the real path of its closest existing directory. */
+async function realFilePath(file: string): Promise<string> {
+  const dir = await existingAncestor(file);
+  const real = await fse.realpath(dir).catch(() => dir);
+  return path.join(real, path.relative(dir, file));
 }
 
 async function reconcileTargets(

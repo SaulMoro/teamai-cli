@@ -10,6 +10,7 @@ vi.mock('../namespaced-entries.js', async (importOriginal) => ({
 }));
 vi.mock('../mcp-reconcile.js', () => ({
   reconcileMcpForConfig: vi.fn(),
+  releaseCleanMcpGitExcludes: vi.fn(),
   resolveMcpTargets: vi.fn().mockResolvedValue([]),
   buildVarTable: vi.fn().mockResolvedValue({}),
 }));
@@ -26,8 +27,8 @@ vi.mock('../utils/logger.js', () => ({
 
 import { autoDetectInit } from '../config.js';
 import { resolveEntriesFor } from '../namespaced-entries.js';
-import { mcpInject, mcpList } from '../mcp-cmd.js';
-import { reconcileMcpForConfig, resolveMcpTargets } from '../mcp-reconcile.js';
+import { mcpInject, mcpList, mcpRemove } from '../mcp-cmd.js';
+import { reconcileMcpForConfig, releaseCleanMcpGitExcludes, resolveMcpTargets } from '../mcp-reconcile.js';
 import { ensureExcludedFromGit } from '../mcp-git-exclude.js';
 import { readJson } from '../utils/fs.js';
 import { managedMcpManifestKey } from '../types.js';
@@ -171,5 +172,28 @@ describe('mcpInject', () => {
       spy.mockRestore();
       process.exitCode = undefined;
     }
+  });
+});
+
+describe('mcpRemove', () => {
+  it('takes out the .git/info/exclude lines of the configs it leaves clean, after removing the servers (#882)', async () => {
+    const init = { localConfig: { repo: { localPath: '/repo' }, scope: 'project', projectRoot: '/work/app' }, teamConfig: { toolPaths: {} } };
+    mockedAutoDetectInit.mockResolvedValue(init);
+    const order: string[] = [];
+    (reconcileMcpForConfig as Mock).mockImplementationOnce(async () => {
+      order.push('reconcile');
+      return { changes: [], wrote: false };
+    });
+    (releaseCleanMcpGitExcludes as Mock).mockImplementationOnce(async () => { order.push('release'); });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await mcpRemove({});
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(reconcileMcpForConfig).toHaveBeenCalledWith(init.teamConfig, init.localConfig, { removeAll: true });
+    expect(releaseCleanMcpGitExcludes).toHaveBeenCalledWith(init.teamConfig, init.localConfig);
+    expect(order).toEqual(['reconcile', 'release']);
   });
 });
