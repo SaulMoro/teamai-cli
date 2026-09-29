@@ -144,6 +144,21 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       });
       expect(await fse.pathExists(excludeFile) ? await fse.readFile(excludeFile, 'utf8') : '').not.toContain('teamai');
     });
+
+    it.skipIf(process.getuid?.() === 0).each([
+      ['a pull', {}],
+      ['a dry run', { dryRun: true }],
+    ])('names the tracked file first on %s when .git/info is not writable either', async (_label, options) => {
+      const info = path.join(repo, '.git', 'info');
+      await fse.chmod(info, 0o555);
+
+      try {
+        const exclusion = await ensureExcludedFromGit(path.join(repo, '.mcp.json'), options);
+        expect(exclusion).toMatchObject({ kind: 'failed', reason: `git already tracks ${path.join(repo, '.mcp.json')}` });
+      } finally {
+        await fse.chmod(info, 0o755);
+      }
+    });
   });
 
   it('stays quiet outside any repository', async () => {
