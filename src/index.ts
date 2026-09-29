@@ -1253,7 +1253,11 @@ recallCmd
   .option('--confidence-writeback', 'Update frontmatter confidence scores')
   .option('--update-quality', 'Find stale docs/rules/skills and suggest updates')
   .option('--dry-run', 'Show what would be done without making changes')
-  .action(async (cmdOpts) => {
+  .action(async (localOpts) => {
+    // The root program takes `--dry-run` wherever it is written, so this
+    // command's own declaration never sets it: read it merged, as the other
+    // actions do (#900).
+    const cmdOpts = { ...(program.opts() as GlobalOptions), ...localOpts };
     if (!cmdOpts.confidenceWriteback && !cmdOpts.prune && !cmdOpts.updateQuality) {
       const { log } = await import('./utils/logger.js');
       log.info('Usage: teamai recall maintenance --prune | --confidence-writeback | --update-quality');
@@ -1261,7 +1265,7 @@ recallCmd
     }
 
     const { autoDetectInit } = await import('./config.js');
-    const { localConfig } = await autoDetectInit();
+    const { localConfig } = await autoDetectInit(undefined, { dryRun: cmdOpts.dryRun });
     const paths = await maintenancePathsOrExit(localConfig);
     if (!paths) return;
     const {
@@ -1271,8 +1275,8 @@ recallCmd
     if (cmdOpts.confidenceWriteback) {
       const { computeAllConfidence, writeBackConfidence } = await import('./maintenance/index.js');
       const map = await computeAllConfidence(votesDir);
-      const written = await writeBackConfidence(learningsReadDirs, map, learningsWriteDir);
-      if (written.length > 0) {
+      const written = await writeBackConfidence(learningsReadDirs, map, learningsWriteDir, { dryRun: cmdOpts.dryRun });
+      if (written.length > 0 && !cmdOpts.dryRun) {
         await publishMaintenance(localConfig, `[teamai] Update confidence for ${written.length} learning(s)`, written);
       }
       return;
@@ -1340,9 +1344,11 @@ recallCmd
   .description('Promote a high-confidence learning to formal knowledge (docs/skills/rules)')
   .option('--category <cat>', 'Target category: skills | rules | docs')
   .option('--dry-run', 'Show what would be done without making changes')
-  .action(async (learningId, cmdOpts) => {
+  .action(async (learningId, localOpts) => {
+    // As in `recall maintenance`: `--dry-run` reaches the root's options only (#900).
+    const cmdOpts = { ...(program.opts() as GlobalOptions), ...localOpts };
     const { autoDetectInit } = await import('./config.js');
-    const { localConfig } = await autoDetectInit();
+    const { localConfig } = await autoDetectInit(undefined, { dryRun: cmdOpts.dryRun });
     const {
       findPromotionCandidates,
       executePromotion,
