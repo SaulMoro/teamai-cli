@@ -580,6 +580,9 @@ describe('local-agent: MCP install/uninstall commands', () => {
 
       expect(acks[0].status).toBe('failed');
       expect(acks[0].error).toContain('git already tracks');
+      // Commands come from the server: no pull replays one.
+      expect(acks[0].error).toContain('then install the MCP server again.');
+      expect(acks[0].error).not.toContain('teamai pull');
       expect(await fse.readJson(path.join(wsPath, '.mcp.json'))).toEqual(original);
       const manifestFile = path.join(wsPath, '.teamai', 'workspaces');
       const manifests = await fse.pathExists(manifestFile) ? await fse.readdir(manifestFile) : [];

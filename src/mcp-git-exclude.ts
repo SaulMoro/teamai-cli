@@ -204,18 +204,24 @@ export type GitExclusion =
  * does not track: an exclude rule does not apply to a tracked file, and a git
  * error is never read as safe. `file` need not exist yet: pull calls this
  * before writing a resolved value into it. `dryRun` writes nothing and reports
- * what would stop the write.
+ * what would stop the write. `rerun` ends each fix: how the caller's write is
+ * tried again.
  */
-export async function ensureExcludedFromGit(file: string, options: { dryRun?: boolean } = {}): Promise<GitExclusion> {
+export async function ensureExcludedFromGit(
+  file: string,
+  options: { dryRun?: boolean; rerun?: string } = {},
+): Promise<GitExclusion> {
+  const { rerun = 'run `teamai pull` again' } = options;
   const tracking = await gitTracking(file);
   if (tracking.kind === 'ignored' || tracking.kind === 'outside-repo') return { kind: 'excluded', added: false };
-  const repair = 'Fix the repository, or add the file to its .git/info/exclude yourself, then run `teamai pull` again.';
+  const repair = `Fix the repository, or add the file to its .git/info/exclude yourself, then ${rerun}.`;
   const tracked = async (): Promise<GitExclusion> => {
     const named = await gitPathOf(file);
     return {
       kind: 'failed',
       reason: `git already tracks ${named.label}`,
-      fix: `Run \`git rm --cached ${named.path}\` (rotate any value a commit of it holds), then \`teamai pull\` again.`,
+      // After "Run `git rm …`", a second "run" is dropped: "then `teamai pull` again".
+      fix: `Run \`git rm --cached ${named.path}\` (rotate any value a commit of it holds), then ${rerun.replace(/^run /, '')}.`,
     };
   };
   const inIndex = await gitTracks(file);
@@ -236,7 +242,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
   // Anchored at the working tree root, glob characters escaped.
   const rel = path.relative(dir, landed).split(path.sep).join('/');
   const pattern = `/${location.prefix}${rel}`.replace(/[\\*?[\]!#]/g, '\\$&');
-  const retry = `Make it writable, or add \`${pattern}\` to it yourself, then run \`teamai pull\` again.`;
+  const retry = `Make it writable, or add \`${pattern}\` to it yourself, then ${rerun}.`;
   // A read-only exclude file is the member's choice; the atomic write would replace it all the same.
   for (const writable of [path.dirname(excludeFile), ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
     const denied = await fse.access(writable, fse.constants.W_OK).then(() => false, () => true);
@@ -257,7 +263,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
       if (add((await readFileSafe(excludeFile)) ?? '') !== null) {
         // A negated rule in a .gitignore outranks .git/info/exclude: the line would change nothing.
         const rule = await reincludingRule(landed);
-        return rule && path.basename(rule.source) === '.gitignore' ? reincluded(await gitPathOf(file), rule) : { kind: 'pending' };
+        return rule && path.basename(rule.source) === '.gitignore' ? reincluded(await gitPathOf(file), rule, rerun) : { kind: 'pending' };
       }
       result = 'unchanged';
     } else {
@@ -270,27 +276,27 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
     return {
       kind: 'failed',
       reason: `another teamai command held ${excludeFile} past the wait`,
-      fix: 'Run `teamai pull` again.',
+      fix: `${rerun.charAt(0).toUpperCase()}${rerun.slice(1)}.`,
     };
   }
   if (result === 'written') log.debug(`Added ${pattern} to ${excludeFile}`);
   if ((await gitTracking(file)).kind !== 'would-commit') return { kind: 'excluded', added: result === 'written' };
   // Untracked, as checked above: a rule git reads after teamai's line, or before it, re-includes the file.
-  return reincluded(await gitPathOf(file), await reincludingRule(landed));
+  return reincluded(await gitPathOf(file), await reincludingRule(landed), rerun);
 }
 
 /** The failure for a file a rule of the member's re-includes, naming `rule` when git could. */
-function reincluded(named: { label: string }, rule: { source: string; line: string; pattern: string } | null): GitExclusion {
+function reincluded(named: { label: string }, rule: { source: string; line: string; pattern: string } | null, rerun: string): GitExclusion {
   return rule
     ? {
       kind: 'failed',
       reason: `a rule in your git ignore files re-includes ${named.label}: \`${rule.pattern}\` (${rule.source}:${rule.line})`,
-      fix: `Remove \`${rule.pattern}\` from ${rule.source}, then run \`teamai pull\` again.`,
+      fix: `Remove \`${rule.pattern}\` from ${rule.source}, then ${rerun}.`,
     }
     : {
       kind: 'failed',
       reason: `a rule in your git ignore files re-includes ${named.label}`,
-      fix: 'Remove the rule in .gitignore, .git/info/exclude or core.excludesFile that re-includes it (`git check-ignore -v` names it), then run `teamai pull` again.',
+      fix: `Remove the rule in .gitignore, .git/info/exclude or core.excludesFile that re-includes it (\`git check-ignore -v\` names it), then ${rerun}.`,
     };
 }
 

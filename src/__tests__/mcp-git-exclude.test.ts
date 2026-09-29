@@ -179,6 +179,14 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(await fse.pathExists(excludeFile) ? await fse.readFile(excludeFile, 'utf8') : '').not.toContain('teamai');
     });
 
+    it('names the caller\'s way to try again in its fix, when given one', async () => {
+      const file = path.join(repo, '.mcp.json');
+
+      expect(await ensureExcludedFromGit(file, { dryRun: true, rerun: 'install the MCP server again' })).toMatchObject({
+        fix: `Run \`git rm --cached ${file}\` (rotate any value a commit of it holds), then install the MCP server again.`,
+      });
+    });
+
     it.skipIf(process.getuid?.() === 0).each([
       ['a pull', {}],
       ['a dry run', { dryRun: true }],

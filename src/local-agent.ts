@@ -2967,7 +2967,8 @@ async function keepCredentialOutOfGit(
 ): Promise<boolean> {
   const { carriesLocalAgentCredential, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   if (!carriesLocalAgentCredential(entry)) return false;
-  const exclusion = await ensureExcludedFromGit(file);
+  // Commands come from the server: no pull replays one.
+  const exclusion = await ensureExcludedFromGit(file, { rerun: 'install the MCP server again' });
   if (exclusion.kind === 'failed') {
     throw new Error(
       `install_mcp: withheld "${slug}" from ${file}: it carries a header or env value, and teamai could not keep the file `
