@@ -75,7 +75,8 @@ until a later pull writes it. A Copilot project config's bare top-level servers
 still count once another tool writes `mcpServers` into the file. On an HTTP-backed
 team the local agent's `install_mcp` lists a project config before writing a
 server with any header, env value, argument or URL (only a bare stdio command is not), fails the install when it cannot, and only
-`teamai uninstall` takes that line out; `teamai doctor` checks those files too.
+`teamai uninstall` takes that line out. The next sync or `teamai pull` in the
+workspace also lists a file an older local agent wrote a credential into; `teamai doctor` checks those files too.
 
 ## Invite a member
 
