@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
-import YAML from 'yaml';
 import type {
   LocalConfig,
   TeamaiConfig,
@@ -20,6 +19,7 @@ import {
   scopedToolPaths,
   TeamaiConfigSchema,
 } from './types.js';
+import YAML from 'yaml';
 import {
   detectMcpFormat,
   supportsTransport,

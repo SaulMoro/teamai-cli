@@ -1132,6 +1132,32 @@ servers:
       });
     });
 
+    it('adds nothing for a disabled tool\'s config whose server never held a resolved value, after its definition changed', async () => {
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/v2\n');
+
+      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(path.join(projectRoot, '.cursor', 'mcp.json'), 'utf-8')).toContain('https://example.com/open');
+      expect(await excludeOf(projectRoot)).not.toContain('teamai');
+    });
+
+    it('keeps listing a Codex project config after its server\'s ${VAR} became a literal and Codex was disabled', async () => {
+      const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
+      await writeMcpYaml(`${withSecret}    tools: [codex]\n`);
+      await reconcileMcpForConfig(withCodex, projectConfig);
+      expect(await fse.readFile(path.join(projectRoot, '.codex', 'config.toml'), 'utf-8')).toContain('super-secret-value');
+      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+      await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'published-literal')}    tools: [codex]\n`);
+      vi.stubEnv('SECRET_TOKEN', '');
+
+      await reconcileMcpForConfig(withCodex, { ...projectConfig, disabledAgents: ['codex'] } as LocalConfig);
+
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
+    });
+
     describe('a config an older teamai wrote under a mapping an earlier teamai.yaml made', () => {
       const custom = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } };
       const customFile = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');
@@ -1254,32 +1280,6 @@ servers:
         // Read as far as git could: a failure is tried again on the next pull.
         expect((await ledger(cfg)).earlierMappingsRead).toBe(read ? true : undefined);
       });
-    });
-
-    it('adds nothing for a disabled tool\'s config whose server never held a resolved value, after its definition changed', async () => {
-      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
-      await reconcileMcpForConfig(teamConfig, projectConfig);
-      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/v2\n');
-
-      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
-
-      expect(await fse.readFile(path.join(projectRoot, '.cursor', 'mcp.json'), 'utf-8')).toContain('https://example.com/open');
-      expect(await excludeOf(projectRoot)).not.toContain('teamai');
-    });
-
-    it('keeps listing a Codex project config after its server\'s ${VAR} became a literal and Codex was disabled', async () => {
-      const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
-      await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
-      await writeMcpYaml(`${withSecret}    tools: [codex]\n`);
-      await reconcileMcpForConfig(withCodex, projectConfig);
-      expect(await fse.readFile(path.join(projectRoot, '.codex', 'config.toml'), 'utf-8')).toContain('super-secret-value');
-      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
-      await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'published-literal')}    tools: [codex]\n`);
-      vi.stubEnv('SECRET_TOKEN', '');
-
-      await reconcileMcpForConfig(withCodex, { ...projectConfig, disabledAgents: ['codex'] } as LocalConfig);
-
-      expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
     });
 
     it('lists the config in .git/info/exclude before writing the value into it', async () => {
