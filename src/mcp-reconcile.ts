@@ -556,6 +556,17 @@ export async function projectWorktreeConfigs(localConfig: LocalConfig): Promise<
   return configs;
 }
 
+/** A project worktree's managed-mcp.json, and whether it is there at all: a lost one proves nothing. */
+export interface ProjectMcpRecord {
+  manifest: ManagedMcpManifest;
+  recorded: boolean;
+}
+
+async function readProjectMcpRecord(cfg: LocalConfig, projectRoot: string): Promise<ProjectMcpRecord> {
+  const { manifest, manifestPath } = await loadProjectMcpManifest(getDataHome(cfg), projectRoot, { dryRun: true });
+  return { manifest, recorded: Object.keys(manifest).length > 0 || await pathExists(manifestPath) };
+}
+
 /**
  * The `files` not proven free of a value teamai resolved (#882), each with why.
  * A missing file is clean; so is one a tool reads that parses and holds no
@@ -567,20 +578,22 @@ export async function projectWorktreeConfigs(localConfig: LocalConfig): Promise<
  * else (no tool reads it, it does not parse, the team's servers cannot be read,
  * the manifest is lost) is not: a server teamai wrote, since dropped from
  * mcp.yaml, with a value no longer set, looks like the member's own.
+ * `before` is `localConfig`'s manifest as it stood before a reconcile rewrote it.
  */
-export async function mcpConfigsNotProvenClean(teamConfig: TeamaiConfig, localConfig: LocalConfig, files: string[]): Promise<Map<string, string>> {
+export async function mcpConfigsNotProvenClean(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  files: string[],
+  before?: ProjectMcpRecord,
+): Promise<Map<string, string>> {
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
   // Keyed by real path: the protected paths come from git, which resolves symlinks (macOS /var).
   const targets = new Map<string, { target: McpTarget; owned: string[]; recorded: boolean }>();
   for (const cfg of await projectWorktreeConfigs(localConfig)) {
-    let manifest: ManagedMcpManifest = {};
-    let recorded = false;
-    if (cfg.projectRoot) {
-      const loaded = await loadProjectMcpManifest(getDataHome(cfg), cfg.projectRoot, { dryRun: true });
-      manifest = loaded.manifest;
-      recorded = Object.keys(manifest).length > 0 || await pathExists(loaded.manifestPath);
-    }
+    const { manifest, recorded } = cfg === localConfig && before ? before
+      : cfg.projectRoot ? await readProjectMcpRecord(cfg, cfg.projectRoot)
+      : { manifest: {}, recorded: false };
     for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) {
       const dir = await fse.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
       const key = path.join(dir, path.basename(target.file));
@@ -637,11 +650,14 @@ export async function reconcileMcpForConfig(
 ): Promise<McpReconcileResult> {
   // Each project config's exclusion from git, established before a resolved value is written into it.
   const exclusions = new Map<string, GitExclusion>();
+  const protect = !options.removeAll && !options.dryRun;
+  // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
+  const before = protect && localConfig.projectRoot ? await readProjectMcpRecord(localConfig, localConfig.projectRoot) : undefined;
   try {
     return await reconcileTargets(teamConfig, localConfig, options, exclusions);
   } finally {
     // Also after a failed write: what earlier pulls wrote is on disk either way.
-    if (!options.removeAll && !options.dryRun) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions);
+    if (protect) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions, before);
   }
 }
 
@@ -656,11 +672,12 @@ async function protectResolvedMcpConfigs(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   exclusions: Map<string, GitExclusion>,
+  before: ProjectMcpRecord | undefined,
 ): Promise<void> {
   const { projectRoot } = localConfig;
   if (localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return;
   try {
-    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions);
+    await protectProjectMcpConfigs(teamConfig, localConfig, projectRoot, exclusions, before);
   } catch (e) {
     log.warn(
       `Could not check this project's MCP configs for resolved values to keep out of git: ${e instanceof Error ? e.message : String(e)}. `
@@ -674,6 +691,7 @@ async function protectProjectMcpConfigs(
   localConfig: LocalConfig,
   projectRoot: string,
   exclusions: Map<string, GitExclusion>,
+  before: ProjectMcpRecord | undefined,
 ): Promise<void> {
   const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
   const teamDefs = resolution.kind === 'failed' ? null : resolution.entries.map((entry) => teamMcpToDef(entry.entry));
@@ -695,7 +713,7 @@ async function protectProjectMcpConfigs(
     const exclusion = exclusions.get(file);
     return !holding.has(file) && exclusion?.kind === 'excluded' && exclusion.added;
   });
-  await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, addedNow);
+  await releaseMcpGitExcludes(teamConfig, localConfig, projectRoot, addedNow, before);
 }
 
 /**
@@ -727,6 +745,7 @@ async function releaseMcpGitExcludes(
   localConfig: LocalConfig,
   projectRoot: string,
   addedNow: string[],
+  before?: ProjectMcpRecord,
 ): Promise<void> {
   const dirs = [projectRoot];
   for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) dirs.push(path.dirname(target.file));
@@ -738,6 +757,7 @@ async function releaseMcpGitExcludes(
     teamConfig,
     localConfig,
     [...excludes.values()].flatMap((entries) => entries.flatMap((entry) => entry.files)),
+    before,
   );
   for (const [excludeFile, entries] of excludes) {
     const clean = entries

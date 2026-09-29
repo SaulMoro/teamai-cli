@@ -1082,6 +1082,21 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      it('but one an earlier pull listed stays when this pull rewrote the manifest it had lost', async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+        await writeMcpYaml(open);
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await fse.pathExists(managedMcpManifestPath(getDataHome(projectConfig), projectRoot))).toBe(true);
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
       it('when the last server with a resolved value leaves mcp.yaml', async () => {
         await writeMcpYaml(`${withSecret}  - name: open\n    transport: http\n    url: https://example.com/open\n`);
         await reconcileMcpForConfig(teamConfig, claudeOnly());
