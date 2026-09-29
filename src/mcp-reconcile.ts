@@ -1592,6 +1592,11 @@ async function applyJson(
       continue;
     }
     nextRecords.push({ name, hash });
+    // The copy a bare write left before another tool added the key would keep the old value beside this one (#882).
+    if (ownedNames.has(name) && doc.beside?.[name] !== undefined) {
+      delete doc.data[name];
+      dirty = true;
+    }
     if (existing !== undefined && ownedHash.get(name) === hash) continue;
     doc.servers[name] = entry;
     dirty = true;

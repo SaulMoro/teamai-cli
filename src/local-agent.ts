@@ -2945,6 +2945,8 @@ async function installMcpServer(
     const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
     await writeJsonAtomic(manifestPath, manifest);
+    // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
+    if (ownedNames.has(slug) && doc.beside?.[slug] !== undefined) delete doc.data[slug];
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
   }

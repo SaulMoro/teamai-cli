@@ -180,6 +180,30 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(await fse.readJson(configFile)).toEqual({ 'user-server': userServer, ...other });
   });
 
+  it('replaces a bare Copilot project entry it installs again once another tool has written mcpServers into the file', async () => {
+    const workspacePath = path.join(tmpDir, 'copilot-reinstall-project');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeJson(configFile, {});
+    const command = { scope: 'workspace', workspace_path: workspacePath, slug: COPILOT_SERVER };
+    let acks = await runResponse({
+      cmds: [{ id: 8997, type: 'install_mcp', ...command, version: '1.0.0', mcp_config: { transport: 'http', url: 'https://old.example.com/mcp' } }],
+    }, 'copilot');
+    expect(acks[0].status).toBe('success');
+    const other = { mcpServers: { claude: { type: 'http', url: 'https://claude.example.com/mcp' } } };
+    await fse.writeJson(configFile, { ...await fse.readJson(configFile), ...other });
+
+    acks = await runResponse({
+      cmds: [{ id: 8998, type: 'install_mcp', ...command, version: '1.0.1', mcp_config: { transport: 'http', url: 'https://new.example.com/mcp' } }],
+    }, 'copilot');
+
+    expect(acks[0].status).toBe('success');
+    const doc = await fse.readJson(configFile) as Record<string, unknown>;
+    expect(doc[COPILOT_SERVER]).toBeUndefined();
+    expect(JSON.stringify(doc)).not.toContain('old.example.com');
+    expect((doc.mcpServers as Record<string, unknown>)[COPILOT_SERVER]).toEqual(expect.objectContaining({ url: 'https://new.example.com/mcp' }));
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');

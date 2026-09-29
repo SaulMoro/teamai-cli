@@ -1104,6 +1104,21 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      it('replaces Copilot\'s bare entry when it writes that server again under the mcpServers Claude added', async () => {
+        await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
+        await reconcileMcpForConfig(shared(), projectConfig);
+        expect((await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>).mcpServers).toBeDefined();
+        await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'published-literal')}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(shared(), projectConfig);
+
+        const after = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+        expect(JSON.stringify(after)).not.toContain('super-secret-value');
+        expect(after['with-secret']).toBeUndefined();
+        expect((after.mcpServers as Record<string, unknown>)['with-secret']).toEqual(expect.objectContaining({ headers: { Authorization: 'Bearer published-literal' } }));
+      });
+
       it('removes Copilot\'s bare entry once the team drops it, leaving the mcpServers Claude wrote', async () => {
         await writeMcpYaml(open);
         vi.stubEnv('SECRET_TOKEN', '');
