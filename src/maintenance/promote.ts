@@ -159,8 +159,6 @@ export async function executePromotion(
 ): Promise<{ targetPath: string; marked: string | null }> {
   const category = options.category ?? candidate.suggestedCategory;
   const targetDir = path.join(repoPath, category);
-  await ensureDir(targetDir);
-
   const targetPath = path.join(targetDir, candidate.filename);
 
   if (options.dryRun) {
@@ -176,6 +174,7 @@ export async function executePromotion(
 
   // AI transforms the learning into a generalized format for the target category
   const promotedContent = await generatePromotedContent(originalContent, category, candidate.title);
+  await ensureDir(targetDir);
   await writeFile(targetPath, promotedContent);
 
   // Mark the learning as promoted. When it lives in a root nothing pushes, the
