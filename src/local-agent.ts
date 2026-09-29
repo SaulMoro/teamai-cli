@@ -581,7 +581,7 @@ function mergeWorkspaceBindings(
   return base;
 }
 
-export async function loadLocalAgentConfig(): Promise<LocalAgentConfig | null> {
+export async function loadLocalAgentConfig(options: { dryRun?: boolean } = {}): Promise<LocalAgentConfig | null> {
   const fileConfig = await readJson<LocalAgentConfig>(getConfigPath());
   if (fileConfig?.endpoint) {
     const config = {
@@ -629,8 +629,7 @@ export async function loadLocalAgentConfig(): Promise<LocalAgentConfig | null> {
   // an HTTP team repo, auto-create config.json so v0.17.x upgraders keep capability.
   const { loadLocalConfig } = await import('./config.js');
   const { resolveApiKey } = await import('./api-key.js');
-  // Only `repo` is read here; a role migration persists on the command that writes (#893).
-  const legacy = await loadLocalConfig({ dryRun: true });
+  const legacy = await loadLocalConfig(options);
   if (legacy?.repo?.kind === 'http' && legacy.repo.url) {
     const endpoint = normalizeEndpoint(legacy.repo.url);
     const token = resolveApiKey() ?? undefined;
@@ -3359,8 +3358,8 @@ export interface LocalAgentSummary {
  * none is configured. Used by `teamai source list` to show the HTTP side channel
  * alongside git cross-team sources.
  */
-export async function describeLocalAgent(): Promise<LocalAgentSummary | null> {
-  const config = await loadLocalAgentConfig();
+export async function describeLocalAgent(options: { dryRun?: boolean } = {}): Promise<LocalAgentSummary | null> {
+  const config = await loadLocalAgentConfig(options);
   if (!config) return null;
 
   const boundProjects = Object.entries(config.workspaceBindings)

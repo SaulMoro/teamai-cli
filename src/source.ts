@@ -246,7 +246,7 @@ export async function sourceList(): Promise<void> {
   }
 
   const { describeLocalAgent } = await import('./local-agent.js');
-  const httpSource = await describeLocalAgent();
+  const httpSource = await describeLocalAgent({ dryRun: true });
 
   if (gitSources.length === 0 && !httpSource) {
     log.info('No sources configured. Use `teamai source add <url>` or `teamai source add-http <endpoint>`.');
@@ -296,7 +296,8 @@ export async function sourceAddHttp(
 
   // Guard: if the main repo is already an HTTP backend, it owns the single
   // local-agent config — refuse rather than overwrite its endpoint.
-  const mainConfig = (await detectProjectConfig(undefined, undefined, options)) ?? (await loadLocalConfig(options));
+  const mainConfig = (await detectProjectConfig(undefined, undefined, { dryRun: options.dryRun }))
+    ?? (await loadLocalConfig({ dryRun: options.dryRun }));
   if (mainConfig?.repo.kind === 'http') {
     log.error('Your main team repo is already an HTTP backend, which owns the HTTP source config.');
     log.info('An HTTP bypass is only for git-based main repos. Nothing changed.');
