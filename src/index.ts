@@ -106,7 +106,7 @@ program
     // A learning queued in this checkout would go with it when the worktree is
     // removed (#808).
     if (needsQueueOutOfCheckout(actionCommand)) {
-      const kept = await queueKeptInCheckout(migration);
+      const kept = await queueKeptInCheckout(migration, { dryRun: !!opts.dryRun });
       if (kept) {
         log.error(kept);
         process.exit(1);
