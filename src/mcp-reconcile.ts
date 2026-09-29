@@ -744,7 +744,8 @@ async function readProjectMcpManifest(cfg: LocalConfig, projectRoot: string): Pr
  * and cleanup left (their definition may have left mcp.yaml), and none of the
  * values of the variables set in this environment. Anything else (no tool reads
  * it, it does not parse, the team's servers cannot be read, the manifest is
- * lost, empty, does not parse or has no record for the tool) is not: a server
+ * lost, empty, does not parse, has no record for the tool, or a record rebuilt
+ * without noting the file's other servers in managed-mcp-files.json) is not: a server
  * teamai wrote, since dropped from mcp.yaml, with a value no longer set, looks
  * like the member's own.
  * `before` is `localConfig`'s manifest as it stood before a reconcile rewrote it.
@@ -782,8 +783,9 @@ export async function mcpConfigsNotProvenClean(
       const key = path.join(dir, path.basename(target.file));
       cfgTargets.push(target);
       const records = manifest[managedMcpManifestKey(target.tool, true)];
-      const recorded = Array.isArray(records);
-      const owned = recorded ? records : [];
+      const owned = Array.isArray(records) ? records : [];
+      // A rebuilt record whose file's other servers could not be noted says nothing of them yet.
+      const recorded = Array.isArray(records) && !records.some((record) => record.unnoted);
       // One file reached twice (two tools share it, or a checkout through a symlink) merges what each says.
       const seen = targets.get(key);
       targets.set(key, {
@@ -840,7 +842,7 @@ export async function mcpConfigsNotProvenClean(
         : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
         : await resolvedValueEvidence(known.target, teamDefs, known, vars, ctx).then((e) => e && `it holds ${e}`)
           ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
-          ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse or has no entry for it');
+          ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse, has no entry for it or was rebuilt without noting its other servers');
       if (why) held.set(file, why);
     }
   }
@@ -1080,7 +1082,7 @@ async function reconcileTargets(
   if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
   // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
   const listed = localConfig.scope === 'project' && !options.dryRun ? new Set(Object.keys((await readResolvedMcpFiles(localConfig)).files)) : new Set<string>();
-  const rebuilt: Array<{ target: McpTarget; recorded: string[] }> = [];
+  const rebuilt: Array<{ target: McpTarget; records: ManagedMcpRecord[] }> = [];
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
 
@@ -1124,19 +1126,26 @@ async function reconcileTargets(
 
     // Whether each entry holds a resolved value: once its definition stops
     // needing one, what this pull wrote still does (#882).
-    if (target.projectScope) for (const record of nextRecords) record.resolved ??= carriesResolvedValue(target, teamDefs, [record.name]);
-    if (listed.has(target.file) && manifest[manifestKey] === undefined && nextRecords.length > 0) {
-      rebuilt.push({ target, recorded: nextRecords.map((record) => record.name) });
+    if (target.projectScope) {
+      for (const record of nextRecords) {
+        record.resolved ??= carriesResolvedValue(target, teamDefs, [record.name]);
+        delete record.unnoted;
+      }
     }
+    // Rebuilt this run, or by one that could not note what else was in the file.
+    const unnoted = manifest[manifestKey] === undefined || manifest[manifestKey].some((record) => record.unnoted);
+    if (listed.has(target.file) && unnoted && nextRecords.length > 0) rebuilt.push({ target, records: nextRecords });
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
     if (nextRecords.length > 0 || (target.projectScope && manifest[manifestKey] !== undefined)) manifest[manifestKey] = nextRecords;
     else delete manifest[manifestKey];
   }
 
-  if (!options.dryRun && wrote) {
-    // Before the manifest: once it is written, nothing says the record was rebuilt.
-    await noteUnverifiedMcpServers(localConfig, rebuilt);
+  if (!options.dryRun && (wrote || rebuilt.length > 0)) {
+    // Before the manifest: once it is written, only a record marked unnoted says it was rebuilt.
+    for (const records of await noteUnverifiedMcpServers(localConfig, rebuilt)) {
+      for (const record of records) record.unnoted = true;
+    }
     await writeJsonAtomic(manifestPath, manifest);
   }
   return { changes, wrote };
@@ -1145,26 +1154,30 @@ async function reconcileTargets(
 /**
  * Note, for each file whose lost record this run rebuilt, the servers in it
  * the new record does not claim: a stale entry teamai wrote looks like the
- * member's own once its value is no longer set (#882). A failure does not
- * stop the manifest write, which the next pull needs to own what this one wrote.
+ * member's own once its value is no longer set (#882). Returns the records of
+ * each file it could not note them for: the manifest write marks them
+ * unnoted, so the file keeps its line and the next pull tries again, and
+ * still owns what this one wrote.
  */
-async function noteUnverifiedMcpServers(localConfig: LocalConfig, rebuilt: Array<{ target: McpTarget; recorded: string[] }>): Promise<void> {
-  if (rebuilt.length === 0) return;
-  const found: Array<{ file: string; names: string[] }> = [];
-  for (const { target, recorded } of rebuilt) {
+async function noteUnverifiedMcpServers(
+  localConfig: LocalConfig,
+  rebuilt: Array<{ target: McpTarget; records: ManagedMcpRecord[] }>,
+): Promise<ManagedMcpRecord[][]> {
+  const found: Array<{ file: string; names: string[]; records: ManagedMcpRecord[] }> = [];
+  for (const { target, records } of rebuilt) {
     const installed = await installedMcpEntries(target);
-    found.push({ file: target.file, names: [...installed?.keys() ?? []].filter((name) => !recorded.includes(name)) });
+    const names = [...installed?.keys() ?? []].filter((name) => !records.some((record) => record.name === name));
+    if (names.length > 0) found.push({ file: target.file, names, records });
   }
+  if (found.length === 0) return [];
   const result = await recordUnverifiedMcpServers(localConfig, found).catch((e: unknown) => e instanceof Error ? e.message : String(e));
-  if (result === 'written' || result === 'unchanged') return;
-  const files = found.filter((f) => f.names.length > 0).map((f) => f.file);
-  if (files.length === 0) return;
-  log.warn(
-    `Could not note the MCP servers teamai found in ${files.join(', ')} while rebuilding its lost record of them: `
+  if (result === 'written' || result === 'unchanged') return [];
+  log.debug(
+    `Did not note the MCP servers teamai found in ${found.map((f) => f.file).join(', ')} while rebuilding its lost record of them: `
     + `${result === 'locked' ? 'another teamai command held managed-mcp-files.json past the wait' : result}. `
-    + 'A later pull may take the file out of .git/info/exclude while a server an earlier pull wrote there is still in it: '
-    + 'remove the servers you did not add yourself, and do not commit the file meanwhile.',
+    + 'They keep their .git/info/exclude lines while they hold MCP servers; the next pull tries again.',
   );
+  return found.map((f) => f.records);
 }
 
 /**

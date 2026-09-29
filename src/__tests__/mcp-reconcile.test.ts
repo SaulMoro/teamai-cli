@@ -1381,6 +1381,40 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      it('and every pull after one that rewrote the manifest it had lost while another command held managed-mcp-files.json', async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+        await fse.remove(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+        await writeMcpYaml(open);
+        vi.stubEnv('SECRET_TOKEN', '');
+        const lock = `${resolvedMcpFilesPath(projectConfig)}.teamai-lock`;
+        expect(await acquireLock(lock)).toBe(true);
+        try {
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          expect(await fse.readJson(mcpJson())).toMatchObject({ mcpServers: { open: expect.anything() } });
+          // Still held: the note is still missing, and so the line stays.
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        } finally {
+          await releaseLock(lock);
+        }
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+
+        // Noted at last: once the member takes the stale server out, the line goes.
+        const doc = await fse.readJson(mcpJson()) as { mcpServers: Record<string, unknown> };
+        delete doc.mcpServers['with-secret'];
+        await fse.writeJson(mcpJson(), doc);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        expect(await excludeOf(projectRoot)).not.toContain('teamai');
+      }, 30_000);
+
       describe.each([
         ['empty', ''],
         ['truncated', '{ "claude:project": [ { "name": "with-sec'],
