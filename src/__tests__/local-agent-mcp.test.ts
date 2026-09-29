@@ -625,6 +625,26 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).not.toMatch(/\.mcp\.json/);
     });
 
+    it('says the next session tries again when that sync cannot list the file, and calls it a credential', async () => {
+      await install(9105, bearer);
+      const excludeFile = path.join(wsPath, '.git', 'info', 'exclude');
+      await fse.writeFile(excludeFile, '');
+      await fse.remove(await workspaceFile('managed-mcp-files.json'));
+      await fse.chmod(excludeFile, 0o444);
+      const { log } = await import('../utils/logger.js');
+      vi.mocked(log.warn).mockClear();
+      try {
+        await runResponse({ cmds: [] }, 'codebuddy', wsPath);
+      } finally {
+        await fse.chmod(excludeFile, 0o644);
+      }
+
+      const warned = vi.mocked(log.warn).mock.calls.map(([line]) => String(line)).join('\n');
+      expect(warned).toContain('may hold a credential');
+      expect(warned).toContain('start a new session');
+      expect(warned).not.toContain('teamai pull');
+    });
+
     it('lists a config an older install wrote a credential into on the next sync in the workspace, with no command to run', async () => {
       await install(9104, bearer);
       // As an older local agent left it: no line, no managed-mcp-files.json, no note on the record.

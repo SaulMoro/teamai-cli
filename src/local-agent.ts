@@ -3310,7 +3310,8 @@ async function protectWorkspaceMcpConfigs(config: LocalAgentConfig, cwd?: string
     const dataHome = await resolveDataHomeForScope('project', workspacePath);
     const localConfig = await createResourceLocalConfig(config, 'project', getUserHome(), workspacePath);
     const { protectLocalAgentMcpConfigs } = await import('./mcp-reconcile.js');
-    await protectLocalAgentMcpConfigs(createLocalAgentTeamConfig(config.endpoint), { ...localConfig, dataHome });
+    // The sync at the next session start checks again, not a pull.
+    await protectLocalAgentMcpConfigs(createLocalAgentTeamConfig(config.endpoint), { ...localConfig, dataHome }, { rerun: 'start a new session' });
   } catch (e) {
     log.warn(
       `Could not check ${workspacePath}'s MCP configs for a credential to keep out of git: ${e instanceof Error ? e.message : String(e)}. `

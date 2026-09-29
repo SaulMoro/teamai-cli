@@ -1210,12 +1210,16 @@ export async function localAgentCredentialFiles(localConfig: LocalConfig, target
  * runs again for a server already in place. Only `teamai uninstall` takes
  * such a line out. The caller skips a dry run.
  */
-export async function protectLocalAgentMcpConfigs(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+export async function protectLocalAgentMcpConfigs(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  options: { rerun?: string } = {},
+): Promise<void> {
   const mapped = await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true });
   const unmapped = await unmappedMcpDefaults(mapped);
   const held = await localAgentCredentialFiles(localConfig, mapped.filter((target) => !unmapped.has(target)));
   if (held.length === 0) return;
-  for (const file of new Set(held.map((target) => target.file))) await excludeFromGit(file);
+  for (const file of new Set(held.map((target) => target.file))) await excludeFromGit(file, { rerun: options.rerun, holds: 'a credential' });
   // A failure does not undo the line: the exclusion protects the file.
   const result = await trackResolvedMcpFiles(localConfig, held.map(({ tool, file }) => ({ tool, file })))
     .catch((e: unknown) => e instanceof Error ? e.message : String(e));

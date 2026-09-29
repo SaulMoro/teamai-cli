@@ -319,12 +319,12 @@ async function reincludingRule(file: string): Promise<{ source: string; line: st
  * `ensureExcludedFromGit` for a file already on disk that may hold a resolved
  * value, warning when it fails rather than failing the sync that wrote the file.
  */
-export async function excludeFromGit(file: string): Promise<void> {
+export async function excludeFromGit(file: string, options: { rerun?: string; holds?: string } = {}): Promise<void> {
   if (!await pathExists(file)) return;
-  const exclusion = await ensureExcludedFromGit(file);
+  const exclusion = await ensureExcludedFromGit(file, { rerun: options.rerun });
   if (exclusion.kind === 'failed') {
     log.warn(
-      `${file} may hold a resolved MCP variable, and teamai could not keep it out of git: ${exclusion.reason}. `
+      `${file} may hold ${options.holds ?? 'a resolved MCP variable'}, and teamai could not keep it out of git: ${exclusion.reason}. `
       + `${exclusion.fix} Do not commit the file meanwhile.`,
     );
   }
