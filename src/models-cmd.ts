@@ -203,7 +203,7 @@ export async function modelsList(reference?: string): Promise<void> {
     return;
   }
   const values: Record<ProfileRef['source'], StoredModelInputs> = {
-    team: context.localConfig && refs.some((ref) => ref.source === 'team') ? await loadTeamValues(context.localConfig, context.team) : {},
+    team: context.localConfig && refs.some((ref) => ref.source === 'team') ? await loadTeamValues(context.localConfig, context.team, { dryRun: true }) : {},
     local: refs.some((ref) => ref.source === 'local') ? await loadModelInputs(getLocalValuesPath()) : {},
   };
   refs.forEach((ref, index) => {

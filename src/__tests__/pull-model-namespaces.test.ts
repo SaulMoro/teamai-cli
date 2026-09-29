@@ -332,6 +332,17 @@ describe('pull: team model profiles by namespace', () => {
     expect(await claude()).toEqual({ url: `${COMPANY}/checkout`, token: 'company-secret', model: 'checkout-model' });
   });
 
+  it('models list reads a key stored before namespaces existed bound, and leaves the file as it was (#893)', async () => {
+    const file = getTeamValuesPath(configFor([]));
+    await saveModelInputs(file, { 'team:gw': { API_KEY: { env: 'COMPANY_KEY' } } });
+    const before = await fse.readFile(file, 'utf8');
+
+    const output = await captureOutput(() => modelsList('team:gw'));
+
+    expect(output).toContain('  API key: environment COMPANY_KEY');
+    expect(await fse.readFile(file, 'utf8')).toBe(before);
+  });
+
   it('binds a beta key to the gateway its agent was switched to, so a root profile that moved since never gets it', async () => {
     const beta = { 'team:gw': { API_KEY: { env: 'COMPANY_KEY' } } };
     await saveModelInputs(getTeamValuesPath(configFor([])), beta);
