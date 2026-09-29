@@ -348,6 +348,26 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix).not.toContain(path.join(projectRoot, '.mcp.json'));
     });
 
+    it('fails for a moved tool\'s file while the tool mapping it today owns that server name only under another key', async () => {
+      const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+      teamConfig.toolPaths = { ...teamConfig.toolPaths, opencode: { skills: '.opencode/skills', mcp: '.config/opencode/opencode.json', mcpProject: 'shared/mcp.json' } };
+      const shared = path.join(projectRoot, 'shared', 'mcp.json');
+      await fse.outputJson(shared, {
+        mcpServers: { x: { type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer t0ken-of-cursor' } } },
+        mcp: { x: { type: 'remote', url: 'https://x.example/mcp' } },
+      });
+      expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'cursor', file: shared }])).toBe('written');
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('opencode', true)]: [{ name: 'x', hash: 'fixture-hash', resolved: false }],
+      });
+      await fse.appendFile(path.join(projectRoot, '.git', 'info', 'exclude'), '/.mcp.json\n');
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(false);
+      expect(check.fix ?? '').toContain(shared);
+    });
+
     describe('a config an older teamai wrote under a mapping an earlier teamai.yaml made, before a pull on this version', () => {
       const old = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');
       const commitTeamYaml = (toolPaths: object): void => {

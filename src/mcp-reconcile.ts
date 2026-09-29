@@ -774,7 +774,7 @@ async function mcpFileState(targets: McpTarget[]): Promise<McpFileObservation['s
  * manifest records say they wrote there, which their own rules judge. Any
  * other server may be what teamai wrote for `targets`' tools.
  */
-export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: readonly string[]): Promise<string | null> {
+export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: McpOwnedFor): Promise<string | null> {
   const state = await mcpFileState(targets);
   if (state.kind === 'unparsable') return 'it does not parse';
   if (state.kind !== 'parsed') return null;
@@ -783,10 +783,31 @@ export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: read
       ? 'teamai may have written a resolved value to it under an earlier toolPaths mapping, and it still holds MCP servers'
       : null;
   }
-  const other = state.servers.find((name) => !owned.includes(name));
-  return other === undefined ? null
-    : `teamai may have written a resolved value to it for ${targets.map((t) => t.tool).join(', ')} under an earlier toolPaths mapping, `
-      + `and it holds ${other}, which no tool that maps it now owns`;
+  // Each target's key read alone: another key's owner proves nothing of it (OpenCode's `mcp` beside `mcpServers`).
+  for (const target of targets) {
+    const own = await mcpFileState([target]);
+    const names = own.kind === 'parsed' ? own.servers : [];
+    const other = names.find((name) => !owned(target).includes(name));
+    if (other !== undefined) {
+      return `teamai may have written a resolved value to it for ${targets.map((t) => t.tool).join(', ')} under an earlier toolPaths mapping, `
+        + `and it holds ${other}, which no tool that maps it now owns`;
+    }
+  }
+  return null;
+}
+
+/** For a target of a file other tools map today, the servers their records own under its key. */
+export type McpOwnedFor = (target: McpTarget) => readonly string[];
+
+/**
+ * `McpOwnedFor` from `mappedBy`, the tools a file's mapping reaches today: only the records of those that
+ * keep their servers under the judged target's key count (#882). Undefined when no tool maps it today.
+ */
+export function ownedByMappers(mappedBy: readonly string[], manifest: ManagedMcpManifest | undefined): McpOwnedFor | undefined {
+  if (mappedBy.length === 0) return undefined;
+  return (target) => mappedBy
+    .filter((tool) => { const format = detectMcpFormat(tool); return format !== null && sameServerKey(format, target.format); })
+    .flatMap((tool) => manifest?.[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
 }
 
 /**
@@ -801,7 +822,7 @@ export async function earlierMappedMcpFileEvidence(
   teamDefs: McpServerDef[] | null,
   vars: Record<string, string>,
   ctx: () => Promise<DesiredMcpContext>,
-  owned?: readonly string[],
+  owned?: McpOwnedFor,
 ): Promise<string | null> {
   return await recordedMcpFileEvidence([target], owned) ?? await resolvedValueEvidence(target, teamDefs, { owned: [] }, vars, ctx);
 }
@@ -827,12 +848,11 @@ async function observeMcpConfigs(
   for (const [file, { targets: group, mappedBy, tracked }] of await recordedMcpTargets(localConfig, targets)) {
     const state = await mcpFileState(group);
     const stillTracked = tracked && (await gitTracks(file)).kind === 'tracked';
-    const owned = mappedBy.length === 0 ? undefined
-      : mappedBy.flatMap((tool) => manifest[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
+    const owned = ownedByMappers(mappedBy, manifest);
     const holding = !stillTracked && await recordedMcpFileEvidence(group, owned) !== null;
-    for (const { tool } of group) {
+    for (const target of group) {
       observations.push({
-        file, tool, state, holding, owned: owned ?? [],
+        file, tool: target.tool, state, holding, owned: owned ? [...owned(target)] : [],
         ...tracked ? { tracked: stillTracked } : {},
         ...owned && !stillTracked ? { remapped: true as const } : {},
       });
@@ -915,6 +935,8 @@ export async function mcpConfigsNotProvenClean(
     mappers: Set<string>; mapsToday: Set<string>; proven: Set<string>; writers: Set<string>;
     /** Every tool's target on this file: tools of different formats read different keys of it. */
     all: McpTarget[];
+    /** What each of those tools' records own there, by format. */
+    ownedByFormat: Array<{ format: McpFormat; names: string[] }>;
   }>();
   const realRoot = (root: string | undefined): Promise<string | undefined> =>
     root ? fse.realpath(root).catch(() => root) : Promise.resolve(undefined);
@@ -965,6 +987,7 @@ export async function mcpConfigsNotProvenClean(
         proven,
         writers,
         all: [...seen?.all ?? [], target],
+        ownedByFormat: [...seen?.ownedByFormat ?? [], { format: target.format, names: owned.map((record) => record.name) }],
         foreign: foreign || seen?.foreign === true,
       });
     }
@@ -1004,7 +1027,9 @@ export async function mcpConfigsNotProvenClean(
         continue;
       }
       const moved = remapped.get(file);
-      const movedWhy = moved && await recordedMcpFileEvidence(moved, targets.get(file)?.owned.map((record) => record.name) ?? []);
+      const mappedHereNow = targets.get(file);
+      const movedWhy = moved && await recordedMcpFileEvidence(moved, (target) => (mappedHereNow?.ownedByFormat ?? [])
+        .filter((o) => sameServerKey(o.format, target.format)).flatMap((o) => o.names));
       if (movedWhy) {
         held.set(file, movedWhy);
         continue;
@@ -1165,11 +1190,10 @@ async function protectProjectMcpConfigs(
       continue;
     }
     // In a file other tools map today, their records tell their own servers.
-    const owned = mappedBy.length === 0 ? undefined
-      : mappedBy.flatMap((tool) => manifest[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
+    const owned = ownedByMappers(mappedBy, manifest);
     const holding = await earlierMappedMcpFileEvidence(target, teamDefs, vars, ctx, owned) !== null;
     if (holding) found.push(target.file);
-    observations.push({ file: target.file, tool: target.tool, state, holding, owned: owned ?? [], ...owned ? { remapped: true as const } : {} });
+    observations.push({ file: target.file, tool: target.tool, state, holding, owned: owned ? [...owned(target)] : [], ...owned ? { remapped: true as const } : {} });
   }
   const holding = new Set(observations.filter((o) => o.holding).map((o) => o.file));
   const unproven = new Set(observations.filter((o) => !o.holding).map((o) => o.file));

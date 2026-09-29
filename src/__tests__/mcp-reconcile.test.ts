@@ -989,6 +989,26 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
     });
 
+    it('never lets a tool that maps a moved tool\'s file today claim its stale server under another key', async () => {
+      const opencode = { skills: '.opencode/skills', mcp: '.config/opencode/opencode.json', mcpProject: '.mcp.json' };
+      const before = { ...teamConfig, toolPaths: { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.mcp.json' }, opencode } } as TeamaiConfig;
+      const after = { ...teamConfig, toolPaths: { ...TOOL_PATHS, opencode } } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.opencode', 'skills'));
+      const open = '  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n';
+      await writeMcpYaml(`servers:\n  - name: x\n    transport: http\n    url: https://example.com/x\n    headers:\n      Authorization: Bearer \${SECRET_TOKEN}\n    tools: [cursor]\n${open}`);
+      await reconcileMcpForConfig(before, projectConfig);
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('super-secret-value');
+      // Cursor moves back to .cursor/mcp.json; OpenCode, on .mcp.json, now owns a literal x under `mcp`.
+      await writeMcpYaml(`servers:\n  - name: x\n    transport: http\n    url: https://example.com/x\n    tools: [opencode]\n${open}`);
+      vi.stubEnv('SECRET_TOKEN', '');
+      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+
+      await reconcileMcpForConfig(after, projectConfig);
+
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('super-secret-value');
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+    });
+
     it('never lets one format\'s record claim a server of the same name under another format\'s key', async () => {
       const toolPaths = {
         ...UNMOVED_TOOL_PATHS,
