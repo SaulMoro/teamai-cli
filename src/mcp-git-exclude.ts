@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import fse from 'fs-extra';
 import type { McpServerDef } from './types.js';
@@ -83,6 +84,18 @@ export async function existingAncestor(file: string): Promise<string> {
 }
 
 /**
+ * Where a write to `file` lands: the real path of its closest existing
+ * directory, the rest appended. The appliers replace the file itself (tmp +
+ * rename) but follow its directories, so every check of whether git would
+ * commit the file judges this path (#886), and reads keep `file`.
+ */
+export async function realFilePath(file: string): Promise<string> {
+  const dir = await existingAncestor(file);
+  const real = await fs.promises.realpath(dir).catch(() => dir);
+  return path.join(real, path.relative(dir, file));
+}
+
+/**
  * Whether git would put a file in a commit. `unknown` is a repository git could
  * not answer for (unsafe ownership, a bad config): never read it as safe.
  */
@@ -92,11 +105,6 @@ export type GitTracking =
   | { kind: 'outside-repo' }
   | { kind: 'unknown'; error: string };
 
-/** Where a write to `file` lands (see realFilePath): the path every check here judges. */
-async function landingPath(file: string): Promise<string> {
-  const { realFilePath } = await import('./mcp-reconcile.js');
-  return realFilePath(file);
-}
 
 /**
  * `file` as a message names it, and the path to give git for it: the one a
@@ -105,7 +113,7 @@ async function landingPath(file: string): Promise<string> {
  * symlink above the checkout (macOS /var) changes no path git uses.
  */
 export async function gitPathOf(file: string): Promise<{ label: string; path: string }> {
-  const landed = await landingPath(file);
+  const landed = await realFilePath(file);
   if (landed === file) return { label: file, path: file };
   const location = await gitExcludeFile(await existingAncestor(landed));
   const inCheckout = location ? path.relative(location.root, landed) : '';
@@ -118,7 +126,7 @@ export async function gitPathOf(file: string): Promise<{ label: string; path: st
  * ignore rule. Judged where a write to it lands. Read-only.
  */
 export async function gitTracking(file: string): Promise<GitTracking> {
-  file = await landingPath(file);
+  file = await realFilePath(file);
   const dir = await existingAncestor(file);
   const result = await execCommand('git', ['check-ignore', '-q', '--', path.relative(dir, file)], { cwd: dir, timeoutMs: 10_000 })
     .catch((e: unknown) => ({ code: -1, stdout: '', stderr: e instanceof Error ? e.message : String(e) }));
@@ -137,7 +145,7 @@ export async function gitTracking(file: string): Promise<GitTracking> {
  * answer: never read it as untracked.
  */
 async function gitTracks(file: string): Promise<{ kind: 'tracked' } | { kind: 'untracked' } | { kind: 'unknown'; error: string }> {
-  file = await landingPath(file);
+  file = await realFilePath(file);
   // The file, or even its directory, may be gone from disk and still be in the index.
   const dir = await existingAncestor(file);
   const result = await execCommand('git', ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path.relative(dir, file)], { cwd: dir, timeoutMs: 10_000 })
@@ -198,7 +206,7 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
   if (inIndex.kind === 'tracked') return tracked();
   if (inIndex.kind === 'unknown') return { kind: 'failed', reason: inIndex.error, fix: repair };
   // Where the write lands. It and its directory need not exist yet: git is asked from the nearest one that does.
-  const landed = await landingPath(file);
+  const landed = await realFilePath(file);
   const dir = await existingAncestor(landed);
   const location = await gitExcludeFile(dir);
   if (!location) {

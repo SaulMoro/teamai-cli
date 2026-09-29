@@ -50,9 +50,9 @@ import {
   carriesResolvedValue,
   ensureExcludedFromGit,
   excludeFromGit,
-  existingAncestor,
   findMcpGitExcludes,
   mcpExcludePatternPath,
+  realFilePath,
   removeMcpGitExclude,
   resolvedVariableIn,
   type GitExclusion,
@@ -1029,18 +1029,6 @@ async function releaseMcpGitExcludes(
     // Left as it is: the next pull tries again.
     if (result === 'locked') log.debug(`Kept ${clean.join(', ')} in ${excludeFile}: another teamai command held it past the wait.`);
   }
-}
-
-/**
- * Where a write to `file` lands: the real path of its closest existing
- * directory, the rest appended. The appliers replace the file itself (tmp +
- * rename) but follow its directories, so every check of whether git would
- * commit the file judges this path (#886), and reads keep `file`.
- */
-export async function realFilePath(file: string): Promise<string> {
-  const dir = await existingAncestor(file);
-  const real = await fse.realpath(dir).catch(() => dir);
-  return path.join(real, path.relative(dir, file));
 }
 
 async function reconcileTargets(
