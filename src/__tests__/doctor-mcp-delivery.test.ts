@@ -366,5 +366,18 @@ describe('doctor — MCP servers delivered on disk', () => {
 
       expect(await excludeCheck()).toBeUndefined();
     });
+
+    it('fails the delivery check for a server withheld from a file git tracks, naming the file and the fix once', async () => {
+      vi.stubEnv('JIRA_TOKEN', 'fixture-jira-token');
+      execFileSync('git', ['add', '.mcp.json'], { cwd: projectRoot });
+
+      const check = await mcpCheck();
+      expect(await check.check()).toBe(false);
+      const file = path.join(projectRoot, '.mcp.json');
+      expect(check.fix).toContain(`In ${file}, withheld: jira, as git would commit the file: git already tracks ${file}.`);
+      expect(check.fix).toContain(`git rm --cached ${file}\` (rotate any value a commit of it holds)`);
+      expect(check.fix).not.toContain('not the team\'s definition');
+      expect(check.fix).not.toContain('pull --force');
+    });
   });
 });

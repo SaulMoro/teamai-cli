@@ -73,9 +73,10 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
       (manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? []).some((r) => r.name === s.name);
     const installedIn = targets.filter(installed).map((t) => t.tool);
     console.log(`    installed: ${installedIn.length > 0 ? installedIn.join(', ') : '(none)'}`);
-    // Pull writes a resolved value only into a file git leaves out of a commit (#882).
+    // Pull writes a resolved value only into a file git leaves out of a commit
+    // (#882); an entry an earlier pull wrote there stays as it was.
     for (const t of targets) {
-      if (installed(t) || !carriesResolvedValue(t, [s], [s.name])) continue;
+      if (!carriesResolvedValue(t, [s], [s.name])) continue;
       const exclusion = await ensureExcludedFromGit(t.file, { dryRun: true });
       if (exclusion.kind === 'failed') console.log(`    withheld: ${t.tool} — ${exclusion.reason}. ${exclusion.fix}`);
     }

@@ -29,6 +29,8 @@ import { resolveEntriesFor } from '../namespaced-entries.js';
 import { mcpInject, mcpList } from '../mcp-cmd.js';
 import { reconcileMcpForConfig, resolveMcpTargets } from '../mcp-reconcile.js';
 import { ensureExcludedFromGit } from '../mcp-git-exclude.js';
+import { readJson } from '../utils/fs.js';
+import { managedMcpManifestKey } from '../types.js';
 
 const mockedAutoDetectInit = autoDetectInit as Mock;
 const mockedResolve = resolveEntriesFor as Mock;
@@ -109,6 +111,30 @@ describe('mcpList', () => {
 
     expect(ensureExcludedFromGit).toHaveBeenCalledWith('/work/app/.mcp.json', { dryRun: true });
     expect(text).toContain('withheld: claude — /work/app/.git/info/exclude is not writable. Make it writable, then run `teamai pull` again.');
+  });
+
+  it('still says a server is withheld from a file an earlier pull installed it in (#882)', async () => {
+    mockedAutoDetectInit.mockResolvedValue({
+      localConfig: { repo: { localPath: '/repo' }, scope: 'project', projectRoot: '/work/app', additionalRoles: [] },
+      teamConfig: { toolPaths: {} },
+    });
+    mockedResolve.mockResolvedValue(resolved([
+      [{ name: 'jira', transport: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer ${JIRA_TOKEN}' } }, 'mcp/mcp.yaml', null],
+    ]));
+    (resolveMcpTargets as Mock).mockResolvedValueOnce([
+      { tool: 'claude', format: 'claude', file: '/work/app/.mcp.json', projectScope: true },
+    ]);
+    (readJson as Mock).mockResolvedValueOnce({ [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }] });
+    (ensureExcludedFromGit as Mock).mockResolvedValueOnce({
+      kind: 'failed',
+      reason: 'git already tracks /work/app/.mcp.json',
+      fix: 'Run `git rm --cached /work/app/.mcp.json` (rotate any value a commit of it holds), then `teamai pull` again.',
+    });
+
+    const text = await listOutput();
+
+    expect(text).toContain('installed: claude');
+    expect(text).toContain('withheld: claude — git already tracks /work/app/.mcp.json. Run `git rm --cached /work/app/.mcp.json`');
   });
 
   it('reports a set that cannot be resolved instead of listing part of it', async () => {

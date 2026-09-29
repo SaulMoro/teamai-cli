@@ -465,6 +465,8 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       .map((change) => `${change.server} (${change.reason ?? 'skipped'})`);
 
     const problems: string[] = [];
+    // Its fix is the exclusion's own, not another pull (#882).
+    let withheld: string | undefined;
     const installed = await installedMcpEntries(target);
     if (installed === null) {
       problems.push(`${target.file} could not be parsed, so no server was injected`);
@@ -478,27 +480,32 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
         // held by something else entirely, and a stale copy is equally undelivered.
         else if (!isDeepStrictEqual(installed.get(name), entry)) foreign.push(name);
       }
-      if (absent.length > 0) problems.push(`not injected: ${nameList(absent)}`);
-      if (foreign.length > 0) problems.push(`not the team's definition: ${nameList(foreign)}`);
-      // Pull writes a resolved value only into a file git leaves out of a commit (#882).
-      if (carriesResolvedValue(target, teamDefs, [...absent, ...foreign])) {
-        const exclusion = await ensureExcludedFromGit(target.file, { dryRun: true });
-        if (exclusion.kind === 'failed') problems.push(`withheld, as git would commit the file: ${exclusion.reason}. ${exclusion.fix.replace(/\.$/, '')}`);
+      // Pull writes a resolved value only into a file git leaves out of a
+      // commit (#882), and otherwise leaves the whole file as it was.
+      const exclusion = carriesResolvedValue(target, teamDefs, [...absent, ...foreign])
+        ? await ensureExcludedFromGit(target.file, { dryRun: true })
+        : undefined;
+      if (exclusion?.kind === 'failed') {
+        withheld = `In ${target.file}, withheld: ${nameList([...absent, ...foreign])}, as git would commit the file: ${exclusion.reason}. ${exclusion.fix}`;
+      } else {
+        if (absent.length > 0) problems.push(`not injected: ${nameList(absent)}`);
+        if (foreign.length > 0) problems.push(`not the team's definition: ${nameList(foreign)}`);
       }
     }
     if (blocked.length > 0) problems.push(`skipped: ${nameList(blocked)}`);
 
-    if (problems.length === 0 && desired.size === 0) continue;
+    if (problems.length === 0 && !withheld && desired.size === 0) continue;
 
+    const delivery = problems.length === 0 ? [] : [`In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
+      + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
+      + 'parses as no variables at all. Then run `teamai pull --force`: a pull leaves an entry '
+      + 'teamai does not own untouched, so a server of your own under a team name only gives '
+      + 'way to `--force`.'];
     checks.push({
       name: `MCP servers delivered to ${target.tool}`,
       source: 'local',
-      check: async () => problems.length === 0,
-      fix: `In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
-        + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
-        + 'parses as no variables at all. Then run `teamai pull --force`: a pull leaves an entry '
-        + 'teamai does not own untouched, so a server of your own under a team name only gives '
-        + 'way to `--force`.',
+      check: async () => problems.length === 0 && !withheld,
+      fix: [...withheld ? [withheld] : [], ...delivery].join(' '),
     });
   }
 
