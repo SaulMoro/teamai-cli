@@ -373,13 +373,13 @@ export async function resolveDataHomeForScope(scope: Scope, projectRoot?: string
  * resolveHookConfig (dashboard-collector.ts), which gives such a payload the
  * scope its session last recorded (#810).
  */
-export async function resolveConfigForDir(dir?: string, options: LoadOptions = {}): Promise<LocalConfig | null> {
+export async function resolveConfigForDir(dir?: string): Promise<LocalConfig | null> {
   const target = dir ?? process.cwd();
-  if (!(await pathExists(target))) return loadLocalConfig(options);
+  if (!(await pathExists(target))) return loadLocalConfig();
   let unreadable = false;
-  const project = await detectProjectConfig(target, () => { unreadable = true; }, options);
+  const project = await detectProjectConfig(target, () => { unreadable = true; });
   if (unreadable) return null;
-  return project ?? loadLocalConfig(options);
+  return project ?? loadLocalConfig();
 }
 
 /**

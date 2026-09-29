@@ -49,8 +49,7 @@ export function aggregateUsage(events: UsageEvent[]): SkillStats[] {
  */
 async function loadReportedStats(): Promise<UserStats | null> {
   try {
-    // Read-only: the load never persists a migration (#893).
-    const config = await resolveConfigForDir(undefined, { dryRun: true });
+    const config = await resolveConfigForDir();
     if (!config) return null;
     // Non-HTTP: stats live on the teamai-reports orphan branch worktree.
     // Leftover stats/ on the default-branch clone is ignored. Read-only: never
@@ -220,8 +219,8 @@ export interface ShowStatsOptions {
  */
 export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // The same scope loadReportedStats reads, so local and reported totals match;
-  // a directory without teamai has no usage of its own (#748). Read-only, as there (#893).
-  const config = await resolveConfigForDir(undefined, { dryRun: true });
+  // a directory without teamai has no usage of its own (#748).
+  const config = await resolveConfigForDir();
   const events = config ? await readUsageEvents(config) : [];
   const localStats = aggregateUsage(events);
   const reported = await loadReportedStats();
