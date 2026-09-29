@@ -39,7 +39,7 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
   };
 });
 
-import { MCP_EXCLUDE_END, MCP_EXCLUDE_START, ensureExcludedFromGit, excludeFromGit, removeMcpGitExclude } from '../mcp-git-exclude.js';
+import { MCP_EXCLUDE_END, MCP_EXCLUDE_START, carriesLocalAgentCredential, ensureExcludedFromGit, excludeFromGit, removeMcpGitExclude } from '../mcp-git-exclude.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
 
@@ -355,5 +355,25 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(await fse.readFile(excludeFile, 'utf8')).toMatch(/^\/\.mcp\.json$/m);
       expect(await fse.readFile(excludeFile, 'utf8')).not.toContain('/config/');
     });
+  });
+});
+
+describe('a local agent install that carries a credential (#882)', () => {
+  it.each([
+    ['a header', { type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer t' } }],
+    ['an env value', { command: 'npx', env: { TOKEN: 't' } }],
+    ['an argument', { command: 'npx', args: ['-y', 'server', '--token', 't'] }],
+    ['a URL with a user', { type: 'http', url: 'https://user:t@x.example/mcp' }],
+    ['a URL with a query', { type: 'http', url: 'https://x.example/mcp?key=t' }],
+    ['a whole command line', { command: 'server --token t' }],
+  ])('counts %s', (_, entry) => {
+    expect(carriesLocalAgentCredential(entry)).toBe(true);
+  });
+
+  it.each([
+    ['a plain URL', { type: 'http', url: 'https://x.example/mcp' }],
+    ['a bare command', { command: 'npx' }],
+  ])('does not count %s', (_, entry) => {
+    expect(carriesLocalAgentCredential(entry)).toBe(false);
   });
 });

@@ -1484,7 +1484,8 @@ async function reconcileTargets(
   // unnoted until protectProjectMcpConfigs notes that server, after its settle records the file.
   for (const target of targets.filter((t) => unrecorded.has(t.tool))) {
     const records = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
-    const claimed = targets.filter((t) => t.file === target.file)
+    // Only tools reading the same key claim: another key's owner proves nothing of this one's (#882).
+    const claimed = targets.filter((t) => t.file === target.file && sameServerKey(t.format, target.format))
       .flatMap((t) => manifest[managedMcpManifestKey(t.tool, true)] ?? []).map((record) => record.name);
     if (records.length > 0 && (await unclaimedMcpServers(target, claimed)).length > 0) {
       for (const record of records) record.unnoted = true;

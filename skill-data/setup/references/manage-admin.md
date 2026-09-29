@@ -74,7 +74,7 @@ note cannot be written (another teamai command holds the record), the line stays
 until a later pull writes it. A Copilot project config's bare top-level servers
 still count once another tool writes `mcpServers` into the file. On an HTTP-backed
 team the local agent's `install_mcp` lists a project config before writing a
-server with any header or env value, fails the install when it cannot, and only
+server with any header, env value, argument, or URL user or query, fails the install when it cannot, and only
 `teamai uninstall` takes that line out; `teamai doctor` checks those files too.
 
 ## Invite a member
