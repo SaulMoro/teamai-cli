@@ -118,7 +118,7 @@ async function ensureSourceRepo(source: SourceConfig, force: boolean): Promise<s
  * This modifies the team repo and requires a push (via MR or direct).
  */
 export async function sourceAdd(repoUrl: string, options: { name?: string } & GlobalOptions): Promise<void> {
-  const { localConfig, teamConfig } = await autoDetectInit();
+  const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: options.dryRun });
   const repoPath = localConfig.repo.localPath;
 
   // Derive name from repo URL if not provided
@@ -189,7 +189,7 @@ export async function sourceAdd(repoUrl: string, options: { name?: string } & Gl
  * Remove a source from teamai.yaml and clean up local cache.
  */
 export async function sourceRemove(name: string, options: GlobalOptions): Promise<void> {
-  const { localConfig, teamConfig } = await autoDetectInit();
+  const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: options.dryRun });
   const repoPath = localConfig.repo.localPath;
 
   const existing = teamConfig.sources ?? [];
@@ -238,7 +238,8 @@ export async function sourceList(): Promise<void> {
   // the HTTP bypass is independent of the team repo, so still show it.
   let gitSources: SourceConfig[] = [];
   try {
-    const { teamConfig } = await autoDetectInit();
+    // Read-only: the load never persists a migration (#893).
+    const { teamConfig } = await autoDetectInit(undefined, { dryRun: true });
     gitSources = teamConfig.sources ?? [];
   } catch {
     // Not initialized (no team repo) — only the HTTP bypass may exist.
@@ -295,7 +296,7 @@ export async function sourceAddHttp(
 
   // Guard: if the main repo is already an HTTP backend, it owns the single
   // local-agent config — refuse rather than overwrite its endpoint.
-  const mainConfig = (await detectProjectConfig()) ?? (await loadLocalConfig());
+  const mainConfig = (await detectProjectConfig(undefined, undefined, options)) ?? (await loadLocalConfig(options));
   if (mainConfig?.repo.kind === 'http') {
     log.error('Your main team repo is already an HTTP backend, which owns the HTTP source config.');
     log.info('An HTTP bypass is only for git-based main repos. Nothing changed.');
@@ -330,7 +331,8 @@ export async function sourceRemoveHttp(options: GlobalOptions): Promise<void> {
  * Browse public skills from a source.
  */
 export async function sourceBrowse(name: string, options: GlobalOptions): Promise<void> {
-  const { teamConfig } = await autoDetectInit();
+  // Read-only: the load never persists a migration (#893).
+  const { teamConfig } = await autoDetectInit(undefined, { dryRun: true });
   const sources = teamConfig.sources ?? [];
   const source = sources.find((s) => s.name === name);
 

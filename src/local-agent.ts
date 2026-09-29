@@ -629,7 +629,8 @@ export async function loadLocalAgentConfig(): Promise<LocalAgentConfig | null> {
   // an HTTP team repo, auto-create config.json so v0.17.x upgraders keep capability.
   const { loadLocalConfig } = await import('./config.js');
   const { resolveApiKey } = await import('./api-key.js');
-  const legacy = await loadLocalConfig();
+  // Only `repo` is read here; a role migration persists on the command that writes (#893).
+  const legacy = await loadLocalConfig({ dryRun: true });
   if (legacy?.repo?.kind === 'http' && legacy.repo.url) {
     const endpoint = normalizeEndpoint(legacy.repo.url);
     const token = resolveApiKey() ?? undefined;
