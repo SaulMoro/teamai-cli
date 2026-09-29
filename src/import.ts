@@ -461,7 +461,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       log.success(`Local directory ${slug} import complete`);
     } else if (opts.fromClaude) {
       // 分支 3b：--from-claude，扫描规则文件并交互式导入
-      const candidates = await scanCandidates({ fromClaude: true });
+      const candidates = await scanCandidates({ fromClaude: true, dryRun: opts.dryRun });
       if (candidates.length === 0) {
         log.info('no importable files found');
         return;
