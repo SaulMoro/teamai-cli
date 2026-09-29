@@ -441,7 +441,8 @@ every checkout, so that is where they live now:
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
-    │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882)
+    │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882);
+    │                                          for an HTTP team, the configs the local agent wrote a header or env value to
     └── search-index.json                      getProjectSearchIndexPath, one per checkout
 <checkout>/.teamai/                            one per checkout: committed knowledge, knowledge-wt/
 ```
