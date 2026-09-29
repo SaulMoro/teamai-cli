@@ -2491,7 +2491,7 @@ teamai init --repo https://github.com/yourorg/yourrepo --force
 
 **Q: After `teamai init` in a project, there is no `.claude/` (or `.cursor/`, `.codebuddy/`) directory?**
 
-That is expected. `init` does not know which agent you will open. Open Claude Code / Cursor / CodeBuddy in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots.
+That is expected for a built-in tool: `init` does not know which agent you will open. Open Claude Code / Cursor / CodeBuddy in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
 
 **Q: Hooks aren't firing automatically?**
 
