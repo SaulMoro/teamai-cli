@@ -717,12 +717,13 @@ export async function mcpConfigsNotProvenClean(
       : {};
     // This checkout listed again under its real path is not another worktree.
     const foreign = cfg !== localConfig && await realRoot(cfg.projectRoot) !== ownRoot;
-    const cfgTargets = await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true });
+    const cfgTargets: McpTarget[] = [];
     recordedBy.set(cfg, cfgTargets);
     const { files: ledger } = await readResolvedMcpFiles(cfg);
-    for (const target of cfgTargets) {
+    for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) {
       const dir = await fse.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
       const key = path.join(dir, path.basename(target.file));
+      cfgTargets.push(target);
       const records = manifest[managedMcpManifestKey(target.tool, true)];
       const recorded = Array.isArray(records);
       const owned = recorded ? records : [];
@@ -1010,11 +1011,11 @@ async function reconcileTargets(
   // mcp.yaml get cleaned out of the tools we previously injected them into.
   const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
   if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
+  // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
+  const listed = localConfig.scope === 'project' && !options.dryRun ? new Set(Object.keys((await readResolvedMcpFiles(localConfig)).files)) : new Set<string>();
+  const rebuilt: Array<{ target: McpTarget; recorded: string[] }> = [];
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
-  // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
-  const listed = projectScope && !options.dryRun ? new Set(Object.keys((await readResolvedMcpFiles(localConfig)).files)) : new Set<string>();
-  const rebuilt: Array<{ target: McpTarget; recorded: string[] }> = [];
 
   for (const target of targets) {
     // Same enabledAgents / disabledAgents gate as the other resource syncs. The
