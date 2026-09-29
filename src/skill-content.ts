@@ -141,8 +141,8 @@ export async function detectTeam(cwd?: string, options: { dryRun?: boolean } = {
  * writable, is then unknown, and the workflow would fail at `teamai contribute`.
  * Any failure past loading the config is a fault here and propagates.
  */
-export async function shareGate(cwd?: string): Promise<ShareGate> {
-  return gateFor(await detectTeam(cwd));
+export async function shareGate(cwd?: string, options: { dryRun?: boolean } = {}): Promise<ShareGate> {
+  return gateFor(await detectTeam(cwd, options));
 }
 
 /** The share gate on a team already detected, for a command that needs the team too. */
@@ -196,8 +196,8 @@ export async function contributeHintAllowed(cwd?: string): Promise<boolean> {
 /** What makes this skill unusable right now, or null. */
 async function blockReason(name: string, team?: TeamDetection): Promise<SkillBlock | null> {
   if (!RECALL_DEPENDENT_SKILLS.has(name)) return null;
-  // `skill get` / `skill path` only read; the Stop hook asks shareGate itself (#893).
-  return (await gateFor(team ?? await detectTeam(undefined, { dryRun: true }))).block;
+  // `skill get` / `skill path` only read; the Stop hook asks shareGate without options (#893).
+  return (team ? await gateFor(team) : await shareGate(undefined, { dryRun: true })).block;
 }
 
 /** A skill directory that ships inside the npm package. */

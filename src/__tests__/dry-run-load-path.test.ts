@@ -417,8 +417,10 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['pull --dry-run', () => pull({ dryRun: true })],
     ['status', () => status({})],
     ['list', () => list(undefined, {})],
-    // What the CLI's preAction hook runs before `pull`/`push --dry-run`, which
-    // calling `pull()` directly skips.
+    // What the CLI's preAction hook runs before a command under --dry-run:
+    // `maybeMigrate` before every write command (`pull`, `push`, ...), and
+    // `queueKeptInCheckout` before one that queues a learning. Calling
+    // `pull()` directly, as the rows above do, skips both.
     ['the pre-command migration under --dry-run', async () => {
       await queueKeptInCheckout(await maybeMigrate({ dryRun: true }), { dryRun: true });
     }],
