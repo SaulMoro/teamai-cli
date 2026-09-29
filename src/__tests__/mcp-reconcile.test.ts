@@ -921,6 +921,26 @@ servers:
       await fse.outputJson(managedMcpManifestPath(getDataHome(projectConfig), projectRoot), { 'claude:project': [], 'cursor:project': [] });
     };
 
+    it('keeps the line of a file tools of different formats share while a stale entry sits under any of their keys', async () => {
+      // Cursor (mcpServers) and OpenCode (mcp) both on .mcp.json, OpenCode last: judged in one format, the other hides.
+      const toolPaths = {
+        ...UNMOVED_TOOL_PATHS,
+        cursor: { ...TOOL_PATHS.cursor, mcpProject: '.mcp.json' },
+        opencode: { skills: '.opencode/skills', mcp: '.config/opencode/opencode.json', mcpProject: '.mcp.json' },
+      };
+      const shared = { ...teamConfig, toolPaths } as TeamaiConfig;
+      await writeMcpYaml(`${withSecret}    tools: [cursor]\n  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n`);
+      await reconcileMcpForConfig(shared, projectConfig);
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('super-secret-value');
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n');
+      vi.stubEnv('SECRET_TOKEN', '');
+
+      await reconcileMcpForConfig(shared, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('super-secret-value');
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+    });
+
     describe('a config two tools share (Claude and CodeBuddy on .mcp.json)', () => {
       const shared = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codebuddy: { ...TOOL_PATHS.codebuddy, mcpProject: '.mcp.json' } } } as TeamaiConfig;
       const open = '  - name: open\n    transport: http\n    url: https://example.com/open\n';

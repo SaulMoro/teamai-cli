@@ -894,6 +894,8 @@ export async function mcpConfigsNotProvenClean(
   const targets = new Map<string, {
     target: McpTarget; owned: ManagedMcpRecord[]; unverified: string[]; recorded: boolean; foreign: boolean;
     mappers: Set<string>; mapsToday: Set<string>; proven: Set<string>; writers: Set<string>;
+    /** Every tool's target on this file: tools of different formats read different keys of it. */
+    all: McpTarget[];
   }>();
   const realRoot = (root: string | undefined): Promise<string | undefined> =>
     root ? fse.realpath(root).catch(() => root) : Promise.resolve(undefined);
@@ -943,6 +945,7 @@ export async function mcpConfigsNotProvenClean(
         mapsToday,
         proven,
         writers,
+        all: [...seen?.all ?? [], target],
         foreign: foreign || seen?.foreign === true,
       });
     }
@@ -987,23 +990,33 @@ export async function mcpConfigsNotProvenClean(
         held.set(file, movedWhy);
         continue;
       }
-      const known = targets.get(file)
+      const mappedHere = targets.get(file);
+      const knownHere = mappedHere
         ?? (sibling && nested ? { target: { ...sibling.target, file }, owned: [], unverified: [], recorded: false, foreign: true, nested } : undefined);
-      const installed = known ? await installedMcpEntries(known.target) : null;
       const raw = (await readFileSafe(file)) ?? '';
-      const named = known && installed && teamDefs
-        ? [...installed.keys()].find((name) => carriesResolvedValue(known.target, teamDefs, [name]))
-        : undefined;
-      const why = !known ? 'no tool teamai knows reads it'
-        : !installed ? 'it does not parse'
-        : installed.size === 0 ? undefined
-        : 'nested' in known ? `it holds MCP servers in a linked worktree of the repository at ${known.nested}, which teamai cannot judge`
-        : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
-        : !teamDefs ? 'the team\'s MCP servers cannot be read'
-        : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
-        : await resolvedValueEvidence(known.target, teamDefs, known, vars, ctx).then((e) => e && `it holds ${e}`)
-          ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
-          ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse, has no entry for it or was rebuilt without noting its other servers');
+      // Judged in the format of every tool that maps it: one tool's key may hold what another's doesn't.
+      const judge = async (known: NonNullable<typeof knownHere>, target: McpTarget): Promise<string | undefined> => {
+        const installed = await installedMcpEntries(target);
+        const named = installed && teamDefs
+          ? [...installed.keys()].find((name) => carriesResolvedValue(target, teamDefs, [name]))
+          : undefined;
+        return !installed ? 'it does not parse'
+          : installed.size === 0 ? undefined
+          : 'nested' in known ? `it holds MCP servers in a linked worktree of the repository at ${known.nested}, which teamai cannot judge`
+          : known.foreign && otherWorktrees === 'empty' ? 'it holds MCP servers in another worktree, which only a pull there can judge'
+          : !teamDefs ? 'the team\'s MCP servers cannot be read'
+          : named ? `it holds the team's ${named}, which needs a resolved \${VAR}`
+          : await resolvedValueEvidence(target, teamDefs, known, vars, ctx).then((e) => e && `it holds ${e}`)
+            ?? values.filter(([, value]) => raw.includes(value)).map(([name]) => `it holds the value of $${name}`)[0]
+            ?? (known.recorded ? undefined : 'it holds MCP servers, and managed-mcp.json, teamai\'s record of which it wrote there, is gone, does not parse, has no entry for it or was rebuilt without noting its other servers');
+      };
+      let why = knownHere ? undefined : 'no tool teamai knows reads it';
+      const formats = mappedHere ? mappedHere.all.filter((t, i, all) => all.findIndex((o) => o.format === t.format) === i)
+        : knownHere ? [knownHere.target] : [];
+      for (const target of formats) {
+        why = knownHere && await judge(knownHere, target);
+        if (why) break;
+      }
       if (why) held.set(file, why);
     }
   }
