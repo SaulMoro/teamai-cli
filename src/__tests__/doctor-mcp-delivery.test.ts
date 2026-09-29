@@ -431,6 +431,43 @@ describe('doctor — MCP servers delivered on disk', () => {
       });
     });
 
+    describe('a config written for a tool the team has since moved, that another tool\'s mapping still reaches', () => {
+      const file = (): string => path.join(projectRoot, '.mcp.json');
+
+      beforeEach(async () => {
+        const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        teamConfig.toolPaths = {
+          claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' },
+          cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' },
+        };
+        await writeTeamMcp('servers:\n  - name: docs\n    transport: http\n    url: https://docs.example/mcp\n');
+        // Claude's own entry, and the one a pull wrote there for Cursor with a token before the team moved it.
+        await fse.writeJson(file(), {
+          mcpServers: {
+            docs: { type: 'http', url: 'https://docs.example/mcp' },
+            gone: { type: 'http', url: 'https://gone.example/mcp', headers: { Authorization: 'Bearer t0ken' } },
+          },
+        });
+        await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+          [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: 'h', resolved: false }],
+        });
+        expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'cursor', file: file() }])).toBe('written');
+      });
+
+      it('fails, naming it once, while it holds a server none of the tools mapping it own', async () => {
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(false);
+        expect((check.fix ?? '').split(file())).toHaveLength(2);
+      });
+
+      it('emits no check once only their servers are left', async () => {
+        await fse.writeJson(file(), { mcpServers: { docs: { type: 'http', url: 'https://docs.example/mcp' } } });
+
+        expect(await excludeCheck()).toBeUndefined();
+      });
+    });
+
     it('fails for a server that was in the file when a pull rebuilt the lost record, after it left mcp.yaml', async () => {
       const { trackResolvedMcpFiles, recordUnverifiedMcpServers } = await import('../mcp-resolved-files.js');
       const file = path.join(projectRoot, '.mcp.json');

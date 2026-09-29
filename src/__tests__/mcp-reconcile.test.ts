@@ -1381,6 +1381,57 @@ servers:
       });
     });
 
+    describe('a config written for a tool the team has since moved, that another tool\'s mapping still reaches', () => {
+      const shared = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.mcp.json' } };
+      const mcpJson = (): string => path.join(projectRoot, '.mcp.json');
+      const ledger = async (): Promise<Record<string, unknown>> => {
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        return (await readResolvedMcpFiles(projectConfig)).files;
+      };
+      const setServers = async (servers: Record<string, unknown>): Promise<void> => {
+        const doc = await fse.readJson(mcpJson()) as { mcpServers: Record<string, unknown> };
+        await fse.writeJson(mcpJson(), { mcpServers: { open: doc.mcpServers.open, ...servers } });
+      };
+
+      beforeEach(async () => {
+        // Cursor's own server, with the token, lands in the file Claude maps too.
+        await writeMcpYaml(`${withSecret}    tools: [cursor]\n  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n`);
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths: shared } as TeamaiConfig, projectConfig);
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        // Then the team moves Cursor back to its own file and drops that server; the token is no longer set.
+        await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n    tools: [claude]\n');
+        vi.stubEnv('SECRET_TOKEN', '');
+      });
+
+      it('keeps its line while the file holds that tool\'s server', async () => {
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/\.mcp\.json/);
+      });
+
+      // As for any recorded file: nothing tells the member's server from one teamai wrote there for Cursor.
+      it('keeps it while the file holds a server of the member\'s own', async () => {
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+        await setServers({ mine: { type: 'http', url: 'https://mine.example/mcp' } });
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
+      it('lets the line go, and takes that tool off the record, once only servers the tools mapping it own are left', async () => {
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+        await setServers({});
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).not.toMatch(/^\/\.mcp\.json$/m);
+        expect(Object.keys(await ledger())).not.toContain(mcpJson());
+      });
+    });
+
     it('lists the config in .git/info/exclude before writing the value into it', async () => {
       await writeMcpYaml(withSecret);
 

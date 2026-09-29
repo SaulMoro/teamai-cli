@@ -562,10 +562,13 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     if (await resolvedValueEvidence(target, teamDefs, { owned, unverified: ledger[target.file]?.unverified }, vars, desired)) await hold(target.file);
   }
   // And a file a pull wrote under a mapping the team has since changed, but one recorded as tracked while git
-  // tracks it: no line protects it.
-  for (const [file, { targets: group, tracked }] of await recordedMcpTargets(localConfig, targets)) {
-    if (tracked && (await gitTracks(file)).kind === 'tracked') continue;
-    if (await recordedMcpFileEvidence(group)) await hold(file);
+  // tracks it: no line protects it. In a file another tool now maps, that tool's records tell its own servers.
+  for (const [file, { targets: group, mappedBy, tracked }] of await recordedMcpTargets(localConfig, targets)) {
+    if (holding.has(file) || (tracked && (await gitTracks(file)).kind === 'tracked')) continue;
+    manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+    const owned = mappedBy.length === 0 ? undefined
+      : mappedBy.flatMap((tool) => manifest?.[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
+    if (await recordedMcpFileEvidence(group, owned)) await hold(file);
   }
   // And, until a pull on this version reads them, those an older teamai wrote under a mapping an earlier
   // teamai.yaml made. Read-only: the record of that read is pull's. Unreadable history skips them.

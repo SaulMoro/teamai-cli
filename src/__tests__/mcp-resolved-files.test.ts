@@ -218,5 +218,20 @@ describe('managed-mcp-files.json', () => {
 
       expect((await readResolvedMcpFiles(cfg)).files[custom()]).toEqual({ tools: ['claude'] });
     });
+
+    it('takes a tool another now maps the file for off the record once it holds nothing of that tool\'s, and the file with its last one', async () => {
+      await fse.outputJson(sidecar, { version: 1, files: { [custom()]: { tools: ['claude', 'cursor'] }, [cursor()]: { tools: ['codebuddy'] } } });
+      const state = { kind: 'parsed', servers: ['open'] } as const;
+
+      await settleResolvedMcpFiles(cfg, [
+        { file: custom(), tool: 'cursor', state, holding: false, owned: ['open'], remapped: true },
+        { file: cursor(), tool: 'codebuddy', state, holding: false, owned: ['open'], remapped: true },
+      ]);
+      expect(await settleResolvedMcpFiles(cfg, [
+        { file: custom(), tool: 'claude', state, holding: true, owned: ['open'], remapped: true },
+      ])).toBe('unchanged');
+
+      expect((await readResolvedMcpFiles(cfg)).files).toEqual({ [custom()]: { tools: ['claude'] } });
+    });
   });
 });

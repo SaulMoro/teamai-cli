@@ -48,6 +48,8 @@ export interface McpFileObservation {
   owned: string[];
   /** Whether git tracks it, for a file recorded (or to record) as one it tracked: kept, whatever it holds, while git does. */
   tracked?: boolean;
+  /** `tool` no longer maps the file, another tool does: `holding` says whether it holds what teamai may have written for `tool`. */
+  remapped?: true;
 }
 
 // Fields a later teamai adds are carried through a rewrite.
@@ -158,10 +160,11 @@ export function recordUnverifiedMcpServers(cfg: LocalConfig, found: Array<{ file
 /**
  * Bring the record up to date with what the files hold: forget a file that is
  * gone or holds no server, record one holding a resolved value it did not
- * list (written by an older teamai), and drop a noted server that left its
- * file or that teamai owns again. A file that does not parse stays as it is,
- * and so does one git tracks that was recorded as tracked: a checkout brings
- * back what git holds.
+ * list (written by an older teamai), take a tool off a file another tool now
+ * maps once the file holds nothing teamai may have written for it, and drop a
+ * noted server that left its file or that teamai owns again. A file that does
+ * not parse stays as it is, and so does one git tracks that was recorded as
+ * tracked: a checkout brings back what git holds.
  * `earlierMappingsRead`: the observations cover the files earlier revisions
  * of teamai.yaml mapped, which later pulls need not read again.
  */
@@ -174,7 +177,7 @@ export function settleResolvedMcpFiles(
     const { files } = sidecar;
     let changed = options.earlierMappingsRead === true && sidecar.earlierMappingsRead !== true;
     if (changed) sidecar.earlierMappingsRead = true;
-    for (const { file, tool, state, holding, owned, tracked } of observations) {
+    for (const { file, tool, state, holding, owned, tracked, remapped } of observations) {
       const entry = files[file];
       if (tracked === true) {
         if (!entry) files[file] = { tools: [tool], tracked: true };
@@ -189,6 +192,14 @@ export function settleResolvedMcpFiles(
       if (entry?.tracked === true && tracked === false) {
         delete entry.tracked;
         changed = true;
+      }
+      if (remapped) {
+        if (holding || !entry?.tools.includes(tool)) continue;
+        const tools = entry.tools.filter((t) => t !== tool);
+        if (tools.length > 0 || entry.unverified) files[file] = { ...entry, tools };
+        else delete files[file];
+        changed = true;
+        continue;
       }
       if (!entry) {
         if (holding) files[file] = { tools: [tool] };

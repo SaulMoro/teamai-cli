@@ -579,27 +579,32 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
 
 /** A file `recordedMcpTargets` returns. */
 export interface RecordedMcpFile {
-  /** A target per tool it was written for. */
+  /** A target per tool it was recorded for whose mapping in `known` no longer reaches it. */
   targets: McpTarget[];
+  /** The tools whose target in `known` reaches it: their manifest records tell their own servers there. */
+  mappedBy: string[];
   /** Recorded as one git tracked (managed-mcp-files.json): no line protects it while git does. */
   tracked: boolean;
 }
 
 /**
- * The files `cfg`'s worktree recorded writing a resolved value to (#882) that
- * no target in `known` is: the team has since changed or removed the
- * toolPaths mapping they were written under.
+ * The files `cfg`'s worktree recorded writing a resolved value to (#882) for
+ * a tool no target in `known` reaches them for: the team has since changed or
+ * removed the toolPaths mapping they were written under. A file another
+ * tool's target reaches is among them while a tool it was recorded for is not
+ * one of those.
  */
 export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): Promise<Map<string, RecordedMcpFile>> {
-  const mapped = new Set(await Promise.all(known.map((target) => realFilePath(target.file))));
+  const reach = await Promise.all(known.map(async (target) => ({ tool: target.tool, real: await realFilePath(target.file) })));
   const recorded = new Map<string, RecordedMcpFile>();
   for (const [file, entry] of Object.entries((await readResolvedMcpFiles(cfg)).files)) {
-    if (mapped.has(await realFilePath(file))) continue;
-    const targets = entry.tools.flatMap((tool): McpTarget[] => {
+    const real = await realFilePath(file);
+    const mappedBy = [...new Set(reach.filter((r) => r.real === real).map((r) => r.tool))];
+    const targets = entry.tools.filter((tool) => !mappedBy.includes(tool)).flatMap((tool): McpTarget[] => {
       const format = detectMcpFormat(tool);
       return format ? [{ tool, format, file, projectScope: true }] : [];
     });
-    if (targets.length > 0) recorded.set(file, { targets, tracked: entry.tracked === true });
+    if (targets.length > 0) recorded.set(file, { targets, mappedBy, tracked: entry.tracked === true });
   }
   return recorded;
 }
@@ -685,13 +690,23 @@ async function mcpFileState(targets: McpTarget[]): Promise<McpFileObservation['s
  * Why a file `recordedMcpTargets` returned may still hold a value teamai
  * resolved, or null once it is gone or holds no server: with no tool's
  * definitions to judge its entries by, any server it holds may be teamai's.
+ * `owned`, for a file other tools' targets now reach: the servers their
+ * manifest records say they wrote there, which their own rules judge. Any
+ * other server may be what teamai wrote for `targets`' tools.
  */
-export async function recordedMcpFileEvidence(targets: McpTarget[]): Promise<string | null> {
+export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: readonly string[]): Promise<string | null> {
   const state = await mcpFileState(targets);
   if (state.kind === 'unparsable') return 'it does not parse';
-  return state.kind === 'parsed' && state.servers.length > 0
-    ? 'teamai may have written a resolved value to it under an earlier toolPaths mapping, and it still holds MCP servers'
-    : null;
+  if (state.kind !== 'parsed') return null;
+  if (!owned) {
+    return state.servers.length > 0
+      ? 'teamai may have written a resolved value to it under an earlier toolPaths mapping, and it still holds MCP servers'
+      : null;
+  }
+  const other = state.servers.find((name) => !owned.includes(name));
+  return other === undefined ? null
+    : `teamai may have written a resolved value to it for ${targets.map((t) => t.tool).join(', ')} under an earlier toolPaths mapping, `
+      + `and it holds ${other}, which no tool that maps it now owns`;
 }
 
 /**
@@ -727,11 +742,19 @@ async function observeMcpConfigs(
     const state = await mcpFileState([target]);
     observations.push({ file: target.file, tool: target.tool, state, holding: await holds(target, owned), owned: owned.map((r) => r.name) });
   }
-  for (const [file, { targets: group, tracked }] of await recordedMcpTargets(localConfig, targets)) {
+  for (const [file, { targets: group, mappedBy, tracked }] of await recordedMcpTargets(localConfig, targets)) {
     const state = await mcpFileState(group);
     const stillTracked = tracked && (await gitTracks(file)).kind === 'tracked';
-    const holding = !stillTracked && await recordedMcpFileEvidence(group) !== null;
-    for (const { tool } of group) observations.push({ file, tool, state, holding, owned: [], ...tracked ? { tracked: stillTracked } : {} });
+    const owned = mappedBy.length === 0 ? undefined
+      : mappedBy.flatMap((tool) => manifest[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
+    const holding = !stillTracked && await recordedMcpFileEvidence(group, owned) !== null;
+    for (const { tool } of group) {
+      observations.push({
+        file, tool, state, holding, owned: owned ?? [],
+        ...tracked ? { tracked: stillTracked } : {},
+        ...owned && !stillTracked ? { remapped: true as const } : {},
+      });
+    }
   }
   return observations;
 }
@@ -836,12 +859,15 @@ export async function mcpConfigsNotProvenClean(
       });
     }
   }
-  // Files a pull wrote under a mapping since changed, in any worktree: nothing but the file itself can judge them.
+  // Files a pull wrote under a mapping since changed, in any worktree: nothing but the file itself can judge them,
+  // and in one another tool now maps, nothing but that tool's records.
   const recorded = new Map<string, McpTarget[]>();
+  const remapped = new Map<string, McpTarget[]>();
   for (const [cfg, cfgTargets] of recordedBy) {
     for (const [file, { targets: group }] of await recordedMcpTargets(cfg, cfgTargets)) {
       const key = await realFilePath(file);
       if (!targets.has(key)) recorded.set(key, group);
+      else remapped.set(key, [...remapped.get(key) ?? [], ...group]);
     }
   }
   // Short values, paths and the login name turn up in ordinary configs, so they prove nothing.
@@ -863,6 +889,12 @@ export async function mcpConfigsNotProvenClean(
       if (earlier) {
         const why = await recordedMcpFileEvidence(earlier);
         if (why) held.set(file, why);
+        continue;
+      }
+      const moved = remapped.get(file);
+      const movedWhy = moved && await recordedMcpFileEvidence(moved, targets.get(file)?.owned.map((record) => record.name) ?? []);
+      if (movedWhy) {
+        held.set(file, movedWhy);
         continue;
       }
       const known = targets.get(file)
