@@ -629,6 +629,7 @@ export async function loadLocalAgentConfig(options: { dryRun?: boolean } = {}): 
   // an HTTP team repo, auto-create config.json so v0.17.x upgraders keep capability.
   const { loadLocalConfig } = await import('./config.js');
   const { resolveApiKey } = await import('./api-key.js');
+  // `dryRun` covers this config.yaml load only; config.json writes above and below are unchanged.
   const legacy = await loadLocalConfig(options);
   if (legacy?.repo?.kind === 'http' && legacy.repo.url) {
     const endpoint = normalizeEndpoint(legacy.repo.url);
