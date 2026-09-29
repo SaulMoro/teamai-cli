@@ -574,9 +574,13 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   // teamai.yaml made. Read-only: the record of that read is pull's. Unreadable history skips them.
   if (!(await readResolvedMcpFiles(localConfig)).earlierMappingsRead) {
     const earlier = await earlierMappedMcpTargets(localConfig, targets).catch(() => null) ?? [];
-    for (const { tracked, ...target } of earlier) {
+    for (const { tracked, mappedBy, ...target } of earlier) {
+      if (tracked || holding.has(target.file)) continue;
       vars ??= await buildVarTable(localConfig);
-      if (!tracked && !holding.has(target.file) && await earlierMappedMcpFileEvidence(target, teamDefs, vars, desired)) await hold(target.file);
+      manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+      const owned = mappedBy.length === 0 ? undefined
+        : mappedBy.flatMap((tool) => manifest?.[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
+      if (await earlierMappedMcpFileEvidence(target, teamDefs, vars, desired, owned)) await hold(target.file);
     }
   }
   if (holding.size === 0) return [];

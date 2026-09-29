@@ -48,7 +48,7 @@ export interface McpFileObservation {
   owned: string[];
   /** Whether git tracks it, for a file recorded (or to record) as one it tracked: kept, whatever it holds, while git does. */
   tracked?: boolean;
-  /** `tool` no longer maps the file, another tool does: `holding` says whether it holds what teamai may have written for `tool`. */
+  /** `tool` does not map the file today, another tool does: `holding` says whether it holds what teamai may have written for `tool`. */
   remapped?: true;
 }
 
@@ -160,11 +160,13 @@ export function recordUnverifiedMcpServers(cfg: LocalConfig, found: Array<{ file
 /**
  * Bring the record up to date with what the files hold: forget a file that is
  * gone or holds no server, record one holding a resolved value it did not
- * list (written by an older teamai), take a tool off a file another tool now
- * maps once the file holds nothing teamai may have written for it, and drop a
- * noted server that left its file or that teamai owns again. A file that does
- * not parse stays as it is, and so does one git tracks that was recorded as
- * tracked: a checkout brings back what git holds.
+ * list (written by an older teamai), keep a tool on the record of a file
+ * another tool now maps while the file holds what teamai may have written for
+ * it (adding it for one an older teamai wrote), and take it off after, and
+ * drop a noted server that left its file or that teamai owns again. A file
+ * that does not parse stays as it is, and so does one recorded as tracked
+ * until an observation says git no longer tracks it: a checkout brings back
+ * what git holds. A tool found in a file git tracks is added, marked tracked.
  * `earlierMappingsRead`: the observations cover the files earlier revisions
  * of teamai.yaml mapped, which later pulls need not read again.
  */
@@ -180,21 +182,29 @@ export function settleResolvedMcpFiles(
     for (const { file, tool, state, holding, owned, tracked, remapped } of observations) {
       const entry = files[file];
       if (tracked === true) {
-        if (!entry) files[file] = { tools: [tool], tracked: true };
-        changed ||= !entry;
+        if (entry?.tools.includes(tool)) continue;
+        files[file] = entry ? { ...entry, tools: [...entry.tools, tool], tracked: true } : { tools: [tool], tracked: true };
+        changed = true;
         continue;
       }
       if (state.kind === 'missing' || (state.kind === 'parsed' && state.servers.length === 0)) {
-        if (entry) delete files[file];
-        changed ||= entry !== undefined;
+        const forget = entry !== undefined && (entry.tracked !== true || tracked === false);
+        if (forget) delete files[file];
+        changed ||= forget;
         continue;
       }
       if (entry?.tracked === true && tracked === false) {
         delete entry.tracked;
         changed = true;
       }
+      if (remapped && holding) {
+        if (entry?.tools.includes(tool)) continue;
+        files[file] = entry ? { ...entry, tools: [...entry.tools, tool] } : { tools: [tool] };
+        changed = true;
+        continue;
+      }
       if (remapped) {
-        if (holding || !entry?.tools.includes(tool)) continue;
+        if (!entry?.tools.includes(tool)) continue;
         const tools = entry.tools.filter((t) => t !== tool);
         if (tools.length > 0 || entry.unverified) files[file] = { ...entry, tools };
         else delete files[file];

@@ -466,6 +466,33 @@ describe('doctor — MCP servers delivered on disk', () => {
 
         expect(await excludeCheck()).toBeUndefined();
       });
+
+      describe('written by an older teamai under a mapping only an earlier teamai.yaml made, before a pull on this version', () => {
+        beforeEach(async () => {
+          const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+          await fse.remove(resolvedMcpFilesPath(localConfig) ?? '');
+          execFileSync('git', ['init', '-q'], { cwd: repoPath });
+          for (const cursorFile of ['.mcp.json', '.cursor/mcp.json']) {
+            const toolPaths = { ...teamConfig.toolPaths, cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: cursorFile } };
+            fse.writeFileSync(path.join(repoPath, 'teamai.yaml'), JSON.stringify({ team: 't', toolPaths }));
+            execFileSync('git', ['add', '-A'], { cwd: repoPath });
+            execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'toolPaths'], { cwd: repoPath });
+          }
+        });
+
+        it('fails, naming it once, while it holds a server none of the tools mapping it own', async () => {
+          const check = await excludeCheck();
+          if (!check) throw new Error('no git exclude check');
+          expect(await check.check()).toBe(false);
+          expect((check.fix ?? '').split(file())).toHaveLength(2);
+        });
+
+        it('emits no check once only their servers are left', async () => {
+          await fse.writeJson(file(), { mcpServers: { docs: { type: 'http', url: 'https://docs.example/mcp' } } });
+
+          expect(await excludeCheck()).toBeUndefined();
+        });
+      });
     });
 
     it('fails for a server that was in the file when a pull rebuilt the lost record, after it left mcp.yaml', async () => {
