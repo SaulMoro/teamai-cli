@@ -1342,8 +1342,9 @@ async function reconcileTargets(
   const ledger = localConfig.scope === 'project' && !options.dryRun ? (await readResolvedMcpFiles(localConfig)).files : {};
   const listed = new Set(Object.keys(ledger));
   const rebuilt: Array<{ target: McpTarget; records: ManagedMcpRecord[] }> = [];
-  // No managed-mcp.json when this pull began (#882): its records are marked below.
-  const lost = localConfig.scope === 'project' && !options.dryRun && Object.keys(manifest).length === 0;
+  // The tools with no record in managed-mcp.json when this pull began (#882): theirs are marked below.
+  const unrecorded = new Set(localConfig.scope === 'project' && !options.dryRun
+    ? targets.filter((t) => manifest[managedMcpManifestKey(t.tool, true)] === undefined).map((t) => t.tool) : []);
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
 
@@ -1411,9 +1412,9 @@ async function reconcileTargets(
     else delete manifest[manifestKey];
   }
 
-  // With no managed-mcp.json when this pull began, a record of a file holding a server no record claims is
+  // A record of a tool that had none when this pull began, of a file holding a server no record claims, is
   // unnoted until protectProjectMcpConfigs notes that server, after its settle records the file.
-  for (const target of lost ? targets : []) {
+  for (const target of targets.filter((t) => unrecorded.has(t.tool))) {
     const records = manifest[managedMcpManifestKey(target.tool, true)] ?? [];
     const claimed = targets.filter((t) => t.file === target.file)
       .flatMap((t) => manifest[managedMcpManifestKey(t.tool, true)] ?? []).map((record) => record.name);
