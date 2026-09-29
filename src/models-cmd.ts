@@ -61,10 +61,10 @@ interface TeamModelsContext {
  * (a broken file, one id in two active namespaces): that is reported here as
  * the command's error, and the command stops.
  */
-async function teamContext(): Promise<TeamModelsContext | null> {
+async function teamContext(options: { dryRun?: boolean } = {}): Promise<TeamModelsContext | null> {
   let initialized: Awaited<ReturnType<typeof autoDetectInit>>;
   try {
-    initialized = await autoDetectInit();
+    initialized = await autoDetectInit(undefined, options);
   } catch {
     return { team: { version: 1, profiles: [] } };
   }
@@ -131,12 +131,12 @@ async function apiKeyFromOptions(options: ApiKeyOptions): Promise<StoredModelInp
   return undefined;
 }
 
-async function findProfile(reference: string): Promise<{
+async function findProfile(reference: string, options: { dryRun?: boolean } = {}): Promise<{
   ref: ProfileRef;
   local: ModelProfilesFile;
   context: TeamModelsContext;
 } | null> {
-  const [context, local] = await Promise.all([teamContext(), loadLocalProfiles()]);
+  const [context, local] = await Promise.all([teamContext(options), loadLocalProfiles()]);
   if (!context) return null;
   const ref = resolveProfileRef(reference, context.team, local);
   if (ref.source === 'team' && context.localConfig) ref.team = getTeamIdentity(context.localConfig);
@@ -181,7 +181,10 @@ function printResults(results: ModelSwitchResult[], explicitAgents: boolean): vo
  * pass a profile to see just that one. API keys are never printed.
  */
 export async function modelsList(reference?: string): Promise<void> {
-  const [context, local, active] = await Promise.all([teamContext(), loadLocalProfiles(), activeModelProfiles()]);
+  // Read-only: the load never persists a migration (#893).
+  const [context, local, active] = await Promise.all([
+    teamContext({ dryRun: true }), loadLocalProfiles(), activeModelProfiles(),
+  ]);
   if (!context) return;
   const team = context.localConfig ? getTeamIdentity(context.localConfig) : undefined;
   let refs: ProfileRef[];
@@ -362,7 +365,7 @@ interface SwitchOptions {
 }
 
 export async function modelsSwitch(reference: string, options: SwitchOptions): Promise<void> {
-  const found = await findProfile(reference);
+  const found = await findProfile(reference, { dryRun: options.dryRun });
   if (!found) return;
   const { ref, context } = found;
   const key = profileRefName(ref);
