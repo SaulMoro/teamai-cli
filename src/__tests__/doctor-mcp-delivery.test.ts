@@ -332,6 +332,22 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
     });
 
+    it('fails, naming it once, for a config a pull wrote under a mcpProject the team has since changed', async () => {
+      const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+      const old = path.join(projectRoot, '.cursor', 'team-mcp.json');
+      await fse.outputJson(old, {
+        mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer t0ken' } } },
+      });
+      expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'cursor', file: old }])).toBe('written');
+      await fse.appendFile(path.join(projectRoot, '.git', 'info', 'exclude'), '/.mcp.json\n');
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(false);
+      expect((check.fix ?? '').split(old)).toHaveLength(2);
+      expect(check.fix).not.toContain(path.join(projectRoot, '.mcp.json'));
+    });
+
     it('names a file two tools share once', async () => {
       teamConfig.toolPaths = {
         claude: { skills: '.claude/skills', mcp: '.claude.json', mcpProject: '.mcp.json' },

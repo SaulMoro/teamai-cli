@@ -1073,6 +1073,65 @@ servers:
       });
     });
 
+    describe('a config an earlier pull wrote under a custom mcpProject the team has since changed', () => {
+      const custom = { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/team-mcp.json' } };
+      const customFile = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');
+      const sidecar = async (): Promise<Record<string, unknown>> => {
+        const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        return (await readResolvedMcpFiles(projectConfig)).files;
+      };
+
+      beforeEach(async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths: custom } as TeamaiConfig, projectConfig);
+        expect(await fse.readFile(customFile(), 'utf-8')).toContain('super-secret-value');
+      });
+
+      it.each([
+        ['restores the built-in path', TOOL_PATHS],
+        ['drops the tool', { claude: TOOL_PATHS.claude }],
+        ['moves it again', { ...TOOL_PATHS, cursor: { ...TOOL_PATHS.cursor, mcpProject: '.cursor/other-mcp.json' } }],
+      ])('is listed again when the team %s', async (_label, toolPaths) => {
+        // As if written before this release, or listed and since dropped: nothing excludes it.
+        await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+
+        await reconcileMcpForConfig({ ...teamConfig, toolPaths } as TeamaiConfig, projectConfig);
+
+        expect(await fse.readFile(customFile(), 'utf-8')).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/team-mcp\.json$/m);
+        expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/team-mcp\.json/);
+      });
+
+      it('keeps its line while it holds a server of the member\'s own', async () => {
+        await fse.writeJson(customFile(), { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/team-mcp\.json$/m);
+      });
+
+      it.each([
+        ['it is deleted', () => fse.remove(customFile())],
+        ['it holds no server', () => fse.writeJson(customFile(), { mcpServers: {} })],
+      ])('lets its line go, and forgets it, once %s', async (_label, arrange) => {
+        await arrange();
+
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
+        expect(Object.keys(await sidecar())).not.toContain(customFile());
+      });
+
+      it('lets its line go when `teamai mcp remove` finds it holding no server', async () => {
+        await fse.writeJson(customFile(), { mcpServers: {} });
+
+        await releaseCleanMcpGitExcludes(teamConfig, projectConfig);
+
+        expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
+        expect(Object.keys(await sidecar())).not.toContain(customFile());
+      });
+    });
+
     it('adds nothing for a disabled tool\'s config whose server never held a resolved value, after its definition changed', async () => {
       await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
       await reconcileMcpForConfig(teamConfig, projectConfig);
@@ -1432,6 +1491,41 @@ servers:
       await reconcileMcpForConfig(teamConfig, projectConfig, { dryRun: true });
 
       expect(await excludeOf(projectRoot)).not.toContain('teamai');
+      const { resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+      expect(await fse.pathExists(resolvedMcpFilesPath(projectConfig) ?? '')).toBe(false);
+    });
+
+    it('records each config it writes a resolved value to, by path, before writing it', async () => {
+      const { readResolvedMcpFiles, resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+      const sidecarAtWrite = new Map<string, boolean>();
+      beforeJsonWrite.run = async (file) => {
+        sidecarAtWrite.set(file, file in (await readResolvedMcpFiles(projectConfig)).files);
+      };
+      await writeMcpYaml(withSecret);
+
+      try {
+        await reconcileMcpForConfig(teamConfig, projectConfig);
+      } finally {
+        beforeJsonWrite.run = null;
+      }
+
+      expect(sidecarAtWrite.get(path.join(projectRoot, '.mcp.json'))).toBe(true);
+      expect((await readResolvedMcpFiles(projectConfig)).files).toEqual({
+        [path.join(projectRoot, '.mcp.json')]: { tools: ['claude'] },
+        [path.join(projectRoot, '.cursor', 'mcp.json')]: { tools: ['cursor'] },
+      });
+      expect((await fse.stat(resolvedMcpFilesPath(projectConfig) ?? '')).mode & 0o777).toBe(0o600);
+    });
+
+    it('records a config an older teamai wrote a resolved value to on the first pull that finds it', async () => {
+      const { readResolvedMcpFiles, resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+      await writeMcpYaml(withSecret);
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+      await fse.remove(resolvedMcpFilesPath(projectConfig) ?? '');
+
+      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect((await readResolvedMcpFiles(projectConfig)).files[path.join(projectRoot, '.cursor', 'mcp.json')]).toEqual({ tools: ['cursor'] });
     });
   });
 

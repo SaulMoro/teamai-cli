@@ -1002,6 +1002,40 @@ describe('uninstall', () => {
       expect(await fse.readFile(excludeFile, 'utf8')).toBe(block);
     });
 
+    describe('for a config a pull wrote under a mcpProject the team has since changed', () => {
+      const oldBlock = block.replace('/.mcp.json', '/.cursor/team-mcp.json');
+
+      async function setupRecorded(content: unknown): Promise<{ excludeFile: string; old: string }> {
+        const { projectRoot, excludeFile, localConfig } = await setup();
+        const old = path.join(projectRoot, '.cursor', 'team-mcp.json');
+        await fse.outputJson(old, content);
+        const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+        expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'cursor', file: old }])).toBe('written');
+        await fse.writeFile(excludeFile, oldBlock);
+        return { excludeFile, old };
+      }
+
+      it('keeps the block while it holds a server, naming it', async () => {
+        const { excludeFile, old } = await setupRecorded({ mcpServers: { jira } });
+        const { log } = await import('../utils/logger.js');
+
+        await uninstall({ force: true });
+
+        expect(await fse.readFile(excludeFile, 'utf8')).toBe(oldBlock);
+        const warning = vi.mocked(log.warn).mock.calls.map(([message]) => String(message)).find((m) => m.includes('team-mcp.json'));
+        expect(warning).toContain(path.join(await fse.realpath(path.dirname(old)), 'team-mcp.json'));
+        expect(warning).toContain('earlier toolPaths mapping');
+      });
+
+      it('removes the block once it holds no server', async () => {
+        const { excludeFile } = await setupRecorded({ mcpServers: {} });
+
+        await uninstall({ force: true });
+
+        expect(await fse.readFile(excludeFile, 'utf8')).toBe('');
+      });
+    });
+
     it('removes the block once uninstall has taken teamai\'s servers out of .mcp.json', async () => {
       const { homeDir, projectRoot, excludeFile, localConfig } = await setup();
       // A path and the login name are in the environment and in ordinary configs: neither holds the block.

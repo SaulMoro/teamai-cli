@@ -220,15 +220,15 @@ export async function ensureExcludedFromGit(file: string, options: { dryRun?: bo
 }
 
 /**
- * `ensureExcludedFromGit` for a file already on disk, warning when it fails
- * rather than failing the sync that wrote the file.
+ * `ensureExcludedFromGit` for a file already on disk that may hold a resolved
+ * value, warning when it fails rather than failing the sync that wrote the file.
  */
 export async function excludeFromGit(file: string): Promise<void> {
   if (!await pathExists(file)) return;
   const exclusion = await ensureExcludedFromGit(file);
   if (exclusion.kind === 'failed') {
     log.warn(
-      `${file} holds a resolved MCP variable, and teamai could not keep it out of git: ${exclusion.reason}. `
+      `${file} may hold a resolved MCP variable, and teamai could not keep it out of git: ${exclusion.reason}. `
       + `${exclusion.fix} Do not commit the file meanwhile.`,
     );
   }
