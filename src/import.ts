@@ -213,7 +213,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       return;
     } else if (opts.fromIwiki) {
       // 分支 0：--from-iwiki，从 iWiki Space 或单页批量导入
-      const { localConfig } = await autoDetectInit();
+      const { localConfig } = await autoDetectInit(undefined, { dryRun: opts.dryRun });
       await importFromIWiki({
         input: opts.fromIwiki,
         all: opts.all,
@@ -240,7 +240,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       }
     } else if (opts.fromMr) {
       // 分支 1：--from-mr <url>，提取 learning + 增量更新 teamwiki
-      const { localConfig, teamConfig } = await autoDetectInit();
+      const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: opts.dryRun });
       // Its learning is published the way `teamai contribute` publishes, which a
       // read-only (HTTP) source refuses; a dry run or --output publishes nothing.
       if (!opts.dryRun && !opts.output) assertNotReadOnly(localConfig, 'teamai import --from-mr');
@@ -468,7 +468,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       }
       const classified = await classifyWithAI(candidates);
       const session = await interactiveReview(classified, { all: opts.all, resume: opts.resume });
-      const { localConfig } = await autoDetectInit();
+      const { localConfig } = await autoDetectInit(undefined, { dryRun: opts.dryRun });
       const { pushed } = await pushAccepted(session, localConfig.repo.localPath, {
         dryRun: opts.dryRun,
         outputDir: opts.output,
