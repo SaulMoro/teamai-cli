@@ -3214,8 +3214,6 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
 
   const tag = localAgentTag(context);
   log.debug(`${tag} run: endpoint=${config.endpoint}`);
-  // Set when the server asked to uninstall teamai: its cleanup is not undone afterwards.
-  let uninstalling = false;
 
   // Report-side bookkeeping (plugin reconcile + binding prune + tool stamp) is
   // tied to the report path and must stay skipped inside the CloudStudio sandbox,
@@ -3272,7 +3270,6 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     const commands = cmds && cmds.length > 0 ? cmds : (syncResponse.commands ?? []);
     if (commands.length > 0) {
       log.debug(`${tag} sync returned ${commands.length} command(s): ${commands.map((c) => `${c.type}#${c.id}`).join(', ')}`);
-      uninstalling = commands.some((c) => c.type === 'uninstall_teamai');
       const modelConfigApplied = await processCommands(config, commands, context);
       if (modelConfigApplied && !skipReport) {
         const reportPayload = await buildReportPayload(config, context);
@@ -3289,8 +3286,10 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     log.error(`${tag} sync FAILED: ${error}`);
     await appendErrorLog({ error, context });
   }
-  // Also when the sync failed: what an install wrote is on disk either way.
-  if (!uninstalling) await protectWorkspaceMcpConfigs(config, context.cwd);
+  // Also when the sync failed: what an install wrote is on disk either way. Also after an uninstall_teamai:
+  // one that removed teamai's servers and records leaves nothing to list, and one that failed or kept the
+  // shared files (another agent remains) leaves what still needs keeping out of git.
+  await protectWorkspaceMcpConfigs(config, context.cwd);
 
   return true;
 }

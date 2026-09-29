@@ -625,6 +625,17 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).not.toMatch(/\.mcp\.json/);
     });
 
+    it('still lists that config when the sync also carried an uninstall_teamai that failed', async () => {
+      await install(9106, bearer);
+      await fse.writeFile(path.join(wsPath, '.git', 'info', 'exclude'), '');
+      await fse.remove(await workspaceFile('managed-mcp-files.json'));
+      vi.stubEnv('TEAMAI_DISABLE_REMOTE_CMD', '1');
+
+      await runResponse({ cmds: [{ id: 9107, type: 'uninstall_teamai', cmd: 'teamai uninstall --force --agent codebuddy' }] }, 'codebuddy', wsPath);
+
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.mcp\.json$/m);
+    });
+
     it('says the next session tries again when that sync cannot list the file, and calls it a credential', async () => {
       await install(9105, bearer);
       const excludeFile = path.join(wsPath, '.git', 'info', 'exclude');
