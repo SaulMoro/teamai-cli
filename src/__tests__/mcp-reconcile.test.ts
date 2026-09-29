@@ -1105,6 +1105,51 @@ servers:
         expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
       });
 
+      describe.each([
+        ['empty', ''],
+        ['truncated', '{ "claude:project": [ { "name": "with-sec'],
+        ['recording nothing for this tool', '{ "cursor:project": [ { "name": "with-secret", "hash": "h" } ] }'],
+      ])('but one an earlier pull listed stays while managed-mcp.json is %s', (_label, content) => {
+        beforeEach(async () => {
+          await writeMcpYaml(withSecret);
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+          const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+          await fse.writeFile(managedMcpManifestPath(getDataHome(projectConfig), projectRoot), content);
+          vi.stubEnv('SECRET_TOKEN', '');
+        });
+
+        it('and a pull finds its server gone from mcp.yaml', async () => {
+          await writeMcpYaml(open);
+
+          await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+          expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        });
+
+        it('and `teamai mcp remove` runs after its server left mcp.yaml', async () => {
+          await writeMcpYaml('servers: []\n');
+
+          await reconcileMcpForConfig(teamConfig, claudeOnly(), { removeAll: true });
+          await releaseCleanMcpGitExcludes(teamConfig, claudeOnly());
+
+          expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('super-secret-value');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        });
+      });
+
+      it('when `teamai mcp remove` takes teamai\'s servers out of a config that also holds the member\'s own', async () => {
+        await fse.writeJson(mcpJson(), { mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly(), { removeAll: true });
+        await releaseCleanMcpGitExcludes(teamConfig, claudeOnly());
+
+        expect(await fse.readJson(mcpJson())).toEqual({ mcpServers: { mine: { type: 'http', url: 'https://mine.example/mcp' } } });
+        expect(await excludeOf(projectRoot)).not.toContain('teamai');
+      });
+
       it('when the last server with a resolved value leaves mcp.yaml', async () => {
         await writeMcpYaml(`${withSecret}  - name: open\n    transport: http\n    url: https://example.com/open\n`);
         await reconcileMcpForConfig(teamConfig, claudeOnly());
