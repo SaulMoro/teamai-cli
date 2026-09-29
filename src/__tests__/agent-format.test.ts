@@ -519,6 +519,45 @@ describe('renderForOpencode', () => {
   });
 });
 
+// ─── renderForTool: tool_extras key per tool ─────────────────────────────────
+
+describe('renderForTool tool_extras dispatch', () => {
+  it.each(['qoder', 'qoder-cn', 'zcode', 'omp'] as const)('%s renders its own extras and never Claude extras', (tool) => {
+    const spec = makeSpec({ tool_extras: { claude: { color: 'blue', memory: 'user' }, [tool]: { color: 'green' } } });
+    const { ext, content } = renderForTool(spec, tool);
+    expect(ext).toBe('.md');
+    expect(content).toContain('color: green');
+    expect(content).not.toContain('memory:');
+    expect(renderForTool(makeSpec({ tool_extras: { claude: { memory: 'user' } } }), tool).content)
+      .toBe(renderForClaude(makeSpec()).content);
+  });
+
+  it('tclaude renders tclaude extras over Claude extras', () => {
+    const spec = makeSpec({ tool_extras: { claude: { color: 'blue', memory: 'user' }, tclaude: { color: 'green' } } });
+    const { ext, content } = renderForTool(spec, 'tclaude');
+    expect(ext).toBe('.md');
+    expect(content).toContain('color: green');
+    expect(content).toContain('memory: user');
+    expect(renderForTool(makeSpec({ tool_extras: { claude: { memory: 'user' } } }), 'tclaude').content)
+      .toContain('memory: user');
+  });
+
+  it('tcodex renders tcodex extras over Codex extras', () => {
+    const spec = makeSpec({
+      tool_extras: { codex: { sandbox_mode: 'read-only', model_reasoning_effort: 'low' }, tcodex: { model_reasoning_effort: 'high' } },
+    });
+    const { ext, content } = renderForTool(spec, 'tcodex');
+    expect(ext).toBe('.toml');
+    expect(parseToml(content)).toMatchObject({ sandbox_mode: 'read-only', model_reasoning_effort: 'high' });
+  });
+
+  it('claude and codex ignore the variant keys', () => {
+    const spec = makeSpec({ tool_extras: { tclaude: { color: 'green' }, tcodex: { sandbox_mode: 'read-only' } } });
+    expect(renderForTool(spec, 'claude').content).not.toContain('color:');
+    expect(renderForTool(spec, 'codex').content).not.toContain('sandbox_mode');
+  });
+});
+
 // ─── reverseFromOpencode ─────────────────────────────────────────────────────
 
 describe('reverseFromOpencode', () => {
@@ -810,6 +849,80 @@ describe('AgentsHandler.pullItem — multi-target', () => {
     await handler.pullItem(item, config, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.codex/agents/test-agent.toml'))).toBe(false);
     expect(await handler.scanLocalForPush(config, localConfig)).toEqual([]);
+  });
+
+  it.each(['qoder', 'zcode', 'omp'] as const)('round-trips a %s extras edit through push and pull', async (tool) => {
+    const spec = makeSpec({ targets: [tool], tool_extras: { claude: { memory: 'user' }, [tool]: { color: 'blue' } } });
+    const yamlPath = path.join(repoPath, 'agents/test-agent.yaml');
+    await fse.writeFile(yamlPath, serializeAgentYaml(spec));
+    await fse.ensureDir(path.join(homeDir, `.${tool}`));
+    const config = buildTeamConfig({ [tool]: { agents: `.${tool}/agents` } });
+    const item = { name: 'test-agent', type: 'agents' as const, sourcePath: yamlPath, relativePath: 'agents/test-agent.yaml' };
+    await handler.pullItem(item, config, localConfig);
+    const expected = { ...spec, tool_extras: { claude: { memory: 'user' }, [tool]: { color: 'red' } } };
+    const deployed = path.join(homeDir, `.${tool}/agents/test-agent.md`);
+    const edited = renderForTool(expected, tool).content;
+    await fse.writeFile(deployed, edited);
+
+    const candidates = await handler.scanLocalForPush(config, localConfig);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].mergedSpec).toEqual(expected);
+    await handler.pushItem(candidates[0], config, localConfig);
+    await handler.pullItem(item, config, localConfig);
+    expect(await fse.readFile(deployed, 'utf-8')).toBe(edited);
+    expect(await handler.scanLocalForPush(config, localConfig)).toEqual([]);
+  });
+
+  it.each([
+    ['tclaude', 'claude', { color: 'blue', memory: 'user' }, { memory: 'project', isolation: 'worktree' }],
+    ['tcodex', 'codex', { sandbox_mode: 'read-only', model_reasoning_effort: 'low' }, { model_reasoning_effort: 'high' }],
+  ] as const)('writes a %s extras edit to its own key, keeping what it inherits from %s', async (tool, base, baseExtras, own) => {
+    const spec = makeSpec({ targets: [tool], tool_extras: { [base]: baseExtras } });
+    const yamlPath = path.join(repoPath, 'agents/test-agent.yaml');
+    await fse.writeFile(yamlPath, serializeAgentYaml(spec));
+    await fse.ensureDir(path.join(homeDir, `.${tool}`));
+    const config = buildTeamConfig({ [tool]: { agents: `.${tool}/agents` } });
+    const item = { name: 'test-agent', type: 'agents' as const, sourcePath: yamlPath, relativePath: 'agents/test-agent.yaml' };
+    await handler.pullItem(item, config, localConfig);
+    const expected = { ...spec, tool_extras: { [base]: baseExtras, [tool]: own } };
+    const edited = renderForTool(expected, tool);
+    const deployed = path.join(homeDir, `.${tool}/agents/test-agent${edited.ext}`);
+    await fse.writeFile(deployed, edited.content);
+
+    const candidates = await handler.scanLocalForPush(config, localConfig);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].mergedSpec).toEqual(expected);
+    await handler.pushItem(candidates[0], config, localConfig);
+    await handler.pullItem(item, config, localConfig);
+    expect(await fse.readFile(deployed, 'utf-8')).toBe(edited.content);
+    expect(await handler.scanLocalForPush(config, localConfig)).toEqual([]);
+  });
+
+  it.each(['qoder', 'zcode', 'omp', 'tclaude', 'claude-internal'] as const)('keys a new %s agent\'s extras by that tool', async (tool) => {
+    await fse.ensureDir(path.join(homeDir, `.${tool}/agents`));
+    const config = buildTeamConfig({ [tool]: { agents: `.${tool}/agents` } });
+    const spec = makeSpec({ tool_extras: { [tool]: { color: 'red' } } });
+    await fse.writeFile(path.join(homeDir, `.${tool}/agents/test-agent.md`), renderForTool(spec, tool).content);
+
+    const candidates = await handler.scanLocalForPush(config, localConfig);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].mergedSpec).toEqual(spec);
+  });
+
+  it('skips a tclaude edit that removes an extra it inherits from Claude', async () => {
+    const spec = makeSpec({ targets: ['tclaude'], tool_extras: { claude: { color: 'blue', memory: 'user' } } });
+    const yamlPath = path.join(repoPath, 'agents/test-agent.yaml');
+    await fse.writeFile(yamlPath, serializeAgentYaml(spec));
+    await fse.ensureDir(path.join(homeDir, '.tclaude'));
+    const config = buildTeamConfig({ tclaude: { agents: '.tclaude/agents' } });
+    await handler.pullItem({ name: 'test-agent', type: 'agents', sourcePath: yamlPath, relativePath: 'agents/test-agent.yaml' }, config, localConfig);
+    await fse.writeFile(path.join(homeDir, '.tclaude/agents/test-agent.md'),
+      renderForTool({ ...spec, tool_extras: { claude: { color: 'blue' } } }, 'tclaude').content);
+
+    const candidates = await handler.scanLocalForPush(config, localConfig);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].skipReason).toContain('tool_extras.tclaude');
+    expect(candidates[0].skipReason).toContain('memory');
   });
 
   it.each(['unchanged', 'conflicting', 'invalid'] as const)('handles an %s second tool copy without data loss', async (mode) => {

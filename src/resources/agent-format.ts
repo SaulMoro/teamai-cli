@@ -908,27 +908,34 @@ export function mergeReverseResults(
 /**
  * Render an AgentSpec for the specified tool.
  *
+ * Each tool reads its own `tool_extras.<tool>`. tclaude and tcodex also fill
+ * the keys they lack from `claude` and `codex`; their own value wins.
+ *
  * @param spec - The agent specification.
  * @param tool - Target tool name.
  * @returns Rendered file extension and content.
  */
 export function renderForTool(spec: AgentSpec, tool: ToolName): RenderResult {
+  const extras = spec.tool_extras;
   switch (tool) {
     case 'claude': return renderForClaude(spec);
     case 'claude-internal': return renderForClaudeInternal(spec);
-    case 'tclaude': return renderForClaude(spec);
+    case 'tclaude':
+      return { ext: agentFileExtensionForTool(tool), content: renderMarkdownAgent(spec, { ...extras?.claude, ...extras?.tclaude }) };
     case 'codebuddy': return renderForCodebuddy(spec);
     case 'codex': return renderForCodex(spec);
     case 'codex-internal': return renderForCodexInternal(spec);
-    case 'tcodex': return renderForCodex(spec);
+    case 'tcodex':
+      return { ext: agentFileExtensionForTool(tool), content: renderTomlAgent(spec, { ...extras?.codex, ...extras?.tcodex }) };
     case 'cursor': return renderForCursor(spec);
     case 'copilot': return renderForCopilot(spec);
     case 'joycode': return renderForJoycode(spec);
-    case 'qoder': return renderForClaude(spec);
-    case 'qoder-cn': return renderForClaude(spec);
+    case 'qoder':
+    case 'qoder-cn':
+    case 'zcode':
+    case 'omp':
+      return { ext: agentFileExtensionForTool(tool), content: renderMarkdownAgent(spec, extras?.[tool]) };
     case 'kiro': return renderForKiro(spec);
-    case 'zcode': return renderForClaude(spec);
-    case 'omp': return renderForClaude(spec);
     case 'opencode': return renderForOpencode(spec);
     case 'workbuddy': return renderForWorkbuddy(spec);
   }

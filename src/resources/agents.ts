@@ -1040,15 +1040,24 @@ function mergeCanonicalEdits(
       });
     }
 
-    // These aliases render the base tool's private metadata; other renderers
-    // own their own namespace even when they share a reverse parser.
-    const extrasKey = tool === 'tclaude' ? 'claude' : tool === 'tcodex' ? 'codex' : tool;
+    // Each tool owns the extras key renderForTool reads for it. tclaude and
+    // tcodex also render what `claude` and `codex` carry, so only the values
+    // that differ from those are theirs; a removed inherited key cannot be
+    // expressed there and is reported rather than dropped.
     const before = Object.values(baseline.spec.tool_extras ?? {})[0] ?? {};
     const after = Object.values(edited.tool_extras ?? {})[0] ?? {};
     if (!isDeepStrictEqual(before, after)) {
-      propose(`tool_extras.${extrasKey}`, after, () => {
-        if (Object.keys(after).length) extras[extrasKey] = after;
-        else delete extras[extrasKey];
+      const base = tool === 'tclaude' ? 'claude' : tool === 'tcodex' ? 'codex' : undefined;
+      const inherited = (base && canonical.tool_extras?.[base]) || {};
+      const removed = Object.keys(inherited).filter((key) => !(key in after));
+      if (base && removed.length) {
+        conflicts.push({ field: `tool_extras.${tool}`, values: { inheritedFrom: `tool_extras.${base}`, removed } });
+        continue;
+      }
+      const own = Object.fromEntries(Object.entries(after).filter(([key, value]) => !isDeepStrictEqual(inherited[key], value)));
+      propose(`tool_extras.${tool}`, own, () => {
+        if (Object.keys(own).length) extras[tool] = own;
+        else delete extras[tool];
       });
     }
   }
@@ -1107,9 +1116,17 @@ async function agentContentEqual(tool: string, localPath: string, teamPath: stri
 }
 
 /**
- * Dispatch reverse parsing to the correct function for each tool.
+ * Dispatch reverse parsing to the correct function for each tool, keying the
+ * extras by that tool: several tools share a parser, and each renders its own key.
  */
 function reverseByTool(tool: ToolName, filePath: string, content: string): ReverseResult {
+  const result = reverseByParser(tool, filePath, content);
+  const extras = result.ok ? Object.values(result.spec.tool_extras ?? {})[0] : undefined;
+  if (result.ok && extras) result.spec.tool_extras = { [tool]: extras };
+  return result;
+}
+
+function reverseByParser(tool: ToolName, filePath: string, content: string): ReverseResult {
   switch (tool) {
     case 'claude':
     case 'claude-internal':
