@@ -31,6 +31,7 @@ vi.mock('../utils/reports-branch.js', async (importOriginal) => ({
 
 import { codebaseCmd } from '../codebase-cmd.js';
 import { contribute } from '../contribute.js';
+import { generateDigest } from '../digest.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { resolveDoctorContext } from '../doctor.js';
 import { excludeList } from '../exclude.js';
@@ -39,17 +40,21 @@ import { importCmd } from '../import.js';
 import { mcpInject, mcpList } from '../mcp-cmd.js';
 import { modelsList, modelsSwitch } from '../models-cmd.js';
 import { pkgInstall } from '../pkg/commands.js';
-import { projectsAdd, projectsList } from '../projects-cmd.js';
+import { listMembers } from '../members.js';
+import { projectsAdd, projectsList, projectsMembers, projectsRemove, projectsUpdate } from '../projects-cmd.js';
 import { pull } from '../pull.js';
 import { push } from '../push.js';
 import { recall } from '../recall.js';
 import { recallStatus } from '../recall-toggle.js';
 import { remove } from '../remove.js';
 import { rolesAdd, rolesInit, rolesList, rolesRemove, rolesSet, rolesUpdate } from '../roles-cmd.js';
-import { sourceAdd, sourceAddHttp, sourceList, sourceRemove } from '../source.js';
+import { skillList, skillShow } from '../skill-cmd.js';
+import { sourceAdd, sourceAddHttp, sourceBrowse, sourceList, sourceRemove } from '../source.js';
+import { showStats } from '../stats.js';
 import { list, status } from '../status.js';
 import { tagsAdd, tagsList, tagsRemove, tagsSubscribe, tagsUnsubscribe } from '../tags.js';
 import { uninstall } from '../uninstall.js';
+import { listWebhooks } from '../webhook.js';
 import { updateReports } from '../utils/reports-branch.js';
 import { log } from '../utils/logger.js';
 import { legacyProjectSlug } from '../utils/partition.js';
@@ -209,6 +214,7 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     process.chdir(originalCwd);
+    process.exitCode = undefined;
     for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -281,13 +287,25 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['codebase --status', () => codebaseCmd({ status: true })],
     ['uninstall --dry-run', () => uninstall({ dryRun: true, force: true })],
     ['packages install --dry-run', () => pkgInstall(undefined, { dryRun: true })],
+    ['source browse', () => sourceBrowse('x', {})],
+    ['codebase --lint', () => codebaseCmd({ lint: true })],
+    ['skill list', () => skillList({})],
+    ['skill show', () => skillShow('core', {})],
+    ['webhook list', async () => { await listWebhooks(); }],
+    ['digest', () => generateDigest()],
   ];
+
+  // The loader logs this line when it previews the migration, so it proves the
+  // row reached the load: an early return would leave the file unchanged too.
+  const PREVIEWED = expect.stringContaining('[dry-run] Would migrate legacy teamai config');
 
   it.each(LOAD_ONLY_COMMANDS)('%s migrates nothing it loads (#850)', async (_command, run) => {
     const { root, configPath } = legacyRoot();
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
     const before = snapshotTree(root);
     const error = await run().then(() => null, (e: unknown) => e);
     expect(error).toBeNull();
+    expect(info).toHaveBeenCalledWith(PREVIEWED);
     expect(snapshotTree(root)).toEqual(before);
     expect(fs.readFileSync(configPath, 'utf-8')).not.toContain('primaryRole');
     // A dry run may parse the remote, but nothing else may reach a provider.
@@ -319,6 +337,9 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['import --from-iwiki', (dryRun) => importCmd({ fromIwiki: 'x', dryRun })],
     ['import --from-mr', (dryRun) => importCmd({ fromMr: 'https://github.com/acme/app/pull/1', dryRun })],
     ['codebase --reconcile', (dryRun) => codebaseCmd({ reconcile: true, dryRun })],
+    ['projects update', (dryRun) => projectsUpdate('checkout', { dryRun, description: 'x' })],
+    ['projects remove', (dryRun) => projectsRemove('checkout', { dryRun })],
+    ['import --from-claude', (dryRun) => importCmd({ fromClaude: true, all: true, dryRun })],
     ['codebase --deep-enrich', (dryRun) => codebaseCmd({ deepEnrich: true, project: 'x', dryRun })],
     ['models switch', (dryRun) => modelsSwitch('p', { dryRun })],
   ];
@@ -339,8 +360,10 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
 
     it('--dry-run leaves a config pending the role migration as it was (#893)', async () => {
       const { configPath } = legacyRoot();
+      const info = vi.spyOn(log, 'info').mockImplementation(() => {});
       const before = fs.readFileSync(configPath, 'utf-8');
       await run(true).catch(() => {});
+      expect(info).toHaveBeenCalledWith(PREVIEWED);
       expect(fs.readFileSync(configPath, 'utf-8')).toBe(before);
     });
 
@@ -349,6 +372,26 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
       await run(false).catch(() => {});
       expect(fs.readFileSync(configPath, 'utf-8')).toContain('primaryRole: hai');
     });
+  });
+
+  // Read-only commands that, past the load, fail on this fixture (there is no
+  // reports branch to read members from) or keep state of their own (`stats`
+  // indexes session owners for the dashboard). Only the load is asserted.
+  const READ_ONLY_PAST_THE_LOAD: Array<[string, () => Promise<unknown>]> = [
+    ['members', () => listMembers({})],
+    ['projects members', () => projectsMembers('checkout', {})],
+    ['stats', () => showStats()],
+  ];
+
+  it.each(READ_ONLY_PAST_THE_LOAD)('%s migrates nothing it loads (#893)', async (_command, run) => {
+    const { configPath } = legacyRoot();
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const before = fs.readFileSync(configPath, 'utf-8');
+    await run().catch(() => {});
+    providerCalls.length = 0;
+    expect(info).toHaveBeenCalledWith(PREVIEWED);
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe(before);
   });
 
   /** A git project whose partition still carries its pre-#546 name, i.e. project scope. */
