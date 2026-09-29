@@ -412,6 +412,20 @@ describe('doctor — MCP servers delivered on disk', () => {
         expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
       });
 
+      it('still fails while a server carrying a credential has lost its record, though another server\'s remains', async () => {
+        await fse.writeJson(path.join(projectRoot, '.mcp.json'), {
+          mcpServers: {
+            jira: { type: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer t0ken' } },
+            local: { command: 'local-mcp' },
+          },
+        });
+        await writeRecord({ name: 'local', hash: 'h', resolved: false });
+
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(false);
+      });
+
       it('has nothing to say of a file whose recorded server carries neither header nor env value', async () => {
         await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp' } } });
         await writeRecord({ name: 'jira', hash: 'h', resolved: false });

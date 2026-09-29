@@ -42,6 +42,7 @@ import {
 } from './resources/mcp-format.js';
 import {
   readJsonDoc,
+  isTeamaiBareCopy,
   writeJsonDoc,
   writeCodexAtomic,
   spliceCodexBlock,
@@ -2941,12 +2942,14 @@ async function installMcpServer(
     if (doc.servers[slug] !== undefined && !ownedNames.has(slug)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
+    // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
+    // Judged by the record as it was before this install updates it.
+    const bareCopy = isTeamaiBareCopy(doc, slug, owned);
     // A credential lands in a project config only once git leaves the file out of a commit, as a pull's does (#882).
     const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
     await writeJsonAtomic(manifestPath, manifest);
-    // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
-    if (ownedNames.has(slug) && doc.beside?.[slug] !== undefined) delete doc.data[slug];
+    if (bareCopy) delete doc.data[slug];
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
   }
@@ -3042,9 +3045,10 @@ async function uninstallMcpServer(
     const allowBare = format === 'copilot' && projectScope;
     const doc = await readJsonDoc(targetFile, serverKey, allowBare);
     // Also a bare entry another tool's mcpServers now sits beside (#882).
-    if (doc && (doc.servers[slug] !== undefined || doc.beside?.[slug] !== undefined)) {
+    const bareCopy = doc !== null && isTeamaiBareCopy(doc, slug, owned);
+    if (doc && (doc.servers[slug] !== undefined || bareCopy)) {
       delete doc.servers[slug];
-      if (doc.beside?.[slug] !== undefined) delete doc.data[slug];
+      if (bareCopy) delete doc.data[slug];
       await writeJsonDoc(targetFile, serverKey, doc);
     }
   }

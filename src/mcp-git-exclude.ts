@@ -52,7 +52,9 @@ export function carriesLocalAgentCredential(entry: unknown): boolean {
     Array.isArray(value) ? value.length > 0 : typeof value === 'object' && value !== null && Object.keys(value).length > 0;
   // OpenCode keeps env under `environment`, and a stdio command with its arguments under `command`.
   if (['headers', 'env', 'environment', 'args'].some((key) => nonEmpty(fields[key]))) return true;
-  if (Array.isArray(fields.command) ? fields.command.length > 1 : typeof fields.command === 'string' && /\s/.test(fields.command.trim())) return true;
+  // A command line in one string, or OpenCode's one-element array holding it, carries its arguments too.
+  const commandParts: unknown[] = Array.isArray(fields.command) ? fields.command : [fields.command];
+  if (commandParts.length > 1 || commandParts.some((part) => typeof part === 'string' && /\s/.test(part.trim()))) return true;
   return ['url', 'serverUrl', 'httpUrl'].some((key) => typeof fields[key] === 'string' && fields[key].trim() !== '');
 }
 

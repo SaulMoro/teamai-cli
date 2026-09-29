@@ -368,12 +368,15 @@ describe('a local agent install that carries a credential (#882)', () => {
     ['a URL with a token in its path', { type: 'http', url: 'https://x.example/mcp/bmcp-t0ken' }],
     ['any URL: nothing tells a token in its path from a plain one', { type: 'http', url: 'https://x.example/mcp' }],
     ['a whole command line', { command: 'server --token t' }],
+    ['a whole command line in OpenCode\'s one-element array', { type: 'local', command: ['server --token t'] }],
+    ['a command array with arguments', { type: 'local', command: ['server', '--token', 't'] }],
   ])('counts %s', (_, entry) => {
     expect(carriesLocalAgentCredential(entry)).toBe(true);
   });
 
   it.each([
     ['a bare command', { command: 'npx' }],
+    ['a bare command in a one-element array', { type: 'local', command: ['npx'] }],
   ])('does not count %s', (_, entry) => {
     expect(carriesLocalAgentCredential(entry)).toBe(false);
   });

@@ -1119,6 +1119,35 @@ servers:
         expect((after.mcpServers as Record<string, unknown>)['with-secret']).toEqual(expect.objectContaining({ headers: { Authorization: 'Bearer published-literal' } }));
       });
 
+      it('never removes a bare server of the member\'s own that shares a name with one teamai writes under mcpServers', async () => {
+        const mine = { type: 'http', url: 'https://mine.example/mcp' };
+        const doc = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+        await fse.writeJson(path.join(projectRoot, '.mcp.json'), { ...doc, jira: mine });
+        const jira = '  - name: jira\n    transport: http\n    url: https://jira.example/mcp\n    tools: [copilot]\n';
+        await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}${jira}`);
+        await reconcileMcpForConfig(shared(), projectConfig);
+        await reconcileMcpForConfig(shared(), projectConfig);
+        await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
+        await reconcileMcpForConfig(shared(), projectConfig);
+
+        expect((await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>).jira).toEqual(mine);
+      });
+
+      it('keeps its line while a stale bare copy differs from the entry of that name under mcpServers', async () => {
+        const stale = (await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>)['with-secret'];
+        await fse.writeJson(path.join(projectRoot, '.mcp.json'), {
+          'with-secret': stale,
+          mcpServers: { 'with-secret': { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer published-literal' } } },
+        });
+        await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+        vi.stubEnv('SECRET_TOKEN', '');
+
+        await reconcileMcpForConfig(shared(), { ...projectConfig, disabledAgents: ['copilot'] } as LocalConfig);
+
+        expect(JSON.stringify(await fse.readJson(path.join(projectRoot, '.mcp.json')))).toContain('super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      });
+
       it('removes Copilot\'s bare entry once the team drops it, leaving the mcpServers Claude wrote', async () => {
         await writeMcpYaml(open);
         vi.stubEnv('SECRET_TOKEN', '');

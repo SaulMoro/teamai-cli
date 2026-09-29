@@ -606,6 +606,15 @@ export async function installedMcpEntries(
   return new Map([...options.underKeyOnly ? [] : Object.entries(doc.beside ?? {}), ...Object.entries(doc.servers)]);
 }
 
+/** In a Copilot project file that also holds `mcpServers`, a bare server whose value differs from the one of its name there. */
+async function shadowedBareCopilotServer(target: McpTarget): Promise<string | undefined> {
+  if (target.format !== 'copilot' || !target.projectScope) return undefined;
+  const doc = await readJsonDoc(target.file, MCP_SERVER_KEY.copilot, true).catch(() => null);
+  if (!doc?.beside) return undefined;
+  return Object.keys(doc.beside).find((name) => doc.servers[name] !== undefined
+    && JSON.stringify(doc.servers[name]) !== JSON.stringify(doc.beside?.[name]));
+}
+
 /**
  * Why `target`'s file may hold a value teamai resolved (#882), or null when it
  * is missing or proven not to. Judged by what is on disk and in the manifest
@@ -631,6 +640,10 @@ export async function resolvedValueEvidence(
   const present = records.map((record) => record.name);
   const unverified = (ledger.unverified ?? []).find((name) => !installed || installed.has(name));
   if (unverified) return `${unverified}, which was in the file when teamai rebuilt its lost record, so teamai cannot tell whether a pull wrote it`;
+  // A Copilot file's bare server beside a different one of its name under mcpServers: the merged view reads the
+  // latter, and the bare copy may be one an earlier pull wrote with a value since resolved away (#882).
+  const shadowed = await shadowedBareCopilotServer(target);
+  if (shadowed) return `a bare ${shadowed} beside a different ${shadowed} under mcpServers, which may be an earlier pull's`;
   if (!teamDefs) return present.length > 0 ? `teamai's ${present.join(', ')}, and the team's MCP servers cannot be read` : null;
   const dropped = present.find((name) => !teamDefs.some((def) => def.name === name));
   if (dropped) return `teamai's ${dropped}, which has left the team's MCP servers`;
@@ -1558,6 +1571,16 @@ async function forgetUnwrittenMcpConfigs(localConfig: LocalConfig, targets: McpT
   }
 }
 
+/**
+ * Whether the bare Copilot server `name` beside `mcpServers` is the copy a teamai write left before another tool
+ * added the key (#882): exactly what `owned`'s record says teamai wrote. A member's own server of that name,
+ * or one edited since, is left alone.
+ */
+export function isTeamaiBareCopy(doc: { beside?: Record<string, unknown> }, name: string, owned: readonly ManagedMcpRecord[]): boolean {
+  const bare = doc.beside?.[name];
+  return bare !== undefined && owned.some((record) => record.name === name && record.hash === entryHash(bare));
+}
+
 // ─── Appliers ────────────────────────────────────────────────
 
 /** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
@@ -1594,7 +1617,7 @@ async function applyJson(
     }
     nextRecords.push({ name, hash });
     // The copy a bare write left before another tool added the key would keep the old value beside this one (#882).
-    if (ownedNames.has(name) && doc.beside?.[name] !== undefined) {
+    if (isTeamaiBareCopy(doc, name, owned)) {
       delete doc.data[name];
       dirty = true;
     }
@@ -1611,7 +1634,7 @@ async function applyJson(
       dirty = true;
     }
     // One a bare write left before another tool added the key goes too (#882).
-    if (doc.beside?.[name] !== undefined) {
+    if (isTeamaiBareCopy(doc, name, owned)) {
       delete doc.data[name];
       dirty = true;
     }

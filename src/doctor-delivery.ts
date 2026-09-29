@@ -616,9 +616,13 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
         await hold(target.file);
         continue;
       }
+      const recordedNames = new Set((records ?? []).map((record) => record.name));
       const credential = (records ?? []).some((record) => installed === null
         ? record.resolved !== false
-        : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))));
+        : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))))
+        // One whose record was lost while another server's remains: judged by the entry itself.
+        || (records !== undefined && installed !== null && [...installed]
+          .some(([name, entry]) => !recordedNames.has(name) && carriesLocalAgentCredential(entry)));
       if (credential) await hold(target.file);
     }
     return report('MCP credentials in plaintext', 'Fix any git error shown, then add each to .git/info/exclude. If git already tracks one, run '
