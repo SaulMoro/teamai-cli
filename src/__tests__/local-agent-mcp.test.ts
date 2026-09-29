@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -529,6 +530,71 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(manifest['codebuddy:project']).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: 'enterprise-search' })]),
     );
+  });
+
+  // A project-scope install carrying a credential lands only in a file git leaves out of a commit (#882).
+  describe('a workspace install carrying a header or env value, in a git checkout (#882)', () => {
+    let wsPath: string;
+    const git = (...args: string[]): string => execFileSync('git', args, { cwd: wsPath, encoding: 'utf-8' });
+    const install = (id: number, mcpConfig: Record<string, unknown>) => runResponse({
+      cmds: [{
+        id, type: 'install_mcp', scope: 'workspace', workspace_path: wsPath, slug: 'clawpro', version: '1.0.0', mcp_config: mcpConfig,
+      }],
+    });
+    const bearer = { transport: 'http', url: 'https://clawpro.example.com/mcp', headers: { Authorization: 'Bearer bmcp-test-token' } };
+    const workspaceFile = async (name: string): Promise<string> => {
+      const wsDir = path.join(wsPath, '.teamai', 'workspaces');
+      const ids = await fse.readdir(wsDir);
+      expect(ids).toHaveLength(1);
+      return path.join(wsDir, ids[0], name);
+    };
+
+    beforeEach(async () => {
+      wsPath = path.join(tmpDir, 'projects', 'repo-git');
+      await fse.ensureDir(path.join(wsPath, '.codebuddy', 'skills'));
+      git('init', '-q');
+    });
+
+    it.each([
+      ['an Authorization header', bearer],
+      ['a stdio env value', { transport: 'stdio', command: 'clawpro-mcp', env: { CLAWPRO_TOKEN: 'bmcp-test-token' } }],
+    ])('lists the config in .git/info/exclude before writing %s, and records it in managed-mcp-files.json', async (_label, mcpConfig) => {
+      const acks = await install(9101, mcpConfig);
+
+      expect(acks[0].status).toBe('success');
+      expect(await fse.readFile(path.join(wsPath, '.mcp.json'), 'utf-8')).toContain('bmcp-test-token');
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.mcp\.json$/m);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toBe('');
+      const sidecar = await fse.readJson(await workspaceFile('managed-mcp-files.json')) as { files: Record<string, { tools: string[] }> };
+      expect(Object.entries(sidecar.files)).toEqual([[expect.stringMatching(/\.mcp\.json$/), { tools: ['codebuddy'] }]]);
+      const manifest = await fse.readJson(await workspaceFile('managed-mcp.json'));
+      expect(manifest['codebuddy:project']).toEqual([expect.objectContaining({ name: 'clawpro', resolved: true })]);
+    });
+
+    it('withholds it from a config git tracks, naming why, and leaves the file and its records as they were', async () => {
+      const original = { mcpServers: { mine: { type: 'http', url: 'https://mine.example.com/mcp' } } };
+      await fse.writeJson(path.join(wsPath, '.mcp.json'), original);
+      git('add', '.mcp.json');
+
+      const acks = await install(9102, bearer);
+
+      expect(acks[0].status).toBe('failed');
+      expect(acks[0].error).toContain('git already tracks');
+      expect(await fse.readJson(path.join(wsPath, '.mcp.json'))).toEqual(original);
+      const manifestFile = path.join(wsPath, '.teamai', 'workspaces');
+      const manifests = await fse.pathExists(manifestFile) ? await fse.readdir(manifestFile) : [];
+      for (const id of manifests) {
+        const manifest = await fse.readJson(path.join(manifestFile, id, 'managed-mcp.json')).catch(() => ({}));
+        expect(manifest['codebuddy:project']).toBeUndefined();
+      }
+    });
+
+    it('adds no line for a server with neither header nor env value', async () => {
+      const acks = await install(9103, { transport: 'http', url: 'https://clawpro.example.com/mcp' });
+
+      expect(acks[0].status).toBe('success');
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).not.toMatch(/\.mcp\.json/);
+    });
   });
 
   // ─── install_mcp: 缺少 mcp_config 时失败 ──────────────────────────

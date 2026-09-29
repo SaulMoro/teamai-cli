@@ -551,15 +551,17 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
  * A project MCP config holding a resolved `${VAR}` that git would commit
  * (#882). Pull lists such a file in `.git/info/exclude`; this is the standing
  * check for a file that is tracked already, or a repo whose exclude could not
- * be written. Read-only: `git check-ignore` changes nothing.
+ * be written. For an HTTP-backed team, whose local agent writes the servers,
+ * a config holding a credential its install recorded. Read-only:
+ * `git check-ignore` changes nothing.
  */
 export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   const { projectRoot } = localConfig;
-  if (!teamConfig || localConfig.scope !== 'project' || !projectRoot || localConfig.repo.kind === 'http') return [];
+  if (!teamConfig || localConfig.scope !== 'project' || !projectRoot) return [];
 
   const {
-    resolveMcpTargets, resolvedValueEvidence, buildVarTable, buildDesiredMcpContext, recordedMcpTargets, recordedMcpFileEvidence,
+    resolveMcpTargets, resolvedValueEvidence, buildVarTable, buildDesiredMcpContext, recordedMcpTargets, recordedMcpFileEvidence, installedMcpEntries,
     earlierMappedMcpTargets, earlierMappedMcpFileEvidence, ownedByMappers, unrecordedMcpTool, unmappedMcpDefaults, unrecordedUnmappedMcpDefaults, unclaimedMcpServers,
   } = await import('./mcp-reconcile.js');
   const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
@@ -591,6 +593,29 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
   // A built-in location no mapping reaches today (its tool moved or dropped): its tool's records describe another file.
   const unmapped = await unmappedMcpDefaults(mapped);
   const targets = mapped.filter((target) => !unmapped.has(target));
+  const report = (held: string, next: string): Check[] => holding.size === 0 ? [] : [{
+    name: 'Project MCP configs with resolved values are kept out of git',
+    source: 'local',
+    check: async () => tracked.length === 0,
+    fix: `${tracked.join(', ')} may hold ${held}, and git would commit them or cannot say. ${next}`,
+  }];
+  if (localConfig.repo.kind === 'http') {
+    // No mcp.yaml to judge by: a server its install recorded as carrying a credential, or an older install's
+    // entry holding a header or env value. Also in a file recorded under a mapping another teamai.yaml made.
+    const { carriesLocalAgentCredential } = await import('./mcp-git-exclude.js');
+    manifest = (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
+    const recorded = [...(await recordedMcpTargets(localConfig, targets)).values()].flatMap((file) => file.targets);
+    for (const target of [...targets, ...recorded]) {
+      if (holding.has(target.file) || !await pathExists(target.file)) continue;
+      const installed = await installedMcpEntries(target);
+      const credential = (manifest[managedMcpManifestKey(target.tool, true)] ?? []).some((record) => installed === null
+        ? record.resolved !== false
+        : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))));
+      if (credential) await hold(target.file);
+    }
+    return report('MCP headers or env values in plaintext', 'Fix any git error shown, then add each to .git/info/exclude. If git already tracks one, run '
+      + '`git rm --cached <file>` and rotate the values it held.');
+  }
   for (const target of targets) {
     if (holding.has(target.file) || !await pathExists(target.file)) continue;
     manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
@@ -624,16 +649,8 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     manifest ??= (await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true })).manifest;
     if (await earlierMappedMcpFileEvidence(target, teamDefs, vars, desired, ownedByMappers(mappedBy, manifest))) await hold(target.file);
   }
-  if (holding.size === 0) return [];
-
-  return [{
-    name: 'Project MCP configs with resolved values are kept out of git',
-    source: 'local',
-    check: async () => tracked.length === 0,
-    fix: `${tracked.join(', ')} may hold MCP variables resolved to plaintext, and git would commit them or cannot say. `
-      + 'Fix any git error shown, then run `teamai pull` to list them in .git/info/exclude. If git already tracks one, run '
-      + '`git rm --cached <file>` and rotate the values it held.',
-  }];
+  return report('MCP variables resolved to plaintext', 'Fix any git error shown, then run `teamai pull` to list them in .git/info/exclude. If git already tracks one, run '
+    + '`git rm --cached <file>` and rotate the values it held.');
 }
 
 /**

@@ -38,6 +38,22 @@ export function carriesResolvedValue(
 }
 
 /**
+ * Whether a JSON MCP entry the local agent installs for an HTTP-backed team
+ * carries a credential (#882): a header or env value of any kind. Its payload
+ * holds the values themselves, not `${VAR}` references teamai resolves, so
+ * nothing tells a bearer token from a plain setting: every one counts.
+ */
+export function carriesLocalAgentCredential(entry: unknown): boolean {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const fields = entry as Record<string, unknown>;
+  // OpenCode keeps env under `environment`.
+  return ['headers', 'env', 'environment'].some((key) => {
+    const values = fields[key];
+    return typeof values === 'object' && values !== null && Object.keys(values).length > 0;
+  });
+}
+
+/**
  * The variable whose value, resolved by teamai into `target`, `raw` (a project
  * file's text) holds, or null: one `teamDefs` references that the tool does not
  * expand itself, with a value in `vars` of 8+ characters (shorter ones turn up

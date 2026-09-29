@@ -2845,13 +2845,16 @@ function updateManifestRecord(
   key: string,
   name: string,
   hash: string,
+  /** Project scope: whether the entry carries a credential, as `resolved` notes for a pull's (#882). */
+  resolved?: boolean,
 ): void {
   const records = manifest[key] ?? [];
   const idx = records.findIndex((r: ManagedMcpRecord) => r.name === name);
+  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved } };
   if (idx >= 0) {
-    records[idx] = { name, hash };
+    records[idx] = record;
   } else {
-    records.push({ name, hash });
+    records.push(record);
   }
   manifest[key] = records;
 }
@@ -2938,13 +2941,46 @@ async function installMcpServer(
     if (doc.servers[slug] !== undefined && !ownedNames.has(slug)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
-    updateManifestRecord(manifest, manifestKey, slug, hash);
+    // A credential lands in a project config only once git leaves the file out of a commit, as a pull's does (#882).
+    const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
+    updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
     await writeJsonAtomic(manifestPath, manifest);
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
+}
+
+/**
+ * For a project-scope install: whether `entry` carries a credential and, if
+ * so, list `file` in `.git/info/exclude` and record it in
+ * managed-mcp-files.json, as a pull does before writing a resolved value
+ * (#882). Throws, before anything is written, when git would commit the file.
+ */
+async function keepCredentialOutOfGit(
+  localConfig: LocalConfig,
+  tool: string,
+  slug: string,
+  file: string,
+  entry: unknown,
+): Promise<boolean> {
+  const { carriesLocalAgentCredential, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
+  if (!carriesLocalAgentCredential(entry)) return false;
+  const exclusion = await ensureExcludedFromGit(file);
+  if (exclusion.kind === 'failed') {
+    throw new Error(
+      `install_mcp: withheld "${slug}" from ${file}: it carries a header or env value, and teamai could not keep the file `
+      + `out of git: ${exclusion.reason}. The file is left as it was. ${exclusion.fix}`,
+    );
+  }
+  const { trackResolvedMcpFiles } = await import('./mcp-resolved-files.js');
+  // A failure does not stop the write: the exclusion protects the file.
+  const result = await trackResolvedMcpFiles(localConfig, [{ tool, file }]).catch((e: unknown) => e instanceof Error ? e.message : String(e));
+  if (result !== 'written' && result !== 'unchanged') {
+    log.debug(`Did not record ${file} in managed-mcp-files.json: ${result === 'locked' ? 'another teamai command held it past the wait' : result}.`);
+  }
+  return true;
 }
 
 async function uninstallMcpServer(

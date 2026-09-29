@@ -368,6 +368,47 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix ?? '').toContain(shared);
     });
 
+    describe('for an HTTP-backed team, judged by the records the local agent wrote', () => {
+      const writeRecord = (record: Record<string, unknown>): Promise<void> =>
+        fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), { [managedMcpManifestKey('claude', true)]: [record] });
+
+      beforeEach(async () => {
+        Object.assign(localConfig, { repo: { localPath: repoPath, remote: 'https://teamai.example', kind: 'http', url: 'https://teamai.example' } });
+        // An HTTP team has no mcp.yaml: its servers arrive through install_mcp.
+        await fse.remove(path.join(repoPath, 'mcp'));
+      });
+
+      it.each([
+        ['notes it carried a header or env value', { name: 'jira', hash: 'h', resolved: true }],
+        ['is an older local agent\'s, without that note, and its entry holds a header', { name: 'jira', hash: 'h' }],
+      ])('fails while git would track the file, and names it, when the record %s', async (_label, record) => {
+        await writeRecord(record);
+
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(false);
+        expect(check.fix).toContain(path.join(projectRoot, '.mcp.json'));
+        // No pull writes an HTTP team's servers, so none lists the file.
+        expect(check.fix).not.toContain('teamai pull');
+      });
+
+      it('passes once git ignores the file', async () => {
+        await writeRecord({ name: 'jira', hash: 'h', resolved: true });
+        await fse.appendFile(path.join(projectRoot, '.git', 'info', 'exclude'), '/.mcp.json\n');
+
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(true);
+      });
+
+      it('has nothing to say of a file whose recorded server carries neither header nor env value', async () => {
+        await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp' } } });
+        await writeRecord({ name: 'jira', hash: 'h', resolved: false });
+
+        expect(await excludeCheck()).toBeUndefined();
+      });
+    });
+
     describe('a config an older teamai wrote under a mapping an earlier teamai.yaml made, before a pull on this version', () => {
       const old = (): string => path.join(projectRoot, '.cursor', 'team-mcp.json');
       const commitTeamYaml = (toolPaths: object): void => {
