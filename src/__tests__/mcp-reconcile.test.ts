@@ -2332,6 +2332,34 @@ servers:
       expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/\.cursor\/mcp\.json/);
     });
 
+    it('takes back a tool it recorded before a write it then skipped, in a file another tool wrote this pull', async () => {
+      const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+      const mcpJson = path.join(projectRoot, '.mcp.json');
+      await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
+      await writeMcpYaml(withSecret);
+
+      // Claude writes with-secret first; CodeBuddy finds it there, not its own, and skips it.
+      const result = await reconcileMcpForConfig(unmovedConfig(), projectConfig);
+
+      expect(result.changes).toContainEqual(expect.objectContaining({ tool: 'codebuddy', server: 'with-secret', action: 'skipped' }));
+      expect((await readResolvedMcpFiles(projectConfig)).files[mcpJson]).toEqual({ tools: ['claude'] });
+    });
+
+    it('keeps a tool it records again whose entry with a resolved value is already in the file, with no write', async () => {
+      const { readResolvedMcpFiles, resolvedMcpFilesPath } = await import('../mcp-resolved-files.js');
+      const mcpJson = path.join(projectRoot, '.mcp.json');
+      await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
+      await writeMcpYaml(`${withSecret}    tools: [codebuddy]\n${withSecret.replace('servers:\n', '').replace('with-secret', 'other-secret')}    tools: [claude]\n`);
+      await reconcileMcpForConfig(unmovedConfig(), projectConfig);
+      expect((await readResolvedMcpFiles(projectConfig)).files[mcpJson]?.tools.sort()).toEqual(['claude', 'codebuddy']);
+      await fse.writeJson(resolvedMcpFilesPath(projectConfig) ?? '', { version: 1, files: { [mcpJson]: { tools: ['claude'] } } });
+
+      const result = await reconcileMcpForConfig(unmovedConfig(), projectConfig);
+
+      expect(result.wrote).toBe(false);
+      expect((await readResolvedMcpFiles(projectConfig)).files[mcpJson]?.tools.sort()).toEqual(['claude', 'codebuddy']);
+    });
+
     it('takes back a tool it recorded before a write that did not happen, in a file another tool recorded', async () => {
       const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
       const mcpJson = path.join(projectRoot, '.mcp.json');

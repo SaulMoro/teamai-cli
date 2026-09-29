@@ -1045,7 +1045,8 @@ export async function reconcileMcpForConfig(
   const exclusions = new Map<string, GitExclusion>();
   // The project configs this run wrote: a line it added for one stays, whatever fails after.
   const written = new Set<string>();
-  // The (file, tool) pairs managed-mcp-files.json first recorded this run, before their write.
+  // The (file, tool) pairs managed-mcp-files.json first recorded this run, before their write, until that
+  // tool's records hold a resolved value there: another tool's write to the same file proves nothing of it.
   const recorded: McpTarget[] = [];
   const protect = !options.removeAll && !options.dryRun;
   // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
@@ -1053,9 +1054,9 @@ export async function reconcileMcpForConfig(
   try {
     return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded);
   } finally {
-    // A record this run added for a file it then did not write goes, as its exclude line does. The settle
+    // A record this run added for a tool that then wrote no value goes, as its exclude line does. The settle
     // below records the file again if it holds a resolved value all the same (an earlier pull wrote it).
-    await forgetUnwrittenMcpConfigs(localConfig, recorded.filter((target) => !written.has(target.file)));
+    await forgetUnwrittenMcpConfigs(localConfig, recorded);
     // Also after a failed write: what earlier pulls wrote is on disk either way.
     if (protect) await protectResolvedMcpConfigs(teamConfig, localConfig, exclusions, written, before);
   }
@@ -1401,6 +1402,8 @@ async function reconcileTargets(
         if (marked) record.unnoted = true;
         else delete record.unnoted;
       }
+      const at = recorded.indexOf(target);
+      if (at >= 0 && nextRecords.some((record) => record.resolved === true)) recorded.splice(at, 1);
     }
     // Rebuilt this run, or by one that could not note what else was in the file.
     const unnoted = manifest[manifestKey] === undefined || manifest[manifestKey].some((record) => record.unnoted);
