@@ -430,6 +430,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
     mcpTargetExcluded, installedMcpEntries,
   } = await import('./mcp-reconcile.js');
+  const { carriesResolvedValue, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { describeEntryFailure, resolveEntriesFor } = await import('./namespaced-entries.js');
 
@@ -479,6 +480,11 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       }
       if (absent.length > 0) problems.push(`not injected: ${nameList(absent)}`);
       if (foreign.length > 0) problems.push(`not the team's definition: ${nameList(foreign)}`);
+      // Pull writes a resolved value only into a file git leaves out of a commit (#882).
+      if (carriesResolvedValue(target, teamDefs, [...absent, ...foreign])) {
+        const exclusion = await ensureExcludedFromGit(target.file, { dryRun: true });
+        if (exclusion.kind === 'failed') problems.push(`withheld, as git would commit the file: ${exclusion.reason}. ${exclusion.fix.replace(/\.$/, '')}`);
+      }
     }
     if (blocked.length > 0) problems.push(`skipped: ${nameList(blocked)}`);
 

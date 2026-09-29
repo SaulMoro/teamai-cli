@@ -344,6 +344,23 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(await excludeCheck()).toBeUndefined();
     });
 
+    it.skipIf(process.getuid?.() === 0)('says a server was withheld because its file cannot be kept out of git, and the fix', async () => {
+      await fse.remove(path.join(projectRoot, '.mcp.json'));
+      vi.stubEnv('JIRA_TOKEN', 'long-t0ken-value-7c1');
+      const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
+      await fse.chmod(excludeFile, 0o444);
+
+      try {
+        const check = await mcpCheck();
+        expect(await check.check()).toBe(false);
+        expect(check.fix).toMatch(/\.git\/info\/exclude is not writable/);
+        expect(check.fix).toContain('teamai pull');
+        expect(check.fix).not.toContain('again..');
+      } finally {
+        await fse.chmod(excludeFile, 0o644);
+      }
+    });
+
     it('emits no check when the installed servers carry no resolved value', async () => {
       await writeTeamMcp('servers:\n  - name: jira\n    transport: http\n    url: https://jira.example/mcp\n');
 

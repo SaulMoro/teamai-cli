@@ -7,8 +7,10 @@ import {
   resolveMcpTargets,
   buildVarTable,
   type McpChange,
+  type McpTarget,
 } from './mcp-reconcile.js';
 import { referencedVars } from './resources/mcp-format.js';
+import { carriesResolvedValue, ensureExcludedFromGit } from './mcp-git-exclude.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions } from './types.js';
 import { managedMcpManifestPath, managedMcpManifestKey, getDataHome } from './types.js';
@@ -67,10 +69,16 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
       console.log(`    secrets:  ${needed.join(', ')} (${state})`);
     }
 
-    const installedIn = targets
-      .filter((t) => (manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? []).some((r) => r.name === s.name))
-      .map((t) => t.tool);
+    const installed = (t: McpTarget): boolean =>
+      (manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? []).some((r) => r.name === s.name);
+    const installedIn = targets.filter(installed).map((t) => t.tool);
     console.log(`    installed: ${installedIn.length > 0 ? installedIn.join(', ') : '(none)'}`);
+    // Pull writes a resolved value only into a file git leaves out of a commit (#882).
+    for (const t of targets) {
+      if (installed(t) || !carriesResolvedValue(t, [s], [s.name])) continue;
+      const exclusion = await ensureExcludedFromGit(t.file, { dryRun: true });
+      if (exclusion.kind === 'failed') console.log(`    withheld: ${t.tool} — ${exclusion.reason}. ${exclusion.fix}`);
+    }
     console.log('');
   }
 
