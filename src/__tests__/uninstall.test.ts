@@ -48,6 +48,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { uninstall } from '../uninstall.js';
+import { log } from '../utils/logger.js';
 import { EnvHandler } from '../resources/env.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
@@ -724,9 +725,16 @@ describe('uninstall', () => {
       await fse.writeFile(path.join(legacyRules, 'teamai-recall.md'), '# Recall Rule');
       await fse.writeFile(path.join(legacyRules, 'default.rules'), 'prefix_rule(pattern=["ls"])');
       await fse.writeFile(path.join(legacyRules, 'my-own-rule.md'), 'mine');
+      const printed = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await uninstall({ force: true });
 
+      // The summary and the result name the file, which is not a CLAUDE.md.
+      const output = [...printed.mock.calls, ...vi.mocked(log.success).mock.calls].map((c) => c.join(' ')).join('\n');
+      printed.mockRestore();
+      expect(output).toContain(agentsMd);
+      expect(output).toContain(`Cleaned ${agentsMd}`);
+      expect(output).not.toContain('CLAUDE.md');
       expect(await fse.pathExists(agentsMd)).toBe(false);
       expect(await fse.pathExists(path.join(legacyRules, 'team-rule.md'))).toBe(false);
       expect(await fse.pathExists(path.join(legacyRules, 'teamai-recall.md'))).toBe(false);

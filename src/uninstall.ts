@@ -845,7 +845,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   }
 
   if (plan.claudeMdFiles.length > 0) {
-    console.log(`   CLAUDE.md rule blocks (${plan.claudeMdFiles.length} files):`);
+    console.log(`   Instruction-file blocks (${plan.claudeMdFiles.length} files):`);
     for (const { path: p } of plan.claudeMdFiles) {
       console.log(`     ${p}`);
     }
@@ -1042,9 +1042,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
       } else {
         await writeFile(claudeMdPath, content + '\n');
       }
-      log.success(`Cleaned CLAUDE.md: ${claudeMdPath}`);
+      log.success(`Cleaned ${claudeMdPath}`);
     } catch (e) {
-      log.warn(`Failed to clean CLAUDE.md ${claudeMdPath}: ${(e as Error).message}`);
+      log.warn(`Failed to clean ${claudeMdPath}: ${(e as Error).message}`);
     }
   }
 
