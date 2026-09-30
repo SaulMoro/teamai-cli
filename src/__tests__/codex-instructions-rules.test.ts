@@ -448,6 +448,68 @@ describe('a pull at an unchanged team revision after a CLI upgrade (#938)', () =
   });
 });
 
+describe('a project-scope pull at an unchanged team revision after a CLI upgrade (#938)', () => {
+  let tmpDir: string;
+  let projectRoot: string;
+  let repoPath: string;
+  let saved: Record<string, unknown>;
+
+  const agentsMd = () => path.join(projectRoot, 'AGENTS.md');
+  const legacyCopy = () => path.join(projectRoot, '.codex', 'rules', 'codeword.md');
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-upgrade-project-'));
+    projectRoot = path.join(tmpDir, 'project');
+    repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(tmpDir, 'home'));
+    await fse.ensureDir(path.join(projectRoot, '.codex'));
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    saved = {};
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state) as Record<string, unknown>;
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(detectProjectConfig).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['codex'],
+    } as LocalConfig);
+    await pull({});
+    await fse.writeFile(agentsMd(), 'My own notes.\n');
+    await fse.outputFile(legacyCopy(), 'The team codeword is PELICAN-42.\n');
+    vi.mocked(log.success).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes the team-rules block to <project>/AGENTS.md and removes the old .codex/rules copy', async () => {
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.some(([message]) => String(message).includes('Already synced at abc1234'))).toBe(true);
+    const content = await fse.readFile(agentsMd(), 'utf8');
+    expect(content).toContain('My own notes.');
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(content).toContain('The team codeword is PELICAN-42.');
+    expect(await fse.pathExists(legacyCopy())).toBe(false);
+    expect(await fse.pathExists(path.join(projectRoot, '.codex', 'rules'))).toBe(false);
+  });
+});
+
 describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#938)', () => {
   const BLOCK_START: Record<string, string> = {
     culture: TEAMAI_CULTURE_START,
