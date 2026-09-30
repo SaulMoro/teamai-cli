@@ -60,6 +60,16 @@ function doc(title: string, tags: string[], body: string): string {
   return `---\ntitle: "${title}"\nauthor: tester\ndate: 2026-05-01\ntags: [${tags.join(', ')}]\n---\n\n${body}\n`;
 }
 
+/** The subagent a Claude hook fires in: its payloads carry `agent_id`, and `agent_type` when the agent has one. */
+interface Subagent {
+  id: string;
+  type?: string;
+}
+
+/** The recall subagent as Claude Code reports it: `agent_type` is the agent file's `name`. */
+const RECALL_SUBAGENT: Subagent = { id: 'agent-recall', type: 'teamai-recall' };
+const GENERAL_SUBAGENT: Subagent = { id: 'agent-general', type: 'general-purpose' };
+
 interface RecallRun {
   /** recall's stdout. */
   output: string;
@@ -143,10 +153,11 @@ class Harness {
   }
 
   /**
-   * The main agent runs `teamai recall` from its shell (its session in the
-   * environment, as Claude Code sets it), then its Bash PostToolUse arrives.
+   * The main agent, or `options.agent`, runs `teamai recall` from its shell
+   * (the session in the environment, as Claude Code sets it for subagents
+   * too), then its Bash PostToolUse arrives.
    */
-  async recall(query: string, options: { check?: boolean; dryRun?: boolean } = {}): Promise<RecallRun> {
+  async recall(query: string, options: { check?: boolean; dryRun?: boolean; caller?: string; agent?: Subagent } = {}): Promise<RecallRun> {
     let output = '';
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
       output += chunk.toString();
@@ -155,14 +166,15 @@ class Harness {
     const before = process.env.CLAUDE_CODE_SESSION_ID;
     process.env.CLAUDE_CODE_SESSION_ID = SESSION;
     try {
-      await recall(query, { check: options.check, dryRun: options.dryRun });
+      await recall(query, { check: options.check, dryRun: options.dryRun, caller: options.caller });
     } finally {
       write.mockRestore();
       if (before === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
       else process.env.CLAUDE_CODE_SESSION_ID = before;
     }
-    await this.postToolUse('Bash', { command: `teamai recall${options.check ? ' --check' : ''} "${query}"`, description: 'Search team knowledge' },
-      { stdout: output, stderr: '', interrupted: false, isImage: false });
+    const flags = `${options.check ? ' --check' : ''}${options.caller ? ` --caller ${options.caller}` : ''}`;
+    await this.postToolUse('Bash', { command: `teamai recall${flags} "${query}"`, description: 'Search team knowledge' },
+      { stdout: output, stderr: '', interrupted: false, isImage: false }, this.root, options.agent);
     return {
       output,
       files: [...output.matchAll(/^File: (.+)$/gm)].map((m) => m[1]),
@@ -170,17 +182,23 @@ class Harness {
     };
   }
 
-  /** Claude's `Read` of `filePath`, from the project root unless `cwd` says otherwise (null: no cwd). */
-  async read(filePath: string, options: { cwd?: string | null } = {}): Promise<void> {
+  /**
+   * Claude's `Read` of `filePath` by the main agent or `options.agent`, from
+   * the project root unless `cwd` says otherwise (null: no cwd).
+   */
+  async read(filePath: string, options: { cwd?: string | null; agent?: Subagent } = {}): Promise<void> {
     const content = fs.existsSync(path.resolve(this.root, filePath)) ? fs.readFileSync(path.resolve(this.root, filePath), 'utf-8') : '';
     await this.postToolUse('Read', { file_path: filePath },
       { type: 'text', file: { filePath, content, numLines: content.split('\n').length, startLine: 1, totalLines: content.split('\n').length } },
-      options.cwd);
+      options.cwd, options.agent);
   }
 
-  async postToolUse(toolName: string, toolInput: Record<string, unknown>, toolResponse: unknown, cwd: string | null = this.root): Promise<void> {
+  async postToolUse(
+    toolName: string, toolInput: Record<string, unknown>, toolResponse: unknown, cwd: string | null = this.root, agent?: Subagent,
+  ): Promise<void> {
     await this.dispatch('post-tool-use', {
       hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: toolInput, tool_response: toolResponse,
+      ...(agent ? { agent_id: agent.id, ...(agent.type ? { agent_type: agent.type } : {}) } : {}),
     }, cwd);
   }
 
@@ -361,13 +379,66 @@ const ROWS: Row[] = [
     },
     project: {},
   },
+  {
+    name: '03: the recall subagent runs recall R and reads the doc; the main agent reads the doc; Stop → +1 in project',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { caller: 'teamai-recall', agent: RECALL_SUBAGENT });
+      await h.read(files[0], { agent: RECALL_SUBAGENT });
+      await h.read(files[0]);
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '03: the same, but only the recall subagent reads the doc → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { caller: 'teamai-recall', agent: RECALL_SUBAGENT });
+      await h.read(files[0], { agent: RECALL_SUBAGENT });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '03: the recall subagent runs recall R; a general-purpose subagent reads the doc; Stop → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { caller: 'teamai-recall', agent: RECALL_SUBAGENT });
+      await h.read(files[0], { agent: GENERAL_SUBAGENT });
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '03: recall R in the main agent; a general-purpose subagent reads the doc; Stop → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.read(files[0], { agent: GENERAL_SUBAGENT });
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '03: a run marked only by --caller (no agent_type in the payload) still excludes its actor\'s reads → 0',
+    trace: async (h) => {
+      const agent = { id: RECALL_SUBAGENT.id };
+      const { files } = await h.recall('redis timeout', { caller: 'teamai-recall', agent });
+      await h.read(files[0], { agent });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '03: a run marked only by agent_type (the model dropped --caller) still excludes its actor\'s reads → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { agent: RECALL_SUBAGENT });
+      await h.read(files[0], { agent: RECALL_SUBAGENT });
+      await h.stop();
+    },
+    project: {},
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '03: the recall subagent runs recall R and reads the doc; the main agent reads the doc; Stop → +1 in project',
-  '03: the same, but only the recall subagent reads the doc → 0',
-  '03: recall R in the main agent; a general-purpose subagent reads the doc; Stop → +1',
   '04: env run under C with 2 candidates; C reads the doc; C Stops; D\'s claim arrives → 0 for C, D owns the run',
   '04: an outer shell prints the inner recall\'s stdout, with no direct teamai recall in its command → 0 for the outer session',
   '05: Codex recall; sed -n \'1,80p\' learnings/redis-timeout.md; Stop → +1',

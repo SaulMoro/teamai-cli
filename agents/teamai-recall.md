@@ -25,7 +25,7 @@ upstream API"). Treat this as your query.
 Before any classification or search, run a single lightweight precheck:
 
 ```bash
-teamai recall --check "<3-6 keywords from the task>"
+teamai recall --caller teamai-recall --check "<3-6 keywords from the task>"
 ```
 
 - If the output starts with `NOT_RELEVANT`: the team knowledge base has no
@@ -77,7 +77,7 @@ Suggested files: <sources from --check output>
 **Stop here** — skip Steps 1–5 entirely.
 
 **If LOW but `--check` output lacks `sources=`**: run
-`teamai recall <keywords> --depth context`, take only the top-1 result's
+`teamai recall --caller teamai-recall <keywords> --depth context`, take only the top-1 result's
 title + Sources, return the same short format above, and skip Steps 1–5.
 
 **If not LOW**: continue to Step 1 as normal.
@@ -193,10 +193,10 @@ Execute with the appropriate depth:
 
 ```bash
 # Default: searches overview, modules, and docs (context layer)
-teamai recall "<keyword1> <keyword2> ..."
+teamai recall --caller teamai-recall "<keyword1> <keyword2> ..."
 
 # For precise symbol/line-number lookups, use lookup depth:
-teamai recall --depth lookup "<keyword1> <keyword2> ..."
+teamai recall --caller teamai-recall --depth lookup "<keyword1> <keyword2> ..."
 ```
 
 This searches all four knowledge categories (`skills`, `learnings`,
@@ -371,12 +371,14 @@ rather than dropping the reasoning.
 - The trailing HTML comment **must** list every doc_id you returned —
   later phases (Phase 3 Stop hook) will parse this from the conversation
   transcript.
-- **不要自己输出带内容的 `teamai:referenced-doc-ids` 标记** —— 那是主对话的职责。你只需在返回末尾另起一行提示主对话：`👉 主对话：完成任务后请在最终回复末尾声明实际引用的 doc-id（从上面 recalled-doc-ids 列表中挑出真正用到的），方括号内只填用到的、没用到就留空。` 这样主对话是"剪枝"而非"凭记忆重建"，能显著提高声明率。
 
 ## Hard rules
 
 - **Do not** copy entire file contents into your response. Summarize.
 - **Do not** call `teamai recall` more than 3 times in one invocation.
+- Pass `--caller teamai-recall` on every `teamai recall` call, `--check`
+  included, exactly as the commands above show. It marks the run as yours, so
+  your own reads of the docs it returns don't count as the team using them.
 - **Do not** invoke other subagents.
 - If `teamai` CLI is not on PATH, return `teamai CLI not available` and stop.
 - Output total ≤ ~2500 characters (≤ 1500 for bugfix and diagnose tasks). This

@@ -142,6 +142,22 @@ describe('deployBuiltinAgents', () => {
     expect(written).not.toMatch(/^tools:/m);
   });
 
+  it('the deployed recall agent marks every recall it runs and asks for no referenced-doc-ids', async () => {
+    await fse.ensureDir(path.join(homeDir, '.codex', 'agents'));
+    const teamConfig = buildTeamConfig({ claude: { agents: '.claude/agents' }, codex: { agents: '.codex/agents' } });
+
+    await deployBuiltinAgents(teamConfig, localConfig);
+
+    for (const file of [path.join(homeDir, '.claude', 'agents', 'teamai-recall.md'), path.join(homeDir, '.codex', 'agents', 'teamai-recall.toml')]) {
+      const written = await fse.readFile(file, 'utf8');
+      // An invocation passes a query ("…" or <…>); prose that names the command does not.
+      const invocations = [...written.matchAll(/teamai recall[^`\n]*/g)].map((m) => m[0]).filter((c) => /["<]/.test(c));
+      expect(invocations.length).toBeGreaterThanOrEqual(4);
+      for (const command of invocations) expect(command, file).toContain('--caller teamai-recall');
+      expect(written).not.toContain('referenced-doc-ids');
+    }
+  });
+
   it('skips targets without a native agent renderer and warns how to proceed', async () => {
     await fse.ensureDir(path.join(homeDir, '.unknown-tool', 'agents'));
     const teamConfig = buildTeamConfig({

@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { appendRecallLine, readRecallLog } from './recall-log.js';
-import type { RecalledDoc, RunLine } from './recall-log.js';
+import type { Actor, ClaimLine, RecalledDoc, RunLine } from './recall-log.js';
 import { getVotesDir } from './types.js';
 import type { LocalConfig } from './types.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
@@ -31,8 +31,26 @@ const RUN_ID_PATTERN = /^--- \[teamai:recall:start\] --- \(\d+ results?\) run=([
 /** A shell command that runs `teamai recall` itself (a path to the binary included). */
 const RECALL_COMMAND = /(?:^|[\s;&|(])(?:[^\s;&|()'"]*[\\/])?teamai(?:\.cmd|\.exe)?\s+recall(?=\s|$)/;
 
+/** The recall subagent's name: its `--caller`, and the `agent_type` its hooks carry. */
+const RECALL_SUBAGENT = 'teamai-recall';
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/** The actor a hook payload names: its session, and the subagent it fired in, if any. */
+function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
+  const agentId = nonEmpty(stdin.agent_id);
+  const agentType = nonEmpty(stdin.agent_type);
+  return {
+    session: deriveDispatchSessionId(stdin, tool),
+    ...(agentId ? { agentId } : {}),
+    ...(agentType ? { agentType } : {}),
+  };
 }
 
 /**
@@ -50,9 +68,9 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
     const stdout = asObject(stdin.tool_response)?.stdout;
     if (typeof stdout !== 'string') return;
     const runs = [...new Set([...stdout.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
-    const session = deriveDispatchSessionId(stdin, tool);
+    const actor = actorOf(stdin, tool);
     for (const run of runs) {
-      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, session });
+      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor });
     }
     return;
   }
@@ -71,7 +89,7 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
     }
     await appendRecallLine(config, {
       kind: 'evidence', ts: new Date().toISOString(), id: randomUUID(),
-      session: deriveDispatchSessionId(stdin, tool), path: resolved, status: 'success',
+      ...actorOf(stdin, tool), path: resolved, status: 'success',
     });
   }
 }
@@ -116,18 +134,27 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  * retries.
  *
  * A run belongs to the session of its first claim, or else to the session its
- * environment named. Only eligible docs are credited: an inherited user-scope
- * doc stays read-only while a project is active.
+ * environment named. A run the recall subagent made (its `--caller`, or its
+ * claim's agent type) is marked: reads by the actor that ran it never count
+ * for it, while reads by the main agent or any other subagent do. Only
+ * eligible docs are credited: an inherited user-scope doc stays read-only
+ * while a project is active.
  */
 export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
   const lines = await readRecallLog(config);
-  const claimedBy = new Map<string, string>();
+  const claimOf = new Map<string, ClaimLine>();
   const consumed = new Set<string>();
   for (const line of lines) {
-    if (line.kind === 'claim' && !claimedBy.has(line.run)) claimedBy.set(line.run, line.session);
+    if (line.kind === 'claim' && !claimOf.has(line.run)) claimOf.set(line.run, line);
     else if (line.kind === 'consumed') consumed.add(line.evidence);
   }
-  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && (claimedBy.get(l.run) ?? l.session) === sessionId);
+  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && (claimOf.get(l.run)?.session ?? l.session) === sessionId);
+  // A marked run's actor within the session: its claim's subagent, or the main agent (null).
+  const markedActor = new Map<RunLine, string | null>();
+  for (const r of runs) {
+    const claim = claimOf.get(r.run);
+    if (r.caller === RECALL_SUBAGENT || claim?.agentType === RECALL_SUBAGENT) markedActor.set(r, claim?.agentId ?? null);
+  }
   const recalled = new Set(runs.flatMap((r) => r.docs.map((d) => d.key))).size;
   if (runs.length === 0) return { credited: [], recalled };
 
@@ -138,6 +165,7 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
     const at = Date.parse(e.ts);
     const docs = runs
       .filter((r) => { const since = at - Date.parse(r.ts); return since >= 0 && since <= ADOPTION_WINDOW_MS; })
+      .filter((r) => !markedActor.has(r) || markedActor.get(r) !== (e.agentId ?? null))
       .flatMap((r) => r.docs);
     const eligible = docsOpened(e.path, docs).filter((d) => d.eligible);
     if (eligible.length === 0) continue;

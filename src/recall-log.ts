@@ -3,9 +3,9 @@
  * calls that confirm a run or read a file under the knowledge roots, one JSON
  * line each. The adoption reducer joins them at Stop.
  *
- *   run       recall searched: the session from the environment and the docs it returned
- *   claim     the PostToolUse of the shell call that ran a recall, naming its run
- *   evidence  a PostToolUse read of a file under the knowledge roots
+ *   run       recall searched: the session from the environment, its caller and the docs it returned
+ *   claim     the PostToolUse of the shell call that ran a recall, naming its run and actor
+ *   evidence  a PostToolUse read of a file under the knowledge roots, by its actor
  *   consumed  evidence that has been credited, so it never votes again
  *
  * It never holds a query, prompt, tool output or file content. It is local and
@@ -32,27 +32,43 @@ export interface RecalledDoc {
   eligible: boolean;
 }
 
+/**
+ * Who made a tool call: a session, and within it the subagent the hook fired
+ * in. No `agentId` means the session's main agent.
+ */
+export interface Actor {
+  session: string;
+  /** The hook's `agent_id`: present only inside a subagent. */
+  agentId?: string;
+  /** The hook's `agent_type`: for a custom subagent, its agent file's `name`. */
+  agentType?: string;
+}
+
 export interface RunLine {
   kind: 'run';
   ts: string;
   run: string;
-  /** The agent session recall read from its environment, or null when none was set. */
+  /**
+   * The agent session recall read from its environment, or null when none was
+   * set. The environment names no subagent, so the run's own actor is that
+   * session's main agent; its claim names the actor that ran it.
+   */
   session: string | null;
+  /** `--caller`: `teamai-recall` when the recall subagent ran it. */
+  caller?: string;
   docs: RecalledDoc[];
 }
 
-export interface ClaimLine {
+export interface ClaimLine extends Actor {
   kind: 'claim';
   ts: string;
   run: string;
-  session: string;
 }
 
-export interface EvidenceLine {
+export interface EvidenceLine extends Actor {
   kind: 'evidence';
   ts: string;
   id: string;
-  session: string;
   /** Absolute once resolved against the call's cwd; relative when the call had no cwd. */
   path: string;
   status: 'success';

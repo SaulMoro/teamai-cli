@@ -306,6 +306,7 @@ Generated: do not edit by hand. Regenerate with
 - `teamai recall [query...]` — Search team learnings knowledge base
   - `--depth <level>` — Recall depth: route (entry-points only) | context (module-level, default) | lookup (full graph traversal)
   - `--check` — Relevance precheck only: print RELEVANT/NOT_RELEVANT + top score; no file reads, no upvote
+  - `--caller <name>` (hidden) — Internal, set by the teamai-recall subagent to mark its own runs; do not pass it yourself
   - `teamai recall disable` — Disable automatic knowledge-base recall
   - `teamai recall enable` — Enable automatic knowledge-base recall
   - `teamai recall status` — Show recall feature status

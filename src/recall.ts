@@ -157,7 +157,7 @@ interface ScopedSearchResult extends SearchResult {
 //      │   └─ ~/.teamai/sessions/<sid>-recall-cache.json
 //      │      (read by contribute-check's knowledge-gap detection)
 //      │
-//      ├─ recordRun(activeConfig, results)
+//      ├─ recordRun(activeConfig, results, session, caller)
 //      │   └─ <dataHome>/dashboard/recall.jsonl, run id printed on the start line
 //      │      (joined to the session's reads at Stop, recall-adoption.ts)
 //      │
@@ -302,15 +302,17 @@ export async function autoUpvote(
 
 /**
  * Append this run to the active scope's recall log: the session the agent's
- * environment names and each returned doc as printed, never the query. While
- * a project is active an inherited user-scope doc is not eligible: it stays
- * read-only, as for recalled_count. Returns the run id, or undefined when the
- * line could not be written, so no id is printed that nothing can join.
+ * environment names, the `--caller` that ran it and each returned doc as
+ * printed, never the query. While a project is active an inherited user-scope
+ * doc is not eligible: it stays read-only, as for recalled_count. Returns the
+ * run id, or undefined when the line could not be written, so no id is printed
+ * that nothing can join.
  */
 async function recordRun(
   config: LocalConfig,
   results: ScopedSearchResult[],
   session: string | undefined,
+  caller: string | undefined,
   projectActive: boolean,
 ): Promise<string | undefined> {
   const { appendRecallLine, recallLogPath } = await import('./recall-log.js');
@@ -321,6 +323,7 @@ async function recordRun(
       ts: new Date().toISOString(),
       run,
       session: session ?? null,
+      ...(caller ? { caller } : {}),
       docs: results.map((r) => {
         const scope = r.scope ?? config.scope;
         return {
@@ -490,7 +493,12 @@ async function loadOrBuildScopeIndex(
  */
 export async function recall(
   query: string,
-  options: GlobalOptions & { depth?: 'route' | 'context' | 'lookup'; check?: boolean },
+  options: GlobalOptions & {
+    depth?: 'route' | 'context' | 'lookup';
+    check?: boolean;
+    /** Internal: `teamai-recall` when the recall subagent runs it, stored on the run. */
+    caller?: string;
+  },
 ): Promise<void> {
   const emitCheckVerdict = (score: number, isCodebaseHit = false, baseline = 1, topResult?: ScopedSearchResult): void => {
     const rounded = Math.round(score * 10) / 10;
@@ -717,7 +725,7 @@ export async function recall(
     recordRecallQuality(session ?? deriveSessionId({}), topResults);
     const activeConfig = projectConfig ?? scopeIndexes[0]?.config;
     if (activeConfig && !options.dryRun && !projectUnreadable) {
-      runId = await recordRun(activeConfig, topResults, session, projectConfig !== null);
+      runId = await recordRun(activeConfig, topResults, session, options.caller, projectConfig !== null);
     }
   }
 
