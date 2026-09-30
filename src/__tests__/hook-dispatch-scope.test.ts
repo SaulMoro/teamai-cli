@@ -139,22 +139,17 @@ describe('hook runs and the scope they belong to (#748)', () => {
     });
     const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchSpy);
-    // Upvote adoption is now collected from tool-use evidence (the main agent
-    // opens a recalled doc's file), not AI self-declaration (#723). Recall a doc
-    // via its File: path and Read that file so an upvote is actually recorded —
-    // this is what proves the handler writes to the dispatcher-resolved scope.
-    const doc1 = path.join(tmp, 'doc-1.md');
+    // Upvote adoption comes from tool-use evidence (the session opens a doc its
+    // recall returned), not AI self-declaration (#723, #884). A user-scope
+    // recall ran in this session and the Read opens its doc, so an upvote is
+    // recorded: this is what proves the handlers use the dispatcher-resolved scope.
+    const doc1 = path.join(teamaiHome(), 'team-repo', 'doc-1.md');
     fs.writeFileSync(doc1, '# doc-1\nteam knowledge');
-    const transcript = path.join(tmp, 'transcript.jsonl');
-    fs.writeFileSync(transcript, [
-      JSON.stringify({ type: 'assistant', message: { content: [{
-        type: 'text',
-        text: `--- [teamai:recall:start] ---\nFile: ${doc1}\n--- [teamai:recall:end] ---`,
-      }] } }),
-      JSON.stringify({ type: 'assistant', message: { content: [{
-        type: 'tool_use', name: 'Read', input: { file_path: doc1 },
-      }] } }),
-    ].join('\n') + '\n');
+    const { appendRecallLine } = await import('../recall-log.js');
+    await appendRecallLine({ repo: { localPath: path.join(teamaiHome(), 'team-repo'), remote: '' }, username: 'tester', scope: 'user', additionalRoles: [] }, {
+      kind: 'run', ts: new Date().toISOString(), run: '00000000-0000-4000-8000-000000000001', session: 'sid-g',
+      docs: [{ key: 'doc-1', type: 'docs', scope: 'user', path: doc1, score: 5, eligible: true }],
+    });
     // The session's worktree is gone, so chdir fails and the host's launch
     // directory, project A, stays the process cwd.
     process.chdir(root);
@@ -162,7 +157,8 @@ describe('hook runs and the scope they belong to (#748)', () => {
 
     try {
       await hook('prompt-submit', '*', { ...base, hook_event_name: 'UserPromptSubmit', prompt: 'rehazlo' });
-      await hook('stop', '*', { ...base, hook_event_name: 'Stop', transcript_path: transcript });
+      await hook('post-tool-use', '*', { ...base, hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: doc1 } });
+      await hook('stop', '*', { ...base, hook_event_name: 'Stop' });
     } finally {
       vi.unstubAllGlobals();
     }

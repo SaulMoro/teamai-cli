@@ -1,0 +1,161 @@
+/**
+ * Adoption of recalled docs (#884): a doc counts as adopted when the session
+ * that ran a recall opens it within 24 hours after the run.
+ *
+ *   PostToolUse ── recordToolCall ──▶ claim / evidence ─┐
+ *   teamai recall ────────────────▶ run ────────────────┼─▶ recall log
+ *   Stop ── creditAdoptedDocs ◀── join ─────────────────┘
+ *              └─▶ incrementUpvoted (per-session ledger) ─▶ consumed
+ *
+ * The hook side only classifies the call and appends one line; it never reads
+ * the log. The reducer does the join, at Stop.
+ */
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+
+import { appendRecallLine, readRecallLog } from './recall-log.js';
+import type { RecalledDoc, RunLine } from './recall-log.js';
+import { getVotesDir } from './types.js';
+import type { LocalConfig } from './types.js';
+import { resolveHookCwd } from './utils/hook-cwd.js';
+import { log } from './utils/logger.js';
+import { deriveDispatchSessionId } from './utils/session-id.js';
+import { normalizeToolName } from './utils/tool-names.js';
+
+/** How long after a run a read of one of its docs counts as adoption. */
+export const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** The run ids recall prints on its region's start line. */
+const RUN_ID_PATTERN = /^--- \[teamai:recall:start\] --- \(\d+ results?\) run=([0-9a-f-]{36})(?=\s|$)/gm;
+
+/** A shell command that runs `teamai recall` itself (a path to the binary included). */
+const RECALL_COMMAND = /(?:^|[\s;&|(])(?:[^\s;&|()'"]*[\\/])?teamai(?:\.cmd|\.exe)?\s+recall(?=\s|$)/;
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/**
+ * Record what the recall log needs from one PostToolUse: a claim when the call
+ * is a shell command that ran `teamai recall` and printed run ids, evidence when
+ * it read a file under the knowledge roots, nothing otherwise.
+ */
+export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
+  const toolName = normalizeToolName(typeof stdin.tool_name === 'string' ? stdin.tool_name : '');
+  const input = asObject(stdin.tool_input);
+  if (!input) return;
+
+  if (toolName === 'Bash') {
+    if (typeof input.command !== 'string' || !RECALL_COMMAND.test(input.command)) return;
+    const stdout = asObject(stdin.tool_response)?.stdout;
+    if (typeof stdout !== 'string') return;
+    const runs = [...new Set([...stdout.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
+    const session = deriveDispatchSessionId(stdin, tool);
+    for (const run of runs) {
+      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, session });
+    }
+    return;
+  }
+
+  if (toolName === 'Read') {
+    const filePath = input.file_path;
+    if (typeof filePath !== 'string' || !filePath.trim()) return;
+    const cwd = resolveHookCwd(stdin);
+    const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : cwd ? path.resolve(cwd, filePath) : filePath;
+    if (path.isAbsolute(resolved)) {
+      const { knowledgeRoots, isUnderRoots } = await import('./utils/learnings-roots.js');
+      if (!isUnderRoots(resolved, await knowledgeRoots(config))) return;
+    } else if (!/\.md$/i.test(resolved)) {
+      // No base to place it under a root: only a doc-shaped path is kept, for the suffix match.
+      return;
+    }
+    await appendRecallLine(config, {
+      kind: 'evidence', ts: new Date().toISOString(), id: randomUUID(),
+      session: deriveDispatchSessionId(stdin, tool), path: resolved, status: 'success',
+    });
+  }
+}
+
+export interface AdoptionResult {
+  /** Docs newly upvoted for the session, or null when the votes file was busy and nothing was credited. */
+  credited: string[] | null;
+  /** Distinct docs the session's runs returned. */
+  recalled: number;
+}
+
+function segments(p: string): string[] {
+  return p.replace(/\\/g, '/').split('/').filter((s) => s !== '' && s !== '.');
+}
+
+function samePath(a: string, b: string): boolean {
+  return segments(a).join('/') === segments(b).join('/') && path.isAbsolute(a) === path.isAbsolute(b);
+}
+
+/**
+ * The docs a read of `evidencePath` opened. An absolute path must equal the
+ * printed one. A relative path had no base: it matches by its trailing
+ * segments (at least the parent and the file name), and only when a single
+ * printed path has them.
+ */
+function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
+  if (path.isAbsolute(evidencePath)) return docs.filter((d) => samePath(d.path, evidencePath));
+  const tail = segments(evidencePath);
+  if (tail.length < 2) return [];
+  const hits = docs.filter((d) => {
+    const segs = segments(d.path);
+    return segs.length >= tail.length && tail.every((s, i) => segs[segs.length - tail.length + i] === s);
+  });
+  return new Set(hits.map((d) => segments(d.path).join('/'))).size === 1 ? hits : [];
+}
+
+/**
+ * The reducer: credit the docs `sessionId` adopted, through the per-session
+ * upvote ledger, and mark the evidence that credited them consumed so it never
+ * votes again. Evidence the ledger already credited this session is consumed
+ * too. When the votes file is busy nothing is consumed, so the next Stop
+ * retries.
+ *
+ * A run belongs to the session of its first claim, or else to the session its
+ * environment named. Only eligible docs are credited: an inherited user-scope
+ * doc stays read-only while a project is active.
+ */
+export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
+  const lines = await readRecallLog(config);
+  const claimedBy = new Map<string, string>();
+  const consumed = new Set<string>();
+  for (const line of lines) {
+    if (line.kind === 'claim' && !claimedBy.has(line.run)) claimedBy.set(line.run, line.session);
+    else if (line.kind === 'consumed') consumed.add(line.evidence);
+  }
+  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && (claimedBy.get(l.run) ?? l.session) === sessionId);
+  const recalled = new Set(runs.flatMap((r) => r.docs.map((d) => d.key))).size;
+  if (runs.length === 0) return { credited: [], recalled };
+
+  const keys = new Set<string>();
+  const crediting: string[] = [];
+  for (const e of lines) {
+    if (e.kind !== 'evidence' || e.session !== sessionId || consumed.has(e.id)) continue;
+    const at = Date.parse(e.ts);
+    const docs = runs
+      .filter((r) => { const since = at - Date.parse(r.ts); return since >= 0 && since <= ADOPTION_WINDOW_MS; })
+      .flatMap((r) => r.docs);
+    const eligible = docsOpened(e.path, docs).filter((d) => d.eligible);
+    if (eligible.length === 0) continue;
+    for (const d of eligible) keys.add(d.key);
+    crediting.push(e.id);
+  }
+  if (keys.size === 0) return { credited: [], recalled };
+
+  const { incrementUpvoted } = await import('./votes.js');
+  const credited = await incrementUpvoted(path.join(getVotesDir(config), `${config.username}.yaml`), [...keys], sessionId);
+  if (credited === null) return { credited: null, recalled };
+  for (const evidence of crediting) {
+    try {
+      await appendRecallLine(config, { kind: 'consumed', ts: new Date().toISOString(), evidence });
+    } catch (e) {
+      // The ledger still holds the credit for its window; past it this evidence could credit again.
+      log.debug(`recall adoption: could not mark evidence ${evidence} consumed: ${(e as Error).message}`);
+    }
+  }
+  return { credited, recalled };
+}

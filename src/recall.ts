@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
@@ -156,6 +157,10 @@ interface ScopedSearchResult extends SearchResult {
 //      │   └─ ~/.teamai/sessions/<sid>-recall-cache.json
 //      │      (read by contribute-check's knowledge-gap detection)
 //      │
+//      ├─ recordRun(activeConfig, results)
+//      │   └─ <dataHome>/dashboard/recall.jsonl, run id printed on the start line
+//      │      (joined to the session's reads at Stop, recall-adoption.ts)
+//      │
 //      └─ autoUpvote(results, config)
 //          └─ write getVotesDir(config)/<user>.yaml (local, per scope)
 //              (pushed by that scope's next report)
@@ -189,13 +194,27 @@ function resolveReadablePath(
   return indexedPath ?? underBase ?? path.join('~', '.teamai', 'learnings', filename);
 }
 
-export function formatResults(results: ScopedSearchResult[]): string {
+/** The `File:` path printed for a result. */
+function printedPath(result: ScopedSearchResult): string {
+  return resolveReadablePath(result.entry.path, result.entry.filename, result.learningsBase);
+}
+
+/** The id a result's votes are kept under: its index filename, not the file's basename. */
+function voteKey(result: SearchResult): string {
+  return result.entry.filename.replace(/\.md$/i, '');
+}
+
+/**
+ * `runId`, when the run was recorded, follows the result count on the start
+ * line. Older CLIs find the region by the prefix before it (#884).
+ */
+export function formatResults(results: ScopedSearchResult[], runId?: string): string {
   const lines: string[] = [];
-  lines.push(`--- [teamai:recall:start] --- (${results.length} result${results.length !== 1 ? 's' : ''})`);
+  lines.push(`--- [teamai:recall:start] --- (${results.length} result${results.length !== 1 ? 's' : ''})${runId ? ` run=${runId}` : ''}`);
   lines.push('');
 
   for (let i = 0; i < results.length; i++) {
-    const { entry, score, scope, learningsBase, sources, matchedTerms, missingTerms } = results[i];
+    const { entry, score, scope, sources, matchedTerms, missingTerms } = results[i];
     const voteStr = entry.votes > 0 ? ` ★${entry.votes}` : '';
     const scopeStr = scope ? ` [${scope}]` : '';
     // Phase 1: prepend a [type] tag so callers can quickly tell which knowledge
@@ -214,7 +233,7 @@ export function formatResults(results: ScopedSearchResult[]): string {
       const matchedStr = matchedTerms && matchedTerms.length > 0 ? matchedTerms.join(', ') : 'none';
       lines.push(`Matched: ${matchedStr} | Missing: ${missingTerms.join(', ')}`);
     }
-    lines.push(`File: ${resolveReadablePath(entry.path, entry.filename, learningsBase)}`);
+    lines.push(`File: ${printedPath(results[i])}`);
     if (sources && sources.length > 0) {
       lines.push(`Sources: ${sources.map((s) => s.desc ? `${s.path} (${s.desc})` : s.path).join(', ')}`);
     }
@@ -266,7 +285,7 @@ export async function autoUpvote(
     const localVotePath = path.join(votesDir, `${config.username}.yaml`);
     await ensureDir(votesDir);
 
-    const docIds = results.map((r) => r.entry.filename.replace(/\.md$/i, ''));
+    const docIds = results.map(voteKey);
     // Best-effort: a contended lock (rare) simply skips this recall bump. Log
     // honestly per the actual outcome — the previous message claimed success
     // even when the locked write was skipped (issue #723 review).
@@ -278,6 +297,47 @@ export async function autoUpvote(
     }
   } catch (e) {
     log.error(`autoUpvote failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Append this run to the active scope's recall log: the session the agent's
+ * environment names and each returned doc as printed, never the query. While
+ * a project is active an inherited user-scope doc is not eligible: it stays
+ * read-only, as for recalled_count. Returns the run id, or undefined when the
+ * line could not be written, so no id is printed that nothing can join.
+ */
+async function recordRun(
+  config: LocalConfig,
+  results: ScopedSearchResult[],
+  session: string | undefined,
+  projectActive: boolean,
+): Promise<string | undefined> {
+  const { appendRecallLine, recallLogPath } = await import('./recall-log.js');
+  const run = randomUUID();
+  try {
+    await appendRecallLine(config, {
+      kind: 'run',
+      ts: new Date().toISOString(),
+      run,
+      session: session ?? null,
+      docs: results.map((r) => {
+        const scope = r.scope ?? config.scope;
+        return {
+          key: voteKey(r),
+          type: r.entry.type,
+          scope,
+          path: printedPath(r),
+          score: Math.round(r.score * 10) / 10,
+          eligible: !(projectActive && scope === 'user'),
+        };
+      }),
+    });
+    return run;
+  } catch (e) {
+    log.warn(`Recall could not record this run in ${recallLogPath(config)}: ${(e as Error).message}. `
+      + 'Docs opened after it will not be upvoted.');
+    return undefined;
   }
 }
 
@@ -648,8 +708,17 @@ export async function recall(
 
   // Record quality signal for contribute-check's knowledge-gap detection.
   // Best-effort and independent of dry-run/verbosity — misses matter too.
+  // The run, a miss included, goes to the active scope's recall log, where the
+  // hooks join it to the docs the session then opens (#884). Not under
+  // --dry-run, nor where votes must not reach the team (#787).
+  let runId: string | undefined;
   if (process.env.TEAMAI_RECALL_DISABLED !== '1') {
-    recordRecallQuality((await agentSessionIdFromEnv()) ?? deriveSessionId({}), topResults);
+    const session = await agentSessionIdFromEnv();
+    recordRecallQuality(session ?? deriveSessionId({}), topResults);
+    const activeConfig = projectConfig ?? scopeIndexes[0]?.config;
+    if (activeConfig && !options.dryRun && !projectUnreadable) {
+      runId = await recordRun(activeConfig, topResults, session, projectConfig !== null);
+    }
   }
 
   if (topResults.length === 0) {
@@ -658,7 +727,7 @@ export async function recall(
   }
 
   // Output results (STDOUT — AI reads this)
-  const output = formatResults(topResults);
+  const output = formatResults(topResults, runId);
   process.stdout.write(output + '\n');
 
   // Auto-upvote (best-effort, non-blocking for dry-run). Each scope keeps its

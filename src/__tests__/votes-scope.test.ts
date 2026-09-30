@@ -50,6 +50,7 @@ const { reportUsageToTeam } = await import('../team-push.js');
 const { recallFeedback } = await import('../votes.js');
 const { resolveVizRoot } = await import('../viz.js');
 const { recall } = await import('../recall.js');
+const { appendRecallLine } = await import('../recall-log.js');
 
 let tmp: string;
 let originalHome: string | undefined;
@@ -120,24 +121,34 @@ function outsideAnyProject(): string {
   return dir;
 }
 
-/** A Stop hook whose transcript recalls `docId` and, unless `opened` is false, opens its file. */
-async function stop(cwd: string, docId: string, opened = true): Promise<void> {
-  const doc = path.join(tmp, `${docId}.md`);
+/**
+ * A session in `cwd`, whose scope is `scope`, recalls `docId` and, unless
+ * `opened` is false, reads its file; then Stop. The recall is in the scope's
+ * recall log and in the transcript, which the opt-in judge reads.
+ */
+async function stop(cwd: string, scope: LocalConfig, docId: string, opened = true): Promise<void> {
+  const session = `sid-${docId}`;
+  const doc = path.join(scope.repo.localPath, `${docId}.md`);
   fs.writeFileSync(doc, `# ${docId}\n`);
+  await appendRecallLine(scope, {
+    kind: 'run', ts: new Date().toISOString(), run: `00000000-0000-4000-8000-${String(Math.floor(Math.random() * 1e12)).padStart(12, '0')}`,
+    session, docs: [{ key: docId, type: 'docs', scope: scope.scope ?? 'user', path: doc, score: 5, eligible: true }],
+  });
   const transcript = path.join(tmp, `transcript-${docId}.jsonl`);
-  fs.writeFileSync(transcript, [
-    JSON.stringify({ type: 'assistant', message: { content: [{
-      type: 'text',
-      text: `--- [teamai:recall:start] ---\nFile: ${doc}\n--- [teamai:recall:end] ---`,
-    }] } }),
-    ...(opened ? [JSON.stringify({ type: 'assistant', message: { content: [{
-      type: 'tool_use', name: 'Read', input: { file_path: doc },
-    }] } })] : []),
-  ].join('\n') + '\n');
-  for (const bgOnly of [false, true]) {
-    const stdinFile = path.join(tmp, `stdin-${Date.now()}-${Math.random()}.json`);
-    fs.writeFileSync(stdinFile, JSON.stringify({ session_id: `sid-${docId}`, cwd, hook_event_name: 'Stop', transcript_path: transcript }));
-    await hookDispatchCli('stop', 'claude', '*', { bgOnly, stdinFile });
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { content: [{
+    type: 'text',
+    text: `--- [teamai:recall:start] ---\nFile: ${doc}\n--- [teamai:recall:end] ---`,
+  }] } })}\n`);
+  const payloads = [
+    ...(opened ? [{ event: 'post-tool-use', payload: { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: doc } } }] : []),
+    { event: 'stop', payload: { hook_event_name: 'Stop', transcript_path: transcript } },
+  ];
+  for (const { event, payload } of payloads) {
+    for (const bgOnly of [false, true]) {
+      const stdinFile = path.join(tmp, `stdin-${Date.now()}-${Math.random()}.json`);
+      fs.writeFileSync(stdinFile, JSON.stringify({ session_id: session, cwd, ...payload }));
+      await hookDispatchCli(event, 'claude', '*', { bgOnly, stdinFile });
+    }
   }
 }
 
@@ -205,7 +216,7 @@ describe('votes stay with the scope they were cast in (#787)', () => {
     const a = await projectA();
 
     await feedbackIn(a.root, 'doc-a');
-    await stop(outsideAnyProject(), 'doc-u');
+    await stop(outsideAnyProject(), user, 'doc-u');
     await report(user);
     await report(a.config);
 
@@ -218,7 +229,7 @@ describe('votes stay with the scope they were cast in (#787)', () => {
     const a = await projectA();
 
     await feedbackIn(outsideAnyProject(), 'doc-u');
-    await stop(a.root, 'doc-a');
+    await stop(a.root, a.config, 'doc-a');
     await report(a.config);
     await report(user);
 
@@ -232,7 +243,7 @@ describe('votes stay with the scope they were cast in (#787)', () => {
     await feedbackIn(outsideAnyProject(), 'doc-u');
     vi.stubEnv('TEAMAI_UPVOTE_JUDGE', '1');
     try {
-      await stop(a.root, 'doc-judged', false);
+      await stop(a.root, a.config, 'doc-judged', false);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -248,8 +259,8 @@ describe('votes stay with the scope they were cast in (#787)', () => {
     const a = await projectA();
     sharedPendingVote('doc-before-upgrade');
 
-    await stop(a.root, 'doc-a');
-    await stop(outsideAnyProject(), 'doc-u');
+    await stop(a.root, a.config, 'doc-a');
+    await stop(outsideAnyProject(), user, 'doc-u');
     await report(a.config);
     await report(user);
 
@@ -408,7 +419,7 @@ describe('votes stay with the scope they were cast in (#787)', () => {
     fs.writeFileSync(path.join(teamaiHome(), 'config.yaml'), YAML.stringify({ ...user, scope: 'project' }));
 
     await feedbackIn(outsideAnyProject(), 'doc-legacy-project');
-    await stop(outsideAnyProject(), 'doc-u');
+    await stop(outsideAnyProject(), { ...user, scope: 'project' }, 'doc-u');
 
     const votes = YAML.parse(fs.readFileSync(path.join(teamaiHome(), 'user-votes', 'tester.yaml'), 'utf-8')) as UserVotesV2;
     expect(Object.keys(votes.votes).sort()).toEqual(['doc-legacy-project', 'doc-u']);

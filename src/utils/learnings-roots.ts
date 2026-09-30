@@ -9,6 +9,7 @@
 import path from 'node:path';
 
 import { listFiles } from './fs.js';
+import { log } from './logger.js';
 import { learningsBranch } from './learnings-branch.js';
 import { ForeignCheckoutError } from './branch-worktree.js';
 import {
@@ -111,6 +112,45 @@ export async function indexableLearningsRoots(localConfig: LocalConfig): Promise
     if (!(e instanceof ForeignCheckoutError)) throw e;
     return roots.read.filter((root) => root !== roots.write);
   }
+}
+
+/**
+ * The directories recalled knowledge is read from: the repo clone (docs, rules,
+ * skills), the user-scope mirror, recall's learnings roots, and the
+ * contribution queue, which recall indexes first and which, for git teams,
+ * lives outside the clone. The upvote judge reads excerpts only under them, and
+ * a tool call's read is adoption evidence only under them (#723, #884).
+ *
+ * The clone and the mirror are always included; the rest are added
+ * best-effort, so a failure to resolve them yields the smaller set, never an
+ * error. Another repository's learnings checkout, if one sits where this
+ * project's would (#808), is left out, judged from git's files since a hook
+ * starts no git process.
+ */
+export async function knowledgeRoots(localConfig: LocalConfig): Promise<string[]> {
+  const roots = [localConfig.repo.localPath, getUserLearningsDir()];
+  try {
+    const { pendingLearningsDir } = await import('./pending-learnings.js');
+    const checkout = learningsBranch.dir(localConfig);
+    const foreign = await learningsBranch.isForeignByFiles(localConfig);
+    const inCheckout = (root: string) => root === checkout || root.startsWith(`${checkout}${path.sep}`);
+    roots.push(
+      ...learningsRoots(localConfig).read.filter((root) => !foreign || !inCheckout(root)),
+      pendingLearningsDir(localConfig),
+    );
+  } catch (e) {
+    log.debug(`knowledgeRoots: could not resolve the learnings roots: ${(e as Error).message}`);
+  }
+  return roots.filter(Boolean);
+}
+
+/** Whether `absPath` is one of `roots` or lies under one. */
+export function isUnderRoots(absPath: string, roots: readonly string[]): boolean {
+  const resolved = path.resolve(absPath);
+  return roots.some((root) => {
+    const rel = path.relative(path.resolve(root), resolved);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
 }
 
 /** One learning file, and the root it actually lives in. */
