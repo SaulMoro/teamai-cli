@@ -134,7 +134,7 @@ In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prin
 | File | When to load it |
 |---|---|
 | `{SKILL_DIR}/references/commands.md` | Before using any command not in the daily list, or any flag. Generated from the CLI's own command table, so it cannot drift. |
-| `{SKILL_DIR}/references/troubleshooting.md` | A command fails, a hook does not fire, or a host needs manual steps. |
+| `{SKILL_DIR}/references/troubleshooting.md` | A command fails, a hook does not fire, a host needs manual steps, or a recalled doc got no upvote. |
 | `{SKILL_DIR}/references/contribute-member.md` | A member wants to publish a skill, rule or doc they already have. Any member can, not just admins. |
 
 `teamai skill get core --full` prints this skill with all three references

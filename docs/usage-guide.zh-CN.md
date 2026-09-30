@@ -1200,13 +1200,69 @@ teamai recall "GPU 内存不足"
 - 支持中英文混合搜索
 - 当前工作目录包含 project scope 配置时搜索该项目；配置 `inheritUserScope: true` 后先搜索 project、再搜索 user，并标注 `[project]`/`[user]` 来源；否则搜索 user scope
 - 资源类型和文件名都相同时由 project 条目优先；不同资源类型即使文件名相同也分别保留
-- 当前 scope 中被查阅的知识自动 upvote；项目运行期间继承的 user 命中保持只读
-- 每次搜索是一次带独立 id 的 run，id 打印在结果数之后：`--- [teamai:recall:start] --- (2 results) run=<id>`。run 写入当前 scope 的本地 recall 日志 `<data home>/dashboard/recall.jsonl`（仅所有者可读写，从不推送）：环境中的 agent 会话，以及每条返回文档的 id、scope 和打印出的 `File:` 路径。没有命中的搜索也会记录。日志从不包含查询词、prompt、工具输出或文件内容。`teamai pull` 会清理日志：先删除超过 30 天的行，再从最旧的开始删到只剩 5,000 行，但从不删除最近 24 小时内尚未投票的读取，也不删除它投票所需的行。`--check`、`--dry-run` 和 `TEAMAI_RECALL_DISABLED=1` 不记录任何内容
-- 运行 recall 的会话在 run 之后 24 小时内打开文档打印出的路径，即视为采纳该文档。PostToolUse hook 记录运行 `teamai recall` 的 shell 调用，以及每次读取团队知识根目录下文件的调用（`Read` 工具调用，或单独运行、或位于管道开头的一个读取命令：`cat`、`bat`、`less`、`more`、`head`、`tail`、`nl`、打印行的 `sed -n`，或带位置参数路径、`-Path` 或 `-LiteralPath` 的 PowerShell `Get-Content`、`gc`、`type` 和 `cat`。在 Windows 上，路径无论怎样书写都计入：盘符大小写不同、使用 `\` 或 `/`，或用 Git Bash 的 `/c/…` 表示 `C:\…`。含 `;`、`&&`、`||` 或 `&` 的命令不算读取，失败的读取从不计入；agent 未报告状态时（如 Codex 的 shell），只有单独运行的读取命令才计入）；Stop hook 将二者关联，每个被采纳的文档每个会话只 upvote 一次。在会话最后一次 Stop 之后才读取文档的 subagent，会在其 SubagentStop 时计入（Claude Code、Codex、CodeBuddy 和 Qoder）；`teamai pull` 会补记仍待处理的读取，例如之后再无 hook 触发的读取，或其 Stop 遇到投票文件被占用的读取。run 归属于自身直接运行 `teamai recall` 的 shell 调用所在的会话，因此一个 agent 运行另一个 agent 时（如 Claude 运行 `codex exec`），run 归内层 agent 的会话；只是打印了 recall 输出的调用不算。没有这样的调用时，只有环境中只设置了一个 agent 会话，run 才归该会话；否则该 run 从不投票。搜索会读取其输出展示了内容行的每个文件：以该文件路径加 `:` 开头的行，或者该文件是唯一的搜索对象时的任何输出（`grep`、`rg`、`ag`、`ack` 或 `git grep`，规则与读取命令相同；或 content 模式下的 `Grep` 这类搜索工具）。列出文件的调用（`Glob`、`ls`、`find`、`rg --files`、`grep -l`、搜索工具的文件列表）或计数（`grep -c`、count 模式）不算读取。由 `teamai-recall` subagent 运行的 recall，其自身的读取从不计入；同一会话中主 agent 或其他 subagent 的读取则计入。subagent 用内部参数 `--caller teamai-recall` 标记自己的 run，Claude Code 以及 18.3.2 起的 OMP 也会在 hook 中注明该 subagent
+- 每次搜索是一次 run，其 id 跟在区块首行的结果数之后：`--- [teamai:recall:start] --- (2 results) run=<id>`。会话在 run 之后打开的当前 scope 文档会获得 upvote，详见 [Recall 采纳与 upvote](#recall-采纳与-upvote)。项目运行期间继承的 user 命中保持只读
 - 当 project 配置存在但无法读取时，recall 不检索也不记录任何内容，既不退回 user scope，也不退回其后优先级更低的 project 配置（如旧的 `.teamai/config.yaml`）：输出 ``Nothing was searched: <file>: <reason>. Fix the file, or move it aside and run `teamai init` to write a new one.`` 并以 exit 1 退出；`--check` 同样如此，不输出任何判定。recall subagent 会原样转述这一行，而不是报告没有团队知识。完全没有配置时，recall 仍提示没有可用的 learnings 并以 exit 0 退出
 - recall 构建索引时（尚无索引或索引格式过旧），如果团队 manifest 无法读取，仍会索引 learnings（若损坏的是 `manifest/projects.yaml`，只索引共享根目录），并提示一次哪些内容被排除，例如：``Recall indexed learnings only: <cause>. Docs, rules and skills stay out of recall until the team manifest is fixed and `teamai pull` rebuilds the index; `teamai doctor` shows the problem.``。skills 冲突且没有旧索引可沿用 skills 时，同样会给出提示。如果这个较小的索引无法覆盖写入旧索引，recall 在该 scope 不检索任何内容，而不是检索会返回被排除内容的旧索引，并提示：``Recall could not build the <scope> search index: <cause>. Recall skips the older index at <path>…``。其他原因导致的构建失败会显示具体原因，而不是 "No learnings available"
 - 提供轻量相关性预检 `teamai recall --check "<关键词>"`，输出 `RELEVANT score=<n> threshold=<n>` 或 `NOT_RELEVANT score=<n> threshold=<n>`，不读取文件、不 upvote —— recall subagent 用它在任务与团队知识无关时跳过检索。当 top 命中为 `RELEVANT` 时，还会输出 `matched=`/`missing=`，即命中/未命中其 title 与 tag 的查询词
 - `RELEVANT` 表示分数越过阈值、值得花成本读文件，**不代表**知识库覆盖了你要找的主题。请用 `matched=`/`missing=`（以及完整结果里的 `Matched:`/`Missing:` 行）自行判断：若关键区分词全部落在 missing 里，那条只是主题相邻，并非答案
+
+### Recall 采纳与 upvote
+
+recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall 的会话在 run 之后 24 小时内打开某篇返回的文档，该文档即被**采纳**，并获得一次 upvote（`upvoted_count`）。采纳指打开文档：如果 `teamai-recall` subagent 总结了某篇文档，而主 agent 只依据这段总结工作，就没有打开任何文档，也不会投票。只有可选开启的评判（`TEAMAI_UPVOTE_JUDGE=1`，见[开启 / 关闭 Recall](#开启--关闭-recall)）能为这种使用计分。
+
+**recall 日志。** 每次 run 都写入当前 scope 的本地 recall 日志 `<data home>/dashboard/recall.jsonl`，该日志仅所有者可读写，从不推送。run 记录环境中的 agent 会话，以及每篇返回文档的 id、scope 和打印出的 `File:` 路径；没有命中的搜索也会记录。PostToolUse hook 追加运行 `teamai recall` 的 shell 调用，以及每次读取团队知识根目录下文件的调用。日志从不包含查询词、prompt、工具输出或文件内容。`teamai pull` 会清理日志：先删除超过 30 天的行，再从最旧的开始删到只剩 5,000 行，但从不删除最近 24 小时内尚未投票的读取，也不删除它投票所需的行。`--check`、`--dry-run` 和 `TEAMAI_RECALL_DISABLED=1` 不记录任何内容。
+
+**run 归属哪个会话。** run 归属于自身直接运行 `teamai recall` 的 shell 调用所在的会话，因此一个 agent 运行另一个 agent 时（如 Claude 运行 `codex exec`），run 归内层 agent 的会话；只是打印了 recall 输出的调用不算。没有这样的调用时，只有环境中只设置了一个 agent 会话，run 才归该会话；否则该 run 从不投票。
+
+**什么算打开文档。** 打开的路径必须就是 run 打印出的路径。
+
+- agent 的读文件工具（`Read`、`read`、`view`、`read_file`、`ReadFile`）。
+- 单独运行、或位于管道开头的一个读取命令：`cat`、`bat`、`less`、`more`、`head`、`tail`、`nl`、打印行的 `sed -n`，或带位置参数路径、`-Path` 或 `-LiteralPath` 的 PowerShell `Get-Content`、`gc`、`type` 和 `cat`。含 `;`、`&&`、`||` 或 `&` 的命令不算读取。agent 未报告状态时（如 Codex 的 shell），只有单独运行的读取命令才计入。
+- 输出展示了文件内容行的搜索：以该文件路径加 `:` 开头的行，或者该文件是唯一的搜索对象时的任何输出（`grep`、`rg`、`ag`、`ack` 或 `git grep`，规则与读取命令相同；或 content 模式下的 `Grep` 这类搜索工具）。
+- 列出文件（`Glob`、`ls`、`find`、`rg --files`、`grep -l`、搜索工具的文件列表）、计数（`grep -c`、count 模式）和失败的读取都不算。
+- 在 Windows 上，路径无论怎样书写都计入：盘符大小写不同、使用 `\` 或 `/`，或用 Git Bash 的 `/c/…` 表示 `C:\…`。
+
+**subagent。** 由 `teamai-recall` subagent 运行的 recall，其自身的读取从不计入；同一会话中主 agent 或其他 subagent 的读取则计入。subagent 用内部参数 `--caller teamai-recall` 标记自己的 run，Claude Code 以及 18.3.2 起的 OMP 也会在 hook 中注明该 subagent。主 agent 之后的读取能否计入 subagent 的 run，取决于 agent：见下表。
+
+**何时投票。** Stop hook 将 run 与读取关联，每篇被采纳的文档每个会话只 upvote 一次；能显示 hook 输出的 agent 会打印 `[teamai] Adopted team knowledge this session: <ids>`。在会话最后一次 Stop 之后才读取文档的 subagent，会在其 SubagentStop 时计入（Claude Code、Codex、CodeBuddy 和 Qoder）；`teamai pull` 会补记仍待处理的读取，例如之后再无 hook 触发的读取，或其 Stop 遇到投票文件被占用的读取。第二天恢复的会话再次打开该文档不会增加投票，除非它再次 recall 到该文档。
+
+**各 agent 支持情况。** *直接 recall*：主 agent 运行 `teamai recall`，之后打开文档。*subagent 路径*：`teamai-recall` subagent 运行 recall，之后由主 agent 或其他 subagent 打开文档。
+
+| Agent | 直接 recall | subagent 路径 |
+|-------|-------------|---------------|
+| Claude Code | 支持 | 支持 |
+| Codex | 支持 | 支持，Codex 0.134 起，其 hook 会注明 subagent |
+| CodeBuddy、WorkBuddy | 支持（未验证） | 支持，CodeBuddy 2.103.1 起，其在 subagent 内的 hook 携带主会话（WorkBuddy 未验证） |
+| Qoder | 支持 | 支持（未验证） |
+| Copilot CLI | 支持 | 不支持：subagent 有自己的会话，且没有 hook 将其关联到父会话 |
+| Cursor | 支持 | 不支持：同 Copilot CLI |
+| OpenCode | 支持 | 支持：`task` 调用将 subagent 的会话关联到父会话 |
+| OMP | 支持，仅通过其 `bash` 调用的认领确定归属 | 不支持：subagent 的会话未关联到父会话 |
+| Pi | 支持 | 不适用：TeamAI 不向 Pi 部署 subagent |
+| ZCode | 支持 | 不支持：ZCode 在 subagent 内不运行 hook |
+| OpenClaw、Hermes、Kiro、JoyCode | 不支持：没有 PostToolUse hook | 不支持 |
+
+*未验证*：依据该 agent 文档记载或读源码得到的 hook 负载实现并测试，尚未在真实会话中核对。
+
+**已知限制。**
+
+- **Cursor、Copilot CLI 和 ZCode 的 subagent。** 在 subagent 中运行的 recall 从不为主 agent 的读取计分：Cursor 和 Copilot CLI 给 subagent 分配独立会话且不关联父会话，ZCode 在 subagent 内不运行 hook。主 agent 自己运行的 recall 可以正常投票。
+- **OMP。** subagent 的会话未关联到父会话，因此 subagent 路径不产生采纳。OMP 不在 shell 中设置会话变量，因此 run 只能通过运行它的 `bash` 调用的认领确定归属：OMP 把大段输出转存为 artifact 时，`run=` 行和投票都会丢失；从 Claude Code shell 启动的 OMP 会先把 run 记在 Claude 会话下，直到该认领将其纠正。
+- **不计入的搜索。** OMP 的 `grep`（markdown 树形输出）和 Cursor 的 `Grep` 不产生证据；打开文档仍然计入。ZCode 打印的 `Grep` 行是相对其工作目录的路径，因此从团队仓库内的目录发起的 ZCode 搜索不计入。
+- **没有 PostToolUse hook。** OpenClaw、Hermes、Kiro 和 JoyCode 会记录其 recall，但不记录读取，因此这些 recall 从不投票。
+- **旧版 CLI。** 使用旧版 TeamAI 的成员仍从会话 transcript 投票，该路径以文件的 basename（`SKILL`、`setup`）而非 recall 打印的 id（`retry`、`common/setup`）作为 skill、子目录中的文档或 wiki 页面的键，因此这些投票落不到该文档上。顶层的 learnings 和文档不受影响，升级后即可解决。
+
+**在 `teamai stats` 中查看。** 当前 scope 的 recall 日志中有 run 时，`teamai stats` 会在 skill 使用统计之后追加一个 recall 小节，列出最近执行过 recall 的 10 个会话，最新的在前：
+
+```text
+Recall (last 10 sessions):
+
+  session   agent   runs  recalled  adopted
+  3f2a9c1e  claude     3         3        1
+  a41d07b2  codex      1         2        0
+```
+
+`session` 是 agent 会话 id 的前 8 个字符；subagent 自己的会话（OpenCode 的 task 工具）计入启动它的那个会话。`agent` 取自该会话中最新一个能确定 agent 的 run：认领该 run 的 hook 所属的 agent，否则为其环境变量指明的 agent；都无法确定时显示 `-`。`runs` 统计归属于该会话的 run，没有命中的搜索也算；会话有歧义且从未被确认的 run 不计入，`--check` 不算 run。`recalled` 统计这些 run 返回的不同文档数，`adopted` 统计其中已被 upvote 的文档数：仍在等待会话 Stop 的读取暂不计入。日志中没有 run 时，输出与之前完全相同。
 
 ### 开启 / 关闭 Recall
 
@@ -1887,17 +1943,7 @@ teamai remove mcp <name>
 teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 ```
 
-`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计。当该 scope 的 recall 日志中有 run 时，会在 skill 使用统计之后追加一个 recall 小节，列出最近执行过 recall 的 10 个会话，最新的在前：
-
-```text
-Recall (last 10 sessions):
-
-  session   agent   runs  recalled  adopted
-  3f2a9c1e  claude     3         3        1
-  a41d07b2  codex      1         2        0
-```
-
-`session` 是 agent 会话 id 的前 8 个字符；subagent 自己的会话（OpenCode 的 task 工具）计入启动它的那个会话。`agent` 是 agent 类型，若 run 的会话来自 hook 而非环境变量则显示 `-`。`runs` 统计归属于该会话的 run，没有命中的搜索也算；会话有歧义且从未被确认的 run 不计入，`--check` 不算 run。`recalled` 统计这些 run 返回的不同文档数，`adopted` 统计其中已被 upvote 的文档数：仍在等待会话 Stop 的读取暂不计入。日志中没有 run 时，输出与之前完全相同。
+`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计；当该 scope 的 recall 日志中有 run 时，还会显示一个 recall 小节（见 [Recall 采纳与 upvote](#recall-采纳与-upvote)）。
 
 仅当所有检查通过时，`teamai doctor` 才以状态码 0 退出；任一检查失败时以状态码 1 退出。尚未初始化时，它只报告缺少配置，不会臆测 Git 托管平台。手动执行 `teamai pull` 结束时会运行同一批检查（不含托管平台相关的检查，也不含本次 pull 已经自行报告过的检查）。被标记为 informational 的检查——目前只有 `No stale env blocks left behind`——仍会计入 `doctor` 的退出码，但 pull 不会把它的失败并入 `Pull finished, but N check(s) failed`：早期安装留下的遗留文件属于清理事项，不代表这次 pull 弄坏了什么，因此依旧会被点名，只是单独用一行更轻的提示呈现。
 

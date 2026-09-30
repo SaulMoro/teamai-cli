@@ -369,8 +369,8 @@ rather than dropping the reasoning.
   query. This tells the main conversation to stop and ask the user rather
   than hallucinating.
 - The trailing HTML comment **must** list every doc_id you returned —
-  later phases (Phase 3 Stop hook) will parse this from the conversation
-  transcript.
+  the opt-in upvote judge reads it from the conversation transcript at the
+  Stop hook.
 
 ## Hard rules
 

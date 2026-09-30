@@ -1320,13 +1320,69 @@ teamai recall "GPU out of memory"
 - Supports mixed-language search
 - Searches the project scope when the current working directory contains its config; with `inheritUserScope: true`, searches project first and user second, labeling results `[project]`/`[user]`. Otherwise searches user scope
 - For the same resource type and filename, the project entry wins; different resource types with the same filename remain separate
-- Consulted active-scope knowledge is automatically upvoted. Inherited user hits remain read-only while the project is active
-- Each search is a run with its own id, printed after the result count: `--- [teamai:recall:start] --- (2 results) run=<id>`. The run goes to the active scope's local recall log, `<data home>/dashboard/recall.jsonl` (owner-only, never pushed): the agent session from the environment, and each returned doc's id, scope and printed `File:` path. A search with no hits is recorded too. The log never holds the query, the prompt, tool output or file content. `teamai pull` prunes it: lines older than 30 days go, then the oldest beyond 5,000, but never a read from the last 24 hours that has not voted yet, nor what it needs to vote. `--check`, `--dry-run` and `TEAMAI_RECALL_DISABLED=1` record nothing
-- A doc counts as adopted when the session that ran the recall opens its printed path within 24 hours after the run. The PostToolUse hook records the shell call that ran `teamai recall` and each read of a file under the team knowledge roots (a `Read` tool call, or one reader command, alone or at the head of a pipeline: `cat`, `bat`, `less`, `more`, `head`, `tail`, `nl`, `sed -n` printing lines, or PowerShell's `Get-Content`, `gc`, `type` and `cat` with a positional path, `-Path` or `-LiteralPath`. On Windows a path counts however it is written: either drive-letter case, `\` or `/`, or Git Bash's `/c/…` for `C:\…`. A command with `;`, `&&`, `||` or `&` is not a read, a failed read never counts, and when the agent reports no status, as Codex's shell does, only a reader alone counts); the Stop hook joins them and upvotes each adopted doc once per session. A subagent that reads after the session's last Stop is credited at its SubagentStop (Claude Code, Codex, CodeBuddy and Qoder), and `teamai pull` credits any read still pending, such as one no later hook fired for, or one whose Stop found the votes file busy. A run belongs to the session whose shell call ran `teamai recall` itself, so when one agent runs another (Claude running `codex exec`), the inner agent's session gets it; a call that only prints a recall's output does not count. With no such call, the run belongs to the session in the environment only when a single agent session was set there; otherwise it never votes. A search reads each file whose lines its output shows: a line that starts with the file's path and `:`, or any output when the file was the only thing searched (`grep`, `rg`, `ag`, `ack` or `git grep`, under the same rules as a reader command, or a search tool such as `Grep` in content mode). A listing (`Glob`, `ls`, `find`, `rg --files`, `grep -l`, a search tool's file list) or a count (`grep -c`, count mode) is not a read. When the `teamai-recall` subagent ran the recall, its own reads never count; reads by the main agent or any other subagent in the session do. The subagent marks its runs with the internal `--caller teamai-recall` flag, and Claude Code, and OMP from 18.3.2, also name it in their hooks
+- Each search is a run, and its id follows the result count on the region's first line: `--- [teamai:recall:start] --- (2 results) run=<id>`. An active-scope doc the session opens after the run is upvoted, as [Recall adoption and upvotes](#recall-adoption-and-upvotes) describes. Inherited user hits remain read-only while the project is active
 - In a project whose config exists but cannot be read, recall searches and records nothing, neither the user scope nor a lower-priority project config (such as a legacy `.teamai/config.yaml`) behind it: it prints ``Nothing was searched: <file>: <reason>. Fix the file, or move it aside and run `teamai init` to write a new one.`` and exits 1, with `--check` too, which prints no verdict. The recall subagent relays that line instead of reporting no knowledge. With no config at all, recall still says no learnings are available and exits 0
 - When recall builds its index (none yet, or an older format) and a team manifest cannot be read, it still indexes the learnings, only the shared root when `manifest/projects.yaml` is the broken file, and says once what it left out, for example: ``Recall indexed learnings only: <cause>. Docs, rules and skills stay out of recall until the team manifest is fixed and `teamai pull` rebuilds the index; `teamai doctor` shows the problem.`` A skills collision with no earlier index to keep skills from is named the same way. If that smaller index cannot be written over an older one, recall searches nothing in that scope rather than the older index, which would return what the warning left out, and says so: ``Recall could not build the <scope> search index: <cause>. Recall skips the older index at <path>…``. Any other build failure is shown with its cause instead of "No learnings available"
 - A lightweight relevance precheck is available via `teamai recall --check "<keywords>"`, which prints `RELEVANT score=<n> threshold=<n>` or `NOT_RELEVANT score=<n> threshold=<n>` without reading files or upvoting — the recall subagent uses it to skip retrieval on unrelated tasks. For a `RELEVANT` top hit it also reports `matched=`/`missing=` — the query terms that hit its title/tags and those that did not
 - `RELEVANT` means a hit cleared the score threshold, i.e. reading files is worth the cost — it does not mean the knowledge base covers your subject. Use the `matched=`/`missing=` terms (and the `Matched:`/`Missing:` lines on full results) to make that judgement: a hit missing all your distinctive terms is topically adjacent, not an answer
+
+### Recall adoption and upvotes
+
+Recall counts every doc it returns (`recalled_count`). A returned doc is **adopted**, and upvoted once (`upvoted_count`), when the session that ran the recall opens it within 24 hours after the run. Adoption means opening the doc: when the `teamai-recall` subagent summarizes a doc and the main agent works from that summary alone, nothing is opened and no vote follows. Only the opt-in judge (`TEAMAI_UPVOTE_JUDGE=1`, see [Enabling / Disabling Recall](#enabling--disabling-recall)) can credit that use.
+
+**The recall log.** Each run goes to the active scope's local recall log, `<data home>/dashboard/recall.jsonl`, which is owner-only and never pushed. The run holds the agent session from the environment and, for each returned doc, its id, scope and printed `File:` path; a search with no hits is recorded too. The PostToolUse hook adds the shell call that ran `teamai recall` and each read of a file under the team knowledge roots. The log never holds the query, the prompt, tool output or file content. `teamai pull` prunes it: lines older than 30 days go, then the oldest beyond 5,000, but never a read from the last 24 hours that has not voted yet, nor what it needs to vote. `--check`, `--dry-run` and `TEAMAI_RECALL_DISABLED=1` record nothing.
+
+**Which session owns a run.** A run belongs to the session whose shell call ran `teamai recall` itself, so when one agent runs another (Claude running `codex exec`), the inner agent's session gets it; a call that only prints a recall's output does not count. With no such call, the run belongs to the session in the environment only when a single agent session was set there; otherwise it never votes.
+
+**What counts as opening a doc.** The opened path must be the path the run printed.
+
+- The agent's file-read tool (`Read`, `read`, `view`, `read_file`, `ReadFile`).
+- One reader command, alone or at the head of a pipeline: `cat`, `bat`, `less`, `more`, `head`, `tail`, `nl`, `sed -n` printing lines, or PowerShell's `Get-Content`, `gc`, `type` and `cat` with a positional path, `-Path` or `-LiteralPath`. A command with `;`, `&&`, `||` or `&` is not a read. When the agent reports no status, as Codex's shell does, only a reader alone counts.
+- A search whose output shows the file's lines: a line that starts with the file's path and `:`, or any output when the file was the only thing searched (`grep`, `rg`, `ag`, `ack` or `git grep`, under the same rules as a reader command, or a search tool such as `Grep` in content mode).
+- Not a listing (`Glob`, `ls`, `find`, `rg --files`, `grep -l`, a search tool's file list), a count (`grep -c`, count mode), or a failed read.
+- On Windows a path counts however it is written: either drive-letter case, `\` or `/`, or Git Bash's `/c/…` for `C:\…`.
+
+**Subagents.** When the `teamai-recall` subagent ran the recall, its own reads never count; reads by the main agent or any other subagent in the session do. The subagent marks its runs with the internal `--caller teamai-recall` flag, and Claude Code, and OMP from 18.3.2, also name it in their hooks. Whether a later read by the main agent reaches the subagent's run depends on the agent: see the table below.
+
+**When the vote lands.** The Stop hook joins runs and reads, and upvotes each adopted doc once per session; an agent that shows hook output prints `[teamai] Adopted team knowledge this session: <ids>`. A subagent that reads after the session's last Stop is credited at its SubagentStop (Claude Code, Codex, CodeBuddy and Qoder), and `teamai pull` credits any read still pending, such as one no later hook fired for, or one whose Stop found the votes file busy. A session resumed the next day that opens the doc again adds no vote unless it recalls the doc again.
+
+**Per agent.** *Direct recall*: the main agent runs `teamai recall`, then opens a doc. *Subagent path*: the `teamai-recall` subagent runs the recall, then the main agent, or another subagent, opens the doc.
+
+| Agent | Direct recall | Subagent path |
+|-------|---------------|---------------|
+| Claude Code | Yes | Yes |
+| Codex | Yes | Yes, from Codex 0.134, whose hooks name the subagent |
+| CodeBuddy, WorkBuddy | Yes (unverified) | Yes, from CodeBuddy 2.103.1, whose hooks inside a subagent carry the main session (unverified on WorkBuddy) |
+| Qoder | Yes | Yes (unverified) |
+| Copilot CLI | Yes | No: the subagent has a session of its own, and no hook links it to its parent |
+| Cursor | Yes | No: as for Copilot CLI |
+| OpenCode | Yes | Yes: the `task` call links the subagent's session to its parent |
+| OMP | Yes, settled only by the claim of its `bash` call | No: the subagent's session is not linked to its parent |
+| Pi | Yes | None: TeamAI deploys no subagent to Pi |
+| ZCode | Yes | No: ZCode runs no hooks inside a subagent |
+| OpenClaw, Hermes, Kiro, JoyCode | No: no PostToolUse hook | No |
+
+*Unverified*: built and tested from the agent's documented or source-read hook payloads, not yet checked in a live session.
+
+**Known limits.**
+
+- **Cursor, Copilot CLI and ZCode subagents.** A recall run in a subagent never credits the main agent's reads: Cursor and Copilot CLI give the subagent its own session with no link to the parent, and ZCode runs no hooks in it. A recall the main agent runs itself does vote.
+- **OMP.** The subagent's session is not linked to its parent, so the subagent path gives no adoption. OMP sets no session variable in its shell, so a run settles only through the claim of the `bash` call that ran it: when OMP moves a large output into an artifact, the `run=` line and the vote are lost, and an OMP started from a Claude Code shell records its run under the Claude session until that claim corrects it.
+- **Searches not counted.** OMP's `grep` (a markdown tree) and Cursor's `Grep` add no evidence; opening the doc still counts. ZCode prints `Grep` lines relative to its working directory, so a ZCode search run from a directory inside the team repo is not counted.
+- **No PostToolUse hook.** OpenClaw, Hermes, Kiro and JoyCode record their recalls but no reads, so these recalls never vote.
+- **Older CLIs.** A member on an older TeamAI still votes from the session transcript, and that path keys a skill, a doc in a subdirectory or a wiki page by its file's basename (`SKILL`, `setup`) rather than the id recall prints (`retry`, `common/setup`), so those votes miss the doc. Top-level learnings and docs are unaffected, and upgrading ends it.
+
+**In `teamai stats`.** When the current scope's recall log has runs, `teamai stats` adds a recall section after the skill usage, with the 10 sessions that recalled most recently, newest first:
+
+```text
+Recall (last 10 sessions):
+
+  session   agent   runs  recalled  adopted
+  3f2a9c1e  claude     3         3        1
+  a41d07b2  codex      1         2        0
+```
+
+`session` is the first 8 characters of the agent session id; a subagent's own session (OpenCode's task tool) counts under the session that started it. `agent` comes from the session's newest run that names one: the agent whose hook claimed the run, else the one its environment named; it is `-` when no run names one. `runs` counts the runs that belong to the session, a search with no hits included; a run whose session is ambiguous and never confirmed is left out, and `--check` is no run. `recalled` counts the distinct docs those runs returned, and `adopted` the docs already upvoted from them: a read still waiting for the session's Stop is not counted yet. Without runs in the log the output is unchanged.
 
 ### Enabling / Disabling Recall
 
@@ -2022,17 +2078,7 @@ teamai remove mcp <name>
 teamai remove rules <name> --force   # Skip the prompt, for scripts and CI
 ```
 
-`teamai stats` shows the current scope's skill usage and session totals. When that scope's recall log has runs, it adds a recall section after the skill usage, with the 10 sessions that recalled most recently, newest first:
-
-```text
-Recall (last 10 sessions):
-
-  session   agent   runs  recalled  adopted
-  3f2a9c1e  claude     3         3        1
-  a41d07b2  codex      1         2        0
-```
-
-`session` is the first 8 characters of the agent session id; a subagent's own session (OpenCode's task tool) counts under the session that started it. `agent` is the agent family, or `-` when the run's session came from a hook rather than the environment. `runs` counts the runs that belong to the session, a search with no hits included; a run whose session is ambiguous and never confirmed is left out, and `--check` is no run. `recalled` counts the distinct docs those runs returned, and `adopted` the docs already upvoted from them: a read still waiting for the session's Stop is not counted yet. Without runs in the log the output is unchanged.
+`teamai stats` shows the current scope's skill usage and session totals, and a recall section when that scope's recall log has runs (see [Recall adoption and upvotes](#recall-adoption-and-upvotes)).
 
 `teamai doctor` exits with code 0 only when every check passes, and code 1 when any check fails. Before initialization, it reports the missing configuration without assuming a Git provider. The same checks run at the end of a manual `teamai pull`, minus the provider ones and minus any check that pull already reported in its own words on that run. A check marked informational — currently only `No stale env blocks left behind` — still counts toward `doctor`'s exit code, but a pull does not fold its failure into `Pull finished, but N check(s) failed`: a leftover file from an earlier install is cleanup, not a sign this pull broke anything, so it is still named but on its own, gentler line.
 
