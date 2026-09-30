@@ -671,7 +671,8 @@ export class RulesHandler extends ResourceHandler {
    * checkout pulled, or as the ledger recorded it; the built-in
    * `teamai-recall.md` as any teamai version deployed it. Every team rule
    * counts, not just the ones delivered here, since a copy outlives the role
-   * or tag that selected it. The copies kept are named in one warning per
+   * or tag that selected it. A copy of a rule the team removed goes unless the
+   * member changed it since delivery. The copies kept are named in one warning per
    * rules sync, until the member deletes them.
    */
   private async reclaimLegacyRuleCopies(
@@ -680,6 +681,8 @@ export class RulesHandler extends ResourceHandler {
     ledger: DeliveryLedger | undefined,
   ): Promise<void> {
     const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
+    const tombstoned = [...await this.readTombstones(localConfig)]
+      .filter((name) => !teamRules.some((rule) => rule.name === name));
     let deliveredRevs: readonly string[] | undefined;
     const kept: string[] = [];
     // A team `toolPaths` that still names one of these dirs delivers there.
@@ -709,6 +712,19 @@ export class RulesHandler extends ResourceHandler {
         if (ledger) forgetDelivered(ledger.hashes, file);
         removedAny = true;
         log.debug(`Removed ${file}: ${tool} reads team rules from its instructions file`);
+      }
+      // The tombstone cleanup walks `toolPath.rules` only, so a rule the team
+      // removed since the last pull that wrote here is reclaimed on its terms (#822).
+      for (const name of tombstoned) {
+        const file = path.join(dir, `${name}.md`);
+        if (!await pathExists(file)) continue;
+        if (await removedCopyChanged(ledger?.previous, file)) {
+          kept.push(file);
+          continue;
+        }
+        await remove(file);
+        if (ledger) forgetDelivered(ledger.hashes, file);
+        removedAny = true;
       }
       const recall = path.join(dir, 'teamai-recall.md');
       const recallContent = await readFileSafe(recall);

@@ -160,6 +160,36 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     expect(ledger.hashes[file]).toBeUndefined();
   });
 
+  // The team removed the rule after this machine's last pre-#938 pull.
+  it('removes the copy of a rule the team has since removed', async () => {
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
+    await fse.ensureDir(legacyDir());
+    await fse.writeFile(legacy('retired.md'), 'A rule the team retired.\n');
+    await fse.writeFile(legacy('codeword.md'), 'The team codeword is PELICAN-42.\n');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(legacy('retired.md'))).toBe(false);
+    expect(await fse.pathExists(legacyDir())).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps and names the copy of a removed rule the member changed since teamai delivered it (#822)', async () => {
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
+    await fse.ensureDir(legacyDir());
+    const file = legacy('retired.md');
+    await fse.writeFile(file, 'A rule the team retired.\nMy own note.\n');
+    const delivered = crypto.createHash('sha256').update('A rule the team retired.\n').digest('hex');
+    const ledger = openLedger({ [file]: delivered });
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+
+    expect(await fse.readFile(file, 'utf8')).toBe('A rule the team retired.\nMy own note.\n');
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(file);
+  });
+
   it('runs when no rule reaches this directory, and covers rules filtered out by roles or tags', async () => {
     await fse.writeFile(path.join(repoPath, 'rules', 'backend-only.md'), 'Backend rule.\n');
     await fse.ensureDir(legacyDir());
