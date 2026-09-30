@@ -201,9 +201,7 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
   });
 
   it.each(['codex', 'codex-internal', 'tcodex'])('reclaims %s copies in user scope, and a second pull finds nothing to do', async (tool) => {
-    // As once T7 drops their rules path: every Codex-family id reads AGENTS.md.
-    const { rules: _dropped, ...paths } = teamConfig.toolPaths[tool];
-    teamConfig = { ...teamConfig, toolPaths: { ...teamConfig.toolPaths, [tool]: paths } };
+    // The default entries: no Codex-family id delivers to a rules dir.
     localConfig = { ...localConfig, scope: 'user', projectRoot: undefined } as unknown as LocalConfig;
     const dir = path.join(homeDir, `.${tool}`, 'rules');
     await fse.ensureDir(dir);

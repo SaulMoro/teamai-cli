@@ -334,7 +334,17 @@ export const TeamaiConfigSchema = z.object({
       claudemd: 'AGENTS.md',
       userScope: { claudemd: '.codex/AGENTS.md' },
     },
-    'codex-internal': { skills: '.codex-internal/skills', rules: '.codex-internal/rules', settings: '.codex-internal/hooks.json', agents: '.codex-internal/agents' },
+    // codex-internal and tcodex run the same Codex from their own home root, so
+    // they take the codex shape. Their user-scope AGENTS.md locations
+    // (~/.codex-internal/AGENTS.md, ~/.tcodex/AGENTS.md) are assumed from that,
+    // not verified against either build.
+    'codex-internal': {
+      skills: '.codex-internal/skills',
+      settings: '.codex-internal/hooks.json',
+      agents: '.codex-internal/agents',
+      claudemd: 'AGENTS.md',
+      userScope: { claudemd: '.codex-internal/AGENTS.md' },
+    },
     'claude-internal': { skills: '.claude-internal/skills', rules: '.claude-internal/rules', settings: '.claude-internal/settings.json', claudemd: '.claude-internal/CLAUDE.md', agents: '.claude-internal/agents' },
     // tclaude ships Claude Code with `customUserDataDir: .tclaude`, which
     // relocates the whole user data dir — so its MCP file is
@@ -342,7 +352,14 @@ export const TeamaiConfigSchema = z.object({
     // for the Claude family is <root>/.mcp.json, which the `claude` target
     // already writes and tclaude reads from the same location.
     tclaude: { skills: '.tclaude/skills', rules: '.tclaude/rules', settings: '.tclaude/settings.json', claudemd: '.tclaude/CLAUDE.md', agents: '.tclaude/agents', mcp: '.tclaude/.claude.json' },
-    tcodex: { skills: '.tcodex/skills', rules: '.tcodex/rules', settings: '.tcodex/hooks.json', agents: '.tcodex/agents' },
+    // Same shape as codex; see codex-internal above.
+    tcodex: {
+      skills: '.tcodex/skills',
+      settings: '.tcodex/hooks.json',
+      agents: '.tcodex/agents',
+      claudemd: 'AGENTS.md',
+      userScope: { claudemd: '.tcodex/AGENTS.md' },
+    },
     cursor: { skills: '.cursor/skills', rules: '.cursor/rules', settings: '.cursor/hooks.json', agents: '.cursor/agents', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' },
     // GitHub Copilot CLI keeps project customizations under .github and moves
     // the complete user customization root when COPILOT_HOME is set. Agents use

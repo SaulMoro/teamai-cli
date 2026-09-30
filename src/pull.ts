@@ -20,7 +20,7 @@ import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { ruleFileExtensionForTool } from './resources/rule-format.js';
+import { instructionFileInstallProbe, ruleFileExtensionForTool, writesInstructionBlock } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
   forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
@@ -1866,10 +1866,8 @@ async function syncManagedInstructions(
 
   if (compiledCulture !== undefined) {
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
-      if (isAgentExcluded(localConfig, tool) || !toolPath.claudemd) continue;
-      // Never probe with `claudemd`: a root-level AGENTS.md exists without the
-      // tool. Codex has no `rules`, so the root of its `settings` path is the probe.
-      const installProbe = toolPath.rules ?? toolPath.settings;
+      if (isAgentExcluded(localConfig, tool) || !writesInstructionBlock(tool, toolPath, 'culture')) continue;
+      const installProbe = instructionFileInstallProbe(tool, toolPath);
       if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
 
       const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
@@ -1900,8 +1898,8 @@ async function syncManagedInstructions(
     const compiled = compileClaudemd(claudemdContents);
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
-      if (isAgentExcluded(localConfig, tool) || !toolPath.claudemd) continue;
-      const installProbe = toolPath.rules ?? toolPath.settings;
+      if (isAgentExcluded(localConfig, tool) || !writesInstructionBlock(tool, toolPath, 'claudemd')) continue;
+      const installProbe = instructionFileInstallProbe(tool, toolPath);
       if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
 
       const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
@@ -1955,7 +1953,7 @@ export async function injectRecallBlockIntoTools(
         let injected = 0;
         for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
             if (isAgentExcluded(localConfig, tool)) continue;
-            if (!toolPath.claudemd || !toolPath.agents) continue;
+            if (!writesInstructionBlock(tool, toolPath, 'recall')) continue;
             if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) continue;
 
             const baseDir = resolveToolBaseDir(tool, localConfig);

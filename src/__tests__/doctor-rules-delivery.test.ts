@@ -23,7 +23,7 @@ import crypto from 'node:crypto';
 import { loadLocalConfig, loadStateForScope, loadTeamConfig } from '../config.js';
 import { buildChecks, resolveDoctorContext, type Check } from '../doctor.js';
 import { checkoutKey } from '../pull.js';
-import { StateSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
+import { StateSchema, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
 /**
  * The rules half of the delivery check (#624). A rule changes both its filename
@@ -433,6 +433,35 @@ describe('doctor — rules delivered on disk', () => {
       localConfig.disabledAgents = ['codex'];
 
       expect(await namedCheck(CODEX)).toBeUndefined();
+    });
+
+    it.each(['codex', 'codex-internal', 'tcodex'])('passes for the default %s entry when its AGENTS.md holds the block', async (tool) => {
+      teamConfig.toolPaths = { [tool]: TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths[tool] };
+      await fse.ensureDir(path.join(homeDir, `.${tool}`));
+      await fse.writeFile(path.join(homeDir, `.${tool}`, 'AGENTS.md'), `${CURRENT_BLOCK}\n`);
+
+      const codex = (await checks()).filter((c) => c.name.startsWith(CODEX));
+      expect(codex.map((c) => c.name)).toEqual([tool === 'codex' ? CODEX : `${CODEX} (${tool})`]);
+      expect(await codex[0].check()).toBe(true);
+    });
+
+    // A team entry replaces the default whole; `{ skills }` leaves its root
+    // as the only sign Codex is installed.
+    it('asks nothing of a team codex entry with only skills on a machine without .codex/', async () => {
+      await fse.remove(path.join(homeDir, '.codex'));
+      teamConfig.toolPaths.codex = { skills: '.codex/skills' };
+
+      expect(await namedCheck(CODEX)).toBeUndefined();
+      expect(await fse.pathExists(path.join(homeDir, '.codex'))).toBe(false);
+    });
+
+    it('fails for a team codex entry with only skills once .codex/ exists, since it names no instructions file', async () => {
+      teamConfig.toolPaths.codex = { skills: '.codex/skills' };
+
+      const check = await namedCheck(CODEX);
+      expect(check).toBeDefined();
+      expect(await check!.check()).toBe(false);
+      expect(check!.fix).toContain('has no `claudemd` path');
     });
 
     it('checks a file once and names every tool that maps it', async () => {
