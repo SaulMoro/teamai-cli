@@ -13,6 +13,7 @@
 
 const CURSOR_MDC_RULE_TOOLS = new Set(['cursor', 'joycode']);
 const COPILOT_INSTRUCTIONS_RULE_TOOLS = new Set(['copilot']);
+const INSTRUCTIONS_FILE_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
 
 /** Extension teamai writes rules with for a given tool. */
 export function ruleFileExtensionForTool(tool: string): '.md' | '.mdc' | '.instructions.md' {
@@ -28,6 +29,14 @@ export function usesCursorMdcRules(tool: string): boolean {
 /** True when the tool stores rules as GitHub Copilot instruction files. */
 export function usesCopilotInstructions(tool: string): boolean {
   return COPILOT_INSTRUCTIONS_RULE_TOOLS.has(tool);
+}
+
+/**
+ * True when the tool reads no rules directory, so team rules are inlined into
+ * a managed block of its instructions file (its `claudemd` path) instead.
+ */
+export function inlinesRulesIntoInstructions(tool: string): boolean {
+  return INSTRUCTIONS_FILE_RULE_TOOLS.has(tool);
 }
 
 /**

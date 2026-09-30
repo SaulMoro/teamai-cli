@@ -1855,7 +1855,10 @@ async function syncManagedInstructions(
   if (compiledCulture !== undefined) {
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
       if (isAgentExcluded(localConfig, tool) || !toolPath.claudemd) continue;
-      if (toolPath.rules && !await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) continue;
+      // Never probe with `claudemd`: a root-level AGENTS.md exists without the
+      // tool. Codex has no `rules`, so the root of its `settings` path is the probe.
+      const installProbe = toolPath.rules ?? toolPath.settings;
+      if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
 
       const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
       try {
@@ -1886,7 +1889,8 @@ async function syncManagedInstructions(
 
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
       if (isAgentExcluded(localConfig, tool) || !toolPath.claudemd) continue;
-      if (toolPath.rules && !await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) continue;
+      const installProbe = toolPath.rules ?? toolPath.settings;
+      if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
 
       const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
       try {

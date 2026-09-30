@@ -323,7 +323,17 @@ export const TeamaiConfigSchema = z.object({
   // wrong guess can never create a junk config file on a user's machine.
   toolPaths: z.record(z.string(), ToolPathsSchema).default({
     claude: { skills: '.claude/skills', rules: '.claude/rules', settings: '.claude/settings.json', claudemd: '.claude/CLAUDE.md', agents: '.claude/agents', mcp: '.claude.json', mcpProject: '.mcp.json' },
-    codex: { skills: '.codex/skills', rules: '.codex/rules', settings: '.codex/hooks.json', agents: '.codex/agents', mcp: '.codex/config.toml' },
+    // Codex reads instructions from AGENTS.md (project root, and ~/.codex at
+    // user scope), not from a rules directory: `.codex/rules` holds its
+    // exec-policy `*.rules` files. Team rules are inlined into that file.
+    codex: {
+      skills: '.codex/skills',
+      settings: '.codex/hooks.json',
+      agents: '.codex/agents',
+      mcp: '.codex/config.toml',
+      claudemd: 'AGENTS.md',
+      userScope: { claudemd: '.codex/AGENTS.md' },
+    },
     'codex-internal': { skills: '.codex-internal/skills', rules: '.codex-internal/rules', settings: '.codex-internal/hooks.json', agents: '.codex-internal/agents' },
     'claude-internal': { skills: '.claude-internal/skills', rules: '.claude-internal/rules', settings: '.claude-internal/settings.json', claudemd: '.claude-internal/CLAUDE.md', agents: '.claude-internal/agents' },
     // tclaude ships Claude Code with `customUserDataDir: .tclaude`, which
@@ -1067,6 +1077,11 @@ export const RESOURCE_TYPES: ResourceType[] = ['skills', 'rules', 'docs', 'env',
 
 export const TEAMAI_RULES_START = '<!-- [teamai:rules:start] -->';
 export const TEAMAI_RULES_END = '<!-- [teamai:rules:end] -->';
+
+// Team rules inlined into an instructions file (Codex AGENTS.md). Not
+// [teamai:rules]: pull strips that legacy block from every claudemd file.
+export const TEAMAI_TEAM_RULES_START = '<!-- [teamai:team-rules:start] -->';
+export const TEAMAI_TEAM_RULES_END = '<!-- [teamai:team-rules:end] -->';
 
 export const TEAMAI_HOOK_DESCRIPTION_PREFIX = '[teamai]';
 

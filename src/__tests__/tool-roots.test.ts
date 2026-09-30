@@ -68,7 +68,8 @@ describe('toolRoots — re-rooting a relocated tool', () => {
       // Project scope is anchored on the project root, not on the member's root.
       mcpProject: '.mcp.json',
     });
-    expect(paths.codex).toEqual(teamConfig.toolPaths.codex);
+    // Codex and Copilot have user-scope overrides, so compare their user-scope view.
+    expect(paths.codex).toEqual(scopedToolPaths(teamConfig, localConfig()).codex);
     expect(paths.tclaude).toEqual(teamConfig.toolPaths.tclaude);
     expect(paths.copilot).toEqual(scopedToolPaths(teamConfig, localConfig()).copilot);
   });

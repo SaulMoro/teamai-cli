@@ -3,7 +3,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
@@ -23,7 +23,9 @@ import {
   usesCursorMdcRules,
   usesCopilotInstructions,
   isLegacyCursorRuleFile,
+  inlinesRulesIntoInstructions,
 } from './rule-format.js';
+import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 
 export class RulesHandler extends ResourceHandler {
   readonly type = 'rules' as const;
@@ -450,6 +452,9 @@ export class RulesHandler extends ResourceHandler {
       }
     }
 
+    // Codex family: no rules directory, so the rules go into AGENTS.md.
+    await this.syncInstructionFileRules(teamConfig, localConfig, rules);
+
     // OpenCode does not auto-scan a rules directory: the .md files are inert
     // until referenced from `instructions` in opencode.json. Activate (or, when
     // there are no team rules, deactivate) that glob. Runs before the empty-set
@@ -603,6 +608,46 @@ export class RulesHandler extends ResourceHandler {
         log.debug(`Removed legacy rules section from ${claudeMdPath}`);
       } catch {
         // Best-effort cleanup
+      }
+    }
+  }
+
+  /**
+   * Sync the team-rules block in the instructions file of each tool that
+   * inlines rules there (the Codex family), once per file. The block is
+   * written while at least one such tool mapping the file is enabled and
+   * installed, and removed otherwise, so disabling Codex does not leave a
+   * frozen copy of the rules in an AGENTS.md another tool still reads.
+   */
+  private async syncInstructionFileRules(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    rules: ResourceItem[],
+  ): Promise<void> {
+    const files = new Map<string, boolean>();
+    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+      if (!inlinesRulesIntoInstructions(tool) || !toolPath.claudemd) continue;
+      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
+      // Never probe with `claudemd`: a root-level AGENTS.md says nothing about
+      // whether Codex is installed. Same probe as the other instruction blocks.
+      const probe = toolPath.rules ?? toolPath.settings;
+      const active = !isAgentExcluded(localConfig, tool)
+        && (probe === undefined || await isToolInstalledForConfig(tool, probe, localConfig));
+      files.set(file, (files.get(file) ?? false) || active);
+    }
+    const block = await teamRulesBlock(rules);
+    for (const [file, active] of files) {
+      try {
+        if (active && block !== null) {
+          await injectClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, block);
+          continue;
+        }
+        await removeClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END);
+        // A file teamai created for the block alone goes with it.
+        const rest = await readFileSafe(file);
+        if (rest !== null && rest.trim() === '') await remove(file);
+      } catch (e) {
+        log.warn(`Failed to update team rules in ${file}: ${(e as Error).message}`);
       }
     }
   }
@@ -770,4 +815,27 @@ export async function hermesRulesText(rules: ResourceItem[]): Promise<string> {
     if (body && body.trim() !== '') bodies.push(body.trim());
   }
   return bodies.join('\n\n');
+}
+
+/**
+ * The team-rules block a tool that reads rules from its instructions file
+ * (`inlinesRulesIntoInstructions`) gets, markers included. Null when no rule
+ * has a body. The body is the same text Hermes inlines into SOUL.md.
+ */
+export async function teamRulesBlock(rules: ResourceItem[]): Promise<string | null> {
+  // A marker line inside a rule body would cut the block short on the next read.
+  const body = (await hermesRulesText(rules))
+    .split('\n')
+    .filter((line) => line.trim() !== TEAMAI_TEAM_RULES_START && line.trim() !== TEAMAI_TEAM_RULES_END)
+    .join('\n')
+    .trim();
+  if (body === '') return null;
+  return [
+    TEAMAI_TEAM_RULES_START,
+    '<!-- DO NOT EDIT: This section is auto-managed by teamai -->',
+    '',
+    body,
+    '',
+    TEAMAI_TEAM_RULES_END,
+  ].join('\n');
 }
