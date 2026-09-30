@@ -19,7 +19,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import { readEntryFileText } from '../namespaced-entries.js';
-import { agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
+import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
 
 /** Alias names every team has, whether or not it maps them. */
 const RESERVED_ALIASES = ['strong', 'fast'] as const;
@@ -39,6 +39,7 @@ const ALIAS_BASE_TOOL: Partial<Record<ToolName, ToolName>> = {
   tclaude: 'claude',
   'codex-internal': 'codex',
   tcodex: 'codex',
+  'qoder-cn': 'qoder',
 };
 
 const OptionSchema = z.union([
@@ -70,6 +71,8 @@ export type ModelAliases =
     /** Every alias name: reserved, and defined in the team file. */
     readonly names: ReadonlySet<string>;
     readonly team: ReadonlyMap<string, AliasEntries>;
+    /** What the files set that no tool receives, one actionable message each. */
+    readonly warnings: readonly string[];
   }
   | { readonly ok: false; readonly reason: string };
 
@@ -106,7 +109,30 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
     };
   }
   const team = new Map(Object.entries(parsed.data.aliases ?? {}));
-  return { ok: true, names: new Set([...RESERVED_ALIASES, ...team.keys()]), team };
+  return { ok: true, names: new Set([...RESERVED_ALIASES, ...team.keys()]), team, warnings: droppedEffortWarnings(team) };
+}
+
+/**
+ * An effort mapped for a tool whose agent files TeamAI writes no effort field
+ * for is dropped: the tool receives the model alone. One message per alias
+ * and tool, however many of its options set an effort.
+ */
+function droppedEffortWarnings(team: ReadonlyMap<string, AliasEntries>): string[] {
+  const warnings: string[] = [];
+  for (const [alias, entries] of team) {
+    for (const tool of ALL_SUPPORTED_TOOLS) {
+      if (!Object.hasOwn(entries, tool) || agentEffortField(tool) !== undefined) continue;
+      const entry = entries[tool]!;
+      const withEffort = (Array.isArray(entry) ? entry : [entry]).find((option) => typeof option !== 'string' && option.effort !== undefined);
+      if (withEffort === undefined || typeof withEffort === 'string') continue;
+      const hint = tool === 'cursor'
+        ? `Remove it, or write it into the model in Cursor's bracket form, such as "${withEffort.model}[effort=${withEffort.effort}]".`
+        : `Remove effort from ${alias}.${tool} to silence this warning.`;
+      warnings.push(`${TEAM_ALIASES_FILE}: alias "${alias}" sets an effort for ${tool}, but effort is not supported for ${tool} agent files, `
+        + `so ${tool} receives the model without it. ${hint}`);
+    }
+  }
+  return warnings;
 }
 
 /**

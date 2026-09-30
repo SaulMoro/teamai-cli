@@ -1830,6 +1830,8 @@ aliases:
   strong:
     claude: [{ model: opus, effort: high }, { model: fable }]
     codex:  { model: gpt-6-sol, effort: high }
+    opencode: anthropic/claude-opus-5-5
+    cursor: "claude-opus-5[effort=high]"
   fast:
     claude: haiku
     codex:  { model: gpt-6-luna, effort: low }
@@ -1839,8 +1841,20 @@ aliases:
 
 - `strong` and `fast` are always aliases, and TeamAI ships no models for them. A team adds its own names, which start with a lowercase letter followed by lowercase letters, digits or hyphens. Any other `model`, such as `opus`, is written as is.
 - A tool entry is one option or an ordered list of them; only the first is used for now. An option is a model string or `{ model, effort }`.
-- Claude, claude-internal and tclaude receive the effort as `effort`; Codex, codex-internal and tcodex as `model_reasoning_effort`, only when the mapping sets one.
-- claude-internal and tclaude use the `claude` entry and codex-internal and tcodex the `codex` entry, unless the alias has a key of their own.
+- Each tool receives the model in its own model field and the effort in its own effort field, and no other tool's keys:
+
+  | Tool | Model | Effort field |
+  |---|---|---|
+  | Claude, claude-internal, tclaude | as written | `effort` |
+  | Codex, codex-internal, tcodex | as written | `model_reasoning_effort`, only when the mapping sets one |
+  | OpenCode | as written (`provider/model`) | `variant` |
+  | CodeBuddy, Qoder, Qoder CN | as written | `effort` |
+  | Cursor | as written, including the bracket form `claude-opus-5[effort=high]` | none; write the effort in the brackets |
+  | Copilot | the first entry, as one model string | none |
+  | Kiro, WorkBuddy, JoyCode, ZCode, OMP | as written | none |
+
+- An `effort` mapped for a tool with no effort field is dropped: the tool receives the model alone, and pull warns once, naming the alias and the tool.
+- claude-internal and tclaude use the `claude` entry, codex-internal and tcodex the `codex` entry, and Qoder CN the `qoder` entry, unless the alias has a key of their own. No other tool inherits an entry: Qoder, ZCode, OMP and JoyCode never receive the `claude` model.
 - A tool the alias does not map gets no `model` field, so it runs the agent on its default. Without `models/aliases.yaml`, `strong` and `fast` give no model field in any tool.
 - `tool_extras.<tool>.model` pins that tool to a concrete model and skips the alias, its effort included. An effort field in `tool_extras.<tool>` without a model overrides only the alias's effort.
 - A `model` that is not a string is rejected when the agent is read. A legacy `agents/<name>.md` is copied as is, so pull warns when its `model` is an alias.

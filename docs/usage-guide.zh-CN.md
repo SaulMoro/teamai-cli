@@ -1717,6 +1717,8 @@ aliases:
   strong:
     claude: [{ model: opus, effort: high }, { model: fable }]
     codex:  { model: gpt-6-sol, effort: high }
+    opencode: anthropic/claude-opus-5-5
+    cursor: "claude-opus-5[effort=high]"
   fast:
     claude: haiku
     codex:  { model: gpt-6-luna, effort: low }
@@ -1726,8 +1728,20 @@ aliases:
 
 - `strong` 和 `fast` 始终是别名，TeamAI 不为它们内置任何模型。团队可以添加自己的名称：以小写字母开头，后跟小写字母、数字或连字符。其他任何 `model`（如 `opus`）按原样写入。
 - 每个工具的条目是一个选项或有序列表；目前只使用第一个。选项是模型字符串或 `{ model, effort }`。
-- Claude、claude-internal 和 tclaude 以 `effort` 接收推理强度；Codex、codex-internal 和 tcodex 以 `model_reasoning_effort` 接收，且仅在映射设置了它时写入。
-- claude-internal 和 tclaude 使用 `claude` 条目，codex-internal 和 tcodex 使用 `codex` 条目，除非该别名有它们自己的键。
+- 每个工具在自己的模型字段接收模型、在自己的推理强度字段接收推理强度，不会收到其他工具的键：
+
+  | 工具 | 模型 | 推理强度字段 |
+  |---|---|---|
+  | Claude、claude-internal、tclaude | 按原样写入 | `effort` |
+  | Codex、codex-internal、tcodex | 按原样写入 | `model_reasoning_effort`，仅在映射设置了它时写入 |
+  | OpenCode | 按原样写入（`provider/model`） | `variant` |
+  | CodeBuddy、Qoder、Qoder CN | 按原样写入 | `effort` |
+  | Cursor | 按原样写入，包括方括号形式 `claude-opus-5[effort=high]` | 无；把推理强度写在方括号中 |
+  | Copilot | 第一个条目，作为单个模型字符串 | 无 |
+  | Kiro、WorkBuddy、JoyCode、ZCode、OMP | 按原样写入 | 无 |
+
+- 为没有推理强度字段的工具映射的 `effort` 会被丢弃：该工具只收到模型，pull 会警告一次，并指明别名和工具。
+- claude-internal 和 tclaude 使用 `claude` 条目，codex-internal 和 tcodex 使用 `codex` 条目，Qoder CN 使用 `qoder` 条目，除非该别名有它们自己的键。其他工具不继承任何条目：Qoder、ZCode、OMP 和 JoyCode 永远不会收到 `claude` 的模型。
 - 别名未映射的工具不会得到 `model` 字段，因此使用其默认模型运行该 agent。没有 `models/aliases.yaml` 时，`strong` 和 `fast` 在所有工具中都不产生 model 字段。
 - `tool_extras.<tool>.model` 把该工具固定到具体模型并跳过别名，包括别名的推理强度。`tool_extras.<tool>` 中只有推理强度字段而没有 model 时，只覆盖别名的推理强度。
 - 读取 agent 时会拒绝非字符串的 `model`。旧格式 `agents/<name>.md` 按原样复制，因此当其 `model` 是别名时 pull 会给出警告。

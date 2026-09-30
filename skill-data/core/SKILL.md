@@ -128,7 +128,12 @@ aliases:
 ```
 
 `teamai pull` writes the mapped model into each tool's agent file, with the effort
-as `effort` for Claude and `model_reasoning_effort` for Codex. A tool the alias does
+in that tool's own field: `effort` for the Claude family, CodeBuddy, Qoder and Qoder CN,
+`model_reasoning_effort` for the Codex family, `variant` for OpenCode. Cursor takes
+effort inside its model string (`claude-opus-5[effort=high]`); Copilot, Kiro, WorkBuddy,
+JoyCode, ZCode and OMP take none, and pull warns and drops an effort mapped for them.
+Qoder CN uses the `qoder` entry; only the Claude and Codex variants and Qoder CN inherit
+an entry, so never expect a `claude` model in Qoder or ZCode. A tool the alias does
 not map gets no `model` and uses its default; a concrete model such as `opus` is
 written as is; `tool_extras.<tool>.model` pins one tool and skips the alias. Suggest
 YAML agents: a legacy `agents/<name>.md` is copied as is, so its alias is not resolved.

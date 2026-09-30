@@ -397,7 +397,7 @@ export function renderForCopilot(spec: AgentSpec): RenderResult {
  * a team that needs per-tool permissions carries them in tool_extras.opencode
  * (e.g. `permission: { edit: deny }`), which is flattened into the frontmatter.
  */
-export function renderForOpencode(spec: AgentSpec): RenderResult {
+export function renderForOpencode(spec: AgentSpec, resolved?: Record<string, unknown>): RenderResult {
   const frontmatterData: Record<string, unknown> = {
     description: spec.description,
     mode: 'subagent',
@@ -405,6 +405,8 @@ export function renderForOpencode(spec: AgentSpec): RenderResult {
   if (spec.model !== undefined) {
     frontmatterData['model'] = spec.model;
   }
+  // Resolved fields go before the extras, so an extras value overrides them.
+  Object.assign(frontmatterData, resolved);
   // Flatten tool_extras.opencode into frontmatter (mode/permission/temperature/…).
   const extras = spec.tool_extras?.['opencode'];
   if (extras) {
@@ -931,11 +933,16 @@ export function agentEffortField(tool: ToolName): string | undefined {
     case 'claude':
     case 'claude-internal':
     case 'tclaude':
+    case 'codebuddy':
+    case 'qoder':
+    case 'qoder-cn':
       return 'effort';
     case 'codex':
     case 'codex-internal':
     case 'tcodex':
       return 'model_reasoning_effort';
+    case 'opencode':
+      return 'variant';
     default:
       return undefined;
   }
@@ -972,17 +979,17 @@ export function renderForTool(spec: AgentSpec, tool: ToolName, resolved?: Resolv
     case 'codex-internal':
     case 'tcodex':
       return { ext, content: renderTomlAgent(target, toolExtrasFor(spec, tool), fields) };
-    case 'codebuddy': return renderForCodebuddy(target);
-    case 'cursor': return renderForCursor(target);
-    case 'copilot': return renderForCopilot(target);
-    case 'joycode': return renderForJoycode(target);
+    case 'codebuddy':
     case 'qoder':
     case 'qoder-cn':
     case 'zcode':
     case 'omp':
-      return { ext, content: renderMarkdownAgent(target, toolExtrasFor(spec, tool)) };
+      return { ext, content: renderMarkdownAgent(target, toolExtrasFor(spec, tool), fields) };
+    case 'cursor': return renderForCursor(target);
+    case 'copilot': return renderForCopilot(target);
+    case 'joycode': return renderForJoycode(target);
     case 'kiro': return renderForKiro(target);
-    case 'opencode': return renderForOpencode(target);
+    case 'opencode': return renderForOpencode(target, fields);
     case 'workbuddy': return renderForWorkbuddy(target);
   }
 }

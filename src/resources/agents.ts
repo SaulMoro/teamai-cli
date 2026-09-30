@@ -16,6 +16,7 @@ import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
+import { warnOnce } from '../utils/warn-once.js';
 import { isModelAlias, loadModelAliases, resolveAgentModel, type ModelAliases, type ModelResolution } from '../models/aliases.js';
 import {
   parseAgentYaml,
@@ -666,6 +667,8 @@ export class AgentsHandler extends ResourceHandler {
     }
 
     const aliases = await loadModelAliases(localConfig);
+    // About the team file, not this agent: said once per pull.
+    if (aliases.ok) for (const warning of aliases.warnings) warnOnce(`[agents] ${warning}`);
     // Say why an agent reaches nothing before the loop silently delivers
     // nowhere: `resolveRenders` skips an unparsable spec for every tool alike.
     if (!isLegacyAgent(agentItem)) {

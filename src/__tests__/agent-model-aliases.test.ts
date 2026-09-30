@@ -32,6 +32,7 @@ import { AgentsHandler, type AgentResourceItem } from '../resources/agents.js';
 import type { AgentSpec, ToolName } from '../resources/agent-format.js';
 import { serializeAgentYaml } from '../resources/agent-format.js';
 import { log } from '../utils/logger.js';
+import { resetWarnOnce } from '../utils/warn-once.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 const STRONG = {
@@ -67,7 +68,8 @@ function teamConfigFor(tools: readonly ToolName[]): TeamaiConfig {
       docs: { localDir: '' },
       env: { injectShellProfile: true },
     },
-    toolPaths: Object.fromEntries(tools.map((tool) => [tool, { agents: `.${tool}/agents` }])),
+    // Copilot's user-scope base dir is ~/.copilot itself.
+    toolPaths: Object.fromEntries(tools.map((tool) => [tool, { agents: tool === 'copilot' ? 'agents' : `.${tool}/agents` }])),
   } as TeamaiConfig;
 }
 
@@ -85,6 +87,7 @@ describe('AgentsHandler pull: model aliases', () => {
     await fse.ensureDir(path.join(repoPath, 'agents'));
     vi.stubEnv('HOME', homeDir);
     vi.mocked(log.warn).mockClear();
+    resetWarnOnce();
     handler = new AgentsHandler();
     localConfig = {
       repo: { localPath: repoPath, remote: 'https://example.com' },
@@ -117,8 +120,12 @@ describe('AgentsHandler pull: model aliases', () => {
     const dir = path.join(homeDir, `.${tool}/agents`);
     const toml = path.join(dir, `${name}.toml`);
     if (await fse.pathExists(toml)) return parseToml(await fse.readFile(toml, 'utf-8')) as Record<string, unknown>;
-    const md = path.join(dir, `${name}.md`);
-    if (await fse.pathExists(md)) return matter(await fse.readFile(md, 'utf-8')).data as Record<string, unknown>;
+    const json = path.join(dir, `${name}.json`);
+    if (await fse.pathExists(json)) return JSON.parse(await fse.readFile(json, 'utf-8')) as Record<string, unknown>;
+    for (const ext of ['.agent.md', '.md']) {
+      const md = path.join(dir, `${name}${ext}`);
+      if (await fse.pathExists(md)) return matter(await fse.readFile(md, 'utf-8')).data as Record<string, unknown>;
+    }
     return {};
   }
 
@@ -183,6 +190,73 @@ describe('AgentsHandler pull: model aliases', () => {
     expect(files['tclaude']).not.toHaveProperty('effort');
     expect(files['claude']).toMatchObject({ model: 'opus', effort: 'high' });
     expect(files['tcodex']).toMatchObject({ model: 'gpt-6-astra', model_reasoning_effort: 'xhigh' });
+  });
+
+  it('writes OpenCode\'s effort as variant', async () => {
+    await writeAliases({ aliases: { strong: { opencode: { model: 'anthropic/claude-opus-5-5', effort: 'max' } } } });
+    const files = await pullTo(['opencode'], makeSpec({ model: 'strong' }));
+    expect(files['opencode']).toMatchObject({ model: 'anthropic/claude-opus-5-5', variant: 'max' });
+    expect(files['opencode']).not.toHaveProperty('effort');
+  });
+
+  it.each(['codebuddy', 'qoder', 'qoder-cn'] as const)('writes %s\'s effort as effort', async (tool) => {
+    await writeAliases({ aliases: { strong: { [tool]: { model: 'performance', effort: 'xhigh' } } } });
+    const files = await pullTo([tool], makeSpec({ model: 'strong' }));
+    expect(files[tool]).toMatchObject({ model: 'performance', effort: 'xhigh' });
+  });
+
+  it('qoder-cn inherits the qoder entry, and its own key wins', async () => {
+    await writeAliases({ aliases: {
+      strong: { qoder: { model: 'performance', effort: 'high' } },
+      fast: { qoder: 'lite', 'qoder-cn': { model: 'efficient', effort: 'low' } },
+    } });
+    expect((await pullTo(['qoder-cn'], makeSpec({ model: 'strong' })))['qoder-cn']).toMatchObject({ model: 'performance', effort: 'high' });
+    expect((await pullTo(['qoder-cn'], makeSpec({ model: 'fast' })))['qoder-cn']).toMatchObject({ model: 'efficient', effort: 'low' });
+  });
+
+  it('qoder does not inherit the claude entry', async () => {
+    await writeAliases(STRONG);
+    const files = await pullTo(['qoder'], makeSpec({ model: 'strong' }));
+    expect(files['qoder']).toHaveProperty('name', 'implementer');
+    expect(files['qoder']).not.toHaveProperty('model');
+  });
+
+  it('writes Cursor\'s model as the team wrote it, bracket effort included', async () => {
+    await writeAliases({ aliases: { strong: { cursor: 'claude-opus-5[effort=high]' } } });
+    const files = await pullTo(['cursor'], makeSpec({ model: 'strong' }));
+    expect(files['cursor']).toMatchObject({ model: 'claude-opus-5[effort=high]' });
+    expect(vi.mocked(log.warn)).not.toHaveBeenCalled();
+  });
+
+  it('writes only the first Copilot entry, as one model string', async () => {
+    await writeAliases({ aliases: { strong: { copilot: ['claude-opus-5', 'gpt-6-sol'] } } });
+    const files = await pullTo(['copilot'], makeSpec({ model: 'strong' }));
+    expect(files['copilot']).toMatchObject({ model: 'claude-opus-5' });
+  });
+
+  it.each(['cursor', 'copilot', 'kiro', 'workbuddy', 'joycode', 'zcode', 'omp'] as const)(
+    'drops an effort mapped for %s with a warning and writes the model', async (tool) => {
+      await writeAliases({ aliases: { strong: { [tool]: [{ model: 'claude-opus-5', effort: 'high' }, 'claude-sonnet-5'] } } });
+      const files = await pullTo([tool], makeSpec({ model: 'strong' }));
+      expect(files[tool]).toMatchObject({ model: 'claude-opus-5' });
+      for (const field of ['effort', 'variant', 'model_reasoning_effort', 'reasoning-effort']) expect(files[tool]).not.toHaveProperty(field);
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(
+        `alias "strong" sets an effort for ${tool}, but effort is not supported for ${tool} agent files, so ${tool} receives the model without it.`,
+      ));
+    },
+  );
+
+  it('suggests Cursor\'s bracket form for a dropped Cursor effort', async () => {
+    await writeAliases({ aliases: { strong: { cursor: { model: 'claude-opus-5', effort: 'high' } } } });
+    await pullTo(['cursor'], makeSpec({ model: 'strong' }));
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining('"claude-opus-5[effort=high]"'));
+  });
+
+  it('warns about a dropped effort once per alias and tool in a pull', async () => {
+    await writeAliases({ aliases: { strong: { kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+    await pullTo(['kiro'], makeSpec({ model: 'strong' }));
+    await pullTo(['kiro'], makeSpec({ name: 'reviewer', model: 'strong' }));
+    expect(vi.mocked(log.warn).mock.calls.filter(([message]) => String(message).includes('sets an effort for kiro'))).toHaveLength(1);
   });
 
   it('an extras model skips the alias, effort included', async () => {
@@ -256,6 +330,18 @@ describe('AgentsHandler pull: model aliases', () => {
       await writeAliases(STRONG);
       await pullTo(['claude', 'codex', 'tclaude'], makeSpec({ model: 'strong' }));
       expect(await handler.scanLocalForPush(teamConfigFor(['claude', 'codex', 'tclaude']), localConfig)).toEqual([]);
+    });
+
+    it('does not report a pulled alias agent with a variant or effort as edited', async () => {
+      const tools = ['opencode', 'codebuddy', 'qoder-cn', 'kiro'] as const;
+      await writeAliases({ aliases: { strong: {
+        opencode: { model: 'anthropic/claude-opus-5-5', effort: 'max' },
+        codebuddy: { model: 'glm-5', effort: 'high' },
+        qoder: { model: 'performance', effort: 'high' },
+        kiro: { model: 'claude-opus-5', effort: 'high' },
+      } } });
+      await pullTo(tools, makeSpec({ model: 'strong' }));
+      expect(await handler.scanLocalForPush(teamConfigFor(tools), localConfig)).toEqual([]);
     });
 
     it('keeps model: strong when the instructions of an alias agent are edited', async () => {
