@@ -50,13 +50,16 @@ vi.mock('../utils/logger.js', () => ({
 
 import { RulesHandler } from '../resources/rules.js';
 import { pull } from '../pull.js';
-import { loadLocalConfigForScope, loadTeamConfig } from '../config.js';
+import { detectProjectConfig, loadLocalConfigForScope, loadTeamConfig } from '../config.js';
 import {
   TeamaiConfigSchema,
   TEAMAI_TEAM_RULES_START,
   TEAMAI_TEAM_RULES_END,
   TEAMAI_RULES_START,
   TEAMAI_RULES_END,
+  TEAMAI_CULTURE_START,
+  TEAMAI_CLAUDEMD_START,
+  TEAMAI_RECALL_RULES_START,
 } from '../types.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -225,5 +228,101 @@ describe('pull on a machine without Codex (#938)', () => {
 
     expect(await fse.readFile(path.join(homeDir, '.claude', 'CLAUDE.md'), 'utf8')).toContain('Shared team instructions.');
     expect(await fse.pathExists(path.join(homeDir, '.codex'))).toBe(false);
+  });
+});
+
+describe('Codex reads team rules from ~/.codex/AGENTS.md in user scope (#938)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let repoPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-user-'));
+    homeDir = path.join(tmpDir, 'home');
+    repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    vi.stubEnv('HOME', homeDir);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes the block to ~/.codex/AGENTS.md, not to a home-level AGENTS.md or ~/.codex/rules', async () => {
+    const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
+    const localConfig = {
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['codex'],
+    } as unknown as LocalConfig;
+
+    await new RulesHandler().pullAllRules(teamConfig, localConfig);
+
+    const content = await fse.readFile(path.join(homeDir, '.codex', 'AGENTS.md'), 'utf8');
+    expect(content).toContain(TEAMAI_TEAM_RULES_START);
+    expect(content).toContain('The team codeword is PELICAN-42.');
+    expect(await fse.pathExists(path.join(homeDir, 'AGENTS.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.codex', 'rules'))).toBe(false);
+  });
+});
+
+describe('a project-scope pull gives Codex every instruction block in one AGENTS.md (#938)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let projectRoot: string;
+  let repoPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-blocks-'));
+    homeDir = path.join(tmpDir, 'home');
+    projectRoot = path.join(tmpDir, 'project');
+    repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(homeDir);
+    await fse.ensureDir(path.join(projectRoot, '.codex'));
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    await fse.writeFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
+    await fse.ensureDir(path.join(repoPath, 'claudemd'));
+    await fse.writeFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
+    vi.stubEnv('HOME', homeDir);
+  });
+
+  afterEach(async () => {
+    vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes culture, shared instructions, team rules and recall into <project>/AGENTS.md', async () => {
+    // The three instruction writers and recall each decide "installed" on
+    // their own; one pull shows they agree on the same file.
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(detectProjectConfig).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['codex'],
+      recallEnabled: true,
+    } as LocalConfig);
+
+    await pull({});
+
+    const content = await fse.readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8');
+    for (const marker of [TEAMAI_CULTURE_START, TEAMAI_CLAUDEMD_START, TEAMAI_TEAM_RULES_START, TEAMAI_RECALL_RULES_START]) {
+      expect(count(content, marker)).toBe(1);
+    }
+    expect(content).toContain('Be kind to teammates.');
+    expect(content).toContain('Shared team instructions.');
+    expect(content).toContain('The team codeword is PELICAN-42.');
   });
 });

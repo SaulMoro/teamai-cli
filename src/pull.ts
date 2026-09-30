@@ -1922,9 +1922,10 @@ async function syncManagedInstructions(
  * Inject (or replace) the teamai-recall block into every Tier-1 tool's CLAUDE.md.
  *
  * Only injected for Tier-1 tools that have BOTH `agents` and `claudemd`
- * configured. Tools without subagent support (cursor / codex / openclaw /
- * workbuddy) are skipped — for them the recall flow runs purely via the
- * TodoWrite hint hook and the manual `teamai recall` command.
+ * configured (Codex included: its `claudemd` is AGENTS.md). Tools missing
+ * either (e.g. cursor / openclaw / hermes) are skipped — for them the recall
+ * flow runs purely via the TodoWrite hint hook and the manual `teamai recall`
+ * command.
  *
  * Extracted so both the full-sync path (Step 3.8) and the "Already synced"
  * rev fast-path can call it — otherwise a CLI upgrade that ships a new recall
