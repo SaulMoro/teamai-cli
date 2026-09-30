@@ -28,7 +28,7 @@ import { commandWords, simpleCommands } from './utils/shell-command.js';
 import { classifyToolCall } from './utils/tool-call.js';
 
 /** How long after a run a read of one of its docs counts as adoption. */
-export const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The run ids recall prints on its region's start line. */
 const RUN_ID_PATTERN = /^--- \[teamai:recall:start\] --- \(\d+ results?\) run=([0-9a-f-]{36})(?=\s|$)/gm;
@@ -383,9 +383,9 @@ export async function recallSessions(config: LocalConfig, limit: number): Promis
 }
 
 /** How long the recall log keeps a line. */
-export const RECALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const RECALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** The most lines the recall log keeps, the oldest dropped first. */
-export const RECALL_LOG_MAX_LINES = 5000;
+const RECALL_LOG_MAX_LINES = 5000;
 
 /**
  * What `teamai pull` does with a scope's recall log. First it credits the
