@@ -1224,6 +1224,18 @@ async function pullForScope(
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
+          // Same reason: a CLI that moves Codex's team rules into AGENTS.md
+          // writes that block and reclaims the old .codex/rules copies here (#938).
+          if (resourceTypes.includes('rules')) {
+            try {
+              const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
+              await (getHandler('rules') as RulesHandler).syncCodexInstructionRules(
+                freshConfig, localConfig, items, openLedger(await deliveredHashes(localConfig, state)),
+              );
+            } catch (error) {
+              log.warn(`[${scopeLabel}] Team rules were not updated in Codex AGENTS.md: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+            }
+          }
           // The repo has not moved, but an agent's model may have (#830).
           if (resourceTypes.includes('agents')) {
             if (await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel, revisionField, reported) && result) {

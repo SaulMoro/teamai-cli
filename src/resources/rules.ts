@@ -455,9 +455,7 @@ export class RulesHandler extends ResourceHandler {
       }
     }
 
-    // Codex family: no rules directory, so the rules go into AGENTS.md.
-    await this.syncInstructionFileRules(teamConfig, localConfig, rules);
-    await this.reclaimLegacyRuleCopies(teamConfig, localConfig, ledger);
+    await this.syncCodexInstructionRules(teamConfig, localConfig, rules, ledger);
 
     // OpenCode does not auto-scan a rules directory: the .md files are inert
     // until referenced from `instructions` in opencode.json. Activate (or, when
@@ -614,6 +612,23 @@ export class RulesHandler extends ResourceHandler {
         // Best-effort cleanup
       }
     }
+  }
+
+  /**
+   * The Codex family's part of a rules sync: it has no rules directory, so
+   * `rules` go into its AGENTS.md, and the copies earlier pulls left in its
+   * rules directory are reclaimed. Nothing else a rules sync does (per-file
+   * delivery, the stale sweep, OpenCode), so the "Already synced" pull can
+   * run it after a CLI upgrade without a full sync.
+   */
+  async syncCodexInstructionRules(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    rules: ResourceItem[],
+    ledger?: DeliveryLedger,
+  ): Promise<void> {
+    await this.syncInstructionFileRules(teamConfig, localConfig, rules);
+    await this.reclaimLegacyRuleCopies(teamConfig, localConfig, ledger);
   }
 
   /**

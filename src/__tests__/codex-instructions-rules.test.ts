@@ -50,7 +50,8 @@ vi.mock('../utils/logger.js', () => ({
 
 import { RulesHandler } from '../resources/rules.js';
 import { pull } from '../pull.js';
-import { detectProjectConfig, loadLocalConfigForScope, loadTeamConfig } from '../config.js';
+import { log } from '../utils/logger.js';
+import { detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
 import {
   TeamaiConfigSchema,
   TEAMAI_TEAM_RULES_START,
@@ -324,5 +325,74 @@ describe('a project-scope pull gives Codex every instruction block in one AGENTS
     expect(content).toContain('Be kind to teammates.');
     expect(content).toContain('Shared team instructions.');
     expect(content).toContain('The team codeword is PELICAN-42.');
+  });
+});
+
+describe('a pull at an unchanged team revision after a CLI upgrade (#938)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let repoPath: string;
+  let saved: Record<string, unknown>;
+
+  const agentsMd = () => path.join(homeDir, '.codex', 'AGENTS.md');
+  // What 0.22.0 delivered: the team rule verbatim, in a directory Codex never read.
+  const legacyCopy = () => path.join(homeDir, '.codex', 'rules', 'codeword.md');
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-upgrade-'));
+    homeDir = path.join(tmpDir, 'home');
+    repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    vi.stubEnv('HOME', homeDir);
+    // The state persists between pulls, so the second one takes the fast path.
+    saved = {};
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state) as Record<string, unknown>;
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['codex'],
+    } as LocalConfig);
+    await pull({});
+    // What an older CLI left at this revision: no block, and the copy.
+    await fse.writeFile(agentsMd(), 'My own notes.\n');
+    await fse.outputFile(legacyCopy(), 'The team codeword is PELICAN-42.\n');
+    vi.mocked(log.success).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes the team-rules block to AGENTS.md and removes the old .codex/rules copy', async () => {
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.some(([message]) => String(message).includes('Already synced at abc1234'))).toBe(true);
+    const content = await fse.readFile(agentsMd(), 'utf8');
+    expect(content).toContain('My own notes.');
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(content).toContain('The team codeword is PELICAN-42.');
+    expect(await fse.pathExists(legacyCopy())).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.codex', 'rules'))).toBe(false);
+  });
+
+  it('writes nothing on a dry run', async () => {
+    await pull({ dryRun: true });
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('My own notes.\n');
+    expect(await fse.pathExists(legacyCopy())).toBe(true);
   });
 });
