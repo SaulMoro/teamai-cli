@@ -560,6 +560,12 @@ const votesJudgeHandler: HookHandler = {
       const { getVotesDir, usesBranchWorktree } = await import('./types.js');
       const votesDir = getVotesDir(localConfig);
       const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
+      // The dispatcher starts this detached pass before the foreground
+      // votes-sync credits the turn, so run the same reducer pass first: a doc
+      // opened in this turn is then in the ledger and never sent to the judge.
+      // Safe to run twice: the ledger and consumed marks dedupe it.
+      const { creditAdoptedDocs } = await import('./recall-adoption.js');
+      await creditAdoptedDocs(localConfig, deriveDispatchSessionId(stdin, _tool));
       const { creditedDocIdsForSession } = await import('./votes.js');
       const ledgerCredited = await creditedDocIdsForSession(votePath, sessionId);
 

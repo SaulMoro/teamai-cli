@@ -1690,6 +1690,18 @@ describe('recall attribution acceptance (#884)', () => {
     expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
   });
 
+  it('12: judge on: a doc opened in the turn that just ended is credited, not judged, even when the judge runs before votes-sync', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('redis timeout');
+    await h.read(files[0]);
+    await h.judgeStop([
+      ...Harness.bashEntries('toolu_recall', 'teamai recall "redis timeout"', output),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: files[0] } }] } },
+    ]);
+    expect(judgeAdoption).not.toHaveBeenCalled();
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+  });
+
   it('12: judge on: a recalled doc the session never opened is judged → +1', async () => {
     await h.setUp();
     const { output, files } = await h.recall('redis timeout');
