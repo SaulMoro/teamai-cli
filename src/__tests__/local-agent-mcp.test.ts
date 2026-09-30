@@ -223,6 +223,34 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toBeUndefined();
   });
 
+  it.each(['install_mcp', 'uninstall_mcp'] as const)('preserves a member-owned keyed Copilot entry after a bare install during %s', async (type) => {
+    const workspacePath = path.join(tmpDir, 'copilot-keyed-member');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeFile(configFile, '');
+    const command = {
+      id: 9010, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0',
+      mcp_config: { transport: 'http', url: 'https://team.example/mcp' },
+    };
+    expect((await runResponse({ cmds: [command] }, 'copilot'))[0].status).toBe('success');
+    const doc = await fse.readJson(configFile);
+    const mine = { type: 'http', tools: ['*'], url: 'https://member.example/mcp' };
+    await fse.writeJson(configFile, { ...doc, mcpServers: { [COPILOT_SERVER]: mine } });
+
+    const acks = await runResponse({ cmds: [{ ...command, id: 9011, type }] }, 'copilot');
+
+    expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toEqual(mine);
+    if (type === 'install_mcp') {
+      expect(acks[0].status).toBe('failed');
+      expect(acks[0].error).toContain('not managed by teamai');
+      expect((await fse.readJson(configFile))[COPILOT_SERVER]).toEqual(doc[COPILOT_SERVER]);
+    } else {
+      expect(acks[0].status).toBe('success');
+      expect((await fse.readJson(configFile))[COPILOT_SERVER]).toBeUndefined();
+    }
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');

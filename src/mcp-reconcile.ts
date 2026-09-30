@@ -1785,6 +1785,11 @@ export function isTeamaiBareCopy(doc: { beside?: Record<string, unknown> }, name
   return bare !== undefined && owned.some((record) => record.name === name && record.bare === true && record.hash === entryHash(bare));
 }
 
+/** A bare ownership record cannot claim a same-named entry under mcpServers. */
+export function ownsJsonMcpEntry(doc: Pick<JsonDoc, 'bare'>, name: string, owned: readonly ManagedMcpRecord[]): boolean {
+  return owned.some((record) => record.name === name && (doc.bare || record.bare !== true));
+}
+
 // ─── Appliers ────────────────────────────────────────────────
 
 /** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
@@ -1806,20 +1811,23 @@ async function applyJson(
     return null;
   }
 
-  const ownedHash = new Map(owned.map((r) => [r.name, r.hash]));
+  const ownedHere = owned.filter((record) => doc.bare || record.bare !== true);
+  const ownedHash = new Map(ownedHere.map((r) => [r.name, r.hash]));
   let dirty = false;
   // A kept entry holds the value an earlier pull resolved (desiredMcpForTarget).
   let holdsResolvedValue = false;
 
   for (const [name, { entry, hash, resolvedValue }] of desired) {
     const existing = doc.servers[name];
-    if (existing !== undefined && !ownedNames.has(name) && !options.force) {
+    if (existing !== undefined && !ownsJsonMcpEntry(doc, name, owned) && !options.force) {
       changes.push({
         tool: target.tool,
         server: name,
         action: 'skipped',
         reason: 'a server with this name already exists and is not managed by teamai',
       });
+      const previous = owned.find((record) => record.name === name);
+      if (previous) nextRecords.push(previous);
       continue;
     }
     const record: ManagedMcpRecord = { name, hash };
@@ -1841,12 +1849,12 @@ async function applyJson(
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
     const kept = keep.get(name);
-    if (kept && doc.servers[name] !== undefined) {
+    if (kept && ((ownsJsonMcpEntry(doc, name, owned) && doc.servers[name] !== undefined) || isTeamaiBareCopy(doc, name, owned))) {
       nextRecords.push(kept);
       holdsResolvedValue = true;
       continue;
     }
-    if (doc.servers[name] !== undefined) {
+    if (ownsJsonMcpEntry(doc, name, owned) && doc.servers[name] !== undefined) {
       delete doc.servers[name];
       dirty = true;
     }

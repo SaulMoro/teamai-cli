@@ -1164,6 +1164,29 @@ servers:
         expect((await fse.readJson(path.join(projectRoot, '.mcp.json')))['with-secret']).toEqual(bare);
       });
 
+      it.each(['update', 'drop', 'remove', 'missing-secret'] as const)('preserves a member-owned keyed Copilot entry after a bare write during %s', async (action) => {
+        const file = path.join(projectRoot, '.mcp.json');
+        const mine = { type: 'http', tools: ['*'], url: 'https://member.example/mcp' };
+        const doc = await fse.readJson(file);
+        await fse.writeJson(file, { ...doc, mcpServers: { 'with-secret': mine } });
+        if (action === 'update') await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'new-team-value')}    tools: [copilot]\n`);
+        if (action === 'drop') await writeMcpYaml('servers: []\n');
+        if (action === 'missing-secret') {
+          await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: SECRET_TOKEN\n');
+          vi.stubEnv('SECRET_TOKEN', '');
+        }
+
+        const result = await reconcileMcpForConfig(shared(), projectConfig, action === 'remove' ? { removeAll: true } : {});
+        if (action === 'update') await reconcileMcpForConfig(shared(), projectConfig);
+
+        expect((await fse.readJson(file)).mcpServers['with-secret']).toEqual(mine);
+        if (action === 'update') {
+          expect(result.changes).toContainEqual(expect.objectContaining({ tool: 'copilot', server: 'with-secret', action: 'skipped' }));
+          expect((await fse.readJson(file))['with-secret']).toEqual(doc['with-secret']);
+        }
+        if (action === 'drop' || action === 'remove') expect((await fse.readJson(file))['with-secret']).toBeUndefined();
+      });
+
       it('keeps its line, pull after pull, while Copilot\'s bare entry holds the value beside the mcpServers Claude wrote', async () => {
         await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
         // No longer set: only the entry, not a scan for the value, says what the file holds.

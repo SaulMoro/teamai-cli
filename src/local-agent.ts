@@ -43,6 +43,7 @@ import {
 import {
   readJsonDoc,
   isTeamaiBareCopy,
+  ownsJsonMcpEntry,
   writeJsonDoc,
   writeCodexAtomic,
   spliceCodexBlock,
@@ -2940,7 +2941,7 @@ async function installMcpServer(
     if (!doc) {
       throw new Error(`install_mcp: cannot parse ${targetFile}`);
     }
-    if (doc.servers[slug] !== undefined && !ownedNames.has(slug)) {
+    if (doc.servers[slug] !== undefined && !ownsJsonMcpEntry(doc, slug, owned)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
     // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
@@ -3056,8 +3057,9 @@ async function uninstallMcpServer(
     const doc = await readJsonDoc(targetFile, serverKey, allowBare);
     // Also a bare entry another tool's mcpServers now sits beside (#882).
     const bareCopy = doc !== null && isTeamaiBareCopy(doc, slug, owned);
-    if (doc && (doc.servers[slug] !== undefined || bareCopy)) {
-      delete doc.servers[slug];
+    const ownsEntry = doc !== null && ownsJsonMcpEntry(doc, slug, owned);
+    if (doc && ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy)) {
+      if (ownsEntry) delete doc.servers[slug];
       if (bareCopy) delete doc.data[slug];
       await writeJsonDoc(targetFile, serverKey, doc);
     }
