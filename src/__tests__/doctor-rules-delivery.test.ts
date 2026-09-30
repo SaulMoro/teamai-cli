@@ -340,22 +340,26 @@ describe('doctor — rules delivered on disk', () => {
       + '<!-- DO NOT EDIT: This section is auto-managed by teamai -->\n\n'
       + 'Body of coding-style\n\nBody of reviews\n\n'
       + '<!-- [teamai:team-rules:end] -->';
+    const CODEX_FAMILY = ['codex', 'codex-internal', 'tcodex'];
     let agentsMd: string;
 
-    /** Codex's default entry, installed in this (user) scope. */
-    async function installCodex(): Promise<void> {
-      teamConfig.toolPaths.codex = {
-        skills: '.codex/skills',
-        settings: '.codex/hooks.json',
-        agents: '.codex/agents',
+    /** A Codex-family tool's default-shaped entry, installed in this (user) scope in place of Codex. */
+    async function installCodex(tool = 'codex'): Promise<void> {
+      delete teamConfig.toolPaths.codex;
+      teamConfig.toolPaths[tool] = {
+        skills: `.${tool}/skills`,
+        settings: `.${tool}/hooks.json`,
+        agents: `.${tool}/agents`,
         claudemd: 'AGENTS.md',
-        userScope: { claudemd: '.codex/AGENTS.md' },
+        userScope: { claudemd: `.${tool}/AGENTS.md` },
       };
-      await fse.ensureDir(path.join(homeDir, '.codex'));
-      agentsMd = path.join(homeDir, '.codex', 'AGENTS.md');
+      await fse.ensureDir(path.join(homeDir, `.${tool}`));
+      agentsMd = path.join(homeDir, `.${tool}`, 'AGENTS.md');
     }
 
-    beforeEach(installCodex);
+    const checkNameFor = (tool: string) => (tool === 'codex' ? CODEX : `${CODEX} (${tool})`);
+
+    beforeEach(() => installCodex());
 
     it('passes when AGENTS.md holds the block pull writes, beside the member\'s own text', async () => {
       await fse.writeFile(agentsMd, `My own instructions\n\n${CURRENT_BLOCK}\n`);
@@ -365,10 +369,11 @@ describe('doctor — rules delivered on disk', () => {
       expect(await check!.check()).toBe(true);
     });
 
-    it('fails when AGENTS.md carries no block, naming the file and the fix', async () => {
+    it.each(CODEX_FAMILY)('fails for %s when AGENTS.md carries no block, naming the file and the fix', async (tool) => {
+      await installCodex(tool);
       await fse.writeFile(agentsMd, 'My own instructions\n');
 
-      const check = (await namedCheck(CODEX))!;
+      const check = (await namedCheck(checkNameFor(tool)))!;
       expect(await check.check()).toBe(false);
       expect(check.fix).toContain(agentsMd);
       expect(check.fix).toContain('carries no team-rules block');
@@ -387,10 +392,11 @@ describe('doctor — rules delivered on disk', () => {
       expect(await check.check()).toBe(true);
     });
 
-    it('fails when the block holds a stale rule set', async () => {
+    it.each(CODEX_FAMILY)('fails for %s when the block holds a stale rule set', async (tool) => {
+      await installCodex(tool);
       await fse.writeFile(agentsMd, CURRENT_BLOCK.replace('\n\nBody of reviews', '') + '\n');
 
-      const check = (await namedCheck(CODEX))!;
+      const check = (await namedCheck(checkNameFor(tool)))!;
       expect(await check.check()).toBe(false);
       expect(check.fix).toContain(agentsMd);
       expect(check.fix).toContain('not what the team rules inline to');
@@ -398,28 +404,30 @@ describe('doctor — rules delivered on disk', () => {
       expect(check.fix).not.toContain('--force');
     });
 
-    it('fails on a current block when AGENTS.override.md sits beside it, which Codex reads instead', async () => {
+    it.each(CODEX_FAMILY)('fails for %s on a current block when AGENTS.override.md sits beside it, which Codex reads instead', async (tool) => {
+      await installCodex(tool);
       await fse.writeFile(agentsMd, `${CURRENT_BLOCK}\n`);
-      const override = path.join(homeDir, '.codex', 'AGENTS.override.md');
+      const override = path.join(homeDir, `.${tool}`, 'AGENTS.override.md');
       await fse.writeFile(override, 'Local override\n');
 
-      const check = (await namedCheck(CODEX))!;
+      const check = (await namedCheck(checkNameFor(tool)))!;
       expect(await check.check()).toBe(false);
       expect(check.fix).toContain(override);
       expect(check.fix).toContain('instead of');
       expect(check.fix).toContain('Move its content into AGENTS.md, or delete it');
     });
 
-    it('fails when a team toolPaths entry gives an installed Codex no instructions file', async () => {
+    it.each(CODEX_FAMILY)('fails when a team toolPaths entry gives an installed %s no instructions file', async (tool) => {
+      await installCodex(tool);
       // A team teamai.yaml written against the 0.22.0 defaults.
-      teamConfig.toolPaths.codex = { skills: '.codex/skills', rules: '.codex/rules', settings: '.codex/hooks.json' };
+      teamConfig.toolPaths[tool] = { skills: `.${tool}/skills`, rules: `.${tool}/rules`, settings: `.${tool}/hooks.json` };
 
-      const check = await namedCheck(CODEX);
+      const check = await namedCheck(checkNameFor(tool));
       expect(check).toBeDefined();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('has no `claudemd` path');
       expect(check!.fix).toContain('`claudemd: AGENTS.md`');
-      expect(check!.fix).toContain('`userScope.claudemd: .codex/AGENTS.md`');
+      expect(check!.fix).toContain(`\`userScope.claudemd: .${tool}/AGENTS.md\``);
       // A teamai.yaml edit moves the team repo, so a plain pull syncs it.
       expect(check!.fix).toContain('then run `teamai pull`.');
       expect(check!.fix).not.toContain('--force');

@@ -713,13 +713,20 @@ describe('uninstall', () => {
       return { projectRoot, teamaiHome, agentsMd: path.join(projectRoot, 'AGENTS.md') };
     }
 
-    it('a full uninstall removes the team-rules block and the old .codex/rules copies, keeping Codex\'s own files', async () => {
-      const { projectRoot, agentsMd } = await projectFixture({ codex: codexPaths }, ['codex']);
-      await fse.ensureDir(path.join(projectRoot, '.codex'));
-      await fse.writeJson(path.join(projectRoot, '.codex', 'hooks.json'), {});
+    it.each(['codex', 'codex-internal', 'tcodex'])('a full uninstall removes the team-rules block and the old .%s/rules copies, keeping its own files', async (tool) => {
+      const toolPaths = {
+        skills: `.${tool}/skills`,
+        settings: `.${tool}/hooks.json`,
+        agents: `.${tool}/agents`,
+        claudemd: 'AGENTS.md',
+        userScope: { claudemd: `.${tool}/AGENTS.md` },
+      };
+      const { projectRoot, agentsMd } = await projectFixture({ [tool]: toolPaths }, [tool]);
+      await fse.ensureDir(path.join(projectRoot, `.${tool}`));
+      await fse.writeJson(path.join(projectRoot, `.${tool}`, 'hooks.json'), {});
       // Only the block, plus the blank lines around it: nothing left worth a file.
       await fse.writeFile(agentsMd, `\n${teamRules}\n\n`);
-      const legacyRules = path.join(projectRoot, '.codex', 'rules');
+      const legacyRules = path.join(projectRoot, `.${tool}`, 'rules');
       await fse.ensureDir(legacyRules);
       await fse.writeFile(path.join(legacyRules, 'team-rule.md'), '# Team Rule');
       await fse.writeFile(path.join(legacyRules, 'teamai-recall.md'), '# Recall Rule');

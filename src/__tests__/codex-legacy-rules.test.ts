@@ -30,6 +30,8 @@ import { log } from '../utils/logger.js';
 import { TeamaiConfigSchema } from '../types.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
+const CODEX_FAMILY = ['codex', 'codex-internal', 'tcodex'];
+
 describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () => {
   let tmpDir: string;
   let homeDir: string;
@@ -72,14 +74,16 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     await fse.remove(tmpDir);
   });
 
-  it('removes an unchanged rule copy, and the directory once nothing else is in it', async () => {
-    await fse.ensureDir(legacyDir());
-    await fse.writeFile(legacy('codeword.md'), 'The team codeword is PELICAN-42.\n');
+  it.each(CODEX_FAMILY)('removes an unchanged %s rule copy, and the directory once nothing else is in it', async (tool) => {
+    localConfig = { ...localConfig, enabledAgents: [tool] } as LocalConfig;
+    const dir = path.join(projectRoot, `.${tool}`, 'rules');
+    await fse.ensureDir(dir);
+    await fse.writeFile(path.join(dir, 'codeword.md'), 'The team codeword is PELICAN-42.\n');
 
     await handler.pullAllRules(teamConfig, localConfig);
 
-    expect(await fse.pathExists(legacy('codeword.md'))).toBe(false);
-    expect(await fse.pathExists(legacyDir())).toBe(false);
+    expect(await fse.pathExists(path.join(dir, 'codeword.md'))).toBe(false);
+    expect(await fse.pathExists(dir)).toBe(false);
   });
 
   it('removes the built-in teamai-recall.md, as this or an earlier teamai version deployed it', async () => {
@@ -93,20 +97,22 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     expect(await fse.pathExists(legacyDir())).toBe(false);
   });
 
-  it('keeps an edited copy and names it once in an English warning with how to remove it', async () => {
+  it.each(CODEX_FAMILY)('keeps an edited %s copy and names it once in an English warning with how to remove it', async (tool) => {
+    localConfig = { ...localConfig, enabledAgents: [tool] } as LocalConfig;
+    const copy = (file: string) => path.join(projectRoot, `.${tool}`, 'rules', file);
     await fse.writeFile(path.join(repoPath, 'rules', 'style.md'), 'Use tabs.\n');
-    await fse.ensureDir(legacyDir());
-    await fse.writeFile(legacy('codeword.md'), 'The team codeword is PELICAN-42.\nMy own note.\n');
-    await fse.writeFile(legacy('style.md'), 'Use spaces.\n');
+    await fse.ensureDir(path.dirname(copy('x')));
+    await fse.writeFile(copy('codeword.md'), 'The team codeword is PELICAN-42.\nMy own note.\n');
+    await fse.writeFile(copy('style.md'), 'Use spaces.\n');
 
     await handler.pullAllRules(teamConfig, localConfig);
 
-    expect(await fse.readFile(legacy('codeword.md'), 'utf8')).toBe('The team codeword is PELICAN-42.\nMy own note.\n');
-    expect(await fse.readFile(legacy('style.md'), 'utf8')).toBe('Use spaces.\n');
+    expect(await fse.readFile(copy('codeword.md'), 'utf8')).toBe('The team codeword is PELICAN-42.\nMy own note.\n');
+    expect(await fse.readFile(copy('style.md'), 'utf8')).toBe('Use spaces.\n');
     const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(legacy('codeword.md'));
-    expect(warnings[0]).toContain(legacy('style.md'));
+    expect(warnings[0]).toContain(copy('codeword.md'));
+    expect(warnings[0]).toContain(copy('style.md'));
     expect(warnings[0]).toContain('AGENTS.md');
     expect(warnings[0]).toMatch(/[Dd]elete/);
   });
