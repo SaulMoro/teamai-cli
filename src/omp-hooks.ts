@@ -74,9 +74,9 @@ export function resolveOmpExtensionsDir(): string {
  *     `tool_result` also carries the tool's text output and a status from
  *     `isError`. A subagent's session file is `<parent>/<agent id>.jsonl`
  *     beside its parent's `<parent>.jsonl`, whose header names the parent
- *     session, so a subagent's first `tool_result` links its session to the
- *     parent's; OMP has no API for it. An in-memory session has no file and
- *     no link.
+ *     session, so a subagent's `tool_result` links its session to the
+ *     parent's, once the parent's file is on disk; OMP has no API for it. A
+ *     main session without a session file (`--no-session`) gives no link.
  *   - Tool naming: OMP passes lowercase tool ids (`bash`, `read`, …) and has
  *     no `Skill` / `TodoWrite` tool to map onto Claude's PascalCase matcher
  *     names, so there is no matcher-scoped pass — only the wildcard
@@ -121,10 +121,14 @@ const sessionOf = (ctx) => {
   return fields;
 };
 
+/** How much of a session file is read for its header line. */
+const HEADER_READ_BYTES = 65536;
+
 /**
  * The session a subagent's session was started from: its file is
  * <parent>/<agent id>.jsonl, and the first line of <parent>.jsonl is the
- * parent's session header. Undefined for any other session.
+ * parent's session header. Undefined for any other session, and while the
+ * parent's file is not on disk.
  */
 const parentSessionOf = (ctx) => {
   try {
@@ -132,7 +136,7 @@ const parentSessionOf = (ctx) => {
     if (typeof file !== "string" || !file) return undefined;
     const fd = fs.openSync(\`\${path.dirname(file)}.jsonl\`, "r");
     try {
-      const head = Buffer.alloc(65536);
+      const head = Buffer.alloc(HEADER_READ_BYTES);
       const size = fs.readSync(fd, head, 0, head.length, 0);
       const header = JSON.parse(head.toString("utf8", 0, size).split("\\n", 1)[0]);
       return header && header.type === "session" && typeof header.id === "string" && header.id ? header.id : undefined;
@@ -182,8 +186,8 @@ export default function teamaiHooks(pi) {
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
   });
 
-  // Sessions already looked up: a session's parent never changes.
-  const checked = new Set();
+  // Subagent sessions already linked: a session's parent never changes.
+  const linked = new Set();
 
   // content is what the model saw; isError is set for a failed call,
   // including a bash command that exits non-zero.
@@ -195,10 +199,10 @@ export default function teamaiHooks(pi) {
       tool_status: event.isError === true ? "failure" : event.isError === false ? "success" : "unknown",
     };
     const child = sessionOf(ctx).session_id;
-    if (child && !checked.has(child)) {
-      checked.add(child);
-      const parent = parentSessionOf(ctx);
-      if (parent && parent !== child) payload.session_link = { child, parent };
+    const parent = child && !linked.has(child) ? parentSessionOf(ctx) : undefined;
+    if (parent) {
+      payload.session_link = { child, parent };
+      linked.add(child);
     }
     await dispatch("post-tool-use", ctx, payload);
   });
