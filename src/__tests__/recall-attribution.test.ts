@@ -53,6 +53,8 @@ const { buildIndex } = await import('../utils/search-index.js');
 const { loadUserVotes } = await import('../votes.js');
 const { getProjectSearchIndexPath, getUserLearningsDir, getUserSearchIndexPath, getVotesDir } = await import('../types.js');
 const { readRecallLog, recallLogPath } = await import('../recall-log.js');
+const { drainRecallLog } = await import('../recall-adoption.js');
+const { acquireLock, releaseLock } = await import('../update.js');
 const { parseTranscriptForVotes } = await import('../transcript-parser.js');
 const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
 const { loadOmpExtension, loadPiExtension } = await import('./helpers/pi-extensions.js');
@@ -320,6 +322,57 @@ class Harness {
   /** `tool`'s Stop, with the session `fields` name. */
   async agentStop(tool: string, fields: Record<string, unknown>): Promise<string> {
     return this.dispatch('stop', { hook_event_name: 'Stop', session_id: undefined, ...fields }, this.root, tool);
+  }
+
+  /** Claude's SubagentStop of `agent` in the main session: it carries the parent's `session_id`. Returns the hook's stdout. */
+  async subagentStop(agent: Subagent): Promise<string> {
+    return this.dispatch('subagent-stop', {
+      hook_event_name: 'SubagentStop', stop_hook_active: false, agent_id: agent.id, ...(agent.type ? { agent_type: agent.type } : {}),
+    });
+  }
+
+  /**
+   * Await `step` while the clock moves a second every 25 ms. Only `Date` is
+   * faked, and the log's lock wait is timed by it, so a frozen clock would
+   * keep a hook waiting for a held lock until its handler times out.
+   */
+  async ticking<T>(step: Promise<T>): Promise<T> {
+    let settled = false;
+    const result = step.finally(() => { settled = true; });
+    for (let now = Date.now(); !settled; now += 1000) {
+      await new Promise((r) => setTimeout(r, 25));
+      vi.setSystemTime(now + 1000);
+    }
+    return result;
+  }
+
+  /** What `teamai pull` does with the project scope's recall log. */
+  async pull(): Promise<void> {
+    await drainRecallLog(this.project);
+  }
+
+  /** Lines of other sessions appended to the recall log as they are, `hours` after the start of the trace. */
+  fillLog(count: number, hours: number): void {
+    const ts = new Date(T0 + hours * 60 * 60 * 1000).toISOString();
+    const lines: object[] = [];
+    for (let i = 0; i < count; i++) {
+      const n = `${hours}-${i}`;
+      const other = `sess-other-${n}`;
+      lines.push([
+        { kind: 'run', ts, run: `run-${n}`, session: other, via: 'env', unambiguous: true, docs: [] },
+        { kind: 'claim', ts, run: `run-${n}`, session: other, direct: true },
+        { kind: 'evidence', ts, id: `ev-${n}`, session: other, path: '/elsewhere/notes.md', status: 'success', simple: true },
+        { kind: 'consumed', ts, evidence: `ev-${hours}-${i - 1}` },
+        { kind: 'link', ts, child: `${other}-child`, parent: other },
+      ][i % 5]);
+    }
+    fs.mkdirSync(path.dirname(recallLogPath(this.project)), { recursive: true });
+    fs.appendFileSync(recallLogPath(this.project), lines.map((l) => JSON.stringify(l) + '\n').join(''));
+  }
+
+  /** The recall log's lines, as the file holds them. */
+  logLines(): Array<{ ts: string }> {
+    return fs.readFileSync(recallLogPath(this.project), 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { ts: string });
   }
 
   /** `session`'s Stop (default: the main session), which carries no `transcript_path` here: the reducer does not need one. Returns the hook's stdout. */
@@ -1453,11 +1506,89 @@ const ROWS: Row[] = [
     },
     project: {},
   },
+  {
+    name: '11: final Stop; a background worker reads the doc; SubagentStop → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.stop();
+      await h.read(files[0], { agent: GENERAL_SUBAGENT });
+      // A user-facing summary belongs to the end of a turn, not to a subagent's.
+      expect(await h.subagentStop(GENERAL_SUBAGENT)).toBe('');
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '11: final Stop; a background worker reads the doc; no SubagentStop, then teamai pull → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.stop();
+      await h.read(files[0], { agent: GENERAL_SUBAGENT });
+      await h.pull();
+      await h.pull();
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '11: a later read of a doc its run already credited, drained by pull after the ledger window → no second vote',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.read(files[0]);
+      await h.stop();
+      h.at(20);
+      // The session ends with no Stop after this read.
+      await h.read(files[0]);
+      h.at(30);
+      await h.pull();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '11: pull prunes lines older than 30 days and keeps the log at 5000 lines, but keeps a 2-hour-old pending read and its run',
+    trace: async (h) => {
+      h.fillLog(1000, -24 * 40);
+      // Two session candidates: the run settles only once its claim arrives, so the read stays pending through the pull.
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.read(files[0]);
+      // Newer lines follow them, so the run and the read are the oldest lines the cap would drop.
+      h.fillLog(6000, 1);
+      h.at(2);
+      await h.pull();
+      const lines = h.logLines();
+      expect(lines.length).toBeLessThanOrEqual(5000);
+      expect(Math.min(...lines.map((l) => Date.parse(l.ts)))).toBe(T0);
+      await h.shell('teamai recall "redis timeout"', output);
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '11: a read appended while the log lock is held, as during a prune, survives the prune → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      h.fillLog(6000, 1);
+      const lock = `${recallLogPath(h.project)}.lock`;
+      expect(await acquireLock(lock)).toBe(true);
+      let pulling: Promise<void>;
+      try {
+        // The hook gives up on the lock and leaves the read in a side record; the prune then waits for the lock.
+        await h.ticking(h.read(files[0]));
+        expect(fs.readdirSync(path.dirname(recallLogPath(h.project))).filter((n) => n.startsWith('recall.pending-'))).toHaveLength(1);
+        pulling = h.pull();
+      } finally {
+        await releaseLock(lock);
+      }
+      await pulling;
+      expect(h.logLines().length).toBeLessThanOrEqual(5000);
+      await h.shell('teamai recall "redis timeout"', output);
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '11: final Stop; a background worker reads the doc; SubagentStop → +1',
   '13: teamai recall --check then a read → no run in stats',
   '13: recall with no hits → one run in stats',
 ];
@@ -1492,6 +1623,27 @@ describe('recall attribution acceptance (#884)', () => {
   });
 
   for (const name of TODO_ROWS) it.todo(name);
+
+  // The votes lock is held for real, so the Stop waits out its full lock wait.
+  it('11: votes lock contended at Stop → no vote now; the next trigger credits it once', async () => {
+    await h.setUp();
+    const { files } = await h.recall('redis timeout');
+    await h.read(files[0]);
+    const lock = `${path.join(getVotesDir(h.project), 'tester.yaml')}.lock`;
+    expect(await acquireLock(lock)).toBe(true);
+    try {
+      await h.stop();
+    } finally {
+      await releaseLock(lock);
+    }
+    expect(await h.upvotes(h.project)).toEqual({});
+
+    await h.pull();
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+    await h.stop();
+    await h.pull();
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+  }, 30_000);
 
   it('prints the run id after the result count on the region start line', async () => {
     await h.setUp();

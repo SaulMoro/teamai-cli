@@ -369,6 +369,7 @@ export function parseStdin(raw: string, event: string): Record<string, unknown> 
       'session-start': 'SessionStart',
       'session-end': 'SessionEnd',
       'stop': 'Stop',
+      'subagent-stop': 'SubagentStop',
       'post-tool-use': 'PostToolUse',
       'prompt-submit': 'UserPromptSubmit',
     };

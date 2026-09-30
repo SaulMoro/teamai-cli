@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { TEAMAI_HOOK_DESCRIPTION_PREFIX } from './types.js';
+import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import type { HookDef } from './types.js';
 import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
@@ -361,6 +362,28 @@ const COPILOT_SESSION_END_SPEC: BuiltinHookSpec = {
   timeoutSec: 15,
 };
 
+const SUBAGENT_STOP_SPEC: BuiltinHookSpec = {
+  key: 'Hook dispatch subagent-stop',
+  event: 'SubagentStop',
+  dispatchEvent: 'subagent-stop',
+  matcher: '*',
+  timeoutSec: 15,
+};
+
+/**
+ * Tools that fire SubagentStop with the parent's session id, so the recall
+ * reducer can credit a read a subagent made after the session's last Stop
+ * (#884): Claude Code, Codex, CodeBuddy and Qoder document it, and their
+ * internal builds share the format. Codex ignores an event key it does not
+ * know. Not WorkBuddy, whose shipped engine version is unverified; not Cursor
+ * or Copilot, whose subagents run in sessions of their own that no hook links
+ * to the parent; not ZCode, which has no such event and rejects the whole
+ * hooks block on an unknown key.
+ */
+const SUBAGENT_STOP_TOOLS = new Set([
+  'claude', 'claude-internal', 'tclaude', ...CODEX_TOOL_IDS, 'codebuddy', 'qoder', 'qoder-cn',
+]);
+
 /**
  * Build the built-in hook definitions for a tool.
  *
@@ -384,9 +407,11 @@ export function builtinHookDefs(tool: string): HookDef[] {
     : WRAPPER_TOOLS.has(tool)
       ? (toolUsesCmdShell(tool) ? getCmdWrapperDispatchCommand : getWrapperDispatchCommand)
       : getDispatchCommand;
-  const specs = tool === 'copilot'
-    ? [...BUILTIN_HOOK_SPECS, COPILOT_SESSION_END_SPEC]
-    : BUILTIN_HOOK_SPECS;
+  const specs = [
+    ...BUILTIN_HOOK_SPECS,
+    ...(tool === 'copilot' ? [COPILOT_SESSION_END_SPEC] : []),
+    ...(SUBAGENT_STOP_TOOLS.has(tool) ? [SUBAGENT_STOP_SPEC] : []),
+  ];
   return specs.map((spec) => ({
     source: 'builtin' as const,
     key: spec.key,

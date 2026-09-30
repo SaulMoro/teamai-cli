@@ -86,8 +86,8 @@ describe('hooks — merged dispatch format', () => {
         totalEntries += matchers.length;
       }
 
-      // Should have: SessionStart(1) + Stop(1) + PostToolUse(*:1, Skill:1, TodoWrite:1) + UserPromptSubmit(1) = 6
-      expect(totalEntries).toBeLessThanOrEqual(6);
+      // Should have: SessionStart(1) + Stop(1) + PostToolUse(*:1, Skill:1, TodoWrite:1) + UserPromptSubmit(1) + SubagentStop(1) = 7
+      expect(totalEntries).toBeLessThanOrEqual(7);
     });
 
     it('SessionStart has exactly one entry with wildcard matcher', async () => {

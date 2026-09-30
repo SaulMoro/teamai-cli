@@ -5,7 +5,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { spawnSync } from 'node:child_process';
 
-import { appendJsonl, readJsonl, rewriteJsonl, HOOK_LOCK_WAIT } from '../utils/jsonl-store.js';
+import { appendJsonl, appendJsonlBatch, readJsonl, rewriteJsonl, HOOK_LOCK_WAIT } from '../utils/jsonl-store.js';
 
 let dir: string;
 const file = () => path.join(dir, 'recall-log.jsonl');
@@ -84,6 +84,45 @@ describe('jsonl store', () => {
     await fs.promises.writeFile(file(), await fs.promises.readFile(path.join(dir, side), 'utf-8'));
 
     expect(await readJsonl(file())).toStrictEqual([{ n: 1 }]);
+  });
+
+  it('appends a batch in order, and records it in one side record while the lock is held', async () => {
+    await appendJsonlBatch(file(), [{ n: 1 }, { n: 2 }]);
+    await holdLock();
+    await appendJsonlBatch(file(), [{ n: 3 }, { n: 4 }, { n: 5 }]);
+
+    expect(await sideRecords()).toHaveLength(1);
+    expect(await readJsonl(file())).toStrictEqual([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }, { n: 5 }]);
+
+    await fs.promises.rm(lockPath());
+    await appendJsonl(file(), { n: 6 });
+
+    expect(await sideRecords()).toEqual([]);
+    expect(await readJsonl(file())).toStrictEqual([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }, { n: 5 }, { n: 6 }]);
+  });
+
+  it('writes nothing for an empty batch', async () => {
+    expect(await appendJsonlBatch(file(), [])).toBeNull();
+
+    expect(fs.existsSync(file())).toBe(false);
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('folds each line of a batch side record once when a fold appended only part of it', async () => {
+    await holdLock();
+    await appendJsonlBatch(file(), [{ n: 1 }, { n: 2 }]);
+    const [side] = await sideRecords();
+    const [first] = (await fs.promises.readFile(path.join(dir, side), 'utf-8')).split('\n');
+    // A fold that was killed after appending the batch's first line.
+    await fs.promises.writeFile(file(), `${first}\n`);
+    await fs.promises.rm(lockPath());
+
+    expect(await readJsonl(file())).toStrictEqual([{ n: 1 }, { n: 2 }]);
+
+    await appendJsonl(file(), { n: 3 });
+
+    expect(await sideRecords()).toEqual([]);
+    expect(await readJsonl(file())).toStrictEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
   });
 
   it('skips a side record that is still being written', async () => {

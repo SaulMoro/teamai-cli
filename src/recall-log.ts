@@ -1,7 +1,8 @@
 /**
  * The recall log of one scope (#884): each `teamai recall` run, and the tool
  * calls that confirm a run or read a file under the knowledge roots, one JSON
- * line each. The adoption reducer joins them at Stop.
+ * line each. The adoption reducer joins them at Stop, SubagentStop and `pull`,
+ * and only `pull` prunes the log (drainRecallLog).
  *
  *   run       recall searched: the session from the environment, its caller and the docs it returned
  *   claim     the PostToolUse of a shell call that printed a run id: its actor, and whether it ran the recall itself
@@ -15,7 +16,7 @@
  */
 import path from 'node:path';
 
-import { appendJsonl, readJsonl } from './utils/jsonl-store.js';
+import { appendJsonlBatch, readJsonl } from './utils/jsonl-store.js';
 import { getDataHome, getTeamaiHomeDir } from './types.js';
 import type { KnowledgeType, LocalConfig } from './types.js';
 
@@ -128,7 +129,12 @@ export function recallLogPath(config: LocalConfig): string {
 
 /** Append one line. Throws on I/O errors; the caller decides what a lost line costs. */
 export async function appendRecallLine(config: LocalConfig, line: RecallLogLine): Promise<void> {
-  await appendJsonl(recallLogPath(config), line);
+  await appendRecallLines(config, [line]);
+}
+
+/** Append lines in one write under one lock, so a hook makes at most one write per call. Throws on I/O errors. */
+export async function appendRecallLines(config: LocalConfig, lines: RecallLogLine[]): Promise<void> {
+  await appendJsonlBatch(recallLogPath(config), lines);
 }
 
 /** Every line of the scope's log, those a busy lock left in side records included. */

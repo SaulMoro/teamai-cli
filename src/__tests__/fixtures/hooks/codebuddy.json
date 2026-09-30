@@ -73,6 +73,19 @@
         ],
         "description": "[teamai] Hook dispatch prompt-submit"
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PATH=\"$HOME/.teamai/bin:$PATH\" teamai hook-dispatch subagent-stop --tool codebuddy 2>/dev/null || true",
+            "timeout": 15
+          }
+        ],
+        "description": "[teamai] Hook dispatch subagent-stop"
+      }
     ]
   }
 }

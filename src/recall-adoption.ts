@@ -4,20 +4,24 @@
  *
  *   PostToolUse ── recordToolCall ──▶ claim / evidence ─┐
  *   teamai recall ────────────────▶ run ────────────────┼─▶ recall log
- *   Stop ── creditAdoptedDocs ◀── join ─────────────────┘
+ *   Stop / SubagentStop ── creditAdoptedDocs ◀── join ──┤
+ *   pull ── drainRecallLog: pending sessions, retention ┘
  *              └─▶ incrementUpvoted (per-session ledger) ─▶ consumed
  *
- * The hook side only classifies the call and appends one line; it never reads
- * the log. The reducer does the join, at Stop.
+ * The hook side only classifies the call and appends its lines in one write;
+ * it never reads the log. The reducer does the join, at Stop, at SubagentStop
+ * and, as a recovery, at `pull`, which alone prunes the log.
  */
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { appendRecallLine, readRecallLog } from './recall-log.js';
-import type { Actor, ClaimLine, RecalledDoc, RunLine } from './recall-log.js';
+import { appendRecallLines, readRecallLog, recallLogPath } from './recall-log.js';
+import type { Actor, ClaimLine, EvidenceLine, LinkLine, RecallLogLine, RecalledDoc, RunLine } from './recall-log.js';
 import { getVotesDir } from './types.js';
 import type { LocalConfig } from './types.js';
 import { isAbsolutePath, pathKey, samePath } from './utils/agent-path.js';
+import { rewriteJsonl } from './utils/jsonl-store.js';
 import { log } from './utils/logger.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { commandWords, simpleCommands } from './utils/shell-command.js';
@@ -78,15 +82,21 @@ function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
  * id a shell call printed, noting whether its command ran `teamai recall`
  * itself; evidence for each file under the knowledge roots it read, or whose
  * lines a search showed, unless it failed; nothing otherwise. Whether a claim or a read of unknown status
- * counts is the reducer's call. The command itself is never recorded.
+ * counts is the reducer's call. The command itself is never recorded. All of
+ * a call's lines go in one write, however many files a search showed.
  */
 export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
+  await appendRecallLines(config, await toolCallLines(stdin, tool, config));
+}
+
+async function toolCallLines(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<RecallLogLine[]> {
+  const lines: RecallLogLine[] = [];
   // A subagent's own session, which a bridge names on the call that ran it (OpenCode's task tool).
   const link = stdin.session_link !== null && typeof stdin.session_link === 'object' ? stdin.session_link as Record<string, unknown> : {};
   const child = nonEmpty(link.child);
   const parent = nonEmpty(link.parent);
   if (child && parent && child !== parent) {
-    await appendRecallLine(config, { kind: 'link', ts: new Date().toISOString(), child, parent });
+    lines.push({ kind: 'link', ts: new Date().toISOString(), child, parent });
   }
 
   const call = classifyToolCall(stdin, tool);
@@ -96,15 +106,13 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
     if (runs.length > 0) {
       const actor = actorOf(stdin, tool);
       const direct = invokesRecall(call.command);
-      for (const run of runs) {
-        await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
-      }
-      return;
+      for (const run of runs) lines.push({ kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
+      return lines;
     }
   }
 
   // A search's paths are the files its output showed lines of; the reducer keeps those a run printed.
-  if ((call.category !== 'read' && call.category !== 'search') || call.status === 'failure') return;
+  if ((call.category !== 'read' && call.category !== 'search') || call.status === 'failure') return lines;
   let roots: string[] | undefined;
   for (const file of call.paths) {
     if (isAbsolutePath(file)) {
@@ -115,11 +123,12 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
       // No base to place it under a root: only a doc-shaped path is kept, for the suffix match.
       continue;
     }
-    await appendRecallLine(config, {
+    lines.push({
       kind: 'evidence', ts: new Date().toISOString(), id: randomUUID(),
       ...actorOf(stdin, tool), path: file, status: call.status, simple: call.simple,
     });
   }
+  return lines;
 }
 
 export interface AdoptionResult {
@@ -150,11 +159,58 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
   return new Set(hits.map((d) => segments(d.path).join('/'))).size === 1 ? hits : [];
 }
 
+/** What the reducer reads off the whole log, once per pass. */
+interface LogIndex {
+  lines: RecallLogLine[];
+  /** Each run's first valid claim: its command ran the recall itself, for a run in this log, earliest by time. */
+  claimOf: Map<string, ClaimLine>;
+  /** Ids of the evidence already credited. */
+  consumed: Set<string>;
+  /** The session a child's work counts for: its links followed up to the root. */
+  rootOf: (session: string) => string;
+}
+
+function indexLog(lines: RecallLogLine[]): LogIndex {
+  const logged = new Set(lines.flatMap((l) => l.kind === 'run' ? [l.run] : []));
+  const claimOf = new Map<string, ClaimLine>();
+  const parentOf = new Map<string, string>();
+  const consumed = new Set<string>();
+  for (const line of lines) {
+    if (line.kind === 'claim') {
+      if (line.direct !== true || !logged.has(line.run)) continue;
+      // Earliest by time: a claim a busy lock left in a side record reads after the file's lines.
+      const first = claimOf.get(line.run);
+      if (!first || line.ts < first.ts) claimOf.set(line.run, line);
+    } else if (line.kind === 'link') {
+      if (!parentOf.has(line.child)) parentOf.set(line.child, line.parent);
+    } else if (line.kind === 'consumed') consumed.add(line.evidence);
+  }
+  // A cycle stops where it closes.
+  const rootOf = (session: string): string => {
+    const seen = new Set<string>([session]);
+    let root = session;
+    for (let up = parentOf.get(root); up !== undefined && !seen.has(up); up = parentOf.get(root)) {
+      seen.add(up);
+      root = up;
+    }
+    return root;
+  };
+  return { lines, claimOf, consumed, rootOf };
+}
+
+/** Whether `at` falls within the adoption window after the run. */
+function inWindow(at: number, run: RunLine): boolean {
+  const since = at - Date.parse(run.ts);
+  return since >= 0 && since <= ADOPTION_WINDOW_MS;
+}
+
 /**
  * The reducer: credit the docs `sessionId` adopted, through the per-session
  * upvote ledger, and mark the evidence that credited them consumed so it never
  * votes again. Evidence the ledger already credited this session is consumed
- * too. When the votes file is busy nothing is consumed, so the next Stop
+ * too, and a run's doc is credited once: a later read of it counts for
+ * nothing, even after the ledger's window. When the votes file is busy
+ * nothing is consumed, so the next trigger (Stop, SubagentStop or `pull`)
  * retries.
  *
  * Each run is settled first: by its first valid claim (one whose command ran
@@ -174,34 +230,14 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  * to the same root count as the root's, the ledger's session, whichever of
  * them stopped. The child stays their actor, so a marked run's own reads are
  * still excluded. Links apply whenever they arrived: evidence that did not
- * count before its link is never consumed, so the next Stop re-evaluates it.
+ * count before its link is never consumed, so the next trigger re-evaluates it.
  */
 export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
-  const lines = await readRecallLog(config);
-  const logged = new Set(lines.flatMap((l) => l.kind === 'run' ? [l.run] : []));
-  const claimOf = new Map<string, ClaimLine>();
-  const parentOf = new Map<string, string>();
-  const consumed = new Set<string>();
-  for (const line of lines) {
-    if (line.kind === 'claim') {
-      if (line.direct !== true || !logged.has(line.run)) continue;
-      // Earliest by time: a claim a busy lock left in a side record reads after the file's lines.
-      const first = claimOf.get(line.run);
-      if (!first || line.ts < first.ts) claimOf.set(line.run, line);
-    } else if (line.kind === 'link') {
-      if (!parentOf.has(line.child)) parentOf.set(line.child, line.parent);
-    } else if (line.kind === 'consumed') consumed.add(line.evidence);
-  }
-  // The session a child's work counts for: its links followed up to the root. A cycle stops where it closes.
-  const rootOf = (session: string): string => {
-    const seen = new Set<string>([session]);
-    let root = session;
-    for (let up = parentOf.get(root); up !== undefined && !seen.has(up); up = parentOf.get(root)) {
-      seen.add(up);
-      root = up;
-    }
-    return root;
-  };
+  return creditRoot(config, indexLog(await readRecallLog(config)), sessionId);
+}
+
+async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: string): Promise<AdoptionResult> {
+  const { lines, claimOf, consumed, rootOf } = index;
   const target = rootOf(sessionId);
   const ownerOf = (r: RunLine): string | null => claimOf.get(r.run)?.session ?? (r.unambiguous === true ? r.session : null);
   const runs = lines.filter((l): l is RunLine => {
@@ -220,23 +256,32 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   const recalled = new Set(runs.flatMap((r) => r.docs.map((d) => d.key))).size;
   if (runs.length === 0) return { credited: [], recalled };
 
-  const keys = new Set<string>();
-  const crediting: string[] = [];
-  for (const e of lines) {
-    if (e.kind !== 'evidence' || consumed.has(e.id) || rootOf(e.session) !== target) continue;
-    // A read of unknown status (Codex's shell) counts only as a simple read, never as a pipeline's head.
-    if (e.status !== 'success' && !(e.status === 'unknown' && e.simple === true)) continue;
+  const runOf = new Map<RecalledDoc, RunLine>(runs.flatMap((r) => r.docs.map((d) => [d, r] as const)));
+  const creditOf = (d: RecalledDoc): string => `${runOf.get(d)!.run}\n${d.key}`;
+  // The eligible docs a read opened, of the runs whose window it falls in and whose own reads it may count for.
+  const opened = (e: EvidenceLine): RecalledDoc[] => {
     const at = Date.parse(e.ts);
     const docs = runs
-      .filter((r) => { const since = at - Date.parse(r.ts); return since >= 0 && since <= ADOPTION_WINDOW_MS; })
+      .filter((r) => inWindow(at, r))
       .filter((r) => {
         const actor = markedActor.get(r);
         return !actor || actor.session !== e.session || actor.agentId !== (e.agentId ?? null);
       })
       .flatMap((r) => r.docs);
-    const eligible = docsOpened(e.path, docs).filter((d) => d.eligible);
-    if (eligible.length === 0) continue;
-    for (const d of eligible) keys.add(d.key);
+    return docsOpened(e.path, docs).filter((d) => d.eligible);
+  };
+  const evidence = lines.filter((e): e is EvidenceLine => e.kind === 'evidence' && rootOf(e.session) === target
+    // A read of unknown status (Codex's shell) counts only as a simple read, never as a pipeline's head.
+    && (e.status === 'success' || (e.status === 'unknown' && e.simple === true)));
+  const done = new Set(evidence.filter((e) => consumed.has(e.id)).flatMap((e) => opened(e).map(creditOf)));
+
+  const keys = new Set<string>();
+  const crediting: string[] = [];
+  for (const e of evidence) {
+    if (consumed.has(e.id)) continue;
+    const fresh = opened(e).filter((d) => !done.has(creditOf(d)));
+    if (fresh.length === 0) continue;
+    for (const d of fresh) keys.add(d.key);
     crediting.push(e.id);
   }
   if (keys.size === 0) return { credited: [], recalled };
@@ -244,13 +289,164 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   const { incrementUpvoted } = await import('./votes.js');
   const credited = await incrementUpvoted(path.join(getVotesDir(config), `${config.username}.yaml`), [...keys], target);
   if (credited === null) return { credited: null, recalled };
-  for (const evidence of crediting) {
-    try {
-      await appendRecallLine(config, { kind: 'consumed', ts: new Date().toISOString(), evidence });
-    } catch (e) {
-      // The ledger still holds the credit for its window; past it this evidence could credit again.
-      log.debug(`recall adoption: could not mark evidence ${evidence} consumed: ${(e as Error).message}`);
-    }
+  for (const id of crediting) consumed.add(id);
+  try {
+    const ts = new Date().toISOString();
+    await appendRecallLines(config, crediting.map((evidence) => ({ kind: 'consumed', ts, evidence })));
+  } catch (e) {
+    // The ledger still holds the credit for its window; past it this evidence could credit again.
+    log.debug(`recall adoption: could not mark ${crediting.length} evidence line(s) consumed: ${(e as Error).message}`);
   }
   return { credited, recalled };
+}
+
+/** How long the recall log keeps a line. */
+export const RECALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** The most lines the recall log keeps, the oldest dropped first. */
+export const RECALL_LOG_MAX_LINES = 5000;
+
+/**
+ * What `teamai pull` does with a scope's recall log. First it credits the
+ * sessions whose evidence is still pending, a recovery for a read after the
+ * session's last Stop, or a Stop that found the votes file busy (git teams
+ * only, as votes are). Then it applies retention under the log's lock (see
+ * {@link retainedLines}). Never call it from a hook: the prune may wait
+ * seconds for the lock. Failures are logged, not thrown: the next pull
+ * retries.
+ */
+export async function drainRecallLog(config: LocalConfig): Promise<void> {
+  const file = recallLogPath(config);
+  if (config.repo.kind !== 'http') {
+    try {
+      await creditPendingSessions(config);
+    } catch (e) {
+      log.debug(`recall adoption: could not credit pending sessions from ${file}: ${(e as Error).message}`);
+    }
+  }
+  // Taking the lock creates its directory: a scope that never recalled gets none.
+  if (!fs.existsSync(file)) return;
+  try {
+    await rewriteJsonl(file, (lines) => retainedLines(lines, Date.now()));
+  } catch (e) {
+    if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') return;
+    log.error(`Could not prune ${file}: ${e instanceof Error ? e.message : String(e)}. It is pruned again at the next pull.`);
+  }
+}
+
+/**
+ * Run the reducer for each root session with evidence not yet consumed. It
+ * stops at the first busy votes file: the rest stays pending for the next
+ * trigger.
+ */
+async function creditPendingSessions(config: LocalConfig): Promise<void> {
+  const index = indexLog(await readRecallLog(config));
+  const roots = new Set(index.lines.flatMap((l) => l.kind === 'evidence' && !index.consumed.has(l.id) ? [index.rootOf(l.session)] : []));
+  for (const root of roots) {
+    if ((await creditRoot(config, index, root)).credited === null) return;
+  }
+}
+
+interface LogEntry {
+  text: string;
+  line: RecallLogLine;
+  at: number;
+}
+
+/**
+ * Retention of the recall log's raw lines at `now`, or null when it drops
+ * none. It keeps lines newer than {@link RECALL_LOG_RETENTION_MS}, then drops
+ * the oldest until {@link RECALL_LOG_MAX_LINES} remain. Neither drops pending
+ * evidence younger than the adoption window, nor what it needs to vote: the
+ * runs whose docs it opened within their window, their claims, the reads
+ * already credited for them, and the links up from those sessions. Evidence
+ * and its `consumed` lines go together, so a credited read never looks
+ * pending again. A malformed line, or one without a time, is dropped.
+ */
+function retainedLines(raw: string[], now: number): string[] | null {
+  const entries: LogEntry[] = [];
+  for (const text of raw) {
+    let line: unknown;
+    try {
+      line = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (line === null || typeof line !== 'object' || Array.isArray(line)) continue;
+    const { kind, ts } = line as { kind?: unknown; ts?: unknown };
+    const at = typeof ts === 'string' ? Date.parse(ts) : NaN;
+    if (typeof kind !== 'string' || !Number.isFinite(at)) continue;
+    entries.push({ text, line: line as RecallLogLine, at });
+  }
+
+  // Units in file order: each evidence with its consumed lines, at the evidence's time and place; each other line alone.
+  const units: LogEntry[][] = [];
+  const unitOf = new Map<string, LogEntry[]>();
+  for (const entry of entries) {
+    if (entry.line.kind !== 'evidence' || typeof entry.line.id !== 'string' || unitOf.has(entry.line.id)) continue;
+    unitOf.set(entry.line.id, [entry]);
+  }
+  for (const entry of entries) {
+    const { line } = entry;
+    if (line.kind === 'consumed') {
+      // A consumed line without its evidence marks nothing any more.
+      unitOf.get(line.evidence)?.push(entry);
+    } else if (line.kind === 'evidence' && unitOf.get(line.id)?.[0] === entry) {
+      units.push(unitOf.get(line.id)!);
+    } else if (line.kind !== 'evidence') {
+      units.push([entry]);
+    }
+  }
+
+  const aged = units.filter((unit) => now - unit[0].at < RECALL_LOG_RETENTION_MS);
+  const kept = new Set(aged);
+  const needed = neededForPending(aged.flat(), now);
+  let count = aged.reduce((n, unit) => n + unit.length, 0);
+  for (const unit of aged) {
+    if (count <= RECALL_LOG_MAX_LINES) break;
+    if (unit.some((entry) => needed.has(entry))) continue;
+    kept.delete(unit);
+    count -= unit.length;
+  }
+
+  const survivors = new Set([...kept].flat());
+  if (survivors.size === raw.length) return null;
+  return entries.filter((entry) => survivors.has(entry)).map((entry) => entry.text);
+}
+
+/**
+ * The entries pending evidence younger than the adoption window still needs
+ * to vote: itself, the runs whose docs it opened within their window, their
+ * claims, the reads already credited for those runs (which stop a second
+ * credit), and the links up from every session involved. It ignores
+ * settlement, which a claim or link arriving later can change.
+ */
+function neededForPending(entries: LogEntry[], now: number): Set<LogEntry> {
+  const consumed = new Set(entries.flatMap(({ line }) => line.kind === 'consumed' ? [line.evidence] : []));
+  const evidence = entries.filter((e): e is LogEntry & { line: EvidenceLine } => e.line.kind === 'evidence');
+  const pending = evidence.filter((e) => !consumed.has(e.line.id) && now - e.at < ADOPTION_WINDOW_MS);
+  if (pending.length === 0) return new Set();
+  const opens = (e: LogEntry & { line: EvidenceLine }, run: RunLine): boolean => inWindow(e.at, run) && docsOpened(e.line.path, run.docs).length > 0;
+
+  const runs = entries.filter((r): r is LogEntry & { line: RunLine } => r.line.kind === 'run'
+    && Array.isArray(r.line.docs) && pending.some((e) => opens(e, r.line as RunLine)));
+  const runIds = new Set(runs.map((r) => r.line.run));
+  const claims = entries.filter((c) => c.line.kind === 'claim' && runIds.has(c.line.run));
+  const reads = evidence.filter((e) => runs.some((r) => opens(e, r.line)));
+  const needed = new Set<LogEntry>([...pending, ...runs, ...claims, ...reads]);
+
+  const sessions = new Set<string>();
+  for (const { line } of needed) {
+    if ((line.kind === 'run' || line.kind === 'claim' || line.kind === 'evidence') && typeof line.session === 'string') sessions.add(line.session);
+  }
+  const links = entries.filter((l): l is LogEntry & { line: LinkLine } => l.line.kind === 'link');
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const link of links) {
+      if (needed.has(link) || !sessions.has(link.line.child)) continue;
+      needed.add(link);
+      sessions.add(link.line.parent);
+      grew = true;
+    }
+  }
+  return needed;
 }

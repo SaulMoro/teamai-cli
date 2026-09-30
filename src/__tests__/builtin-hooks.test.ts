@@ -2,15 +2,29 @@ import { describe, it, expect } from 'vitest';
 import { builtinHookDefs, applyBuiltinOverride } from '../builtin-hooks.js';
 
 describe('builtinHookDefs — unified built-in hook model', () => {
-  it('returns 6 built-in defs in canonical order, all tagged source=builtin', () => {
+  it('returns 7 built-in defs for Claude in canonical order, all tagged source=builtin', () => {
     const defs = builtinHookDefs('claude');
-    expect(defs).toHaveLength(6);
+    expect(defs).toHaveLength(7);
     expect(defs.every((d) => d.source === 'builtin')).toBe(true);
     expect(defs.map((d) => d.event)).toEqual([
       'SessionStart', 'Stop',
       'PostToolUse', 'PostToolUse', 'PostToolUse',
-      'UserPromptSubmit',
+      'UserPromptSubmit', 'SubagentStop',
     ]);
+  });
+
+  it('adds SubagentStop only for the agents that fire it (#884)', () => {
+    const subagentStop = (tool: string) => builtinHookDefs(tool).filter((d) => d.event === 'SubagentStop');
+    for (const tool of ['claude', 'claude-internal', 'tclaude', 'codex', 'codex-internal', 'tcodex', 'codebuddy', 'qoder', 'qoder-cn']) {
+      expect(subagentStop(tool)).toEqual([expect.objectContaining({
+        key: 'Hook dispatch subagent-stop',
+        matcher: '*',
+        command: expect.stringContaining(`hook-dispatch subagent-stop --tool ${tool}`),
+      })]);
+    }
+    // Cursor and Copilot run a subagent in a session of its own that no hook links to its parent;
+    // ZCode has no such event and rejects the whole hooks block on an unknown key.
+    for (const tool of ['cursor', 'copilot', 'zcode', 'workbuddy']) expect(subagentStop(tool)).toEqual([]);
   });
 
   it('adds a lifecycle-complete SessionEnd hook only for Copilot', () => {
@@ -22,7 +36,7 @@ describe('builtinHookDefs — unified built-in hook model', () => {
       timeout: 15,
       command: expect.stringContaining('hook-dispatch session-end --tool copilot'),
     }));
-    expect(builtinHookDefs('claude')).toHaveLength(6);
+    expect(builtinHookDefs('claude').some((d) => d.event === 'SessionEnd')).toBe(false);
   });
 
   it('Claude defs carry no timeout; Cursor defs carry per-hook timeouts', () => {
@@ -50,7 +64,7 @@ describe('applyBuiltinOverride (§4.8)', () => {
     const defs = applyBuiltinOverride(builtinHookDefs('claude'), {
       disabled: ['Hook dispatch post-tool-use TodoWrite'],
     });
-    expect(defs).toHaveLength(5);
+    expect(defs).toHaveLength(builtinHookDefs('claude').length - 1);
     expect(defs.some((d) => d.key === 'Hook dispatch post-tool-use TodoWrite')).toBe(false);
   });
 

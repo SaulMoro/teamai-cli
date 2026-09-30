@@ -2184,6 +2184,15 @@ export async function pull(
           });
         }
 
+        // Credit the sessions whose recall evidence is still pending (a read
+        // after their last Stop, or a Stop that found the votes file busy),
+        // then prune each recall log (#884), before the report so the votes it
+        // credits go out now. Retention runs here, never in a hook.
+        const { drainRecallLog } = await import('./recall-adoption.js');
+        for (const scope of [reconcileProject, reconcileUser]) {
+          if (scope) await drainRecallLog(scope);
+        }
+
         // Each scope keeps its own usage file (#748), so each target truncates
         // only what it reported. Counted before the report: events appended
         // meanwhile survive. A failed target keeps its events; a late success

@@ -54,21 +54,31 @@ const OWNER_ONLY = 0o600;
  * errors; the caller decides whether a lost record is worth reporting.
  */
 export async function appendJsonl(filePath: string, record: object, options: JsonlStoreOptions = {}): Promise<string | null> {
+  return appendJsonlBatch(filePath, [record], options);
+}
+
+/**
+ * Append records in order, under one lock and in one write, or in one side
+ * record when the lock stays held, as {@link appendJsonl} does for one. An
+ * empty batch writes nothing and returns null.
+ */
+export async function appendJsonlBatch(filePath: string, records: object[], options: JsonlStoreOptions = {}): Promise<string | null> {
+  if (records.length === 0) return null;
   const mode = options.mode ?? OWNER_ONLY;
   await ensureDir(path.dirname(filePath));
-  const line = JSON.stringify(record) + '\n';
-  if (await withLock(filePath, options.wait ?? HOOK_LOCK_WAIT, mode, () => appendWhole(filePath, line, mode))) return null;
-  // The lock is still held: record it in a side file of its own for the next
-  // lock holder to fold in, rather than race a rewrite.
+  const lines = records.map((record) => JSON.stringify(record) + '\n').join('');
+  if (await withLock(filePath, options.wait ?? HOOK_LOCK_WAIT, mode, () => appendWhole(filePath, lines, mode))) return null;
+  // The lock is still held: record them in a side file of their own for the
+  // next lock holder to fold in, rather than race a rewrite.
   await options.beforeSideFile?.();
-  // The id lets a fold tell whether this very line is already in the file;
-  // readers drop it, so it never leaves the store.
-  const pendingId = randomUUID();
-  const pendingPath = path.join(path.dirname(filePath), `${pendingPrefix(filePath)}${pendingId}.jsonl`);
+  // Each line's id lets a fold tell whether that very line is already in the
+  // file; readers drop it, so it never leaves the store.
+  const pendingPath = path.join(path.dirname(filePath), `${pendingPrefix(filePath)}${randomUUID()}.jsonl`);
   // It holds what the file holds, so it gets no wider mode than that file;
   // owner-only while there is no file yet.
   const sideMode = await fs.promises.stat(filePath).then((s) => s.mode & 0o777, () => OWNER_ONLY);
-  await fs.promises.writeFile(pendingPath, JSON.stringify({ ...record, pendingId }) + '\n', { encoding: 'utf-8', flag: 'wx', mode: sideMode });
+  const pending = records.map((record) => JSON.stringify({ ...record, pendingId: randomUUID() }) + '\n').join('');
+  await fs.promises.writeFile(pendingPath, pending, { encoding: 'utf-8', flag: 'wx', mode: sideMode });
   return pendingPath;
 }
 
@@ -178,11 +188,11 @@ async function sideRecordPaths(filePath: string): Promise<string[]> {
 }
 
 /**
- * Append the side records to the file, then remove them. Each holds one whole
- * line; one without its newline is still being written and waits for the next
- * holder. A side record whose id the file already holds was folded by a holder
- * that died or could not remove it, so it is not appended again; identical
- * records keep their own ids and lines.
+ * Append the side records to the file, then remove them. Each holds whole
+ * lines; one without its final newline is still being written and waits for
+ * the next holder. A line whose id the file already holds was folded by a
+ * holder that died or could not remove its side record, so it is not appended
+ * again; identical records keep their own ids and lines.
  */
 async function foldSideRecords(filePath: string, mode: number): Promise<void> {
   let folded: Set<string> | undefined;
@@ -190,11 +200,14 @@ async function foldSideRecords(filePath: string, mode: number): Promise<void> {
     try {
       const content = await fs.promises.readFile(pendingPath, 'utf-8');
       if (!content.endsWith('\n')) continue;
-      const id = pendingIdOf(content);
-      folded ??= new Set((await readOrEmpty(filePath).catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined));
-      if (id === undefined || !folded.has(id)) {
-        await appendWhole(filePath, content, mode);
-        if (id !== undefined) folded.add(id);
+      const known = folded ??= new Set((await readOrEmpty(filePath).catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined));
+      const fresh = content.split('\n').filter((line) => {
+        const id = pendingIdOf(line);
+        return line.trim() !== '' && (id === undefined || !known.has(id));
+      });
+      if (fresh.length > 0) {
+        await appendWhole(filePath, fresh.join('\n') + '\n', mode);
+        for (const id of fresh.map(pendingIdOf)) if (id !== undefined) known.add(id);
       }
       await fs.promises.rm(pendingPath, { force: true });
     } catch (e) {

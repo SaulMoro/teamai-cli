@@ -67,6 +67,18 @@
         ],
         "description": "[teamai] Hook dispatch prompt-submit"
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc \"teamai hook-dispatch subagent-stop --tool claude-internal 2>/dev/null\" || true"
+          }
+        ],
+        "description": "[teamai] Hook dispatch subagent-stop"
+      }
     ]
   }
 }

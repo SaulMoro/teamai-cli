@@ -242,9 +242,10 @@ const trackHandler: HookHandler = {
 
 /**
  * PostToolUse: record a recall claim or a read of team knowledge in the recall
- * log, for the reducer votes-sync runs at Stop (#884). One append per run id,
- * doc read or file a search showed lines of, and never a read of the log or
- * of a file, so it stays inside the foreground budget.
+ * log, for the reducer votes-sync runs at Stop and SubagentStop (#884). One
+ * write per call, whatever number of run ids, docs read or files a search
+ * showed lines of it records, and never a read of the log or of a file, so it
+ * stays inside the foreground budget.
  */
 const recallAttributionHandler: HookHandler = {
   name: 'recall-attribution',
@@ -491,7 +492,9 @@ const votesSyncHandler: HookHandler = {
       // context (additionalContext); routing an FYI summary there would pollute
       // the next turn, so we simply skip it for those tools rather than misuse
       // the model channel.
-      if (adoptedDocIds.length > 0) {
+      // A subagent's end is not the end of the turn: the summary waits for Stop.
+      const subagentStop = typeof stdin.hook_event_name === 'string' && stdin.hook_event_name.toLowerCase() === 'subagentstop';
+      if (adoptedDocIds.length > 0 && !subagentStop) {
         const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
         if (!stopStdoutUnsupported(tool)) {
           const { formatStopHookOutput } = await import('./utils/hook-output.js');
@@ -838,6 +841,12 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'stop', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     { event: 'stop', matcher: '*', handler: localAgentHandler, timeoutMs: LOCAL_AGENT_TIMEOUT_MS, background: true },
     { event: 'stop', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
+
+    // ─── SubagentStop ─────────────────────────────────
+    // A subagent can finish after the session's last Stop (a background
+    // worker): votes-sync credits what it read then (#884). Only the agents in
+    // SUBAGENT_STOP_TOOLS (builtin-hooks.ts) register it.
+    { event: 'subagent-stop', matcher: '*', handler: votesSyncHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
 
     // ─── PostToolUse ──────────────────────────────────
     { event: 'post-tool-use', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },

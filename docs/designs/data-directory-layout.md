@@ -703,7 +703,7 @@ read. Local votes followed for the same reason (#787): `<dataHome>/votes/`, and
 pushes only the votes cast where it is set up. The old shared `~/.teamai/votes/`
 is never read, and its pending deltas are not pushed. The recall log sits beside
 them (#884): `<dataHome>/dashboard/recall.jsonl` in every scope (`dashboard/` is
-already ignored in a workspace `.teamai/`), local and owner-only, never pushed. The dashboard stays an A2
+already ignored in a workspace `.teamai/`), local and owner-only, never pushed, and pruned only by `pull` (30 days, then 5,000 lines). The dashboard stays an A2
 singleton: `teamai dashboard`, `session save` and the contribute check read
 across scopes; `stats --by-repo` reads only the current scope's events, as the
 rest of `stats` does (#795). Each event instead
