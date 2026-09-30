@@ -377,6 +377,16 @@ describe('doctor — rules delivered on disk', () => {
       expect(check.fix).not.toContain('--force');
     });
 
+    it('passes without a block when every team rule is frontmatter only, since pull writes none', async () => {
+      for (const name of ['coding-style', 'reviews']) {
+        await fse.writeFile(path.join(repoPath, 'rules', `${name}.md`), '---\npaths:\n  - "src/**"\n---\n');
+      }
+      await fse.writeFile(agentsMd, 'My own instructions\n');
+
+      const check = (await namedCheck(CODEX))!;
+      expect(await check.check()).toBe(true);
+    });
+
     it('fails when the block holds a stale rule set', async () => {
       await fse.writeFile(agentsMd, CURRENT_BLOCK.replace('\n\nBody of reviews', '') + '\n');
 

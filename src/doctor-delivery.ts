@@ -401,11 +401,13 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
       ? content.slice(start, end + TEAMAI_TEAM_RULES_END.length)
       : null;
     // Codex reads AGENTS.override.md instead of AGENTS.md in the same
-    // directory, so a current block there is never seen.
+    // directory, so a current block there is never seen. An empty or
+    // whitespace-only override shadows it too (checked with `codex exec`).
     const override = path.join(path.dirname(file), 'AGENTS.override.md');
     const shadowed = await isReadableFile(override);
     const problems: string[] = [];
-    if (delivered === null) {
+    // With no rule body to inline (`expected === null`), pull writes no block.
+    if (delivered === null && expected !== null) {
       problems.push(`${file} carries no team-rules block, so ${tools.join(', ')} reads none of the team `
         + 'rules. Run `teamai pull` to restore it.');
     } else if (delivered !== expected) {
@@ -413,7 +415,7 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
         + 'standing instructions from this file rather than a rules directory, so a stale block '
         + 'is a stale rule set. Run `teamai pull` to rewrite it.');
     }
-    if (shadowed) {
+    if (shadowed && expected !== null) {
       problems.push(`${override} exists, so Codex reads it instead of ${file} and never sees the `
         + 'team rules. Move its content into AGENTS.md, or delete it.');
     }
