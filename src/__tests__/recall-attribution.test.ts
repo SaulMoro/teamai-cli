@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import type { LocalConfig } from '../types.js';
+import type { ExtensionContext } from './helpers/pi-extensions.js';
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -54,6 +55,7 @@ const { getProjectSearchIndexPath, getUserLearningsDir, getUserSearchIndexPath, 
 const { readRecallLog, recallLogPath } = await import('../recall-log.js');
 const { parseTranscriptForVotes } = await import('../transcript-parser.js');
 const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
+const { loadOmpExtension, loadPiExtension } = await import('./helpers/pi-extensions.js');
 
 const SESSION = 'sess-main';
 /** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
@@ -73,6 +75,13 @@ const COPILOT_CHILD = '9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d';
 /** An OpenCode session, and the child session its `task` tool runs a subagent in. */
 const OPENCODE = 'ses_parent';
 const OPENCODE_CHILD = 'ses_child';
+/** A Pi session (its bash tool's PI_SESSION_ID). */
+const PI = 'pi-sess';
+/** An OMP session, and the recall subagent's own session, with the ctx.agent OMP >= 18.3.2 gives each. */
+const OMP = 'omp-main';
+const OMP_SUB = 'omp-sub';
+const OMP_MAIN_AGENT: OmpAgent = { kind: 'main', id: 'Main', name: 'main', depth: 0 };
+const OMP_RECALL_AGENT: OmpAgent = { kind: 'sub', id: '0-TeamaiRecall', name: 'teamai-recall', depth: 1, parentId: 'Main' };
 
 /** Cursor's `tool_output`: the tool's result as a JSON string. */
 function cursorOutput(result: Record<string, unknown>): Record<string, unknown> {
@@ -97,6 +106,9 @@ interface Subagent {
 /** The recall subagent as Claude Code reports it: `agent_type` is the agent file's `name`. */
 const RECALL_SUBAGENT: Subagent = { id: 'agent-recall', type: 'teamai-recall' };
 const GENERAL_SUBAGENT: Subagent = { id: 'agent-general', type: 'general-purpose' };
+
+/** OMP's `ctx.agent` (ExtensionAgentIdentity). */
+type OmpAgent = NonNullable<ExtensionContext['agent']>;
 
 interface RecallRun {
   /** recall's stdout. */
@@ -389,6 +401,55 @@ class Harness {
   /** `session` goes idle: OpenCode's Stop. */
   async openCodeIdle(session: string): Promise<void> {
     await this.openCode('event', { event: { type: 'session.idle', properties: { sessionID: session } } });
+  }
+
+  private piExt?: ReturnType<typeof loadPiExtension>;
+  private ompExt?: ReturnType<typeof loadOmpExtension>;
+
+  /**
+   * The host fires `event` at the generated Pi or OMP extension (evaluated in
+   * a `vm`) with the context of `session` (and OMP's `agent`), from the
+   * project root. Each `teamai hook-dispatch` it runs goes to the real
+   * dispatcher with the payload the extension wrote.
+   */
+  async bridge(tool: 'pi' | 'omp', event: string, payload: Record<string, unknown>, session: string, agent?: OmpAgent): Promise<void> {
+    const ext = tool === 'pi' ? (this.piExt ??= loadPiExtension()) : (this.ompExt ??= loadOmpExtension());
+    await ext.on[event](payload, { cwd: this.root, sessionManager: { getSessionId: () => session }, ...(agent ? { agent } : {}) });
+    for (const { args: argv, payload: stdin } of ext.dispatches.splice(0)) {
+      await this.dispatch(argv[1], { session_id: undefined, ...stdin }, null, tool);
+    }
+  }
+
+  /** A Pi tool call in `session`: `tool_execution_start` caches its input, `tool_execution_end` carries its text result. */
+  async piTool(session: string, toolName: string, args: Record<string, unknown>, text: string, isError = false): Promise<void> {
+    await this.bridge('pi', 'tool_execution_start', { toolCallId: `call-${toolName}`, toolName, args }, session);
+    await this.bridge('pi', 'tool_execution_end',
+      { toolCallId: `call-${toolName}`, toolName, result: { content: [{ type: 'text', text }], details: {} }, isError }, session);
+  }
+
+  /** Pi's bash tool in `session` runs `teamai recall`, with PI_SESSION_ID set to that session as Pi sets it. */
+  async piRecall(query: string, session: string): Promise<RecallRun> {
+    const run = await this.recall(query, { env: { PI_SESSION_ID: session }, claim: false });
+    await this.piTool(session, 'bash', { command: `teamai recall "${query}"` }, run.output);
+    return run;
+  }
+
+  /** An OMP `tool_result` in `session` (by `agent`), with its text content. */
+  async ompTool(session: string, toolName: string, input: Record<string, unknown>, text: string, agent?: OmpAgent): Promise<void> {
+    await this.bridge('omp', 'tool_result',
+      { type: 'tool_result', toolCallId: `call-${toolName}`, toolName, input, content: [{ type: 'text', text }], isError: false },
+      session, agent);
+  }
+
+  /**
+   * OMP's bash tool in `session` (by `agent`) runs `teamai recall`. OMP sets
+   * no session variable in its shell, so only the tool result's claim settles it.
+   */
+  async ompRecall(query: string, session: string, options: { caller?: string; agent?: OmpAgent } = {}): Promise<RecallRun> {
+    const run = await this.recall(query, { env: {}, caller: options.caller, claim: false });
+    const command = `teamai recall${options.caller ? ` --caller ${options.caller}` : ''} "${query}"`;
+    await this.ompTool(session, 'bash', { command }, run.output, options.agent);
+    return run;
   }
 
   /** Upvotes per doc in a scope's own votes file. */
@@ -1331,6 +1392,64 @@ const ROWS: Row[] = [
       const { files } = await h.openCodeRecall('redis timeout', OPENCODE);
       await h.openCodeBash(OPENCODE, `cat '${files[0]}'`, `cat: ${files[0]}: Permission denied`, 1);
       await h.openCodeIdle(OPENCODE);
+    },
+    project: {},
+  },
+  {
+    name: '10: Pi recall with PI_SESSION_ID, then a read of the doc, then Stop → +1',
+    trace: async (h) => {
+      await h.bridge('pi', 'session_start', {}, PI);
+      const { files } = await h.piRecall('redis timeout', PI);
+      await h.piTool(PI, 'read', { path: files[0] }, fs.readFileSync(files[0], 'utf-8'));
+      await h.bridge('pi', 'agent_settled', {}, PI);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '10: Pi cat of the doc that exits non-zero → 0',
+    trace: async (h) => {
+      const { files } = await h.piRecall('redis timeout', PI);
+      await h.piTool(PI, 'bash', { command: `cat '${files[0]}'` }, `cat: ${files[0]}: Permission denied\n\nCommand exited with code 1`, true);
+      await h.bridge('pi', 'agent_settled', {}, PI);
+    },
+    project: {},
+  },
+  {
+    name: '10: OMP main-agent recall, then a read with a selector suffix (:50-200) → +1',
+    trace: async (h) => {
+      const { files } = await h.ompRecall('redis timeout', OMP, { agent: OMP_MAIN_AGENT });
+      await h.ompTool(OMP, 'read', { path: `${files[0]}:50-200` }, '---', OMP_MAIN_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP, OMP_MAIN_AGENT);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '10: OMP read of C:\\kb\\learnings\\redis-timeout.md:raw keeps the drive colon → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      const { files } = await h.ompRecall('redis timeout', OMP);
+      expect(files).toEqual([WINDOWS_DOC]);
+      await h.ompTool(OMP, 'read', { path: `${WINDOWS_DOC}:raw` }, '---');
+      await h.bridge('omp', 'session_stop', {}, OMP);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '10: OMP recall subagent reads the doc → 0',
+    trace: async (h) => {
+      const { files } = await h.ompRecall('redis timeout', OMP_SUB, { caller: 'teamai-recall', agent: OMP_RECALL_AGENT });
+      await h.ompTool(OMP_SUB, 'read', { path: files[0] }, '---', OMP_RECALL_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP_SUB, OMP_RECALL_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP);
+    },
+    project: {},
+  },
+  {
+    name: '10: OMP recall subagent without --caller is marked by the agent type ctx.agent names; its own read → 0',
+    trace: async (h) => {
+      const { files } = await h.ompRecall('redis timeout', OMP_SUB, { agent: OMP_RECALL_AGENT });
+      await h.ompTool(OMP_SUB, 'read', { path: files[0] }, '---', OMP_RECALL_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP_SUB, OMP_RECALL_AGENT);
     },
     project: {},
   },

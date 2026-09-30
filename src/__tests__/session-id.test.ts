@@ -103,14 +103,8 @@ describe('agentSessionIdFromEnv', () => {
             'CURSOR_CONVERSATION_ID',
             'CLAUDE_SESSION_ID',
             'TEAMAI_AGENT_SESSION_ID',
+            'PI_SESSION_ID',
         ]);
-    });
-
-    // Pi's hook bridge sends no session id, so its hooks record under the
-    // pid fallback; PI_SESSION_ID would name a session with no events.
-    it('ignores PI_SESSION_ID, which Pi hooks never receive', async () => {
-        vi.stubEnv('PI_SESSION_ID', 'pi-session');
-        expect(await agentSessionIdFromEnv()).toBeUndefined();
     });
 
     it.each(AGENT_SESSION_ENV)('returns %s', async (name) => {
@@ -134,13 +128,11 @@ describe('agentSessionIdFromEnv', () => {
         expect(await agentSessionIdFromEnv()).toBeUndefined();
     });
 
-    // Pi exports none of AGENT_SESSION_ENV, and its hooks record under the pid
-    // fallback. Started from Claude Code's shell, it inherits its variable,
-    // which would file its work under the Claude session.
-    it('returns undefined under the Pi bridge marker, even with an inherited variable', async () => {
-        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+    // Pi's bash tool sets PI_SESSION_ID to the session TeamAI's Pi extension
+    // sends on every event (#884).
+    it('reads the Pi session from PI_SESSION_ID in a Pi shell', async () => {
         vi.stubEnv('PI_SESSION_ID', 'pi-session');
-        expect(await agentSessionIdFromEnv()).toBeUndefined();
+        expect(await agentSessionFromEnv()).toEqual({ id: 'pi-session', agent: 'pi', unambiguous: true });
     });
 
     // The OpenCode plugin sets TEAMAI_AGENT_SESSION_ID in its bash tool's
@@ -230,6 +222,20 @@ describe('agentSessionIdFromEnv', () => {
             expect(await agentSessionFromEnv()).toEqual({ id: 'inner-claude', agent: 'claude', unambiguous: false });
         });
 
+        // Pi started from Claude Code's shell inherits CLAUDE_CODE_SESSION_ID
+        // next to its own PI_SESSION_ID; its extension records its session start.
+        it('picks Pi started from a Claude Code shell, by its later session start', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+            vi.stubEnv('PI_SESSION_ID', 'inner-pi');
+            writeEvents([
+                { sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z', type: 'session_start' },
+                { sessionId: 'inner-pi', timestamp: '2026-09-28T10:05:00.000Z', type: 'session_start' },
+            ]);
+            expect(await agentSessionFromEnv()).toEqual({ id: 'inner-pi', agent: 'pi', unambiguous: false });
+        });
+
         it('falls back to the variable order when no set session has events', async () => {
             home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
             vi.stubEnv('HOME', home);
@@ -270,10 +276,7 @@ describe('agentSessionFromEnv', () => {
         expect(await agentSessionFromEnv()).toEqual({ id: 'outer-claude', agent: 'claude', unambiguous: false });
     });
 
-    it('has no session and is not unambiguous when no variable is set, or under a bridge marker', async () => {
-        expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
-        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
-        vi.stubEnv('PI_SESSION_ID', 'pi-session');
+    it('has no session and is not unambiguous when no variable is set', async () => {
         expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
     });
 });

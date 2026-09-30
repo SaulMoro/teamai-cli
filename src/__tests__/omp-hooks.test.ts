@@ -24,6 +24,7 @@ import {
 } from '../omp-hooks.js';
 import { reconcileHooksToAllTools } from '../hooks.js';
 import { log } from '../utils/logger.js';
+import { loadOmpExtension } from './helpers/pi-extensions.js';
 
 describe('resolveOmpExtensionsDir', () => {
   it('always targets the user agent dir (single-copy policy)', () => {
@@ -187,5 +188,61 @@ describe('reconcileHooksToAllTools routes omp to the extension adapter', () => {
     await fse.ensureDir(path.join(home, '.omp', 'agent'));
     await reconcileHooksToAllTools(toolPaths, home, [], manifest(), { settingsOnly: true });
     expect(await fse.pathExists(extFile())).toBe(false);
+  });
+});
+
+// Recall attribution (#884): the extension evaluated in `vm`, with a fake host.
+describe('OMP extension: bridge payloads (#884)', () => {
+  const main = { cwd: '/work/proj', sessionManager: { getSessionId: () => 'omp-main' }, agent: { kind: 'main' as const, id: 'Main', name: 'main', depth: 0 } };
+  const sub = {
+    cwd: '/work/proj', sessionManager: { getSessionId: () => 'omp-sub' },
+    agent: { kind: 'sub' as const, id: '0-TeamaiRecall', name: 'teamai-recall', depth: 1, parentId: 'Main' },
+  };
+
+  it('sends the host session id on every lifecycle event, and no agent fields for the main agent', async () => {
+    const { on, dispatches } = loadOmpExtension();
+    await on.session_start({}, main);
+    await on.before_agent_start({ prompt: 'hi' }, main);
+    await on.session_stop({}, main);
+    expect(dispatches.map((d) => [d.args[1], d.payload])).toEqual([
+      ['session-start', { cwd: '/work/proj', session_id: 'omp-main' }],
+      ['prompt-submit', { cwd: '/work/proj', session_id: 'omp-main', prompt: 'hi' }],
+      ['stop', { cwd: '/work/proj', session_id: 'omp-main' }],
+    ]);
+    expect(dispatches.every((d) => d.args.join(' ').endsWith('--tool omp'))).toBe(true);
+  });
+
+  it('sends the text output and the status on post-tool-use', async () => {
+    const { on, dispatches } = loadOmpExtension();
+    await on.tool_result({ type: 'tool_result', toolCallId: 'c1', toolName: 'bash', input: { command: 'ls' },
+      content: [{ type: 'text', text: 'a.md' }, { type: 'image', data: 'AAAA' }, { type: 'text', text: 'b.md' }], isError: false }, main);
+    await on.tool_result({ type: 'tool_result', toolCallId: 'c2', toolName: 'bash', input: { command: 'false' },
+      content: [{ type: 'text', text: 'Command exited with code 1' }], isError: true }, main);
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', session_id: 'omp-main', tool_name: 'bash', tool_input: { command: 'ls' }, tool_response: 'a.md\nb.md', tool_status: 'success' },
+      { cwd: '/work/proj', session_id: 'omp-main', tool_name: 'bash', tool_input: { command: 'false' }, tool_response: 'Command exited with code 1', tool_status: 'failure' },
+    ]);
+  });
+
+  it('sends a subagent\'s agent id and type on its events', async () => {
+    const { on, dispatches } = loadOmpExtension();
+    await on.session_start({}, sub);
+    await on.tool_result({ type: 'tool_result', toolCallId: 'c1', toolName: 'read', input: { path: 'x.md' }, content: [], isError: false }, sub);
+    await on.session_stop({}, sub);
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall' },
+      { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall', tool_name: 'read', tool_input: { path: 'x.md' }, tool_response: '', tool_status: 'success' },
+      { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall' },
+    ]);
+  });
+
+  it('still dispatches on an older host with no ctx.agent (below 18.3.2), no session manager and no result fields', async () => {
+    const { on, dispatches } = loadOmpExtension();
+    await on.session_start({}, { cwd: '/work/proj', sessionManager: { getSessionId: () => 'omp-old' } });
+    await on.tool_result({ toolName: 'read', input: { path: 'x.md' } }, { cwd: '/work/proj' });
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', session_id: 'omp-old' },
+      { cwd: '/work/proj', tool_name: 'read', tool_input: { path: 'x.md' }, tool_status: 'unknown' },
+    ]);
   });
 });

@@ -58,16 +58,33 @@ export function buildPiExtensionSource(): string {
 //
 // Bridges Pi extension events to the shared teamai hook-dispatch entry
 // point. The child process receives the same JSON payload as shell-based hooks
-// (cwd / tool_name / tool_input / prompt). Errors and timeouts are swallowed so
-// a missing teamai binary never blocks the Pi session.
+// (cwd / session_id / tool_name / tool_input / prompt, and on post-tool-use the
+// tool's text output and status). Errors and timeouts are swallowed so a
+// missing teamai binary never blocks the Pi session.
 
 import { spawn } from "node:child_process";
+
+/** The host session id (Pi's bash tool exports it as PI_SESSION_ID), read defensively. */
+const sessionOf = (ctx) => {
+  try {
+    const id = ctx && ctx.sessionManager && ctx.sessionManager.getSessionId();
+    return typeof id === "string" && id ? { session_id: id } : {};
+  } catch {
+    return {};
+  }
+};
+
+/** A tool result's text parts, joined; undefined when it has no content list. */
+const textOf = (content) => Array.isArray(content)
+  ? content.filter((part) => part && part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\\n")
+  : undefined;
 
 /** @param {any} pi Pi ExtensionAPI */
 export default function teamaiHooks(pi) {
   const toolInputs = new Map();
-  const dispatch = async (event, cwd, payload) => {
+  const dispatch = async (event, ctx, payload) => {
     try {
+      const cwd = ctx.cwd;
       const command = process.platform === "win32" ? "teamai.cmd" : "teamai";
       const args = ["hook-dispatch", event, "--tool", "pi"];
       const child = spawn(command, args, {
@@ -76,7 +93,7 @@ export default function teamaiHooks(pi) {
         windowsHide: true,
         shell: process.platform === "win32",
       });
-      const stdin = JSON.stringify({ cwd, ...(payload || {}) });
+      const stdin = JSON.stringify({ cwd, ...sessionOf(ctx), ...(payload || {}) });
       child.stdin?.on("error", () => {});
       child.stdin?.end(stdin);
       await new Promise((resolve) => {
@@ -100,25 +117,29 @@ export default function teamaiHooks(pi) {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    await dispatch("session-start", ctx.cwd);
+    await dispatch("session-start", ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    await dispatch("stop", ctx.cwd);
+    await dispatch("stop", ctx);
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    await dispatch("prompt-submit", ctx.cwd, { prompt: event.prompt });
+    await dispatch("prompt-submit", ctx, { prompt: event.prompt });
   });
 
   pi.on("tool_execution_start", async (event) => {
     toolInputs.set(event.toolCallId, event.args);
   });
 
+  // The result is what the model saw; isError is set for a failed call,
+  // including a bash command that exits non-zero.
   pi.on("tool_execution_end", async (event, ctx) => {
-    await dispatch("post-tool-use", ctx.cwd, {
+    await dispatch("post-tool-use", ctx, {
       tool_name: event.toolName,
       tool_input: toolInputs.get(event.toolCallId) || {},
+      tool_response: textOf(event.result && event.result.content),
+      tool_status: event.isError === true ? "failure" : event.isError === false ? "success" : "unknown",
     });
     toolInputs.delete(event.toolCallId);
   });

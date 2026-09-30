@@ -67,6 +67,12 @@ export function resolveOmpExtensionsDir(): string {
  *     `tool_name` / `tool_input` / `prompt` off STDIN, and the
  *     provider-config gate reads `cwd` to pick the project-scope config.
  *     The extension forwards `ctx.cwd` plus the per-event fields.
+ *   - Recall attribution (#884): every event also carries the host's
+ *     `session_id` (`ctx.sessionManager.getSessionId()`, a subagent's own
+ *     session), and a subagent's events its `agent_id` / `agent_type` from
+ *     `ctx.agent`, which only OMP >= 18.3.2 has: it is read only when present.
+ *     `tool_result` also carries the tool's text output and a status from
+ *     `isError`.
  *   - Tool naming: OMP passes lowercase tool ids (`bash`, `read`, …) and has
  *     no `Skill` / `TodoWrite` tool to map onto Claude's PascalCase matcher
  *     names, so there is no matcher-scoped pass — only the wildcard
@@ -78,16 +84,41 @@ export function buildOmpExtensionSource(): string {
 //
 // Bridges OMP extension events to \`teamai hook-dispatch\`, mirroring the
 // Claude built-in hook set. Feeds the same STDIN JSON payload other agents
-// send (cwd / tool_name / tool_input / prompt) so the track / hint handlers
-// and project-scope gating work. Errors are swallowed; dispatches run for
-// their side effects (status report / sync / update) and never block the
-// agent.
+// send (cwd / session_id / tool_name / tool_input / prompt, a subagent's
+// agent_id / agent_type, and on post-tool-use the tool's text output and
+// status) so the track / hint / recall handlers and project-scope gating work.
+// Errors are swallowed; dispatches run for their side effects (status report /
+// sync / update) and never block the agent.
 //
 // NOTE: OMP awaits session_stop before the session settles; this handler
 // returns nothing on purpose — the \`continue\` / \`decision\` result fields
 // would force a session continuation.
 
 import { $ } from "bun";
+
+/**
+ * The session this handler serves (a subagent's own), and for a subagent its
+ * identity. ctx.agent exists only from OMP 18.3.2, so each field is read
+ * defensively.
+ */
+const sessionOf = (ctx) => {
+  const fields = {};
+  try {
+    const id = ctx.sessionManager && ctx.sessionManager.getSessionId();
+    if (typeof id === "string" && id) fields.session_id = id;
+  } catch {}
+  const agent = ctx.agent;
+  if (agent && agent.kind === "sub" && typeof agent.id === "string" && agent.id) {
+    fields.agent_id = agent.id;
+    if (typeof agent.name === "string" && agent.name) fields.agent_type = agent.name;
+  }
+  return fields;
+};
+
+/** A tool result's text parts, joined; undefined when it has no content list. */
+const textOf = (content) => Array.isArray(content)
+  ? content.filter((part) => part && part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\\n")
+  : undefined;
 
 /** @param {any} pi OMP ExtensionAPI */
 export default function teamaiHooks(pi) {
@@ -96,10 +127,10 @@ export default function teamaiHooks(pi) {
   // hook-dispatch's handlers read. No matcher pass: OMP's tool ids are
   // lowercase (bash / read / edit / write / ...) and it has no Skill /
   // TodoWrite tool to map onto Claude's PascalCase matchers.
-  const dispatch = async (event, cwd, payload) => {
+  const dispatch = async (event, ctx, payload) => {
     try {
       const args = ["hook-dispatch", event, "--tool", "omp"];
-      const stdin = JSON.stringify({ cwd, ...(payload || {}) });
+      const stdin = JSON.stringify({ cwd: ctx.cwd, ...sessionOf(ctx), ...(payload || {}) });
       // Redirect the payload into STDIN via a Response (Bun shell can only
       // redirect Response/Buffer/Blob, not a bare string). .quiet() suppresses
       // output; .nothrow() keeps a non-zero exit (e.g. no teamai on PATH)
@@ -111,21 +142,25 @@ export default function teamaiHooks(pi) {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    await dispatch("session-start", ctx.cwd);
+    await dispatch("session-start", ctx);
   });
 
   pi.on("session_stop", async (_event, ctx) => {
-    await dispatch("stop", ctx.cwd);
+    await dispatch("stop", ctx);
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    await dispatch("prompt-submit", ctx.cwd, { prompt: event.prompt });
+    await dispatch("prompt-submit", ctx, { prompt: event.prompt });
   });
 
+  // content is what the model saw; isError is set for a failed call,
+  // including a bash command that exits non-zero.
   pi.on("tool_result", async (event, ctx) => {
-    await dispatch("post-tool-use", ctx.cwd, {
+    await dispatch("post-tool-use", ctx, {
       tool_name: event.toolName,
       tool_input: event.input,
+      tool_response: textOf(event.content),
+      tool_status: event.isError === true ? "failure" : event.isError === false ? "success" : "unknown",
     });
   });
 }

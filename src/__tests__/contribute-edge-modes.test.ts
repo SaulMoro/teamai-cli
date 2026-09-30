@@ -140,13 +140,20 @@ describe('marking the agent session contributed', () => {
     expect((await readContributeState('claude-session')).contributed).toBe(true);
   });
 
-  it('does not mark an outer Claude Code session from a Pi shell it started', async () => {
+  it('marks the Pi session, not the outer Claude Code session, from a Pi shell it started', async () => {
     initEmptySelfRepo();
     vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
     vi.stubEnv('PI_SESSION_ID', 'pi-session');
+    // Pi started from Claude Code's shell: its extension records its own session start, later (#884).
+    fs.mkdirSync(path.join(process.env.HOME!, '.teamai', 'dashboard'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.HOME!, '.teamai', 'dashboard', 'events.jsonl'), [
+      { type: 'session_start', tool: 'claude', sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z' },
+      { type: 'session_start', tool: 'pi', sessionId: 'pi-session', timestamp: '2026-09-28T10:05:00.000Z' },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 
     await contribute({ scope: 'project', title: 'nested pi', file: note('# knowledge') });
 
     expect((await readContributeState('outer-claude')).contributed).toBe(false);
+    expect((await readContributeState('pi-session')).contributed).toBe(true);
   });
 });

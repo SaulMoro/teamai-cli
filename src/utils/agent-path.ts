@@ -42,6 +42,35 @@ export function pathKey(p: string): string {
   return key.length > 1 && key.endsWith('/') && !/^[a-z]:\/$/.test(key) ? key.slice(0, -1) : key;
 }
 
+/**
+ * One OMP `read` selector: a line range list (`50`, `50-200`, `50-`, `50+150`,
+ * `L50..60`, `5-16,960-973`), a tail (`-60`), or a view (`raw`, `conflicts`,
+ * `img`). The grammar of OMP's own path splitter (`splitPathAndSel`).
+ */
+const RANGE = String.raw`L?\d+(?:(?:\.\.|[-+])L?\d*)?(?<=[\d.-])`;
+const RANGES = `${RANGE}(?:,${RANGE})*`;
+const SELECTOR = new RegExp(`^(?:${RANGES}|-\\d+|raw|conflicts|img)$`, 'i');
+const RANGE_ONLY = new RegExp(`^(?:${RANGES}|-\\d+)$`, 'i');
+
+/**
+ * `p` without the selector an OMP `read` path can carry inline (`x.md:50-200`,
+ * `x.md:raw`, `x.md:1-50:raw`, `x.md:raw:1-50`), as OMP splits it. A drive
+ * letter's colon (`C:\kb\x.md`) is never a selector's.
+ */
+export function withoutReadSelector(p: string): string {
+  const split = (s: string): [string, string] | undefined => {
+    const colon = s.lastIndexOf(':');
+    const floor = /^[A-Za-z]:/.test(s) ? 1 : 0;
+    return colon > floor ? [s.slice(0, colon), s.slice(colon + 1)] : undefined;
+  };
+  const outer = split(p);
+  if (!outer || !SELECTOR.test(outer[1])) return p;
+  const inner = split(outer[0]);
+  const raw = (chunk: string) => chunk.toLowerCase() === 'raw';
+  if (inner && ((raw(inner[1]) && RANGE_ONLY.test(outer[1])) || (RANGE_ONLY.test(inner[1]) && raw(outer[1])))) return inner[0];
+  return outer[0];
+}
+
 /** Whether `a` and `b` name the same file, each written on either platform. */
 export function samePath(a: string, b: string): boolean {
   return isAbsolutePath(a) === isAbsolutePath(b) && pathKey(a) === pathKey(b);

@@ -299,13 +299,20 @@ describe('recall scope isolation (issue #73)', () => {
     expect(applyPhase2Adjustments(0, hookSessionId).isKnowledgeGap).toBe(true);
   });
 
-  it('leaves the outer session alone when recall runs from a Pi shell started by Claude Code', async () => {
+  it('records under the Pi session, not the outer one, when recall runs from a Pi shell started by Claude Code', async () => {
     vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
     vi.stubEnv('PI_SESSION_ID', 'pi-session');
+    // Pi started from Claude Code's shell: its extension records its own session start, later (#884).
+    fse.mkdirSync(path.join(homeDir, '.teamai', 'dashboard'), { recursive: true });
+    fse.writeFileSync(path.join(homeDir, '.teamai', 'dashboard', 'events.jsonl'), [
+      { type: 'session_start', tool: 'claude', sessionId: 'outer-claude', timestamp: '2026-09-28T10:00:00.000Z' },
+      { type: 'session_start', tool: 'pi', sessionId: 'pi-session', timestamp: '2026-09-28T10:05:00.000Z' },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
     vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
 
     await recall('completely unrelated gibberish query xyzzy', { dryRun: true });
 
     expect(readRecallQuality('outer-claude')).toBeNull();
+    expect(readRecallQuality('pi-session')).toEqual(expect.objectContaining({ hitCount: 0, missCount: 1 }));
   });
 });

@@ -53,6 +53,7 @@ import {
 import { reconcileHooksToAllTools } from '../hooks.js';
 import { log } from '../utils/logger.js';
 import type { HookDef } from '../types.js';
+import { loadPiExtension } from './helpers/pi-extensions.js';
 
 describe('Pi hook extension', () => {
   let tmp: string;
@@ -362,5 +363,49 @@ describe('Pi hook extension', () => {
       .toContain('}, 45000);');
     expect(buildPiAgentHookExtensionSource('default', 'SessionStart', 'echo default'))
       .toContain('}, 10000);');
+  });
+});
+
+// Recall attribution (#884): the extension evaluated in `vm`, with a fake host.
+describe('Pi extension: bridge payloads (#884)', () => {
+  const ctx = { cwd: '/work/proj', sessionManager: { getSessionId: () => 'pi-sess' } };
+
+  it('sends the host session id on every lifecycle event', async () => {
+    const { on, dispatches } = loadPiExtension();
+    await on.session_start({}, ctx);
+    await on.before_agent_start({ prompt: 'hi' }, ctx);
+    await on.agent_settled({}, ctx);
+    expect(dispatches.map((d) => [d.args[1], d.payload])).toEqual([
+      ['session-start', { cwd: '/work/proj', session_id: 'pi-sess' }],
+      ['prompt-submit', { cwd: '/work/proj', session_id: 'pi-sess', prompt: 'hi' }],
+      ['stop', { cwd: '/work/proj', session_id: 'pi-sess' }],
+    ]);
+    expect(dispatches.every((d) => d.args.join(' ').endsWith('--tool pi'))).toBe(true);
+  });
+
+  it('sends the cached input, the text output and the status on post-tool-use', async () => {
+    const { on, dispatches } = loadPiExtension();
+    const end = async (toolCallId: string, isError: boolean | undefined, content: unknown[]) => {
+      await on.tool_execution_start({ toolCallId, toolName: 'bash', args: { command: 'cat x.md' } }, ctx);
+      await on.tool_execution_end({ toolCallId, toolName: 'bash', result: { content, details: {} }, isError }, ctx);
+    };
+    await end('c1', false, [{ type: 'text', text: 'line one' }, { type: 'image', data: 'AAAA' }, { type: 'text', text: 'line two' }]);
+    await end('c2', true, [{ type: 'text', text: 'cat: x.md: No such file\n\nCommand exited with code 1' }]);
+    await end('c3', undefined, []);
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: 'line one\nline two', tool_status: 'success' },
+      { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: 'cat: x.md: No such file\n\nCommand exited with code 1', tool_status: 'failure' },
+      { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: '', tool_status: 'unknown' },
+    ]);
+  });
+
+  it('still dispatches on a host with no session manager and no result', async () => {
+    const { on, dispatches } = loadPiExtension();
+    await on.session_start({}, { cwd: '/work/proj' });
+    await on.tool_execution_end({ toolCallId: 'c1', toolName: 'read' }, { cwd: '/work/proj' });
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj' },
+      { cwd: '/work/proj', tool_name: 'read', tool_input: {}, tool_status: 'unknown' },
+    ]);
   });
 });

@@ -14,7 +14,7 @@
  * agent adds its tool names to CATEGORY_OF and its output fields to
  * responseOf. A name not listed here is `unknown` and never counts.
  */
-import { isAbsolutePath, isWithin, resolvePath, samePath } from './agent-path.js';
+import { isAbsolutePath, isWithin, resolvePath, samePath, withoutReadSelector } from './agent-path.js';
 import { resolveHookCwd } from './hook-cwd.js';
 import { classifyShellCommand } from './shell-command.js';
 import { normalizeToolName } from './tool-names.js';
@@ -86,6 +86,9 @@ const LISTS_BY_DEFAULT = new Set(['Grep', 'grep_code']);
  */
 const NO_SEARCH_EVIDENCE = new Set(['omp', 'cursor']);
 
+/** Agents whose read path can carry a selector inline (OMP's `x.md:50-200`, `x.md:raw`). */
+const READ_SELECTORS = new Set(['omp']);
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -112,7 +115,7 @@ function responseOf(stdin: Record<string, unknown>): unknown {
  * on success; an `exitCode` (Cursor's Shell, CodeBuddy IDE, Qoder, ZCode)
  * tells a failure apart, and so does Copilot's `result_type`. Codex sends its
  * output as a plain string with no exit code: unknown. A generated bridge
- * (OpenCode) sends the status it normalized from the host as `tool_status`.
+ * (OpenCode, Pi, OMP) sends the status it normalized from the host as `tool_status`.
  */
 function statusOf(stdin: Record<string, unknown>, response: unknown): ToolStatus {
   const bridged = stdin.tool_status;
@@ -191,7 +194,8 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
     // `filePath`: CodeBuddy IDE's `read_file` (unverified); `path`: Copilot's `view`, and Cursor's Read too.
     const file = input.file_path ?? input.filePath ?? input.path;
     if (typeof file !== 'string' || !file.trim()) return unknown;
-    return { category, paths: [resolvePath(file, cwd)], status, simple: true };
+    const spelled = READ_SELECTORS.has(agent ?? '') ? withoutReadSelector(file) : file;
+    return { category, paths: [resolvePath(spelled, cwd)], status, simple: true };
   }
   if (category === 'list') return { category, paths: [], status, simple: true };
 

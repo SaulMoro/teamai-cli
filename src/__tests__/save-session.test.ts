@@ -62,10 +62,15 @@ describe('session save default session', () => {
     expect(recordedSession()).toBe('pid-4242');
   });
 
-  it('records the most recent session from a Pi shell started by Claude Code', async () => {
+  // Pi's extension records its own session start, after the outer session's events (#884).
+  it('records the Pi session from a Pi shell started by Claude Code', async () => {
     vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'claudeid-session');
-    vi.stubEnv('PI_SESSION_ID', 'pi-session');
+    vi.stubEnv('PI_SESSION_ID', 'pisession-1');
+    writeEvents([
+      { sessionId: 'claudeid-session', timestamp: '2026-09-28T10:00:00.000Z' },
+      { sessionId: 'pisession-1', timestamp: '2026-09-28T10:05:00.000Z' },
+    ]);
     await saveSession({ dryRun: true });
-    expect(recordedSession()).toBe('pid-4242');
+    expect(recordedSession()).toBe('pisessio');
   });
 });
