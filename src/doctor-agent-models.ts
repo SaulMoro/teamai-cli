@@ -182,8 +182,9 @@ export async function agentModelNotes(ctx: DoctorContext): Promise<string[]> {
  */
 async function describeTool(spec: AgentSpec, tool: ToolName, resolution: ModelResolution, recorded: RecordedAgentModel | undefined): Promise<string> {
   if (!resolution.ok) return `held, its copy is kept  [see the failing check "${CHECK_NAME}"]`;
+  const { sameAgentModel } = await import('./resources/agents.js');
   const now = await describeModel(spec, tool, resolution);
-  if (!recorded || sameModel(recorded, resolution)) return now;
+  if (!recorded || sameAgentModel(recorded, resolution)) return now;
   return `${now}; the last pull deployed ${await describeModel(spec, tool, recorded)}, which \`teamai pull\` updates`;
 }
 
@@ -216,10 +217,6 @@ async function describeModel(spec: AgentSpec, tool: ToolName, resolved: Recorded
     }
   })();
   return `${value}  [${why}]`;
-}
-
-function sameModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
-  return a.step === b.step && a.model === b.model && a.effort === b.effort && a.source === b.source;
 }
 
 /**

@@ -24,10 +24,7 @@ import {
   parseAgentYaml,
   serializeAgentYaml,
   renderForClaude,
-  renderForClaudeInternal,
-  renderForCodebuddy,
   renderForCodex,
-  renderForCodexInternal,
   renderForCursor,
   renderForJoycode,
   renderForOpencode,
@@ -165,17 +162,17 @@ describe('renderForClaude', () => {
     expect(content).toContain('subagentModel: haiku');
   });
 
-  it('renderForClaudeInternal produces same format', () => {
+  it('renders claude-internal in the same format, with its own extras', () => {
     const spec = makeSpec({ tool_extras: { 'claude-internal': { extra_field: 'val' } } });
-    const { ext, content } = renderForClaudeInternal(spec);
+    const { ext, content } = renderForTool(spec, 'claude-internal');
     expect(ext).toBe('.md');
     expect(content).toContain('extra_field: val');
     expect(content).toContain('name: test-agent');
   });
 
-  it('renderForCodebuddy flattens codebuddy extras', () => {
+  it('flattens codebuddy extras for codebuddy', () => {
     const spec = makeSpec({ tool_extras: { codebuddy: { permissionMode: 'strict' } } });
-    const { ext, content } = renderForCodebuddy(spec);
+    const { ext, content } = renderForTool(spec, 'codebuddy');
     expect(ext).toBe('.md');
     expect(content).toContain('permissionMode: strict');
   });
@@ -211,9 +208,9 @@ describe('renderForCodex', () => {
     expect(content).toContain('model_reasoning_effort');
   });
 
-  it('renderForCodexInternal produces same TOML format with codex-internal extras', () => {
+  it('renders codex-internal in the same TOML format, with its own extras', () => {
     const spec = makeSpec({ tool_extras: { 'codex-internal': { env_override: 'test' } } });
-    const { ext, content } = renderForCodexInternal(spec);
+    const { ext, content } = renderForTool(spec, 'codex-internal');
     expect(ext).toBe('.toml');
     expect(content).toContain('env_override');
   });

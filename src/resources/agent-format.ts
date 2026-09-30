@@ -203,28 +203,6 @@ export function renderForClaude(spec: AgentSpec): RenderResult {
 }
 
 /**
- * Render an AgentSpec for Claude Internal.
- * Same format as Claude — YAML frontmatter + body.
- */
-export function renderForClaudeInternal(spec: AgentSpec): RenderResult {
-  return {
-    ext: agentFileExtensionForTool('claude-internal'),
-    content: renderMarkdownAgent(spec, spec.tool_extras?.['claude-internal']),
-  };
-}
-
-/**
- * Render an AgentSpec for CodeBuddy.
- * Same format as Claude, but merges tool_extras.codebuddy into frontmatter.
- */
-export function renderForCodebuddy(spec: AgentSpec): RenderResult {
-  return {
-    ext: agentFileExtensionForTool('codebuddy'),
-    content: renderMarkdownAgent(spec, spec.tool_extras?.['codebuddy']),
-  };
-}
-
-/**
  * Render an AgentSpec for JoyCode.
  * JoyCode agents use Markdown with YAML frontmatter, matching the common
  * name/description/instructions representation.
@@ -301,17 +279,6 @@ export function renderForCodex(spec: AgentSpec): RenderResult {
   return {
     ext: agentFileExtensionForTool('codex'),
     content: renderTomlAgent(spec, spec.tool_extras?.['codex']),
-  };
-}
-
-/**
- * Render an AgentSpec for Codex Internal.
- * Same format as Codex — TOML with developer_instructions.
- */
-export function renderForCodexInternal(spec: AgentSpec): RenderResult {
-  return {
-    ext: agentFileExtensionForTool('codex-internal'),
-    content: renderTomlAgent(spec, spec.tool_extras?.['codex-internal']),
   };
 }
 
@@ -917,14 +884,20 @@ export function mergeReverseResults(
 // ─── Dispatch helpers ─────────────────────────────────────────────────────────
 
 /**
+ * The tools whose extras also carry the keys another tool's extras set:
+ * tclaude reads `tool_extras.claude`, tcodex `tool_extras.codex`. Model
+ * alias inheritance is a separate, wider table (`ALIAS_BASE_TOOL`).
+ */
+export const EXTRAS_BASE_TOOL: Readonly<Partial<Record<ToolName, ToolName>>> = { tclaude: 'claude', tcodex: 'codex' };
+
+/**
  * The extras `tool` renders: its own `tool_extras.<tool>`. tclaude and tcodex
  * also fill the keys they lack from `claude` and `codex`; their own value wins.
  */
 export function toolExtrasFor(spec: AgentSpec, tool: ToolName): Record<string, unknown> | undefined {
   const extras = spec.tool_extras;
-  if (tool === 'tclaude') return { ...extras?.claude, ...extras?.tclaude };
-  if (tool === 'tcodex') return { ...extras?.codex, ...extras?.tcodex };
-  return extras?.[tool];
+  const base = EXTRAS_BASE_TOOL[tool];
+  return base ? { ...extras?.[base], ...extras?.[tool] } : extras?.[tool];
 }
 
 /** The agent-file field `tool` reads a reasoning effort from, if it has one. */

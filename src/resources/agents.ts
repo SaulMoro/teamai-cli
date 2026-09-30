@@ -34,6 +34,7 @@ import {
   mergeReverseResults,
   agentEffortField,
   toolExtrasFor,
+  EXTRAS_BASE_TOOL,
   ALL_SUPPORTED_TOOLS,
   AGENT_FILE_EXTENSIONS,
   agentStemFromFilename,
@@ -1284,7 +1285,7 @@ function mergeCanonicalEdits(
     const before: Record<string, unknown> = { ...Object.values(baseline.spec.tool_extras ?? {})[0] };
     const after: Record<string, unknown> = { ...Object.values(edited.tool_extras ?? {})[0] };
     // tclaude and tcodex also render what `claude` and `codex` carry.
-    const base = tool === 'tclaude' ? 'claude' : tool === 'tcodex' ? 'codex' : undefined;
+    const base = EXTRAS_BASE_TOOL[tool];
     const inherited: Record<string, unknown> = (base && canonical.tool_extras?.[base]) || {};
     // An inherited model pin reaches the copy as its native `model`, which
     // reverse parsing reads as the root field: compared as an extras key, a
@@ -1480,7 +1481,7 @@ function withoutExtrasEffort(spec: AgentSpec, tool: ToolName): AgentSpec {
 const KEEPS_SPEC_MODEL: ReadonlySet<string> = new Set<ResolutionStep>(['extras', 'literal']);
 
 /** Whether two records or resolutions give a copy the same model. The alias name is not compared: records written before it lack it. */
-function sameAgentModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
+export function sameAgentModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
   return a.step === b.step && a.model === b.model && a.effort === b.effort && a.source === b.source;
 }
 
