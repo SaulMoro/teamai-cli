@@ -44,13 +44,19 @@ export interface ShellClassification {
 
 const REDIRECT = /^(?:&>>?|<<<|<<-?|<>|<&|>>|>&|>\||<|>)/;
 
+/** The characters an unquoted backslash escapes: whitespace and those the shell gives a meaning. */
+const ESCAPABLE = /[\s'"\\$`()&;|<>*?#!]/;
+
 /**
  * The simple commands of a shell command line, split on `;`, `&&`, `||`, `|`,
  * `&` and newlines outside quotes, each with the operator after it. A
  * redirect (`2>&1`, `> out`, `<in`) is kept apart with its target. An
  * unquoted `#` at the start of a word begins a comment that runs to the end
- * of the line. A backslash escapes only `"` or `\` inside double quotes, and a newline
- * outside quotes, so a Windows path stays whole.
+ * of the line. Outside quotes a backslash escapes whitespace or a character
+ * the shell gives a meaning (`my\ doc.md`), and joins a line to the next;
+ * before any other character it is kept, so an unquoted Windows path
+ * (`C:\kb\x.md`) stays whole. Inside double quotes it escapes only `"` or
+ * `\`, and inside single quotes nothing.
  */
 export function simpleCommands(command: string): SimpleCommand[] {
   const commands: SimpleCommand[] = [];
@@ -87,6 +93,9 @@ export function simpleCommands(command: string): SimpleCommand[] {
       quote = c;
       word ??= '';
     } else if (c === '\\' && next === '\n') {
+      i++;
+    } else if (c === '\\' && next !== undefined && ESCAPABLE.test(next)) {
+      word = (word ?? '') + next;
       i++;
     } else if (c === '#' && word === null) {
       // A `#` that starts a word starts a comment, up to the newline; `a#b` is a word.

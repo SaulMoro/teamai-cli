@@ -274,6 +274,17 @@ class Harness {
     fs.writeFileSync(indexPath, JSON.stringify(index));
   }
 
+  /** Add a learning to the project's team repo under `name` (which may hold a space), and reindex. */
+  async addLearning(name: string, content: string): Promise<string> {
+    const file = path.join(this.teamRepo, 'learnings', name);
+    fs.writeFileSync(file, content);
+    await buildIndex({
+      learningsDir: path.join(this.teamRepo, 'learnings'), docsDir: path.join(this.teamRepo, 'docs'),
+      indexPath: getProjectSearchIndexPath(this.project),
+    });
+    return file;
+  }
+
   /** A PowerShell call's PostToolUse (Claude's and CodeBuddy's `PowerShell` tool) from the project root. */
   async powershell(command: string, stdout: string): Promise<void> {
     await this.postToolUse('PowerShell', { command }, { stdout, stderr: '', interrupted: false, isImage: false });
@@ -985,6 +996,17 @@ const ROWS: Row[] = [
       await h.stop();
     },
     project: {},
+  },
+  {
+    name: '05: Codex recall; cat of a spaced POSIX path written with backslash escapes (…/sentinel\\ failover.md) → +1',
+    trace: async (h) => {
+      const file = await h.addLearning('sentinel failover.md', doc('Sentinel failover', ['sentinel', 'failover'], 'Promote a replica.'));
+      const { files } = await h.codexRecall('sentinel failover');
+      expect(files).toEqual([file]);
+      await h.codexShell(`cat ${file.replace(/ /g, '\\ ')}`, fs.readFileSync(file, 'utf-8'));
+      await h.stop(CODEX);
+    },
+    project: { 'sentinel failover': 1 },
   },
   {
     name: '05: a read with a trailing comment (cat <doc> # the fix) → +1',

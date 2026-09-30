@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 
+import { classifyShellCommand } from '../utils/shell-command.js';
 import { classifyToolCall } from '../utils/tool-call.js';
 
 const CWD = path.resolve('/w');
@@ -45,8 +46,21 @@ describe('classifyToolCall', () => {
     ['cat a#b.md', ['a#b.md']],
     ['cat "#x.md" \'#y.md\'', ['#x.md', '#y.md']],
     ['# a note\ncat doc.md', ['doc.md']],
+    ['cat my\\ doc.md', ['my doc.md']],
+    ['cat \\#x.md \\"y\\".md', ['#x.md', '"y".md']],
+    ['cat "a\\"b.md"', ['a"b.md']],
   ])('%j reads %j', (command, files) => {
     expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple: true, status: 'success' });
+  });
+
+  // As written, before any path resolution: outside quotes a backslash escapes only a shell-special character.
+  it.each<[string, string[]]>([
+    ['cat C:\\kb\\learnings\\x.md', ['C:\\kb\\learnings\\x.md']],
+    ['cat a\\\\b.md', ['a\\b.md']],
+    ['cat "c\\\\d.md" "e\\f.md" \'g\\ h.md\'', ['c\\d.md', 'e\\f.md', 'g\\ h.md']],
+    ['cat x.md\\', ['x.md\\']],
+  ])('%j names %j', (command, files) => {
+    expect(classifyShellCommand(command)).toMatchObject({ category: 'read', paths: files });
   });
 
   it.each([
