@@ -108,6 +108,10 @@ describe('Codex reads team rules from AGENTS.md in project scope (#938)', () => 
 
   it('inlines the rules in a team-rules block in <project>/AGENTS.md, keeps user text, and writes nothing to .codex/rules', async () => {
     await fse.writeFile(agentsMd(), '# Project notes\n\nKeep this line.\n');
+    await fse.writeFile(
+      path.join(repoPath, 'rules', 'scoped.md'),
+      '---\npaths:\n  - "src/**"\n---\nPrefer named exports.\n',
+    );
 
     await handler.pullAllRules(teamConfig, localConfig);
 
@@ -117,7 +121,11 @@ describe('Codex reads team rules from AGENTS.md in project scope (#938)', () => 
     const end = content.indexOf(TEAMAI_TEAM_RULES_END);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    expect(content.slice(start, end)).toContain('The team codeword is PELICAN-42.');
+    const block = content.slice(start, end);
+    expect(block).toContain('The team codeword is PELICAN-42.');
+    // A path-scoped rule is inlined without frontmatter, after the globs it applies to.
+    expect(block).toContain('Applies to files matching: src/**\nPrefer named exports.');
+    expect(block).not.toContain('paths:');
     expect(await fse.pathExists(path.join(projectRoot, '.codex', 'rules'))).toBe(false);
   });
 

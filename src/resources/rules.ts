@@ -829,11 +829,11 @@ export async function inlinedRulesText(rules: ResourceItem[]): Promise<string> {
 /**
  * The team-rules block a tool that reads rules from its instructions file
  * (`inlinesRulesIntoInstructions`) gets, markers included. Null when no rule
- * has a body. The body is the same text Hermes inlines into SOUL.md.
+ * has a body. The body is the same render Hermes gets in SOUL.md.
  */
 export async function teamRulesBlock(rules: ResourceItem[]): Promise<string | null> {
   // A marker line inside a rule body would cut the block short on the next read.
-  const body = (await hermesRulesText(rules))
+  const body = (await inlinedRulesText(rules))
     .split('\n')
     .filter((line) => line.trim() !== TEAMAI_TEAM_RULES_START && line.trim() !== TEAMAI_TEAM_RULES_END)
     .join('\n')
