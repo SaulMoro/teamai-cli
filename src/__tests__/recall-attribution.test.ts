@@ -1800,6 +1800,33 @@ describe('recall attribution acceptance (#884)', () => {
     expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
   });
 
+  // The transcript parser keys a doc on its `File:` basename (`setup`); its vote key is `learnings/setup`.
+  it('12: judge on: a nested doc the hook path credited is not judged again under the basename the transcript parser gives it', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('setup installer flags');
+    const nested = path.join(h.teamRepo, 'docs', 'learnings', 'setup.md');
+    expect(files[0]).toBe(nested);
+    await h.read(nested);
+    await h.stop();
+    expect(await h.upvotes(h.project)).toEqual({ 'learnings/setup': 1 });
+    await h.judgeStop([
+      ...Harness.bashEntries('toolu_recall', 'teamai recall "setup installer flags"', output),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: nested } }] } },
+    ]);
+    expect(judgeAdoption).not.toHaveBeenCalled();
+    expect(await h.upvotes(h.project)).toEqual({ 'learnings/setup': 1 });
+  });
+
+  it('12: judge on: a nested doc the session never opened is judged → +1 under its vote key', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('setup installer flags');
+    expect(files[0]).toBe(path.join(h.teamRepo, 'docs', 'learnings', 'setup.md'));
+    await h.stop();
+    await h.judgeStop(Harness.bashEntries('toolu_recall', 'teamai recall "setup installer flags"', output));
+    expect(judgeAdoption).toHaveBeenCalledWith('Raised the pool size.', ['setup'], expect.any(Object), expect.any(Array));
+    expect(await h.upvotes(h.project)).toEqual({ 'learnings/setup': 1 });
+  });
+
   it('prints the run id after the result count on the region start line', async () => {
     await h.setUp();
     const { output, run } = await h.recall('redis timeout');

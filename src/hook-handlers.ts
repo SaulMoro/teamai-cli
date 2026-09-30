@@ -564,10 +564,19 @@ const votesJudgeHandler: HookHandler = {
       // votes-sync credits the turn, so run the same reducer pass first: a doc
       // opened in this turn is then in the ledger and never sent to the judge.
       // Safe to run twice: the ledger and consumed marks dedupe it.
-      const { creditAdoptedDocs } = await import('./recall-adoption.js');
-      await creditAdoptedDocs(localConfig, deriveDispatchSessionId(stdin, _tool));
+      const { creditAdoptedDocs, recalledKeyOf } = await import('./recall-adoption.js');
+      const dispatchSessionId = deriveDispatchSessionId(stdin, _tool);
+      await creditAdoptedDocs(localConfig, dispatchSessionId);
       const { creditedDocIdsForSession } = await import('./votes.js');
       const ledgerCredited = await creditedDocIdsForSession(votePath, sessionId);
+      // The parser names a doc by its `File:` basename (`setup`, a skill's
+      // `SKILL`); the ledger and the votes use the key its run recorded
+      // (`learnings/setup`, `retry`). A path no run printed keeps the parser's id.
+      const printedKey = await recalledKeyOf(localConfig, dispatchSessionId);
+      const keyOf = (id: string): string => {
+        const printed = voteData.recalledDocPaths[id];
+        return (printed !== undefined ? printedKey(printed) : undefined) ?? id;
+      };
 
       // Same scope guard as the foreground handler: while a project is active,
       // a doc recalled from the inherited USER scope is read-only, so the judge
@@ -583,7 +592,7 @@ const votesJudgeHandler: HookHandler = {
       // and a positive verdict only lands once incrementUpvoted succeeds
       // atomically (sessionId-scoped) — preventing any double credit.
       const toJudge = voteData.recalledDocIds.filter(
-        (id) => scopeEligible.has(id) && !ledgerCredited.has(id),
+        (id) => scopeEligible.has(id) && !ledgerCredited.has(keyOf(id)),
       );
       if (toJudge.length === 0) return null;
 
@@ -606,7 +615,7 @@ const votesJudgeHandler: HookHandler = {
       // Pass sessionId so judge credits enter the SAME per-session ledger the
       // foreground handler uses, preventing a later foreground open from
       // double-counting the same doc (issue #723 review).
-      const credited = await incrementUpvoted(votePath, verified, sessionId);
+      const credited = await incrementUpvoted(votePath, [...new Set(verified.map(keyOf))], sessionId);
       if (credited === null || credited.length === 0) return null;
 
       // Sync using the same path as the foreground handler.

@@ -325,6 +325,19 @@ async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: strin
   return { credited, recalled };
 }
 
+/**
+ * The vote key of a doc `sessionId`'s runs printed, by the path they printed
+ * it at (however it is written), settled and linked as the reducer does; or
+ * undefined when none printed it. The upvote judge maps the transcript
+ * parser's ids (a `File:` basename such as `setup` or `SKILL`) through it.
+ */
+export async function recalledKeyOf(config: LocalConfig, sessionId: string): Promise<(printed: string) => string | undefined> {
+  const index = indexLog(await readRecallLog(config));
+  const { runs } = viewRoot(index, index.rootOf(sessionId));
+  const keys = new Map(runs.flatMap((r) => r.docs.map((d) => [pathKey(d.path), d.key] as const)));
+  return (printed) => keys.get(pathKey(printed));
+}
+
 /** One root session's recall activity, as `teamai stats` shows it. */
 export interface RecallSessionSummary {
   /** The root session: a linked child's runs and reads count under it. */

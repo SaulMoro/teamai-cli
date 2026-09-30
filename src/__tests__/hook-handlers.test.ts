@@ -137,6 +137,7 @@ vi.mock('../transcript-parser.js', () => ({
 const mockCreditAdoptedDocs = vi.hoisted(() => vi.fn());
 vi.mock('../recall-adoption.js', () => ({
   creditAdoptedDocs: mockCreditAdoptedDocs,
+  recalledKeyOf: vi.fn(async () => () => undefined),
   recordToolCall: vi.fn(async () => undefined),
 }));
 
