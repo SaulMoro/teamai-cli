@@ -372,7 +372,9 @@ describe('doctor — rules delivered on disk', () => {
       expect(await check.check()).toBe(false);
       expect(check.fix).toContain(agentsMd);
       expect(check.fix).toContain('carries no team-rules block');
-      expect(check.fix).toContain('teamai pull --force');
+      // An already-synced pull restores the block too (#938).
+      expect(check.fix).toContain('Run `teamai pull` to restore it.');
+      expect(check.fix).not.toContain('--force');
     });
 
     it('fails when the block holds a stale rule set', async () => {
@@ -382,7 +384,8 @@ describe('doctor — rules delivered on disk', () => {
       expect(await check.check()).toBe(false);
       expect(check.fix).toContain(agentsMd);
       expect(check.fix).toContain('not what the team rules inline to');
-      expect(check.fix).toContain('teamai pull --force');
+      expect(check.fix).toContain('Run `teamai pull` to rewrite it.');
+      expect(check.fix).not.toContain('--force');
     });
 
     it('fails on a current block when AGENTS.override.md sits beside it, which Codex reads instead', async () => {

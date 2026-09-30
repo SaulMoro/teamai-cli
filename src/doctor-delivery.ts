@@ -407,12 +407,11 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
     const problems: string[] = [];
     if (delivered === null) {
       problems.push(`${file} carries no team-rules block, so ${tools.join(', ')} reads none of the team `
-        + 'rules. Run `teamai pull --force`: a plain pull skips a scope whose team repo has not '
-        + 'changed, so it cannot restore this.');
+        + 'rules. Run `teamai pull` to restore it.');
     } else if (delivered !== expected) {
       problems.push(`The team-rules block in ${file} is not what the team rules inline to: Codex reads `
         + 'standing instructions from this file rather than a rules directory, so a stale block '
-        + 'is a stale rule set. Run `teamai pull --force` to rewrite it.');
+        + 'is a stale rule set. Run `teamai pull` to rewrite it.');
     }
     if (shadowed) {
       problems.push(`${override} exists, so Codex reads it instead of ${file} and never sees the `
