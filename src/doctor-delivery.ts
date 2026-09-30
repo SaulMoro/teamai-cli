@@ -388,7 +388,7 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
       fix: `The toolPaths entry for ${tool} has no \`claudemd\` path, so pull has no instructions `
         + `file to inline the team rules into and ${tool} reads none of them. Add `
         + `\`claudemd: AGENTS.md\` and \`userScope.claudemd: .${tool}/AGENTS.md\` to that entry `
-        + 'in the team teamai.yaml, then run `teamai pull --force`.',
+        + 'in the team teamai.yaml, then run `teamai pull`.',
     });
   }
 

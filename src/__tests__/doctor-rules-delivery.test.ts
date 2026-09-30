@@ -420,6 +420,9 @@ describe('doctor — rules delivered on disk', () => {
       expect(check!.fix).toContain('has no `claudemd` path');
       expect(check!.fix).toContain('`claudemd: AGENTS.md`');
       expect(check!.fix).toContain('`userScope.claudemd: .codex/AGENTS.md`');
+      // A teamai.yaml edit moves the team repo, so a plain pull syncs it.
+      expect(check!.fix).toContain('then run `teamai pull`.');
+      expect(check!.fix).not.toContain('--force');
     });
 
     it('no longer reports rule files delivered to codex', async () => {
