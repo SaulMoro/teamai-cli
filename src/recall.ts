@@ -11,7 +11,8 @@ import { getProjectSearchIndexPath, getUserSearchIndexPath, getVotesDir } from '
 import { queryCodeKnowledge } from './code-knowledge-recall.js';
 import type { SourceAnchor } from './code-knowledge-recall.js';
 import { recordRecallQuality } from './recall-quality.js';
-import { agentSessionIdFromEnv, deriveSessionId } from './utils/session-id.js';
+import { agentSessionFromEnv, deriveSessionId } from './utils/session-id.js';
+import type { EnvAgentSession } from './utils/session-id.js';
 
 /** Relevance threshold for codebase graph hits.
  *  These are log-compressed to a bounded [0,10] range (see `queryCodeKnowledge`
@@ -302,7 +303,8 @@ export async function autoUpvote(
 
 /**
  * Append this run to the active scope's recall log: the session the agent's
- * environment names, the `--caller` that ran it and each returned doc as
+ * environment names (its agent family, and whether it was the only
+ * candidate), the `--caller` that ran it and each returned doc as
  * printed, never the query. While a project is active an inherited user-scope
  * doc is not eligible: it stays read-only, as for recalled_count. Returns the
  * run id, or undefined when the line could not be written, so no id is printed
@@ -311,7 +313,7 @@ export async function autoUpvote(
 async function recordRun(
   config: LocalConfig,
   results: ScopedSearchResult[],
-  session: string | undefined,
+  session: EnvAgentSession,
   caller: string | undefined,
   projectActive: boolean,
 ): Promise<string | undefined> {
@@ -322,7 +324,10 @@ async function recordRun(
       kind: 'run',
       ts: new Date().toISOString(),
       run,
-      session: session ?? null,
+      session: session.id ?? null,
+      ...(session.agent ? { agent: session.agent } : {}),
+      via: session.id ? 'env' : 'none',
+      unambiguous: session.unambiguous,
       ...(caller ? { caller } : {}),
       docs: results.map((r) => {
         const scope = r.scope ?? config.scope;
@@ -721,8 +726,8 @@ export async function recall(
   // --dry-run, nor where votes must not reach the team (#787).
   let runId: string | undefined;
   if (process.env.TEAMAI_RECALL_DISABLED !== '1') {
-    const session = await agentSessionIdFromEnv();
-    recordRecallQuality(session ?? deriveSessionId({}), topResults);
+    const session = await agentSessionFromEnv();
+    recordRecallQuality(session.id ?? deriveSessionId({}), topResults);
     const activeConfig = projectConfig ?? scopeIndexes[0]?.config;
     if (activeConfig && !options.dryRun && !projectUnreadable) {
       runId = await recordRun(activeConfig, topResults, session, options.caller, projectConfig !== null);

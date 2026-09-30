@@ -4,7 +4,7 @@
  * line each. The adoption reducer joins them at Stop.
  *
  *   run       recall searched: the session from the environment, its caller and the docs it returned
- *   claim     the PostToolUse of the shell call that ran a recall, naming its run and actor
+ *   claim     the PostToolUse of a shell call that printed a run id: its actor, and whether it ran the recall itself
  *   evidence  a PostToolUse read of a file under the knowledge roots, by its actor
  *   consumed  evidence that has been credited, so it never votes again
  *
@@ -54,6 +54,15 @@ export interface RunLine {
    * session's main agent; its claim names the actor that ran it.
    */
   session: string | null;
+  /** The agent family whose variable named `session`, e.g. `claude` or `codex`. */
+  agent?: string;
+  /** `env` when the environment named `session`, `none` when it named none. A hook's confirmation is a claim. */
+  via: 'env' | 'none';
+  /**
+   * True when the environment held a single session id. A run settles by its
+   * first valid claim, or else by `session` only when this is true.
+   */
+  unambiguous: boolean;
   /** `--caller`: `teamai-recall` when the recall subagent ran it. */
   caller?: string;
   docs: RecalledDoc[];
@@ -63,6 +72,11 @@ export interface ClaimLine extends Actor {
   kind: 'claim';
   ts: string;
   run: string;
+  /**
+   * Whether the shell command itself ran `teamai recall`, rather than only
+   * printing a recall's output. Only a direct claim can settle its run.
+   */
+  direct: boolean;
 }
 
 export interface EvidenceLine extends Actor {

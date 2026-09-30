@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { AGENT_SESSION_ENV, agentSessionIdFromEnv, deriveSessionId } from '../utils/session-id.js';
+import { AGENT_SESSION_ENV, agentSessionFromEnv, agentSessionIdFromEnv, deriveSessionId } from '../utils/session-id.js';
 
 describe('deriveSessionId', () => {
     const originalEnv = process.env.CLAUDE_SESSION_ID;
@@ -209,5 +209,42 @@ describe('agentSessionIdFromEnv', () => {
             writeEvents([{ sessionId: 'unrelated', timestamp: '2026-09-28T10:09:00.000Z' }]);
             expect(await agentSessionIdFromEnv()).toBe('outer-claude');
         });
+    });
+});
+
+// Recall settles a run by its env session only when no pick was made (#884).
+describe('agentSessionFromEnv', () => {
+    let home: string | undefined;
+
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        if (home) fs.rmSync(home, { recursive: true, force: true });
+        home = undefined;
+    });
+
+    it('names the agent family of a single session variable, unambiguous', async () => {
+        vi.stubEnv('CODEX_SESSION_ID', 'codex-session');
+        expect(await agentSessionFromEnv()).toEqual({ id: 'codex-session', agent: 'codex', unambiguous: true });
+    });
+
+    it('counts CodeBuddy\'s CLAUDE_SESSION_ID alias of the same id as one candidate', async () => {
+        vi.stubEnv('CODEBUDDY_SESSION_ID', 'codebuddy-session');
+        vi.stubEnv('CLAUDE_SESSION_ID', 'codebuddy-session');
+        expect(await agentSessionFromEnv()).toEqual({ id: 'codebuddy-session', agent: 'codebuddy', unambiguous: true });
+    });
+
+    it('is ambiguous when a nested agent sees two sessions, and names the family of the one it picked', async () => {
+        home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+        vi.stubEnv('HOME', home);
+        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+        vi.stubEnv('CODEX_SESSION_ID', 'inner-codex');
+        expect(await agentSessionFromEnv()).toEqual({ id: 'outer-claude', agent: 'claude', unambiguous: false });
+    });
+
+    it('has no session and is not unambiguous when no variable is set, or under a bridge marker', async () => {
+        expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
+        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
+        vi.stubEnv('OPENCODE', '1');
+        expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
     });
 });

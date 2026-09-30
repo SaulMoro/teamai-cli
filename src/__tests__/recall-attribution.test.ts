@@ -54,6 +54,10 @@ const { readRecallLog, recallLogPath } = await import('../recall-log.js');
 const { parseTranscriptForVotes } = await import('../transcript-parser.js');
 
 const SESSION = 'sess-main';
+/** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
+const CODEX = 'sess-codex';
+/** Both session variables a `codex exec` run from Claude's shell sees: two candidates, so the run is ambiguous. */
+const NESTED_ENV = { CLAUDE_CODE_SESSION_ID: SESSION, CODEX_SESSION_ID: CODEX };
 const T0 = Date.parse('2026-09-01T09:00:00.000Z');
 
 function doc(title: string, tags: string[], body: string): string {
@@ -126,6 +130,7 @@ class Harness {
     fs.mkdirSync(path.join(this.teamRepo, 'team-B', 'learnings'), { recursive: true });
     fs.writeFileSync(path.join(this.teamRepo, 'team-B', 'learnings', 'setup.md'), doc('Other setup', ['setup'], 'Another checkout.'));
     this.docs['redis-timeout'] = path.join(learnings, 'redis-timeout.md');
+    this.docs.setup = path.join(learnings, 'setup.md');
     this.docs['team-B/setup'] = path.join(this.teamRepo, 'team-B', 'learnings', 'setup.md');
     this.docs['cache-warmup'] = path.join(getUserLearningsDir(), 'cache-warmup.md');
 
@@ -155,26 +160,33 @@ class Harness {
   /**
    * The main agent, or `options.agent`, runs `teamai recall` from its shell
    * (the session in the environment, as Claude Code sets it for subagents
-   * too), then its Bash PostToolUse arrives.
+   * too), then its Bash PostToolUse arrives. `options.env` replaces the
+   * session variables the run sees; `claim: false` sends no PostToolUse, as
+   * when the call that ran it is another agent's.
    */
-  async recall(query: string, options: { check?: boolean; dryRun?: boolean; caller?: string; agent?: Subagent } = {}): Promise<RecallRun> {
+  async recall(query: string, options: {
+    check?: boolean; dryRun?: boolean; caller?: string; agent?: Subagent;
+    env?: Record<string, string | undefined>; claim?: false;
+  } = {}): Promise<RecallRun> {
     let output = '';
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
       output += chunk.toString();
       return true;
     }) as never);
-    const before = process.env.CLAUDE_CODE_SESSION_ID;
-    process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+    const vars = options.env ?? { CLAUDE_CODE_SESSION_ID: SESSION };
+    const before = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
+    this.env(vars);
     try {
       await recall(query, { check: options.check, dryRun: options.dryRun, caller: options.caller });
     } finally {
       write.mockRestore();
-      if (before === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
-      else process.env.CLAUDE_CODE_SESSION_ID = before;
+      this.env(before);
     }
     const flags = `${options.check ? ' --check' : ''}${options.caller ? ` --caller ${options.caller}` : ''}`;
-    await this.postToolUse('Bash', { command: `teamai recall${flags} "${query}"`, description: 'Search team knowledge' },
-      { stdout: output, stderr: '', interrupted: false, isImage: false }, this.root, options.agent);
+    if (options.claim !== false) {
+      await this.postToolUse('Bash', { command: `teamai recall${flags} "${query}"`, description: 'Search team knowledge' },
+        { stdout: output, stderr: '', interrupted: false, isImage: false }, this.root, options.agent);
+    }
     return {
       output,
       files: [...output.matchAll(/^File: (.+)$/gm)].map((m) => m[1]),
@@ -183,31 +195,44 @@ class Harness {
   }
 
   /**
-   * Claude's `Read` of `filePath` by the main agent or `options.agent`, from
-   * the project root unless `cwd` says otherwise (null: no cwd).
+   * Claude's `Read` of `filePath` by the main agent or `options.agent` of
+   * `options.session` (default: the main session), from the project root
+   * unless `cwd` says otherwise (null: no cwd).
    */
-  async read(filePath: string, options: { cwd?: string | null; agent?: Subagent } = {}): Promise<void> {
+  async read(filePath: string, options: { cwd?: string | null; agent?: Subagent; session?: string } = {}): Promise<void> {
     const content = fs.existsSync(path.resolve(this.root, filePath)) ? fs.readFileSync(path.resolve(this.root, filePath), 'utf-8') : '';
     await this.postToolUse('Read', { file_path: filePath },
       { type: 'text', file: { filePath, content, numLines: content.split('\n').length, startLine: 1, totalLines: content.split('\n').length } },
-      options.cwd, options.agent);
+      options.cwd, options.agent, options.session);
+  }
+
+  /**
+   * A shell call's PostToolUse in `options.session` (default: the main
+   * session): Claude's Bash, or Codex's, whose `tool_response` is the output
+   * string.
+   */
+  async shell(command: string, stdout: string, options: { session?: string; tool?: 'claude' | 'codex' } = {}): Promise<void> {
+    const response = options.tool === 'codex' ? stdout : { stdout, stderr: '', interrupted: false, isImage: false };
+    await this.postToolUse('Bash', { command }, response, this.root, undefined, options.session, options.tool);
   }
 
   async postToolUse(
     toolName: string, toolInput: Record<string, unknown>, toolResponse: unknown, cwd: string | null = this.root, agent?: Subagent,
+    session?: string, tool?: string,
   ): Promise<void> {
     await this.dispatch('post-tool-use', {
       hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: toolInput, tool_response: toolResponse,
       ...(agent ? { agent_id: agent.id, ...(agent.type ? { agent_type: agent.type } : {}) } : {}),
-    }, cwd);
+      ...(session ? { session_id: session } : {}),
+    }, cwd, tool);
   }
 
-  /** Claude's Stop, which carries no `transcript_path` here: the reducer does not need one. Returns the hook's stdout. */
-  async stop(): Promise<string> {
-    return this.dispatch('stop', { hook_event_name: 'Stop', stop_hook_active: false });
+  /** `session`'s Stop (default: the main session), which carries no `transcript_path` here: the reducer does not need one. Returns the hook's stdout. */
+  async stop(session?: string): Promise<string> {
+    return this.dispatch('stop', { hook_event_name: 'Stop', stop_hook_active: false, ...(session ? { session_id: session } : {}) });
   }
 
-  async dispatch(event: string, payload: Record<string, unknown>, cwd: string | null = this.root): Promise<string> {
+  async dispatch(event: string, payload: Record<string, unknown>, cwd: string | null = this.root, tool = 'claude'): Promise<string> {
     const stdinFile = path.join(this.tmp, `stdin-${Math.random().toString(36).slice(2)}.json`);
     fs.writeFileSync(stdinFile, JSON.stringify({ session_id: SESSION, ...(cwd ? { cwd } : {}), ...payload }));
     let output = '';
@@ -217,7 +242,7 @@ class Harness {
       return true;
     }) as never);
     try {
-      await hookDispatchCli(event, 'claude', '*', { stdinFile });
+      await hookDispatchCli(event, tool, '*', { stdinFile });
     } finally {
       write.mockRestore();
     }
@@ -435,12 +460,107 @@ const ROWS: Row[] = [
     },
     project: {},
   },
+  {
+    name: '04 (Dan): codex exec from inside Claude; the Codex hook claims the run → the Codex session owns it; Claude-session reads → 0',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      // Codex's hook fires when its shell call ends, before `codex exec` returns to Claude with the output.
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      await h.shell('codex exec "run teamai recall redis timeout and summarize"', output);
+      await h.read(files[0]);
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '04: an outer shell prints the inner recall\'s stdout, with no direct teamai recall in its command → the claim is ignored, the run owner is unchanged',
+    trace: async (h) => {
+      // An unambiguous run under Codex, whose own claim never arrives.
+      const { output, files } = await h.recall('redis timeout', { env: { CODEX_SESSION_ID: CODEX }, claim: false });
+      await h.shell('codex exec "run teamai recall redis timeout"', output);
+      await h.read(files[0]);
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '04: env run under C with 2 candidates; C reads the doc; C Stops; D\'s claim arrives → 0 for C, D owns the run',
+    trace: async (h) => {
+      // No hook events yet, so the variable order picks C (the main session).
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.read(files[0]);
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      h.at(1);
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '04: an unambiguous env run with no claim (a long-running Codex command); the session reads the doc → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { CODEX_SESSION_ID: CODEX }, claim: false });
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '04: two runs in one shell call (teamai recall a; teamai recall b) → both claimed',
+    trace: async (h) => {
+      const a = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      const b = await h.recall('setup', { env: NESTED_ENV, claim: false });
+      await h.shell('teamai recall "redis timeout"; teamai recall "setup"', `${a.output}${b.output}`, { session: CODEX, tool: 'codex' });
+      await h.read(a.files[0], { session: CODEX });
+      await h.read(h.docs.setup, { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1, setup: 1 },
+  },
+  {
+    name: '04: duplicate delivery of the same claim → a single claim effect',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      h.at(1);
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '04: a later valid claim from another session is kept but not applied → 0 for it',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      h.at(1);
+      await h.shell('npx teamai recall "redis timeout"', output);
+      await h.read(files[0]);
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '04: env run under C with 2 candidates; C reads the doc; C Stops; D\'s claim arrives → 0 for C, D owns the run',
-  '04: an outer shell prints the inner recall\'s stdout, with no direct teamai recall in its command → 0 for the outer session',
   '05: Codex recall; sed -n \'1,80p\' learnings/redis-timeout.md; Stop → +1',
   '05: Codex recall; test -e x && cat learnings/redis-timeout.md || true → 0',
   '05: a read that fails (status failure) → 0',
@@ -506,7 +626,7 @@ describe('recall attribution acceptance (#884)', () => {
     await h.setUp();
     await h.recall('kubernetes');
     const runs = (await readRecallLog(h.project)).filter((l) => l.kind === 'run');
-    expect(runs).toEqual([expect.objectContaining({ kind: 'run', session: SESSION, docs: [] })]);
+    expect(runs).toEqual([expect.objectContaining({ kind: 'run', session: SESSION, agent: 'claude', via: 'env', unambiguous: true, docs: [] })]);
   });
 
   it('teamai recall --check records no run', async () => {

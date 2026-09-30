@@ -28,14 +28,74 @@ export const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** The run ids recall prints on its region's start line. */
 const RUN_ID_PATTERN = /^--- \[teamai:recall:start\] --- \(\d+ results?\) run=([0-9a-f-]{36})(?=\s|$)/gm;
 
-/** A shell command that runs `teamai recall` itself (a path to the binary included). */
-const RECALL_COMMAND = /(?:^|[\s;&|(])(?:[^\s;&|()'"]*[\\/])?teamai(?:\.cmd|\.exe)?\s+recall(?=\s|$)/;
+/** The binary's file name; after `npx`, the package, with or without a version. */
+const TEAMAI_BINARY = /^teamai(?:\.cmd|\.exe)?$/i;
+const TEAMAI_PACKAGE = /^teamai(?:-cli)?(?:@\S*)?$/i;
 
 /** The recall subagent's name: its `--caller`, and the `agent_type` its hooks carry. */
 const RECALL_SUBAGENT = 'teamai-recall';
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/**
+ * The simple commands of a shell command line, each as its words with the
+ * quotes removed: it splits on `;`, `&&`, `||`, `|`, `&` and newlines outside
+ * quotes. A backslash escapes only `"` or `\` inside double quotes, and a
+ * newline outside quotes, so a Windows path stays whole.
+ */
+function simpleCommands(command: string): string[][] {
+  const commands: string[][] = [[]];
+  let word: string | null = null;
+  let quote: string | null = null;
+  const endWord = (): void => {
+    if (word !== null) commands[commands.length - 1].push(word);
+    word = null;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && (command[i + 1] === '"' || command[i + 1] === '\\')) word += command[++i];
+      else word += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      word ??= '';
+    } else if (c === '\\' && command[i + 1] === '\n') {
+      i++;
+    } else if (c === ';' || c === '&' || c === '|' || c === '\n') {
+      endWord();
+      if (commands[commands.length - 1].length > 0) commands.push([]);
+    } else if (/\s/.test(c)) {
+      endWord();
+    } else {
+      word = (word ?? '') + c;
+    }
+  }
+  endWord();
+  return commands;
+}
+
+/**
+ * Whether a shell command itself runs `teamai recall`: one of its simple
+ * commands has `teamai` (by path or `.cmd`/`.exe` too, or the package after
+ * `npx`) as its command word, after any `NAME=value` assignments, with
+ * `recall` next. A command that only names it inside a quoted argument, such
+ * as `codex exec "run teamai recall …"`, does not.
+ */
+function invokesRecall(command: string): boolean {
+  return simpleCommands(command).some((words) => {
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    let name = TEAMAI_BINARY;
+    if (words[i] === 'npx') {
+      i++;
+      while (i < words.length && words[i].startsWith('-')) i++;
+      name = TEAMAI_PACKAGE;
+    }
+    return name.test(words[i]?.split(/[\\/]/).pop() ?? '') && words[i + 1] === 'recall';
+  });
 }
 
 function nonEmpty(value: unknown): string | undefined {
@@ -54,9 +114,10 @@ function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
 }
 
 /**
- * Record what the recall log needs from one PostToolUse: a claim when the call
- * is a shell command that ran `teamai recall` and printed run ids, evidence when
- * it read a file under the knowledge roots, nothing otherwise.
+ * Record what the recall log needs from one PostToolUse: a claim for each run
+ * id a shell call printed, noting whether its command ran `teamai recall`
+ * itself; evidence when it read a file under the knowledge roots; nothing
+ * otherwise. Whether a claim counts is the reducer's call.
  */
 export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
   const toolName = normalizeToolName(typeof stdin.tool_name === 'string' ? stdin.tool_name : '');
@@ -64,13 +125,17 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
   if (!input) return;
 
   if (toolName === 'Bash') {
-    if (typeof input.command !== 'string' || !RECALL_COMMAND.test(input.command)) return;
-    const stdout = asObject(stdin.tool_response)?.stdout;
+    if (typeof input.command !== 'string') return;
+    // Claude's response is `{ stdout, … }`; Codex's is the output string.
+    const response = stdin.tool_response;
+    const stdout = typeof response === 'string' ? response : asObject(response)?.stdout;
     if (typeof stdout !== 'string') return;
     const runs = [...new Set([...stdout.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
+    if (runs.length === 0) return;
     const actor = actorOf(stdin, tool);
+    const direct = invokesRecall(input.command);
     for (const run of runs) {
-      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor });
+      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
     }
     return;
   }
@@ -133,8 +198,11 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  * too. When the votes file is busy nothing is consumed, so the next Stop
  * retries.
  *
- * A run belongs to the session of its first claim, or else to the session its
- * environment named. A run the recall subagent made (its `--caller`, or its
+ * Each run is settled first: by its first valid claim (one whose command ran
+ * the recall itself, for a run in this log, earliest by time), or else by the
+ * session its environment named, only when that was the only candidate. A
+ * later claim that disagrees is kept but not applied, and an unsettled run
+ * never votes. A run the recall subagent made (its `--caller`, or its valid
  * claim's agent type) is marked: reads by the actor that ran it never count
  * for it, while reads by the main agent or any other subagent do. Only
  * eligible docs are credited: an inherited user-scope doc stays read-only
@@ -142,13 +210,19 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  */
 export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
   const lines = await readRecallLog(config);
+  const logged = new Set(lines.flatMap((l) => l.kind === 'run' ? [l.run] : []));
   const claimOf = new Map<string, ClaimLine>();
   const consumed = new Set<string>();
   for (const line of lines) {
-    if (line.kind === 'claim' && !claimOf.has(line.run)) claimOf.set(line.run, line);
-    else if (line.kind === 'consumed') consumed.add(line.evidence);
+    if (line.kind === 'claim') {
+      if (line.direct !== true || !logged.has(line.run)) continue;
+      // Earliest by time: a claim a busy lock left in a side record reads after the file's lines.
+      const first = claimOf.get(line.run);
+      if (!first || line.ts < first.ts) claimOf.set(line.run, line);
+    } else if (line.kind === 'consumed') consumed.add(line.evidence);
   }
-  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && (claimOf.get(l.run)?.session ?? l.session) === sessionId);
+  const ownerOf = (r: RunLine): string | null => claimOf.get(r.run)?.session ?? (r.unambiguous === true ? r.session : null);
+  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && ownerOf(l) === sessionId);
   // A marked run's actor within the session: its claim's subagent, or the main agent (null).
   const markedActor = new Map<RunLine, string | null>();
   for (const r of runs) {

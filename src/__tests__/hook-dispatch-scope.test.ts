@@ -147,7 +147,7 @@ describe('hook runs and the scope they belong to (#748)', () => {
     fs.writeFileSync(doc1, '# doc-1\nteam knowledge');
     const { appendRecallLine } = await import('../recall-log.js');
     await appendRecallLine({ repo: { localPath: path.join(teamaiHome(), 'team-repo'), remote: '' }, username: 'tester', scope: 'user', additionalRoles: [] }, {
-      kind: 'run', ts: new Date().toISOString(), run: '00000000-0000-4000-8000-000000000001', session: 'sid-g',
+      kind: 'run', ts: new Date().toISOString(), run: '00000000-0000-4000-8000-000000000001', session: 'sid-g', via: 'env', unambiguous: true,
       docs: [{ key: 'doc-1', type: 'docs', scope: 'user', path: doc1, score: 5, eligible: true }],
     });
     // The session's worktree is gone, so chdir fails and the host's launch

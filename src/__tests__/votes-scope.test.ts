@@ -132,7 +132,7 @@ async function stop(cwd: string, scope: LocalConfig, docId: string, opened = tru
   fs.writeFileSync(doc, `# ${docId}\n`);
   await appendRecallLine(scope, {
     kind: 'run', ts: new Date().toISOString(), run: `00000000-0000-4000-8000-${String(Math.floor(Math.random() * 1e12)).padStart(12, '0')}`,
-    session, docs: [{ key: docId, type: 'docs', scope: scope.scope ?? 'user', path: doc, score: 5, eligible: true }],
+    session, via: 'env', unambiguous: true, docs: [{ key: docId, type: 'docs', scope: scope.scope ?? 'user', path: doc, score: 5, eligible: true }],
   });
   const transcript = path.join(tmp, `transcript-${docId}.jsonl`);
   fs.writeFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { content: [{

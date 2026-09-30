@@ -52,8 +52,39 @@ export const BRIDGE_AGENT_ENV = ['PI_SESSION_ID', 'OPENCODE'] as const;
  * no events for any of them, the variable order decides.
  */
 export async function agentSessionIdFromEnv(): Promise<string | undefined> {
-    if (BRIDGE_AGENT_ENV.some((name) => process.env[name])) return undefined;
-    const ids = [...new Set(AGENT_SESSION_ENV.map((name) => process.env[name]).filter((v) => !!v))];
+    return (await agentSessionFromEnv()).id;
+}
+
+// The agent family each variable names. CodeBuddy's CLAUDE_SESSION_ID alias
+// carries the same id as CODEBUDDY_SESSION_ID, which comes first.
+const AGENT_FAMILY: Record<typeof AGENT_SESSION_ENV[number], string> = {
+    CLAUDE_CODE_SESSION_ID: 'claude',
+    CODEX_SESSION_ID: 'codex',
+    CODEBUDDY_SESSION_ID: 'codebuddy',
+    COPILOT_AGENT_SESSION_ID: 'copilot',
+    CURSOR_CONVERSATION_ID: 'cursor',
+    CLAUDE_SESSION_ID: 'claude',
+};
+
+export interface EnvAgentSession {
+    /** What agentSessionIdFromEnv returns. */
+    id?: string;
+    /** The family of the first variable holding `id`, e.g. `claude` or `codex`. */
+    agent?: string;
+    /** True when the variables held exactly one distinct id, so no pick was made. */
+    unambiguous: boolean;
+}
+
+/** agentSessionIdFromEnv, with the family of the agent it names and whether the pick was unambiguous. */
+export async function agentSessionFromEnv(): Promise<EnvAgentSession> {
+    if (BRIDGE_AGENT_ENV.some((name) => process.env[name])) return { unambiguous: false };
+    const ids = [...new Set(AGENT_SESSION_ENV.map((name) => process.env[name]).filter((v): v is string => !!v))];
+    const id = await pickSession(ids);
+    const name = id ? AGENT_SESSION_ENV.find((n) => process.env[n] === id) : undefined;
+    return { ...(id ? { id } : {}), ...(name ? { agent: AGENT_FAMILY[name] } : {}), unambiguous: ids.length === 1 };
+}
+
+async function pickSession(ids: string[]): Promise<string | undefined> {
     if (ids.length <= 1) return ids[0];
 
     // Loaded here: dashboard-collector imports this module.
