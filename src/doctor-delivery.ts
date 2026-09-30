@@ -2,7 +2,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
-import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey } from './types.js';
+import {
+  getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, TEAMAI_TEAM_RULES_END, TEAMAI_TEAM_RULES_START,
+} from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
@@ -355,7 +357,81 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
     });
   }
 
+  checks.push(...await buildCodexInstructionsChecks(ctx, items));
   return checks;
+}
+
+/**
+ * The Codex family reads no rules directory: pull inlines the team rules into
+ * a managed block of the instructions file each tool maps (`claudemd`), one
+ * block per file. One check per file an enabled, installed tool maps.
+ */
+async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceItem[]): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+
+  const { RulesHandler, teamRulesBlock } = await import('./resources/rules.js');
+  const toolsByFile = new Map<string, string[]>();
+  const checks: Check[] = [];
+  for (const { tool, file, active } of await new RulesHandler().instructionFileRuleTools(teamConfig, localConfig)) {
+    if (!active) continue;
+    if (file !== null) {
+      appendTo(toolsByFile, file, tool);
+      continue;
+    }
+    // A team `toolPaths` entry replaces the default one whole, so an entry
+    // written before #938 leaves this tool with nowhere to read rules from.
+    checks.push({
+      name: codexCheckName([tool]),
+      source: 'local',
+      check: async () => false,
+      fix: `The toolPaths entry for ${tool} has no \`claudemd\` path, so pull has no instructions `
+        + `file to inline the team rules into and ${tool} reads none of them. Add `
+        + `\`claudemd: AGENTS.md\` and \`userScope.claudemd: .${tool}/AGENTS.md\` to that entry `
+        + 'in the team teamai.yaml, then run `teamai pull --force`.',
+    });
+  }
+
+  const expected = await teamRulesBlock(items);
+  for (const [file, tools] of toolsByFile) {
+    const content = await readFileSafe(file);
+    const start = content?.indexOf(TEAMAI_TEAM_RULES_START) ?? -1;
+    const end = content?.indexOf(TEAMAI_TEAM_RULES_END) ?? -1;
+    const delivered = content !== null && start !== -1 && end > start
+      ? content.slice(start, end + TEAMAI_TEAM_RULES_END.length)
+      : null;
+    // Codex reads AGENTS.override.md instead of AGENTS.md in the same
+    // directory, so a current block there is never seen.
+    const override = path.join(path.dirname(file), 'AGENTS.override.md');
+    const shadowed = await isReadableFile(override);
+    const problems: string[] = [];
+    if (delivered === null) {
+      problems.push(`${file} carries no team-rules block, so ${tools.join(', ')} reads none of the team `
+        + 'rules. Run `teamai pull --force`: a plain pull skips a scope whose team repo has not '
+        + 'changed, so it cannot restore this.');
+    } else if (delivered !== expected) {
+      problems.push(`The team-rules block in ${file} is not what the team rules inline to: Codex reads `
+        + 'standing instructions from this file rather than a rules directory, so a stale block '
+        + 'is a stale rule set. Run `teamai pull --force` to rewrite it.');
+    }
+    if (shadowed) {
+      problems.push(`${override} exists, so Codex reads it instead of ${file} and never sees the `
+        + 'team rules. Move its content into AGENTS.md, or delete it.');
+    }
+    checks.push({
+      name: codexCheckName(tools),
+      source: 'local',
+      check: async () => problems.length === 0,
+      fix: problems.join(' '),
+    });
+  }
+  return checks;
+}
+
+/** The check's name, naming the tools unless it is Codex alone. */
+function codexCheckName(tools: string[]): string {
+  const name = 'Team rules are inlined in Codex AGENTS.md';
+  return tools.length === 1 && tools[0] === 'codex' ? name : `${name} (${tools.join(', ')})`;
 }
 
 /**
