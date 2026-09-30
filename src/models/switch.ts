@@ -1153,6 +1153,37 @@ export async function activeModelProfiles(): Promise<Partial<Record<ModelAgent, 
   ]));
 }
 
+/** Whether a model profile switch still controls one agent, or why that cannot be told. */
+export type LiveModelSwitch = { readonly ok: true; readonly switched: boolean } | { readonly ok: false; readonly reason: string };
+
+/**
+ * Which agents a TeamAI switch still controls: the switch was recorded for
+ * the agent's live settings path (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, ...) and
+ * those settings still hold what TeamAI wrote, the checks `restore` makes
+ * before it touches them. A record for another path, or settings the user
+ * took over, does not count. Reads without the lock and never writes, so an
+ * interrupted switch counts only once its write landed.
+ */
+export async function liveModelSwitches(): Promise<Record<ModelAgent, LiveModelSwitch>> {
+  let manifest: ModelSwitchManifest | null;
+  try {
+    manifest = await loadManifest();
+  } catch (error) {
+    const unreadable: LiveModelSwitch = { ok: false, reason: (error as Error).message };
+    return Object.fromEntries(ALL_MODEL_AGENTS.map((agent) => [agent, unreadable])) as Record<ModelAgent, LiveModelSwitch>;
+  }
+  const entries = await Promise.all(ALL_MODEL_AGENTS.map(async (agent): Promise<[ModelAgent, LiveModelSwitch]> => {
+    const state = manifest?.agents[agent];
+    if (!state || !sameAgentSettingsPath(agent, state)) return [agent, { ok: true, switched: false }];
+    try {
+      return [agent, { ok: true, switched: sameManaged(agent, await currentSnapshot(agent, state.lastWritten), state.lastWritten) }];
+    } catch (error) {
+      return [agent, { ok: false, reason: (error as Error).message }];
+    }
+  }));
+  return Object.fromEntries(entries) as Record<ModelAgent, LiveModelSwitch>;
+}
+
 /**
  * For each `team:` profile of the team `localConfig` describes, an agent is
  * switched to: the gateway origins TeamAI last wrote into those agents'

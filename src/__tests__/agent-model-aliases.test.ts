@@ -35,6 +35,8 @@ import { log } from '../utils/logger.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutKey } from '../pull.js';
+import { ModelProfileSchema, resolveProfile, type ModelAgent } from '../models/profile.js';
+import { switchModelProfile } from '../models/switch.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 const STRONG = {
@@ -428,6 +430,116 @@ describe('AgentsHandler pull: model aliases', () => {
       await writeLocal({ aliases: { strong: { kiro: { model: 'claude-opus-5', effort: 'high' } } } });
       await pullTo(['kiro'], makeSpec({ model: 'strong' }));
       expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(`${localFile()}: alias "strong" sets an effort for kiro`));
+    });
+  });
+
+  describe('tools switched to a model profile', () => {
+    beforeEach(async () => {
+      // The switch finds each tool's live settings through these.
+      for (const key of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG']) vi.stubEnv(key, '');
+      vi.stubEnv('XDG_CONFIG_HOME', path.join(homeDir, '.config'));
+    });
+
+    /** `teamai models switch` for `agents`, to a gateway that serves every protocol. */
+    async function switchTo(agents: ModelAgent[]): Promise<void> {
+      for (const agent of agents) await fse.ensureDir(agent === 'opencode' ? path.join(homeDir, '.config/opencode') : path.join(homeDir, `.${agent}`));
+      const profile = ModelProfileSchema.parse({
+        id: 'gateway',
+        name: 'Gateway',
+        base_url: 'https://gateway.example.test',
+        api_key: '${API_KEY}',
+        model_groups: [{ protocols: ['anthropic', 'openai-responses', 'openai-chat-completions'], models: ['claude-opus-4-8', 'gpt-gateway'] }],
+      });
+      const resolved = resolveProfile({ source: 'team', profile, team: 'another-team' }, {
+        'team:gateway@https://gateway.example.test': { API_KEY: { value: 'secret' } },
+      });
+      const results = await switchModelProfile(resolved, agents);
+      expect(results.map((result) => result.status)).toEqual(agents.map(() => 'switched'));
+    }
+
+    const EVERY_TOOL_STRONG = {
+      aliases: {
+        strong: {
+          claude: [{ model: 'opus', effort: 'high' }],
+          codex: { model: 'gpt-6-sol', effort: 'high' },
+          opencode: { model: 'anthropic/claude-opus-5-5', effort: 'high' },
+          codebuddy: { model: 'gpt-6-sol', effort: 'high' },
+          workbuddy: 'gpt-6-sol',
+        },
+      },
+    };
+
+    it('gives OpenCode, CodeBuddy and WorkBuddy no model and no effort', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['opencode', 'codebuddy', 'workbuddy']);
+      const files = await pullTo(['opencode', 'codebuddy', 'workbuddy'], makeSpec({ model: 'strong' }));
+      for (const tool of ['opencode', 'codebuddy', 'workbuddy']) {
+        expect(files[tool]).toHaveProperty('description', 'Implements a change');
+        for (const field of ['model', 'effort', 'variant']) expect(files[tool]).not.toHaveProperty(field);
+      }
+    });
+
+    it('keeps Claude\'s sonnet and haiku from the local entry, and drops any other model', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['claude']);
+      const localFile = path.join(homeDir, '.teamai/models/aliases.yaml');
+      for (const model of ['sonnet', 'haiku']) {
+        await fse.outputFile(localFile, YAML.stringify({ aliases: { strong: { claude: { model, effort: 'low' } } } }));
+        const claude = (await pullTo(['claude'], makeSpec({ model: 'strong' })))['claude'];
+        expect(claude).toMatchObject({ model });
+        expect(claude).not.toHaveProperty('effort');
+      }
+      await fse.outputFile(localFile, YAML.stringify({ aliases: { strong: { claude: 'claude-opus-4-8' } } }));
+      expect((await pullTo(['claude'], makeSpec({ model: 'strong' })))['claude']).not.toHaveProperty('model');
+    });
+
+    it('keeps the member\'s opt-out an opt-out', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), 'aliases:\n  strong:\n    claude: ~\n');
+      await switchTo(['claude']);
+      const claude = (await pullTo(['claude'], makeSpec({ model: 'strong' })))['claude'];
+      expect(claude).toHaveProperty('name', 'implementer');
+      expect(claude).not.toHaveProperty('model');
+    });
+
+    it('never treats a variant as switched', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['claude', 'codex']);
+      const files = await pullTo(['claude-internal', 'tclaude', 'codex-internal', 'tcodex'], makeSpec({ model: 'strong' }));
+      for (const tool of ['claude-internal', 'tclaude']) expect(files[tool]).toMatchObject({ model: 'opus', effort: 'high' });
+      for (const tool of ['codex-internal', 'tcodex']) expect(files[tool]).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
+    });
+
+    it('leaves an extras model and a literal model as written', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['codex']);
+      expect((await pullTo(['codex'], makeSpec({ model: 'strong', tool_extras: { codex: { model: 'gpt-pinned' } } })))['codex'])
+        .toMatchObject({ model: 'gpt-pinned' });
+      expect((await pullTo(['codex'], makeSpec({ model: 'gpt-literal' })))['codex']).toMatchObject({ model: 'gpt-literal' });
+    });
+
+    it('holds alias agents in the tool whose switch state cannot be read, and only there', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['codex']);
+      await fse.writeFile(path.join(homeDir, '.codex/config.toml'), 'model = [unterminated\n');
+      const files = await pullTo(['claude', 'codex'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'opus', effort: 'high' });
+      expect(files['codex']).toEqual({});
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(
+        'Held implementer.yaml for codex: Cannot tell whether a tool is switched to a model profile: Cannot parse Codex config.toml',
+      ));
+    });
+
+    it('holds alias agents in every switchable tool, in one warning, while the switch records cannot be read', async () => {
+      await writeAliases({ aliases: { strong: { ...EVERY_TOOL_STRONG.aliases.strong, cursor: 'claude-opus-5' } } });
+      await fse.outputFile(path.join(homeDir, '.teamai/models/managed.json'), '{broken');
+      const files = await pullTo(['claude', 'codex', 'cursor'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toEqual({});
+      expect(files['codex']).toEqual({});
+      expect(files['cursor']).toMatchObject({ model: 'claude-opus-5' });
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(
+        'Held implementer.yaml for claude, codex: Cannot tell whether a tool is switched to a model profile: Cannot parse model ownership manifest',
+      ));
     });
   });
 

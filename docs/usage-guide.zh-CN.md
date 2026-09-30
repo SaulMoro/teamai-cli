@@ -1762,13 +1762,23 @@ aliases:
     codex: default          # fast 在 Codex 中使用 Codex 自己的默认模型
 ```
 
-- 每个工具的顺序是：`tool_extras.<tool>.model`，然后是你的条目，然后是团队条目，最后是不写 model 字段。你的条目会整体替换该工具的团队条目，包括推理强度，因此即使团队映射了推理强度，`codex: gpt-6-astra` 也不会给 Codex 写推理强度。
+- 每个工具的顺序是：`tool_extras.<tool>.model`，然后是你的条目，然后是团队条目，最后是不写 model 字段。已切换到模型配置档的工具会过滤你的条目或团队条目给出的结果，见下文。你的条目会整体替换该工具的团队条目，包括推理强度，因此即使团队映射了推理强度，`codex: gpt-6-astra` 也不会给 Codex 写推理强度。
 - 某个工具写 `~` 或 `default` 时，无论团队如何映射，它都不会得到 model 字段和推理强度。
 - 键可以是保留名称（`strong`、`fast`）或团队定义的别名，值可以是任意模型。团队还没有 `models/aliases.yaml` 时，你也可以映射 `strong`。两者都不是的名称不起作用，因为该文件服务于这台机器上的所有团队。
 - claude-internal 和 tclaude 使用你的 `claude` 条目，codex-internal 和 tcodex 使用你的 `codex` 条目，Qoder CN 使用你的 `qoder` 条目，除非你为它们单独写了条目。你的 `claude` 条目优先于团队的 `tclaude` 条目。
 - 该文件每台机器一份：它适用于所有作用域（user 和每个项目检出），也适用于使用该别名名称的每个团队。
 - 修改该文件后，普通的 `teamai pull` 即会应用，即使团队仓库没有变化。
 - 该文件无法读取时，pull 会警告并指明该文件，并像团队文件一样暂停所有模型依赖它的 agent。
+
+##### 已切换到模型配置档的工具
+
+用 `teamai models switch` 切换过的工具会把请求发往配置档的网关，而网关不认识你账号下的模型。因此，对 `model` 为别名的 agent，pull 只写入切换能够路由的值：
+
+- Claude 保留解析出的 `opus`、`sonnet` 或 `haiku`（来自你的条目或团队条目），因为切换会把这几个系列分别指向网关模型。其他模型会被丢弃。
+- Codex、OpenCode、CodeBuddy 和 WorkBuddy 不会得到 `model` 字段。
+- 已切换的工具都不会得到别名的推理强度。
+
+不写 `model` 字段意味着使用工具自身的继承规则，而不是配置档的模型：例如 Codex 会在你的配置设置了 `[agents].default_subagent_model` 时使用它，否则使用启动该 agent 的会话的模型。`tool_extras.<tool>.model`、`opus` 这类具体 `model`，以及你的 `~` 或 `default`，都与未切换时一样写入。Claude 和 Codex 的变体（claude-internal、tclaude、codex-internal、tcodex）从不视为已切换。只有当工具当前的配置路径（`CLAUDE_CONFIG_DIR`、`CODEX_HOME` 等）与切换时记录的一致，且这些配置仍是 TeamAI 写入的内容时，该工具才算已切换，这与 `teamai models restore` 所做的检查相同。TeamAI 无法读取切换记录（`~/.teamai/models/managed.json`）时，pull 会警告并在 `models switch` 支持的五个工具中暂停别名 agent；无法读取某个已切换工具的配置时，只在该工具中暂停。执行 `teamai models switch` 或 `teamai models restore` 后，普通的 `teamai pull` 就会重写受影响的 agent。
 
 ### GitHub Copilot CLI
 

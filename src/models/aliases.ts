@@ -18,13 +18,18 @@
  * Resolution, first match wins: the tool's own extras `model` (the alias and
  * its effort are skipped), the member's local entry, the team entry (first
  * option), no model field. Each entry is whole: a local entry replaces the
- * team's, effort included.
+ * team's, effort included. A tool switched to a model profile with
+ * `teamai models switch` filters what the local or team entry gives: Claude
+ * keeps `opus`, `sonnet` or `haiku`, which the switch routes to the gateway's
+ * models, and every other switched tool gets no model, so it inherits one
+ * natively. No switched tool gets an alias effort.
  */
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { readEntryFileText } from '../namespaced-entries.js';
+import { liveModelSwitches, type LiveModelSwitch } from './switch.js';
 import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
 
 /** Alias names every team has, whether or not it maps them. */
@@ -47,6 +52,9 @@ function localAliasesPath(): string {
  * CodeBuddy's native value for its default model.
  */
 const LOCAL_DEFAULT = 'default';
+
+/** The Claude aliases a switch points at the gateway's models of that family. */
+const SWITCH_ROUTED_CLAUDE_MODELS: ReadonlySet<string> = new Set(['opus', 'sonnet', 'haiku']);
 
 const ALIAS_NAME_RE = /^[a-z][a-z0-9-]*$/;
 
@@ -100,14 +108,21 @@ export type ModelAliases =
     readonly local: ReadonlyMap<string, AliasEntries>;
     /** What the files set that no tool receives, one actionable message each. */
     readonly warnings: readonly string[];
+    /**
+     * Each tool `models switch` can switch, by its own id: a variant such as
+     * tclaude has no entry, so it is never switched.
+     */
+    readonly switches: Readonly<Partial<Record<ToolName, LiveModelSwitch>>>;
   }
   | { readonly ok: false; readonly reason: string };
 
 /**
  * Which resolution step produced a tool's model: `literal` when `model` is not
  * an alias. `local` without a model is the member's `~` or `default`.
+ * `switched` is a local or team model the switch filtered: Claude's family
+ * alias it kept, or no model.
  */
-export type ResolutionStep = 'extras' | 'literal' | 'local' | 'team' | 'default';
+export type ResolutionStep = 'extras' | 'literal' | 'switched' | 'local' | 'team' | 'default';
 
 /**
  * What one tool receives for an agent's model, or why it cannot be resolved.
@@ -138,6 +153,8 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
   const local = await readAliasesFile(localPath, localPath);
   if (!local.ok) return local;
   const names = new Set<string>([...RESERVED_ALIASES, ...team.aliases.keys()]);
+  // Read once per load, and only matters for aliases: a literal model is written as is.
+  const switches = await liveModelSwitches();
   // A local name no team here defines is another team's: it has no effect, so no warning either.
   const localHere = new Map([...local.aliases].filter(([alias]) => names.has(alias)));
   return {
@@ -146,6 +163,7 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
     team: team.aliases,
     local: localHere,
     warnings: [...droppedEffortWarnings(team.aliases, TEAM_ALIASES_FILE), ...droppedEffortWarnings(localHere, localPath)],
+    switches,
   };
 }
 
@@ -215,13 +233,34 @@ export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, tool: 
   if (!aliases.ok) return aliases;
   if (!aliases.names.has(spec.model)) return { ok: true, step: 'literal', model: spec.model };
 
-  // A tool switched to a model profile takes its step here, above the local entry.
-  const local = toolEntry(aliases.local.get(spec.model), tool);
+  const switched = aliases.switches[tool];
+  if (switched?.ok === false) {
+    return { ok: false, reason: `Cannot tell whether a tool is switched to a model profile: ${switched.reason}` };
+  }
+  const resolution = fromEntries(aliases, spec.model, tool, extras);
+  return switched?.switched ? throughSwitch(resolution, tool) : resolution;
+}
+
+/** What the member's local entry, else the team entry, gives `tool` for `alias`. */
+function fromEntries(aliases: ModelAliases & { ok: true }, alias: string, tool: ToolName, extras: Record<string, unknown> | undefined): ModelResolution {
+  const local = toolEntry(aliases.local.get(alias), tool);
   if (local === null || local === LOCAL_DEFAULT) return { ok: true, step: 'local' };
   if (local !== undefined) return fromOption('local', local, tool, extras);
-  const team = toolEntry(aliases.team.get(spec.model), tool);
+  const team = toolEntry(aliases.team.get(alias), tool);
   if (team === undefined || team === null) return { ok: true, step: 'default' };
   return fromOption('team', team, tool, extras);
+}
+
+/**
+ * What a switched tool keeps of `resolution`: the gateway receives only what
+ * the switch routes. A resolution with no model, such as the member's
+ * opt-out, has nothing to filter and keeps its step.
+ */
+function throughSwitch(resolution: ModelResolution, tool: ToolName): ModelResolution {
+  if (!resolution.ok || resolution.model === undefined) return resolution;
+  return tool === 'claude' && SWITCH_ROUTED_CLAUDE_MODELS.has(resolution.model)
+    ? { ok: true, step: 'switched', model: resolution.model }
+    : { ok: true, step: 'switched' };
 }
 
 /** `tool`'s entry in one file's alias, its own key before the tool it inherits from. */

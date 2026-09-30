@@ -73,3 +73,7 @@ Codex 按行编辑，以保留注释和格式。写入前会解析结果并与�
 写入顺序保证中断后可以收敛：先保存待完成记录，再原子替换 Agent 文件，最后清除待完成标记。下次执行命令时，只有受管字段与写入前或写入后的状态之一一致，才会自动收敛；否则跳过该 Agent。写入失败会删除对应的待完成记录。记录中固定了 Agent 的配置路径（支持 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`XDG_CONFIG_HOME`、`OPENCODE_CONFIG`、`PI_CODING_AGENT_DIR`），之后路径变化也不会让恢复写到别处。所有模型操作通过一把锁串行执行；`pull` 会在持锁后再次确认 Agent 仍在使用它要重新应用的配置。
 
 某个 Agent 使用 TeamAI 模型配置期间，local-agent 服务端模型下发会对该 Agent 暂停。用户级完整卸载会在清理 MCP 前先恢复模型配置，若有 Agent 无法恢复就停止卸载并保留记录；项目级卸载不改动这些机器级配置。
+
+## 团队 Agent 与模型别名
+
+团队 agent 的 `model` 为别名（`strong`、`fast` 或 `models/aliases.yaml` 中的团队别名）时，每次 pull 都会按工具解析。已切换的工具使用网关，网关不认识账号下的模型，因此 pull 会过滤成员本地覆盖或团队条目给该工具的结果：Claude 保留 `opus`、`sonnet` 或 `haiku`，由上文的家族路由指向网关模型，其他模型丢弃；Codex、OpenCode、CodeBuddy 和 WorkBuddy 不写 `model` 字段。已切换的工具都不写别名的推理强度。不写 `model` 字段意味着使用工具自身的继承规则，而不是配置档的模型：Codex 可能使用 `[agents].default_subagent_model` 或父会话的模型。`tool_extras.<tool>.model`、具体的 `model` 以及成员的 `~`/`default` 不受过滤。判断工具是否已切换使用与恢复相同的检查，不持锁读取记录：记录的配置路径就是当前路径，且受管字段仍是 TeamAI 写入的内容。tclaude、codex-internal 等变体没有记录，从不视为已切换。pull 会记录每个 agent 副本收到的内容，因此 `models switch` 或 `models restore` 之后，普通的 pull 就会重写受影响的 agent。

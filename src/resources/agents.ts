@@ -681,6 +681,18 @@ export class AgentsHandler extends ResourceHandler {
       specModel = parseResult.spec.model;
       if (!aliases.ok && specModel !== undefined) {
         log.warn(`[agents] Held ${item.name}.yaml: ${aliases.reason}. Its deployed copies are kept and no new ones are written until the file is fixed.`);
+      } else if (specModel !== undefined) {
+        // Some tools can fail alone, such as those whose model switch cannot be read.
+        const spec = parseResult.spec;
+        const heldTools = new Map<string, ToolName[]>();
+        for (const { tool } of await this.agentToolDirs(teamConfig, localConfig)) {
+          if (spec.targets && !spec.targets.includes(tool)) continue;
+          const resolution = resolveAgentModel(aliases, spec, tool);
+          if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
+        }
+        for (const [reason, tools] of heldTools) {
+          log.warn(`[agents] Held ${item.name}.yaml for ${tools.join(', ')}: ${reason}. Its copies there are kept, and none are written, until that is fixed.`);
+        }
       }
     } else {
       warnLegacyAlias(item, content, aliases);

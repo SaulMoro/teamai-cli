@@ -72,6 +72,8 @@ import { pull } from '../pull.js';
 import { detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
 import { renderForTool, serializeAgentYaml, type AgentSpec } from '../resources/agent-format.js';
+import { ModelProfileSchema, resolveProfile, type ModelAgent } from '../models/profile.js';
+import { restoreModelProfiles, switchModelProfile } from '../models/switch.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 const STRONG = {
@@ -105,6 +107,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     await fse.ensureDir(path.join(homeDir, '.claude'));
     await fse.ensureDir(path.join(homeDir, '.codex'));
     vi.stubEnv('HOME', homeDir);
+    // The switch reads these to find each tool's live settings.
+    for (const key of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG', 'XDG_CONFIG_HOME']) vi.stubEnv(key, '');
     vi.clearAllMocks();
     vi.mocked(detectProjectConfig).mockResolvedValue(null);
 
@@ -327,6 +331,95 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
       const projectCopy = path.join(projectRoot, '.claude', 'agents', 'implementer.md');
       expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'sonnet' });
+    });
+  });
+
+  describe('tools switched to a model profile', () => {
+    /** `teamai models switch` for `agents`, to a gateway serving Claude and Codex models. */
+    async function switchTo(agents: ModelAgent[]): Promise<void> {
+      const profile = ModelProfileSchema.parse({
+        id: 'gateway',
+        name: 'Gateway',
+        base_url: 'https://gateway.example.test',
+        api_key: '${API_KEY}',
+        model_groups: [
+          { protocols: ['anthropic'], models: ['claude-opus-4-8', 'claude-haiku-4-6'] },
+          { protocols: ['openai-responses'], models: ['gpt-gateway'] },
+        ],
+      });
+      const resolved = resolveProfile({ source: 'team', profile, team: 'another-team' }, {
+        'team:gateway@https://gateway.example.test': { API_KEY: { value: 'secret' } },
+      });
+      const results = await switchModelProfile(resolved, agents);
+      expect(results.map((result) => result.status)).toEqual(agents.map(() => 'switched'));
+    }
+
+    it('drops the alias model and effort from Codex, keeps Claude\'s opus without effort, and restore brings them back', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+
+      await switchTo(['codex', 'claude']);
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      const codex = await codexModel();
+      expect(codex).toHaveProperty('name', 'implementer');
+      expect(codex).not.toHaveProperty('model');
+      expect(codex).not.toHaveProperty('model_reasoning_effort');
+      const claude = await claudeModel();
+      expect(claude).toMatchObject({ model: 'opus' });
+      expect(claude).not.toHaveProperty('effort');
+      expect((await homeRecord())?.agentModels?.['implementer']).toEqual({
+        claude: { step: 'switched', model: 'opus' },
+        codex: { step: 'switched' },
+      });
+
+      vi.clearAllMocks();
+      expect((await restoreModelProfiles(['codex', 'claude'])).map((result) => result.status)).toEqual(['restored', 'restored']);
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
+      expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
+    });
+
+    it('drops a Claude model the switch does not route', async () => {
+      await writeAliases({ aliases: { strong: { claude: [{ model: 'fable', effort: 'high' }] } } });
+      await writeAgent(IMPLEMENTER);
+      await switchTo(['claude']);
+
+      await pull({ silent: true });
+
+      const claude = await claudeModel();
+      expect(claude).toHaveProperty('name', 'implementer');
+      expect(claude).not.toHaveProperty('model');
+      expect(claude).not.toHaveProperty('effort');
+    });
+
+    it('does not count a switch recorded for another CODEX_HOME', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      const otherCodexHome = path.join(tmpDir, 'other-codex');
+      await fse.ensureDir(otherCodexHome);
+      vi.stubEnv('CODEX_HOME', otherCodexHome);
+      await switchTo(['codex']);
+      vi.stubEnv('CODEX_HOME', '');
+
+      await pull({ silent: true });
+
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
+    });
+
+    it('does not count a switch whose settings the member took over', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await switchTo(['codex']);
+      await fse.writeFile(path.join(homeDir, '.codex', 'config.toml'), 'model = "gpt-mine"\n');
+
+      await pull({ silent: true });
+
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
     });
   });
 

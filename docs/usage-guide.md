@@ -1875,13 +1875,23 @@ aliases:
     codex: default          # Codex uses its own default for fast
 ```
 
-- For each tool, the order is: `tool_extras.<tool>.model`, then your entry, then the team entry, then no model field. Your entry replaces the team's whole entry for that tool, effort included, so `codex: gpt-6-astra` gives Codex no effort even when the team maps one.
+- For each tool, the order is: `tool_extras.<tool>.model`, then your entry, then the team entry, then no model field. A tool switched to a model profile filters the result of your entry or the team entry, as described next. Your entry replaces the team's whole entry for that tool, effort included, so `codex: gpt-6-astra` gives Codex no effort even when the team maps one.
 - `~` or `default` for a tool gives it no model field and no effort, whatever the team maps.
 - A key is a reserved name (`strong`, `fast`) or an alias the team defines, and a value can be any model. You can map `strong` before your team has a `models/aliases.yaml`. A name that is neither has no effect, since the file serves every team on the machine.
 - claude-internal and tclaude use your `claude` entry, codex-internal and tcodex your `codex` entry, and Qoder CN your `qoder` entry, unless you give them their own. Your `claude` entry wins over the team's `tclaude` entry.
 - The file is one per machine: it applies in every scope (user and each project checkout) and to every team that uses the alias name.
 - An ordinary `teamai pull` applies an edit to the file, even when the team repo has not moved.
 - While the file cannot be read, pull warns, naming it, and holds each agent whose model depends on it, as for the team file.
+
+##### Tools switched to a model profile
+
+A tool you switched with `teamai models switch` sends its requests to the profile's gateway, which does not know your account's models. For an agent whose `model` is an alias, pull therefore writes only what the switch can route:
+
+- Claude keeps a resolved `opus`, `sonnet` or `haiku`, from your entry or the team's, because the switch points each of these families at a gateway model. Any other model is dropped.
+- Codex, OpenCode, CodeBuddy and WorkBuddy get no `model` field.
+- No switched tool gets the alias's effort.
+
+No `model` field means the tool's native inheritance, not the profile's model: Codex, for example, uses `[agents].default_subagent_model` when your config sets one, otherwise the model of the session that starts the agent. `tool_extras.<tool>.model`, a concrete `model` such as `opus`, and your `~` or `default` are written as they are without a switch. The Claude and Codex variants (claude-internal, tclaude, codex-internal, tcodex) are never switched. A tool counts as switched only while its live settings path (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, ...) is the one the switch recorded and those settings still hold what TeamAI wrote, the same checks `teamai models restore` makes. While TeamAI cannot read its switch records (`~/.teamai/models/managed.json`), pull warns and holds alias agents in the five tools `models switch` supports; while it cannot read one switched tool's settings, in that tool only. An ordinary `teamai pull` after `teamai models switch` or `teamai models restore` rewrites the affected agents.
 
 ### GitHub Copilot CLI
 

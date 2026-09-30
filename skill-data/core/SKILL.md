@@ -146,6 +146,13 @@ or a team alias; other names do nothing. One file serves every scope and every t
 with that alias name. An ordinary `teamai pull` applies an edit. In the team file,
 `default` is a literal model value and `~` is an error.
 
+On a tool switched with `teamai models switch`, alias agents get no alias effort, and
+Claude keeps only `opus`, `sonnet` or `haiku` (the switch routes those to the gateway)
+while Codex, OpenCode, CodeBuddy and WorkBuddy get no `model`. No `model` means the
+tool's native inheritance (for Codex, `[agents].default_subagent_model` or the parent's
+model), not the profile's model. Variants such as tclaude are never switched. An ordinary
+`teamai pull` after `models switch` or `models restore` rewrites the affected agents.
+
 ## References
 
 In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prints; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.
