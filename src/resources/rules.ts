@@ -629,15 +629,8 @@ export class RulesHandler extends ResourceHandler {
     rules: ResourceItem[],
   ): Promise<void> {
     const files = new Map<string, boolean>();
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!inlinesRulesIntoInstructions(tool) || !toolPath.claudemd) continue;
-      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
-      // Never probe with `claudemd`: a root-level AGENTS.md says nothing about
-      // whether Codex is installed. Same probe as the other instruction blocks.
-      const probe = toolPath.rules ?? toolPath.settings;
-      const active = !isAgentExcluded(localConfig, tool)
-        && (probe === undefined || await isToolInstalledForConfig(tool, probe, localConfig));
-      files.set(file, (files.get(file) ?? false) || active);
+    for (const { file, active } of await this.instructionFileRuleTools(teamConfig, localConfig)) {
+      if (file !== null) files.set(file, (files.get(file) ?? false) || active);
     }
     const block = await teamRulesBlock(rules);
     for (const [file, active] of files) {
@@ -723,6 +716,32 @@ export class RulesHandler extends ResourceHandler {
         + 'then delete the copy.',
       );
     }
+  }
+
+  /**
+   * Each tool in this scope that inlines rules into its instructions file (the
+   * Codex family): that file, or null when its entry has no `claudemd` path,
+   * and whether pull writes the block for it (enabled and installed).
+   *
+   * Read-only and public so `doctor` inspects the file the pull writes rather
+   * than deriving it a second time (#624).
+   */
+  async instructionFileRuleTools(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+  ): Promise<Array<{ tool: string; file: string | null; active: boolean }>> {
+    const out: Array<{ tool: string; file: string | null; active: boolean }> = [];
+    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+      if (!inlinesRulesIntoInstructions(tool)) continue;
+      const file = toolPath.claudemd ? path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd) : null;
+      // Never probe with `claudemd`: a root-level AGENTS.md says nothing about
+      // whether Codex is installed. Same probe as the other instruction blocks.
+      const probe = toolPath.rules ?? toolPath.settings;
+      const active = !isAgentExcluded(localConfig, tool)
+        && (probe === undefined || await isToolInstalledForConfig(tool, probe, localConfig));
+      out.push({ tool, file, active });
+    }
+    return out;
   }
 
   /**
