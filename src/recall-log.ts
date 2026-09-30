@@ -5,7 +5,7 @@
  *
  *   run       recall searched: the session from the environment, its caller and the docs it returned
  *   claim     the PostToolUse of a shell call that printed a run id: its actor, and whether it ran the recall itself
- *   evidence  a PostToolUse read of a file under the knowledge roots, by its actor
+ *   evidence  a PostToolUse read of a file under the knowledge roots, by its actor: its path and status, never its command
  *   consumed  evidence that has been credited, so it never votes again
  *
  * It never holds a query, prompt, tool output or file content. It is local and
@@ -85,7 +85,10 @@ export interface EvidenceLine extends Actor {
   id: string;
   /** Absolute once resolved against the call's cwd; relative when the call had no cwd. */
   path: string;
-  status: 'success';
+  /** A failed read is never recorded. `unknown` when the agent reports no status, as Codex's shell. */
+  status: 'success' | 'unknown';
+  /** True when the read was the call's only command, not the head of a pipeline. */
+  simple: boolean;
 }
 
 export interface ConsumedLine {

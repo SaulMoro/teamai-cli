@@ -17,10 +17,10 @@ import { appendRecallLine, readRecallLog } from './recall-log.js';
 import type { Actor, ClaimLine, RecalledDoc, RunLine } from './recall-log.js';
 import { getVotesDir } from './types.js';
 import type { LocalConfig } from './types.js';
-import { resolveHookCwd } from './utils/hook-cwd.js';
 import { log } from './utils/logger.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
-import { normalizeToolName } from './utils/tool-names.js';
+import { commandWords, simpleCommands } from './utils/shell-command.js';
+import { classifyToolCall } from './utils/tool-call.js';
 
 /** How long after a run a read of one of its docs counts as adoption. */
 export const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -35,48 +35,6 @@ const TEAMAI_PACKAGE = /^teamai(?:-cli)?(?:@\S*)?$/i;
 /** The recall subagent's name: its `--caller`, and the `agent_type` its hooks carry. */
 const RECALL_SUBAGENT = 'teamai-recall';
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-/**
- * The simple commands of a shell command line, each as its words with the
- * quotes removed: it splits on `;`, `&&`, `||`, `|`, `&` and newlines outside
- * quotes. A backslash escapes only `"` or `\` inside double quotes, and a
- * newline outside quotes, so a Windows path stays whole.
- */
-function simpleCommands(command: string): string[][] {
-  const commands: string[][] = [[]];
-  let word: string | null = null;
-  let quote: string | null = null;
-  const endWord = (): void => {
-    if (word !== null) commands[commands.length - 1].push(word);
-    word = null;
-  };
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    if (quote) {
-      if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && (command[i + 1] === '"' || command[i + 1] === '\\')) word += command[++i];
-      else word += c;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-      word ??= '';
-    } else if (c === '\\' && command[i + 1] === '\n') {
-      i++;
-    } else if (c === ';' || c === '&' || c === '|' || c === '\n') {
-      endWord();
-      if (commands[commands.length - 1].length > 0) commands.push([]);
-    } else if (/\s/.test(c)) {
-      endWord();
-    } else {
-      word = (word ?? '') + c;
-    }
-  }
-  endWord();
-  return commands;
-}
-
 /**
  * Whether a shell command itself runs `teamai recall`: one of its simple
  * commands has `teamai` (by path or `.cmd`/`.exe` too, or the package after
@@ -85,9 +43,9 @@ function simpleCommands(command: string): string[][] {
  * as `codex exec "run teamai recall …"`, does not.
  */
 function invokesRecall(command: string): boolean {
-  return simpleCommands(command).some((words) => {
+  return simpleCommands(command).some((simple) => {
+    const words = commandWords(simple.words);
     let i = 0;
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
     let name = TEAMAI_BINARY;
     if (words[i] === 'npx') {
       i++;
@@ -116,45 +74,39 @@ function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
 /**
  * Record what the recall log needs from one PostToolUse: a claim for each run
  * id a shell call printed, noting whether its command ran `teamai recall`
- * itself; evidence when it read a file under the knowledge roots; nothing
- * otherwise. Whether a claim counts is the reducer's call.
+ * itself; evidence for each file under the knowledge roots it read, unless it
+ * failed; nothing otherwise. Whether a claim or a read of unknown status
+ * counts is the reducer's call. The command itself is never recorded.
  */
 export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
-  const toolName = normalizeToolName(typeof stdin.tool_name === 'string' ? stdin.tool_name : '');
-  const input = asObject(stdin.tool_input);
-  if (!input) return;
+  const call = classifyToolCall(stdin);
 
-  if (toolName === 'Bash') {
-    if (typeof input.command !== 'string') return;
-    // Claude's response is `{ stdout, … }`; Codex's is the output string.
-    const response = stdin.tool_response;
-    const stdout = typeof response === 'string' ? response : asObject(response)?.stdout;
-    if (typeof stdout !== 'string') return;
-    const runs = [...new Set([...stdout.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
-    if (runs.length === 0) return;
-    const actor = actorOf(stdin, tool);
-    const direct = invokesRecall(input.command);
-    for (const run of runs) {
-      await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
+  if (call.command !== undefined && call.output !== undefined) {
+    const runs = [...new Set([...call.output.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
+    if (runs.length > 0) {
+      const actor = actorOf(stdin, tool);
+      const direct = invokesRecall(call.command);
+      for (const run of runs) {
+        await appendRecallLine(config, { kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
+      }
+      return;
     }
-    return;
   }
 
-  if (toolName === 'Read') {
-    const filePath = input.file_path;
-    if (typeof filePath !== 'string' || !filePath.trim()) return;
-    const cwd = resolveHookCwd(stdin);
-    const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : cwd ? path.resolve(cwd, filePath) : filePath;
-    if (path.isAbsolute(resolved)) {
+  if (call.category !== 'read' || call.status === 'failure') return;
+  let roots: string[] | undefined;
+  for (const file of call.paths) {
+    if (path.isAbsolute(file)) {
       const { knowledgeRoots, isUnderRoots } = await import('./utils/learnings-roots.js');
-      if (!isUnderRoots(resolved, await knowledgeRoots(config))) return;
-    } else if (!/\.md$/i.test(resolved)) {
+      roots ??= await knowledgeRoots(config);
+      if (!isUnderRoots(file, roots)) continue;
+    } else if (!/\.md$/i.test(file)) {
       // No base to place it under a root: only a doc-shaped path is kept, for the suffix match.
-      return;
+      continue;
     }
     await appendRecallLine(config, {
       kind: 'evidence', ts: new Date().toISOString(), id: randomUUID(),
-      ...actorOf(stdin, tool), path: resolved, status: 'success',
+      ...actorOf(stdin, tool), path: file, status: call.status, simple: call.simple,
     });
   }
 }
@@ -204,9 +156,11 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  * later claim that disagrees is kept but not applied, and an unsettled run
  * never votes. A run the recall subagent made (its `--caller`, or its valid
  * claim's agent type) is marked: reads by the actor that ran it never count
- * for it, while reads by the main agent or any other subagent do. Only
- * eligible docs are credited: an inherited user-scope doc stays read-only
- * while a project is active.
+ * for it, while reads by the main agent or any other subagent do. A read
+ * whose status the agent did not report counts only when it was the call's
+ * only command, of a path one of the session's runs printed. Only eligible
+ * docs are credited: an inherited user-scope doc stays read-only while a
+ * project is active.
  */
 export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
   const lines = await readRecallLog(config);
@@ -236,6 +190,8 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   const crediting: string[] = [];
   for (const e of lines) {
     if (e.kind !== 'evidence' || e.session !== sessionId || consumed.has(e.id)) continue;
+    // A read of unknown status (Codex's shell) counts only as a simple read, never as a pipeline's head.
+    if (e.status !== 'success' && !(e.status === 'unknown' && e.simple === true)) continue;
     const at = Date.parse(e.ts);
     const docs = runs
       .filter((r) => { const since = at - Date.parse(r.ts); return since >= 0 && since <= ADOPTION_WINDOW_MS; })

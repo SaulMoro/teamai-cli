@@ -208,12 +208,32 @@ class Harness {
 
   /**
    * A shell call's PostToolUse in `options.session` (default: the main
-   * session): Claude's Bash, or Codex's, whose `tool_response` is the output
-   * string.
+   * session), from the project root: Claude's Bash, or Codex's, whose
+   * `tool_response` is the output string.
    */
   async shell(command: string, stdout: string, options: { session?: string; tool?: 'claude' | 'codex' } = {}): Promise<void> {
     const response = options.tool === 'codex' ? stdout : { stdout, stderr: '', interrupted: false, isImage: false };
     await this.postToolUse('Bash', { command }, response, this.root, undefined, options.session, options.tool);
+  }
+
+  /** `file` relative to the project root, the cwd every call is made from. */
+  rel(file: string): string {
+    return path.relative(this.root, file);
+  }
+
+  /**
+   * A Codex session (the only session in its environment) runs `teamai
+   * recall`, and its shell call's PostToolUse claims the run.
+   */
+  async codexRecall(query: string): Promise<RecallRun> {
+    const run = await this.recall(query, { env: { CODEX_SESSION_ID: CODEX }, claim: false });
+    await this.shell(`teamai recall "${query}"`, run.output, { session: CODEX, tool: 'codex' });
+    return run;
+  }
+
+  /** The Codex session's shell call. */
+  async codexShell(command: string, stdout = ''): Promise<void> {
+    await this.shell(command, stdout, { session: CODEX, tool: 'codex' });
   }
 
   async postToolUse(
@@ -557,13 +577,134 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  {
+    name: '05 (Bob): Codex recall; sed -n \'1,80p\' <doc, relative to the cwd>; Stop → +1',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`sed -n '1,80p' '${h.rel(files[0])}'`, fs.readFileSync(files[0], 'utf-8'));
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: Codex claims its run with teamai recall … 2>&1 (a redirect is no & operator) → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.codexShell('teamai recall "redis timeout" 2>&1', output);
+      await h.codexShell(`cat '${files[0]}'`, '---');
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: Codex recall; nl -ba <doc> → +1',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`nl -ba '${files[0]}'`, '     1\t---');
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: Codex recall; learnings/redis-timeout.md relative to a cwd that holds no such doc → 0',
+    trace: async (h) => {
+      await h.codexRecall('redis timeout');
+      await h.codexShell("sed -n '1,80p' learnings/redis-timeout.md", 'sed: learnings/redis-timeout.md: No such file or directory');
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '05: Claude recall; cat <doc> | head (a pipeline that starts with the reader, status success) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`cat '${h.rel(files[0])}' | head -n 20`, '---');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: Codex recall; cat <doc> | head (status unknown, not a simple read) → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`cat '${h.rel(files[0])}' | head -n 20`, '---');
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '05: Codex recall; test -e x && cat <doc> || true → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`test -e x && cat '${h.rel(files[0])}' || true`, '---');
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '05: Claude recall; cat <doc>; echo done, or cat <doc> & (any ;, &&, || or & makes the call no read) → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`cat '${files[0]}'; echo done`, '---\ndone');
+      await h.shell(`cat '${files[0]}' &`, '');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '05: Claude recall; sed -i \'s/pool/POOL/\' <doc> → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`sed -i 's/pool/POOL/' '${files[0]}'`, '');
+      await h.shell(`sed -n -i '1p' '${files[0]}'`, '');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '05: the doc as a redirect target or a flag value, not a file operand → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`cat notes.txt > '${files[0]}'`, '');
+      await h.shell(`cat < '${files[0]}'`, '---');
+      await h.shell(`nl -s '${files[0]}' notes.txt`, '');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '05: a read that fails (status failure: CodeBuddy IDE execute_command with exitCode 1) → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('execute_command', { command: `cat '${files[0]}'` },
+        { exitCode: 1, stdout: '', stderr: 'cat: permission denied' }, h.root, undefined, undefined, 'codebuddy');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '05: the same read with exitCode 0 → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('execute_command', { command: `cat '${files[0]}'` },
+        { exitCode: 0, stdout: '---', stderr: '' }, h.root, undefined, undefined, 'codebuddy');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: an unknown tool name with the doc path in its input → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('OpenDocument', { file_path: files[0], path: files[0], command: `cat '${files[0]}'` }, { content: '---' });
+      await h.stop();
+    },
+    project: {},
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '05: Codex recall; sed -n \'1,80p\' learnings/redis-timeout.md; Stop → +1',
-  '05: Codex recall; test -e x && cat learnings/redis-timeout.md || true → 0',
-  '05: a read that fails (status failure) → 0',
   '06: ls learnings/ and grep -l timeout learnings/ → 0',
   '06: grep -rn timeout learnings/ with output line learnings/redis-timeout.md:12: → +1',
   '06: grep -c timeout learnings/redis-timeout.md → 0',
@@ -659,11 +800,12 @@ describe('recall attribution acceptance (#884)', () => {
     const { files } = await h.recall('redis timeout QUERYMARK');
     expect(files).toEqual([h.docs['redis-timeout']]);
     await h.read(files[0]);
+    await h.shell(`sed -n '1,80p' '${h.rel(files[0])}'`, fs.readFileSync(files[0], 'utf-8'), { tool: 'codex' });
     await h.stop();
 
     const raw = fs.readFileSync(recallLogPath(h.project), 'utf-8');
-    expect(raw).toContain('"kind":"evidence"');
-    for (const secret of ['QUERYMARK', 'PROMPTMARK', 'SNIPPETMARK', 'Raise the pool size', 'Author:', 'teamai recall']) {
+    expect(raw.match(/"kind":"evidence"/g)).toHaveLength(2);
+    for (const secret of ['QUERYMARK', 'PROMPTMARK', 'SNIPPETMARK', 'Raise the pool size', 'Author:', 'teamai recall', 'sed -n', '1,80p']) {
       expect(raw).not.toContain(secret);
     }
     if (process.platform !== 'win32') {
