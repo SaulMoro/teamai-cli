@@ -1858,10 +1858,19 @@ aliases:
 - A tool the alias does not map gets no `model` field, so it runs the agent on its default. Without `models/aliases.yaml`, `strong` and `fast` give no model field in any tool.
 - `tool_extras.<tool>.model` pins that tool to a concrete model and skips the alias, its effort included. An effort field in `tool_extras.<tool>` without a model overrides only the alias's effort.
 - A `model` that is not a string is rejected when the agent is read. A legacy `agents/<name>.md` is copied as is, so pull warns when its `model` is an alias.
-- A structural error fails the whole file: YAML that does not parse, a value of the wrong type, an alias name that breaks the naming rule, an option with `effort` and no `model`, or `~`. Until it is fixed, pull warns, naming the file, and holds every agent with a `model` field (an unreadable file may define any name) in each tool without `tool_extras.<tool>.model`: deployed copies stay, new ones are not written, and the models pull recorded for them stay as they were. Push skips those agents and says why; everything else pushes.
+- A structural error fails the whole file: YAML that does not parse, a value of the wrong type, an alias name that breaks the naming rule, an option with `effort` and no `model`, or `~`. Until it is fixed, pull warns, naming the file, and holds every agent with a `model` field (an unreadable file may define any name) in each tool without `tool_extras.<tool>.model`: deployed copies stay, new ones are not written, and the models pull recorded for them stay as they were. Push skips those agents and says why; everything else pushes. Once the file is fixed, an ordinary `teamai pull` delivers the held agents, including ones it never deployed.
 - Anything else this CLI does not know is dropped with a warning, and the rest of the file applies: a tool key that is not a tool teamai knows, an option field other than `model` and `effort` (the entry is used without it), and an alias named like a tool's own model alias (`opus`, `sonnet`, `haiku`, `fable`, `inherit`, `default`, `auto`, `lite`, a short best-effort list), which is ignored so that `model: opus` stays `opus`. A `gateways` key inside an alias is reserved for a later version and ignored without a warning. Pull prints each warning once, and only when it delivers an agent that uses that alias; a warning about one tool's entry, only when that tool reads the entry.
 - Pull records the model and effort each agent copy received, so an ordinary `teamai pull` applies a change even when the team repo has not moved, such as the first pull after upgrading from a CLI that wrote `model: strong` as is. It rewrites only the agents whose model changed and keeps a copy you edited. When the alias an agent used is removed, pull warns that its `model` is now written as is.
 - `default` in `models/aliases.yaml` is a model value like any other and is written as is, which is CodeBuddy's own value for its default model. `~` there is an error: leave the tool out to give it no model field.
+
+##### Adopting aliases
+
+Only a CLI that knows model aliases resolves them, so a team adopts them in two steps:
+
+1. Everyone updates teamai to a version with model aliases. Nothing changes yet: an agent with a concrete model or none is written as before.
+2. Then the team adds `models/aliases.yaml` and moves agents to `model: strong`, `model: fast` or its own aliases, in the team repo or by writing the alias name in a deployed copy and pushing.
+
+An older CLI ignores `models/aliases.yaml` and writes `model: strong` into every tool as is, a model no tool knows. Its `teamai push` also reads a model changed in a deployed copy as an edit, so it can replace `model: strong` in the team's agent with a concrete model such as `opus`. TeamAI does not check versions, so updating first is the only protection. The first ordinary `teamai pull` after a member updates replaces a literal `model: strong` with what the alias resolves to.
 
 ##### Namespaced aliases
 

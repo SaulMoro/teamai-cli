@@ -1745,10 +1745,19 @@ aliases:
 - 别名未映射的工具不会得到 `model` 字段，因此使用其默认模型运行该 agent。没有 `models/aliases.yaml` 时，`strong` 和 `fast` 在所有工具中都不产生 model 字段。
 - `tool_extras.<tool>.model` 把该工具固定到具体模型并跳过别名，包括别名的推理强度。`tool_extras.<tool>` 中只有推理强度字段而没有 model 时，只覆盖别名的推理强度。
 - 读取 agent 时会拒绝非字符串的 `model`。旧格式 `agents/<name>.md` 按原样复制，因此当其 `model` 是别名时 pull 会给出警告。
-- 结构性错误会让整个文件失效：无法解析的 YAML、类型错误的值、不符合命名规则的别名、有 `effort` 却没有 `model` 的选项，或 `~`。修复之前，pull 会警告并指明该文件，并在每个没有 `tool_extras.<tool>.model` 的工具中暂停所有带 `model` 字段的 agent（无法读取的文件可能定义任何名称）：已部署的副本保留，不写入新副本，pull 为它们记录的模型也保持不变。push 会跳过这些 agent 并说明原因，其他内容照常 push。
+- 结构性错误会让整个文件失效：无法解析的 YAML、类型错误的值、不符合命名规则的别名、有 `effort` 却没有 `model` 的选项，或 `~`。修复之前，pull 会警告并指明该文件，并在每个没有 `tool_extras.<tool>.model` 的工具中暂停所有带 `model` 字段的 agent（无法读取的文件可能定义任何名称）：已部署的副本保留，不写入新副本，pull 为它们记录的模型也保持不变。push 会跳过这些 agent 并说明原因，其他内容照常 push。文件修复后，普通的 `teamai pull` 就会交付被暂停的 agent，包括从未部署过的。
 - 其他当前 CLI 不认识的内容会被丢弃并给出警告，文件其余部分照常生效：不是 teamai 已知工具的工具键；`model` 和 `effort` 之外的选项字段（该条目去掉该字段后照常使用）；以及与工具自带模型别名同名的别名（`opus`、`sonnet`、`haiku`、`fable`、`inherit`、`default`、`auto`、`lite`，这是一个尽力而为的简短列表），该别名会被忽略，因此 `model: opus` 仍是 `opus`。别名中的 `gateways` 键保留给后续版本，会被忽略且不给出警告。pull 对每条警告只打印一次，并且只在交付使用该别名的 agent 时打印；关于某个工具条目的警告，只在该工具读取该条目时打印。
 - pull 会记录每个 agent 副本收到的模型和推理强度，因此即使团队仓库没有变化，普通的 `teamai pull` 也会应用变化，例如从把 `model: strong` 按原样写入的旧版 CLI 升级后的第一次 pull。它只重写模型发生变化的 agent，并保留你修改过的副本。agent 使用的别名被删除时，pull 会警告其 `model` 现在按原样写入。
 - `models/aliases.yaml` 中的 `default` 和其他模型值一样按原样写入，它是 CodeBuddy 表示其默认模型的原生值。在该文件中写 `~` 是错误：要让某个工具不产生 model 字段，不写该工具即可。
+
+##### 引入别名
+
+只有支持模型别名的 CLI 才会解析别名，因此团队分两步引入：
+
+1. 所有人先把 teamai 升级到支持模型别名的版本。此时什么都不会变：`model` 为具体模型或未设置的 agent 照旧写入。
+2. 之后团队再添加 `models/aliases.yaml`，并把 agent 改为 `model: strong`、`model: fast` 或团队自己的别名，可以直接在团队仓库中修改，也可以在已部署的副本中写入别名名称后 push。
+
+旧版 CLI 会忽略 `models/aliases.yaml`，把 `model: strong` 按原样写入每个工具，而没有工具认识这个模型。旧版 CLI 的 `teamai push` 还会把已部署副本中改动的模型当作编辑，因此可能把团队 agent 中的 `model: strong` 替换成 `opus` 这样的具体模型。TeamAI 不检查版本，所以先升级是唯一的保护。成员升级后的第一次普通 `teamai pull` 会把按原样写入的 `model: strong` 替换为别名解析出的值。
 
 ##### 按 namespace 的别名
 

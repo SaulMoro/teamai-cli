@@ -137,6 +137,8 @@ an entry, so never expect a `claude` model in Qoder or ZCode. A tool the alias d
 not map gets no `model` and uses its default; a concrete model such as `opus` is
 written as is; `tool_extras.<tool>.model` pins one tool and skips the alias. Suggest
 YAML agents: a legacy `agents/<name>.md` is copied as is, so its alias is not resolved.
+Before a team adds its first alias, every member updates teamai: an older CLI writes
+`model: strong` literally, and its push can replace the alias with a concrete model.
 
 A member overrides an entry on their machine in `~/.teamai/models/aliases.yaml`
 (same `aliases:` shape). For one tool it replaces the team's whole entry, effort
@@ -157,7 +159,8 @@ to use it, add `models: [<ns>]` to the role's or project's resources.
 A structural error in any aliases file, active or not, or in the local file (bad YAML, a
 wrong type, a bad alias name, an effort without a model, `~` in a team file) holds every
 agent with a `model`: pull keeps
-their copies and push skips them until the file its warning names is fixed. An unknown
+their copies and push skips them until the file its warning names is fixed; then an
+ordinary `teamai pull` delivers them. An unknown
 tool key, an unknown option field, or an alias named like `opus` or `inherit` is only
 dropped, with a warning when an agent uses that alias; `gateways` is ignored.
 
