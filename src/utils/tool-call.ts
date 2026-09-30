@@ -7,12 +7,12 @@
  *                                                  ├─ search  its output_mode, shownFiles(content)
  *                                                  ├─ list    nothing: it shows paths, not a file's lines
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
- *   tool_response ── statusOf, outputOf, searchOutputOf
+ *   responseOf ── statusOf, outputOf, searchOutputOf
  *
  * Paths are resolved and compared by agent-path, the same on every OS, so a
- * Windows member's `C:\kb\x.md` is one file however it is written. Extension
- * point: other agents' tool names and output fields (08). A name not listed
- * here is `unknown` and never counts.
+ * Windows member's `C:\kb\x.md` is one file however it is written. A new
+ * agent adds its tool names to CATEGORY_OF and its output fields to
+ * responseOf. A name not listed here is `unknown` and never counts.
  */
 import { isAbsolutePath, isWithin, resolvePath, samePath } from './agent-path.js';
 import { resolveHookCwd } from './hook-cwd.js';
@@ -46,7 +46,14 @@ export interface ToolCall {
  */
 const CATEGORY_OF: Record<string, Exclude<ToolCategory, 'unknown'>> = {
   Read: 'read',
+  // Copilot's; Qoder IDE's PascalCase spelling of `read_file` (unverified).
+  view: 'read',
+  ReadFile: 'read',
   Bash: 'shell',
+  // Copilot's (and the bridges' lowercase name), Cursor's, Qoder IDE's.
+  bash: 'shell',
+  Shell: 'shell',
+  run_in_terminal: 'shell',
   // Claude's and CodeBuddy's PowerShell tool, and Copilot's.
   PowerShell: 'shell',
   powershell: 'shell',
@@ -82,31 +89,52 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * The agent's response to the call: `tool_response` (Claude and the agents
+ * that copy it), Cursor's `tool_output` (the result as a JSON string, kept as
+ * text when it is not an object's), or Copilot's `tool_result`.
+ */
+function responseOf(stdin: Record<string, unknown>): unknown {
+  if (stdin.tool_response !== undefined) return stdin.tool_response;
+  if (typeof stdin.tool_output === 'string') {
+    try {
+      return asObject(JSON.parse(stdin.tool_output)) ?? stdin.tool_output;
+    } catch {
+      return stdin.tool_output;
+    }
+  }
+  return stdin.tool_result;
+}
+
+/**
  * The call's status from the agent's response. Claude sends PostToolUse only
- * on success; an `exitCode` (CodeBuddy IDE, Qoder) tells a failure apart.
- * Codex sends its output as a plain string with no exit code: unknown.
+ * on success; an `exitCode` (Cursor's Shell, CodeBuddy IDE, Qoder, ZCode)
+ * tells a failure apart, and so does Copilot's `result_type`. Codex sends its
+ * output as a plain string with no exit code: unknown.
  */
 function statusOf(response: unknown): ToolStatus {
   const r = asObject(response);
   if (!r) return 'unknown';
-  return typeof r.exitCode === 'number' && r.exitCode !== 0 ? 'failure' : 'success';
+  if (typeof r.exitCode === 'number') return r.exitCode !== 0 ? 'failure' : 'success';
+  if (typeof r.result_type === 'string') return r.result_type === 'success' ? 'success' : 'failure';
+  return 'success';
 }
 
-/** Claude's response is `{ stdout, … }`; Codex's is the output string. */
+/** Claude's and Cursor's response is `{ stdout, … }`; Codex's is the output string; Copilot's is its text result. */
 function outputOf(response: unknown): string | undefined {
-  const output = typeof response === 'string' ? response : asObject(response)?.stdout;
+  const r = asObject(response);
+  const output = typeof response === 'string' ? response : r?.stdout ?? r?.text_result_for_llm;
   return typeof output === 'string' ? output : undefined;
 }
 
 /**
  * A search tool's text output: the string itself (OpenCode, Pi), Claude's
- * and ZCode's `content`, or Qoder's `results`. A `filenames` list is a
- * listing and is never read.
+ * and ZCode's `content`, Qoder's `results`, or Copilot's text result. A
+ * `filenames` list is a listing and is never read.
  */
 function searchOutputOf(response: unknown): string | undefined {
   if (typeof response === 'string') return response;
   const r = asObject(response);
-  const output = r?.content ?? r?.results;
+  const output = r?.content ?? r?.results ?? r?.text_result_for_llm;
   return typeof output === 'string' ? output : undefined;
 }
 
@@ -148,24 +176,25 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const name = normalizeToolName(typeof stdin.tool_name === 'string' ? stdin.tool_name : '');
   const category = CATEGORY_OF[name];
   const input = asObject(stdin.tool_input);
-  const status = statusOf(stdin.tool_response);
+  const response = responseOf(stdin);
+  const status = statusOf(response);
   const cwd = resolveHookCwd(stdin);
   const unknown: ToolCall = { category: 'unknown', paths: [], status, simple: false };
   if (!input || !category) return unknown;
 
   if (category === 'read') {
-    const file = input.file_path;
+    // `filePath`: CodeBuddy IDE's `read_file` (unverified); `path`: Copilot's `view`, and Cursor's Read too.
+    const file = input.file_path ?? input.filePath ?? input.path;
     if (typeof file !== 'string' || !file.trim()) return unknown;
     return { category, paths: [resolvePath(file, cwd)], status, simple: true };
   }
   if (category === 'list') return { category, paths: [], status, simple: true };
 
   if (category === 'search') {
-    const response = asObject(stdin.tool_response);
-    const given = input.output_mode ?? response?.mode;
+    const given = input.output_mode ?? asObject(response)?.mode;
     const mode = typeof given === 'string' ? given : LISTS_BY_DEFAULT.has(name) ? 'files_with_matches' : 'content';
     if (mode === 'files_with_matches') return { category: 'list', paths: [], status, simple: true };
-    const output = searchOutputOf(stdin.tool_response);
+    const output = searchOutputOf(response);
     if (mode !== 'content' || output === undefined || NO_SEARCH_EVIDENCE.has(agent ?? '')) {
       return { category, paths: [], status, simple: true };
     }
@@ -179,7 +208,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const command = input.command;
   if (typeof command !== 'string') return unknown;
   const shell = classifyShellCommand(command);
-  const output = outputOf(stdin.tool_response);
+  const output = outputOf(response);
   const optional = output !== undefined ? { output } : {};
   if (shell.category === 'search') {
     // A shell search prints paths as its operands wrote them: relative to the cwd.

@@ -22,7 +22,7 @@ export const AGENT_SESSION_ENV = [
     'CODEX_SESSION_ID',          // Codex >= 0.148
     'CODEBUDDY_SESSION_ID',      // CodeBuddy
     'COPILOT_AGENT_SESSION_ID',  // Copilot CLI >= 1.0.29
-    'CURSOR_CONVERSATION_ID',    // Cursor
+    'CURSOR_CONVERSATION_ID',    // Cursor: its hooks' conversation_id
     'CLAUDE_SESSION_ID',         // CodeBuddy's alias and older setups
 ] as const;
 
@@ -117,8 +117,10 @@ export interface DeriveSessionIdOptions {
  * Priority:
  *   1. Explicit `session_id` field from the hook payload
  *   2. Explicit `sessionId` field from camelCase hook payloads
- *   3. `CLAUDE_SESSION_ID` environment variable
- *   4. `pid-${process.ppid ?? process.pid}` (or `pid-${ppid}-${cwd}` when includeCwd is true)
+ *   3. Cursor's `conversation_id`, the id its tool hooks carry (and its
+ *      shell's CURSOR_CONVERSATION_ID)
+ *   4. `CLAUDE_SESSION_ID` environment variable
+ *   5. `pid-${process.ppid ?? process.pid}` (or `pid-${ppid}-${cwd}` when includeCwd is true)
  */
 export function deriveSessionId(
     data: Record<string, unknown>,
@@ -130,6 +132,10 @@ export function deriveSessionId(
 
     if (typeof data.sessionId === 'string' && data.sessionId) {
         return data.sessionId;
+    }
+
+    if (typeof data.conversation_id === 'string' && data.conversation_id) {
+        return data.conversation_id;
     }
 
     if (process.env.CLAUDE_SESSION_ID) {

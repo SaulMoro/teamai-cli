@@ -31,6 +31,14 @@ describe('deriveSessionId', () => {
         })).toBe('canonical-session');
     });
 
+    it('uses Cursor\'s conversation_id after session_id and sessionId, before the environment', () => {
+        vi.stubEnv('CLAUDE_SESSION_ID', 'env-session');
+        expect(deriveSessionId({ conversation_id: 'cursor-conversation' })).toBe('cursor-conversation');
+        expect(deriveSessionId({ sessionId: 'copilot-session', conversation_id: 'cursor-conversation' })).toBe('copilot-session');
+        expect(deriveSessionId({ session_id: 'canonical-session', conversation_id: 'cursor-conversation' })).toBe('canonical-session');
+        expect(deriveSessionId({ conversation_id: '' })).toBe('env-session');
+    });
+
     it('falls back to CLAUDE_SESSION_ID env var', () => {
         delete process.env.CLAUDE_SESSION_ID;
         process.env.CLAUDE_SESSION_ID = 'env-session';

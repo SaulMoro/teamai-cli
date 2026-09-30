@@ -63,6 +63,22 @@ const T0 = Date.parse('2026-09-01T09:00:00.000Z');
 /** Where a Windows member's team repo is, as data: see Harness.windowsTeamRepo. */
 const WINDOWS_REPO = 'C:\\kb';
 const WINDOWS_DOC = 'C:\\kb\\learnings\\redis-timeout.md';
+/** A Cursor conversation, and a subagent's own conversation (Cursor runs each subagent under a fresh one). */
+const CURSOR = 'conv-main';
+const CURSOR_CHILD = 'conv-child';
+/** A Copilot CLI session, and a subagent's own session. */
+const COPILOT = '5f0c9d2e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+const COPILOT_CHILD = '9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d';
+
+/** Cursor's `tool_output`: the tool's result as a JSON string. */
+function cursorOutput(result: Record<string, unknown>): Record<string, unknown> {
+  return { tool_output: JSON.stringify(result) };
+}
+
+/** Copilot's `tool_result` (snake_case, as TeamAI's PascalCase events get it) for a call that completed. */
+function copilotResult(text: string): Record<string, unknown> {
+  return { tool_result: { result_type: 'success', text_result_for_llm: text } };
+}
 
 function doc(title: string, tags: string[], body: string): string {
   return `---\ntitle: "${title}"\nauthor: tester\ndate: 2026-05-01\ntags: [${tags.join(', ')}]\n---\n\n${body}\n`;
@@ -270,6 +286,24 @@ class Harness {
       ...(agent ? { agent_id: agent.id, ...(agent.type ? { agent_type: agent.type } : {}) } : {}),
       ...(session ? { session_id: session } : {}),
     }, cwd, tool);
+  }
+
+  /**
+   * `tool`'s PostToolUse as that agent sends it (`tool` is the dispatch tool
+   * id), from the project root. `fields` carry its session (`session_id`,
+   * Cursor's `conversation_id`, a subagent's `agent_id`) and its output
+   * (`tool_response`, Cursor's `tool_output`, Copilot's `tool_result`): the
+   * main session's `session_id` is sent only when `fields` names it.
+   */
+  async agentCall(tool: string, toolName: string, toolInput: Record<string, unknown>, fields: Record<string, unknown>): Promise<void> {
+    await this.dispatch('post-tool-use', {
+      hook_event_name: 'PostToolUse', session_id: undefined, tool_name: toolName, tool_input: toolInput, ...fields,
+    }, this.root, tool);
+  }
+
+  /** `tool`'s Stop, with the session `fields` name. */
+  async agentStop(tool: string, fields: Record<string, unknown>): Promise<string> {
+    return this.dispatch('stop', { hook_event_name: 'Stop', session_id: undefined, ...fields }, this.root, tool);
   }
 
   /** `session`'s Stop (default: the main session), which carries no `transcript_path` here: the reducer does not need one. Returns the hook's stdout. */
@@ -964,13 +998,208 @@ const ROWS: Row[] = [
     },
     project: {},
   },
+  {
+    name: '08: a Cursor payload carrying only conversation_id joins the session CURSOR_CONVERSATION_ID named at run time; Read (tool_output holds only metadata) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { CURSOR_CONVERSATION_ID: CURSOR }, claim: false });
+      await h.agentCall('cursor', 'Read', { file_path: files[0] },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR, ...cursorOutput({ file_path: files[0], content_length: 194 }) });
+      await h.agentStop('cursor', { hook_event_name: 'stop', conversation_id: CURSOR, status: 'completed' });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Cursor recall claimed by its Shell call; Shell cat <doc>, output in tool_output → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { CURSOR_CONVERSATION_ID: CURSOR, CLAUDE_CODE_SESSION_ID: SESSION }, claim: false });
+      await h.agentCall('cursor', 'Shell', { command: 'teamai recall "redis timeout"' },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR, ...cursorOutput({ exitCode: 0, stdout: output }) });
+      await h.agentCall('cursor', 'Shell', { command: `cat '${files[0]}'` },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR, ...cursorOutput({ exitCode: 0, stdout: fs.readFileSync(files[0], 'utf-8') }) });
+      await h.agentStop('cursor', { hook_event_name: 'stop', conversation_id: CURSOR, status: 'completed' });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Cursor Shell cat <doc> whose tool_output has a non-zero exitCode → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { CURSOR_CONVERSATION_ID: CURSOR }, claim: false });
+      await h.agentCall('cursor', 'Shell', { command: `cat '${files[0]}'` },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR, ...cursorOutput({ exitCode: 1, stdout: '' }) });
+      await h.agentStop('cursor', { hook_event_name: 'stop', conversation_id: CURSOR, status: 'completed' });
+    },
+    project: {},
+  },
+  {
+    name: '08 (Frank): Cursor recall subagent in its own conversation, run with --caller, reads the doc → 0 (and no link credits the parent) [unverified payload: CURSOR_CONVERSATION_ID in a subagent shell]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { CURSOR_CONVERSATION_ID: CURSOR_CHILD }, caller: 'teamai-recall', claim: false });
+      await h.agentCall('cursor', 'Shell', { command: 'teamai recall --caller teamai-recall "redis timeout"' },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR_CHILD, ...cursorOutput({ exitCode: 0, stdout: output }) });
+      await h.agentCall('cursor', 'Read', { file_path: files[0] },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR_CHILD, ...cursorOutput({ file_path: files[0], content_length: 194 }) });
+      await h.agentStop('cursor', { hook_event_name: 'stop', conversation_id: CURSOR_CHILD, status: 'completed' });
+      await h.agentCall('cursor', 'Read', { file_path: files[0] },
+        { hook_event_name: 'postToolUse', conversation_id: CURSOR, ...cursorOutput({ file_path: files[0], content_length: 194 }) });
+      await h.agentStop('cursor', { hook_event_name: 'stop', conversation_id: CURSOR, status: 'completed' });
+    },
+    project: {},
+  },
+  {
+    name: '08: Copilot main agent recalls, claimed by its bash call; view of the doc → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT, CLAUDE_CODE_SESSION_ID: SESSION }, claim: false });
+      await h.agentCall('copilot', 'bash', { command: 'teamai recall "redis timeout"', description: 'Search team knowledge' },
+        { session_id: COPILOT, ...copilotResult(output) });
+      await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT, ...copilotResult(fs.readFileSync(files[0], 'utf-8')) });
+      await h.agentStop('copilot', { session_id: COPILOT });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Copilot recall; grep in content mode whose output has an abs/path:line:text line → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT }, claim: false });
+      await h.agentCall('copilot', 'grep', { pattern: 'timeout', path: path.dirname(files[0]), output_mode: 'content', '-n': true },
+        { session_id: COPILOT, ...copilotResult(`${files[0]}:5:tags: [redis, timeout]`) });
+      await h.agentStop('copilot', { session_id: COPILOT });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Copilot PostToolUse under Claude tool names (Bash claim, Read with path) → +1 [unverified payload]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT, CLAUDE_CODE_SESSION_ID: SESSION }, claim: false });
+      await h.agentCall('copilot', 'Bash', { command: 'teamai recall "redis timeout"' }, { session_id: COPILOT, ...copilotResult(output) });
+      await h.agentCall('copilot', 'Read', { path: files[0] }, { session_id: COPILOT, ...copilotResult('---') });
+      await h.agentStop('copilot', { session_id: COPILOT });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Copilot recall subagent in its own session, run with --caller, views the doc → 0 [unverified payload: which session a subagent\'s hooks and shell carry]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT_CHILD }, caller: 'teamai-recall', claim: false });
+      await h.agentCall('copilot', 'bash', { command: 'teamai recall --caller teamai-recall "redis timeout"' },
+        { session_id: COPILOT_CHILD, ...copilotResult(output) });
+      await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT_CHILD, ...copilotResult('---') });
+      await h.agentStop('copilot', { session_id: COPILOT_CHILD });
+    },
+    project: {},
+  },
+  {
+    name: '08: CodeBuddy CLI recall claimed by its Bash call; Read of the doc → +1 [unverified payload: Bash tool_response shape]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { CODEBUDDY_SESSION_ID: SESSION, CLAUDE_SESSION_ID: SESSION }, claim: false });
+      await h.agentCall('codebuddy', 'Bash', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { stdout: output, stderr: '' } });
+      await h.agentCall('codebuddy', 'Read', { file_path: files[0] }, { session_id: SESSION, tool_response: '---' });
+      await h.agentStop('codebuddy', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: CodeBuddy IDE recall claimed by execute_command; read_file of the doc → +1 [unverified payload: read_file path field]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: { CODEBUDDY_SESSION_ID: SESSION, CLAUDE_CODE_SESSION_ID: 'sess-other' }, claim: false });
+      await h.agentCall('codebuddy', 'execute_command', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { exitCode: 0, stdout: output, stderr: '' } });
+      await h.agentCall('codebuddy', 'read_file', { filePath: files[0] }, { session_id: SESSION, tool_response: '---' });
+      await h.agentStop('codebuddy', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: CodeBuddy recall subagent (parent session_id, agent_id/agent_type) runs recall and reads the doc; the main agent reads it → +1',
+    trace: async (h) => {
+      const subagent = { session_id: SESSION, agent_id: 'task-7', agent_type: 'teamai-recall' };
+      const { output, files } = await h.recall('redis timeout', { env: { CODEBUDDY_SESSION_ID: SESSION }, caller: 'teamai-recall', claim: false });
+      await h.agentCall('codebuddy', 'Bash', { command: 'teamai recall --caller teamai-recall "redis timeout"' },
+        { ...subagent, tool_response: { stdout: output, stderr: '' } });
+      await h.agentCall('codebuddy', 'Read', { file_path: files[0] }, { ...subagent, tool_response: '---' });
+      await h.agentStop('codebuddy', { session_id: SESSION });
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.agentCall('codebuddy', 'Read', { file_path: files[0] }, { session_id: SESSION, tool_response: '---' });
+      await h.agentStop('codebuddy', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: WorkBuddy recall, with no session variable, claimed by its Bash call; Read of the doc → +1 [unverified payload: tool names]',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.agentCall('workbuddy', 'Bash', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { stdout: output, stderr: '' } });
+      await h.agentCall('workbuddy', 'Read', { file_path: files[0] }, { session_id: SESSION, tool_response: '---' });
+      await h.agentStop('workbuddy', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Qoder CLI recall claimed by Bash {stdout, stderr, exitCode}; Read {type, text, file_path} → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.agentCall('qoder', 'Bash', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { stdout: output, stderr: '', exitCode: 0 } });
+      await h.agentCall('qoder', 'Read', { file_path: files[0] },
+        { session_id: SESSION, tool_response: { type: 'text', text: '---', file_path: files[0] } });
+      await h.agentStop('qoder', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Qoder IDE recall claimed by run_in_terminal; read_file of the doc (string tool_response) → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.agentCall('qoder', 'run_in_terminal', { command: 'teamai recall "redis timeout"' }, { session_id: SESSION, tool_response: output });
+      await h.agentCall('qoder', 'read_file', { file_path: files[0] }, { session_id: SESSION, tool_response: '---' });
+      await h.agentStop('qoder', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Qoder recall subagent (agent_id/agent_type, main session_id) reads the doc → 0; the main agent reads it → +1 [unverified payload: session_id inside a subagent]',
+    trace: async (h) => {
+      const subagent = { session_id: SESSION, agent_id: 'agent-3', agent_type: 'teamai-recall' };
+      const { output, files } = await h.recall('redis timeout', { env: {}, caller: 'teamai-recall', claim: false });
+      await h.agentCall('qoder', 'Bash', { command: 'teamai recall --caller teamai-recall "redis timeout"' },
+        { ...subagent, tool_response: { stdout: output, stderr: '', exitCode: 0 } });
+      await h.agentCall('qoder', 'Read', { file_path: files[0] }, { ...subagent, tool_response: { type: 'text', text: '---', file_path: files[0] } });
+      await h.agentStop('qoder', { session_id: SESSION });
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.agentCall('qoder', 'Read', { file_path: files[0] }, { session_id: SESSION, tool_response: { type: 'text', text: '---', file_path: files[0] } });
+      await h.agentStop('qoder', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: ZCode recall claimed by Bash {stdout, stderr, exitCode, status}; Read of the doc → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.agentCall('zcode', 'Bash', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { stdout: output, stderr: '', interrupted: false, status: 'completed', exitCode: 0 } });
+      await h.agentCall('zcode', 'Read', { file_path: files[0] }, { session_id: SESSION, tool_response: { type: 'text', file: { filePath: files[0] } } });
+      await h.agentStop('zcode', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: ZCode recall; Grep in content mode whose content has a <doc>:line: line → +1',
+    trace: async (h) => {
+      const { output } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.agentCall('zcode', 'Bash', { command: 'teamai recall "redis timeout"' },
+        { session_id: SESSION, tool_response: { stdout: output, stderr: '', exitCode: 0 } });
+      await h.agentCall('zcode', 'Grep', { pattern: 'timeout', path: path.dirname(h.docs['redis-timeout']), output_mode: 'content' },
+        { session_id: SESSION, tool_response: { mode: 'content', numFiles: 1, filenames: [], content: `${h.docs['redis-timeout']}:5:tags: [redis, timeout]`, numLines: 1 } });
+      await h.agentStop('zcode', { session_id: SESSION });
+    },
+    project: { 'redis-timeout': 1 },
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '08: Copilot main agent recalls; view of the doc → +1',
-  '08: Cursor recall subagent (its own conversation) with --caller reads the doc → 0',
-  '09: OpenCode recall in a task child; the parent reads the doc; task link; Stop → +1 for the parent',
+  '09:OpenCode recall in a task child; the parent reads the doc; task link; Stop → +1 for the parent',
   '11: final Stop; a background worker reads the doc; SubagentStop → +1',
   '13: teamai recall --check then a read → no run in stats',
   '13: recall with no hits → one run in stats',
