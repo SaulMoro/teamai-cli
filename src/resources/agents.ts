@@ -863,8 +863,8 @@ export class AgentsHandler extends ResourceHandler {
    *   nothing and resolved no alias, so it differs only where this CLI
    *   replaces the spec's `model`. A copy the member changed is left to the
    *   full sync, which names it; here it would only be kept again, every pull.
-   * - `missing`: no record and no copy, as an agent held before it was ever
-   *   delivered, or one the member deleted before records existed.
+   * - `missing`: no copy, as an agent held before it was ever delivered, or
+   *   one the member deleted.
    * - `render`: no record, and the copy is still what teamai delivered but
    *   not what it renders now, such as another tool's extras an older CLI
    *   wrote there. Without a delivered record nothing tells that copy from
@@ -889,9 +889,8 @@ export class AgentsHandler extends ResourceHandler {
         if (!render.model) continue;
         const target = { tool, dest, content: render.content };
         const recorded = ledger.agentModels[item.name]?.[tool];
-        const reason = recorded
-          ? (sameAgentModel(recorded, render.model.recorded) ? undefined : 'model')
-          : !await pathExists(dest) ? 'missing'
+        const reason = !await pathExists(dest) ? 'missing'
+          : recorded ? (sameAgentModel(recorded, render.model.recorded) ? undefined : 'model')
             : render.model.replacesSpecModel ? 'model'
               : await deliveredAndOutdated(ledger, dest, render.content) ? 'render' : undefined;
         if (reason === undefined) continue;
@@ -1377,13 +1376,14 @@ function mergeCanonicalEdits(
       }
       // What pull wrote, as recorded or as it would write now, is unedited,
       // even a model that is also an alias name.
-      const unedited = [expected, ...(recorded ? [recorded] : [])]
-        .some((known) => known.model === deployed.model && (effortField === undefined || known.effort === deployed.effort));
+      const known = [expected, ...(recorded ? [recorded] : [])];
+      const unedited = known.some((value) => value.model === deployed.model && (effortField === undefined || value.effort === deployed.effort));
       // An extras model pin is the author's value, even one named like an
       // alias: a change to it is an extras edit, not an adoption.
       if (unedited) {
         // Nothing to propose or report.
-      } else if (deployed.model !== undefined && expected.step !== 'extras' && isModelAlias(aliases, deployed.model)) {
+      } else if (deployed.model !== undefined && expected.step !== 'extras' && isModelAlias(aliases, deployed.model)
+        && !known.some((value) => value.model === deployed.model)) {
         if (deployed.model !== canonical.model) {
           const alias = deployed.model;
           propose('model', alias, () => { merged.model = alias; });
@@ -1407,9 +1407,9 @@ function mergeCanonicalEdits(
     }
 
     // Each tool owns the extras key renderForTool reads for it. For tclaude
-    // and tcodex only the values that differ from the base tool's are
-    // theirs; a removed inherited key cannot be expressed there and is
-    // reported rather than dropped. Keys reverse parsing reads as root fields
+    // and tcodex the values that differ from the base tool's are theirs, as
+    // are their own keys while unchanged; a removed inherited key cannot be
+    // expressed there and is reported rather than dropped. Keys reverse parsing reads as root fields
     // are never in `after`, so only a model pin put there counts.
     // Alias-owned fields are already out of `before` and `after`, and never inherited.
     if (!isDeepStrictEqual(before, after)) {
@@ -1419,7 +1419,9 @@ function mergeCanonicalEdits(
         conflicts.push({ field: `tool_extras.${tool}`, values: { inheritedFrom: `tool_extras.${base}`, removed } });
         continue;
       }
-      const own = Object.fromEntries(Object.entries(after).filter(([key, value]) => !isDeepStrictEqual(inherited[key], value)));
+      const ownBefore = canonical.tool_extras?.[tool] ?? {};
+      const own = Object.fromEntries(Object.entries(after).filter(([key, value]) =>
+        !isDeepStrictEqual(inherited[key], value) || (key in ownBefore && isDeepStrictEqual(before[key], value))));
       propose(`tool_extras.${tool}`, own, () => {
         if (Object.keys(own).length) extras[tool] = own;
         else delete extras[tool];

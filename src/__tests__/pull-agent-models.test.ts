@@ -769,6 +769,19 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(logged('success', /Updated the model/)).toBe(false);
       expect(logged('success', /Delivered 1 agent\(s\) missing from a tool: implementer/)).toBe(true);
     });
+
+    it('delivers a recorded agent whose copy was deleted since the last pull', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+      await fse.remove(codexFile());
+
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol' });
+      expect(logged('success', /Delivered 1 agent\(s\) missing from a tool: implementer/)).toBe(true);
+    });
   });
 
   describe('copies an older CLI rendered with another tool\'s extras', () => {

@@ -724,6 +724,17 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(removed.skipReason).toContain(`tool_extras.${tool}: {"inheritedFrom":"tool_extras.${tool.slice(1)}","removed":["model"]}`);
     });
 
+    it('keeps a tcodex model pin equal to the inherited one while pushing an unrelated tcodex edit', async () => {
+      const pins = { codex: { model: 'gpt-6-sol' }, tcodex: { model: 'gpt-6-sol' } };
+      const spec = makeSpec({ model: 'opus', tool_extras: pins });
+      await pullTo(['tcodex'], spec);
+      await editDeployed('tcodex', spec.name, (fields) => { fields['sandbox_mode'] = 'read-only'; });
+
+      const [candidate] = await scan(['tcodex']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, tool_extras: { ...pins, tcodex: { model: 'gpt-6-sol', sandbox_mode: 'read-only' } } });
+    });
+
     it.each([
       ['qoder', 'performance', 'coder-model'],
       ['claude', 'sonnet', 'haiku'],
@@ -920,6 +931,17 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(candidate.skipReason).toBeUndefined();
       expect(candidate.modelDrift).toBeUndefined();
       expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+    });
+
+    it('reports an effort changed on a resolution named like another alias as drift, and does not adopt that alias', async () => {
+      await writeAliases({ aliases: { ...STRONG.aliases, strong: { claude: { model: 'fast', effort: 'high' } } } });
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude', 'codex'], spec);
+      await editDeployed('claude', spec.name, (fields) => { fields['effort'] = 'low'; });
+
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.mergedSpec).toBeUndefined();
+      expect(candidate.skipReason).toContain('sets model "fast" and effort "low", but model: strong gives claude model "fast" and effort "high"');
     });
 
     it('pushes a new native agent\'s literal model', async () => {
