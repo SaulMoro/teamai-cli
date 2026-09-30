@@ -168,6 +168,8 @@ interface LogIndex {
   consumed: Set<string>;
   /** The session a child's work counts for: its links followed up to the root. */
   rootOf: (session: string) => string;
+  /** The session a run is settled to, or null when it is unsettled. */
+  ownerOf: (run: RunLine) => string | null;
 }
 
 function indexLog(lines: RecallLogLine[]): LogIndex {
@@ -195,7 +197,8 @@ function indexLog(lines: RecallLogLine[]): LogIndex {
     }
     return root;
   };
-  return { lines, claimOf, consumed, rootOf };
+  const ownerOf = (r: RunLine): string | null => claimOf.get(r.run)?.session ?? (r.unambiguous === true ? r.session : null);
+  return { lines, claimOf, consumed, rootOf, ownerOf };
 }
 
 /** Whether `at` falls within the adoption window after the run. */
@@ -236,10 +239,25 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   return creditRoot(config, indexLog(await readRecallLog(config)), sessionId);
 }
 
-async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: string): Promise<AdoptionResult> {
-  const { lines, claimOf, consumed, rootOf } = index;
-  const target = rootOf(sessionId);
-  const ownerOf = (r: RunLine): string | null => claimOf.get(r.run)?.session ?? (r.unambiguous === true ? r.session : null);
+/** What one root session's settled runs and countable reads are, as the reducer judges them. */
+interface RootView {
+  runs: RunLine[];
+  /** Distinct docs the runs returned. */
+  recalled: number;
+  /** Distinct docs consumed reads credited. */
+  adopted: number;
+  /** The root's reads whose status lets them count. */
+  evidence: EvidenceLine[];
+  /** The eligible docs a read opened, of the runs whose window it falls in and whose own reads it may count for. */
+  opened: (e: EvidenceLine) => RecalledDoc[];
+  /** The credit a doc earns: once per run. */
+  creditOf: (d: RecalledDoc) => string;
+  /** The credits consumed reads already earned. */
+  done: Set<string>;
+}
+
+function viewRoot(index: LogIndex, target: string): RootView {
+  const { lines, claimOf, consumed, rootOf, ownerOf } = index;
   const runs = lines.filter((l): l is RunLine => {
     if (l.kind !== 'run') return false;
     const owner = ownerOf(l);
@@ -254,8 +272,6 @@ async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: strin
     }
   }
   const recalled = new Set(runs.flatMap((r) => r.docs.map((d) => d.key))).size;
-  if (runs.length === 0) return { credited: [], recalled };
-
   const runOf = new Map<RecalledDoc, RunLine>(runs.flatMap((r) => r.docs.map((d) => [d, r] as const)));
   const creditOf = (d: RecalledDoc): string => `${runOf.get(d)!.run}\n${d.key}`;
   // The eligible docs a read opened, of the runs whose window it falls in and whose own reads it may count for.
@@ -273,7 +289,16 @@ async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: strin
   const evidence = lines.filter((e): e is EvidenceLine => e.kind === 'evidence' && rootOf(e.session) === target
     // A read of unknown status (Codex's shell) counts only as a simple read, never as a pipeline's head.
     && (e.status === 'success' || (e.status === 'unknown' && e.simple === true)));
-  const done = new Set(evidence.filter((e) => consumed.has(e.id)).flatMap((e) => opened(e).map(creditOf)));
+  const credited = evidence.filter((e) => consumed.has(e.id)).flatMap(opened);
+  const done = new Set(credited.map(creditOf));
+  return { runs, recalled, adopted: new Set(credited.map((d) => d.key)).size, evidence, opened, creditOf, done };
+}
+
+async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: string): Promise<AdoptionResult> {
+  const target = index.rootOf(sessionId);
+  const { runs, recalled, evidence, opened, creditOf, done } = viewRoot(index, target);
+  if (runs.length === 0) return { credited: [], recalled };
+  const { consumed } = index;
 
   const keys = new Set<string>();
   const crediting: string[] = [];
@@ -298,6 +323,47 @@ async function creditRoot(config: LocalConfig, index: LogIndex, sessionId: strin
     log.debug(`recall adoption: could not mark ${crediting.length} evidence line(s) consumed: ${(e as Error).message}`);
   }
   return { credited, recalled };
+}
+
+/** One root session's recall activity, as `teamai stats` shows it. */
+export interface RecallSessionSummary {
+  /** The root session: a linked child's runs and reads count under it. */
+  session: string;
+  /** The agent family of its newest run the environment named it in, when one did. */
+  agent?: string;
+  /** Settled runs, those with no hits included. */
+  runs: number;
+  /** Distinct docs the runs returned. */
+  recalled: number;
+  /** Distinct docs the reducer credited: a read still pending is not counted. */
+  adopted: number;
+  /** The newest run's time. */
+  last: string;
+}
+
+/**
+ * The root sessions of the scope's log with settled runs, newest run first,
+ * at most `limit`, settled, linked and credited exactly as the reducer does.
+ * It only reads the log.
+ */
+export async function recallSessions(config: LocalConfig, limit: number): Promise<RecallSessionSummary[]> {
+  const index = indexLog(await readRecallLog(config));
+  const newest = new Map<string, RunLine>();
+  for (const line of index.lines) {
+    if (line.kind !== 'run') continue;
+    const owner = index.ownerOf(line);
+    if (owner === null) continue;
+    const root = index.rootOf(owner);
+    const seen = newest.get(root);
+    if (!seen || line.ts > seen.ts) newest.set(root, line);
+  }
+  return [...newest].sort(([, a], [, b]) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0)).slice(0, limit).map(([session, last]) => {
+    const { runs, recalled, adopted } = viewRoot(index, session);
+    // A run's family is known only when the session it settled to is the one its environment named.
+    const named = runs.filter((r) => r.agent && index.ownerOf(r) === r.session);
+    const agent = named.reduce<RunLine | undefined>((a, r) => (!a || r.ts > a.ts ? r : a), undefined)?.agent;
+    return { session, ...(agent ? { agent } : {}), runs: runs.length, recalled, adopted, last: last.ts };
+  });
 }
 
 /** How long the recall log keeps a line. */

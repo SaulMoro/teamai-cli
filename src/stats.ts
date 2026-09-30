@@ -206,6 +206,9 @@ function mergeDashboardAndReported(
   return merged;
 }
 
+/** How many sessions the recall section lists, newest first. */
+const RECALL_SESSIONS_SHOWN = 10;
+
 export interface ShowStatsOptions {
   /** Add a per-repo usage breakdown. */
   byRepo?: boolean;
@@ -268,7 +271,11 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // same SCOPE — hence the shared filter — and never another project's rows.
   const dashboardEvents = scopedEvents;
 
-  if (stats.length === 0 && !hasDashboardData) {
+  // The active scope's recall activity, per root session (#884). None: the output is unchanged.
+  const { recallSessions } = await import('./recall-adoption.js');
+  const recallRows = config ? await recallSessions(config, RECALL_SESSIONS_SHOWN) : [];
+
+  if (stats.length === 0 && !hasDashboardData && recallRows.length === 0) {
     console.log('No usage data yet.');
     console.log('Usage tracking starts automatically via hooks.');
     return;
@@ -296,6 +303,22 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
     if (events.length > 0) {
       console.log(`  (${events.length} pending upload)`);
     }
+  }
+
+  // ─── Recall section ───
+  if (recallRows.length > 0) {
+    console.log('');
+    console.log(`Recall (last ${RECALL_SESSIONS_SHOWN} sessions):`);
+    console.log('');
+    const cells = recallRows.map((r) => [
+      r.session.slice(0, 8), r.agent ?? '-', String(r.runs), String(r.recalled), String(r.adopted),
+    ]);
+    const header = ['session', 'agent', 'runs', 'recalled', 'adopted'];
+    const widths = header.map((h, i) => Math.max(h.length, ...cells.map((c) => c[i].length)));
+    // Text columns left-aligned, counts right-aligned.
+    const format = (row: string[]): string => `  ${row.map((c, i) => (i < 2 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join('  ')}`;
+    console.log(format(header));
+    for (const row of cells) console.log(format(row));
   }
 
   // ─── Session & usage section ───

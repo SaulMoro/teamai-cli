@@ -3,8 +3,8 @@
  * the real hook dispatcher (`hookDispatchCli`, the real handler registry) with
  * the payloads an agent sends, then asserts on the votes the scope holds.
  *
- * Every row of the spec's acceptance contract is listed here: rows a ticket has
- * shipped run, the rest are `it.todo` named after the ticket that ships them.
+ * Every row of the spec's acceptance contract is listed here, named after the
+ * ticket that shipped it.
  * Paths are whatever recall printed, so the rows hold on every OS.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,6 +61,7 @@ const { acquireLock, releaseLock } = await import('../update.js');
 const { parseTranscriptForVotes } = await import('../transcript-parser.js');
 const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
 const { loadOmpExtension, loadPiExtension } = await import('./helpers/pi-extensions.js');
+const { showStats } = await import('../stats.js');
 
 const SESSION = 'sess-main';
 /** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
@@ -536,6 +537,18 @@ class Harness {
     return run;
   }
 
+  /** What `teamai stats` prints in the current directory. */
+  async stats(): Promise<string> {
+    const lines: string[] = [];
+    const print = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    try {
+      await showStats();
+    } finally {
+      print.mockRestore();
+    }
+    return lines.join('\n');
+  }
+
   /** Upvotes per doc in a scope's own votes file. */
   async upvotes(config: LocalConfig): Promise<Record<string, number>> {
     const votes = await loadUserVotes(path.join(getVotesDir(config), 'tester.yaml'));
@@ -543,6 +556,21 @@ class Harness {
       .filter(([, entry]) => entry.upvoted_count > 0)
       .map(([id, entry]) => [id, entry.upvoted_count]));
   }
+}
+
+const RECALL_SECTION = 'Recall (last 10 sessions):';
+const RECALL_HEADER = ['session', 'agent', 'runs', 'recalled', 'adopted'];
+
+/** The rows of `stats`' recall section, split into columns, or null when it has none. */
+function recallRows(output: string): string[][] | null {
+  const lines = output.split('\n');
+  const at = lines.indexOf(RECALL_SECTION);
+  if (at < 0) return null;
+  expect(lines[at + 1]).toBe('');
+  expect(lines[at + 2].trim().split(/\s+/)).toEqual(RECALL_HEADER);
+  const rows: string[][] = [];
+  for (let i = at + 3; i < lines.length && lines[i] !== ''; i++) rows.push(lines[i].trim().split(/\s+/));
+  return rows;
 }
 
 interface Row {
@@ -1616,12 +1644,26 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
-];
-
-/** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
-const TODO_ROWS = [
-  '13: teamai recall --check then a read → no run in stats',
-  '13: recall with no hits → one run in stats',
+  {
+    name: '13: teamai recall --check then a read → no run in stats',
+    trace: async (h) => {
+      await h.recall('redis timeout', { check: true });
+      await h.read(h.docs['redis-timeout']);
+      await h.stop();
+      expect(recallRows(await h.stats())).toBeNull();
+    },
+    project: {},
+  },
+  {
+    name: '13: recall with no hits → one run in stats',
+    trace: async (h) => {
+      const { run } = await h.recall('kubernetes');
+      expect(run).toBeUndefined();
+      await h.stop();
+      expect(recallRows(await h.stats())).toEqual([['sess-mai', 'claude', '1', '0', '0']]);
+    },
+    project: {},
+  },
 ];
 
 describe('recall attribution acceptance (#884)', () => {
@@ -1653,8 +1695,6 @@ describe('recall attribution acceptance (#884)', () => {
     expect(await h.upvotes(h.project)).toEqual(row.project);
     expect(await h.upvotes(h.user)).toEqual(row.user ?? {});
   });
-
-  for (const name of TODO_ROWS) it.todo(name);
 
   // The votes lock is held for real, so the Stop waits out its full lock wait.
   it('11: votes lock contended at Stop → no vote now; the next trigger credits it once', async () => {
@@ -1809,5 +1849,84 @@ describe('recall attribution acceptance (#884)', () => {
     expect(recallLogPath(h.project)).toBe(path.join(h.project.dataHome!, 'dashboard', 'recall.jsonl'));
     expect(fs.existsSync(recallLogPath(h.project))).toBe(true);
     expect(fs.existsSync(recallLogPath(h.user))).toBe(false);
+  });
+
+  describe('13: the recall section of teamai stats', () => {
+    it('lists each session with settled runs, newest first: its agent, runs, distinct docs recalled and docs credited', async () => {
+      await h.setUp();
+      const first = await h.recall('redis timeout');
+      await h.read(first.files[0]);
+      await h.stop();
+      h.at(1);
+      const second = await h.recall('setup');
+      h.at(2);
+      const codex = await h.codexRecall('setup');
+      h.at(3);
+      // A run with no hits is a run, and makes the session the newest.
+      await h.recall('kubernetes');
+      const recalled = new Set([...first.files, ...second.files]).size;
+      expect(recallRows(await h.stats())).toEqual([
+        ['sess-mai', 'claude', '3', String(recalled), '1'],
+        ['sess-cod', 'codex', '1', String(codex.files.length), '0'],
+      ]);
+    });
+
+    it('shows at most the 10 sessions with the newest runs', async () => {
+      await h.setUp();
+      for (let i = 0; i < 12; i++) {
+        h.at(i);
+        await h.recall('redis timeout', { env: { CLAUDE_CODE_SESSION_ID: `s-${String(i).padStart(2, '0')}` }, claim: false });
+      }
+      const rows = recallRows(await h.stats())!;
+      expect(rows.map((r) => r[0])).toEqual(['s-11', 's-10', 's-09', 's-08', 's-07', 's-06', 's-05', 's-04', 's-03', 's-02']);
+    });
+
+    it('counts no unsettled run, and a read counts as adopted only once credited, once per doc', async () => {
+      await h.setUp();
+      // Two session candidates and no claim: the run never settles.
+      await h.recall('setup', { env: NESTED_ENV, claim: false });
+      const { files } = await h.recall('redis timeout');
+      await h.read(files[0]);
+      expect(recallRows(await h.stats())).toEqual([['sess-mai', 'claude', '1', String(files.length), '0']]);
+      await h.stop();
+      await h.read(files[0]);
+      await h.stop();
+      expect(recallRows(await h.stats())).toEqual([['sess-mai', 'claude', '1', String(files.length), '1']]);
+    });
+
+    it('shows a linked child session\'s runs under its root session only', async () => {
+      await h.setUp();
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE_CHILD, { caller: 'teamai-recall' });
+      await h.openCodeTask(OPENCODE, OPENCODE_CHILD);
+      await h.openCodeRead(OPENCODE, files[0]);
+      await h.openCodeIdle(OPENCODE);
+      expect(recallRows(await h.stats())).toEqual([['ses_pare', 'opencode', '1', String(files.length), '1']]);
+    });
+
+    it('prints the same output with a missing log, an empty one, and one without settled runs', async () => {
+      await h.setUp();
+      await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.read(h.docs['redis-timeout']);
+      await h.stop();
+      const unsettled = await h.stats();
+      fs.rmSync(recallLogPath(h.project));
+      const missing = await h.stats();
+      fs.writeFileSync(recallLogPath(h.project), '');
+      const empty = await h.stats();
+      expect(missing).not.toContain('Recall');
+      expect(empty).toBe(missing);
+      expect(unsettled).toBe(missing);
+    });
+
+    it('shows only the active scope\'s log: a project\'s runs not in the user scope, and the reverse', async () => {
+      await h.setUp();
+      await h.recall('redis timeout');
+      process.chdir(process.env.HOME!);
+      expect(recallRows(await h.stats())).toBeNull();
+      await h.recall('cache warmup', { env: { CLAUDE_CODE_SESSION_ID: 'sess-user' }, claim: false });
+      expect(recallRows(await h.stats())).toEqual([['sess-use', 'claude', '1', '1', '0']]);
+      process.chdir(h.root);
+      expect(recallRows(await h.stats())).toEqual([['sess-mai', 'claude', '1', '1', '0']]);
+    });
   });
 });
