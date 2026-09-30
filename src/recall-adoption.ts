@@ -121,7 +121,7 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
 
 async function toolCallLines(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<RecallLogLine[]> {
   const lines: RecallLogLine[] = [];
-  // A subagent's own session, which a bridge names on the call that ran it (OpenCode's task tool).
+  // A subagent's own session, which a bridge names on the call that ran it (OpenCode's task tool) or on the subagent's first call (OMP).
   const link = stdin.session_link !== null && typeof stdin.session_link === 'object' ? stdin.session_link as Record<string, unknown> : {};
   const child = nonEmpty(link.child);
   const parent = nonEmpty(link.parent);
@@ -258,7 +258,7 @@ function inWindow(at: number, run: RunLine): boolean {
  * docs are credited: an inherited user-scope doc stays read-only while a
  * project is active.
  *
- * A subagent that ran in a child session (OpenCode's task tool) is linked to
+ * A subagent that ran in a child session (OpenCode's task tool, OMP) is linked to
  * the session that started it: the runs and reads of every session linked up
  * to the same root count as the root's, the ledger's session, whichever of
  * them stopped. The child stays their actor, so a marked run's own reads are

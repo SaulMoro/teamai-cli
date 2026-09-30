@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import vm from 'node:vm';
 import { EventEmitter } from 'node:events';
 import { buildPiExtensionSource } from '../../pi-hooks.js';
@@ -12,7 +14,7 @@ export interface ExtensionDispatch {
 /** The ExtensionContext fields the extensions read: Pi and OMP share `cwd` and `sessionManager`; OMP adds `agent`. */
 export interface ExtensionContext {
   cwd: string;
-  sessionManager?: { getSessionId: () => string };
+  sessionManager?: { getSessionId: () => string; getSessionFile?: () => string | undefined };
   agent?: { kind: 'main' | 'sub'; id: string; name: string; depth?: number; parentId?: string };
 }
 
@@ -65,6 +67,6 @@ export function loadOmpExtension(): LoadedExtension {
     })();
     return { quiet: () => ({ nothrow: () => run }) };
   };
-  const on = register(buildOmpExtensionSource(), { $, Response });
+  const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer });
   return { on, dispatches };
 }
