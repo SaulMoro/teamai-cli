@@ -138,10 +138,10 @@ broken machine):
 
 | Tool                  | Hooks status              | Why                                                                 |
 |-----------------------|---------------------------|---------------------------------------------------------------------|
-| Claude Code (`claude`)| Installed                 | Fully supported — this is the main, working path                    |
+| Claude Code (`claude`)| Installed                 | Fully supported                                                     |
 | Codex                 | Written but **trust-gated** or skipped | Codex gates non-managed hooks behind an explicit trust step; `teamai doctor` prints a reminder to trust them |
 | Cursor                | Often not written         | Uses its own hook mechanism; broader CLI support is still pending   |
-| CodeBuddy / WorkBuddy | Skipped **by design**     | They only accept versioned plugins (`plugin@version`); teamai writes raw entries into a `hooks` field, which they don't take |
+| CodeBuddy / WorkBuddy | Installed                 | Claude-format hooks in their own `settings.json`                    |
 
 Practical rule: if you set up with `--agent claude`, expect **only** Claude to show
 hooks installed. A tool you are not using, or one that is not a supported hook
