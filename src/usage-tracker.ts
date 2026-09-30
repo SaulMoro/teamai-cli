@@ -11,7 +11,9 @@ import {
   type UsageEvent,
   resolveToolRootDir,
   CLAUDE_TOOL_ID,
+  CODEX_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
+  DEFAULT_CODEX_ROOT,
 } from './types.js';
 import { readJson, writeJson, writeFileAtomic, pathExists } from './utils/fs.js';
 import { appendJsonl, readJsonl, rewriteJsonl, type JsonlStoreOptions } from './utils/jsonl-store.js';
@@ -201,12 +203,14 @@ const PROJECT_SKILL_DIRS = [...SKILL_DIRS, '.github/skills'];
  */
 export async function skillExistsOnDisk(skillName: string, toolRoots?: Record<string, string>): Promise<boolean> {
   const home = getUserHome();
-  // A Claude Code relocated with CLAUDE_CONFIG_DIR keeps its skills under the
-  // recorded root, which the static list cannot know; the caller resolves it
-  // from the hook's directory (resolveMemberToolRoots).
+  // A Claude Code relocated with CLAUDE_CONFIG_DIR (a Codex with CODEX_HOME)
+  // keeps its skills under the recorded root, which the static list cannot
+  // know; the caller resolves it from the hook's directory (resolveMemberToolRoots).
   const claudeRoot = resolveToolRootDir(CLAUDE_TOOL_ID, DEFAULT_CLAUDE_ROOT, toolRoots);
+  const codexRoot = resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, toolRoots);
   const userSkillDirs = [
     path.join(claudeRoot, 'skills'),
+    path.join(codexRoot, 'skills'),
     ...SKILL_DIRS.map((dir) => path.join(home, dir)),
     path.join(getCopilotHome(), 'skills'),
   ];

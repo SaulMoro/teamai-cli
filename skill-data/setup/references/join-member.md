@@ -93,13 +93,14 @@ teamai init --http https://your-team-host/api --token <api-key>
 This is a read-only consumer mode — `push` / `contribute` are not available, but
 skills and rules still sync.
 
-**Claude Code kept in a different directory (`CLAUDE_CONFIG_DIR`):** `init` records
-that directory (as `toolRoots.claude` in the local config) and syncs every Claude
-path there, so run `init` from a shell that has the variable exported. Re-running
-`init` after changing it moves the install (the old root's hooks, managed MCP
-servers and delivered model credentials are removed; its skills and rules are left
-and named in the output). To end the relocation, run `init` once with the variable
-set but blank: `CLAUDE_CONFIG_DIR= teamai init …`.
+**Claude Code or Codex kept in a different directory (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`):** `init` records that directory (as `toolRoots.claude` /
+`toolRoots.codex` in the local config) and syncs every path of that tool there,
+so run `init` from a shell that has the variable exported. Re-running `init` after
+changing it moves the install (the old root's hooks and managed MCP servers are
+removed, and for Claude Code its delivered model credentials; its skills and rules
+are left and named in the output). To end the relocation, run `init` once with the
+variable set but blank: `CLAUDE_CONFIG_DIR= teamai init …` or `CODEX_HOME= teamai init …`.
 
 ## Step 5 — Verify with doctor
 

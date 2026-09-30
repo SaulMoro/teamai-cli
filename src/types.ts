@@ -583,7 +583,7 @@ export const LocalConfigSchema = z.object({
   /**
    * Per-machine relocation of a tool's user-scope root, keyed by the same tool
    * id as `toolPaths` (`claude: ~/.claude-work`). A tool that can be told to
-   * keep its configuration elsewhere — Claude Code's `CLAUDE_CONFIG_DIR` —
+   * keep its configuration elsewhere — Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME` —
    * reads nothing teamai writes to the team-wide default, and `teamai init`
    * records that variable here so every later run targets the right root.
    * The value must resolve inside HOME; `~/` is expanded.
@@ -1848,6 +1848,21 @@ export const CLAUDE_TOOL_ID = 'claude';
 /** The `toolPaths.claude` root segment Claude Code uses when it is not relocated. */
 export const DEFAULT_CLAUDE_ROOT = '.claude';
 
+export const CODEX_TOOL_ID = 'codex';
+
+/** The `toolPaths.codex` root segment Codex uses when `CODEX_HOME` is unset. */
+export const DEFAULT_CODEX_ROOT = '.codex';
+
+/** A tool whose user root can be moved, and the variable that moves it. */
+export interface RelocatableTool {
+  /** Display name in init output and doctor checks. */
+  label: string;
+  /** The environment variable the tool reads its root from. */
+  envVar: string;
+  /** The root segment in HOME when the variable is unset. */
+  defaultRoot: string;
+}
+
 /** True when `dir` resolves to something inside the user's home directory. */
 function isUnderUserHome(dir: string): boolean {
   const rel = path.relative(getUserHome(), path.resolve(dir));
@@ -1871,18 +1886,25 @@ function isAddressableRootSegment(segment: string): boolean {
 }
 
 /**
- * Tools a member may relocate. An allowlist, not a list of known offenders: a
- * root is only honest for a tool whose every user-scope write goes through
- * `toolPaths`, and most tools keep at least one path teamai resolves elsewhere
- * (OMP's extension dir, Codex and Cursor co-author files, Copilot's
+ * Tools a member may relocate, keyed by tool id. An allowlist, not a list of
+ * known offenders: a root is only honest for a tool whose every user-scope
+ * write follows it, and most tools keep at least one path teamai resolves
+ * elsewhere (OMP's extension dir, Cursor's co-author file, Copilot's
  * `$COPILOT_HOME`, OpenCode's plugin dir), which a partial move would split in
- * half. Claude Code qualifies today — hooks, skills, rules, agents, CLAUDE.md,
- * MCP, model sync and co-author all resolve through `toolPaths`, and the one
- * remaining fixed `.claude` path is `legacyHooksNeedReinject`, a read-only
- * probe for a pre-dispatch migration. `toolRoots` itself stays a generic record,
- * so a tool joins this set as soon as its writes have been audited.
+ * half.
+ *
+ * Claude Code qualifies — hooks, skills, rules, agents, CLAUDE.md, MCP, model
+ * sync and co-author all resolve through `toolPaths`, and the one remaining
+ * fixed `.claude` path is `legacyHooksNeedReinject`, a read-only probe for a
+ * pre-dispatch migration. Codex qualifies — hooks, skills, rules, agents and
+ * MCP resolve through `toolPaths`, co-author through `resolveToolRootDir`, and
+ * model switching reads `CODEX_HOME` itself. `toolRoots` stays a generic
+ * record, so a tool joins this table as soon as its writes have been audited.
  */
-const TOOL_ROOTS_SUPPORTED: ReadonlySet<string> = new Set([CLAUDE_TOOL_ID]);
+export const RELOCATABLE_TOOLS: Readonly<Record<string, RelocatableTool>> = {
+  [CLAUDE_TOOL_ID]: { label: 'Claude Code', envVar: 'CLAUDE_CONFIG_DIR', defaultRoot: DEFAULT_CLAUDE_ROOT },
+  [CODEX_TOOL_ID]: { label: 'Codex', envVar: 'CODEX_HOME', defaultRoot: DEFAULT_CODEX_ROOT },
+};
 
 /**
  * Why `dir` cannot serve as a tool root, as a sentence fragment for a warning —
@@ -1904,22 +1926,24 @@ export function toolRootRejection(dir: string): string | null {
 }
 
 /**
- * The Claude Code configuration root `CLAUDE_CONFIG_DIR` asks for, or null when
- * the variable is unset or blank.
+ * The root a relocatable tool's variable asks for (`CLAUDE_CONFIG_DIR`,
+ * `CODEX_HOME`), or null when the variable is unset or blank, or the tool is
+ * not relocatable.
  *
- * A value equal to the default `~/.claude` is still an answer, not an absence:
+ * A value equal to the default root is still an answer, not an absence:
  * Claude Code reads `.claude.json` from INSIDE the configured directory
  * whenever the variable is set, so `~/.claude/.claude.json` rather than
  * `~/.claude.json` — a different file from the one an unset variable means.
  *
  * Read in exactly two commands: `teamai init` records the answer into
- * `toolRoots.claude`, and `teamai doctor` reports a recorded value that no
+ * `toolRoots.<tool>`, and `teamai doctor` reports a recorded value that no
  * longer matches. Everything else reads the recorded value, so a teamai run
  * from a shell that happens not to export the variable (a hook, a cron, a
- * different terminal) still writes where that Claude Code reads.
+ * different terminal) still writes where that tool reads.
  */
-export function detectClaudeConfigRoot(env: NodeJS.ProcessEnv = process.env): string | null {
-  const configured = env.CLAUDE_CONFIG_DIR?.trim();
+export function detectToolRoot(tool: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const spec = RELOCATABLE_TOOLS[tool];
+  const configured = spec ? env[spec.envVar]?.trim() : undefined;
   if (!configured) return null;
   return path.resolve(expandHome(configured));
 }
@@ -1993,11 +2017,11 @@ const warnedToolRoots = new Set<string>();
  * would be worse than telling them about it.
  */
 function toolRootSegment(tool: string, configured: string): string | null {
-  if (!TOOL_ROOTS_SUPPORTED.has(tool)) {
+  if (!(tool in RELOCATABLE_TOOLS)) {
     if (!warnedToolRoots.has(tool)) {
       warnedToolRoots.add(tool);
       log.warn(
-        `Ignoring toolRoots.${tool}: toolRoots currently supports ${CLAUDE_TOOL_ID} only — `
+        `Ignoring toolRoots.${tool}: toolRoots currently supports ${Object.keys(RELOCATABLE_TOOLS).join(' and ')} only — `
         + `${tool} has writes teamai does not resolve through toolPaths.`
         + (tool === COPILOT_TOOL_ID ? ' Copilot CLI is relocated with COPILOT_HOME instead.' : ''),
       );

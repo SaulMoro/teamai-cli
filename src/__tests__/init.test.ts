@@ -925,9 +925,13 @@ describe('init', () => {
   describe('CLAUDE_CONFIG_DIR', () => {
     const relocated = path.join(HOME, '.claude-work');
     let originalConfigDir: string | undefined;
+    let originalCodexHome: string | undefined;
 
     beforeEach(() => {
       originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      originalCodexHome = process.env.CODEX_HOME;
+      // Records are asserted whole, so a developer's own CODEX_HOME must not add one.
+      delete process.env.CODEX_HOME;
       // vi.clearAllMocks() keeps implementations, so the re-init case below
       // would otherwise hand its saved config to every later test.
       vi.mocked(loadLocalConfigForScope).mockResolvedValue(null);
@@ -942,6 +946,8 @@ describe('init', () => {
     afterEach(() => {
       if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
     });
 
     async function savedConfig(): Promise<Record<string, unknown>> {
@@ -958,6 +964,17 @@ describe('init', () => {
       const { log } = await import('../utils/logger.js');
       expect(vi.mocked(log.info).mock.calls.map(([m]) => String(m)).join('\n'))
         .toContain(`Recorded CLAUDE_CONFIG_DIR as the Claude Code root: ${relocated}`);
+    });
+
+    it('records a relocated Codex root from CODEX_HOME beside the Claude one', async () => {
+      const codexHome = path.join(HOME, '.codex-alt');
+      process.env.CLAUDE_CONFIG_DIR = relocated;
+      process.env.CODEX_HOME = codexHome;
+
+      expect(await savedConfig()).toMatchObject({ toolRoots: { claude: relocated, codex: codexHome } });
+      const { log } = await import('../utils/logger.js');
+      expect(vi.mocked(log.info).mock.calls.map(([m]) => String(m)).join('\n'))
+        .toContain(`Recorded CODEX_HOME as the Codex root: ${codexHome}`);
     });
 
     it('records nothing when the variable is unset', async () => {
