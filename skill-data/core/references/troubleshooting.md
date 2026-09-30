@@ -138,7 +138,7 @@ broken machine):
 
 | Tool                  | Hooks status              | Why                                                                 |
 |-----------------------|---------------------------|---------------------------------------------------------------------|
-| Claude Code (`claude`)| Installed                 | Fully supported                                                     |
+| Claude Code (`claude`)| Installed                 | Fully supported — this is the main, working path                    |
 | Codex                 | Written but **trust-gated** or skipped | Codex gates non-managed hooks behind an explicit trust step; `teamai doctor` prints a reminder to trust them |
 | Cursor                | Often not written         | Uses its own hook mechanism; broader CLI support is still pending   |
 | CodeBuddy / WorkBuddy | Installed                 | Claude-format hooks in their own `settings.json`                    |
