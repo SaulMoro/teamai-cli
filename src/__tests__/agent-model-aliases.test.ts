@@ -891,6 +891,24 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
     });
 
+    it.each([
+      ['current', {}],
+      ['recorded', { strong: { codex: 'gpt-6-sol' } }],
+    ])('does not read a %s resolution named like another alias as adopting it', async (_, later) => {
+      const aliasNamedModel = { aliases: { ...STRONG.aliases, strong: { codex: 'gpt-5-codex' }, 'gpt-5-codex': { claude: 'sonnet' } } };
+      await writeAliases(aliasNamedModel);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['codex'], spec);
+      await recordModels({ implementer: { codex: { step: 'team', model: 'gpt-5-codex', source: 'models/aliases.yaml', alias: 'strong' } } });
+      await writeAliases({ aliases: { ...aliasNamedModel.aliases, ...later } });
+      await editDeployed('codex', spec.name, () => {}, 'Edited instructions.');
+
+      const [candidate] = await scan(['codex']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.modelDrift).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+    });
+
     it('pushes a new native agent\'s literal model', async () => {
       await writeAliases(STRONG);
       await fse.outputFile(path.join(homeDir, '.claude/agents/fresh.md'),

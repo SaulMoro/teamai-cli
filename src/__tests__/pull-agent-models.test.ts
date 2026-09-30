@@ -539,6 +539,30 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(logged('warn', /Held implementer\.yaml/)).toBe(true);
       expect(held.completed).toBe(false);
     });
+
+    it('does not hold an agent whose every targeted tool pins its model in the extras while the team file is broken', async () => {
+      const pinned: AgentSpec = { ...IMPLEMENTER, targets: ['claude'], tool_extras: { claude: { model: 'opus' } } };
+      await fse.outputFile(path.join(repoPath, 'models/aliases.yaml'), 'aliases: [broken');
+      await writeAgent(pinned);
+
+      await pull({ silent: true, dryRun: true });
+      expect(logged('warn', /Would hold/)).toBe(false);
+      expect(logged('info', /\[user\] \[dry-run\] Would pull 1 agents$/)).toBe(true);
+
+      vi.clearAllMocks();
+      const outcome = { completed: false };
+      await pull({ silent: true }, outcome);
+
+      expect(logged('warn', /Held /)).toBe(false);
+      expect(await claudeModel()).toMatchObject({ model: 'opus' });
+      expect(outcome.completed).toBe(true);
+      expect((await loadStateForScope(localConfig)).lastPullRev).toBe('abc1234');
+
+      vi.clearAllMocks();
+      await pull({ silent: true });
+      expect(alreadySynced()).toBe(true);
+      expect(logged('warn', /Held /)).toBe(false);
+    });
   });
 
   describe('agents held on an unchanged team revision', () => {

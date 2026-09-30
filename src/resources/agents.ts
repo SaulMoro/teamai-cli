@@ -1141,8 +1141,10 @@ export class AgentsHandler extends ResourceHandler {
       if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
     }
     const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
-    // A load failure holds the agent whole; the member's file only holds an alias agent.
-    const loadFailure = !aliases.ok ? aliases.reason : heldCount > 0 ? aliases.localFailure : undefined;
+    // A load failure holds the agent whole, if any tool fails for it: an extras
+    // model pin needs no aliases, and the member's file only holds an alias agent.
+    if (heldCount === 0) return [];
+    const loadFailure = !aliases.ok ? aliases.reason : aliases.localFailure;
     return loadFailure !== undefined
       ? [{ name, reason: loadFailure, everyTool: heldCount === targeted }]
       : [...heldTools].map(([reason, tools]) => ({ name, reason, tools, everyTool: heldCount === targeted }));
@@ -1370,23 +1372,24 @@ function mergeCanonicalEdits(
         delete before[effortField];
         delete after[effortField];
       }
+      // What pull wrote, as recorded or as it would write now, is unedited,
+      // even a model that is also an alias name.
+      const unedited = [expected, ...(recorded ? [recorded] : [])]
+        .some((known) => known.model === deployed.model && (effortField === undefined || known.effort === deployed.effort));
       // An extras model pin is the author's value, even one named like an
       // alias: a change to it is an extras edit, not an adoption.
-      if (deployed.model !== undefined && expected.step !== 'extras' && isModelAlias(aliases, deployed.model)) {
+      if (unedited) {
+        // Nothing to propose or report.
+      } else if (deployed.model !== undefined && expected.step !== 'extras' && isModelAlias(aliases, deployed.model)) {
         if (deployed.model !== canonical.model) {
           const alias = deployed.model;
           propose('model', alias, () => { merged.model = alias; });
         }
       } else {
-        const recorded = context.recorded?.[tool];
-        const unedited = [expected, ...(recorded ? [recorded] : [])]
-          .some((known) => known.model === deployed.model && (effortField === undefined || known.effort === deployed.effort));
-        if (!unedited) {
-          drift.push(modelDrift({
-            tool, file: context.files.get(tool) ?? tool, alias: canonical.model!, relPath: context.relPath,
-            deployed, expected, effortField,
-          }));
-        }
+        drift.push(modelDrift({
+          tool, file: context.files.get(tool) ?? tool, alias: canonical.model!, relPath: context.relPath,
+          deployed, expected, effortField,
+        }));
       }
     }
 
