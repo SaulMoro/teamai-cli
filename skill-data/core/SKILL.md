@@ -146,6 +146,12 @@ or a team alias; other names do nothing. One file serves every scope and every t
 with that alias name. An ordinary `teamai pull` applies an edit. In the team file,
 `default` is a literal model value and `~` is an error.
 
+A structural error in either file (bad YAML, a wrong type, a bad alias name, an effort
+without a model, `~` in the team file) holds every agent with a `model`: pull keeps
+their copies and push skips them until the file its warning names is fixed. An unknown
+tool key, an unknown option field, or an alias named like `opus` or `inherit` is only
+dropped, with a warning when an agent uses that alias; `gateways` is ignored.
+
 On a tool switched with `teamai models switch`, alias agents get no alias effort, and
 Claude keeps only `opus`, `sonnet` or `haiku` (the switch routes those to the gateway)
 while Codex, OpenCode, CodeBuddy and WorkBuddy get no `model`. No `model` means the

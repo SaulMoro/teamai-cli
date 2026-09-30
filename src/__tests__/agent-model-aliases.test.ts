@@ -33,6 +33,7 @@ import type { AgentSpec, ToolName } from '../resources/agent-format.js';
 import { serializeAgentYaml } from '../resources/agent-format.js';
 import { log } from '../utils/logger.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
+import { openLedger } from '../resources/delivered-copies.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutKey } from '../pull.js';
 import { ModelProfileSchema, resolveProfile, type ModelAgent } from '../models/profile.js';
@@ -299,12 +300,6 @@ describe('AgentsHandler pull: model aliases', () => {
     }));
     expect(files['claude']).toMatchObject({ model: 'opus', effort: 'low' });
     expect(files['codex']).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'medium' });
-  });
-
-  it('ignores a gateways key inside an alias', async () => {
-    await writeAliases({ aliases: { strong: { claude: 'opus', gateways: { corp: { claude: 'gw-opus' } } } } });
-    const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
-    expect(files['claude']).toMatchObject({ model: 'opus' });
   });
 
   it('skips a YAML agent whose model is not a string', async () => {
@@ -792,6 +787,152 @@ describe('AgentsHandler pull: model aliases', () => {
       const [candidate] = await scan(['claude']);
       expect(candidate.mergedSpec).toBeUndefined();
       expect(candidate.skipReason).toContain('its model cannot be resolved: Invalid model aliases YAML at models/aliases.yaml');
+    });
+  });
+
+  describe('invalid aliases files', () => {
+    const warnings = (): string => vi.mocked(log.warn).mock.calls.flat().join('\n');
+    const localFile = (): string => path.join(homeDir, '.teamai/models/aliases.yaml');
+
+    const structural: Array<[string, unknown, string]> = [
+      ['unparseable YAML', 'aliases: [broken', 'Invalid model aliases YAML at models/aliases.yaml'],
+      ['an alias that is not a map', { aliases: { strong: 'opus' } }, 'Invalid model aliases file at models/aliases.yaml: aliases.strong'],
+      ['an option of the wrong type', { aliases: { strong: { claude: 42 } } }, 'Invalid model aliases file at models/aliases.yaml: aliases.strong.claude'],
+      ['an invalid alias name', { aliases: { Strong: { claude: 'opus' } } }, 'Invalid model aliases file at models/aliases.yaml: aliases.Strong'],
+      ['an effort without a model', { aliases: { strong: { claude: { effort: 'high' } } } }, 'Invalid model aliases file at models/aliases.yaml: aliases.strong.claude'],
+      ['~ in the team file', 'aliases:\n  strong:\n    claude: ~\n', 'Invalid model aliases file at models/aliases.yaml: strong.claude: ~ is accepted only in a member\'s'],
+    ];
+
+    it.each(structural)('holds agents with a model on %s, deployed or not, and keeps their records', async (_case, broken, reason) => {
+      await writeAliases(STRONG);
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      const deployed = path.join(homeDir, '.claude/agents/implementer.md');
+      const before = await fse.readFile(deployed, 'utf-8');
+      const records: AgentModelRecords = { implementer: { claude: { step: 'team', model: 'opus', effort: 'high' } } };
+      const ledger = openLedger(undefined, records);
+      await writeAliases(broken);
+
+      const config = teamConfigFor(['claude']);
+      for (const spec of [makeSpec({ model: 'strong', instructions: 'Changed.' }), makeSpec({ name: 'never', model: 'strong' }), makeSpec({ name: 'plain' })]) {
+        const yamlPath = path.join(repoPath, 'agents', `${spec.name}.yaml`);
+        await fse.writeFile(yamlPath, serializeAgentYaml(spec));
+        await handler.pullItem({ name: spec.name, type: 'agents', sourcePath: yamlPath, relativePath: `agents/${spec.name}.yaml` }, config, localConfig, ledger);
+      }
+
+      expect(await fse.readFile(deployed, 'utf-8')).toBe(before);
+      expect(await fse.pathExists(path.join(homeDir, '.claude/agents/never.md'))).toBe(false);
+      expect(await fse.pathExists(path.join(homeDir, '.claude/agents/plain.md'))).toBe(true);
+      expect(ledger.agentModels).toEqual({ ...records, plain: { claude: { step: 'default' } } });
+      expect(warnings()).toContain(`Held implementer.yaml: ${reason}`);
+      expect(warnings()).toContain(`Held never.yaml: ${reason}`);
+    });
+
+    it.each(structural)('skips alias agents on push with a reason on %s, and pushes the rest', async (_case, broken, reason) => {
+      await writeAliases(STRONG);
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      await pullTo(['claude'], makeSpec({ name: 'plain' }));
+      await editDeployed('claude', 'implementer', () => {}, 'Edited instructions.');
+      await editDeployed('claude', 'plain', () => {}, 'Edited instructions.');
+      await writeAliases(broken);
+
+      const byName = Object.fromEntries((await scan(['claude'])).map((item) => [item.name, item]));
+      expect(byName['implementer']?.mergedSpec).toBeUndefined();
+      expect(byName['implementer']?.skipReason).toContain(`its model cannot be resolved: ${reason}`);
+      expect(byName['plain']?.skipReason).toBeUndefined();
+      expect(byName['plain']?.mergedSpec?.instructions).toBe('Edited instructions.');
+    });
+
+    it('holds a never-deployed agent while the local file cannot be parsed, naming it by path', async () => {
+      await fse.outputFile(localFile(), 'aliases: [broken');
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toEqual({});
+      expect(warnings()).toContain(`Held implementer.yaml: Invalid model aliases YAML at ${localFile()}`);
+    });
+
+    it('keeps the root agent a held namespace agent replaces, and the held copy, without a warning', async () => {
+      await writeAliases(STRONG);
+      const config = teamConfigFor(['claude']);
+      await fse.ensureDir(path.join(homeDir, '.claude'));
+      const root = path.join(repoPath, 'agents/vr.yaml');
+      const namespaced = path.join(repoPath, 'agents/fe/vr.yaml');
+      await fse.outputFile(root, serializeAgentYaml(makeSpec({ name: 'vr' })));
+      await fse.outputFile(namespaced, serializeAgentYaml(makeSpec({ name: 'vr', model: 'strong' })));
+      const deployed = path.join(homeDir, '.claude/agents/vr.md');
+
+      // The root copy is deployed and `fe` becomes active while the file is broken.
+      await handler.pullItem({ name: 'vr', type: 'agents', sourcePath: root, relativePath: 'agents/vr.yaml' }, config, localConfig);
+      const rootCopy = await fse.readFile(deployed, 'utf-8');
+      await writeAliases('aliases: [broken');
+      await handler.cleanupInactiveNamespaces(config, localConfig, ['fe']);
+      expect(await fse.readFile(deployed, 'utf-8')).toBe(rootCopy);
+
+      // The namespace copy is deployed, then the file breaks.
+      await writeAliases(STRONG);
+      await handler.pullItem({ name: 'vr', type: 'agents', sourcePath: namespaced, relativePath: 'agents/fe/vr.yaml', namespace: 'fe' }, config, localConfig);
+      const heldCopy = await fse.readFile(deployed, 'utf-8');
+      await writeAliases('aliases: [broken');
+      await handler.cleanupInactiveNamespaces(config, localConfig, ['fe']);
+      expect(await fse.readFile(deployed, 'utf-8')).toBe(heldCopy);
+      expect(warnings()).not.toMatch(/Kept agent/);
+    });
+
+    it('drops an unknown tool key, applies the rest, and warns only when an agent uses the alias', async () => {
+      await writeAliases({ aliases: { strong: { claude: 'opus', 'claude-next': 'opus-6' }, fast: { claude: 'haiku' } } });
+      const fast = await pullTo(['claude'], makeSpec({ name: 'quick', model: 'fast' }));
+      expect(fast['claude']).toMatchObject({ model: 'haiku' });
+      expect(warnings()).not.toContain('claude-next');
+
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'opus' });
+      expect(warnings()).toContain('models/aliases.yaml: alias "strong" maps "claude-next", which is not a tool teamai knows, so that entry is ignored.');
+    });
+
+    it('drops an unknown option field, keeps the entry, and warns only for the tools that read it', async () => {
+      await writeAliases({ aliases: { strong: {
+        claude: [{ model: 'opus', effort: 'high', context: '1m' }],
+        codex: { model: 'gpt-6-sol', effort: 'high' },
+      } } });
+      const codex = await pullTo(['codex'], makeSpec({ model: 'strong' }));
+      expect(codex['codex']).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
+      expect(warnings()).not.toContain('"context"');
+
+      // tclaude reads the claude entry.
+      const files = await pullTo(['tclaude'], makeSpec({ model: 'strong' }));
+      expect(files['tclaude']).toMatchObject({ model: 'opus', effort: 'high' });
+      expect(files['tclaude']).not.toHaveProperty('context');
+      expect(warnings()).toContain('models/aliases.yaml: alias "strong" sets "context" for claude, which teamai does not know');
+    });
+
+    it('does not warn about a team entry the member\'s local entry replaces', async () => {
+      await writeAliases({ aliases: { strong: { claude: { model: 'opus', context: '1m' }, kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+      await fse.outputFile(localFile(), YAML.stringify({ aliases: { strong: { claude: 'sonnet' } } }));
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'sonnet' });
+      expect(warnings()).toBe('');
+    });
+
+    it('drops an alias named like a native model alias, and warns only when an agent uses that name', async () => {
+      await writeAliases({ aliases: { opus: { claude: 'sonnet' }, strong: { claude: 'opus' } } });
+      const strong = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(strong['claude']).toMatchObject({ model: 'opus' });
+      expect(warnings()).toBe('');
+
+      const files = await pullTo(['claude'], makeSpec({ name: 'literal', model: 'opus' }));
+      expect(files['claude']).toMatchObject({ model: 'opus' });
+      expect(warnings()).toContain('models/aliases.yaml: alias "opus" has the name of a tool\'s own model alias, so it is ignored');
+    });
+
+    it('ignores a gateways key inside an alias without a warning', async () => {
+      await writeAliases({ aliases: { strong: { claude: 'opus', gateways: { corp: { claude: 42 } } } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'opus' });
+      expect(warnings()).toBe('');
+    });
+
+    it('does not warn about a dropped effort for a tool the agent does not reach', async () => {
+      await writeAliases({ aliases: { strong: { claude: 'opus', kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(warnings()).toBe('');
     });
   });
 });

@@ -23,6 +23,12 @@
  * keeps `opus`, `sonnet` or `haiku`, which the switch routes to the gateway's
  * models, and every other switched tool gets no model, so it inherits one
  * natively. No switched tool gets an alias effort.
+ *
+ * A structural error in either file (bad YAML, wrong types, a bad alias name,
+ * an effort without a model, `~` in the team file) fails the load: no model
+ * can then be told from an alias, so agents with a `model` are held. What
+ * this version does not know is dropped with a warning instead, so a newer
+ * CLI's additions never freeze this one.
  */
 import path from 'node:path';
 import YAML from 'yaml';
@@ -32,8 +38,24 @@ import { readEntryFileText } from '../namespaced-entries.js';
 import { liveModelSwitches, type LiveModelSwitch } from './switch.js';
 import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
 
-/** Alias names every team has, whether or not it maps them. */
+/**
+ * Alias names every team has, whether or not it maps them. A team maps one
+ * by defining it. A name reserved in a later version keeps meaning the team's
+ * alias wherever a team already defines it.
+ */
 const RESERVED_ALIASES = ['strong', 'fast'] as const;
+
+/**
+ * Names the tools already read as model aliases of their own, best effort and
+ * kept short on purpose: a team alias named like one would silently change
+ * what every agent with `model: opus` receives, so such an alias is dropped.
+ * A full model id is not covered.
+ */
+const NATIVE_MODEL_ALIASES: ReadonlySet<string> = new Set(['opus', 'sonnet', 'haiku', 'fable', 'inherit', 'default', 'auto', 'lite']);
+
+const KNOWN_TOOLS: ReadonlySet<string> = new Set(ALL_SUPPORTED_TOOLS);
+
+const OPTION_FIELDS: ReadonlySet<string> = new Set(['model', 'effort']);
 
 /** Repo-relative path of the team aliases file. */
 export const TEAM_ALIASES_FILE = 'models/aliases.yaml';
@@ -79,13 +101,10 @@ type AliasOption = z.infer<typeof OptionSchema>;
 
 /**
  * Tool id to one option or an ordered list, only the first option used, or
- * null (`~`), which only the local file accepts.
+ * null (`~`), which only the local file accepts. What this version does not
+ * know is gone by now (`dropUnknownEntries`).
  */
-const AliasSchema = z.preprocess(
-  // `gateways` is reserved for mappings keyed by model profile; v1 ignores it.
-  (value) => (isRecord(value) ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'gateways')) : value),
-  z.record(z.string(), z.union([z.null(), OptionSchema, z.array(OptionSchema).min(1)])),
-);
+const AliasSchema = z.record(z.string(), z.union([z.null(), OptionSchema, z.array(OptionSchema).min(1)]));
 
 const AliasesFileSchema = z.object({
   aliases: z.record(
@@ -97,6 +116,18 @@ const AliasesFileSchema = z.object({
 type AliasEntry = AliasOption | AliasOption[] | null;
 type AliasEntries = Record<string, AliasEntry>;
 
+/**
+ * Something a file sets that no tool receives as written, dropped with a
+ * message. With `tool`, it is about that tool key's entry of `alias` in
+ * `file`; without, about the alias as a whole.
+ */
+export interface AliasWarning {
+  readonly alias: string;
+  readonly file: 'team' | 'local';
+  readonly tool?: ToolName;
+  readonly message: string;
+}
+
 /** The aliases a scope reads, or why they cannot be read. */
 export type ModelAliases =
   | {
@@ -106,8 +137,11 @@ export type ModelAliases =
     readonly team: ReadonlyMap<string, AliasEntries>;
     /** The member's override, for the names in `names` only. */
     readonly local: ReadonlyMap<string, AliasEntries>;
-    /** What the files set that no tool receives, one actionable message each. */
-    readonly warnings: readonly string[];
+    /**
+     * Every entry the files set that was dropped, one actionable message
+     * each. Pull prints those an agent it delivers uses (`aliasWarningsFor`).
+     */
+    readonly warnings: readonly AliasWarning[];
     /**
      * Each tool `models switch` can switch, by its own id: a variant such as
      * tclaude has no entry, so it is never switched.
@@ -139,7 +173,7 @@ export type ModelResolution =
  * and `fast` resolve to no model field.
  */
 export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelAliases> {
-  const team = await readAliasesFile(path.join(localConfig.repo.localPath, ...TEAM_ALIASES_FILE.split('/')), TEAM_ALIASES_FILE);
+  const team = await readAliasesFile(path.join(localConfig.repo.localPath, ...TEAM_ALIASES_FILE.split('/')), TEAM_ALIASES_FILE, 'team');
   if (!team.ok) return team;
   const optOut = [...team.aliases].flatMap(([alias, entries]) => Object.keys(entries).filter((tool) => entries[tool] === null).map((tool) => `${alias}.${tool}`));
   if (optOut.length > 0) {
@@ -150,7 +184,7 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
     };
   }
   const localPath = localAliasesPath();
-  const local = await readAliasesFile(localPath, localPath);
+  const local = await readAliasesFile(localPath, localPath, 'local');
   if (!local.ok) return local;
   const names = new Set<string>([...RESERVED_ALIASES, ...team.aliases.keys()]);
   // Read once per load, and only matters for aliases: a literal model is written as is.
@@ -162,16 +196,26 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
     names,
     team: team.aliases,
     local: localHere,
-    warnings: [...droppedEffortWarnings(team.aliases, TEAM_ALIASES_FILE), ...droppedEffortWarnings(localHere, localPath)],
+    warnings: [
+      ...team.warnings,
+      ...droppedEffortWarnings(team.aliases, TEAM_ALIASES_FILE, 'team'),
+      // A native name is in no team's `names`: the member meant it for all of them.
+      ...local.warnings.filter(({ alias }) => names.has(alias) || NATIVE_MODEL_ALIASES.has(alias)),
+      ...droppedEffortWarnings(localHere, localPath, 'local'),
+    ],
     switches,
   };
 }
 
-/** One aliases file, `label` naming it in messages. */
+/**
+ * One aliases file, `label` naming it in messages. A structural error fails
+ * it whole; what this version does not know is dropped with a warning.
+ */
 async function readAliasesFile(
   absolutePath: string,
   label: string,
-): Promise<{ ok: true; aliases: Map<string, AliasEntries> } | { ok: false; reason: string }> {
+  file: AliasWarning['file'],
+): Promise<{ ok: true; aliases: Map<string, AliasEntries>; warnings: AliasWarning[] } | { ok: false; reason: string }> {
   const read = await readEntryFileText(absolutePath, label);
   if (!read.ok) return read;
   let document: unknown = null;
@@ -180,14 +224,64 @@ async function readAliasesFile(
   } catch (error) {
     return { ok: false, reason: `Invalid model aliases YAML at ${label}: ${error instanceof Error ? error.message : String(error)}` };
   }
-  const parsed = AliasesFileSchema.safeParse(document ?? {});
+  const known = dropUnknownEntries(document ?? {}, label, file);
+  const parsed = AliasesFileSchema.safeParse(known.document);
   if (!parsed.success) {
     return {
       ok: false,
       reason: `Invalid model aliases file at ${label}: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
     };
   }
-  return { ok: true, aliases: new Map(Object.entries(parsed.data.aliases ?? {})) };
+  return { ok: true, aliases: new Map(Object.entries(parsed.data.aliases ?? {})), warnings: known.warnings };
+}
+
+/**
+ * Take out what this version does not know before the schema sees it, so a
+ * newer CLI's additions never fail the file: an alias named like a native
+ * model alias, a tool key that is not a tool and an option field other than
+ * `model` and `effort`, each with a warning, and `gateways`, reserved for
+ * mappings keyed by model profile, silently. Whatever is not shaped like an
+ * alias map is left for the schema to reject.
+ */
+function dropUnknownEntries(document: unknown, label: string, file: AliasWarning['file']): { document: unknown; warnings: AliasWarning[] } {
+  if (!isRecord(document) || !isRecord(document['aliases'])) return { document, warnings: [] };
+  const warnings: AliasWarning[] = [];
+  const aliases: Record<string, unknown> = {};
+  for (const [alias, value] of Object.entries(document['aliases'])) {
+    if (NATIVE_MODEL_ALIASES.has(alias)) {
+      warnings.push({ alias, file, message: `${label}: alias "${alias}" has the name of a tool's own model alias, so it is ignored `
+        + `and agents with model: ${alias} receive ${alias} as written. Rename the alias, such as "${alias}-team".` });
+      continue;
+    }
+    if (!isRecord(value)) {
+      aliases[alias] = value;
+      continue;
+    }
+    const entries: Record<string, unknown> = {};
+    for (const [tool, entry] of Object.entries(value)) {
+      if (tool === 'gateways') continue;
+      if (!KNOWN_TOOLS.has(tool)) {
+        warnings.push({ alias, file, message: `${label}: alias "${alias}" maps "${tool}", which is not a tool teamai knows, so that entry `
+          + 'is ignored. Fix the tool id, or update teamai if a newer version added that tool.' });
+        continue;
+      }
+      const unknown = new Set<string>();
+      const withoutUnknown = (option: unknown): unknown => {
+        if (!isRecord(option)) return option;
+        const fields = Object.keys(option).filter((field) => !OPTION_FIELDS.has(field));
+        for (const field of fields) unknown.add(field);
+        return fields.length === 0 ? option : Object.fromEntries(Object.entries(option).filter(([field]) => OPTION_FIELDS.has(field)));
+      };
+      entries[tool] = Array.isArray(entry) ? entry.map(withoutUnknown) : withoutUnknown(entry);
+      if (unknown.size > 0) {
+        const fields = [...unknown].map((field) => `"${field}"`).join(', ');
+        warnings.push({ alias, file, tool: tool as ToolName, message: `${label}: alias "${alias}" sets ${fields} for ${tool}, which teamai `
+          + `does not know, so ${tool} receives that entry without it. Remove it, or update teamai if a newer version added it.` });
+      }
+    }
+    aliases[alias] = entries;
+  }
+  return { document: { ...document, aliases }, warnings };
 }
 
 /**
@@ -195,8 +289,8 @@ async function readAliasesFile(
  * for is dropped: the tool receives the model alone. One message per alias
  * and tool, however many of its options set an effort.
  */
-function droppedEffortWarnings(aliases: ReadonlyMap<string, AliasEntries>, label: string): string[] {
-  const warnings: string[] = [];
+function droppedEffortWarnings(aliases: ReadonlyMap<string, AliasEntries>, label: string, file: AliasWarning['file']): AliasWarning[] {
+  const warnings: AliasWarning[] = [];
   for (const [alias, entries] of aliases) {
     for (const tool of ALL_SUPPORTED_TOOLS) {
       const entry = entries[tool];
@@ -206,8 +300,8 @@ function droppedEffortWarnings(aliases: ReadonlyMap<string, AliasEntries>, label
       const hint = tool === 'cursor'
         ? `Remove it, or write it into the model in Cursor's bracket form, such as "${withEffort.model}[effort=${withEffort.effort}]".`
         : `Remove effort from ${alias}.${tool} to silence this warning.`;
-      warnings.push(`${label}: alias "${alias}" sets an effort for ${tool}, but effort is not supported for ${tool} agent files, `
-        + `so ${tool} receives the model without it. ${hint}`);
+      warnings.push({ alias, file, tool, message: `${label}: alias "${alias}" sets an effort for ${tool}, but effort is not supported for `
+        + `${tool} agent files, so ${tool} receives the model without it. ${hint}` });
     }
   }
   return warnings;
@@ -219,6 +313,33 @@ function droppedEffortWarnings(aliases: ReadonlyMap<string, AliasEntries>, label
  */
 export function isModelAlias(aliases: ModelAliases, model: string): boolean {
   return aliases.ok ? aliases.names.has(model) : (RESERVED_ALIASES as readonly string[]).includes(model);
+}
+
+/**
+ * The warnings about what `tool` receives for `spec`: those about its alias as
+ * a whole, and those about the entry its model comes from. A tool whose
+ * extras model skips the alias, or that is switched, receives no entry as
+ * written. Pull prints only these, so a member hears of an entry only when an
+ * agent they receive uses it; doctor lists them all.
+ */
+export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, tool: ToolName): string[] {
+  if (!aliases.ok || spec.model === undefined) return [];
+  const alias = spec.model;
+  const switched = aliases.switches[tool];
+  const readsEntry = toolExtrasFor(spec, tool)?.['model'] === undefined && !(switched?.ok === true && switched.switched);
+  const source = readsEntry ? entrySource(aliases, alias, tool) : undefined;
+  return aliases.warnings
+    .filter((warning) => warning.alias === alias
+      && (warning.tool === undefined || (warning.file === source?.file && warning.tool === source.key)))
+    .map((warning) => warning.message);
+}
+
+/** Which file's entry, under which tool key, `fromEntries` reads for `tool`. */
+function entrySource(aliases: ModelAliases & { ok: true }, alias: string, tool: ToolName): { file: AliasWarning['file']; key: string } | undefined {
+  const local = entryKey(aliases.local.get(alias), tool);
+  if (local !== undefined) return { file: 'local', key: local };
+  const team = entryKey(aliases.team.get(alias), tool);
+  return team !== undefined ? { file: 'team', key: team } : undefined;
 }
 
 /** What `tool` receives for `spec`'s model. */
@@ -265,10 +386,16 @@ function throughSwitch(resolution: ModelResolution, tool: ToolName): ModelResolu
 
 /** `tool`'s entry in one file's alias, its own key before the tool it inherits from. */
 function toolEntry(entries: AliasEntries | undefined, tool: ToolName): AliasEntry | undefined {
+  const key = entryKey(entries, tool);
+  return key === undefined ? undefined : entries![key];
+}
+
+/** The key of `tool`'s entry in one file's alias. */
+function entryKey(entries: AliasEntries | undefined, tool: ToolName): string | undefined {
   if (entries === undefined) return undefined;
-  if (Object.hasOwn(entries, tool)) return entries[tool];
+  if (Object.hasOwn(entries, tool)) return tool;
   const base = ALIAS_BASE_TOOL[tool];
-  return base !== undefined && Object.hasOwn(entries, base) ? entries[base] : undefined;
+  return base !== undefined && Object.hasOwn(entries, base) ? base : undefined;
 }
 
 /**

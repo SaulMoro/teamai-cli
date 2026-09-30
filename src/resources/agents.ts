@@ -17,7 +17,7 @@ import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from 
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
-import { TEAM_ALIASES_FILE, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
+import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
   parseAgentYaml,
   serializeAgentYaml,
@@ -690,11 +690,10 @@ export class AgentsHandler extends ResourceHandler {
       return;
     }
 
-    const aliases = await loadModelAliases(localConfig);
-    // About the team file, not this agent: said once per pull.
-    if (aliases.ok) for (const warning of aliases.warnings) warnOnce(`[agents] ${warning}`);
+    const aliases = await aliasesForPull(localConfig, ledger);
     // Say why an agent reaches nothing before the loop silently delivers
     // nowhere: `resolveRenders` skips an unparsable spec for every tool alike.
+    let spec: AgentSpec | undefined;
     let specModel: string | undefined;
     if (!isLegacyAgent(agentItem)) {
       const parseResult: ParseResult = parseAgentYaml(content, `${item.name}.yaml`);
@@ -702,12 +701,12 @@ export class AgentsHandler extends ResourceHandler {
         log.warn(`[agents] Skipped ${item.name}.yaml: ${parseResult.reason}`);
         return;
       }
+      spec = parseResult.spec;
       specModel = parseResult.spec.model;
       if (!aliases.ok && specModel !== undefined) {
         log.warn(`[agents] Held ${item.name}.yaml: ${aliases.reason}. Its deployed copies are kept and no new ones are written until the file is fixed.`);
       } else if (specModel !== undefined) {
         // Some tools can fail alone, such as those whose model switch cannot be read.
-        const spec = parseResult.spec;
         const heldTools = new Map<string, ToolName[]>();
         for (const { tool } of await this.agentToolDirs(teamConfig, localConfig)) {
           if (spec.targets && !spec.targets.includes(tool)) continue;
@@ -724,6 +723,13 @@ export class AgentsHandler extends ResourceHandler {
 
     const renders = await this.resolveRenders(teamConfig, localConfig, item, aliases);
     if (ledger && specModel !== undefined) warnAliasGone(item, specModel, renders, ledger.agentModels[item.name]);
+    // A dropped aliases entry concerns this member only where an agent they
+    // receive reads it; each is said once per pull, however many agents do.
+    if (spec) {
+      for (const { tool } of renders) {
+        for (const warning of aliasWarningsFor(aliases, spec, tool)) warnOnce(`[agents] ${warning}`);
+      }
+    }
     for (const { tool, dest, render } of renders) {
       const destDir = path.dirname(dest);
       try {
@@ -925,12 +931,17 @@ export class AgentsHandler extends ResourceHandler {
 
     for (const { tool, dir: destDir } of await this.agentToolDirs(teamConfig, localConfig)) {
       const activeDestinations = new Set<string>();
+      // Held while its model cannot be resolved: the copy on disk may be its
+      // own, and a root agent it replaces stays until it can be delivered.
+      const held = new Set<string>();
       for (const item of active) {
         const rendered = await this.renderedForTool(item, tool, aliases);
         if (rendered) activeDestinations.add(`${item.name}${rendered.ext}`);
+        else if (await this.heldForTool(item, tool, aliases)) held.add(item.name);
       }
       for (const item of inactive) {
         if (item.namespace === undefined && unusable.has(item.name)) continue;
+        if (held.has(item.name)) continue;
         const expected = await this.renderedForTool(item, tool, aliases);
         if (!expected || activeDestinations.has(`${item.name}${expected.ext}`)) continue;
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
@@ -1063,11 +1074,38 @@ export class AgentsHandler extends ResourceHandler {
     return resolved.ok ? resolved.render : null;
   }
 
+  /** Whether `tool` would receive `item` but for a model that cannot be resolved. */
+  private async heldForTool(item: AgentResourceItem, tool: ToolName, aliases: ModelAliases): Promise<boolean> {
+    if (isLegacyAgent(item)) return false;
+    const content = await readFileSafe(item.sourcePath);
+    const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
+    if (!parsed?.ok || (parsed.spec.targets && !parsed.spec.targets.includes(tool))) return false;
+    return !resolveAgentModel(aliases, parsed.spec, tool).ok;
+  }
+
   // ─── Private helpers ──────────────────────────────────────────────────────
 
 }
 
 // ─── Module-level helpers ──────────────────────────────────────────────────
+
+/**
+ * The model aliases, loaded once per ledger: a ledger lives for one pull of
+ * one checkout, which reads the same alias files and switch state for every
+ * agent (model profiles are synced before it opens). Without one, each call
+ * loads afresh.
+ */
+const aliasesByLedger = new WeakMap<DeliveryLedger, Promise<ModelAliases>>();
+
+function aliasesForPull(localConfig: LocalConfig, ledger: DeliveryLedger | undefined): Promise<ModelAliases> {
+  if (!ledger) return loadModelAliases(localConfig);
+  let aliases = aliasesByLedger.get(ledger);
+  if (!aliases) {
+    aliases = loadModelAliases(localConfig);
+    aliasesByLedger.set(ledger, aliases);
+  }
+  return aliases;
+}
 
 /** Tools that receive a legacy `agents/<name>.md` copied verbatim. */
 const LEGACY_MD_TOOLS = new Set(['claude', 'claude-internal', 'tclaude', 'codebuddy', 'joycode', 'omp']);

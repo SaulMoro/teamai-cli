@@ -1853,12 +1853,13 @@ aliases:
   | Copilot | the first entry, as one model string | none |
   | Kiro, WorkBuddy, JoyCode, ZCode, OMP | as written | none |
 
-- An `effort` mapped for a tool with no effort field is dropped: the tool receives the model alone, and pull warns once, naming the alias and the tool.
+- An `effort` mapped for a tool with no effort field is dropped: the tool receives the model alone, and pull warns once, naming the alias and the tool, when it delivers an agent that uses the alias to that tool.
 - claude-internal and tclaude use the `claude` entry, codex-internal and tcodex the `codex` entry, and Qoder CN the `qoder` entry, unless the alias has a key of their own. No other tool inherits an entry: Qoder, ZCode, OMP and JoyCode never receive the `claude` model.
 - A tool the alias does not map gets no `model` field, so it runs the agent on its default. Without `models/aliases.yaml`, `strong` and `fast` give no model field in any tool.
 - `tool_extras.<tool>.model` pins that tool to a concrete model and skips the alias, its effort included. An effort field in `tool_extras.<tool>` without a model overrides only the alias's effort.
 - A `model` that is not a string is rejected when the agent is read. A legacy `agents/<name>.md` is copied as is, so pull warns when its `model` is an alias.
-- While `models/aliases.yaml` cannot be read, pull warns and holds each agent whose model depends on it: deployed copies stay and new ones are not written. Push skips those agents and says why.
+- A structural error fails the whole file: YAML that does not parse, a value of the wrong type, an alias name that breaks the naming rule, an option with `effort` and no `model`, or `~`. Until it is fixed, pull warns, naming the file, and holds every agent with a `model` field (an unreadable file may define any name) in each tool without `tool_extras.<tool>.model`: deployed copies stay, new ones are not written, and the models pull recorded for them stay as they were. Push skips those agents and says why; everything else pushes.
+- Anything else this CLI does not know is dropped with a warning, and the rest of the file applies: a tool key that is not a tool teamai knows, an option field other than `model` and `effort` (the entry is used without it), and an alias named like a tool's own model alias (`opus`, `sonnet`, `haiku`, `fable`, `inherit`, `default`, `auto`, `lite`, a short best-effort list), which is ignored so that `model: opus` stays `opus`. A `gateways` key inside an alias is reserved for a later version and ignored without a warning. Pull prints each warning once, and only when it delivers an agent that uses that alias; a warning about one tool's entry, only when that tool reads the entry.
 - Pull records the model and effort each agent copy received, so an ordinary `teamai pull` applies a change even when the team repo has not moved, such as the first pull after upgrading from a CLI that wrote `model: strong` as is. It rewrites only the agents whose model changed and keeps a copy you edited. When the alias an agent used is removed, pull warns that its `model` is now written as is.
 - `default` in `models/aliases.yaml` is a model value like any other and is written as is, which is CodeBuddy's own value for its default model. `~` there is an error: leave the tool out to give it no model field.
 
@@ -1881,7 +1882,7 @@ aliases:
 - claude-internal and tclaude use your `claude` entry, codex-internal and tcodex your `codex` entry, and Qoder CN your `qoder` entry, unless you give them their own. Your `claude` entry wins over the team's `tclaude` entry.
 - The file is one per machine: it applies in every scope (user and each project checkout) and to every team that uses the alias name.
 - An ordinary `teamai pull` applies an edit to the file, even when the team repo has not moved.
-- While the file cannot be read, pull warns, naming it, and holds each agent whose model depends on it, as for the team file.
+- The file follows the same rules as the team file, `~` aside: a structural error holds agents with a `model` field and the warning names the file by its path, and an entry this CLI does not know is dropped with a warning.
 
 ##### Tools switched to a model profile
 
