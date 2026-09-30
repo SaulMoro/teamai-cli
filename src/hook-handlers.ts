@@ -428,15 +428,21 @@ const votesSyncHandler: HookHandler = {
       // next Stop retries). Inherited user-scope docs stay read-only.
       const { credited, recalled } = await creditAdoptedDocs(localConfig, sessionId);
       const adoptedDocIds = credited ?? [];
+      // A subagent's end is not the end of the turn: the main agent waits on
+      // this hook, so it only credits locally. The ledger prune and the vote
+      // push, a git round trip, wait for the next Stop or pull.
+      const subagentStop = typeof stdin.hook_event_name === 'string' && stdin.hook_event_name.toLowerCase() === 'subagentstop';
 
       // Bound the in-file session ledger even in the default (judge-off) config,
       // where a recall-but-never-adopt session never reaches incrementUpvoted and
       // so would never prune (issue #723 review). This runs every Stop, is locked,
       // and only writes when it actually drops a stale entry.
-      await pruneUpvoteLedger(votePath).catch(() => undefined);
+      if (!subagentStop) await pruneUpvoteLedger(votePath).catch(() => undefined);
 
       const { usesBranchWorktree } = await import('./types.js');
-      if (usesBranchWorktree(localConfig)) {
+      if (subagentStop) {
+        // Nothing to push now: see above.
+      } else if (usesBranchWorktree(localConfig)) {
         // Votes are report data → the teamai-reports orphan branch, written
         // through an isolated worktree (never the default branch / active tree).
         // Stop fires every turn: skip the fetch when nothing is pending.
@@ -492,8 +498,7 @@ const votesSyncHandler: HookHandler = {
       // context (additionalContext); routing an FYI summary there would pollute
       // the next turn, so we simply skip it for those tools rather than misuse
       // the model channel.
-      // A subagent's end is not the end of the turn: the summary waits for Stop.
-      const subagentStop = typeof stdin.hook_event_name === 'string' && stdin.hook_event_name.toLowerCase() === 'subagentstop';
+      // The summary waits for Stop too.
       if (adoptedDocIds.length > 0 && !subagentStop) {
         const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
         if (!stopStdoutUnsupported(tool)) {
@@ -848,7 +853,8 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
 
     // ─── SubagentStop ─────────────────────────────────
     // A subagent can finish after the session's last Stop (a background
-    // worker): votes-sync credits what it read then (#884). Only the agents in
+    // worker): votes-sync credits what it read then, locally; the next Stop or
+    // pull pushes it (#884). Only the agents in
     // SUBAGENT_STOP_TOOLS (builtin-hooks.ts) register it.
     { event: 'subagent-stop', matcher: '*', handler: votesSyncHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
 

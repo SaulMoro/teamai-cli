@@ -1224,7 +1224,7 @@ recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall �
 
 **subagent。** 由 `teamai-recall` subagent 运行的 recall，其自身的读取从不计入；同一会话中主 agent 或其他 subagent 的读取则计入。subagent 用内部参数 `--caller teamai-recall` 标记自己的 run，Claude Code 以及 18.3.2 起的 OMP 也会在 hook 中注明该 subagent。主 agent 之后的读取能否计入 subagent 的 run，取决于 agent：见下表。
 
-**何时投票。** Stop hook 将 run 与读取关联，每篇被采纳的文档每个会话只 upvote 一次；能显示 hook 输出的 agent 会打印 `[teamai] Adopted team knowledge this session: <ids>`。在会话最后一次 Stop 之后才读取文档的 subagent，会在其 SubagentStop 时计入（Claude Code、Codex、CodeBuddy 和 Qoder）；`teamai pull` 会补记仍待处理的读取，例如之后再无 hook 触发的读取，或其 Stop 遇到投票文件被占用的读取。第二天恢复的会话再次打开该文档不会增加投票，除非它再次 recall 到该文档。
+**何时投票。** Stop hook 将 run 与读取关联，每篇被采纳的文档每个会话只 upvote 一次；能显示 hook 输出的 agent 会打印 `[teamai] Adopted team knowledge this session: <ids>`。在会话最后一次 Stop 之后才读取文档的 subagent，会在其 SubagentStop 时计入（Claude Code、Codex、CodeBuddy 和 Qoder），此时不推送任何内容，主 agent 不必等待 git：投票由下一次 Stop 或 pull 推送。`teamai pull` 会补记仍待处理的读取，例如之后再无 hook 触发的读取，或其 Stop 遇到投票文件被占用的读取。第二天恢复的会话再次打开该文档不会增加投票，除非它再次 recall 到该文档。
 
 **各 agent 支持情况。** *直接 recall*：主 agent 运行 `teamai recall`，之后打开文档。*subagent 路径*：`teamai-recall` subagent 运行 recall，之后由主 agent 或其他 subagent 打开文档。
 

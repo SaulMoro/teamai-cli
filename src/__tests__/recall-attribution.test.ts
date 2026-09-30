@@ -1749,6 +1749,20 @@ describe('recall attribution acceptance (#884)', () => {
     expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
   }, 30_000);
 
+  it('11: SubagentStop credits a read locally and pushes nothing mid-turn; the next Stop pushes it', async () => {
+    await h.setUp();
+    const { updateReports } = await import('../utils/reports-branch.js');
+    const { files } = await h.recall('redis timeout');
+    await h.stop();
+    vi.mocked(updateReports).mockClear();
+    await h.read(files[0], { agent: GENERAL_SUBAGENT });
+    expect(await h.subagentStop(GENERAL_SUBAGENT)).toBe('');
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+    expect(updateReports).not.toHaveBeenCalled();
+    await h.stop();
+    expect(updateReports).toHaveBeenCalledTimes(1);
+  });
+
   it('12: judge on: a doc the hook path credited is not sent to the judge again', async () => {
     await h.setUp();
     const { output, files } = await h.recall('redis timeout');
