@@ -27,7 +27,7 @@ export interface SimpleCommand {
   op: ShellOperator | null;
 }
 
-/** What a shell call did with files. Ticket 07 adds PowerShell's readers. */
+/** What a shell call did with files. */
 export interface ShellClassification {
   category: 'read' | 'search' | 'list' | 'shell';
   /**
@@ -200,6 +200,44 @@ const READERS: Record<string, (args: string[]) => string[]> = {
   sed: sedPrintFiles,
 };
 
+/** Get-Content's parameters that name its files, and its switches: every other parameter takes a value. */
+const GET_CONTENT_PATHS = ['path', 'literalpath', 'pspath', 'lp'];
+const GET_CONTENT_SWITCHES = ['raw', 'wait', 'force', 'asbytestream', 'verbose', 'debug'];
+
+/**
+ * The files PowerShell's Get-Content reads: its positional operands and the
+ * values of `-Path` and `-LiteralPath`, written `-Path x` or `-Path:x`.
+ * Parameter names are case-insensitive; an unknown one takes the next word as
+ * its value, so the word is never taken for a file.
+ */
+function getContentFiles(args: string[]): string[] {
+  const files: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const param = /^-([A-Za-z]+)(:?)(.*)$/.exec(args[i]);
+    if (!param) {
+      files.push(args[i]);
+      continue;
+    }
+    const [, name, colon, inline] = param;
+    if (GET_CONTENT_SWITCHES.includes(name.toLowerCase())) continue;
+    const value = colon ? inline : args[++i];
+    if (GET_CONTENT_PATHS.includes(name.toLowerCase()) && value) files.push(value);
+  }
+  return files;
+}
+
+/**
+ * PowerShell's readers, looked up in lowercase since PowerShell ignores case:
+ * Get-Content and its aliases `gc`, `type` (cmd's too) and `cat`. `cat` as
+ * written in lowercase is POSIX cat's, which reads `cat -Path x` the same.
+ */
+const POWERSHELL_READERS: Record<string, (args: string[]) => string[]> = {
+  'get-content': getContentFiles,
+  gc: getContentFiles,
+  type: getContentFiles,
+  cat: getContentFiles,
+};
+
 /**
  * A search verb's flags, each written `-x` or `--name`: those that take a
  * value, those whose value is the pattern (so no operand is), and those that
@@ -307,12 +345,17 @@ function searchArgs(args: string[], verb: SearchVerb): { shows: 'lines' | 'paths
   return { shows, operands: pattern ? words : words.slice(1) };
 }
 
-/** Where a search operand points: its part before the first segment with a glob or a variable. */
+/**
+ * Where a search operand points: its part before the first segment with a
+ * glob or a variable, split on `/` or `\\`. A root (`/`, `C:\\`) keeps its
+ * separator.
+ */
 function searchRoot(operand: string): string {
-  const segments = operand.split('/');
-  const glob = segments.findIndex((s) => EXPANDS.test(s));
-  if (glob === -1) return operand;
-  return segments.slice(0, glob).join('/') || (operand.startsWith('/') ? '/' : '.');
+  const glob = /(?:^|[\\/])[^\\/]*[$`*?[\]{}()]/.exec(operand);
+  if (!glob) return operand;
+  const dir = operand.slice(0, glob.index + (glob.index === 0 && !/^[\\/]/.test(operand) ? 0 : 1));
+  if (/^(?:[A-Za-z]:)?[\\/]$/.test(dir)) return dir;
+  return dir.replace(/[\\/]$/, '') || '.';
 }
 
 const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false };
@@ -325,11 +368,12 @@ const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false
 function classifySimple(command: SimpleCommand, simple: boolean): ShellClassification {
   const [verb, ...rest] = commandWords(command.words);
   if (verb === undefined || !command.redirects.every((r) => r.op.startsWith('2>'))) return SHELL;
-  const base = verb.split('/').pop()!;
+  // By path on either platform, `.exe` too: `C:\\…\\cat.exe`, `Microsoft.PowerShell.Management\\Get-Content`.
+  const base = verb.split(/[\\/]/).pop()!.replace(/\.exe$/i, '');
   const name = base === 'git' && rest.length > 0 ? `git-${rest[0]}` : base;
   const args = name === base ? rest : rest.slice(1);
 
-  const read = READERS[name];
+  const read = READERS[name] ?? POWERSHELL_READERS[name.toLowerCase()];
   if (read) {
     const files = read(args);
     return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple } : SHELL;

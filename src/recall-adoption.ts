@@ -17,6 +17,7 @@ import { appendRecallLine, readRecallLog } from './recall-log.js';
 import type { Actor, ClaimLine, RecalledDoc, RunLine } from './recall-log.js';
 import { getVotesDir } from './types.js';
 import type { LocalConfig } from './types.js';
+import { isAbsolutePath, pathKey, samePath } from './utils/agent-path.js';
 import { log } from './utils/logger.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { commandWords, simpleCommands } from './utils/shell-command.js';
@@ -97,7 +98,7 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
   if ((call.category !== 'read' && call.category !== 'search') || call.status === 'failure') return;
   let roots: string[] | undefined;
   for (const file of call.paths) {
-    if (path.isAbsolute(file)) {
+    if (isAbsolutePath(file)) {
       const { knowledgeRoots, isUnderRoots } = await import('./utils/learnings-roots.js');
       roots ??= await knowledgeRoots(config);
       if (!isUnderRoots(file, roots)) continue;
@@ -120,21 +121,17 @@ export interface AdoptionResult {
 }
 
 function segments(p: string): string[] {
-  return p.replace(/\\/g, '/').split('/').filter((s) => s !== '' && s !== '.');
-}
-
-function samePath(a: string, b: string): boolean {
-  return segments(a).join('/') === segments(b).join('/') && path.isAbsolute(a) === path.isAbsolute(b);
+  return pathKey(p).split('/').filter((s) => s !== '' && s !== '.');
 }
 
 /**
- * The docs a read of `evidencePath` opened. An absolute path must equal the
- * printed one. A relative path had no base: it matches by its trailing
- * segments (at least the parent and the file name), and only when a single
- * printed path has them.
+ * The docs a read of `evidencePath` opened. An absolute path must name the
+ * printed one, however either is written (agent-path). A relative path had
+ * no base: it matches by its trailing segments (at least the parent and the
+ * file name), and only when a single printed path has them.
  */
 function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
-  if (path.isAbsolute(evidencePath)) return docs.filter((d) => samePath(d.path, evidencePath));
+  if (isAbsolutePath(evidencePath)) return docs.filter((d) => samePath(d.path, evidencePath));
   const tail = segments(evidencePath);
   if (tail.length < 2) return [];
   const hits = docs.filter((d) => {

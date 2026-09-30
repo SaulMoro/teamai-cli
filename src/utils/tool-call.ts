@@ -9,12 +9,12 @@
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
  *   tool_response ── statusOf, outputOf, searchOutputOf
  *
- * Extension points: PowerShell readers and Windows paths (ticket 07), other
- * agents' tool names and output fields (08). A name not listed here is
- * `unknown` and never counts.
+ * Paths are resolved and compared by agent-path, the same on every OS, so a
+ * Windows member's `C:\kb\x.md` is one file however it is written. Extension
+ * point: other agents' tool names and output fields (08). A name not listed
+ * here is `unknown` and never counts.
  */
-import path from 'node:path';
-
+import { isAbsolutePath, isWithin, resolvePath, samePath } from './agent-path.js';
 import { resolveHookCwd } from './hook-cwd.js';
 import { classifyShellCommand } from './shell-command.js';
 import { normalizeToolName } from './tool-names.js';
@@ -47,6 +47,9 @@ export interface ToolCall {
 const CATEGORY_OF: Record<string, Exclude<ToolCategory, 'unknown'>> = {
   Read: 'read',
   Bash: 'shell',
+  // Claude's and CodeBuddy's PowerShell tool, and Copilot's.
+  PowerShell: 'shell',
+  powershell: 'shell',
   Grep: 'search',
   grep_code: 'search',
   grep: 'search',
@@ -107,23 +110,18 @@ function searchOutputOf(response: unknown): string | undefined {
   return typeof output === 'string' ? output : undefined;
 }
 
-function resolveAgainst(file: string, cwd: string | undefined): string {
-  if (path.isAbsolute(file)) return path.resolve(file);
-  return cwd ? path.resolve(cwd, file) : file;
-}
-
 /** Whether `file` is `root` or under it; always, when `root` has no base to place it. */
 function within(file: string, root: string): boolean {
-  if (!path.isAbsolute(root)) return true;
-  const rel = path.relative(root, file);
-  return path.isAbsolute(file) && (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)));
+  if (!isAbsolutePath(root)) return true;
+  return isAbsolutePath(file) && isWithin(file, root);
 }
 
 /**
  * The files a search's output shows lines of, never its text: each line that
  * starts with a path under one of the search `roots` followed by `:`
  * (`path:12:text`, `path:text`, OpenCode's `path:` header), resolved against
- * `base`. A bare path line is a listing. A search of one file prints no path,
+ * `base`. A Windows path's drive colon (`C:\kb\x.md:12:`) is part of the
+ * path. A bare path line is a listing. A search of one file prints no path,
  * so its `target` counts when the output shows anything and names nothing
  * under it. Only the output held in memory is scanned: no file is read.
  */
@@ -131,15 +129,15 @@ function shownFiles(output: string, roots: string[], base: string | undefined, t
   const files = new Set<string>();
   let under = false;
   for (const line of output.split('\n')) {
-    const colon = line.indexOf(':');
+    const colon = line.indexOf(':', /^[A-Za-z]:[\\/]/.test(line) ? 2 : 0);
     if (colon <= 0) continue;
     const prefix = line.slice(0, colon);
     // `12:text` (a line number), OpenCode's `  Line 12: text`.
     if (/^\s|^\d+$/.test(prefix)) continue;
-    const file = resolveAgainst(prefix, base);
+    const file = resolvePath(prefix, base);
     if (!roots.some((root) => within(file, root))) continue;
     files.add(file);
-    if (target !== undefined && file !== target) under = true;
+    if (target !== undefined && !samePath(file, target)) under = true;
   }
   if (target !== undefined && !under && output.trim()) files.add(target);
   return [...files];
@@ -158,7 +156,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   if (category === 'read') {
     const file = input.file_path;
     if (typeof file !== 'string' || !file.trim()) return unknown;
-    return { category, paths: [resolveAgainst(file, cwd)], status, simple: true };
+    return { category, paths: [resolvePath(file, cwd)], status, simple: true };
   }
   if (category === 'list') return { category, paths: [], status, simple: true };
 
@@ -172,9 +170,9 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
       return { category, paths: [], status, simple: true };
     }
     // Relative output paths are relative to the searched path (Pi), else to the cwd.
-    const root = typeof input.path === 'string' && input.path.trim() ? resolveAgainst(input.path, cwd) : undefined;
+    const root = typeof input.path === 'string' && input.path.trim() ? resolvePath(input.path, cwd) : undefined;
     const base = root ?? cwd;
-    const target = root !== undefined && path.isAbsolute(root) ? root : undefined;
+    const target = root !== undefined && isAbsolutePath(root) ? root : undefined;
     return { category, paths: shownFiles(output, base ? [base] : [], base, target), status, simple: true };
   }
 
@@ -185,15 +183,15 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const optional = output !== undefined ? { output } : {};
   if (shell.category === 'search') {
     // A shell search prints paths as its operands wrote them: relative to the cwd.
-    const roots = shell.paths.map((f) => resolveAgainst(f, cwd));
+    const roots = shell.paths.map((f) => resolvePath(f, cwd));
     // Only a lone search prints its output; after a pipe, what shows may no longer be the file's lines.
-    const target = shell.target !== undefined && shell.simple ? resolveAgainst(shell.target, cwd) : undefined;
+    const target = shell.target !== undefined && shell.simple ? resolvePath(shell.target, cwd) : undefined;
     const paths = output !== undefined ? shownFiles(output, roots, cwd, target) : [];
     return { category: 'search', paths, status, simple: shell.simple, command, ...optional };
   }
   return {
     category: shell.category,
-    paths: shell.paths.map((f) => resolveAgainst(f, cwd)),
+    paths: shell.paths.map((f) => resolvePath(f, cwd)),
     status,
     simple: shell.simple,
     command,

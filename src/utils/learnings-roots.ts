@@ -8,6 +8,7 @@
  */
 import path from 'node:path';
 
+import { isAbsolutePath, isWithin } from './agent-path.js';
 import { listFiles } from './fs.js';
 import { log } from './logger.js';
 import { learningsBranch } from './learnings-branch.js';
@@ -144,13 +145,13 @@ export async function knowledgeRoots(localConfig: LocalConfig): Promise<string[]
   return roots.filter(Boolean);
 }
 
-/** Whether `absPath` is one of `roots` or lies under one. */
+/**
+ * Whether `absPath` is one of `roots` or lies under one, each written on
+ * either platform (agent-path): `/c/kb/x.md` lies under `C:\kb`.
+ */
 export function isUnderRoots(absPath: string, roots: readonly string[]): boolean {
-  const resolved = path.resolve(absPath);
-  return roots.some((root) => {
-    const rel = path.relative(path.resolve(root), resolved);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-  });
+  const absolute = (p: string): string => isAbsolutePath(p) ? p : path.resolve(p);
+  return roots.some((root) => isWithin(absolute(absPath), absolute(root)));
 }
 
 /** One learning file, and the root it actually lives in. */

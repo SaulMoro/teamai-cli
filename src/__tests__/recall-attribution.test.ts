@@ -31,8 +31,9 @@ vi.mock('../code-knowledge-recall.js', () => ({ queryCodeKnowledge: vi.fn(async 
 vi.mock('../utils/reports-branch.js', async () => {
   const nodePath = await import('node:path');
   const nodeFs = await import('node:fs');
+  // Beside the data home, never beside a Windows row's `C:\kb` (data, not a place to write).
   const checkout = (config: LocalConfig): string => {
-    const dir = nodePath.join(nodePath.dirname(config.repo.localPath), 'reports-wt');
+    const dir = nodePath.join(config.dataHome ?? nodePath.dirname(config.repo.localPath), 'reports-wt');
     nodeFs.mkdirSync(dir, { recursive: true });
     return dir;
   };
@@ -59,6 +60,9 @@ const CODEX = 'sess-codex';
 /** Both session variables a `codex exec` run from Claude's shell sees: two candidates, so the run is ambiguous. */
 const NESTED_ENV = { CLAUDE_CODE_SESSION_ID: SESSION, CODEX_SESSION_ID: CODEX };
 const T0 = Date.parse('2026-09-01T09:00:00.000Z');
+/** Where a Windows member's team repo is, as data: see Harness.windowsTeamRepo. */
+const WINDOWS_REPO = 'C:\\kb';
+const WINDOWS_DOC = 'C:\\kb\\learnings\\redis-timeout.md';
 
 function doc(title: string, tags: string[], body: string): string {
   return `---\ntitle: "${title}"\nauthor: tester\ndate: 2026-05-01\ntags: [${tags.join(', ')}]\n---\n\n${body}\n`;
@@ -214,6 +218,27 @@ class Harness {
   async shell(command: string, stdout: string, options: { session?: string; tool?: 'claude' | 'codex' } = {}): Promise<void> {
     const response = options.tool === 'codex' ? stdout : { stdout, stderr: '', interrupted: false, isImage: false };
     await this.postToolUse('Bash', { command }, response, this.root, undefined, options.session, options.tool);
+  }
+
+  /**
+   * The team repo as a Windows machine holds it, at `C:\kb`: the scope's
+   * config names it, and the index returns its docs there, so recall prints
+   * `C:\kb\learnings\redis-timeout.md`. The paths are data, the same on every
+   * OS; nothing is on disk at them.
+   */
+  async windowsTeamRepo(): Promise<void> {
+    await saveLocalConfigForScope({ ...this.project, repo: { ...this.project.repo, localPath: WINDOWS_REPO } });
+    const indexPath = getProjectSearchIndexPath(this.project);
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { entries: Array<{ path?: string }> };
+    for (const entry of index.entries) {
+      if (entry.path) entry.path = path.win32.join(WINDOWS_REPO, path.relative(this.teamRepo, entry.path));
+    }
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+  }
+
+  /** A PowerShell call's PostToolUse (Claude's and CodeBuddy's `PowerShell` tool) from the project root. */
+  async powershell(command: string, stdout: string): Promise<void> {
+    await this.postToolUse('PowerShell', { command }, { stdout, stderr: '', interrupted: false, isImage: false });
   }
 
   /** `file` relative to the project root, the cwd every call is made from. */
@@ -847,11 +872,83 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  ...[
+    `Get-Content -LiteralPath '${WINDOWS_DOC}'`,
+    `Get-Content -Path "${WINDOWS_DOC}" -TotalCount 40`,
+    `get-content ${WINDOWS_DOC} -Raw`,
+    `type ${WINDOWS_DOC}`,
+    `gc ${WINDOWS_DOC}`,
+    `cat -LiteralPath '${WINDOWS_DOC}'`,
+    `Microsoft.PowerShell.Management\\Get-Content -LiteralPath:'${WINDOWS_DOC}' | Select-Object -First 20`,
+  ].map((command): Row => ({
+    name: `07: Windows PowerShell ${command} after a recall that printed that path → +1`,
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      const { files } = await h.recall('redis timeout');
+      expect(files).toEqual([WINDOWS_DOC]);
+      await h.powershell(command, fs.readFileSync(h.docs['redis-timeout'], 'utf-8'));
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  })),
+  {
+    name: '07: Windows Git Bash cat /c/kb/learnings/redis-timeout.md against a printed C:\\kb\\… path → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.shell('cat /c/kb/learnings/redis-timeout.md', fs.readFileSync(h.docs['redis-timeout'], 'utf-8'));
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '07: Windows Read of c:/kb/learnings/redis-timeout.md (other drive-letter case and separators) → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.read('c:/kb/learnings/redis-timeout.md');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '07: Windows rg -n timeout C:\\kb\\learnings with an output line C:\\kb\\learnings\\redis-timeout.md:12: → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.powershell(`rg -n timeout ${WINDOWS_REPO}\\learnings`, `${WINDOWS_DOC}:12:Raise the pool size.\n`);
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '07: Windows Grep tool in C:\\kb\\learnings, content mode, with a C:\\kb\\…\\redis-timeout.md:5: line → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'timeout', path: `${WINDOWS_REPO}\\learnings`, output_mode: 'content' },
+        { mode: 'content', numFiles: 1, filenames: [], content: `${WINDOWS_DOC}:5:tags: [redis, timeout]`, numLines: 1 });
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '07: Windows reads of the same path on another drive, and a one-file search whose text starts with the doc\'s path → 0',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.shell('cat /d/kb/learnings/redis-timeout.md', 'x');
+      await h.powershell("Get-Content -LiteralPath 'D:\\kb\\learnings\\redis-timeout.md'", 'x');
+      await h.read('d:/kb/learnings/redis-timeout.md');
+      await h.powershell(`rg timeout ${WINDOWS_REPO}\\learnings\\setup.md`, `${WINDOWS_DOC}: the fix\n`);
+      await h.stop();
+    },
+    project: {},
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '07:Windows Get-Content -LiteralPath \'C:\\kb\\learnings\\redis-timeout.md\' → +1',
   '08: Copilot main agent recalls; view of the doc → +1',
   '08: Cursor recall subagent (its own conversation) with --caller reads the doc → 0',
   '09: OpenCode recall in a task child; the parent reads the doc; task link; Stop → +1 for the parent',
