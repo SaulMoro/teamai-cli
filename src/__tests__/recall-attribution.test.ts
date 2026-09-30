@@ -1903,6 +1903,15 @@ describe('recall attribution acceptance (#884)', () => {
       expect(recallRows(await h.stats())).toEqual([['ses_pare', 'opencode', '1', String(files.length), '1']]);
     });
 
+    it('names the agent whose hook claimed the run, even when the environment named another (Dan)', async () => {
+      await h.setUp();
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.shell('teamai recall "redis timeout"', output, { session: CODEX, tool: 'codex' });
+      await h.read(files[0], { session: CODEX });
+      await h.stop(CODEX);
+      expect(recallRows(await h.stats())).toEqual([[CODEX.slice(0, 8), 'codex', '1', String(files.length), '1']]);
+    });
+
     it('prints the same output with a missing log, an empty one, and one without settled runs', async () => {
       await h.setUp();
       await h.recall('redis timeout', { env: NESTED_ENV, claim: false });

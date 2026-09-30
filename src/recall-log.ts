@@ -79,6 +79,8 @@ export interface ClaimLine extends Actor {
    * printing a recall's output. Only a direct claim can settle its run.
    */
   direct: boolean;
+  /** The agent whose hook sent the claim: its dispatch tool id. */
+  agent?: string;
 }
 
 export interface EvidenceLine extends Actor {

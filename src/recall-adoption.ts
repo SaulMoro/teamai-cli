@@ -106,7 +106,7 @@ async function toolCallLines(stdin: Record<string, unknown>, tool: string, confi
     if (runs.length > 0) {
       const actor = actorOf(stdin, tool);
       const direct = invokesRecall(call.command);
-      for (const run of runs) lines.push({ kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct });
+      for (const run of runs) lines.push({ kind: 'claim', ts: new Date().toISOString(), run, ...actor, direct, agent: tool });
       return lines;
     }
   }
@@ -359,10 +359,13 @@ export async function recallSessions(config: LocalConfig, limit: number): Promis
   }
   return [...newest].sort(([, a], [, b]) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0)).slice(0, limit).map(([session, last]) => {
     const { runs, recalled, adopted } = viewRoot(index, session);
-    // A run's family is known only when the session it settled to is the one its environment named.
-    const named = runs.filter((r) => r.agent && index.ownerOf(r) === r.session);
-    const agent = named.reduce<RunLine | undefined>((a, r) => (!a || r.ts > a.ts ? r : a), undefined)?.agent;
-    return { session, ...(agent ? { agent } : {}), runs: runs.length, recalled, adopted, last: last.ts };
+    // A run's agent is the one whose hook claimed it, else its environment's
+    // family when the run settled to the session that environment named.
+    const agentOf = (r: RunLine) => index.claimOf.get(r.run)?.agent ?? (index.ownerOf(r) === r.session ? r.agent : undefined);
+    const named = runs.filter((r) => agentOf(r));
+    const agent = named.reduce<RunLine | undefined>((a, r) => (!a || r.ts > a.ts ? r : a), undefined);
+    const family = agent ? agentOf(agent) : undefined;
+    return { session, ...(family ? { agent: family } : {}), runs: runs.length, recalled, adopted, last: last.ts };
   });
 }
 
