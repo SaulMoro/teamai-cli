@@ -14,7 +14,8 @@ const cli = path.resolve('dist/index.js');
  * unchanged team revision: a local override, push, switching tools to a
  * model profile and back, each taking effect on an ordinary pull; then a
  * teammate's alias change the member pushes over before pulling, and the
- * doctor view. One `it`, because each step starts from the state the last
+ * doctor view; then a teammate change held by the member's broken override
+ * and delivered once it is fixed. One `it`, because each step starts from the state the last
  * one left, and a retried step would not.
  */
 it('keeps model aliases right across overrides, pushes, switches and a teammate change', () => {
@@ -173,6 +174,23 @@ it('keeps model aliases right across overrides, pushes, switches and a teammate 
     expect(view).toBeDefined();
     expect(view).toContain('claude: opus, effort max  [team: models/aliases.yaml]; the last pull deployed opus, effort high  [team: models/aliases.yaml]');
     expect(view).toContain(`codex: gpt-6-astra, effort low  [local: ${path.join(teamHome, 'models', 'aliases.yaml')}]`);
+
+    // Held, then fixed: while the member's override is broken, a teammate
+    // changes implementer. That pull holds it; once the file is fixed, the
+    // next pull must sync again and deliver it, not skip as already synced.
+    const overrideFile = path.join(teamHome, 'models', 'aliases.yaml');
+    const override = fs.readFileSync(overrideFile, 'utf8');
+    write(overrideFile, 'aliases: [broken\n');
+    write(path.join(teammate, 'agents', 'implementer.yaml'), YAML.stringify({ ...canonical, instructions: 'Make the change, then test it.' }));
+    git(teammate, 'commit', '-qam', 'implementer: test the change');
+    git(teammate, 'push', '-q', 'origin', 'main');
+    expect(ok('pull')).toContain('Held implementer.yaml');
+    expect(fs.readFileSync(claudeFile, 'utf8')).not.toContain('then test it');
+    write(overrideFile, override);
+    expect(ok('pull')).not.toContain('Already synced');
+    expect(fs.readFileSync(claudeFile, 'utf8')).toContain('Make the change, then test it.');
+    expect(claude()).toMatchObject({ model: 'opus', effort: 'max' });
+    ordinaryPull();
   } finally {
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
