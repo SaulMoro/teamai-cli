@@ -30,9 +30,9 @@ import {
   buildEntryResolutionChecks,
   buildEntryScopeKeyCheck,
   entryNamespaceNotes,
-  aliasNamespaceNotes,
   buildDocsCheck,
 } from './doctor-delivery.js';
+import { agentModelNotes, aliasNamespaceNotes, buildAgentModelChecks } from './doctor-agent-models.js';
 
 /**
  * Where a check gets its answer. `provider` checks shell out to a provider CLI
@@ -458,6 +458,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     // them, so skipping them post-pull is what keeps the budget for the rest.
     ...(stage === 'doctor' ? await buildRulesDeliveryChecks(ctx) : []),
     ...(stage === 'doctor' ? await buildAgentsDeliveryChecks(ctx) : []),
+    ...await buildAgentModelChecks(ctx, stage),
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),
@@ -552,11 +553,13 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ? codexTrustReminder()
     : null;
   // Info, not checks: which namespace item or entry replaces which root one
-  // (#707), and a model alias an agent uses from a namespace not active here (#830).
+  // (#707), a model alias an agent uses from a namespace not active here, and
+  // how each alias agent's model resolved in each tool (#830).
   const notes = [
     ...await buildNamespaceNotes(ctx),
     ...await entryNamespaceNotes(ctx),
     ...await aliasNamespaceNotes(ctx),
+    ...await agentModelNotes(ctx),
     ...(codexNote ? [codexNote] : []),
   ];
 

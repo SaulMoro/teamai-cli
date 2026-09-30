@@ -175,6 +175,16 @@ it: the member's override file, the team aliases file the alias comes from, or `
 restore --agent <tool>` for a switched tool. Writing an alias name in a deployed copy (`model: fast`)
 and pushing proposes `model: <alias>`. Never tell a user to push a concrete model over an alias.
 
+To answer "why does this tool run this model", run `teamai doctor`. Each alias agent gets
+a note with one line per tool: the model and effort it receives, then `[step: source]`.
+`extras` = `tool_extras.<tool>.model`; `switched` = the tool runs a model profile;
+`local` = the member's override (`tool default (chosen in <path>)` is their `~`/`default`);
+`team` = the team file named; `default` = no model field (alias unmapped for that tool, or
+no active file defines it). A Codex line with no effort means the session's effort carries
+over. A line naming what "the last pull deployed" is fixed by an ordinary `teamai pull`.
+The failing check `Agent model aliases can be resolved` names why agents are held (broken
+aliases file, namespace conflict, unreadable switched-tool settings) and which file to fix.
+
 ## References
 
 In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prints; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.

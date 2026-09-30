@@ -703,19 +703,22 @@ export class AgentsHandler extends ResourceHandler {
       }
       spec = parseResult.spec;
       specModel = parseResult.spec.model;
-      if (!aliases.ok && specModel !== undefined) {
-        log.warn(`[agents] Held ${item.name}.yaml: ${aliases.reason}. Its deployed copies are kept and no new ones are written until the file is fixed.`);
-      } else if (specModel !== undefined) {
+      if (specModel !== undefined) {
         // Some tools can fail alone, such as those whose model switch cannot be read.
         const heldTools = new Map<string, ToolName[]>();
+        let targeted = 0;
         for (const { tool } of await this.agentToolDirs(teamConfig, localConfig)) {
           if (spec.targets && !spec.targets.includes(tool)) continue;
+          targeted += 1;
           const resolution = resolveAgentModel(aliases, spec, tool);
           if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
         }
-        for (const [reason, tools] of heldTools) {
-          log.warn(`[agents] Held ${item.name}.yaml for ${tools.join(', ')}: ${reason}. Its copies there are kept, and none are written, until that is fixed.`);
-        }
+        const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
+        const holds = !aliases.ok
+          ? [{ name: item.name, reason: aliases.reason, everyTool: heldCount === targeted }]
+          : [...heldTools].map(([reason, tools]) => ({ name: item.name, reason, tools, everyTool: heldCount === targeted }));
+        if (ledger) ledger.held.push(...holds);
+        else reportHeld(holds);
       }
     } else {
       warnLegacyAlias(item, content, aliases);
@@ -1105,6 +1108,34 @@ function aliasesForPull(localConfig: LocalConfig, ledger: DeliveryLedger | undef
     aliasesByLedger.set(ledger, aliases);
   }
   return aliases;
+}
+
+/**
+ * Say which agents pull held because their model cannot be resolved, one line
+ * per reason and set of tools however many agents share it, and empty the
+ * ledger's list. Returns how many of them no tool they target received.
+ */
+export function reportHeldAgents(ledger: DeliveryLedger): number {
+  const held = ledger.held.splice(0);
+  reportHeld(held);
+  return new Set(held.filter((hold) => hold.everyTool).map((hold) => hold.name)).size;
+}
+
+function reportHeld(held: DeliveryLedger['held']): void {
+  const byCause = new Map<string, { reason: string; tools?: string[]; names: string[] }>();
+  for (const { name, reason, tools } of held) {
+    const key = `${tools?.join(',') ?? ''}\n${reason}`;
+    const group = byCause.get(key) ?? { reason, ...(tools ? { tools } : {}), names: [] };
+    if (!group.names.includes(name)) group.names.push(name);
+    byCause.set(key, group);
+  }
+  for (const { reason, tools, names } of byCause.values()) {
+    const files = names.map((name) => `${name}.yaml`).join(', ');
+    const its = names.length === 1 ? 'Its' : 'Their';
+    log.warn(tools
+      ? `[agents] Held ${files} for ${tools.join(', ')}: ${reason}. ${its} copies there are kept, and none are written, until that is fixed.`
+      : `[agents] Held ${files}: ${reason}. ${its} deployed copies are kept and no new ones are written until the file is fixed.`);
+  }
 }
 
 /** Tools that receive a legacy `agents/<name>.md` copied verbatim. */

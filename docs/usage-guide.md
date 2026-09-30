@@ -1913,6 +1913,30 @@ For an agent whose `model` is an alias, each tool's `model` and the effort field
 - To move an agent to another alias, write the alias name in a deployed copy, such as `model: fast` in place of `opus`, or `model: strong` in an agent that set `model: opus`, and push: push proposes `model: <alias>`. Two copies that name different aliases conflict, as any two different values do.
 - A new agent that exists only in a tool's directory is pushed with the model it has there, which is never turned back into an alias.
 
+##### Checking with doctor
+
+`teamai doctor` answers "why does Codex run this model". For each agent whose `model` is an alias, it prints a note with one line per installed tool the agent targets: the model and effort the tool receives, and in brackets the step that decided it. Agents and tools that resolve alike share a line; agents with a concrete model or none are left out, since they are written as their spec says.
+
+```text
+models: how model: strong resolves for agents implementer, planner:
+    claude: opus, effort high  [team: models/aliases.yaml]
+    codex: gpt-6-astra, effort xhigh  [local: /home/me/.teamai/models/aliases.yaml]
+    opencode: tool default  [default: models/aliases.yaml does not map opencode]
+```
+
+| Step | Meaning |
+|---|---|
+| `extras` | `tool_extras.<tool>.model` pins the model; the alias is skipped |
+| `switched` | the tool is switched to a model profile: Claude keeps `opus`, `sonnet` or `haiku`, other tools get no model field and pick one natively |
+| `local` | your entry in `~/.teamai/models/aliases.yaml`; `tool default (chosen in <path>)` is your `~` or `default` |
+| `team` | the team entry, in the file named |
+| `default` | no model field: the alias does not map the tool, or no active aliases file defines it |
+
+- A Codex-family line with a model and no effort says so: the effort of the session that starts the agent carries over.
+- When the last pull deployed something else, such as before you pull an edit to your override, the line names what is deployed; an ordinary `teamai pull` updates it, and `Agents delivered to <tool>` lists the agent as `model changed since the last pull`.
+- Every entry an aliases file sets that this CLI drops is a note too.
+- `Agent model aliases can be resolved` fails while a structural error in any aliases file (active or not, your own included), one alias in two active namespaces, or a switched tool whose settings cannot be read holds agents. It names the reason, the file and the held agents. An ordinary pull on an unchanged team repo is silent about held agents, so this check is where they show.
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI is supported for its official custom-instructions, Rules, Skills, custom-agent, hooks, and MCP surfaces, plus TeamAI Docs and Env delivery:

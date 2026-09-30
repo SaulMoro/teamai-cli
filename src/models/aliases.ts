@@ -329,7 +329,9 @@ async function readAliasesFile(
   try {
     document = read.text === null ? null : YAML.parse(read.text);
   } catch (error) {
-    return { ok: false, reason: `Invalid model aliases YAML at ${label}: ${error instanceof Error ? error.message : String(error)}` };
+    // The parser's first line names the problem and its position; the code frame under it would split every message it is quoted in.
+    const message = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.replace(/:\s*$/, '');
+    return { ok: false, reason: `Invalid model aliases YAML at ${label}: ${message}` };
   }
   const known = dropUnknownEntries(document ?? {}, label);
   const parsed = AliasesFileSchema.safeParse(known.document);

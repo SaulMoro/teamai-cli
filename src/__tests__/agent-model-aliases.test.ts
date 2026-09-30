@@ -28,7 +28,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-import { AgentsHandler, type AgentResourceItem } from '../resources/agents.js';
+import { AgentsHandler, reportHeldAgents, type AgentResourceItem } from '../resources/agents.js';
 import type { AgentSpec, ToolName } from '../resources/agent-format.js';
 import { serializeAgentYaml } from '../resources/agent-format.js';
 import { log } from '../utils/logger.js';
@@ -823,8 +823,12 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(await fse.pathExists(path.join(homeDir, '.claude/agents/never.md'))).toBe(false);
       expect(await fse.pathExists(path.join(homeDir, '.claude/agents/plain.md'))).toBe(true);
       expect(ledger.agentModels).toEqual({ ...records, plain: { claude: { step: 'default' } } });
-      expect(warnings()).toContain(`Held implementer.yaml: ${reason}`);
-      expect(warnings()).toContain(`Held never.yaml: ${reason}`);
+      // Said once for every agent it holds, after the pass; neither reached a tool.
+      expect(warnings()).toBe('');
+      expect(reportHeldAgents(ledger)).toBe(2);
+      expect(vi.mocked(log.warn)).toHaveBeenCalledTimes(1);
+      expect(warnings()).toContain(`Held implementer.yaml, never.yaml: ${reason}`);
+      expect(warnings()).toContain('Their deployed copies are kept');
     });
 
     it.each(structural)('skips alias agents on push with a reason on %s, and pushes the rest', async (_case, broken, reason) => {

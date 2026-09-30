@@ -59,6 +59,12 @@ export interface DeliveryLedger {
    * held keeps its old entry.
    */
   readonly agentModels: AgentModelRecords;
+  /**
+   * Agents pull held because their model cannot be resolved (#830), said
+   * once per reason after the pass: `tools` when only those tools are held,
+   * `everyTool` when no tool the agent targets received it.
+   */
+  readonly held: { name: string; reason: string; tools?: string[]; everyTool: boolean }[];
 }
 
 export function openLedger(previous: DeliveredHashes | undefined, agentModels?: AgentModelRecords): DeliveryLedger {
@@ -66,6 +72,7 @@ export function openLedger(previous: DeliveredHashes | undefined, agentModels?: 
     previous,
     hashes: { ...previous },
     kept: [],
+    held: [],
     agentModels: Object.fromEntries(Object.entries(agentModels ?? {}).map(([stem, byTool]) => [stem, { ...byTool }])),
   };
 }

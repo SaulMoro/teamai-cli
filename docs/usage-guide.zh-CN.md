@@ -1800,6 +1800,30 @@ aliases:
 - 要让 agent 改用另一个别名，在已部署的副本中写入别名名称（例如用 `model: fast` 替换 `opus`，或在原本设置 `model: opus` 的 agent 中写 `model: strong`），然后 push：push 会提议 `model: <alias>`。两个副本写了不同的别名时会冲突，与其他任何两个不同的值一样。
 - 只存在于某个工具目录中的新 agent 按其中的模型原样 push，不会被反推回别名。
 
+##### 用 doctor 查看
+
+`teamai doctor` 回答“为什么 Codex 用的是这个模型”。对每个 `model` 为别名的 agent，它输出一条说明（note），为该 agent 面向的每个已安装工具列一行：该工具收到的模型和推理强度，方括号里是决定它的步骤。解析结果相同的 agent 和工具合并为一行；`model` 为具体模型或未设置的 agent 不列出，因为它们按 spec 原样写入。
+
+```text
+models: how model: strong resolves for agents implementer, planner:
+    claude: opus, effort high  [team: models/aliases.yaml]
+    codex: gpt-6-astra, effort xhigh  [local: /home/me/.teamai/models/aliases.yaml]
+    opencode: tool default  [default: models/aliases.yaml does not map opencode]
+```
+
+| 步骤 | 含义 |
+|---|---|
+| `extras` | `tool_extras.<tool>.model` 固定了模型，跳过别名 |
+| `switched` | 该工具已切换到模型配置档：Claude 保留 `opus`、`sonnet` 或 `haiku`，其他工具不写 model 字段，由工具自行选择 |
+| `local` | 你在 `~/.teamai/models/aliases.yaml` 中的条目；`tool default (chosen in <path>)` 表示你写了 `~` 或 `default` |
+| `team` | 团队条目，来自所列文件 |
+| `default` | 不写 model 字段：别名未映射该工具，或没有生效的别名文件定义它 |
+
+- Codex 系工具有模型但没有推理强度时，该行会注明：沿用启动该 agent 的会话的推理强度。
+- 上次 pull 部署的内容不同时（例如你修改了覆盖文件但还没 pull），该行会写出已部署的内容；普通的 `teamai pull` 即可更新，`Agents delivered to <tool>` 会把该 agent 列为 `model changed since the last pull`。
+- 别名文件中被本 CLI 丢弃的每个条目也会作为说明列出。
+- 任一别名文件（无论是否生效，包括你自己的）存在结构错误、同一别名出现在两个生效的 namespace 中，或已切换工具的设置无法读取而导致 agent 被暂缓时，`Agent model aliases can be resolved` 检查失败，并给出原因、文件和被暂缓的 agent。团队仓库未变化时普通 pull 不会提示被暂缓的 agent，所以要在这个检查里看。
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定义 Agent、Hooks 和 MCP 配置面，以及 TeamAI Docs 和 Env 下发：

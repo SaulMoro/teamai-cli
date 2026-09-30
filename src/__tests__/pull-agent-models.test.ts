@@ -423,6 +423,36 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     });
   });
 
+  it('says once per reason which agents it held, and does not count them as synced', async () => {
+    await fse.outputFile(path.join(repoPath, 'models/aliases.yaml'), 'aliases: [broken');
+    await writeAgent(IMPLEMENTER);
+    await writeAgent({ ...IMPLEMENTER, name: 'planner' });
+    await writeAgent({ ...IMPLEMENTER, name: 'bare', model: undefined });
+
+    await pull({ silent: true });
+
+    const held = vi.mocked(log.warn).mock.calls.map((args) => String(args[0])).filter((line) => line.includes('Held '));
+    expect(held).toHaveLength(1);
+    expect(held[0]).toContain('[agents] Held implementer.yaml, planner.yaml: Invalid model aliases YAML at models/aliases.yaml');
+    expect(held[0]).toContain('Their deployed copies are kept and no new ones are written until the file is fixed.');
+    // The parser's position, without its code frame.
+    expect(held[0]).toMatch(/at line \d+, column \d+\. Their/);
+    expect(held[0]).not.toContain('\n');
+    expect(logged('success', /Synced 1 agents \(2 held\)/)).toBe(true);
+    expect(await fse.pathExists(claudeFile('bare'))).toBe(true);
+  });
+
+  it('stays quiet about a tool the alias does not map, which gets no model field', async () => {
+    await writeAliases({ aliases: { strong: { claude: 'opus' } } });
+    await writeAgent(IMPLEMENTER);
+
+    await pull({ silent: true });
+
+    expect(vi.mocked(log.warn)).not.toHaveBeenCalled();
+    expect(await codexModel()).not.toHaveProperty('model');
+    expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/aliases.yaml' });
+  });
+
   it('warns when a model resolved by an alias at the last pull is now written literally', async () => {
     await writeAliases({ aliases: { reviewer: { claude: { model: 'opus', effort: 'max' } } } });
     await writeAgent({ ...IMPLEMENTER, model: 'reviewer' });

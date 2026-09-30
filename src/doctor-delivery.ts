@@ -138,6 +138,13 @@ function changedByYouFix(delivery: ToolDelivery): string {
     : '';
 }
 
+/**
+ * The label for an agent copy that still carries the model the last pull
+ * resolved, since changed by the member's aliases file, a model switch or the
+ * team's aliases (#830). A plain pull redeploys it.
+ */
+const MODEL_CHANGED = 'model changed since the last pull';
+
 /** Whether a tool's delivery has a problem other than copies the member changed. */
 function hasDeliveryProblem(delivery: ToolDelivery): boolean {
   return [...delivery.problems.keys()].some((label) => label !== CHANGED_BY_YOU);
@@ -157,7 +164,7 @@ async function differingCopyLabel(
 }
 
 /** `a, b, c and 4 more` — a fix a human reads, not a wall of paths. */
-function nameList(names: string[]): string {
+export function nameList(names: string[]): string {
   if (names.length <= MAX_NAMED_IN_FIX) return names.join(', ');
   const shown = names.slice(0, MAX_NAMED_IN_FIX).join(', ');
   return `${shown} and ${names.length - MAX_NAMED_IN_FIX} more`;
@@ -391,32 +398,58 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
 
   // An agent whose spec reaches no tool at all is not a per-tool failure: the
   // file is in the team repo and nothing renders it anywhere.
-  const agentLabels = ['not delivered', 'delivered from an older spec', CHANGED_BY_YOU] as const;
-  const { byTool, unreceived: unreachable } = await walkDelivery(
+  const agentLabels = ['not delivered', 'delivered from an older spec', MODEL_CHANGED, CHANGED_BY_YOU] as const;
+  // What the last pull wrote for each agent, its model as recorded then (#830).
+  const recordedTargets = new Map<string, Promise<DeliveryTarget[]>>();
+  const recordedContent = async (item: ResourceItem, tool: string): Promise<string | undefined> => {
+    let targets = recordedTargets.get(item.name);
+    if (!targets) {
+      targets = handler.recordedDeliveryTargets(teamConfig, localConfig, item);
+      recordedTargets.set(item.name, targets);
+    }
+    return (await targets).find((target) => target.tool === tool)?.content;
+  };
+  const { byTool, unreceived } = await walkDelivery(
     handler,
     ctx,
     items,
     // `pullItem` writes `content` verbatim, so anything else at that path is a
     // render of an older spec — a copy that landed and is still wrong, the
-    // same class as a rule whose delivered copy no longer matches its render.
+    // same class as a rule whose delivered copy no longer matches its render —
+    // or of the model the last pull resolved, which has changed since.
     async (target, item) => {
       // readFileSafe answers both questions at once: a directory or a dangling
       // link on the name reads as null, the same as nothing being there.
       const delivered = await readFileSafe(target.dest);
       if (delivered === null) return agentLabels[0];
       if (target.content === undefined || delivered === target.content) return null;
+      if (delivered === await recordedContent(item, target.tool)) return MODEL_CHANGED;
       return differingCopyLabel(item, target, agentLabels[1], localConfig);
     },
   );
+  // An agent whose model cannot be resolved is held, not unreachable: the
+  // model aliases check names the reason.
+  const { heldAgentNames } = await import('./doctor-agent-models.js');
+  const held = await heldAgentNames(ctx);
+  const unreachable = unreceived.filter((name) => !held.has(name));
 
-  const checks: Check[] = [...byTool].map(([tool, delivery]) => ({
-    name: `Agents delivered to ${tool}`,
-    source: 'local',
-    check: async () => !hasDeliveryProblem(delivery),
-    fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, agentLabels)}. `
-      + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + `so it cannot restore this.${changedByYouFix(delivery)}`,
-  }));
+  const checks: Check[] = [...byTool].map(([tool, delivery]) => {
+    const modelChanged = delivery.problems.has(MODEL_CHANGED);
+    const restoredByForce = [...delivery.problems.keys()].some((label) => label !== MODEL_CHANGED && label !== CHANGED_BY_YOU);
+    return {
+      name: `Agents delivered to ${tool}`,
+      source: 'local',
+      check: async () => !hasDeliveryProblem(delivery),
+      fix: [
+        `In ${delivery.dir}, ${describeProblems(delivery.problems, agentLabels)}.`,
+        ...(modelChanged ? ['A plain `teamai pull` redeploys an agent whose model changed.'] : []),
+        ...(restoredByForce
+          ? [`${modelChanged ? 'For the rest, run' : 'Run'} \`teamai pull --force\`: a plain pull skips a scope whose team repo `
+            + 'has not changed, so it cannot restore this.']
+          : []),
+      ].join(' ') + changedByYouFix(delivery),
+    };
+  });
 
   // Only worth reporting once a tool is there to receive agents: with none
   // installed, "reaches no tool" is the machine, not the team repo. The gate is
@@ -584,50 +617,6 @@ export async function buildEntryResolutionChecks(ctx: DoctorContext): Promise<Ch
 export async function entryNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
   const { describeEntryNotes } = await import('./namespaced-entries.js');
   return (await resolveEntryTypes(ctx.localConfig)).flatMap(({ type, resolution }) => describeEntryNotes(type, resolution));
-}
-
-/**
- * Info lines for `doctor`: a model alias that agents this member receives use
- * is also defined in a `models/<ns>/aliases.yaml` whose `<ns>` their roles and
- * projects do not activate in `resources.models`. That file does not apply
- * here, which is right unless the activation was forgotten. Nothing is said
- * while the aliases cannot be read: pull reports that.
- */
-export async function aliasNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
-  const { localConfig, teamConfig } = ctx;
-  if (!teamConfig || localConfig.repo.kind === 'http') return [];
-  const { loadModelAliases } = await import('./models/aliases.js');
-  const aliases = await loadModelAliases(localConfig);
-  if (!aliases.ok || aliases.inactive.size === 0) return [];
-
-  const { buildRolePullContext, resolveDesiredAgents } = await import('./resources/desired.js');
-  const { parseAgentYaml } = await import('./resources/agent-format.js');
-  let items: ResourceItem[];
-  try {
-    const desired = await resolveDesiredAgents(teamConfig, localConfig, await buildRolePullContext(localConfig));
-    if (desired.kind === 'conflict') return [];
-    ({ items } = desired);
-  } catch {
-    return [];
-  }
-  const agentsByAlias = new Map<string, string[]>();
-  for (const item of items) {
-    if (!item.sourcePath.endsWith('.yaml')) continue;
-    const content = await readFileSafe(item.sourcePath);
-    const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
-    const model = parsed?.ok ? parsed.spec.model : undefined;
-    if (model === undefined || !aliases.inactive.has(model)) continue;
-    agentsByAlias.set(model, [...agentsByAlias.get(model) ?? [], item.name]);
-  }
-  return [...agentsByAlias].flatMap(([alias, agents]) => (aliases.inactive.get(alias) ?? []).map(({ namespace, source }) => {
-    const active = aliases.team.get(alias);
-    const instead = active
-      ? `"${alias}" comes from ${active.source} instead`
-      : `no active team file maps "${alias}", so each tool uses its default model unless your local aliases file maps it`;
-    return `models: alias "${alias}" in ${source}, used by agent${agents.length === 1 ? '' : 's'} ${nameList(agents)}, does not apply here, `
-      + `as your roles and projects do not list "${namespace}" in resources.models: ${instead}. If it should apply, add `
-      + `\`models: [${namespace}]\` to the resources of your role in manifest/roles.yaml or of your project in manifest/projects.yaml.`;
-  }));
 }
 
 async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: EntryType; resolution: EntryResolution<unknown> }[]> {

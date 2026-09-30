@@ -16,6 +16,7 @@ import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSa
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
+import { reportHeldAgents } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
@@ -754,6 +755,7 @@ async function redeployAgentsWithChangedModels(
     const changed = await handler.agentsWithChangedModels(desired.items, freshConfig, localConfig, ledger.agentModels);
     if (changed.length === 0) return;
     for (const item of changed) await handler.pullItem(item, freshConfig, localConfig, ledger);
+    reportHeldAgents(ledger);
     reportKept(ledger, scopeLabel);
     // A project checkout reaches the fast path only through its own record.
     const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];
@@ -1330,10 +1332,15 @@ async function pullForScope(
       for (const item of items) {
         await handler.pullItem(item, freshConfig, localConfig, ledger);
       }
+      // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
+      const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;
+      if (held > 0) reported.add('model-aliases');
 
       if (canReceive) {
         if (type === 'skills') {
           logSyncDetail(type, items, existingNames, !!options.verbose, scopeLabel, skippedByTags);
+        } else if (held > 0) {
+          log.success(`[${scopeLabel}] Synced ${items.length - held} ${type} (${held} held)`);
         } else {
           log.success(`[${scopeLabel}] Synced ${items.length} ${type}`);
         }
