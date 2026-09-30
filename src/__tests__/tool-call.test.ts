@@ -140,11 +140,27 @@ describe('classifyToolCall', () => {
   });
 
   it('status unknown: its command\'s error lines are no content, but the lines around them are', () => {
-    expect(shell('cat a.md doc.md', 'cat: a.md: No such file or directory\n---')).toMatchObject({ status: 'unknown', paths: [at('a.md'), at('doc.md')] });
+    expect(shell('cat a.md doc.md', 'cat: a.md: No such file or directory\n---')).toMatchObject({ status: 'unknown', paths: [at('doc.md')] });
     expect(shell('grep -rn needle learnings', 'grep: learnings/b.md: Permission denied\nlearnings/a.md:3:x'))
       .toMatchObject({ status: 'unknown', paths: [at('learnings/a.md')] });
     expect(shell('cat doc.md', 'grep: doc.md: said by another command')).toMatchObject({ status: 'unknown', paths: [at('doc.md')] });
     expect(shell('cat doc.md', { stdout: 'cat: doc.md: Permission denied' })).toMatchObject({ status: 'success' });
+  });
+
+  it.each<[string, string, string[]]>([
+    ['cat a.md doc.md', '# a\ncat: doc.md: Permission denied', ['a.md']],
+    ['cat a.md ./doc.md', '# a\ncat: doc.md: Permission denied', ['a.md']],
+    ['cat a.md doc.md', `# a\ncat: ${at('doc.md')}: Permission denied`, ['a.md']],
+    ['/bin/cat a.md "my doc.md"', "# a\n/bin/cat: 'my doc.md': No such file or directory", ['a.md']],
+    ['head -n 5 a.md doc.md', '==> a.md <==\n# a\nhead: doc.md: x\n', ['a.md']],
+    ['cat a.md doc.md', '# a\ncat: b.md: No such file or directory', ['a.md', 'doc.md']],
+    ['cat a.md doc.md', '# a\ngrep: doc.md: No such file or directory', ['a.md', 'doc.md']],
+  ])('status unknown: %j with output %j reads only %j: an operand its command\'s error names is dropped', (command, output, files) => {
+    expect(shell(command, output)).toMatchObject({ category: 'read', status: 'unknown', paths: files.map(at) });
+  });
+
+  it('status success: an error line names no operand to drop', () => {
+    expect(shell('cat a.md doc.md', { stdout: '# a\ncat: doc.md: Permission denied' }).paths).toEqual([at('a.md'), at('doc.md')]);
   });
 
   it.each<[string, string, string[]]>([

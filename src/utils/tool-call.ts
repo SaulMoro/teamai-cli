@@ -8,7 +8,8 @@
  *                                                  ├─ list    nothing: it shows paths, not a file's lines
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
  *   responseOf ── statusOf (or a bridge's tool_status), outputOf, searchOutputOf
- *   status unknown: withoutErrors(output), a shell call that printed only its command's errors failed
+ *   status unknown: withoutErrors(output), a shell call that printed only its command's errors failed,
+ *                   and a read did not read a file an error names
  *
  * Paths are resolved and compared by agent-path, the same on every OS, so a
  * Windows member's `C:\kb\x.md` is one file however it is written. A new
@@ -218,15 +219,24 @@ const SHELL_DIAGNOSTIC = /^(?:\S*\/)?(?:ba|z)?sh: /;
  * A shell call's output without the lines its command printed as errors:
  * those that start with its command word, as written or by name, and `: `
  * (`cat: x.md: No such file or directory`, `/bin/cat: …`, `grep: …`), and the
- * shell's own diagnostics. Null when those lines were all it printed, as when
- * the call failed.
+ * shell's own diagnostics. `content` is null when those lines were all it
+ * printed, as when the call failed. `named` holds the file each such
+ * `<verb>: <file>: …` line names, unquoted.
  */
-function withoutErrors(output: string, verb: string): string | null {
+function withoutErrors(output: string, verb: string): { content: string | null; named: string[] } {
   const prefixes = [...new Set([verb, verb.split(/[\\/]/).pop()!])].map((name) => `${name}: `);
   const lines = output.split('\n');
-  const kept = lines.filter((line) => !SHELL_DIAGNOSTIC.test(line) && !prefixes.some((prefix) => line.startsWith(prefix)));
-  if (kept.length === lines.length) return output;
-  return kept.some((line) => line.trim() !== '') ? kept.join('\n') : null;
+  const named: string[] = [];
+  const kept = lines.filter((line) => {
+    if (SHELL_DIAGNOSTIC.test(line)) return false;
+    const prefix = prefixes.find((p) => line.startsWith(p));
+    if (prefix === undefined) return true;
+    const file = /^(.+?): /.exec(line.slice(prefix.length))?.[1];
+    if (file !== undefined) named.push(file.replace(/^'(.*)'$/, '$1'));
+    return false;
+  });
+  if (kept.length === lines.length) return { content: output, named };
+  return { content: kept.some((line) => line.trim() !== '') ? kept.join('\n') : null, named };
 }
 
 /** Classify one PostToolUse payload from `agent` (the dispatch tool id). */
@@ -270,7 +280,10 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const output = outputOf(response);
   const optional = output !== undefined ? { output } : {};
   // With no status, only the command's own error lines tell a failure apart.
-  const content = status === 'unknown' && output !== undefined && shell.verb !== undefined ? withoutErrors(output, shell.verb) : output;
+  const errors = status === 'unknown' && output !== undefined && shell.verb !== undefined
+    ? withoutErrors(output, shell.verb)
+    : { content: output, named: [] };
+  const content = errors.content;
   if (content === null) return { category: shell.category, paths: [], status: 'failure', simple: shell.simple, command, ...optional };
   if (shell.category === 'search') {
     // A shell search prints paths as its operands wrote them: relative to the cwd.
@@ -280,9 +293,11 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
     const paths = content !== undefined ? shownFiles(content, roots, cwd, target, true) : [];
     return { category: 'search', paths, status, simple: shell.simple, command, ...optional };
   }
+  // A read did not read a file its command's error names.
+  const failed = errors.named.map((f) => resolvePath(f, cwd));
   return {
     category: shell.category,
-    paths: shell.paths.map((f) => resolvePath(f, cwd)),
+    paths: shell.paths.map((f) => resolvePath(f, cwd)).filter((f) => !failed.some((e) => samePath(e, f))),
     status,
     simple: shell.simple,
     command,

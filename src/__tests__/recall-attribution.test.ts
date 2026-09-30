@@ -972,6 +972,24 @@ const ROWS: Row[] = [
     project: {},
   },
   {
+    name: '05: Codex cat notes.md <doc> whose output is notes.md\'s text and cat: <doc>: Permission denied (status unknown) → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`cat notes.md ${files[0]}`, `# Notes\nnothing here\ncat: ${files[0]}: Permission denied\n`);
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '05: Codex cat missing.md <doc> whose output is cat: missing.md: No such file or directory and the doc\'s text (status unknown) → +1',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`cat missing.md ${files[0]}`, `cat: missing.md: No such file or directory\n${fs.readFileSync(files[0], 'utf-8')}`);
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
     name: '06: Codex searches of the doc or its directory whose output is only the search\'s error (status unknown) → 0',
     trace: async (h) => {
       const { files } = await h.codexRecall('redis timeout');
