@@ -270,6 +270,7 @@ Windows 与 macOS 的默认文件系统上它们是同一个目录，限定到�
 ```bash
 teamai projects list                 # 已定义的项目 + 本目录激活的项目
 teamai projects set hai-inference    # 设置本目录激活的项目（覆盖语义；逗号分隔或重复；留空清除）
+teamai projects set hai-inference --dry-run # 预览选择，不保存配置
 teamai projects members hai-inference # 查看某项目下注册了哪些成员
 
 # 管理员：修改 manifest/projects.yaml 并发起 PR（均支持 --dry-run）
@@ -450,7 +451,7 @@ main 的团队知识 —— `git status` 保持干净。旧版单仓装升级后
    - `.teamai/hooks/hooks.yaml` —— 团队 hooks
    - `.teamai/mcp/mcp.yaml` —— 共享 MCP servers
 
-> **关于 `env` 的提醒。** 单仓模式下 `.teamai/env/env.yaml` **会被提交到 main**（不同于独立模式的每机本地 env），因此会随 clone 分发给所有人。`env.yaml` 存的是明文键值对 —— 只放非敏感的共享配置，真正的密钥请留在你自己未追踪的环境里。
+> **关于 `env` 的提醒。** 单仓模式下 `.teamai/env/env.yaml` **会被提交到 main**（不同于独立模式的每机本地 env），因此会随 clone 分发给所有人。`env.yaml` 存的是明文键值对 —— 只放非敏感的共享配置。密钥请在 `.teamai/env/secrets.yaml` 中只声明、不写值（见[团队密钥](designs/team-secrets.zh-CN.md)），值留在你自己未追踪的环境里。
 
 > **限制。** 单仓模式把一套团队配置绑定到一个业务仓。如果需要一套团队知识库被多个业务仓共享，请改用独立团队仓（`teamai init <repo>`）。
 
@@ -913,6 +914,9 @@ projects:
   `teamai list <env|hooks|mcp> --source repo` 会给出每个条目的 namespace、是否覆盖了
   根条目，并指出每个未下发的条目及其原因；`teamai status` 按 namespace 计数并同样
   指出它们；`teamai doctor` 以提示信息列出每一处覆盖。
+  你用 `teamai env set KEY` 为该团队设置了值时，变量取你的值，否则取文件中的值；环境
+  不覆盖二者，`env.sh` 导出的就是这个值（用 `--from-env` 设置的除外）。`teamai env list` 与
+  `teamai list env` 显示这个值及其来源：`team` 或 `env.yaml`。
 - **先让所有成员升级。** teamai 0.25.0 与 0.26.0 beta 会拒绝不认识的 `resources:` key，
   声明 `env`、`hooks` 或 `mcp` 会让这些版本的 pull 失败。从本版本起，未知的
   `resources:` key 只会给出警告，`teamai roles` 与 `teamai projects` 保存 manifest 时也会保留它。
@@ -962,6 +966,66 @@ variables:
     value: https://api.example.com
     description: 团队 API 地址              # 可选
 ```
+
+**密钥。** 团队需要的密钥只声明、不写值，写在 `env/secrets.yaml` 或某个 namespace 的
+`env/<ns>/secrets.yaml` 中（生效条件与 `env/<ns>/env.yaml` 相同，namespace 条目替换根文件中同 key
+的条目）。每个成员在自己的机器上保存值。
+
+```yaml
+secrets:
+  - key: GITHUB_TOKEN
+    description: GitHub token with repo scope   # 可选
+    url: https://github.com/settings/tokens     # 可选：成员获取 token 的地址
+```
+
+```bash
+teamai env add GITHUB_TOKEN --secret -d "GitHub token with repo scope" --url https://github.com/settings/tokens
+teamai env remove GITHUB_TOKEN        # env.yaml 未设置的 key；两个文件都有时加 --secret
+teamai push
+```
+
+`teamai env add KEY --secret` 在根文件中（或用 `--role` / `--project` 在对应 namespace 的文件中）声明一个 key，
+或更新它的描述和 url；它不接受值，也不会输出值。
+
+每个成员为当前目录的团队设置自己的值，从不通过命令行参数传入：
+
+```bash
+teamai env set GITHUB_TOKEN                               # 提示输入，不回显
+teamai env set GITHUB_TOKEN --stdin                       # 从管道读取
+teamai env set GITHUB_TOKEN --from-env WORK_GITHUB_TOKEN  # 使用时从该变量读取
+teamai env set GITHUB_TOKEN --global                      # 对本机所有团队生效
+teamai env unset GITHUB_TOKEN [--global]
+```
+
+`env set` 接受已声明的密钥，不加 `--global` 时也接受该目录收到的 `env.yaml` 变量，并把值保存在 `~/.teamai/secrets/teams/<hash>.json`
+（权限 `0600`），每个团队仓库一个文件，按你的 `~/.teamai/config.yaml` 中的团队仓库 URL 命名（不使用 `teamai.yaml` 的 `repo:`），修改 `team:` 不影响它；加 `--global` 时保存在 `~/.teamai/secrets/machine.json`，
+对本机所有团队生效，为某个团队设置的值仍然优先。不在任何 scope 中时，`--global` 接受任何合法的 key，
+并提示目前还没有团队声明它。值保持设置时该 key 的类型：团队不再声明某个同时在 `env.yaml` 中设置的密钥后，你的值不会用于该变量，`env list` 会提示先运行 `teamai env unset KEY`，再运行 `teamai env set KEY`。`teamai env list` 和 `teamai list env` 会把每个已声明的密钥
+显示为 `team`（你为该团队设置了它）、`global`（你为本机设置了它）、`environment`（你自己的环境中有它的值）、`missing`，
+或 `unreadable`（你的值文件无法读取），从不显示值，
+`--reveal` 也一样。既声明为密钥、又在 `env.yaml` 中设置的 key 按密钥处理：它的 `env.yaml` 值不会
+导出到 `env.sh`，也不会列出。密钥文件无法使用时不会被当作"没有密钥"：`env.sh` 和 MCP server 保持原样，
+`pull` 会警告，`env list` 和 `mcp list` 以非零状态退出（此时 `env list` 不显示任何变量的值，因为其中任何一个都可能是密钥），
+`teamai doctor` 的检查失败并指出该文件。值文件无法读取时，`Your team secret values can be read` 检查失败。`teamai push` 会带上任何密钥文件的改动。
+见[团队密钥](designs/team-secrets.zh-CN.md)。
+
+`gh`、`glab` 等 CLI 在 `teamai env exec` 下运行时，会拿到当前目录的变量和密钥；它对项目的每个 worktree
+都以同样的方式找到 scope：
+
+```bash
+teamai env exec -- gh pr create
+teamai env exec -- glab mr list
+```
+
+命令继承你的环境，并叠加该 scope 的 `env.yaml` 变量和按[解析顺序](designs/team-secrets.zh-CN.md#解析顺序)解析的密钥；在该 scope 下没有值的已声明密钥
+会从中移除。命令前要加 `--`：否则 teamai 会把命令的参数当作自己的，因此它会提示并以退出码 2 结束。缺少密钥时，会在 stderr 上打印 `teamai env set` 那一行提示，命令照常运行。teamai 打印的所有内容
+都输出到 stderr，退出码就是命令的退出码。这里没有 teamai 配置时，命令以你的环境运行，并给出提示。
+不会把任何值写入磁盘。见[用 `env exec` 运行 CLI](designs/team-secrets.zh-CN.md#用-env-exec-运行-cli)。
+
+scope 声明了密钥时，session-start hook 会告诉 agent 有哪些 key 及其 `description`，并让它通过
+`teamai env exec --` 运行需要这些 key 的 CLI。工具会丢弃 hook 输出的 agent 从 teamai core skill 获得同样的规则。
+agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端运行 `teamai env set KEY`。见
+[告诉 agent](designs/team-secrets.zh-CN.md#告诉-agent)。
 
 不再下发到该目录的变量会在下一次 pull 时从 `env.sh` 中移除，即使这次 pull 因团队仓库
 未变化而提示 `Already synced` 也一样。在那次 pull 之前，`teamai doctor` 会报告
@@ -1064,11 +1128,11 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 
 Copilot 使用原生 `mcpServers` 结构：`stdio` 写成 `type: "local"`，远程传输保留 `http` 或 `sse`，每个 TeamAI 管理的条目都会带上必需的 `tools: ["*"]` 允许列表。TeamAI 遵循 `COPILOT_HOME`，项目配置使用 Copilot CLI 官方文档指定的 `.github/mcp.json` 仓库路径。详见 [GitHub Copilot CLI 添加 MCP Server](https://docs.github.com/zh/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)。Codex 支持 `stdio` 与 `http`，`sse` 会被跳过。Qoder 使用对应作用域 `.qoder/settings.json` 中与 Claude 兼容的 `mcpServers` 格式。Kiro 在专用的、只含 `mcpServers` 的 `.kiro/settings/mcp.json` 中使用同一格式（见 [Kiro MCP 配置文档](https://kiro.dev/docs/mcp/configuration/)）。OpenCode 支持 `stdio`（写成其 `type:"local"` 形态）与 `http`（`type:"remote"`），`sse` 会被跳过，其 server 位于共享 `opencode.json` 的 `mcp` 键下。归属记录在 `~/.teamai/managed-mcp.json`——手动添加的 server 不动；与手写同名则跳过，除非 `--force`。
 
-**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。取值优先来自环境变量，其次是该目录收到的团队环境变量（`env/env.yaml` 与活动的 `env/<ns>/env.yaml`）。变量无法解析则跳过并提示。
+**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。团队在 `env/secrets.yaml` 中声明的 key 优先取你为该团队设置的值（`teamai env set`），其次取你为本机设置的值（`teamai env set --global`），再次取你自己的环境，不包括 teamai `env.sh` 导出的值（见[团队密钥](designs/team-secrets.zh-CN.md#解析顺序)）。其他变量优先取你为该团队设置的值（`teamai env set KEY`），其次是该目录收到的团队环境变量（`env/env.yaml` 与活动的 `env/<ns>/env.yaml`）；环境只补充团队没有设置的 key，不再覆盖团队变量（见[团队密钥](designs/team-secrets.zh-CN.md#变量)）。你导出的值与团队的值不同而被忽略时，交互式 `pull` 和 `teamai doctor` 会指出。变量无法解析则跳过并提示。已声明的密钥不同：pull 找不到它时，之前某次 pull 写入的条目原样保留，因此里面可能是已经轮换掉的旧值，直到某次 pull 找到新值（见[团队密钥](designs/team-secrets.zh-CN.md#缺少密钥时保留-mcp-条目)）。交互式 `pull`、`teamai mcp list`、`teamai env list`、`teamai doctor` 和 `teamai env exec` 会指出没有值的已声明密钥、用到它的 server 以及设置它的命令：`` github: GITHUB_TOKEN is not set. Run `teamai env set GITHUB_TOKEN` (<url>). ``
 
-teamai 会**把每个 `${VAR}` 解析成取值后原样写入**各工具的配置文件（新建文件权限为 `0600`）。它不依赖任何工具自身的环境变量展开——因为那种展开很脆弱：最典型的是，以 GUI 方式（Dock/Launchpad）启动的 IDE 不会继承你 shell 中 `export` 的变量，`${VAR}` 占位符会展开为空、导致服务端 401。解析成明文可以保证无论工具如何启动，token 都在。
+teamai 会**把每个 `${VAR}` 解析成取值后原样写入**各工具的配置文件，并以 `0600` 写入该文件，已有的 `0644` 文件也会收紧（不含已解析值的配置保持原权限；新建文件权限为 `0600`）。它不依赖任何工具自身的环境变量展开——因为那种展开很脆弱：最典型的是，以 GUI 方式（Dock/Launchpad）启动的 IDE 不会继承你 shell 中 `export` 的变量，`${VAR}` 占位符会展开为空、导致服务端 401。解析成明文可以保证无论工具如何启动，token 都在。
 
-> ⚠️ **解析后的 token 会落盘。** 项目级 MCP 配置（`.mcp.json`、`.github/mcp.json`、`.cursor/mcp.json`、`.codex/config.toml`、`opencode.json`）因此含有明文密钥——请把它们加入 `.gitignore`，切勿提交。
+> ⚠️ **解析后的 token 会落盘。** 项目级 MCP 配置（`.mcp.json`、`.github/mcp.json`、`.cursor/mcp.json`、`.codex/config.toml`、`opencode.json`）因此含有明文密钥。只要这类文件将含有 teamai 解析出的值且 git 会跟踪它，teamai 就会在写入该值之前把路径写入本地克隆的 `.git/info/exclude`，放在 `# [teamai:mcp-exclude:start]` 块中（同一仓库的各 worktree 共用该文件）。经由符号链接目录访问的配置（例如 `.cursor/` 指向 `config/`）按写入实际落到的位置判断：写入 exclude、检查和报告的都是该路径（`/config/mcp.json`），已被跟踪时会同时给出两个路径。文件本身是符号链接时，写入会替换该链接，因此以文件自身的路径为准。本次 pull 未写入的文件同样适用：之前为某个现已禁用的工具写入的文件，团队已从 `toolPaths` 移除或改到别处的工具的内置位置上的文件（只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录描述的是另一个文件或没有文件；当前由另一个工具映射的文件，例如 Claude 映射的 CodeBuddy 的 `.mcp.json`，则在含有该工具未写入的 server 时算数，见下文），在团队此后改动的 `toolPaths` 映射下写入的文件（每个 worktree 会把写入过解析值的文件记录在其 `managed-mcp.json` 旁的 `managed-mcp-files.json` 中；对于旧版 teamai 在有这份记录之前写入的文件，第一次 pull 会读取一次团队仓库中 `teamai.yaml` 历史里的每个 `mcpProject` 路径，以及 teamai 此后改掉的内置路径（CodeBuddy 的 `.codebuddy/mcp.json`），以克隆中现有的历史为限，且只看项目内的文件，跳过同一工具当前仍映射的路径；这类文件只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录只描述当前路径（当前由另一个工具映射的文件，则在含有该工具未写入的 server 时算数，见下文），在那次 pull 之前 `teamai doctor` 也会检查这些文件；被 git 跟踪的文件不会写入 exclude（写入也不起作用），但无论其内容如何都会记为已跟踪，待 git 不再跟踪它（`git rm --cached`）后按其他此类文件的规则判断，直到它从磁盘和 git 中都消失才会被遗忘），或仍含已从 `mcp.yaml` 删除的 server 的文件。pull 写入的带解析值的条目只要未被改动就一直算数，即使团队后来把其中的 `${VAR}` 改成了字面值。worktree 中完全没有 `managed-mcp.json` 时（记录丢失，或在其第一次 pull 之前），未被 git 跟踪的配置只要含有任何记录都未认领的 server 就算数，你自己的 server 也包括在内：pull 会像重建丢失的记录时那样把这些 server 记入 `managed-mcp-files.json`，在它们离开该文件之前该路径一直保留；`teamai doctor` 也按同样方式检查。`managed-mcp.json` 中没有某个工具的记录时（记录丢失，或这是 teamai 对该工具的第一次投递），pull 为该工具写入第一份记录的配置也按此处理。git 无法判断是否忽略的路径，只要 `git ls-files` 显示该文件未被跟踪，也会照样写入；若连这一点也无法判断，则按 git 出错处理。若无法写入——`.git/info` 或 exclude 文件不可写、另一个 teamai 命令在短暂等待后仍占用 exclude 文件、git 已跟踪该文件、你自己的 git 忽略文件中有规则重新包含了它（例如 `!/.mcp.json`；警告会指出该规则），或 git 出错——teamai 会保持该文件原样（之前 pull 写入的条目保留），给出原因与修复方法的警告，`teamai mcp list` 和 `teamai doctor` 也会针对 pull 会写入它的每个工具，把该 server 报告为未写入（withheld）；请让文件可写（或对已跟踪的文件执行 `git rm --cached`，或删除重新包含它的规则），再运行 `teamai pull`。已被跟踪的文件会优先报告，且不会写入任何路径。不会改动已提交的 `.gitignore`，git 已忽略的路径不会重复添加，pull、`teamai mcp remove` 和 `teamai uninstall` 会从块中移除某个路径（移除最后一个路径时连同整个块），前提是该文件已不存在、不含任何 MCP server，或在命令运行前 teamai 的写入记录（`managed-mcp.json`）就已存在、可以解析且记有该文件所属工具的条目的情况下（对于两个工具共用的文件，例如 Claude 和 CodeBuddy 共用的 `.mcp.json`：需记有 `managed-mcp-files.json` 中写入过解析值的每个工具的条目；若其中没有列出任何工具，则需记有映射到它的每个工具的条目；空的、无法读取或被截断的记录不能作为依据；pull 重建记录时、或在 `managed-mcp.json` 中没有该工具的记录时写入记录时，若无法把文件中的其他 server 记入 `managed-mcp-files.json`，该记录在之后某次 pull 记下它们之前也不能作为依据）不含以下任何一项：带解析值的团队 server、清理后仍残留的 teamai 条目、teamai 重建丢失的 `managed-mcp.json` 时文件中已有的 server、仍在环境中设置的变量的值（8 个字符以上）。在已改动的映射下写入的文件、团队已移除或改到别处的工具的内置位置上的文件（当前有另一个工具映射到它的除外），或位于嵌套仓库某个关联 worktree 中的文件，须已不存在或不含任何 MCP server。为团队此后改到别处的工具写入（有记录、在上述历史中找到，或位于该工具的内置位置）、但仍被另一个工具的映射指向的文件，只要含有当前映射到它的工具未写入的 server（以它们的 `managed-mcp.json` 记录为准），也会保留该路径；与其他在已改动映射下写入的文件一样，你自己的 server 也会让它保留。`teamai uninstall` 对仓库每个 worktree 中的该文件都按此判断；pull 和 `teamai mcp remove` 只对当前 worktree 的文件按此判断，只要其他任一 worktree 中的该文件仍含 MCP server，就保留该路径：那个 worktree 上次 pull 写入的条目（例如团队后来改成字面值的 `${VAR}`）只能由在那里运行的 pull 判断。某次 pull 写入了路径、随后却没有把值写进该文件（文件无法解析，或其中有你自己的同名 server）时，该路径会在这次 pull 结束时移除，它在 `managed-mcp-files.json` 中的记录也会一并移除。否则，或对无法检查的文件（例如无法解析），会保留该路径，`teamai uninstall` 会给出警告，说明文件及原因：请先从中移除 teamai 的 server，再自行删除那一行（删到最后一行时连同块的首尾标记）。`teamai doctor` 会报告 git 仍会提交或无法判断的这类文件——例如已被跟踪的文件：请 `git rm --cached` 并轮换 token。
 
 Claude Code 可能把来自仓库的 `.mcp.json` 标为待批准，需在交互式会话中确认一次。
 
@@ -1953,7 +2017,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 有两个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json` 的 `instructions` 中是否仍列着 teamai 所拥有的那条 glob：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。
 
-`MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；过期的旧副本同样等于没送达。两者都报告为 `not the team's definition`，而覆盖非 teamai 写入的条目只有 `teamai pull --force` 能做到。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。无法解析的 `mcp.yaml` 并不等于团队没有 MCP：它会作为 `Team MCP servers can be read` 连同解析错误一起报告，因为这种文件不会向任何工具注入内容，而且除第一次之外的每次运行都对此保持沉默。无法解析的团队 hooks 与团队模型配置（文件无法解析、同一文件内重复的名字，或两个活动 namespace 中的同名条目）会让 `Team hooks can be resolved` 与 `Team model profiles can be resolved` 失败，并给出 pull 只记录一次的原因；`teamai status` 把它们计为 0 时会指向这里。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 能否解析、以及是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明；而显式写成 `variables: []` 属于没有内容要下发的配置，不会判为失败）、每个变量是否以 `env.yaml` 声明的值写进了 `env.sh`（残留的旧值会一直被导出到每个 shell 和 MCP server，直到下次 pull；比对时会用生成器自身的逆运算读回 `env.sh`，因此跨多行引用的多行值能够正确匹配，而不会被误判为过期），以及本作用域注入的代码块（即 source 本作用域 `env.sh` 的那一块，因为同一个 profile 里还可能有其他作用域的代码块）是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。`No stale env blocks left behind` 是独立的一项检查：pull 优先选用哪个文件会随时间变化（Windows 上 Git Bash 的登录 shell 读取的是 `.bash_profile`/`.bash_login`/`.profile`，从不读取 `.bashrc`），而 pull 只会新增代码块，从不迁移旧的，因此早期安装或平台变化留下的失效代码块可能一直留在另一个候选文件里。它会列出每一个这样的文件（检查 `.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login` 和 `.profile`，新旧写法都算），并指向 `teamai uninstall` 来清除它们——这与投递检查分开进行，因此不会因为还留着一个旧副本，就让一个正常工作的 env 代码块被判成故障。
+`MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；过期的旧副本同样等于没送达。两者都报告为 `not the team's definition`，而覆盖非 teamai 写入的条目只有 `teamai pull --force` 能做到。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。没有值的已声明密钥不算失败：doctor 把它作为备注打印（`--json` 中的 `notes`），并附上设置它的命令，退出码与没有它时相同；备注还会说明为它保留的条目可能含有旧值，以及某个 key 既声明为密钥、又在 `env.yaml` 中设置的情况。无法解析的 `mcp.yaml` 并不等于团队没有 MCP：它会作为 `Team MCP servers can be read` 连同解析错误一起报告，因为这种文件不会向任何工具注入内容，而且除第一次之外的每次运行都对此保持沉默。无法解析的团队 hooks 与团队模型配置（文件无法解析、同一文件内重复的名字，或两个活动 namespace 中的同名条目）会让 `Team hooks can be resolved` 与 `Team model profiles can be resolved` 失败，并给出 pull 只记录一次的原因；`teamai status` 把它们计为 0 时会指向这里。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 能否解析、以及是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明；而显式写成 `variables: []` 属于没有内容要下发的配置，不会判为失败）、每个变量是否以 `env.yaml` 声明的值（或你为该团队设置的值；用 `--from-env` 设置的不会写入）写进了 `env.sh`（残留的旧值会一直被导出到每个 shell 和 MCP server，直到下次 pull；比对时会用生成器自身的逆运算读回 `env.sh`，因此跨多行引用的多行值能够正确匹配，而不会被误判为过期），以及本作用域注入的代码块（即 source 本作用域 `env.sh` 的那一块，因为同一个 profile 里还可能有其他作用域的代码块）是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。`No stale env blocks left behind` 是独立的一项检查：pull 优先选用哪个文件会随时间变化（Windows 上 Git Bash 的登录 shell 读取的是 `.bash_profile`/`.bash_login`/`.profile`，从不读取 `.bashrc`），而 pull 只会新增代码块，从不迁移旧的，因此早期安装或平台变化留下的失效代码块可能一直留在另一个候选文件里。它会列出每一个这样的文件（检查 `.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login` 和 `.profile`，新旧写法都算），并指向 `teamai uninstall` 来清除它们——这与投递检查分开进行，因此不会因为还留着一个旧副本，就让一个正常工作的 env 代码块被判成故障。
 
 `Contributed learnings are published` 会在 `teamai contribute` 写下、但尚未推送成功的笔记仍在队列中时失败。当本次 pull 已经说过时，手动 `teamai pull` 结束时不会再重复它：pull 会尝试发布队列并自行报告结果，还会带上导致失败的推送错误——这是该检查本身给不出的信息。如果 pull 因为团队仓库刷新失败而根本没走到那一步，该检查会照常打印。
 

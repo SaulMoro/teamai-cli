@@ -25,7 +25,9 @@ let origCopilotHome: string | undefined;
 const TEST_SESSION_ID = `test-session-${randomUUID()}`;
 
 beforeEach(async () => {
-  tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-la-test-'));
+  tmpDir = fs.realpathSync.native(
+    await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-la-test-')),
+  );
   origHome = process.env.HOME;
   origCopilotHome = process.env.COPILOT_HOME;
   process.env.HOME = tmpDir;
@@ -149,14 +151,14 @@ describe('local-agent: project MCP report is per-worktree (issue #374 P1-2C)', (
     const { managedMcpWorkspaceId } = await import('../types.js');
 
     // Real git repo + linked worktree → same projectAnchor → same partition.
-    const repo = realpathSync(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-la-wt-')));
+    const repo = realpathSync.native(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-la-wt-')));
     const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'pipe' });
     git(repo, 'init', '-q');
     git(repo, 'config', 'user.email', 't@e'); git(repo, 'config', 'user.name', 'T');
     git(repo, 'commit', '--allow-empty', '-q', '-m', 'init');
     const wtB = path.join(repo, '..', path.basename(repo) + '-wtB');
     git(repo, 'worktree', 'add', '-q', wtB, 'HEAD');
-    const wtBReal = realpathSync(wtB);
+    const wtBReal = realpathSync.native(wtB);
 
     // Partition manifest (shared): A owns `a-only`, B owns `b-only`, each under
     // its own workspace-scoped key.
@@ -1951,14 +1953,14 @@ describe('local-agent: per-worktree claudemd isolation (issue #374 P1-2C)', () =
 
     // Real git repo + linked worktree → shared partition data home. The resource
     // cache used to be shared, so syncClaudemd merged A's + B's fragments.
-    const repo = realpathSync(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-cmd-wt-')));
+    const repo = realpathSync.native(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-cmd-wt-')));
     const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'pipe' });
     git(repo, 'init', '-q');
     git(repo, 'config', 'user.email', 't@e'); git(repo, 'config', 'user.name', 'T');
     git(repo, 'commit', '--allow-empty', '-q', '-m', 'init');
     const wtB = path.join(repo, '..', path.basename(repo) + '-B');
     git(repo, 'worktree', 'add', '-q', wtB, 'HEAD');
-    const wtBReal = realpathSync(wtB);
+    const wtBReal = realpathSync.native(wtB);
     // codebuddy is the "installed" tool in each worktree.
     for (const wt of [repo, wtBReal]) await fse.ensureDir(path.join(wt, '.codebuddy', 'skills'));
 

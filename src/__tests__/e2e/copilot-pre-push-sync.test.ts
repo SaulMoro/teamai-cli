@@ -11,8 +11,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const CLI = path.join(ROOT, 'dist/index.js');
 
 it('push refreshes an unedited Copilot rule instead of pushing a rollback, and preserves real edits', () => {
-  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-copilot-push-')));
-  if (path.dirname(sandbox) !== fs.realpathSync(os.tmpdir())
+  const sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-copilot-push-')));
+  if (path.dirname(sandbox) !== fs.realpathSync.native(os.tmpdir())
     || !path.basename(sandbox).startsWith('teamai-copilot-push-')) {
     throw new Error('Unexpected test cleanup path');
   }

@@ -33,6 +33,8 @@ import { codebaseCmd } from '../codebase-cmd.js';
 import { contribute } from '../contribute.js';
 import { generateDigest } from '../digest.js';
 import { loadLocalConfigForScope } from '../config.js';
+import { envList, envUnset } from '../env-commands.js';
+import { envExec } from '../env-exec.js';
 import { resolveDoctorContext } from '../doctor.js';
 import { excludeList } from '../exclude.js';
 import { hooksList } from '../hooks-cmd.js';
@@ -57,7 +59,7 @@ import { tagsAdd, tagsList, tagsRemove, tagsSubscribe, tagsUnsubscribe } from '.
 import { uninstall } from '../uninstall.js';
 import { listWebhooks } from '../webhook.js';
 import { updateReports } from '../utils/reports-branch.js';
-import { log } from '../utils/logger.js';
+import { log, setStderrOnly } from '../utils/logger.js';
 import { legacyProjectSlug } from '../utils/partition.js';
 
 const ROLES_YAML =
@@ -115,7 +117,7 @@ function setupLegacyNamedPartition(root: string): string {
   const project = path.join(root, 'app');
   fs.mkdirSync(project);
   gitInit(project);
-  const partition = path.join(root, 'home', '.teamai', 'projects', legacyProjectSlug(fs.realpathSync(project)));
+  const partition = path.join(root, 'home', '.teamai', 'projects', legacyProjectSlug(fs.realpathSync.native(project)));
   const repoDir = path.join(partition, 'team-repo');
   fs.mkdirSync(path.join(repoDir, 'manifest'), { recursive: true });
   fs.writeFileSync(path.join(repoDir, 'teamai.yaml'), 'team: demo\nrepo: owner/repo\nprovider: github\n');
@@ -156,6 +158,15 @@ function snapshotTree(root: string): Record<string, string> {
   };
   walk(root);
   return files;
+}
+
+/** `env exec` sends the logger to stderr for the rest of the process; put it back for the next case. */
+async function envExecDryRun(): Promise<void> {
+  try {
+    await envExec(['--', 'true'], { dryRun: true });
+  } finally {
+    setStderrOnly(false);
+  }
 }
 
 const FIXTURES: Array<[string, (root: string) => string]> = [
@@ -263,8 +274,8 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
   // The command-level half of #850. Each of these reaches the legacy role
   // migration through a loader it used to call bare, so the fixture's
   // `config.yaml` gained `primaryRole` even though nothing had asked to write.
-  // `pull`/`push` carry `--dry-run`; `status`/`list` are read-only and pass it
-  // unconditionally (see the note at their `autoDetectInit` call site).
+  // `pull`/`push` carry `--dry-run`; `status`/`list`/`env list` are read-only
+  // and pass it unconditionally (see the note at their `autoDetectInit` call site).
   //
   // The positive control is the test directly above: the SAME fixture does gain
   // `primaryRole` when the flag is absent, so an unchanged tree here is a real
@@ -274,6 +285,9 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['push --dry-run', () => push({ dryRun: true })],
     ['status', () => status({})],
     ['list', () => list(undefined, {})],
+    ['env list', () => envList({})],
+    ['env unset --dry-run', () => envUnset('TOKEN', { dryRun: true })],
+    ['env exec --dry-run', envExecDryRun],
     ['mcp inject --dry-run', () => mcpInject({ dryRun: true })],
     ['mcp list', () => mcpList({})],
     ['roles list', () => rolesList()],
@@ -417,6 +431,8 @@ describe('--dry-run through the loaders the commands share (#850)', () => {
     ['pull --dry-run', () => pull({ dryRun: true })],
     ['status', () => status({})],
     ['list', () => list(undefined, {})],
+    ['env list', () => envList({})],
+    ['env exec --dry-run', envExecDryRun],
     // What the CLI's preAction hook runs before a command under --dry-run:
     // `maybeMigrate` before every write command (`pull`, `push`, ...), and
     // `queueKeptInCheckout` before one that queues a learning. Calling

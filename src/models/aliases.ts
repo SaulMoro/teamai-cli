@@ -43,7 +43,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
-import { activeEntryNamespaces, describeEntryFailure, listEntryFiles, namespaceDir, readEntryFileText } from '../namespaced-entries.js';
+import { activeEntryNamespaces, describeEntryFailure, entryLayout, listEntryFiles, namespaceDir, readEntryFileText, type EntryLayout } from '../namespaced-entries.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
 import { listDirs } from '../utils/fs.js';
 import { liveModelSwitches, type LiveModelSwitch } from './switch.js';
@@ -71,7 +71,14 @@ const OPTION_FIELDS: ReadonlySet<string> = new Set(['model', 'effort']);
 /** Repo-relative path of the root team aliases file; a namespace's is `models/<ns>/aliases.yaml`. */
 export const TEAM_ALIASES_FILE = 'models/aliases.yaml';
 
-const ALIASES_FILE_NAME = 'aliases.yaml';
+/** The aliases files sit beside the model profiles and share their namespaces. */
+const ALIASES_LAYOUT: EntryLayout = {
+  ...entryLayout('models'),
+  file: 'aliases.yaml',
+  label: 'model aliases',
+  noun: 'alias',
+  kept: 'Model aliases were not resolved this run; agents whose model depends on them keep their deployed copies.',
+};
 
 /**
  * The member's override. Its keys have effect only where they name an alias
@@ -257,7 +264,7 @@ async function loadTeamAliases(localConfig: LocalConfig): Promise<
 > {
   const repoPath = localConfig.repo.localPath;
   const files: Array<{ namespace: string | null; source: string; aliases: Map<string, AliasEntries>; warnings: AliasWarning[] }> = [];
-  for (const { namespace, relativePath, absolutePath } of await listEntryFiles(repoPath, 'models', ALIASES_FILE_NAME)) {
+  for (const { namespace, relativePath, absolutePath } of await listEntryFiles(repoPath, ALIASES_LAYOUT)) {
     const read = await readAliasesFile(absolutePath, relativePath);
     if (!read.ok) return read;
     const optOut = [...read.aliases].flatMap(([alias, entries]) => Object.keys(entries).filter((tool) => entries[tool] === null).map((tool) => `${alias}.${tool}`));
@@ -274,7 +281,7 @@ async function loadTeamAliases(localConfig: LocalConfig): Promise<
   // Each active namespace reads the directory model profiles read for it. Its
   // file is its candidate, named by the namespace as declared.
   const activeDirs = new Map<string, string>();
-  const active = files.some((file) => file.namespace !== null) ? await activeEntryNamespaces(localConfig, 'models') : { ok: true as const, active: null };
+  const active = files.some((file) => file.namespace !== null) ? await activeEntryNamespaces(localConfig, ALIASES_LAYOUT) : { ok: true as const, active: null };
   if (!active.ok) {
     const { failure } = active;
     const cause = failure.kind === 'namespaces-unresolved' ? failure.reason : describeEntryFailure(failure);

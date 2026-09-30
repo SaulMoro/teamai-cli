@@ -669,10 +669,12 @@ envCmd
   });
 
 envCmd
-  .command('add <key> <value>')
-  .description('Add or update a team environment variable')
-  .option('-d, --description <desc>', 'Description for the variable')
-  .option('--role <ns>', 'Write to env/<ns>/env.yaml instead of env/env.yaml')
+  .command('add <key> [value]')
+  .description('Add or update a team environment variable, or declare a secret with --secret')
+  .option('-d, --description <desc>', 'Description for the variable or secret')
+  .option('--secret', 'Declare a secret in env/secrets.yaml: no value, each member sets their own')
+  .option('--url <url>', 'Where a member gets a value for the secret (with --secret)')
+  .option('--role <ns>', 'Write to env/<ns>/ instead of env/ (env.yaml, or secrets.yaml with --secret)')
   .option('--project <id>', "Write to the project's env namespace (resources.env in manifest/projects.yaml)")
   .action(async (key, value, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
@@ -682,13 +684,47 @@ envCmd
 
 envCmd
   .command('remove <key>')
-  .description('Remove a team environment variable')
-  .option('--role <ns>', 'Remove from env/<ns>/env.yaml instead of env/env.yaml')
+  .description('Remove a team environment variable or declared secret')
+  .option('--secret', 'Remove the declared secret only (env/secrets.yaml), for a key env.yaml also sets')
+  .option('--role <ns>', 'Remove from env/<ns>/ instead of env/')
   .option('--project <id>', "Remove from the project's env namespace (resources.env in manifest/projects.yaml)")
   .action(async (key, cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { envRemove } = await import('./env-commands.js');
     await envRemove(key, { ...globalOpts, ...cmdOpts });
+  });
+
+envCmd
+  .command('set <key>')
+  .description("Set your value for a secret the team declares, or an env variable it sets, for this directory's team, on this machine (prompts without echo)")
+  .option('--stdin', 'Read the value from piped stdin')
+  .option('--from-env <var>', 'Read the value from this environment variable each time it is used; no copy is stored')
+  .option('--global', 'Set a secret for every team on this machine; a value set for a team still wins')
+  .action(async (key, cmdOpts) => {
+    const globalOpts = program.opts() as GlobalOptions;
+    const { envSet } = await import('./env-commands.js');
+    await envSet(key, { ...globalOpts, ...cmdOpts });
+  });
+
+envCmd
+  .command('unset <key>')
+  .description("Remove your value for a secret or env variable, for this directory's team, from this machine")
+  .option('--global', 'Remove the value set for every team on this machine instead')
+  .action(async (key, cmdOpts) => {
+    const globalOpts = program.opts() as GlobalOptions;
+    const { envUnset } = await import('./env-commands.js');
+    await envUnset(key, { ...globalOpts, ...cmdOpts });
+  });
+
+envCmd
+  .command('exec <command...>')
+  .description("Run a command with this directory's team env variables and secrets (put -- before the command)")
+  .action(async () => {
+    const globalOpts = program.opts() as GlobalOptions;
+    const { envExec, exitLike } = await import('./env-exec.js');
+    // What was typed after `exec`, `--` included: Commander drops it.
+    const argv = process.argv.slice(2);
+    exitLike(await envExec(argv.slice(argv.indexOf('exec', argv.indexOf('env')) + 1), globalOpts));
   });
 
 // ─── Hooks commands ─────────────────────────────────────

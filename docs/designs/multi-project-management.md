@@ -241,6 +241,7 @@ directory's projects list under `resources.<type>`.
 | Type | `resources:` key | Replaced by name | Two active namespaces, one name |
 |---|---|---|---|
 | env | `env` | variable `key` | conflict |
+| secrets (`env/<ns>/secrets.yaml`, [#875](team-secrets.md)) | `env` | secret `key` | conflict |
 | hooks | `hooks` | hook `id` | conflict |
 | mcp | `mcp` | server `name` (`command`, `args`, `env` and `tools:` together) | conflict |
 | models | `models` | profile `id` | conflict |
@@ -266,7 +267,8 @@ active, the next pull delivers the root item again and removes items that only
 the namespace had; for env, hooks and MCP that happens on an `Already synced`
 pull too, and `env.sh` is regenerated from the resolved set even when
 `env/env.yaml` is missing or declares nothing. MCP `${VAR}` lookup reads the same
-resolved env set.
+resolved env set, with the member's value for this team (`teamai env set KEY`)
+first; the environment no longer overrides a team variable ([Team secrets](team-secrets.md#variables)).
 
 Skills keep one difference: in role/project mode the root `skills/` stays the tag
 catalog and is not delivered by default. A root skill that arrives through a
@@ -320,13 +322,14 @@ copy is not a duplicate: each copy that passes the role filter is delivered, as
 | Type | Effect of a failure |
 |---|---|
 | env | `env.sh` and the shell profile keep what they had |
+| secrets | the declared secrets are not resolved, and `env.sh`, the env backup and the MCP servers keep what they had; `teamai env list` and `teamai doctor` fail naming the file |
 | hooks | installed team hooks and the managed-hooks record stay as they are. The built-in hooks are still installed in each tool that misses one (a tool with all of them is not rewritten), so a first install gets the session-start pull that heals it: with the root file's `builtin:` overrides whenever `hooks/hooks.yaml` parses (a broken namespace file or a clash does not hide them), and when the root file itself does not parse, with their defaults and only in a tool that has no teamai hook yet. `teamai init` and bootstrap say the team hooks were not installed; `teamai hooks inject` exits 1 |
 | mcp | no tool's MCP config changes |
 | models | no switched agent is updated; `teamai models` commands fail with the same message; `teamai push` refuses any invalid models file, active or not |
 | skills, agents | that type is neither installed nor swept; the other types and the search index still sync |
 | rules, claudemd, docs, learnings | no conflict case |
 
-For env, hooks, MCP and models the warning is also written to
+For env, secrets, hooks, MCP and models the warning is also written to
 `~/.teamai/debug.log`, so a silent session-start pull leaves a trace. This
 replaces two earlier behaviours: an invalid hooks or MCP file reconciled to the
 empty set and removed every managed entry, and a skills or agents collision
@@ -450,8 +453,9 @@ a root one is written to its namespace file, never to the root. The agents
 source order is active namespace, then this machine's placement record, then the
 shared root; in role/project mode a same-stem root file no longer withdraws the
 placement record (legacy mode still does). The skills push scan uses role ∪
-project namespaces, and `push` picks up a change to any `env/<ns>/env.yaml`.
-`teamai env add|remove` take `--role` / `--project`. `teamai remove mcp <name>`
+project namespaces, and `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.
+`teamai env add|remove` take `--role` / `--project`, and `--secret` for that namespace's `secrets.yaml`.
+`teamai remove mcp <name>`
 removes from the root file when it defines the name, otherwise from the one
 namespace file that does, and asks for `--role` / `--project` only when several
 namespace files and not the root define it, and removes nothing by a bare name

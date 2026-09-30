@@ -8,22 +8,43 @@ vi.mock('../namespaced-entries.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../namespaced-entries.js')>()),
   resolveEntriesFor: vi.fn(),
 }));
-vi.mock('../mcp-reconcile.js', () => ({
-  reconcileMcpForConfig: vi.fn(),
-  resolveMcpTargets: vi.fn().mockResolvedValue([]),
-  buildVarTable: vi.fn().mockResolvedValue({}),
+// The per-target delivery filters stay real: `withheld` must name only where a pull would write.
+vi.mock('../mcp-reconcile.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mcp-reconcile.js')>();
+  return {
+    desiredMcpForTarget: actual.desiredMcpForTarget,
+    mcpTargetExcluded: actual.mcpTargetExcluded,
+    reconcileMcpForConfig: vi.fn(),
+    releaseCleanMcpGitExcludes: vi.fn(),
+    resolveMcpTargets: vi.fn().mockResolvedValue([]),
+    buildDesiredMcpContext: vi.fn().mockResolvedValue({
+      sharing: { autoApply: true, allowedCommands: [], allowedHosts: [] },
+      excluded: new Set(),
+      vars: { JIRA_TOKEN: 'jira-token-value' },
+      secrets: { kind: 'absent' },
+    }),
+  };
+});
+vi.mock('../mcp-git-exclude.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../mcp-git-exclude.js')>()),
+  ensureExcludedFromGit: vi.fn(),
 }));
 vi.mock('../utils/fs.js', () => ({
   readJson: vi.fn().mockResolvedValue(null),
+  // No teamai env.sh on this machine (member-env.ts, via the env advisories).
+  readFileSafe: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
 import { autoDetectInit } from '../config.js';
-import { resolveEntriesFor } from '../namespaced-entries.js';
-import { mcpInject, mcpList } from '../mcp-cmd.js';
-import { reconcileMcpForConfig } from '../mcp-reconcile.js';
+import { entryLayout, resolveEntriesFor } from '../namespaced-entries.js';
+import { mcpInject, mcpList, mcpRemove } from '../mcp-cmd.js';
+import { reconcileMcpForConfig, releaseCleanMcpGitExcludes, resolveMcpTargets } from '../mcp-reconcile.js';
+import { ensureExcludedFromGit } from '../mcp-git-exclude.js';
+import { readJson } from '../utils/fs.js';
+import { managedMcpManifestKey } from '../types.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
 
 const mockedAutoDetectInit = autoDetectInit as Mock;
@@ -89,6 +110,69 @@ describe('mcpList', () => {
     expect(text.match(/roles:/g)).toHaveLength(1);
   });
 
+  it('says where a server needing a resolved value is withheld because git would commit the file, and the fix (#882)', async () => {
+    mockedResolve.mockResolvedValue(resolved([
+      [{ name: 'jira', transport: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer ${JIRA_TOKEN}' } }, 'mcp/mcp.yaml', null],
+    ]));
+    (resolveMcpTargets as Mock).mockResolvedValueOnce([
+      { tool: 'claude', format: 'claude', file: '/work/app/.mcp.json', projectScope: true },
+    ]);
+    (ensureExcludedFromGit as Mock).mockResolvedValueOnce({
+      kind: 'failed',
+      reason: '/work/app/.git/info/exclude is not writable',
+      fix: 'Make it writable, then run `teamai pull` again.',
+    });
+
+    const text = await listOutput();
+
+    expect(ensureExcludedFromGit).toHaveBeenCalledWith('/work/app/.mcp.json', { dryRun: true });
+    expect(text).toContain('withheld: claude — /work/app/.git/info/exclude is not writable. Make it writable, then run `teamai pull` again.');
+  });
+
+  it('still says a server is withheld from a file an earlier pull installed it in (#882)', async () => {
+    mockedAutoDetectInit.mockResolvedValue({
+      localConfig: { repo: { localPath: '/repo' }, scope: 'project', projectRoot: '/work/app', additionalRoles: [] },
+      teamConfig: { toolPaths: {} },
+    });
+    mockedResolve.mockResolvedValue(resolved([
+      [{ name: 'jira', transport: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer ${JIRA_TOKEN}' } }, 'mcp/mcp.yaml', null],
+    ]));
+    (resolveMcpTargets as Mock).mockResolvedValueOnce([
+      { tool: 'claude', format: 'claude', file: '/work/app/.mcp.json', projectScope: true },
+    ]);
+    (readJson as Mock).mockResolvedValueOnce({ [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }] });
+    (ensureExcludedFromGit as Mock).mockResolvedValueOnce({
+      kind: 'failed',
+      reason: 'git already tracks /work/app/.mcp.json',
+      fix: 'Run `git rm --cached /work/app/.mcp.json` (rotate any value a commit of it holds), then `teamai pull` again.',
+    });
+
+    const text = await listOutput();
+
+    expect(text).toContain('installed: claude');
+    expect(text).toContain('withheld: claude — git already tracks /work/app/.mcp.json. Run `git rm --cached /work/app/.mcp.json`');
+  });
+
+  it('does not say a server is withheld from a tool delivery never writes it to (#882)', async () => {
+    mockedResolve.mockResolvedValue(resolved([
+      [{ name: 'jira', transport: 'http', url: 'https://jira.example/mcp', headers: { Authorization: 'Bearer ${JIRA_TOKEN}' }, tools: ['cursor'] }, 'mcp/mcp.yaml', null],
+    ]));
+    (resolveMcpTargets as Mock).mockResolvedValueOnce([
+      { tool: 'claude', format: 'claude', file: '/work/app/.mcp.json', projectScope: true },
+    ]);
+    (ensureExcludedFromGit as Mock).mockResolvedValue({
+      kind: 'failed',
+      reason: 'git already tracks /work/app/.mcp.json',
+      fix: 'Run `git rm --cached /work/app/.mcp.json`, then `teamai pull` again.',
+    });
+
+    try {
+      expect(await listOutput()).not.toContain('withheld');
+    } finally {
+      (ensureExcludedFromGit as Mock).mockReset();
+    }
+  });
+
   it('reports a set that cannot be resolved instead of listing part of it', async () => {
     mockedResolve.mockResolvedValue({
       kind: 'failed',
@@ -96,7 +180,10 @@ describe('mcpList', () => {
         kind: 'unknown-key',
         message: 'mcp/mcp.yaml: server "hidden" has unknown key `role:`, so this entry is not delivered.',
       }],
-      failure: { kind: 'two-namespaces', type: 'mcp', name: 'db', first: 'mcp/checkout/mcp.yaml', second: 'mcp/billing/mcp.yaml' },
+      failure: {
+        kind: 'two-namespaces', type: 'mcp', name: 'db', first: 'mcp/checkout/mcp.yaml', second: 'mcp/billing/mcp.yaml',
+        layout: entryLayout('mcp'),
+      },
     });
     const { log } = await import('../utils/logger.js');
     await listOutput();
@@ -165,5 +252,28 @@ describe('mcpInject', () => {
       spy.mockRestore();
       process.exitCode = undefined;
     }
+  });
+});
+
+describe('mcpRemove', () => {
+  it('takes out the .git/info/exclude lines of the configs it leaves clean, after removing the servers (#882)', async () => {
+    const init = { localConfig: { repo: { localPath: '/repo' }, scope: 'project', projectRoot: '/work/app' }, teamConfig: { toolPaths: {} } };
+    mockedAutoDetectInit.mockResolvedValue(init);
+    const order: string[] = [];
+    (reconcileMcpForConfig as Mock).mockImplementationOnce(async () => {
+      order.push('reconcile');
+      return { changes: [], wrote: false };
+    });
+    (releaseCleanMcpGitExcludes as Mock).mockImplementationOnce(async () => { order.push('release'); });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await mcpRemove({});
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(reconcileMcpForConfig).toHaveBeenCalledWith(init.teamConfig, init.localConfig, { removeAll: true });
+    expect(releaseCleanMcpGitExcludes).toHaveBeenCalledWith(init.teamConfig, init.localConfig);
+    expect(order).toEqual(['reconcile', 'release']);
   });
 });

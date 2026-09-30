@@ -924,6 +924,18 @@ export interface ManagedMcpRecord {
   name: string;
   /** sha1 (first 16 hex) of the rendered entry; drives idempotent rewrites. */
   hash: string;
+  /**
+   * Project scope: whether the entry holds a `${VAR}` value teamai resolved
+   * (#882). Absent in records an older teamai wrote.
+   */
+  resolved?: boolean;
+  /**
+   * Project scope: this record was rebuilt after it was lost, or written by a
+   * pull that found no managed-mcp.json, and the other servers in its file
+   * could not be noted in managed-mcp-files.json yet (#882). Until a pull
+   * notes them, the file counts as having no record.
+   */
+  unnoted?: true;
 }
 
 /** ~/.teamai/managed-mcp.json — team MCP servers injected per tool+scope key. */
