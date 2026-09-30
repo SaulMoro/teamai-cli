@@ -110,8 +110,8 @@ describe('classifyToolCall', () => {
     expect(shell(command, { stdout })).toMatchObject({ category: 'search', paths: files.map(at), simple: true });
   });
 
-  // The hook reads no file, so it cannot tell a lone file operand from a directory: it records the operand,
-  // which only ever equals a doc's path when it is that doc.
+  // The hook reads no file: a lone operand without a file name may be a directory, so it records the operand,
+  // which only ever equals a doc's path when it is that doc (the recorder keeps only `.md` paths).
   it.each<[string, string]>([
     ['grep -rn timeout learnings', 'learnings/a.md\nlearnings/b.md'],
     ['grep -rn timeout learnings', 'other/a.md:3:x'],
@@ -161,6 +161,21 @@ describe('classifyToolCall', () => {
       expect(classifyToolCall({ tool_name: agent === 'omp' ? 'grep' : 'Grep', tool_input: { pattern: 'x', path: at('learnings/a.md'), output_mode: 'content' }, tool_response: '3:x', cwd: CWD }, agent))
         .toMatchObject({ category: 'search', paths: [] });
     }
+  });
+
+  it('a line counts only when it starts with a file name, then :<line>: or :; a one-file search\'s lines name no path', () => {
+    const doc = at('learnings/a.md');
+    const grep = (input: Record<string, unknown>, response: unknown, agent?: string): string[] =>
+      classifyToolCall({ tool_name: 'grep', tool_input: { pattern: 'x', ...input }, tool_response: response, cwd: CWD }, agent).paths;
+    // The doc searched: Claude's -n false line, Pi's basename line. Never `<doc>/<text>`.
+    expect(classifyToolCall({ tool_name: 'Grep', tool_input: { pattern: 'x', path: doc, output_mode: 'content', '-n': false },
+      tool_response: { content: 'Cause: the pool' }, cwd: CWD }).paths).toEqual([doc]);
+    expect(grep({ path: doc }, 'a.md:5: x', 'pi')).toEqual([doc]);
+    // A directory searched: text before a colon is no path.
+    expect(shell('grep -rh pool learnings', { stdout: 'Cause: the pool\nFix: 12: raise it' }).paths).not.toContain(at('learnings/Cause'));
+    expect(shell('grep -rh pool learnings', { stdout: 'Fix: 12: raise it' }).paths).not.toContain(at('learnings/Fix'));
+    expect(grep({ path: at('learnings') }, 'sub/b.md:5: x', 'pi')).toEqual([at('learnings/sub/b.md')]);
+    expect(grep({ path: at('learnings') }, 'Cause:5: x', 'pi')).not.toContain(at('learnings/Cause'));
   });
 
   it('an unknown tool name is unknown, whatever its input names', () => {

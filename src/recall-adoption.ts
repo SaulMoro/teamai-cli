@@ -115,13 +115,13 @@ async function toolCallLines(stdin: Record<string, unknown>, tool: string, confi
   if ((call.category !== 'read' && call.category !== 'search') || call.status === 'failure') return lines;
   let roots: string[] | undefined;
   for (const file of call.paths) {
+    // Recalled docs are markdown: no other path can vote, and none that is text a search printed reaches the log.
+    if (!/\.md$/i.test(file)) continue;
+    // A relative path had no base to place it under a root: it is kept for the suffix match.
     if (isAbsolutePath(file)) {
       const { knowledgeRoots, isUnderRoots } = await import('./utils/learnings-roots.js');
       roots ??= await knowledgeRoots(config);
       if (!isUnderRoots(file, roots)) continue;
-    } else if (!/\.md$/i.test(file)) {
-      // No base to place it under a root: only a doc-shaped path is kept, for the suffix match.
-      continue;
     }
     lines.push({
       kind: 'evidence', ts: new Date().toISOString(), id: randomUUID(),

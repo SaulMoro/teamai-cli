@@ -1151,6 +1151,16 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  {
+    name: '06: Pi grep whose path is the doc prints its basename (redis-timeout.md:5:), no path under the doc → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('grep', { pattern: 'timeout', path: files[0] },
+        'redis-timeout.md:5: tags: [redis, timeout]', h.root, undefined, undefined, 'pi');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
   ...[
     `Get-Content -LiteralPath '${WINDOWS_DOC}'`,
     `Get-Content -Path "${WINDOWS_DOC}" -TotalCount 40`,
@@ -1832,6 +1842,22 @@ describe('recall attribution acceptance (#884)', () => {
     if (process.platform !== 'win32') {
       expect(fs.statSync(recallLogPath(h.project)).mode & 0o077).toBe(0);
     }
+  });
+
+  it('the recall log never holds a search\'s text when its lines carry no path', async () => {
+    await h.setUp();
+    const { files } = await h.recall('redis timeout');
+    // One file searched with -n false: the bare line, its text before a colon.
+    await h.postToolUse('Grep', { pattern: 'pool', path: files[0], output_mode: 'content', '-n': false },
+      { mode: 'content', numFiles: 1, filenames: [], content: 'Raise the pool size SNIPPETMARK: now', numLines: 1 });
+    // A directory searched with -h, from inside the team repo.
+    await h.postToolUse('Bash', { command: 'grep -rh pool .' },
+      { stdout: 'Raise the pool size SNIPPETMARK: now\n', stderr: '', interrupted: false, isImage: false }, path.dirname(files[0]));
+    await h.stop();
+
+    const raw = fs.readFileSync(recallLogPath(h.project), 'utf-8');
+    for (const secret of ['SNIPPETMARK', 'Raise the pool size']) expect(raw).not.toContain(secret);
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
   });
 
   it('an older CLI still finds the recalled doc in the new output', async () => {

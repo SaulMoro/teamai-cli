@@ -152,24 +152,37 @@ function within(file: string, root: string): boolean {
   return isAbsolutePath(file) && isWithin(file, root);
 }
 
+/** Whether a path ends in a file name: a name with an extension (`redis-timeout.md`, `SKILL.md`), not a word of text. */
+function endsInFileName(p: string): boolean {
+  return /[^\\/\s.][^\\/]*\.[A-Za-z0-9]+$/.test(p);
+}
+
 /**
- * The files a search's output shows lines of, never its text: each line that
- * starts with a path under one of the search `roots` followed by `:`
- * (`path:12:text`, `path:text`, OpenCode's `path:` header), resolved against
- * `base`. A Windows path's drive colon (`C:\kb\x.md:12:`) is part of the
- * path. A bare path line is a listing. A search of one file prints no path,
- * so its `target` counts when the output shows anything and names nothing
+ * The files a search's output shows lines of, never its text. A search of
+ * one file (a `target` that ends in a file name) prints no path on its lines
+ * (Pi prints the basename), so no line names a file: the target counts when
+ * the output shows anything. Otherwise a line counts when it starts with a
+ * path under one of the search `roots` that ends in a file name, followed by
+ * `:<line>:` (`path:12:text`), or by `:` in the formats without line numbers:
+ * a shell search's `path:text` (`plain`: grep and rg without `-n`) and
+ * OpenCode's `path:` header, alone on its line. Paths resolve against
+ * `base`; a Windows path's drive colon (`C:\kb\x.md:12:`) is part of it. A
+ * bare path line is a listing. A lone operand that names no file may be a
+ * directory: it counts when the output shows something and names nothing
  * under it. Only the output held in memory is scanned: no file is read.
  */
-function shownFiles(output: string, roots: string[], base: string | undefined, target: string | undefined): string[] {
+function shownFiles(output: string, roots: string[], base: string | undefined, target: string | undefined, plain: boolean): string[] {
+  if (target !== undefined && endsInFileName(target)) return output.trim() ? [target] : [];
   const files = new Set<string>();
   let under = false;
   for (const line of output.split('\n')) {
     const colon = line.indexOf(':', /^[A-Za-z]:[\\/]/.test(line) ? 2 : 0);
     if (colon <= 0) continue;
     const prefix = line.slice(0, colon);
-    // `12:text` (a line number), OpenCode's `  Line 12: text`.
-    if (/^\s|^\d+$/.test(prefix)) continue;
+    // Text before a colon (`Cause: …`, `12:text`, OpenCode's `  Line 12: text`) is no path.
+    if (/^\s/.test(prefix) || !endsInFileName(prefix)) continue;
+    const rest = line.slice(colon);
+    if (!plain && !/^:\d+:/.test(rest) && rest.trimEnd() !== ':') continue;
     const file = resolvePath(prefix, base);
     if (!roots.some((root) => within(file, root))) continue;
     files.add(file);
@@ -211,7 +224,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
     const root = typeof input.path === 'string' && input.path.trim() ? resolvePath(input.path, cwd) : undefined;
     const base = root ?? cwd;
     const target = root !== undefined && isAbsolutePath(root) ? root : undefined;
-    return { category, paths: shownFiles(output, base ? [base] : [], base, target), status, simple: true };
+    return { category, paths: shownFiles(output, base ? [base] : [], base, target, false), status, simple: true };
   }
 
   const command = input.command;
@@ -224,7 +237,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
     const roots = shell.paths.map((f) => resolvePath(f, cwd));
     // Only a lone search prints its output; after a pipe, what shows may no longer be the file's lines.
     const target = shell.target !== undefined && shell.simple ? resolvePath(shell.target, cwd) : undefined;
-    const paths = output !== undefined ? shownFiles(output, roots, cwd, target) : [];
+    const paths = output !== undefined ? shownFiles(output, roots, cwd, target, true) : [];
     return { category: 'search', paths, status, simple: shell.simple, command, ...optional };
   }
   return {
