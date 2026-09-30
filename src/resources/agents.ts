@@ -1340,11 +1340,12 @@ function mergeCanonicalEdits(
     // tclaude and tcodex also render what `claude` and `codex` carry.
     const base = EXTRAS_BASE_TOOL[tool];
     const inherited: Record<string, unknown> = (base && canonical.tool_extras?.[base]) || {};
-    // An inherited model pin reaches the copy as its native `model`, which
-    // reverse parsing reads as the root field: compared as an extras key, a
-    // change to it stays this tool's, and the base tool's pin is kept.
-    const inheritedPin = !canonicalAlias && inherited['model'] !== undefined;
-    if (inheritedPin) {
+    // A model pin, the tool's own or inherited, reaches the copy as its native
+    // `model`, which reverse parsing reads as the root field: compared as an
+    // extras key, a change to it stays this tool's, and the root model and the
+    // base tool's pin are kept.
+    const modelPin = !canonicalAlias && toolExtrasFor(canonical, tool)?.['model'] !== undefined;
+    if (modelPin) {
       before['model'] = baseline.spec.model;
       if (edited.model !== undefined) after['model'] = edited.model;
     }
@@ -1396,7 +1397,7 @@ function mergeCanonicalEdits(
     }
 
     for (const field of ROOT_AGENT_FIELDS) {
-      if (field === 'model' && (canonicalAlias || aliasWroteModel || inheritedPin)) continue;
+      if (field === 'model' && (canonicalAlias || aliasWroteModel || modelPin)) continue;
       if (isDeepStrictEqual(baseline.spec[field], edited[field])) continue;
       propose(field, edited[field], () => {
         const output = merged as unknown as Record<string, unknown>;
@@ -1409,11 +1410,11 @@ function mergeCanonicalEdits(
     // and tcodex only the values that differ from the base tool's are
     // theirs; a removed inherited key cannot be expressed there and is
     // reported rather than dropped. Keys reverse parsing reads as root fields
-    // are never in `after`, so only an inherited pin put there counts.
+    // are never in `after`, so only a model pin put there counts.
     // Alias-owned fields are already out of `before` and `after`, and never inherited.
     if (!isDeepStrictEqual(before, after)) {
       const removed = Object.keys(inherited)
-        .filter((key) => !(key in after) && (!(ROOT_AGENT_FIELDS as readonly string[]).includes(key) || (key === 'model' && inheritedPin)));
+        .filter((key) => !(key in after) && (!(ROOT_AGENT_FIELDS as readonly string[]).includes(key) || (key === 'model' && modelPin)));
       if (base && removed.length) {
         conflicts.push({ field: `tool_extras.${tool}`, values: { inheritedFrom: `tool_extras.${base}`, removed } });
         continue;

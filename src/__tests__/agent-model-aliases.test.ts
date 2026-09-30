@@ -724,6 +724,19 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(removed.skipReason).toContain(`tool_extras.${tool}: {"inheritedFrom":"tool_extras.${tool.slice(1)}","removed":["model"]}`);
     });
 
+    it.each([
+      ['qoder', 'performance', 'coder-model'],
+      ['claude', 'sonnet', 'haiku'],
+    ] as const)('writes a model changed in %s over its own extras pin back to that pin, and keeps the root model', async (tool, pin, edit) => {
+      const spec = makeSpec({ model: 'opus', tool_extras: { [tool]: { model: pin } } });
+      await pullTo([tool], spec);
+      await editDeployed(tool, spec.name, (fields) => { fields['model'] = edit; });
+
+      const [candidate] = await scan([tool]);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, tool_extras: { [tool]: { model: edit } } });
+    });
+
     it('does not propose a copy with the bytes teamai last delivered there, rendered by an older CLI', async () => {
       const spec = makeSpec({ model: 'opus', tool_extras: { claude: { color: 'red' } } });
       // A CLI before #830 gave Qoder the Claude extras.
