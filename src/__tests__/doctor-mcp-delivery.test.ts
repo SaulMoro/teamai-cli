@@ -454,6 +454,19 @@ describe('doctor — MCP servers delivered on disk', () => {
         expect(await check.check()).toBe(false);
       });
 
+      it('fails for a credential a local agent from before 57636a27 wrote at CodeBuddy\'s former .codebuddy/mcp.json', async () => {
+        const old = path.join(projectRoot, '.codebuddy', 'mcp.json');
+        await fse.outputJson(old, { mcpServers: { clawpro: { type: 'http', url: 'https://clawpro.example/mcp', headers: { Authorization: 'Bearer t0ken' } } } });
+        await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+          [managedMcpManifestKey('codebuddy', true)]: [{ name: 'clawpro', hash: 'h' }],
+        });
+
+        const check = await excludeCheck();
+        if (!check) throw new Error('no git exclude check');
+        expect(await check.check()).toBe(false);
+        expect(check.fix ?? '').toContain(old);
+      });
+
       it('has nothing to say of a file whose recorded server carries neither header nor env value', async () => {
         const jira = { type: 'http', url: 'https://jira.example/mcp' };
         await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira } });

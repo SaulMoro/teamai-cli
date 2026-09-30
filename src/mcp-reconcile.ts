@@ -839,16 +839,20 @@ const EARLIER_BUILTIN_MCP_PROJECT = {
 export async function earlierMappedMcpTargets(
   cfg: LocalConfig,
   known: McpTarget[],
+  /** `history: false`: only the built-in defaults, for a team with no teamai.yaml (HTTP-backed). */
+  options: { history?: boolean } = {},
 ): Promise<Array<McpTarget & { tracked: boolean; mappedBy: string[] }> | null> {
   const { projectRoot } = cfg;
   if (!projectRoot) return [];
   const repoPath = cfg.repo.localPath;
-  let revisions: string[];
-  try {
-    revisions = (await createGit(repoPath).raw(['log', '--format=%H', 'HEAD', '--', 'teamai.yaml'])).split('\n').filter(Boolean);
-  } catch (e) {
-    log.debug(`Could not read the history of teamai.yaml in ${repoPath}: ${e instanceof Error ? e.message : String(e)}. The next pull tries again.`);
-    return null;
+  let revisions: string[] = [];
+  if (options.history !== false) {
+    try {
+      revisions = (await createGit(repoPath).raw(['log', '--format=%H', 'HEAD', '--', 'teamai.yaml'])).split('\n').filter(Boolean);
+    } catch (e) {
+      log.debug(`Could not read the history of teamai.yaml in ${repoPath}: ${e instanceof Error ? e.message : String(e)}. The next pull tries again.`);
+      return null;
+    }
   }
   const root = await realFilePath(projectRoot);
   // Each path, by real path, with the tools today's targets or the record reach it for.
@@ -916,9 +920,9 @@ export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: McpO
   }
   // Each target's key read alone: another key's owner proves nothing of it (OpenCode's `mcp` beside `mcpServers`).
   for (const target of targets) {
-    const { underKey, bare } = await serverNamesByPlacement(target);
-    const other = underKey.find((name) => !owned(target).includes(name))
-      ?? bare.find((name) => !owned(target, { bare: true }).includes(name));
+    const placed = await mcpEntriesByPlacement(target);
+    const other = [...placed?.keyed.keys() ?? []].find((name) => !owned(target).includes(name))
+      ?? [...placed?.bare.keys() ?? []].find((name) => !owned(target, { bare: true }).includes(name));
     if (other !== undefined) {
       return `teamai may have written a resolved value to it for ${targets.map((t) => t.tool).join(', ')} under an earlier toolPaths mapping, `
         + `and it holds ${other}, which no tool that maps it now owns`;
@@ -928,18 +932,19 @@ export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: McpO
 }
 
 /**
- * `target`'s server names under its format's key, and apart, a Copilot project file's bare ones: a name
- * another tool owns under `mcpServers` says nothing of a bare server beside it (#882).
+ * `target`'s servers under its format's key, and apart, a Copilot project file's bare ones, or null when
+ * the file does not parse (#882). `installedMcpEntries` merges the two by name, the keyed one winning: a
+ * bare server beside one of its name under `mcpServers` is judged on its own here.
  */
-async function serverNamesByPlacement(target: McpTarget): Promise<{ underKey: string[]; bare: string[] }> {
+async function mcpEntriesByPlacement(target: McpTarget): Promise<{ keyed: Map<string, unknown>; bare: Map<string, unknown> } | null> {
   if (target.format !== 'copilot' || !target.projectScope) {
-    return { underKey: [...(await installedMcpEntries(target))?.keys() ?? []], bare: [] };
+    const keyed = await installedMcpEntries(target);
+    return keyed && { keyed, bare: new Map() };
   }
   const doc = await readJsonDoc(target.file, MCP_SERVER_KEY.copilot, true);
-  if (!doc) return { underKey: [], bare: [] };
-  return doc.bare
-    ? { underKey: [], bare: Object.keys(doc.servers) }
-    : { underKey: Object.keys(doc.servers), bare: Object.keys(doc.beside ?? {}) };
+  if (!doc) return null;
+  const entries = (servers: Record<string, unknown> | undefined): Map<string, unknown> => new Map(Object.entries(servers ?? {}));
+  return doc.bare ? { keyed: new Map(), bare: entries(doc.servers) } : { keyed: entries(doc.servers), bare: entries(doc.beside) };
 }
 
 /**
@@ -1288,12 +1293,14 @@ async function protectResolvedMcpConfigs(
 }
 
 /**
- * The targets among `targets`, and those managed-mcp-files.json recorded under
- * a mapping another teamai.yaml made, whose project MCP config may hold a
- * credential an HTTP-backed team's local agent wrote (#882). No mcp.yaml to
- * judge by: a server its install recorded as carrying a credential, or an
- * older install's entry carrying one (a header, env value, argument or URL),
- * or one whose record was lost while another server's remains. With no record
+ * The targets among `targets`, those managed-mcp-files.json recorded under
+ * a mapping another teamai.yaml made, and the built-in defaults teamai has
+ * since changed, whose project MCP config may hold a credential an HTTP-backed
+ * team's local agent wrote (#882). No mcp.yaml to judge by: a server its
+ * install recorded as carrying a credential, or an older install's entry
+ * carrying one (a header, env value, argument or URL), or one whose record was
+ * lost while another server's remains. Each entry is judged on its own, a
+ * Copilot file's bare one apart from the one of its name under mcpServers. With no record
  * of the tool at all, a file managed-mcp-files.json lists holds while it holds
  * any server, or doesn't parse: nothing says which of them the local agent
  * wrote. A file two tools map may appear once for each. Read-only.
@@ -1304,25 +1311,27 @@ export async function localAgentCredentialFiles(localConfig: LocalConfig, target
   const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
   const ledger = (await readResolvedMcpFiles(localConfig)).files;
   const recorded = [...(await recordedMcpTargets(localConfig, targets)).values()].flatMap((file) => file.targets);
+  // An older agent wrote to a built-in default teamai has since changed; an HTTP team has no teamai.yaml history.
+  const earlier = await earlierMappedMcpTargets(localConfig, targets, { history: false }) ?? [];
   const held: McpTarget[] = [];
-  for (const target of [...targets, ...recorded]) {
+  for (const target of [...targets, ...recorded, ...earlier]) {
     if (!await pathExists(target.file)) continue;
-    const installed = await installedMcpEntries(target);
+    const placed = await mcpEntriesByPlacement(target);
+    const entries = placed && [...placed.keyed, ...placed.bare];
     const records = manifest[managedMcpManifestKey(target.tool, true)];
     if (records === undefined) {
-      if (ledger[target.file] !== undefined && (installed === null || installed.size > 0)) held.push(target);
+      if (ledger[target.file] !== undefined && (entries === null || entries.length > 0)) held.push(target);
       continue;
     }
-    const recordedNames = new Set(records.map((record) => record.name));
-    const credential = records.some((record) => {
-      if (installed === null) return record.resolved !== false;
-      if (!installed.has(record.name)) return false;
-      const entry = installed.get(record.name);
-      // `resolved: false` speaks for the entry its install wrote: an older one a failed write left is judged by what it holds.
-      const noted = record.resolved === true || entryHash(entry) === record.hash ? record.resolved : undefined;
-      return noted ?? carriesLocalAgentCredential(entry);
-    })
-      || (installed !== null && [...installed].some(([name, entry]) => !recordedNames.has(name) && carriesLocalAgentCredential(entry)));
+    const byName = new Map(records.map((record) => [record.name, record]));
+    const credential = entries === null
+      ? records.some((record) => record.resolved !== false)
+      : entries.some(([name, entry]) => {
+        const record = byName.get(name);
+        // `resolved: false` speaks for the entry its install wrote: an older one a failed write left is judged by what it holds.
+        const noted = record && (record.resolved === true || entryHash(entry) === record.hash) ? record.resolved : undefined;
+        return noted ?? carriesLocalAgentCredential(entry);
+      });
     if (credential) held.push(target);
   }
   return held;

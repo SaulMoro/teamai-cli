@@ -676,6 +676,46 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(await fse.readFile(path.join(wsPath, '.mcp.json'), 'utf-8')).toContain('bmcp-test-token');
     });
 
+    // As an older local agent left it: no line, no managed-mcp-files.json, no note on the record.
+    const asAnOlderAgentLeftIt = async (tool: string): Promise<void> => {
+      await fse.writeFile(path.join(wsPath, '.git', 'info', 'exclude'), '');
+      await fse.remove(await workspaceFile('managed-mcp-files.json'));
+      const manifestFile = await workspaceFile('managed-mcp.json');
+      const manifest = await fse.readJson(manifestFile) as Record<string, Array<{ name: string; hash: string }>>;
+      manifest[`${tool}:project`] = manifest[`${tool}:project`].map(({ name, hash }) => ({ name, hash }));
+      await fse.writeJson(manifestFile, manifest);
+    };
+
+    it('lists the config an agent from before 57636a27 wrote at CodeBuddy\'s former .codebuddy/mcp.json, on the next sync', async () => {
+      await install(9107, bearer);
+      await asAnOlderAgentLeftIt('codebuddy');
+      await fse.move(path.join(wsPath, '.mcp.json'), path.join(wsPath, '.codebuddy', 'mcp.json'));
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.codebuddy/mcp.json')).not.toBe('');
+
+      await runResponse({ cmds: [] }, 'codebuddy', wsPath);
+
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.codebuddy\/mcp\.json$/m);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.codebuddy/mcp.json')).toBe('');
+    });
+
+    it('lists a Copilot config whose bare entry holds a credential beside a credential-free one of its name under mcpServers', async () => {
+      const configFile = path.join(wsPath, '.github', 'mcp.json');
+      await fse.outputJson(configFile, {});
+      const acks = await runResponse({
+        cmds: [{ id: 9108, type: 'install_mcp', scope: 'workspace', workspace_path: wsPath, slug: 'clawpro', version: '1.0.0', mcp_config: bearer }],
+      }, 'copilot');
+      expect(acks[0].status).toBe('success');
+      await asAnOlderAgentLeftIt('copilot');
+      const doc = await fse.readJson(configFile) as Record<string, unknown>;
+      expect(JSON.stringify(doc.clawpro)).toContain('bmcp-test-token');
+      await fse.writeJson(configFile, { ...doc, mcpServers: { clawpro: { command: 'clawpro-mcp' } } });
+
+      await runResponse({ cmds: [] }, 'copilot', wsPath);
+
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.github\/mcp\.json$/m);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.github/mcp.json')).toBe('');
+    });
+
     it('still lists that config when an install replacing its entry with a bare command cannot write the file', async () => {
       await install(9105, bearer);
       await fse.writeFile(path.join(wsPath, '.git', 'info', 'exclude'), '');
