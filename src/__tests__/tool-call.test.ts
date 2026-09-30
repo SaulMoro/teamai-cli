@@ -93,6 +93,20 @@ describe('classifyToolCall', () => {
     expect(shell(command)).toMatchObject({ category: 'shell', paths: [], command });
   });
 
+  it('type and gc are PowerShell\'s aliases only under a PowerShell tool or with a Windows path; Get-Content is everywhere', () => {
+    const ps = (command: string): ReturnType<typeof classifyToolCall> =>
+      classifyToolCall({ tool_name: 'PowerShell', tool_input: { command }, tool_response: { stdout: '' }, cwd: CWD });
+    expect(shell('type doc.md')).toMatchObject({ category: 'shell', paths: [] });
+    expect(shell('gc /w/doc.md')).toMatchObject({ category: 'shell', paths: [] });
+    expect(shell('type C:\\kb\\doc.md').category).toBe('read');
+    expect(shell('gc .\\doc.md').category).toBe('read');
+    expect(shell("type '\\\\server\\share\\doc.md'").category).toBe('read');
+    expect(shell('type C:\\kb\\doc.md /w/b.md').category).toBe('shell');
+    expect(ps('type doc.md')).toMatchObject({ category: 'read', paths: [at('doc.md')] });
+    expect(classifyToolCall({ tool_name: 'powershell', tool_input: { command: 'gc doc.md' }, tool_response: {}, cwd: CWD }).category).toBe('read');
+    expect(shell('Get-Content doc.md')).toMatchObject({ category: 'read', paths: [at('doc.md')] });
+  });
+
   it('a pipeline that starts with the reader is a read, but not a simple one', () => {
     expect(shell('cat doc.md 2>&1 | head -n 20')).toMatchObject({ category: 'read', paths: [at('doc.md')], simple: false });
   });
@@ -117,6 +131,10 @@ describe('classifyToolCall', () => {
     ["sed -n '1,5p' doc.md", "sed: can't read doc.md: No such file or directory"],
     ['grep needle doc.md', 'grep: doc.md: Permission denied'],
     ['rg -n needle learnings', 'rg: learnings/a.md: Permission denied (os error 13)'],
+    ['cat doc.md', 'bash: line 1: cat: command not found'],
+    ['head -n 5 doc.md', 'sh: 1: head: not found\n'],
+    ['cat doc.md', 'zsh: permission denied: doc.md'],
+    ['cat doc.md', '/bin/bash: line 1: cat: command not found'],
   ])('status unknown: %j with output %j, only its command\'s errors, is a failure', (command, output) => {
     expect(shell(command, output)).toMatchObject({ status: 'failure', paths: [] });
   });

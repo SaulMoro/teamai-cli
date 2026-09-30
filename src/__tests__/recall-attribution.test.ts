@@ -73,6 +73,9 @@ const T0 = Date.parse('2026-09-01T09:00:00.000Z');
 /** Where a Windows member's team repo is, as data: see Harness.windowsTeamRepo. */
 const WINDOWS_REPO = 'C:\\kb';
 const WINDOWS_DOC = 'C:\\kb\\learnings\\redis-timeout.md';
+/** Where a Linux or macOS member's team repo is, as data: see Harness.posixTeamRepo. */
+const POSIX_REPO = '/posix/kb';
+const POSIX_DOC = '/posix/kb/learnings/redis-timeout.md';
 /** A Cursor conversation, and a subagent's own conversation (Cursor runs each subagent under a fresh one). */
 const CURSOR = 'conv-main';
 const CURSOR_CHILD = 'conv-child';
@@ -273,11 +276,20 @@ class Harness {
    * OS; nothing is on disk at them.
    */
   async windowsTeamRepo(): Promise<void> {
-    await saveLocalConfigForScope({ ...this.project, repo: { ...this.project.repo, localPath: WINDOWS_REPO } });
+    await this.teamRepoAt(WINDOWS_REPO, path.win32);
+  }
+
+  /** The team repo at `/posix/kb`, as windowsTeamRepo places it at `C:\kb`: POSIX paths on every OS, Windows CI too. */
+  async posixTeamRepo(): Promise<void> {
+    await this.teamRepoAt(POSIX_REPO, path.posix);
+  }
+
+  private async teamRepoAt(root: string, paths: typeof path.posix): Promise<void> {
+    await saveLocalConfigForScope({ ...this.project, repo: { ...this.project.repo, localPath: root } });
     const indexPath = getProjectSearchIndexPath(this.project);
     const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { entries: Array<{ path?: string }> };
     for (const entry of index.entries) {
-      if (entry.path) entry.path = path.win32.join(WINDOWS_REPO, path.relative(this.teamRepo, entry.path));
+      if (entry.path) entry.path = paths.join(root, ...path.relative(this.teamRepo, entry.path).split(path.sep));
     }
     fs.writeFileSync(indexPath, JSON.stringify(index));
   }
@@ -1294,6 +1306,52 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   })),
+  ...[`type ${WINDOWS_DOC}`, `gc ${WINDOWS_DOC}`].map((command): Row => ({
+    name: `07: Codex on Windows ${command} (no status; a Windows path, so PowerShell's alias) → +1`,
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.codexRecall('redis timeout');
+      await h.codexShell(command, fs.readFileSync(h.docs['redis-timeout'], 'utf-8'));
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  })),
+  ...[
+    [`type ${POSIX_DOC}`, `bash: type: ${POSIX_DOC}: not found`],
+    [`type ${POSIX_DOC}`, ''],
+    [`gc ${POSIX_DOC}`, `bash: line 1: gc: command not found`],
+  ].map(([command, output]): Row => ({
+    name: `07: Codex under bash ${command} with output ${JSON.stringify(output)} (bash's type, no PowerShell alias) → 0`,
+    trace: async (h) => {
+      await h.posixTeamRepo();
+      const { files } = await h.codexRecall('redis timeout');
+      expect(files).toEqual([POSIX_DOC]);
+      await h.codexShell(command, output);
+      await h.stop(CODEX);
+    },
+    project: {},
+  })),
+  {
+    name: '07: Codex under bash, a reader whose output is only the shell\'s own diagnostic (bash: line 1: head: command not found) → 0',
+    trace: async (h) => {
+      await h.posixTeamRepo();
+      await h.codexRecall('redis timeout');
+      await h.codexShell(`head -n 40 ${POSIX_DOC}`, 'bash: line 1: head: command not found\n');
+      await h.codexShell(`sed -n '1,40p' ${POSIX_DOC}`, 'sh: 1: sed: not found');
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '07: Codex under bash cat of the doc → +1 (the POSIX team repo placement itself counts)',
+    trace: async (h) => {
+      await h.posixTeamRepo();
+      await h.codexRecall('redis timeout');
+      await h.codexShell(`cat ${POSIX_DOC}`, fs.readFileSync(h.docs['redis-timeout'], 'utf-8'));
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
   {
     name: '07: Windows Git Bash cat /c/kb/learnings/redis-timeout.md against a printed C:\\kb\\… path → +1',
     trace: async (h) => {

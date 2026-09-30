@@ -254,6 +254,22 @@ const POWERSHELL_READERS: Record<string, (args: string[]) => string[]> = {
 };
 
 /**
+ * The aliases that read only in PowerShell or cmd: in a POSIX shell `type` is
+ * a builtin that prints what a name is, and `gc` is no command. They count
+ * under a PowerShell tool, or when every file is a Windows path.
+ */
+const WINDOWS_ONLY_READERS = new Set(['type', 'gc']);
+
+/** A Windows path: a drive letter, or any `\` (`.\x.md`, a UNC `\\server\share\x.md`). */
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]|\\/;
+
+/** The shell the call ran in, when the tool names it. */
+export interface ShellFlavor {
+  /** The agent's PowerShell tool ran it. */
+  powershell?: boolean;
+}
+
+/**
  * A search verb's flags, each written `-x` or `--name`: those that take a
  * value, those whose value is the pattern (so no operand is), and those that
  * make it print file names or counts instead of lines.
@@ -380,7 +396,7 @@ const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false
  * (`2>/dev/null`, `2>&1`) is allowed: with its input or output redirected,
  * what the agent saw is not the file.
  */
-function classifySimple(command: SimpleCommand, simple: boolean): ShellClassification {
+function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFlavor): ShellClassification {
   const [verb, ...rest] = commandWords(command.words);
   if (verb === undefined || !command.redirects.every((r) => r.op.startsWith('2>'))) return SHELL;
   // By path on either platform, `.exe` too: `C:\\…\\cat.exe`, `Microsoft.PowerShell.Management\\Get-Content`.
@@ -393,6 +409,7 @@ function classifySimple(command: SimpleCommand, simple: boolean): ShellClassific
     ?? (Object.hasOwn(POWERSHELL_READERS, name.toLowerCase()) ? POWERSHELL_READERS[name.toLowerCase()] : undefined);
   if (read) {
     const files = read(args);
+    if (WINDOWS_ONLY_READERS.has(name.toLowerCase()) && !flavor.powershell && !files.every((f) => WINDOWS_PATH.test(f))) return SHELL;
     return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verb } : SHELL;
   }
   if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
@@ -410,8 +427,8 @@ function classifySimple(command: SimpleCommand, simple: boolean): ShellClassific
  * when it is one such command, or a pipeline that starts with one; otherwise
  * just a shell call.
  */
-export function classifyShellCommand(command: string): ShellClassification {
+export function classifyShellCommand(command: string, flavor: ShellFlavor = {}): ShellClassification {
   const commands = simpleCommands(command);
   const pipeline = commands.every((c, i) => c.op === (i === commands.length - 1 ? null : '|'));
-  return pipeline && commands.length > 0 ? classifySimple(commands[0], commands.length === 1) : SHELL;
+  return pipeline && commands.length > 0 ? classifySimple(commands[0], commands.length === 1, flavor) : SHELL;
 }

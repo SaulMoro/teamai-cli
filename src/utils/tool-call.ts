@@ -211,16 +211,20 @@ function shownFiles(output: string, roots: string[], base: string | undefined, t
   return [...files];
 }
 
+/** A POSIX shell's own diagnostic: `bash: line 1: cat: command not found`, `sh: 1: head: not found`, `/bin/bash: …`. */
+const SHELL_DIAGNOSTIC = /^(?:\S*\/)?(?:ba|z)?sh: /;
+
 /**
  * A shell call's output without the lines its command printed as errors:
  * those that start with its command word, as written or by name, and `: `
- * (`cat: x.md: No such file or directory`, `/bin/cat: …`, `grep: …`). Null
- * when those lines were all it printed, as when the call failed.
+ * (`cat: x.md: No such file or directory`, `/bin/cat: …`, `grep: …`), and the
+ * shell's own diagnostics. Null when those lines were all it printed, as when
+ * the call failed.
  */
 function withoutErrors(output: string, verb: string): string | null {
   const prefixes = [...new Set([verb, verb.split(/[\\/]/).pop()!])].map((name) => `${name}: `);
   const lines = output.split('\n');
-  const kept = lines.filter((line) => !prefixes.some((prefix) => line.startsWith(prefix)));
+  const kept = lines.filter((line) => !SHELL_DIAGNOSTIC.test(line) && !prefixes.some((prefix) => line.startsWith(prefix)));
   if (kept.length === lines.length) return output;
   return kept.some((line) => line.trim() !== '') ? kept.join('\n') : null;
 }
@@ -262,7 +266,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
 
   const command = input.command;
   if (typeof command !== 'string') return unknown;
-  const shell = classifyShellCommand(command);
+  const shell = classifyShellCommand(command, { powershell: name.toLowerCase() === 'powershell' });
   const output = outputOf(response);
   const optional = output !== undefined ? { output } : {};
   // With no status, only the command's own error lines tell a failure apart.
