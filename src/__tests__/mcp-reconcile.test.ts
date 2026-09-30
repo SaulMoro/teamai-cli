@@ -1206,6 +1206,62 @@ servers:
         if (action === 'update') expect(result.changes).toContainEqual(expect.objectContaining({ tool: 'copilot', server: 'with-secret', action: 'skipped' }));
       });
 
+      it.each(['legacy bare', 'legacy keyed', 'proven keyed', 'bare migration'] as const)(
+        'restores %s after a manifest write fails so update and removal can be retried', async (source) => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+        const manifest = await fse.readJson(manifestFile);
+        const file = path.join(projectRoot, '.mcp.json');
+        const doc = await fse.readJson(file);
+        if (source.endsWith('keyed')) {
+          await fse.writeJson(file, { mcpServers: doc });
+          manifest['copilot:project'][0].bare = false;
+        }
+        if (source.startsWith('legacy')) delete manifest['copilot:project'][0].bare;
+        if (source === 'bare migration') await fse.writeJson(file, { ...doc, mcpServers: { mine: { command: 'member-server' } } });
+        await fse.writeJson(manifestFile, manifest);
+        const original = await fse.readJson(file);
+        await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'replacement')}    tools: [copilot]\n`);
+        beforeJsonWrite.run = async (target) => {
+          if (target.endsWith('/managed-mcp.json')) throw new Error('simulated manifest write failure');
+        };
+
+        await expect(reconcileMcpForConfig(shared(), projectConfig)).rejects.toThrow('simulated manifest write failure');
+        beforeJsonWrite.run = null;
+
+        expect(await fse.readJson(manifestFile)).toEqual(manifest);
+        expect(await fse.readJson(file)).toEqual(original);
+        expect(git(projectRoot, 'status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toBe('');
+        await reconcileMcpForConfig(shared(), projectConfig);
+        expect(await fse.readFile(file, 'utf-8')).not.toContain('super-secret-value');
+        await reconcileMcpForConfig(shared(), projectConfig, { removeAll: true });
+        const removed = await fse.readJson(file);
+        expect(removed['with-secret']).toBeUndefined();
+        expect(removed.mcpServers?.['with-secret']).toBeUndefined();
+        if (source === 'bare migration') expect(removed.mcpServers.mine).toEqual({ command: 'member-server' });
+      });
+
+      it('restores the first write when a second tool fails on the same config', async () => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+        const file = path.join(projectRoot, '.mcp.json');
+        const original = await fse.readJson(file);
+        const manifest = await fse.readJson(manifestFile);
+        await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'replacement')}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
+        let writes = 0;
+        beforeJsonWrite.run = async (target) => {
+          if (target === file && ++writes === 2) throw new Error('simulated second config write failure');
+        };
+
+        await expect(reconcileMcpForConfig(shared(), projectConfig)).rejects.toThrow('simulated second config write failure');
+        beforeJsonWrite.run = null;
+
+        expect(await fse.readJson(file)).toEqual(original);
+        expect(await fse.readJson(manifestFile)).toEqual(manifest);
+        await reconcileMcpForConfig(shared(), projectConfig);
+        expect(await fse.readFile(file, 'utf-8')).not.toContain('super-secret-value');
+      });
+
       it('keeps its line, pull after pull, while Copilot\'s bare entry holds the value beside the mcpServers Claude wrote', async () => {
         await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
         // No longer set: only the entry, not a scan for the value, says what the file holds.
@@ -2204,7 +2260,7 @@ servers:
         expect(vi.mocked(log.debug).mock.calls.flat().join('\n')).toMatch(/\/\.mcp\.json/);
       });
 
-      it('but one this pull listed stays when it wrote the value and then failed to record it', async () => {
+      it.each([false, true])('handles a failed ownership write after adding a credential, restoration fails=%s', async (restoreFails) => {
         // Shorter than eight characters: no scan of the file can find it again.
         vi.stubEnv('SECRET_TOKEN', 'short');
         await writeMcpYaml(withSecret);
@@ -2212,10 +2268,23 @@ servers:
           if (path.basename(file) === 'managed-mcp.json') throw new Error('disk full');
         };
 
-        await expect(reconcileMcpForConfig(teamConfig, claudeOnly())).rejects.toThrow('disk full');
+        const rm = fs.promises.rm;
+        const spy = vi.spyOn(fs.promises, 'rm').mockImplementation(async (file, ...args) => {
+          if (restoreFails && String(file) === mcpJson()) throw new Error('simulated restoration failure');
+          return rm(file, ...args);
+        });
+        await expect(reconcileMcpForConfig(teamConfig, claudeOnly())).rejects.toThrow(restoreFails ? /restoring configs failed.*simulated restoration failure/ : 'disk full');
+        spy.mockRestore();
 
-        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('Bearer short');
-        expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        if (restoreFails) {
+          expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('Bearer short');
+          expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+        } else {
+          expect(await fse.pathExists(mcpJson())).toBe(false);
+          expect(await excludeOf(projectRoot)).not.toMatch(/^\/\.mcp\.json$/m);
+          const { readResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+          expect((await readResolvedMcpFiles(claudeOnly())).files[mcpJson()]).toBeUndefined();
+        }
       });
 
       it('but one an earlier pull listed stays while the config cannot be proven clean', async () => {

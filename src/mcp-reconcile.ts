@@ -44,6 +44,7 @@ import {
   readJson,
   writeJsonAtomic,
   readFileSafe,
+  readFileIfExists,
   pathExists,
   expandHome,
 } from './utils/fs.js';
@@ -1248,11 +1249,31 @@ export async function reconcileMcpForConfig(
   // The (file, tool) pairs managed-mcp-files.json first recorded this run, before their write, until that
   // tool's records hold a resolved value there: another tool's write to the same file proves nothing of it.
   const recorded: McpTarget[] = [];
+  // One snapshot per file, before any tool writes it, until ownership is saved.
+  const restoreConfigs = new Map<string, () => Promise<void>>();
   const protect = !options.removeAll && !options.dryRun;
   // Read before the reconcile records what it writes: a manifest it recreates says nothing of what came before.
   const before = protect && localConfig.projectRoot ? await readProjectMcpManifest(localConfig, localConfig.projectRoot) : undefined;
   try {
-    return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded);
+    return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded, restoreConfigs);
+  } catch (error) {
+    const failures: string[] = [];
+    for (const [file, restore] of restoreConfigs) {
+      try {
+        await restore();
+        written.delete(file);
+      } catch (restoreError) {
+        failures.push(`${file}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `MCP sync failed (${error instanceof Error ? error.message : String(error)}), and restoring configs failed (${failures.join('; ')}). `
+        + 'Their ownership records may not match. Repair the configs and ownership records before retrying the command.',
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
     // A record this run added for a tool that then wrote no value goes, as its exclude line does. The settle
     // below records the file again if it holds a resolved value all the same (an earlier pull wrote it).
@@ -1572,6 +1593,7 @@ async function reconcileTargets(
   exclusions: Map<string, GitExclusion>,
   written: Set<string>,
   recorded: McpTarget[],
+  restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<McpReconcileResult> {
   const changes: McpChange[] = [];
   let wrote = false;
@@ -1667,8 +1689,8 @@ async function reconcileTargets(
     }
 
     const wroteTarget = target.format === 'codex'
-      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, options)
-      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, options);
+      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, options, restoreConfigs)
+      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, options, restoreConfigs);
     if (wroteTarget) written.add(target.file);
     wrote = wroteTarget || wrote;
     // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
@@ -1684,8 +1706,6 @@ async function reconcileTargets(
         if (marked) record.unnoted = true;
         else delete record.unnoted;
       }
-      const at = recorded.indexOf(target);
-      if (at >= 0 && nextRecords.some((record) => record.resolved === true)) recorded.splice(at, 1);
     }
     // Rebuilt this run, or by one that could not note what else was in the file.
     const unnoted = manifest[manifestKey] === undefined || manifest[manifestKey].some((record) => record.unnoted);
@@ -1718,6 +1738,12 @@ async function reconcileTargets(
       }
     }
     await writeJsonAtomic(manifestPath, manifest);
+  }
+  // Only committed ownership retains a file record added by this run. On failure,
+  // the outer cleanup removes it before inspecting the restored configs.
+  for (let index = recorded.length - 1; index >= 0; index--) {
+    const target = recorded[index];
+    if (manifest[managedMcpManifestKey(target.tool, target.projectScope)]?.some((record) => record.resolved === true)) recorded.splice(index, 1);
   }
   return { changes, wrote };
 }
@@ -1815,6 +1841,7 @@ async function applyJson(
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
   options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean | null> {
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
@@ -1823,6 +1850,8 @@ async function applyJson(
     log.warn(`Could not parse ${target.file} — skipping MCP injection for ${target.tool}`);
     return null;
   }
+  const existed = await pathExists(target.file);
+  const previousData = structuredClone(doc.data);
 
   const ownedHere = owned.filter((record) => ownsJsonMcpEntry(doc, record.name, [record], allowBare));
   const ownedHash = new Map(ownedHere.map((r) => [r.name, r.hash]));
@@ -1892,6 +1921,11 @@ async function applyJson(
   // empty `mcpServers` in a file the tool never reads under that name.
   // A file that holds a resolved value is the member's alone, an existing one tightened.
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
+  if (!restoreConfigs.has(target.file)) {
+    restoreConfigs.set(target.file, existed
+      ? () => writeJsonAtomic(target.file, previousData)
+      : () => fs.promises.rm(target.file, { force: true }));
+  }
   return true;
 }
 
@@ -1903,8 +1937,10 @@ async function applyCodex(
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
   options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
-  let source = (await readFileSafe(target.file)) ?? '';
+  const previous = await readFileIfExists(target.file);
+  let source = previous ?? '';
   const present = new Set(codexServerNames(source));
   let dirty = false;
   let holdsResolvedValue = false;
@@ -1951,6 +1987,11 @@ async function applyCodex(
   }
 
   await writeCodexAtomic(target.file, source);
+  if (!restoreConfigs.has(target.file)) {
+    restoreConfigs.set(target.file, previous === null
+      ? () => fs.promises.rm(target.file, { force: true })
+      : () => writeCodexAtomic(target.file, previous));
+  }
   return true;
 }
 

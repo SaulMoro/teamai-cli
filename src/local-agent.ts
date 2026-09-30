@@ -13,6 +13,7 @@ import {
   listFilesRecursive,
   pathExists,
   readFileSafe,
+  readFileIfExists,
   readJson,
   remove,
   writeFile,
@@ -2923,7 +2924,7 @@ async function installMcpServer(
   if (format === 'codex') {
     const block = renderCodexBlock(def);
     const hash = entryHash(block);
-    let source = (await readFileSafe(targetFile)) ?? '';
+    let source = (await readFileIfExists(targetFile)) ?? '';
     const present = new Set(codexServerNames(source));
     if (present.has(slug) && !ownedNames.has(slug)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
@@ -2949,17 +2950,37 @@ async function installMcpServer(
     const bareCopy = isTeamaiBareCopy(doc, slug, owned);
     // Check Git without changing it until ownership is persisted. Recheck protection before writing the credential (#882).
     const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
-    const priorPlacement = owned.find((record) => record.name === slug)?.bare;
-    updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, priorPlacement === doc.bare ? priorPlacement : undefined);
-    await writeJsonAtomic(manifestPath, manifest);
+    const previousRecord = owned.find((record) => record.name === slug);
+    const previousData = previousRecord ? structuredClone(doc.data) : undefined;
+    // Existing ownership stays valid until the config write completes. New installs
+    // still persist a provisional record before adding a Git exclusion (#882).
+    if (!previousRecord) {
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
+      await writeJsonAtomic(manifestPath, manifest);
+    }
     if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     if (bareCopy) delete doc.data[slug];
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
-    if (allowBare) {
+    if (allowBare || previousRecord) {
       // Placement is evidence of a completed write, not just an attempted install.
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, doc.bare);
-      await writeJsonAtomic(manifestPath, manifest);
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, allowBare ? doc.bare : undefined);
+      try {
+        await writeJsonAtomic(manifestPath, manifest);
+      } catch (error) {
+        if (previousData) {
+          try {
+            await writeJsonAtomic(targetFile, previousData);
+          } catch (restoreError) {
+            throw new Error(
+              `install_mcp: ownership write failed (${error instanceof Error ? error.message : String(error)}), and restoring ${targetFile} failed `
+              + `(${restoreError instanceof Error ? restoreError.message : String(restoreError)}). The config may not match ${manifestPath}. Repair the config and ownership record after fixing both write errors, then install the server again.`,
+              { cause: error },
+            );
+          }
+        }
+        throw error;
+      }
     }
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
@@ -3044,26 +3065,47 @@ async function uninstallMcpServer(
 
   if (!ownedNames.has(slug)) return;
 
-  manifest[manifestKey] = owned.filter((r: ManagedMcpRecord) => r.name !== slug);
-  if ((manifest[manifestKey] as ManagedMcpRecord[]).length === 0) delete manifest[manifestKey];
-  await writeJsonAtomic(manifestPath, manifest);
-
+  let restoreConfig: (() => Promise<void>) | undefined;
   if (format === 'codex') {
-    let source = (await readFileSafe(targetFile)) ?? '';
-    source = spliceCodexBlock(source, slug, null);
-    await writeCodexAtomic(targetFile, source);
+    const source = (await readFileIfExists(targetFile)) ?? '';
+    const next = spliceCodexBlock(source, slug, null);
+    if (next !== source) {
+      await writeCodexAtomic(targetFile, next);
+      restoreConfig = () => writeCodexAtomic(targetFile, source);
+    }
   } else {
     const serverKey = MCP_SERVER_KEY[format];
     const allowBare = format === 'copilot' && projectScope;
     const doc = await readJsonDoc(targetFile, serverKey, allowBare);
+    if (!doc) throw new Error(`uninstall_mcp: cannot parse ${targetFile}. Ownership was kept; repair the config and uninstall the server again.`);
     // Also a bare entry another tool's mcpServers now sits beside (#882).
-    const bareCopy = doc !== null && isTeamaiBareCopy(doc, slug, owned);
-    const ownsEntry = doc !== null && ownsJsonMcpEntry(doc, slug, owned, allowBare);
-    if (doc && ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy)) {
+    const bareCopy = isTeamaiBareCopy(doc, slug, owned);
+    const ownsEntry = ownsJsonMcpEntry(doc, slug, owned, allowBare);
+    if ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy) {
+      const previousData = structuredClone(doc.data);
       if (ownsEntry) delete doc.servers[slug];
       if (bareCopy) delete doc.data[slug];
       await writeJsonDoc(targetFile, serverKey, doc);
+      restoreConfig = () => writeJsonAtomic(targetFile, previousData);
     }
+  }
+  manifest[manifestKey] = owned.filter((r: ManagedMcpRecord) => r.name !== slug);
+  if (manifest[manifestKey].length === 0) delete manifest[manifestKey];
+  try {
+    await writeJsonAtomic(manifestPath, manifest);
+  } catch (error) {
+    if (restoreConfig) {
+      try {
+        await restoreConfig();
+      } catch (restoreError) {
+        throw new Error(
+          `uninstall_mcp: ownership write failed (${error instanceof Error ? error.message : String(error)}), and restoring ${targetFile} failed `
+          + `(${restoreError instanceof Error ? restoreError.message : String(restoreError)}). The config may not match ${manifestPath}. Repair the config and ownership record after fixing both write errors, then uninstall the server again.`,
+          { cause: error },
+        );
+      }
+    }
+    throw error;
   }
   log.debug(`local-agent: uninstalled MCP server "${slug}" from ${tool} (scope=${scope})`);
 }

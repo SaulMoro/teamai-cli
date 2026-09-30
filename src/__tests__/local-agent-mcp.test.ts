@@ -328,6 +328,204 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toBeUndefined();
   });
 
+  it.each((['proven bare', 'proven bare migration', 'legacy bare', 'proven keyed', 'legacy keyed'] as const)
+    .flatMap((source) => (['config', 'manifest'] as const)
+      .flatMap((failure) => (['retry', 'uninstall'] as const).map((next) => [source, failure, next] as const))))(
+    'preserves ownership for %s after a %s write fails, then allows %s', async (source, failure, next) => {
+    const workspacePath = path.join(tmpDir, 'copilot-failed-update');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    execFileSync('git', ['init', '-q'], { cwd: workspacePath });
+    await fse.writeFile(configFile, source.includes('bare') ? '' : '{"mcpServers":{}}');
+    const command = {
+      id: 9040, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0',
+      mcp_config: { transport: 'http', url: 'https://team.example/mcp', headers: { Authorization: 'Bearer fixture-old' } },
+    };
+    expect((await runResponse({ cmds: [command] }, 'copilot'))[0].status).toBe('success');
+    const wsDir = path.join(workspacePath, '.teamai', 'workspaces');
+    const [id] = await fse.readdir(wsDir);
+    const manifestFile = path.join(wsDir, id, 'managed-mcp.json');
+    const before = await fse.readJson(manifestFile);
+    if (source.startsWith('legacy')) {
+      delete before['copilot:project'][0].bare;
+      await fse.writeJson(manifestFile, before);
+    }
+    if (source === 'proven bare migration') {
+      await fse.writeJson(configFile, { ...(await fse.readJson(configFile)), mcpServers: { mine: { command: 'member-server' } } });
+    }
+    const original = await fse.readJson(configFile);
+    const replacement = { ...command, id: 9041, mcp_config: { transport: 'stdio', command: 'replacement-server' } };
+    const fs = await import('../utils/fs.js');
+    const write = fs.writeJsonAtomic;
+    let configWritten = false;
+    const spy = vi.spyOn(fs, 'writeJsonAtomic').mockImplementation(async (file, ...args) => {
+      if (failure === 'config' && file.endsWith('/.github/mcp.json')) throw new Error('simulated MCP config write failure');
+      if (failure === 'manifest' && file.endsWith('/managed-mcp.json') && configWritten) throw new Error('simulated manifest write failure');
+      await write(file, ...args);
+      if (file.endsWith('/.github/mcp.json')) configWritten = true;
+    });
+
+    const failed = await runResponse({ cmds: [replacement] }, 'copilot');
+    spy.mockRestore();
+    const afterFailure = await fse.readJson(manifestFile);
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].error).toContain(failure === 'config' ? 'simulated MCP config write failure' : 'simulated manifest write failure');
+    expect(await fse.readJson(configFile)).toEqual(original);
+    if (source === 'proven bare') {
+      await fse.writeJson(configFile, { ...original, mcpServers: { mine: { command: 'member-server' } } });
+    }
+
+    const resumed = await runResponse({ cmds: [{ ...replacement, id: 9042, type: next === 'retry' ? 'install_mcp' : 'uninstall_mcp' }] }, 'copilot');
+
+    expect(resumed[0].status).toBe('success');
+    const after = await fse.readJson(configFile);
+    if (next === 'uninstall') {
+      expect(after[COPILOT_SERVER]).toBeUndefined();
+      expect(after.mcpServers?.[COPILOT_SERVER]).toBeUndefined();
+    } else {
+      expect(JSON.stringify(after)).not.toContain('fixture-old');
+      expect(JSON.stringify(after)).toContain('replacement-server');
+      if (source.startsWith('proven bare')) expect(after[COPILOT_SERVER]).toBeUndefined();
+    }
+    if (source.startsWith('proven bare')) expect(after.mcpServers.mine).toEqual({ command: 'member-server' });
+    expect(afterFailure).toEqual(before);
+  });
+
+  it.each((['copilot bare', 'copilot keyed', 'codebuddy keyed', 'codex user'] as const)
+    .flatMap((source) => (['config', 'manifest'] as const).map((failure) => [source, failure] as const)))(
+    'allows retrying uninstall of %s after a %s write fails', async (source, failure) => {
+    const tool = source.split(' ')[0];
+    const workspacePath = path.join(tmpDir, 'failed-uninstall');
+    const configFile = source === 'codex user' ? path.join(tmpDir, '.codex', 'config.toml')
+      : path.join(workspacePath, tool === 'copilot' ? '.github/mcp.json' : '.mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    if (tool !== 'codex') await fse.writeFile(configFile, source === 'copilot bare' ? '' : '{"mcpServers":{}}');
+    const command = {
+      id: 9050, type: 'install_mcp', scope: tool === 'codex' ? 'user' : 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0', mcp_config: { transport: 'stdio', command: 'team-server' },
+    };
+    expect((await runResponse({ cmds: [command] }, tool))[0].status).toBe('success');
+    const wsDir = path.join(workspacePath, '.teamai', 'workspaces');
+    const manifestFile = tool === 'codex' ? path.join(tmpDir, '.teamai', 'managed-mcp.json')
+      : path.join(wsDir, (await fse.readdir(wsDir))[0], 'managed-mcp.json');
+    const before = await fse.readJson(manifestFile);
+    const original = await fse.readFile(configFile, 'utf-8');
+    const fs = await import('../utils/fs.js');
+    const write = fs.writeJsonAtomic;
+    const spy = vi.spyOn(fs, 'writeJsonAtomic').mockImplementation(async (file, ...args) => {
+      if ((failure === 'config' && file.endsWith(tool === 'copilot' ? '/.github/mcp.json' : '/.mcp.json')) || (failure === 'manifest' && file.endsWith('/managed-mcp.json'))) {
+        throw new Error(`simulated ${failure} write failure`);
+      }
+      return write(file, ...args);
+    });
+    const reconcile = await import('../mcp-reconcile.js');
+    const codexWrite = reconcile.writeCodexAtomic;
+    const codexSpy = vi.spyOn(reconcile, 'writeCodexAtomic').mockImplementation(async (...args) => {
+      if (failure === 'config') throw new Error('simulated config write failure');
+      return codexWrite(...args);
+    });
+    const removal = { ...command, id: 9051, type: 'uninstall_mcp' };
+
+    const failed = await runResponse({ cmds: [removal] }, tool);
+    spy.mockRestore();
+    codexSpy.mockRestore();
+
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].error).toContain(`simulated ${failure} write failure`);
+    expect(await fse.readJson(manifestFile)).toEqual(before);
+    expect(await fse.readFile(configFile, 'utf-8')).toBe(original);
+    expect((await runResponse({ cmds: [{ ...removal, id: 9052 }] }, tool))[0].status).toBe('success');
+    expect(await fse.readFile(configFile, 'utf-8')).not.toContain('team-server');
+  });
+
+  it('keeps ownership when uninstall cannot parse the config, then removes the repaired entry', async () => {
+    const workspacePath = path.join(tmpDir, 'malformed-uninstall');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(workspacePath);
+    const command = {
+      id: 9060, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0', mcp_config: { transport: 'stdio', command: 'team-server' },
+    };
+    expect((await runResponse({ cmds: [command] }, 'copilot'))[0].status).toBe('success');
+    const wsDir = path.join(workspacePath, '.teamai', 'workspaces');
+    const manifestFile = path.join(wsDir, (await fse.readdir(wsDir))[0], 'managed-mcp.json');
+    const before = await fse.readJson(manifestFile);
+    const original = await fse.readFile(configFile, 'utf-8');
+    await fse.writeFile(configFile, '{invalid config');
+    const removal = { ...command, id: 9061, type: 'uninstall_mcp' };
+
+    const failed = await runResponse({ cmds: [removal] }, 'copilot');
+
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].error).toContain('cannot parse');
+    expect(await fse.readJson(manifestFile)).toEqual(before);
+    expect(await fse.readFile(configFile, 'utf-8')).toBe('{invalid config');
+    await fse.writeFile(configFile, original);
+    expect((await runResponse({ cmds: [{ ...removal, id: 9062 }] }, 'copilot'))[0].status).toBe('success');
+    expect(await fse.readFile(configFile, 'utf-8')).not.toContain('team-server');
+  });
+
+  it.each(['install_mcp', 'uninstall_mcp'] as const)(
+    'keeps Codex config and ownership when %s cannot read the config', async (type) => {
+    const configFile = path.join(tmpDir, '.codex', 'config.toml');
+    const command = {
+      id: 9070, type: 'install_mcp', scope: 'user', slug: COPILOT_SERVER, version: '1.0.0',
+      mcp_config: { transport: 'stdio', command: 'team-server' },
+    };
+    expect((await runResponse({ cmds: [command] }, 'codex'))[0].status).toBe('success');
+    const manifestFile = path.join(tmpDir, '.teamai', 'managed-mcp.json');
+    const before = await fse.readJson(manifestFile);
+    const original = await fse.readFile(configFile, 'utf-8');
+    const read = fse.readFile;
+    const spy = vi.spyOn(fse, 'readFile').mockImplementation((file, ...args) => {
+      if (String(file).endsWith('/.codex/config.toml')) return Promise.reject(new Error('simulated config read failure'));
+      return read(file, ...args);
+    });
+
+    const failed = await runResponse({ cmds: [{ ...command, id: 9071, type }] }, 'codex');
+    spy.mockRestore();
+
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].error).toContain('simulated config read failure');
+    expect(await fse.readJson(manifestFile)).toEqual(before);
+    expect(await fse.readFile(configFile, 'utf-8')).toBe(original);
+    expect((await runResponse({ cmds: [{ ...command, id: 9072, type }] }, 'codex'))[0].status).toBe('success');
+  });
+
+  it.each(['install_mcp', 'uninstall_mcp'] as const)(
+    'reports both failures when %s cannot restore a config after its manifest write fails', async (type) => {
+    const workspacePath = path.join(tmpDir, 'failed-restoration');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(workspacePath);
+    const command = {
+      id: 9080, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0', mcp_config: { transport: 'stdio', command: 'team-server' },
+    };
+    expect((await runResponse({ cmds: [command] }, 'copilot'))[0].status).toBe('success');
+    const original = await fse.readJson(configFile);
+    const fs = await import('../utils/fs.js');
+    const write = fs.writeJsonAtomic;
+    let configWritten = false;
+    const spy = vi.spyOn(fs, 'writeJsonAtomic').mockImplementation(async (file, ...args) => {
+      if (file.endsWith('/managed-mcp.json')) throw new Error('simulated manifest write failure');
+      if (file.endsWith('/.github/mcp.json') && configWritten) throw new Error('simulated restoration failure');
+      await write(file, ...args);
+      if (file.endsWith('/.github/mcp.json')) configWritten = true;
+    });
+    const retry = { ...command, id: 9081, type, mcp_config: { transport: 'stdio', command: 'replacement-server' } };
+
+    const failed = await runResponse({ cmds: [retry] }, 'copilot');
+    spy.mockRestore();
+
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].error).toContain('simulated manifest write failure');
+    expect(failed[0].error).toContain('simulated restoration failure');
+    expect(failed[0].error).toContain('The config may not match');
+    await fse.writeJson(configFile, original);
+    expect((await runResponse({ cmds: [{ ...retry, id: 9082 }] }, 'copilot'))[0].status).toBe('success');
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');

@@ -447,6 +447,15 @@ every checkout, so that is where they live now:
 <checkout>/.teamai/                            one per checkout: committed knowledge, knowledge-wt/
 ```
 
+MCP configs and ownership must describe the same completed writes. Existing
+JSON local-agent installs keep the old record until the config write succeeds;
+uninstall keeps it until the entry is removed. A later manifest-write failure
+restores the previous config. Reconcile keeps one snapshot per config before
+any tool writes it and restores those snapshots if saving ownership or a later
+config write fails. File records added by that failed run are cleaned up before
+Git protection is checked against the restored configs. If restoration also
+fails, the command reports both failures and keeps credential files excluded.
+
 `git worktree add` takes a path outside the repo, and the owning repo is still
 the business repo, whose refs every checkout shares. The search index is keyed
 per checkout, like managed MCP, because each checkout indexes its own branch's
