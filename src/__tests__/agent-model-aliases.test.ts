@@ -748,6 +748,59 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(candidate.mergedSpec).toEqual({ ...spec, tool_extras: { [tool]: { model: edit } } });
     });
 
+    describe('a hand edit to tclaude under each kind of model pin', () => {
+      // tclaude reads its own extras over claude's, so it covers the tool's own
+      // pin, the inherited one, and both at once.
+      const PINS = {
+        none: undefined,
+        own: { tclaude: { model: 'sonnet' } },
+        inherited: { claude: { model: 'sonnet' } },
+        'own and inherited': { claude: { model: 'sonnet' }, tclaude: { model: 'sonnet' } },
+      } as const;
+      const EDITS: Record<string, (fields: Record<string, unknown>) => void> = {
+        model: (fields) => { fields['model'] = 'haiku'; },
+        effort: (fields) => { fields['effort'] = 'max'; },
+        'another field': (fields) => { fields['color'] = 'blue'; },
+        'model removed': (fields) => { delete fields['model']; },
+      };
+      type Expected = Partial<AgentSpec> | { conflict: string };
+      const CASES: Array<[keyof typeof PINS, string, Expected]> = [
+        ['none', 'model', { model: 'haiku' }],
+        ['none', 'effort', { tool_extras: { tclaude: { effort: 'max' } } }],
+        ['none', 'another field', { tool_extras: { tclaude: { color: 'blue' } } }],
+        ['none', 'model removed', { model: undefined }],
+        ['own', 'model', { tool_extras: { tclaude: { model: 'haiku' } } }],
+        ['own', 'effort', { tool_extras: { tclaude: { model: 'sonnet', effort: 'max' } } }],
+        ['own', 'another field', { tool_extras: { tclaude: { model: 'sonnet', color: 'blue' } } }],
+        ['own', 'model removed', { tool_extras: undefined }],
+        ['inherited', 'model', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { model: 'haiku' } } }],
+        ['inherited', 'effort', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { effort: 'max' } } }],
+        ['inherited', 'another field', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { color: 'blue' } } }],
+        ['inherited', 'model removed', { conflict: '"removed":["model"]' }],
+        ['own and inherited', 'model', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { model: 'haiku' } } }],
+        ['own and inherited', 'effort', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { model: 'sonnet', effort: 'max' } } }],
+        ['own and inherited', 'another field', { tool_extras: { claude: { model: 'sonnet' }, tclaude: { model: 'sonnet', color: 'blue' } } }],
+        ['own and inherited', 'model removed', { conflict: '"removed":["model"]' }],
+      ];
+
+      it.each(CASES)('pin %s, edit %s: writes the edit where tclaude reads it, and nothing else', async (pin, edit, expected) => {
+        const spec = makeSpec({ model: 'opus', ...(PINS[pin] ? { tool_extras: PINS[pin] } : {}) });
+        await pullTo(['tclaude'], spec);
+        await editDeployed('tclaude', spec.name, EDITS[edit]!);
+
+        const [candidate] = await scan(['tclaude']);
+        if ('conflict' in expected) {
+          expect(candidate.mergedSpec).toBeUndefined();
+          expect(candidate.skipReason).toContain(expected.conflict);
+          return;
+        }
+        expect(candidate.skipReason).toBeUndefined();
+        const merged: Record<string, unknown> = { ...spec, ...expected };
+        for (const key of Object.keys(merged)) if (merged[key] === undefined) delete merged[key];
+        expect(candidate.mergedSpec).toEqual(merged);
+      });
+    });
+
     it('does not propose a copy with the bytes teamai last delivered there, rendered by an older CLI', async () => {
       const spec = makeSpec({ model: 'opus', tool_extras: { claude: { color: 'red' } } });
       // A CLI before #830 gave Qoder the Claude extras.
