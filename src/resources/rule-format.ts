@@ -11,6 +11,10 @@
  * new per-tool extension never has to be re-discovered call site by call site.
  */
 
+import type { TeamaiConfig } from '../types.js';
+
+type ToolPath = TeamaiConfig['toolPaths'][string];
+
 const CURSOR_MDC_RULE_TOOLS = new Set(['cursor', 'joycode']);
 const COPILOT_INSTRUCTIONS_RULE_TOOLS = new Set(['copilot']);
 const INSTRUCTIONS_FILE_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
@@ -37,6 +41,42 @@ export function usesCopilotInstructions(tool: string): boolean {
  */
 export function inlinesRulesIntoInstructions(tool: string): boolean {
   return INSTRUCTIONS_FILE_RULE_TOOLS.has(tool);
+}
+
+/** A managed block pull writes into a tool's instructions file (`claudemd`). */
+export type InstructionBlock = 'culture' | 'claudemd' | 'recall' | 'team-rules';
+
+/**
+ * Whether pull writes `block` into this tool's instructions file: culture and
+ * shared instructions for every tool that has one, recall for a tool that
+ * also has `agents`, team rules for a tool that inlines them. Pull's writers
+ * and uninstall both ask this, so what uninstall keeps for a remaining tool is
+ * what that tool's next pull refreshes. Whether the tool is installed is a
+ * separate question (`instructionFileInstallProbe`).
+ */
+export function writesInstructionBlock(
+  tool: string, toolPath: ToolPath, block: 'recall',
+): toolPath is ToolPath & { claudemd: string; agents: string };
+export function writesInstructionBlock(
+  tool: string, toolPath: ToolPath, block: InstructionBlock,
+): toolPath is ToolPath & { claudemd: string };
+export function writesInstructionBlock(tool: string, toolPath: ToolPath, block: InstructionBlock): boolean {
+  if (!toolPath.claudemd) return false;
+  if (block === 'recall') return toolPath.agents !== undefined;
+  if (block === 'team-rules') return inlinesRulesIntoInstructions(tool);
+  return true;
+}
+
+/**
+ * The tool path whose root says a tool is installed, for the culture,
+ * shared-instruction and team-rules writers; undefined when there is none to
+ * probe. Never `claudemd`: a root-level AGENTS.md exists without the tool. A
+ * Codex-family entry may carry neither `rules` nor `settings` (a team entry
+ * replaces the default whole), so its `skills` root is the last resort.
+ */
+export function instructionFileInstallProbe(tool: string, toolPath: ToolPath): string | undefined {
+  const probe = toolPath.rules ?? toolPath.settings;
+  return inlinesRulesIntoInstructions(tool) ? probe ?? toolPath.skills : probe;
 }
 
 /**

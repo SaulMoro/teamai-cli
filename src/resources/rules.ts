@@ -26,6 +26,8 @@ import {
   usesCopilotInstructions,
   isLegacyCursorRuleFile,
   inlinesRulesIntoInstructions,
+  instructionFileInstallProbe,
+  writesInstructionBlock,
   LEGACY_RULE_DIRS,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
@@ -733,10 +735,11 @@ export class RulesHandler extends ResourceHandler {
     const out: Array<{ tool: string; file: string | null; active: boolean }> = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!inlinesRulesIntoInstructions(tool)) continue;
-      const file = toolPath.claudemd ? path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd) : null;
-      // Never probe with `claudemd`: a root-level AGENTS.md says nothing about
-      // whether Codex is installed. Same probe as the other instruction blocks.
-      const probe = toolPath.rules ?? toolPath.settings;
+      const file = writesInstructionBlock(tool, toolPath, 'team-rules')
+        ? path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd)
+        : null;
+      // Same probe as the other instruction blocks.
+      const probe = instructionFileInstallProbe(tool, toolPath);
       const active = !isAgentExcluded(localConfig, tool)
         && (probe === undefined || await isToolInstalledForConfig(tool, probe, localConfig));
       out.push({ tool, file, active });

@@ -34,7 +34,7 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES } from './builtin-rules.js';
-import { inlinesRulesIntoInstructions, LEGACY_RULE_DIRS, ruleStemFromFilename } from './resources/rule-format.js';
+import { LEGACY_RULE_DIRS, ruleStemFromFilename, writesInstructionBlock, type InstructionBlock } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
@@ -176,17 +176,22 @@ const CLAUDEMD_MARKER_PAIRS: Array<[string, string]> = [
   [TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END],
 ];
 
+const INSTRUCTION_BLOCK_STARTS: Record<InstructionBlock, string> = {
+  culture: TEAMAI_CULTURE_START,
+  claudemd: TEAMAI_CLAUDEMD_START,
+  recall: TEAMAI_RECALL_RULES_START,
+  'team-rules': TEAMAI_TEAM_RULES_START,
+};
+
 /**
- * Start markers of the blocks a pull writes into a tool's `claudemd` file:
- * culture and shared instructions for every tool that has one, recall for a
- * tool that also has `agents`, and team rules for a tool that inlines them.
- * Nobody writes the legacy `[teamai:rules]` block any more.
+ * Start markers of the blocks a pull writes into a tool's `claudemd` file,
+ * as pull's writers decide it (`writesInstructionBlock`). Nobody writes the
+ * legacy `[teamai:rules]` block any more.
  */
 function instructionBlocksWrittenBy(tool: string, toolPath: TeamaiConfig['toolPaths'][string]): string[] {
-  const starts = [TEAMAI_CULTURE_START, TEAMAI_CLAUDEMD_START];
-  if (toolPath.agents) starts.push(TEAMAI_RECALL_RULES_START);
-  if (inlinesRulesIntoInstructions(tool)) starts.push(TEAMAI_TEAM_RULES_START);
-  return starts;
+  return (Object.keys(INSTRUCTION_BLOCK_STARTS) as InstructionBlock[])
+    .filter((block) => writesInstructionBlock(tool, toolPath, block))
+    .map((block) => INSTRUCTION_BLOCK_STARTS[block]);
 }
 
 /**
