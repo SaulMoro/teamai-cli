@@ -1293,9 +1293,14 @@ export async function localAgentCredentialFiles(localConfig: LocalConfig, target
       continue;
     }
     const recordedNames = new Set(records.map((record) => record.name));
-    const credential = records.some((record) => installed === null
-      ? record.resolved !== false
-      : installed.has(record.name) && (record.resolved ?? carriesLocalAgentCredential(installed.get(record.name))))
+    const credential = records.some((record) => {
+      if (installed === null) return record.resolved !== false;
+      if (!installed.has(record.name)) return false;
+      const entry = installed.get(record.name);
+      // `resolved: false` speaks for the entry its install wrote: an older one a failed write left is judged by what it holds.
+      const noted = record.resolved === true || entryHash(entry) === record.hash ? record.resolved : undefined;
+      return noted ?? carriesLocalAgentCredential(entry);
+    })
       || (installed !== null && [...installed].some(([name, entry]) => !recordedNames.has(name) && carriesLocalAgentCredential(entry)));
     if (credential) held.push(target);
   }

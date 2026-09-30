@@ -427,8 +427,10 @@ describe('doctor — MCP servers delivered on disk', () => {
       });
 
       it('has nothing to say of a file whose recorded server carries neither header nor env value', async () => {
-        await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira: { type: 'http', url: 'https://jira.example/mcp' } } });
-        await writeRecord({ name: 'jira', hash: 'h', resolved: false });
+        const jira = { type: 'http', url: 'https://jira.example/mcp' };
+        await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira } });
+        const { entryHash } = await import('../resources/mcp-format.js');
+        await writeRecord({ name: 'jira', hash: entryHash(jira), resolved: false });
 
         expect(await excludeCheck()).toBeUndefined();
       });

@@ -675,6 +675,32 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(Object.entries(sidecar.files)).toEqual([[expect.stringMatching(/\.mcp\.json$/), { tools: ['codebuddy'] }]]);
       expect(await fse.readFile(path.join(wsPath, '.mcp.json'), 'utf-8')).toContain('bmcp-test-token');
     });
+
+    it('still lists that config when an install replacing its entry with a bare command cannot write the file', async () => {
+      await install(9105, bearer);
+      await fse.writeFile(path.join(wsPath, '.git', 'info', 'exclude'), '');
+      await fse.remove(await workspaceFile('managed-mcp-files.json'));
+      const manifestFile = await workspaceFile('managed-mcp.json');
+      const manifest = await fse.readJson(manifestFile) as Record<string, Array<{ name: string; hash: string }>>;
+      manifest['codebuddy:project'] = manifest['codebuddy:project'].map(({ name, hash }) => ({ name, hash }));
+      await fse.writeJson(manifestFile, manifest);
+      // The config's directory refuses the write: the old entry, and its token, stay.
+      await fse.chmod(wsPath, 0o555);
+      let acks;
+      try {
+        acks = await install(9106, { transport: 'stdio', command: 'clawpro-mcp' });
+      } finally {
+        await fse.chmod(wsPath, 0o755);
+      }
+
+      expect(acks[0].status).toBe('failed');
+      expect(await fse.readFile(path.join(wsPath, '.mcp.json'), 'utf-8')).toContain('bmcp-test-token');
+
+      await runResponse({ cmds: [] }, 'codebuddy', wsPath);
+
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toMatch(/^\/\.mcp\.json$/m);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toBe('');
+    });
   });
 
   // ─── install_mcp: 缺少 mcp_config 时失败 ──────────────────────────
