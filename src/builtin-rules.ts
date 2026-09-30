@@ -124,7 +124,18 @@ export async function deployBuiltinRules(
 
 // ─── Rule content ──────────────────────────────────────
 
-const TEAMAI_RECALL_RULE_CONTENT = `# Team Knowledge Recall (teamai)
+const TEAMAI_RECALL_RULE_HEADING = '# Team Knowledge Recall (teamai)';
+
+/**
+ * True when `content` is the `teamai-recall` rule as some teamai version
+ * deployed it. Every version opens with the same heading, and each pull
+ * rewrote the file whole, so a member's edit never survived one.
+ */
+export function isDeployedRecallRule(content: string): boolean {
+    return content.startsWith(`${TEAMAI_RECALL_RULE_HEADING}\n`);
+}
+
+const TEAMAI_RECALL_RULE_CONTENT = `${TEAMAI_RECALL_RULE_HEADING}
 
 > **Self-exemption (must read first):** If you ARE the \`teamai-recall\` subagent yourself, this rule does NOT apply to you — do not invoke \`teamai-recall\` (or any recall) again. Proceed directly to performing the knowledge search that is your task. This prevents infinite subagent recursion in tools (e.g. Cursor) whose always-apply rules leak into subagent sessions.
 >

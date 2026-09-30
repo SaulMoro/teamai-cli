@@ -40,6 +40,18 @@ export function inlinesRulesIntoInstructions(tool: string): boolean {
 }
 
 /**
+ * The rules directory each tool that now inlines rules into its instructions
+ * file received `<rule>.md` copies in before #938, relative to the tool's base
+ * dir in either scope. The tool never read them. It keeps its own `*.rules`
+ * exec-policy files there, so only teamai's copies may be removed from it.
+ */
+export const LEGACY_RULE_DIRS: Readonly<Record<string, string>> = {
+  codex: '.codex/rules',
+  'codex-internal': '.codex-internal/rules',
+  tcodex: '.tcodex/rules',
+};
+
+/**
  * Every extension a rule file may carry on disk, newest layout first.
  *
  * Writers use `ruleFileExtensionForTool`; scanners and deleters use this list so
