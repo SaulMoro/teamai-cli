@@ -74,12 +74,12 @@ function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
 /**
  * Record what the recall log needs from one PostToolUse: a claim for each run
  * id a shell call printed, noting whether its command ran `teamai recall`
- * itself; evidence for each file under the knowledge roots it read, unless it
- * failed; nothing otherwise. Whether a claim or a read of unknown status
+ * itself; evidence for each file under the knowledge roots it read, or whose
+ * lines a search showed, unless it failed; nothing otherwise. Whether a claim or a read of unknown status
  * counts is the reducer's call. The command itself is never recorded.
  */
 export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
-  const call = classifyToolCall(stdin);
+  const call = classifyToolCall(stdin, tool);
 
   if (call.command !== undefined && call.output !== undefined) {
     const runs = [...new Set([...call.output.matchAll(RUN_ID_PATTERN)].map((m) => m[1]))];
@@ -93,7 +93,8 @@ export async function recordToolCall(stdin: Record<string, unknown>, tool: strin
     }
   }
 
-  if (call.category !== 'read' || call.status === 'failure') return;
+  // A search's paths are the files its output showed lines of; the reducer keeps those a run printed.
+  if ((call.category !== 'read' && call.category !== 'search') || call.status === 'failure') return;
   let roots: string[] | undefined;
   for (const file of call.paths) {
     if (path.isAbsolute(file)) {

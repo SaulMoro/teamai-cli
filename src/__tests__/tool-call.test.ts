@@ -90,6 +90,79 @@ describe('classifyToolCall', () => {
     expect(shell('cat doc.md', { stdout: '', exitCode: 1 })).toMatchObject({ status: 'failure' });
   });
 
+  it.each<[string, string, string[]]>([
+    ['grep -rn timeout learnings', 'learnings/a.md:3:x\nlearnings/sub/b.md:9:y', ['learnings/a.md', 'learnings/sub/b.md']],
+    ['grep -e timeout -e pool learnings', 'learnings/a.md:x', ['learnings/a.md']],
+    ['grep -A 2 timeout learnings', 'learnings/a.md:3:x\nlearnings/a.md-4-y', ['learnings/a.md']],
+    ['grep --include=*.md -rn timeout .', './learnings/a.md:3:x', ['learnings/a.md']],
+    ['egrep -rn "a|b" learnings 2>/dev/null', 'learnings/a.md:1:a', ['learnings/a.md']],
+    ['rg -n timeout', 'learnings/a.md:3:x', ['learnings/a.md']],
+    ['rg -g "*.md" -t md timeout learnings', 'learnings/a.md:x', ['learnings/a.md']],
+    ['rg -L timeout learnings', 'learnings/a.md:x', ['learnings/a.md']],
+    ['rg -n timeout learnings/*.md', 'learnings/a.md:3:x', ['learnings/a.md']],
+    ['git grep -n timeout', 'learnings/a.md:3:x', ['learnings/a.md']],
+    ['ag timeout learnings', 'learnings/a.md:3:x', ['learnings/a.md']],
+    ['ack --match timeout learnings', 'learnings/a.md:3:x', ['learnings/a.md']],
+    ['grep -n timeout learnings/a.md', '3:x', ['learnings/a.md']],
+    ['grep -H timeout learnings/a.md', 'learnings/a.md:x', ['learnings/a.md']],
+    ['grep -rn timeout learnings', 'Found 2 matches\nlearnings/a.md:', ['learnings/a.md']],
+  ])('%j with output %j shows lines of %j', (command, stdout, files) => {
+    expect(shell(command, { stdout })).toMatchObject({ category: 'search', paths: files.map(at), simple: true });
+  });
+
+  // The hook reads no file, so it cannot tell a lone file operand from a directory: it records the operand,
+  // which only ever equals a doc's path when it is that doc.
+  it.each<[string, string]>([
+    ['grep -rn timeout learnings', 'learnings/a.md\nlearnings/b.md'],
+    ['grep -rn timeout learnings', 'other/a.md:3:x'],
+    ['grep timeout learnings/a.md', '../b.md: see b'],
+  ])('%j with output %j shows the lines of its operand only', (command, stdout) => {
+    expect(shell(command, { stdout }).paths).toEqual([at(command.split(' ').pop()!)]);
+  });
+
+  it.each<[string, string]>([
+    ['grep -rn timeout learnings', ''],
+    ['grep -rn timeout learnings other', 'learnings/a.md\nthird/a.md:3:x'],
+    ['grep -c timeout learnings/a.md', '3'],
+    ['grep -rnc timeout learnings', 'learnings/a.md:3'],
+    ['rg --count-matches timeout learnings', 'learnings/a.md:3'],
+    ['git grep --count timeout', 'learnings/a.md:3'],
+    ['grep -rn timeout learnings/a.md | wc -l', '3'],
+    ['grep -rn timeout learnings > hits.txt', 'learnings/a.md:3:x'],
+    ['grep -rn timeout learnings && echo ok', 'learnings/a.md:3:x'],
+  ])('%j with output %j shows no file\'s lines', (command, stdout) => {
+    expect(shell(command, { stdout }).paths).toEqual([]);
+  });
+
+  it.each([
+    'grep -l timeout learnings', 'grep -rL timeout learnings', 'grep --files-with-matches timeout learnings',
+    'rg -l timeout', 'rg --files learnings', 'git grep --name-only timeout', 'ag -g md learnings', 'ack -f learnings',
+    'ls learnings', 'ls -la learnings/a.md', 'find learnings -name "*.md"', 'fd md learnings', 'tree learnings',
+    'git ls-files learnings',
+  ])('%j is a listing', (command) => {
+    expect(shell(command, { stdout: 'learnings/a.md:3:x' })).toMatchObject({ category: 'list', paths: [] });
+  });
+
+  it('a search tool shows the lines of the files its content names, never of its filenames list', () => {
+    const grep = (input: Record<string, unknown>, response: unknown, agent?: string): ReturnType<typeof classifyToolCall> =>
+      classifyToolCall({ tool_name: 'Grep', tool_input: { pattern: 'x', ...input }, tool_response: response, cwd: CWD }, agent);
+    expect(grep({ path: 'learnings' }, { filenames: [at('learnings/a.md')] })).toMatchObject({ category: 'list', paths: [] });
+    expect(grep({ path: 'learnings', output_mode: 'content' }, { content: `${at('learnings/a.md')}:3:x` }))
+      .toMatchObject({ category: 'search', paths: [at('learnings/a.md')] });
+    expect(grep({ output_mode: 'content' }, { content: 'learnings/a.md:3:x' })).toMatchObject({ paths: [at('learnings/a.md')] });
+    expect(grep({ path: 'learnings', output_mode: 'count' }, { content: `${at('learnings/a.md')}:3` })).toMatchObject({ paths: [] });
+    expect(classifyToolCall({ tool_name: 'search_content', tool_input: { pattern: 'x', path: at('learnings/a.md') }, tool_response: {} }))
+      .toMatchObject({ category: 'list' });
+    // OpenCode: an absolute `path:` header, then `  Line N: text`.
+    expect(classifyToolCall({ tool_name: 'grep', tool_input: { pattern: 'x' }, tool_response: `Found 1 matches\n${at('learnings/a.md')}:\n  Line 3: x`, cwd: CWD }))
+      .toMatchObject({ category: 'search', paths: [at('learnings/a.md')], status: 'unknown', simple: true });
+    // OMP's markdown tree and Cursor's Grep: no evidence yet.
+    for (const agent of ['omp', 'cursor']) {
+      expect(classifyToolCall({ tool_name: agent === 'omp' ? 'grep' : 'Grep', tool_input: { pattern: 'x', path: at('learnings/a.md'), output_mode: 'content' }, tool_response: '3:x', cwd: CWD }, agent))
+        .toMatchObject({ category: 'search', paths: [] });
+    }
+  });
+
   it('an unknown tool name is unknown, whatever its input names', () => {
     expect(classifyToolCall({ tool_name: 'OpenDocument', tool_input: { file_path: '/w/doc.md', command: 'cat doc.md' }, tool_response: {} }))
       .toEqual({ category: 'unknown', paths: [], status: 'success', simple: false });

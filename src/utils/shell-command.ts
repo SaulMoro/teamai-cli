@@ -2,10 +2,11 @@
  * The one shell command-line parser (#884): an agent's shell call split into
  * simple commands, and what the call did with files.
  *
- * Only a call that surely ran its reader is a read: one simple command, or a
- * pipeline that starts with it. Any `;`, `&&`, `||` or `&` means the read may
- * never have run, so the call is no read. The files are the reader's file
- * operands only: never a flag's value, a sed script or a redirect target.
+ * Only a call that surely ran its reader or search is one: one simple command,
+ * or a pipeline that starts with it. Any `;`, `&&`, `||` or `&` means it may
+ * never have run, so the call is neither. The files are the command's file
+ * operands only: never a flag's value, a sed script, a search pattern or a
+ * redirect target.
  */
 
 /** An operator that ends a simple command. A newline is a `;`. */
@@ -26,12 +27,18 @@ export interface SimpleCommand {
   op: ShellOperator | null;
 }
 
-/** What a shell call did with files. Ticket 06 adds `search` and `list`, ticket 07 PowerShell's readers. */
+/** What a shell call did with files. Ticket 07 adds PowerShell's readers. */
 export interface ShellClassification {
-  category: 'read' | 'shell';
-  /** The files it read, as written in the command. */
+  category: 'read' | 'search' | 'list' | 'shell';
+  /**
+   * As written in the command. A read: the files it read. A search: where it
+   * searched, the part of each operand before any glob (`.` for the cwd), or
+   * none when it prints counts, not lines.
+   */
   paths: string[];
-  /** True when the reader is the call's only command, not the head of a pipeline. */
+  /** A search's only file or directory operand, when it has one with nothing to expand. */
+  target?: string;
+  /** True when the reader or search is the call's only command, not the head of a pipeline. */
   simple: boolean;
 }
 
@@ -193,31 +200,157 @@ const READERS: Record<string, (args: string[]) => string[]> = {
   sed: sedPrintFiles,
 };
 
+/**
+ * A search verb's flags, each written `-x` or `--name`: those that take a
+ * value, those whose value is the pattern (so no operand is), and those that
+ * make it print file names or counts instead of lines.
+ */
+interface SearchVerb {
+  values: readonly string[];
+  patterns: readonly string[];
+  lists: readonly string[];
+  counts: readonly string[];
+}
+
+const GREP: SearchVerb = {
+  values: ['-e', '-f', '-m', '-A', '-B', '-C', '-d', '-D', '--regexp', '--file', '--max-count', '--after-context',
+    '--before-context', '--context', '--directories', '--devices', '--include', '--exclude', '--exclude-dir',
+    '--exclude-from', '--label', '--binary-files', '--group-separator'],
+  patterns: ['-e', '-f', '--regexp', '--file'],
+  lists: ['-l', '-L', '--files-with-matches', '--files-without-match'],
+  counts: ['-c', '--count'],
+};
+
+/**
+ * The search verbs, each with its flags; `git grep` is `git-grep`. Ported from
+ * the same Codex classification as the readers.
+ */
+const SEARCHERS: Record<string, SearchVerb> = {
+  grep: GREP,
+  egrep: GREP,
+  fgrep: GREP,
+  'git-grep': {
+    values: ['-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--after-context',
+      '--before-context', '--context', '--max-depth', '--threads'],
+    patterns: GREP.patterns,
+    lists: [...GREP.lists, '-O', '--name-only', '--open-files-in-pager'],
+    counts: GREP.counts,
+  },
+  rg: {
+    values: ['-e', '-f', '-g', '-t', '-T', '-m', '-A', '-B', '-C', '-M', '-j', '-r', '-E', '-d', '--regexp', '--file',
+      '--glob', '--iglob', '--type', '--type-not', '--type-add', '--type-clear', '--max-count', '--after-context',
+      '--before-context', '--context', '--max-columns', '--threads', '--replace', '--encoding', '--max-depth',
+      '--max-filesize', '--sort', '--sortr', '--pre', '--pre-glob', '--ignore-file', '--context-separator',
+      '--path-separator', '--field-match-separator', '--field-context-separator', '--colors', '--color', '--engine'],
+    patterns: GREP.patterns,
+    // rg's -L follows symlinks.
+    lists: ['-l', '--files', '--files-with-matches', '--files-without-match', '--type-list'],
+    counts: ['-c', '--count', '--count-matches'],
+  },
+  ag: {
+    values: ['-A', '-B', '-C', '-G', '-g', '-m', '-p', '--after', '--before', '--context', '--file-search-regex',
+      '--max-count', '--ignore', '--ignore-dir', '--depth', '--path-to-ignore', '--pager', '--workers'],
+    patterns: [],
+    lists: ['-g', '-l', '-L', '--files-with-matches', '--files-without-matches', '--filename-pattern', '--list-file-types'],
+    counts: ['-c', '--count'],
+  },
+  ack: {
+    values: ['-A', '-B', '-C', '-g', '-m', '--after-context', '--before-context', '--context', '--max-count', '--match',
+      '--type', '--ignore-dir', '--output', '--pager'],
+    patterns: ['--match'],
+    lists: ['-f', '-g', '-l', '-L', '--files-with-matches', '--files-without-matches'],
+    counts: ['-c', '--count'],
+  },
+};
+
+/** The list verbs: they show paths, never a file's lines. `git ls-files` is `git-ls-files`. */
+const LISTERS = new Set(['ls', 'find', 'fd', 'tree', 'git-ls-files']);
+
 /** A word the shell would expand, so it names no file as written. */
 const EXPANDS = /[$`*?[\]{}()]/;
 
+/** What a search prints, from its flags, and its file or directory operands. */
+function searchArgs(args: string[], verb: SearchVerb): { shows: 'lines' | 'paths' | 'counts'; operands: string[] } {
+  let shows: 'lines' | 'paths' | 'counts' = 'lines';
+  let pattern = false;
+  const words: string[] = [];
+  const flag = (f: string): void => {
+    if (verb.lists.includes(f)) shows = 'paths';
+    else if (verb.counts.includes(f) && shows === 'lines') shows = 'counts';
+    if (verb.patterns.includes(f)) pattern = true;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') {
+      words.push(...args.slice(i + 1));
+      break;
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq === -1 ? a : a.slice(0, eq);
+      flag(name);
+      if (eq === -1 && verb.values.includes(name)) i++;
+    } else if (a.startsWith('-') && a.length > 1) {
+      // A cluster of short flags, such as `-rn`: one that takes a value takes the rest of it, or the next word.
+      for (let j = 1; j < a.length; j++) {
+        const f = `-${a[j]}`;
+        flag(f);
+        if (verb.values.includes(f)) {
+          if (j === a.length - 1) i++;
+          break;
+        }
+      }
+    } else {
+      words.push(a);
+    }
+  }
+  return { shows, operands: pattern ? words : words.slice(1) };
+}
+
+/** Where a search operand points: its part before the first segment with a glob or a variable. */
+function searchRoot(operand: string): string {
+  const segments = operand.split('/');
+  const glob = segments.findIndex((s) => EXPANDS.test(s));
+  if (glob === -1) return operand;
+  return segments.slice(0, glob).join('/') || (operand.startsWith('/') ? '/' : '.');
+}
+
+const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false };
+
 /**
- * The files one simple command reads, or none when it is no reader. Only a
- * stderr redirect (`2>/dev/null`, `2>&1`) is allowed: with its input or
- * output redirected, what the agent saw is not the file.
+ * What one simple command did with files. Only a stderr redirect
+ * (`2>/dev/null`, `2>&1`) is allowed: with its input or output redirected,
+ * what the agent saw is not the file.
  */
-function readerFiles(command: SimpleCommand): string[] {
-  const [verb, ...args] = commandWords(command.words);
-  const read = verb === undefined ? undefined : READERS[verb.split('/').pop()!];
-  if (!read || !command.redirects.every((r) => r.op.startsWith('2>'))) return [];
-  const files = read(args);
-  return files.some((f) => EXPANDS.test(f)) ? [] : files;
+function classifySimple(command: SimpleCommand, simple: boolean): ShellClassification {
+  const [verb, ...rest] = commandWords(command.words);
+  if (verb === undefined || !command.redirects.every((r) => r.op.startsWith('2>'))) return SHELL;
+  const base = verb.split('/').pop()!;
+  const name = base === 'git' && rest.length > 0 ? `git-${rest[0]}` : base;
+  const args = name === base ? rest : rest.slice(1);
+
+  const read = READERS[name];
+  if (read) {
+    const files = read(args);
+    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple } : SHELL;
+  }
+  if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
+  const search = SEARCHERS[name];
+  if (!search) return SHELL;
+  const { shows, operands: roots } = searchArgs(args, search);
+  if (shows === 'paths') return { category: 'list', paths: [], simple };
+  if (shows === 'counts') return { category: 'search', paths: [], simple };
+  const target = roots.length === 1 && !EXPANDS.test(roots[0]) ? roots[0] : undefined;
+  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple };
 }
 
 /**
- * What a shell command line did with files: a read when it is one reader
- * command, or a pipeline that starts with one; otherwise just a shell call.
+ * What a shell command line did with files: a read, a search or a listing
+ * when it is one such command, or a pipeline that starts with one; otherwise
+ * just a shell call.
  */
 export function classifyShellCommand(command: string): ShellClassification {
   const commands = simpleCommands(command);
   const pipeline = commands.every((c, i) => c.op === (i === commands.length - 1 ? null : '|'));
-  const paths = pipeline && commands.length > 0 ? readerFiles(commands[0]) : [];
-  return paths.length > 0
-    ? { category: 'read', paths, simple: commands.length === 1 }
-    : { category: 'shell', paths: [], simple: false };
+  return pipeline && commands.length > 0 ? classifySimple(commands[0], commands.length === 1) : SHELL;
 }

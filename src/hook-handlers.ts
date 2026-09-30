@@ -242,9 +242,9 @@ const trackHandler: HookHandler = {
 
 /**
  * PostToolUse: record a recall claim or a read of team knowledge in the recall
- * log, for the reducer votes-sync runs at Stop (#884). One append per run id
- * or doc read, and never a read of the log, so it stays inside the foreground
- * budget.
+ * log, for the reducer votes-sync runs at Stop (#884). One append per run id,
+ * doc read or file a search showed lines of, and never a read of the log or
+ * of a file, so it stays inside the foreground budget.
  */
 const recallAttributionHandler: HookHandler = {
   name: 'recall-attribution',

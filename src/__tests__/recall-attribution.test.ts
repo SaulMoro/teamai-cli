@@ -701,14 +701,157 @@ const ROWS: Row[] = [
     },
     project: {},
   },
+  {
+    name: '06: grep -rn timeout learnings/ with output line learnings/redis-timeout.md:12: → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`grep -rn timeout '${h.rel(path.dirname(files[0]))}'`, `${h.rel(files[0])}:12:Raise the pool size.\n`);
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: Codex rg timeout <dir> with a path:text line (no -n) → +1',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`rg timeout ${h.rel(path.dirname(files[0]))}`, `${h.rel(files[0])}:tags: [redis, timeout]\n`);
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: grep timeout <doc> (a single file operand prints no path prefix) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`grep timeout '${h.rel(files[0])}'`, 'tags: [redis, timeout]\n');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: grep -l timeout learnings/, grep -l / rg --files / ls / find naming the doc → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      const dir = h.rel(path.dirname(files[0]));
+      const doc = h.rel(files[0]);
+      await h.shell(`grep -l timeout '${dir}'`, `${doc}\n`);
+      await h.shell(`grep -rl timeout '${doc}'`, `${doc}\n`);
+      await h.shell(`grep -L pool '${doc}'`, `${doc}\n`);
+      await h.shell(`rg --files '${doc}'`, `${doc}\n`);
+      await h.shell(`ls '${dir}'`, 'redis-timeout.md\nsetup.md\n');
+      await h.shell(`ls -l '${doc}'`, `-rw-r--r-- 1 me staff 120 Sep  1 09:00 ${doc}\n`);
+      await h.shell(`find '${dir}' -name '*.md'`, `${doc}\n`);
+      await h.shell(`git ls-files '${doc}'`, `${doc}\n`);
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: list tools (glob, list_dir, search_file, list_files) that name the doc → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      for (const name of ['glob', 'list_dir', 'search_file', 'list_files', 'LS']) {
+        await h.postToolUse(name, { pattern: '*.md', path: files[0] }, `${files[0]}\n`);
+      }
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: grep -c timeout learnings/redis-timeout.md, rg --count, and Grep count mode → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`grep -c timeout '${h.rel(files[0])}'`, '3\n');
+      await h.shell(`grep -rnc timeout '${h.rel(path.dirname(files[0]))}'`, `${h.rel(files[0])}:3\n`);
+      await h.shell(`rg --count timeout '${h.rel(path.dirname(files[0]))}'`, `${h.rel(files[0])}:3\n`);
+      await h.postToolUse('Grep', { pattern: 'timeout', path: files[0], output_mode: 'count' },
+        { mode: 'count', numFiles: 1, filenames: [], content: `${files[0]}:3`, numMatches: 3 });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: Grep tool with path = the doc, content mode, non-empty output → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'timeout', path: files[0], output_mode: 'content', '-n': true },
+        { mode: 'content', numFiles: 1, filenames: [], content: '5:tags: [redis, timeout]', numLines: 1 });
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: Grep tool with path = the doc, content mode, empty output → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'kubernetes', path: files[0], output_mode: 'content' },
+        { mode: 'content', numFiles: 0, filenames: [], content: '', numLines: 0 });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: Pi-style grep output relative to the searched dir (redis-timeout.md:12:) resolved against the input path → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('grep', { pattern: 'timeout', path: path.dirname(files[0]) },
+        'redis-timeout.md:5: tags: [redis, timeout]', h.root, undefined, undefined, 'pi');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: a doc that only links to redis-timeout.md in its text shows up in search output → 0 for redis-timeout',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      const dir = h.rel(path.dirname(files[0]));
+      const setup = h.rel(h.docs.setup);
+      await h.shell(`grep -rn redis '${dir}'`,
+        `${setup}:7:See [redis](redis-timeout.md): raise the pool\n${setup}:8:${h.rel(files[0])}: the fix\n`);
+      // One file operand: a line of its text that starts with the doc's path is no path prefix.
+      await h.shell(`grep redis '${setup}'`, `${h.rel(files[0])}: the fix\n`);
+      await h.postToolUse('Grep', { pattern: 'redis', path: h.docs.setup, output_mode: 'content' },
+        { mode: 'content', numFiles: 1, filenames: [], content: `${files[0]}: the fix`, numLines: 1 });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: structured {filenames[]} output (Grep\'s default files_with_matches mode) → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'timeout', path: files[0] }, { mode: 'files_with_matches', filenames: [files[0]], numFiles: 1 });
+      await h.postToolUse('Grep', { pattern: 'timeout', path: files[0] }, { filenames: [files[0]], numFiles: 1 });
+      await h.postToolUse('Grep', { pattern: 'timeout', path: files[0], output_mode: 'files_with_matches' }, { results: files[0], matchCount: 1 });
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: structured output whose content string has a <doc>: line → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'timeout', path: path.dirname(files[0]), output_mode: 'content' },
+        { mode: 'content', numFiles: 1, filenames: [], content: `${files[0]}:5:tags: [redis, timeout]`, numLines: 1 });
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '06: Qoder Grep {results, matchCount} in content mode with a <doc>: line → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('Grep', { pattern: 'timeout', path: path.dirname(files[0]), output_mode: 'content' },
+        { results: `${files[0]}:5:tags: [redis, timeout]`, matchCount: 1 }, h.root, undefined, undefined, 'qoder');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '06: ls learnings/ and grep -l timeout learnings/ → 0',
-  '06: grep -rn timeout learnings/ with output line learnings/redis-timeout.md:12: → +1',
-  '06: grep -c timeout learnings/redis-timeout.md → 0',
-  '07: Windows Get-Content -LiteralPath \'C:\\kb\\learnings\\redis-timeout.md\' → +1',
+  '07:Windows Get-Content -LiteralPath \'C:\\kb\\learnings\\redis-timeout.md\' → +1',
   '08: Copilot main agent recalls; view of the doc → +1',
   '08: Cursor recall subagent (its own conversation) with --caller reads the doc → 0',
   '09: OpenCode recall in a task child; the parent reads the doc; task link; Stop → +1 for the parent',
@@ -801,11 +944,12 @@ describe('recall attribution acceptance (#884)', () => {
     expect(files).toEqual([h.docs['redis-timeout']]);
     await h.read(files[0]);
     await h.shell(`sed -n '1,80p' '${h.rel(files[0])}'`, fs.readFileSync(files[0], 'utf-8'), { tool: 'codex' });
+    await h.shell(`grep -rn GREPMARK '${h.rel(path.dirname(files[0]))}'`, `${h.rel(files[0])}:12:Raise the pool size SNIPPETMARK.\n`);
     await h.stop();
 
     const raw = fs.readFileSync(recallLogPath(h.project), 'utf-8');
-    expect(raw.match(/"kind":"evidence"/g)).toHaveLength(2);
-    for (const secret of ['QUERYMARK', 'PROMPTMARK', 'SNIPPETMARK', 'Raise the pool size', 'Author:', 'teamai recall', 'sed -n', '1,80p']) {
+    expect(raw.match(/"kind":"evidence"/g)).toHaveLength(3);
+    for (const secret of ['QUERYMARK', 'PROMPTMARK', 'SNIPPETMARK', 'GREPMARK', 'Raise the pool size', 'Author:', 'teamai recall', 'sed -n', '1,80p', ':12:']) {
       expect(raw).not.toContain(secret);
     }
     if (process.platform !== 'win32') {

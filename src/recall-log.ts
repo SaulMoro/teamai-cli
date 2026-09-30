@@ -5,7 +5,7 @@
  *
  *   run       recall searched: the session from the environment, its caller and the docs it returned
  *   claim     the PostToolUse of a shell call that printed a run id: its actor, and whether it ran the recall itself
- *   evidence  a PostToolUse read of a file under the knowledge roots, by its actor: its path and status, never its command
+ *   evidence  a PostToolUse read of a file under the knowledge roots, or a search that showed its lines, by its actor: its path and status, never its command or output
  *   consumed  evidence that has been credited, so it never votes again
  *
  * It never holds a query, prompt, tool output or file content. It is local and
