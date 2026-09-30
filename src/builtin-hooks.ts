@@ -374,8 +374,11 @@ const SUBAGENT_STOP_SPEC: BuiltinHookSpec = {
  * Tools that fire SubagentStop with the parent's session id, so the recall
  * reducer can credit a read a subagent made after the session's last Stop
  * (#884): Claude Code, Codex, CodeBuddy and Qoder document it, and their
- * internal builds share the format. Codex ignores an event key it does not
- * know. Not WorkBuddy, whose shipped engine version is unverified; not Cursor
+ * internal builds share the format. The installed Codex 0.159 knows
+ * `SubagentStop`, and Codex main's `HookEventsToml` (codex-rs/config/src/
+ * hook_config.rs) has no `deny_unknown_fields`, so it skips an event key it
+ * does not know; how older hook-capable builds treat one is unverified (a
+ * hooks.json Codex cannot parse is dropped whole). Not WorkBuddy, whose shipped engine version is unverified; not Cursor
  * or Copilot, whose subagents run in sessions of their own that no hook links
  * to the parent; not ZCode, which has no such event and rejects the whole
  * hooks block on an unknown key.
