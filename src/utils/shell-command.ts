@@ -373,13 +373,15 @@ function classifySimple(command: SimpleCommand, simple: boolean): ShellClassific
   const name = base === 'git' && rest.length > 0 ? `git-${rest[0]}` : base;
   const args = name === base ? rest : rest.slice(1);
 
-  const read = READERS[name] ?? POWERSHELL_READERS[name.toLowerCase()];
+  // Own keys only: a verb like `constructor` must not hit Object.prototype.
+  const read = (Object.hasOwn(READERS, name) ? READERS[name] : undefined)
+    ?? (Object.hasOwn(POWERSHELL_READERS, name.toLowerCase()) ? POWERSHELL_READERS[name.toLowerCase()] : undefined);
   if (read) {
     const files = read(args);
     return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple } : SHELL;
   }
   if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
-  const search = SEARCHERS[name];
+  const search = Object.hasOwn(SEARCHERS, name) ? SEARCHERS[name] : undefined;
   if (!search) return SHELL;
   const { shows, operands: roots } = searchArgs(args, search);
   if (shows === 'paths') return { category: 'list', paths: [], simple };

@@ -631,6 +631,15 @@ const ROWS: Row[] = [
     project: { 'redis-timeout': 1 },
   },
   {
+    name: '05: Codex recall; constructor <doc> (an Object.prototype key, no reader verb) → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`constructor '${files[0]}'`, '');
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
     name: '05: Codex recall; learnings/redis-timeout.md relative to a cwd that holds no such doc → 0',
     trace: async (h) => {
       await h.codexRecall('redis timeout');
@@ -907,6 +916,16 @@ const ROWS: Row[] = [
       await h.windowsTeamRepo();
       await h.recall('redis timeout');
       await h.read('c:/kb/learnings/redis-timeout.md');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '07: Windows Read of C:\\KB\\Learnings\\Redis-Timeout.md (Windows paths ignore case) → +1',
+    trace: async (h) => {
+      await h.windowsTeamRepo();
+      await h.recall('redis timeout');
+      await h.read('C:\\KB\\Learnings\\Redis-Timeout.md');
       await h.stop();
     },
     project: { 'redis-timeout': 1 },

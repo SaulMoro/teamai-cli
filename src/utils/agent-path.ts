@@ -32,12 +32,13 @@ export function resolvePath(file: string, base?: string): string {
 
 /**
  * `p` in one form, for comparison only: `/` separators, a Git Bash drive
- * (`/c/…`) as its letter (`c:/…`), the drive letter in lowercase, `.` and
- * `..` collapsed, and no trailing separator.
+ * (`/c/…`) as its letter (`c:/…`), `.` and `..` collapsed, and no trailing
+ * separator. A drive-lettered path is lowercased whole, as Windows paths
+ * ignore case.
  */
 export function pathKey(p: string): string {
   const slashed = p.replace(/\\/g, '/').replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/');
-  const key = path.posix.normalize(slashed.replace(/^[A-Za-z]:/, (drive) => drive.toLowerCase()));
+  const key = path.posix.normalize(/^[A-Za-z]:/.test(slashed) ? slashed.toLowerCase() : slashed);
   return key.length > 1 && key.endsWith('/') && !/^[a-z]:\/$/.test(key) ? key.slice(0, -1) : key;
 }
 
