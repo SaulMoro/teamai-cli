@@ -1337,7 +1337,7 @@ The Recall feature is controlled by a two-tier configuration — admins set the 
 | Team default | `teamai.yaml` | `sharing.recall.enabled` | `true` / `false` (default `false`) |
 | User override | `~/.teamai/config.yaml` | `recallEnabled` | `true` / `false`, takes priority over the team default |
 | Environment variable | shell | `TEAMAI_RECALL_DISABLED=1` | Force-disables all recall hooks (emergency kill switch) |
-| Environment variable | shell | `TEAMAI_UPVOTE_JUDGE=1` | Opt-in: on a git-team session a background pass asks your local signed-in CLI whether the latest reply substantively used each recalled doc that left no other adoption trace, and upvotes that subset. Each doc is judged at most once per session (a doc recalled or used only on a later turn is still judged then); an inherited user-scope doc is not upvoted while a project is active. Off by default; runs detached (no added latency) and uses your CLI subscription |
+| Environment variable | shell | `TEAMAI_UPVOTE_JUDGE=1` | Opt-in: on a git-team session a background pass asks your local signed-in CLI whether the latest reply substantively used each recalled doc not yet upvoted for the session, and upvotes that subset. A doc already in the session's upvote ledger (the session opened it, or an earlier judge pass upvoted it) is never sent to the judge, so a doc is upvoted at most once per session; a doc the judge turned down is judged again on a later turn; an inherited user-scope doc is not upvoted while a project is active. Off by default; runs detached (no added latency) and uses your CLI subscription |
 
 ```bash
 teamai recall enable     # Enable recall, deploy the subagent and rules

@@ -17,7 +17,7 @@ const mockTakePendingHint = vi.fn().mockResolvedValue(null);
 // Default: no doc has been credited yet this session → every adopted doc is
 // "fresh" (returns its input). Tests that exercise the dedup override this.
 const mockJudgeAdoption = vi.fn().mockResolvedValue([]);
-const mockParseTranscriptForVotes = vi.fn().mockResolvedValue({ recalledDocIds: [], adoptedDocIds: [], finalAssistantText: '', recalledDocPaths: {} });
+const mockParseTranscriptForVotes = vi.fn().mockResolvedValue({ recalledDocIds: [], finalAssistantText: '', recalledDocPaths: {} });
 // incrementUpvoted now returns the docs it actually credited (or null on lock
 // failure). Default: echo the input docIds as the freshly-credited set.
 const mockIncrementUpvoted = vi.fn().mockImplementation(async (_p: string, docIds: string[]) => docIds);
@@ -176,7 +176,7 @@ const scope: LocalConfig = { repo: { localPath: '/tmp', remote: '' }, username: 
 describe('hook-handlers registry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockParseTranscriptForVotes.mockResolvedValue({ recalledDocIds: [], adoptedDocIds: [], finalAssistantText: '', recalledDocPaths: {}, recalledDocScopes: {} });
+    mockParseTranscriptForVotes.mockResolvedValue({ recalledDocIds: [], finalAssistantText: '', recalledDocPaths: {}, recalledDocScopes: {} });
     mockIncrementUpvoted.mockImplementation(async (_p: string, docIds: string[]) => docIds);
     mockCreditAdoptedDocs.mockResolvedValue({ credited: [], recalled: 0 });
     mockJudgeAdoption.mockResolvedValue([]);
@@ -936,7 +936,7 @@ describe('hook-handlers registry', () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
     // Recalled two docs; neither opened → both go to the judge.
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['doc-a', 'doc-b'], adoptedDocIds: [],
+      recalledDocIds: ['doc-a', 'doc-b'],
       finalAssistantText: 'I applied doc-a here.',
       recalledDocPaths: { 'doc-a': '/l/doc-a.md', 'doc-b': '/l/doc-b.md' },
       recalledDocScopes: {},
@@ -964,12 +964,13 @@ describe('hook-handlers registry', () => {
 
   it('votes-judge does NOT re-judge docs already credited by tool-use', async () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
-    // doc-a already adopted via tool-use → only doc-b is uncredited.
+    // doc-a already upvoted via tool-use (in the session ledger) → only doc-b is uncredited.
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['doc-a', 'doc-b'], adoptedDocIds: ['doc-a'],
+      recalledDocIds: ['doc-a', 'doc-b'],
       finalAssistantText: 'used something', recalledDocPaths: { 'doc-b': '/l/doc-b.md' },
       recalledDocScopes: {},
     });
+    voteMocks.creditedDocIdsForSession.mockResolvedValueOnce(new Set(['doc-a']));
     mockJudgeAdoption.mockResolvedValue([]);
 
     const registry = buildHandlerRegistry();
@@ -1034,7 +1035,7 @@ describe('hook-handlers registry', () => {
     async function judgeRoots(config: LocalConfig): Promise<string[]> {
       process.env.TEAMAI_UPVOTE_JUDGE = '1';
       mockParseTranscriptForVotes.mockResolvedValue({
-        recalledDocIds: ['doc-a'], adoptedDocIds: [], finalAssistantText: 'used doc-a',
+        recalledDocIds: ['doc-a'], finalAssistantText: 'used doc-a',
         recalledDocPaths: { 'doc-a': '/l/doc-a.md' }, recalledDocScopes: {},
       });
       const registry = buildHandlerRegistry();
@@ -1085,7 +1086,7 @@ describe('hook-handlers registry', () => {
     // is no per-session marker, so doc-a is re-sent to the judge along with
     // doc-b. Only the adopted doc lands in the ledger.
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['doc-a', 'doc-b'], adoptedDocIds: [],
+      recalledDocIds: ['doc-a', 'doc-b'],
       finalAssistantText: 'final reply using doc-b', recalledDocPaths: { 'doc-a': '/l/doc-a.md', 'doc-b': '/l/doc-b.md' },
       recalledDocScopes: {},
     });
@@ -1106,7 +1107,7 @@ describe('hook-handlers registry', () => {
   it('votes-judge with an empty verdict upvotes nothing (ledger-only: no marker, no crash residue)', async () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['doc-a'], adoptedDocIds: [],
+      recalledDocIds: ['doc-a'],
       finalAssistantText: 'x', recalledDocPaths: { 'doc-a': '/l/doc-a.md' }, recalledDocScopes: {},
     });
     // Judge returns no adoption (e.g. CLI missing → soft-fails to []) — nothing
@@ -1129,7 +1130,7 @@ describe('hook-handlers registry', () => {
   it('votes-judge SKIPS a doc already in the session upvote ledger (no CLI call, keeps cost bounded)', async () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['doc-a'], adoptedDocIds: [],
+      recalledDocIds: ['doc-a'],
       finalAssistantText: 'used doc-a', recalledDocPaths: { 'doc-a': '/l/doc-a.md' }, recalledDocScopes: {},
     });
     // The foreground pass already upvoted doc-a this session (in the shared ledger).
@@ -1149,7 +1150,7 @@ describe('hook-handlers registry', () => {
   it('votes-judge does NOT upvote an inherited USER-scope doc while a PROJECT is active (#2)', async () => {
     process.env.TEAMAI_UPVOTE_JUDGE = '1';
     mockParseTranscriptForVotes.mockResolvedValue({
-      recalledDocIds: ['proj-doc', 'user-doc'], adoptedDocIds: [],
+      recalledDocIds: ['proj-doc', 'user-doc'],
       finalAssistantText: 'used both', recalledDocPaths: { 'proj-doc': '/l/proj-doc.md', 'user-doc': '/l/user-doc.md' },
       recalledDocScopes: { 'proj-doc': 'project', 'user-doc': 'user' },
     });

@@ -2,7 +2,7 @@
 /**
  * End-to-end data flow verification for the Phase 3 + Phase 4 pipeline.
  *
- * Simulates: recall → incrementRecalled → Stop hook transcript parse →
+ * Simulates: recall → incrementRecalled → Stop hook adoption →
  * incrementUpvoted → syncVotesToTeam → buildIndex (confidence + hotness) →
  * search (cold penalty applied)
  */
@@ -14,7 +14,6 @@ import YAML from 'yaml';
 import matter from 'gray-matter';
 
 import { incrementRecalled, incrementUpvoted, syncVotesToTeam, loadUserVotes } from '../votes.js';
-import { parseTranscriptForVotes } from '../transcript-parser.js';
 import { buildIndex, loadIndex, search } from '../utils/search-index.js';
 import { computeAllConfidence, writeBackConfidence } from '../maintenance/confidence.js';
 import { findPruneCandidates } from '../maintenance/prune.js';
@@ -66,39 +65,8 @@ describe('Phase 3+4 end-to-end data flow', () => {
     expect(afterRecall.votes['outdated-pattern'].recalled_count).toBe(1);
     expect(afterRecall.deltas['api-retry'].recalled_delta).toBe(3);
 
-    // ─── Step 2: Simulate Stop hook (transcript parse → incrementUpvoted) ───
-    // Adoption is captured from tool-use evidence: the agent opens api-retry's
-    // file via Read, with no self-declaration anywhere.
-    const transcriptPath = path.join(tmpDir, 'transcript.jsonl');
-    const transcriptLines = [
-      {
-        type: 'assistant',
-        message: {
-          content: [{
-            type: 'text',
-            text: '--- [teamai:recall:start] ---\nFile: ' + path.join(learningsDir, 'api-retry.md') +
-              '\nFile: ' + path.join(learningsDir, 'outdated-pattern.md') + '\n--- [teamai:recall:end] ---',
-          }],
-        },
-      },
-      {
-        type: 'assistant',
-        message: {
-          content: [{
-            type: 'tool_use',
-            name: 'Read',
-            input: { file_path: path.join(learningsDir, 'api-retry.md') },
-          }],
-        },
-      },
-    ];
-    fs.writeFileSync(transcriptPath, transcriptLines.map((l) => JSON.stringify(l)).join('\n') + '\n');
-
-    const voteData = await parseTranscriptForVotes(transcriptPath);
-    expect(voteData.adoptedDocIds).toContain('api-retry');
-    expect(voteData.adoptedDocIds).not.toContain('outdated-pattern');
-
-    await incrementUpvoted(localVotePath, voteData.adoptedDocIds);
+    // ─── Step 2: Stop credits the adopted doc (the recall-attribution tests drive how) ───
+    await incrementUpvoted(localVotePath, ['api-retry']);
 
     // Verify: api-retry now has upvoted_count=1
     const afterUpvote = await loadUserVotes(localVotePath);
@@ -153,57 +121,6 @@ describe('Phase 3+4 end-to-end data flow', () => {
     // api-retry should rank higher (more votes + higher hotness)
     expect(results[0].entry.filename).toBe('api-retry.md');
     expect(results[0].score).toBeGreaterThan(results[1].score);
-  });
-
-  it('tool-use adoption drives upvotes with NO self-declaration (issue #723)', async () => {
-    const learningsDir = path.join(tmpDir, 'learnings');
-    const votesDir = path.join(tmpDir, 'votes');
-    fs.mkdirSync(learningsDir, { recursive: true });
-    fs.mkdirSync(votesDir, { recursive: true });
-
-    const localVotePath = path.join(votesDir, 'jeff.yaml');
-    // Two docs recalled this session.
-    await incrementRecalled(localVotePath, ['api-retry', 'outdated-pattern']);
-
-    // Transcript: recall region injects both candidates, then the agent opens
-    // ONLY api-retry's file via Read. Crucially, there is NO referenced-doc-ids
-    // declaration anywhere — the structural failure mode from #723.
-    const transcriptPath = path.join(tmpDir, 'transcript.jsonl');
-    const lines = [
-      {
-        type: 'assistant',
-        message: {
-          content: [{
-            type: 'text',
-            text: '--- [teamai:recall:start] ---\nFile: ' + path.join(learningsDir, 'api-retry.md') +
-              '\nFile: ' + path.join(learningsDir, 'outdated-pattern.md') + '\n--- [teamai:recall:end] ---',
-          }],
-        },
-      },
-      {
-        type: 'assistant',
-        message: {
-          content: [{
-            type: 'tool_use',
-            name: 'Read',
-            input: { file_path: path.join(learningsDir, 'api-retry.md') },
-          }],
-        },
-      },
-    ];
-    fs.writeFileSync(transcriptPath, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
-
-    const voteData = await parseTranscriptForVotes(transcriptPath);
-    // No self-declaration, yet adoption is captured from the Read tool call.
-    expect(voteData.adoptedDocIds).toEqual(['api-retry']);
-
-    // Upvote is driven purely by tool-use adoption evidence.
-    await incrementUpvoted(localVotePath, voteData.adoptedDocIds);
-
-    const after = await loadUserVotes(localVotePath);
-    expect(after.votes['api-retry'].upvoted_count).toBe(1);
-    // The recalled-but-unopened doc gets no upvote.
-    expect(after.votes['outdated-pattern'].upvoted_count).toBe(0);
   });
 
   it('confidence writeback updates frontmatter', async () => {

@@ -519,8 +519,8 @@ const votesSyncHandler: HookHandler = {
  * the subagent's summary as text, so the main agent often adopts a doc WITHOUT
  * opening it — leaving no tool-use trace. This detached pass asks the local
  * signed-in CLI whether the latest reply substantively used each recalled doc,
- * then upvotes the subset the foreground pass did NOT already credit (no double
- * counting).
+ * then upvotes the subset. Docs already in the session's upvote ledger are
+ * never sent to it, so it and the foreground pass never double-count (#884).
  *
  * Properties:
  *   - background: true → runs detached, never blocks the host Stop (UX ~0s).
@@ -528,9 +528,9 @@ const votesSyncHandler: HookHandler = {
  *   - Opt-in via TEAMAI_UPVOTE_JUDGE=1 so default behavior is unchanged; a
  *     reviewer can decide whether to enable it by default after evaluating cost.
  *   - Judgement gated to recalled doc-ids; fails soft (no upvote on any error).
- *   - Each recalled doc is judged at most once per session (per-doc judged
- *     record, not an exclusive claim); later turns still judge NEW docs, and a
- *     killed run records nothing so the next Stop retries (crash-safe).
+ *   - Each recalled doc is upvoted at most once per session (the ledger); a
+ *     doc the judge rejected is judged again on a later Stop, and a killed
+ *     run records nothing so the next Stop retries (crash-safe).
  */
 const votesJudgeHandler: HookHandler = {
   name: 'votes-judge',
@@ -554,19 +554,9 @@ const votesJudgeHandler: HookHandler = {
       const voteData = await parseTranscriptForVotes(transcriptPath);
       if (voteData.recalledDocIds.length === 0) return null;
 
-      // Only judge docs the foreground pass did NOT already credit — i.e. those
-      // with no tool-use evidence (the agent adopted them without opening their
-      // file). This avoids double counting the same adoption.
+      // The session's upvote ledger holds every doc the hook path (or an earlier
+      // judge pass) upvoted for it: those are not judged again (#884).
       const recalledSet = new Set(voteData.recalledDocIds);
-      const alreadyCredited = new Set<string>(voteData.adoptedDocIds);
-
-      // Resolve config + votes path up front so we can also exclude docs the
-      // session already UPVOTED (via the shared in-file ledger). Without this,
-      // a doc the foreground pass credited on a later turn would still enter
-      // toJudge and, because the provisional claim is released whenever the
-      // increment dedups to nothing, could re-trigger a local-CLI judge call on
-      // every subsequent Stop (issue #723 review). Filtering here keeps the cost
-      // at ~one CLI call per session in the steady state.
       const { getVotesDir, usesBranchWorktree } = await import('./types.js');
       const votesDir = getVotesDir(localConfig);
       const votePath = path.join(votesDir, `${localConfig.username}.yaml`);
@@ -579,8 +569,7 @@ const votesJudgeHandler: HookHandler = {
       const scopeEligible = new Set(
         eligibleUpvotes(voteData.recalledDocIds, voteData.recalledDocScopes, localConfig.scope),
       );
-      // Dedup is ledger-only now: a doc credited by the foreground pass, by this
-      // judge's tool-use evidence, or already in the shared per-session upvote
+      // Dedup is ledger-only: a doc already in the shared per-session upvote
       // ledger is never sent to the judge again. A recalled doc that was NOT
       // adopted is re-judged on a later Stop (the judge is opt-in, so this cost
       // is acceptable). There is no per-session marker to clean up, so a killed
@@ -588,7 +577,7 @@ const votesJudgeHandler: HookHandler = {
       // and a positive verdict only lands once incrementUpvoted succeeds
       // atomically (sessionId-scoped) — preventing any double credit.
       const toJudge = voteData.recalledDocIds.filter(
-        (id) => scopeEligible.has(id) && !alreadyCredited.has(id) && !ledgerCredited.has(id),
+        (id) => scopeEligible.has(id) && !ledgerCredited.has(id),
       );
       if (toJudge.length === 0) return null;
 

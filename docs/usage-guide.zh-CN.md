@@ -1217,7 +1217,7 @@ Recall 功能通过两级配置控制——管理员设置团队默认值，成�
 | 团队默认 | `teamai.yaml` | `sharing.recall.enabled` | `true` / `false`（默认 `false`） |
 | 用户覆盖 | `~/.teamai/config.yaml` | `recallEnabled` | `true` / `false`，优先级高于团队默认 |
 | 环境变量 | shell | `TEAMAI_RECALL_DISABLED=1` | 强制禁用所有 recall hooks（应急开关） |
-| 环境变量 | shell | `TEAMAI_UPVOTE_JUDGE=1` | 可选开关：git 团队会话中，后台向本地已登录的 CLI 询问最新回复是否实质性用到了每条「没有其他采纳痕迹」的召回文档，并为该子集补记 upvote。每篇文档每会话最多评判一次（仅在后续轮次才召回/使用的文档届时仍会被评判）；项目激活时不会为继承的 user 作用域文档记 upvote。默认关闭；分离进程运行（不增加延迟），使用你自己的 CLI 订阅 |
+| 环境变量 | shell | `TEAMAI_UPVOTE_JUDGE=1` | 可选开关：git 团队会话中，后台向本地已登录的 CLI 询问最新回复是否实质性用到了每条本会话尚未 upvote 的召回文档，并为该子集补记 upvote。已在本会话 upvote 台账中的文档（会话打开过它，或此前的评判已为它记 upvote）不会再送去评判，因此每篇文档每会话最多记一次 upvote；评判未采纳的文档会在后续轮次再次评判；项目激活时不会为继承的 user 作用域文档记 upvote。默认关闭；分离进程运行（不增加延迟），使用你自己的 CLI 订阅 |
 
 ```bash
 teamai recall enable     # 开启 recall，部署 subagent 和 rules

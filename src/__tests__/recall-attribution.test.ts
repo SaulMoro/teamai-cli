@@ -28,6 +28,9 @@ vi.mock('../update.js', async (importOriginal) => ({
 }));
 vi.mock('../local-agent.js', () => ({ reportAndSyncFromHook: vi.fn(async () => null) }));
 vi.mock('../code-knowledge-recall.js', () => ({ queryCodeKnowledge: vi.fn(async () => []) }));
+// The opt-in judge's local-CLI verdict: every candidate it is sent was used.
+const { judgeAdoption } = vi.hoisted(() => ({ judgeAdoption: vi.fn(async (_reply: string, ids: string[]) => ids) }));
+vi.mock('../votes-judge.js', () => ({ judgeAdoption }));
 // A vote sync lands in a reports checkout beside the clone instead of being pushed.
 vi.mock('../utils/reports-branch.js', async () => {
   const nodePath = await import('node:path');
@@ -380,7 +383,35 @@ class Harness {
     return this.dispatch('stop', { hook_event_name: 'Stop', stop_hook_active: false, ...(session ? { session_id: session } : {}) });
   }
 
-  async dispatch(event: string, payload: Record<string, unknown>, cwd: string | null = this.root, tool = 'claude'): Promise<string> {
+  /**
+   * The main session's Stop with TEAMAI_UPVOTE_JUDGE=1, as its detached pass
+   * runs the judge: Claude's transcript holds `entries`, then a final reply.
+   */
+  async judgeStop(entries: object[]): Promise<void> {
+    const transcript = path.join(this.tmp, 'transcript.jsonl');
+    const reply = { type: 'assistant', message: { id: 'msg-final', content: [{ type: 'text', text: 'Raised the pool size.' }] } };
+    fs.writeFileSync(transcript, [...entries, reply].map((e) => `${JSON.stringify(e)}\n`).join(''));
+    this.env({ TEAMAI_UPVOTE_JUDGE: '1' });
+    try {
+      await this.dispatch('stop', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: transcript },
+        this.root, 'claude', { background: true });
+    } finally {
+      this.env({ TEAMAI_UPVOTE_JUDGE: undefined });
+    }
+  }
+
+  /** Claude's transcript entries for a Bash call that printed `stdout`: the call, then its result. */
+  static bashEntries(id: string, command: string, stdout: string): object[] {
+    return [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: stdout }] }, toolUseResult: { stdout, stderr: '' } },
+    ];
+  }
+
+  /** `background`: run the dispatch's detached pass (its background handlers) instead of its foreground one. */
+  async dispatch(
+    event: string, payload: Record<string, unknown>, cwd: string | null = this.root, tool = 'claude', options: { background?: boolean } = {},
+  ): Promise<string> {
     const stdinFile = path.join(this.tmp, `stdin-${Math.random().toString(36).slice(2)}.json`);
     fs.writeFileSync(stdinFile, JSON.stringify({ session_id: SESSION, ...(cwd ? { cwd } : {}), ...payload }));
     let output = '';
@@ -390,7 +421,7 @@ class Harness {
       return true;
     }) as never);
     try {
-      await hookDispatchCli(event, tool, '*', { stdinFile });
+      await hookDispatchCli(event, tool, '*', { stdinFile, bgOnly: options.background });
     } finally {
       write.mockRestore();
     }
@@ -1603,6 +1634,7 @@ describe('recall attribution acceptance (#884)', () => {
     originalCwd = process.cwd();
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(T0);
+    judgeAdoption.mockClear();
     h = new Harness();
   });
 
@@ -1644,6 +1676,45 @@ describe('recall attribution acceptance (#884)', () => {
     await h.pull();
     expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
   }, 30_000);
+
+  it('12: judge on: a doc the hook path credited is not sent to the judge again', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('redis timeout');
+    await h.read(files[0]);
+    await h.stop();
+    await h.judgeStop([
+      ...Harness.bashEntries('toolu_recall', 'teamai recall "redis timeout"', output),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: files[0] } }] } },
+    ]);
+    expect(judgeAdoption).not.toHaveBeenCalled();
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+  });
+
+  it('12: judge on: a recalled doc the session never opened is judged → +1', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('redis timeout');
+    await h.stop();
+    expect(await h.upvotes(h.project)).toEqual({});
+    await h.judgeStop(Harness.bashEntries('toolu_recall', 'teamai recall "redis timeout"', output));
+    expect(judgeAdoption).toHaveBeenCalledWith('Raised the pool size.', ['redis-timeout'], { 'redis-timeout': files[0] }, expect.any(Array));
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+  });
+
+  it('12: judge on: a doc the transcript shows only in a Glob listing, which the hook path does not credit, is judged → +1', async () => {
+    await h.setUp();
+    const { output, files } = await h.recall('redis timeout');
+    const glob = { pattern: '**/*.md', path: path.dirname(files[0]) };
+    await h.postToolUse('Glob', glob, { filenames: [files[0]], durationMs: 3, numFiles: 1, truncated: false });
+    await h.stop();
+    expect(await h.upvotes(h.project)).toEqual({});
+    await h.judgeStop([
+      ...Harness.bashEntries('toolu_recall', 'teamai recall "redis timeout"', output),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_glob', name: 'Glob', input: glob }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_glob', content: files[0] }] } },
+    ]);
+    expect(judgeAdoption).toHaveBeenCalledWith('Raised the pool size.', ['redis-timeout'], expect.any(Object), expect.any(Array));
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
+  });
 
   it('prints the run id after the result count on the region start line', async () => {
     await h.setUp();

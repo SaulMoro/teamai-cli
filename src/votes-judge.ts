@@ -2,9 +2,9 @@
 //
 // Optional background LLM-judge for upvote adoption (issue #723, design option 1).
 //
-// The tool-use signal (transcript-parser) only captures adoption when the main
-// agent OPENS a recalled doc's file. But the recommended recall path injects the
-// subagent's summary as text, so the main agent often adopts a doc without ever
+// The tool-use signal (the recall log's reads, #884) only captures adoption
+// when the agent OPENS a recalled doc's file. But the recommended recall path
+// injects the subagent's summary as text, so the main agent often adopts a doc without ever
 // opening it — that adoption leaves no tool-use trace. This judge closes that
 // gap WITHOUT asking the model to self-declare: after the session, it asks the
 // local signed-in CLI whether the final reply substantively used each recalled
