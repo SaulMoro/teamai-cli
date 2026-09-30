@@ -5,6 +5,7 @@ import { applyNonInteractiveGitEnv } from './utils/git-env.js';
 import { ensureBundledRuntimeOnPath } from './bundled-runtime.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 import type { MaintenancePaths } from './maintenance/paths.js';
+import { GLOBAL_OPTIONS } from './global-options.js';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { registerPackagesCommand } from './pkg/register-command.js';
 
@@ -75,9 +76,9 @@ const program = new Command();
 program
   .name('teamai')
   .description('TeamAI — Make Every Team AI Native')
-  .version(version)
-  .option('--dry-run', 'Preview mode, no changes made')
-  .option('-v, --verbose', 'Verbose output')
+  .version(version);
+for (const [flags, description] of GLOBAL_OPTIONS) program.option(flags, description);
+program
   .hook('preAction', async (thisCommand, actionCommand) => {
     const opts = thisCommand.opts();
     if (opts.verbose) setVerbose(true);

@@ -16,6 +16,9 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { Option } from 'commander';
+
+import { GLOBAL_OPTIONS } from './global-options.js';
 import { appendRecallLines, readRecallLog, recallLogPath } from './recall-log.js';
 import type { Actor, ClaimLine, EvidenceLine, LinkLine, RecallLogLine, RecalledDoc, RunLine } from './recall-log.js';
 import { getVotesDir } from './types.js';
@@ -40,12 +43,33 @@ const TEAMAI_PACKAGE = /^teamai(?:-cli)?(?:@\S*)?$/i;
 /** The recall subagent's name: its `--caller`, and the `agent_type` its hooks carry. */
 const RECALL_SUBAGENT = 'teamai-recall';
 
+/** The root program's options, as Commander reads their flags. */
+const ROOT_OPTIONS = GLOBAL_OPTIONS.map(([flags]) => new Option(flags));
+
+/**
+ * How many words at `words[i]` are one of the root program's options, with
+ * its value when it takes one (`--name value`, `--name=value`); 0 when
+ * `words[i]` is none.
+ */
+function rootOptionWords(words: string[], i: number): number {
+  const word = words[i] ?? '';
+  const eq = word.startsWith('--') ? word.indexOf('=') : -1;
+  const flag = eq === -1 ? word : word.slice(0, eq);
+  const option = ROOT_OPTIONS.find((o) => o.short === flag || o.long === flag);
+  if (!option) return 0;
+  const takesValue = option.required || option.optional;
+  if (eq !== -1) return takesValue ? 1 : 0;
+  // Commander gives an optional value the next word unless it is an option.
+  return option.required || (option.optional && !(words[i + 1] ?? '-').startsWith('-')) ? 2 : 1;
+}
+
 /**
  * Whether a shell command itself runs `teamai recall`: one of its simple
  * commands has `teamai` (by path or `.cmd`/`.exe` too, or the package after
  * `npx`) as its command word, after any `NAME=value` assignments, with
- * `recall` next. A command that only names it inside a quoted argument, such
- * as `codex exec "run teamai recall …"`, does not.
+ * `recall` next, after any of the root program's options (`teamai -v
+ * recall`). A command that only names it inside a quoted argument, such as
+ * `codex exec "run teamai recall …"`, does not.
  */
 function invokesRecall(command: string): boolean {
   return simpleCommands(command).some((simple) => {
@@ -57,7 +81,10 @@ function invokesRecall(command: string): boolean {
       while (i < words.length && words[i].startsWith('-')) i++;
       name = TEAMAI_PACKAGE;
     }
-    return name.test(words[i]?.split(/[\\/]/).pop() ?? '') && words[i + 1] === 'recall';
+    if (!name.test(words[i]?.split(/[\\/]/).pop() ?? '')) return false;
+    i++;
+    for (let n = rootOptionWords(words, i); n > 0; n = rootOptionWords(words, i)) i += n;
+    return words[i] === 'recall';
   });
 }
 

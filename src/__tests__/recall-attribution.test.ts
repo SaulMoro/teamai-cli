@@ -1618,6 +1618,29 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  ...[
+    'teamai -v recall "redis timeout"',
+    'npx -y teamai-cli@0.22.0 --verbose recall "redis timeout"',
+  ].map((command): Row => ({
+    name: `10: OMP recall with no session variable (via none) settles through its claim ${command} (a global option before recall), then a read → +1`,
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.ompTool(OMP, 'bash', { command }, output, OMP_MAIN_AGENT);
+      await h.ompTool(OMP, 'read', { path: files[0] }, '---', OMP_MAIN_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP, OMP_MAIN_AGENT);
+    },
+    project: { 'redis-timeout': 1 },
+  })),
+  {
+    name: '10: OMP recall claimed by teamai --no-such-option recall "…" (not a global option: recall never ran) → 0',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: {}, claim: false });
+      await h.ompTool(OMP, 'bash', { command: 'teamai --no-such-option recall "redis timeout"' }, output, OMP_MAIN_AGENT);
+      await h.ompTool(OMP, 'read', { path: files[0] }, '---', OMP_MAIN_AGENT);
+      await h.bridge('omp', 'session_stop', {}, OMP, OMP_MAIN_AGENT);
+    },
+    project: {},
+  },
   {
     name: '10: OMP read of C:\\kb\\learnings\\redis-timeout.md:raw keeps the drive colon → +1',
     trace: async (h) => {
