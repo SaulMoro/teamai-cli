@@ -16,6 +16,8 @@ import {
   TEAMAI_CLAUDEMD_END,
   TEAMAI_RECALL_RULES_START,
   TEAMAI_RECALL_RULES_END,
+  TEAMAI_TEAM_RULES_START,
+  TEAMAI_TEAM_RULES_END,
   getDataHome,
   getManagedHooksPath,
   isAgentExcluded,
@@ -32,7 +34,7 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES } from './builtin-rules.js';
-import { ruleStemFromFilename } from './resources/rule-format.js';
+import { inlinesRulesIntoInstructions, LEGACY_RULE_DIRS, ruleStemFromFilename } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
@@ -93,8 +95,8 @@ interface RemovalPlan {
   dshHookFile: string | null;
   /** Manifest used by the primary hook injection scope. */
   hookManifestPath: string;
-  /** CLAUDE.md files with teamai rules blocks. */
-  claudeMdFiles: string[];
+  /** Instruction files (CLAUDE.md, AGENTS.md, …), each with the teamai blocks to strip from it. */
+  claudeMdFiles: Array<{ path: string; blocks: Array<[string, string]> }>;
   /**
    * Skill directories synced from team repo, each with the base directory its
    * skills root hangs off: the prune refuses a link anywhere below that base.
@@ -171,7 +173,21 @@ const CLAUDEMD_MARKER_PAIRS: Array<[string, string]> = [
   [TEAMAI_CULTURE_START, TEAMAI_CULTURE_END],
   [TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END],
   [TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END],
+  [TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END],
 ];
+
+/**
+ * Start markers of the blocks a pull writes into a tool's `claudemd` file:
+ * culture and shared instructions for every tool that has one, recall for a
+ * tool that also has `agents`, and team rules for a tool that inlines them.
+ * Nobody writes the legacy `[teamai:rules]` block any more.
+ */
+function instructionBlocksWrittenBy(tool: string, toolPath: TeamaiConfig['toolPaths'][string]): string[] {
+  const starts = [TEAMAI_CULTURE_START, TEAMAI_CLAUDEMD_START];
+  if (toolPath.agents) starts.push(TEAMAI_RECALL_RULES_START);
+  if (inlinesRulesIntoInstructions(tool)) starts.push(TEAMAI_TEAM_RULES_START);
+  return starts;
+}
 
 /**
  * Collect team repo skill names, handling both flat and namespaced layouts.
@@ -454,8 +470,12 @@ async function discoverToolResources(
 
   // (d) Rules — team-synced rules plus CLI built-in rules (teamRuleNames
   // now includes BUILTIN_RULE_NAMES). User-authored rules are left alone.
-  if (toolPath.rules) {
-    const rulesDir = path.join(baseDir, toolPath.rules);
+  // The legacy directory holds copies a release made before the tool's rules
+  // moved into its instructions file, which a pull may not have reclaimed yet.
+  const rulesDirs = new Set<string>();
+  if (toolPath.rules) rulesDirs.add(path.join(baseDir, toolPath.rules));
+  if (LEGACY_RULE_DIRS[tool]) rulesDirs.add(path.join(baseDir, LEGACY_RULE_DIRS[tool]));
+  for (const rulesDir of rulesDirs) {
     if (await pathExists(rulesDir)) {
       const files = await listFilesRecursive(rulesDir);
       for (const file of files) {
@@ -548,8 +568,9 @@ async function buildRemovalPlan(
   // agents and CLAUDE.md stay on the config-scope paths below — those are real
   // project resources.
   const hookToolPaths = scopedToolPaths(teamConfig, { ...localConfig, scope: primaryHookScope.scope });
+  const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const perTool = new Map<string, ToolResources>();
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+  for (const [tool, toolPath] of Object.entries(toolPaths)) {
     perTool.set(
       tool,
       await discoverToolResources(
@@ -576,7 +597,7 @@ async function buildRemovalPlan(
   // tool-specific root (skills/rules/settings), never `claudemd`: that's
   // exactly the shared, ambiguous path this check exists to disambiguate.
   const activeTools = new Set<string>();
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+  for (const [tool, toolPath] of Object.entries(toolPaths)) {
     if (isAgentExcluded(localConfig, tool)) continue;
     const probePath = toolPath.skills ?? toolPath.rules ?? toolPath.settings ?? toolPath.claudemd;
     if (probePath && await isToolInstalledForConfig(tool, probePath, localConfig)) {
@@ -628,14 +649,18 @@ async function buildRemovalPlan(
   };
 
   // A single instruction file can be the native target for several agents
-  // (for example project `AGENTS.md` is shared by Pi, Hermes, and WorkBuddy).
-  // Keep its TeamAI blocks when another enabled, installed agent still
-  // references the same file; a targeted uninstall must not remove
-  // instructions owned by that remaining agent.
-  const retainedInstructionFiles = new Set<string>();
+  // (for example project `AGENTS.md` is shared by Pi, Hermes, WorkBuddy, Codex).
+  // Keep a TeamAI block when another enabled, installed agent that maps the
+  // same file would write that block; the rest go, since no remaining agent's
+  // pull would ever refresh or remove them.
+  const retainedBlocks = new Map<string, Set<string>>();
   for (const [tool, resources] of perTool) {
-    if (!toolsToMerge.includes(tool) && activeTools.has(tool)) {
-      for (const file of resources.claudeMdFiles) retainedInstructionFiles.add(file);
+    if (toolsToMerge.includes(tool) || !activeTools.has(tool)) continue;
+    const written = instructionBlocksWrittenBy(tool, toolPaths[tool]);
+    for (const file of resources.claudeMdFiles) {
+      const kept = retainedBlocks.get(file) ?? new Set<string>();
+      for (const start of written) kept.add(start);
+      retainedBlocks.set(file, kept);
     }
   }
 
@@ -650,9 +675,12 @@ async function buildRemovalPlan(
     plan.piHookFiles.push(...res.piHookFiles);
     if (res.dshHookFile) plan.dshHookFile = res.dshHookFile;
     for (const file of res.claudeMdFiles) {
-      if (!retainedInstructionFiles.has(file) && !plan.claudeMdFiles.includes(file)) {
-        plan.claudeMdFiles.push(file);
-      }
+      if (plan.claudeMdFiles.some((entry) => entry.path === file)) continue;
+      const content = await readFileSafe(file) ?? '';
+      const kept = retainedBlocks.get(file);
+      const blocks = CLAUDEMD_MARKER_PAIRS
+        .filter(([start]) => content.includes(start) && !kept?.has(start));
+      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
     }
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
@@ -813,7 +841,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
 
   if (plan.claudeMdFiles.length > 0) {
     console.log(`   CLAUDE.md rule blocks (${plan.claudeMdFiles.length} files):`);
-    for (const p of plan.claudeMdFiles) {
+    for (const { path: p } of plan.claudeMdFiles) {
       console.log(`     ${p}`);
     }
     console.log('');
@@ -988,13 +1016,13 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   }
 
   // (b) Clean CLAUDE.md teamai section blocks
-  for (const claudeMdPath of plan.claudeMdFiles) {
+  for (const { path: claudeMdPath, blocks } of plan.claudeMdFiles) {
     try {
       const raw = await readFileSafe(claudeMdPath);
       if (!raw) continue;
 
       let content: string = raw;
-      for (const [startMarker, endMarker] of CLAUDEMD_MARKER_PAIRS) {
+      for (const [startMarker, endMarker] of blocks) {
         const startIdx = content.indexOf(startMarker);
         const endIdx = content.indexOf(endMarker);
         if (startIdx === -1 || endIdx === -1) continue;
