@@ -40,10 +40,10 @@ export function inlinesRulesIntoInstructions(tool: string): boolean {
 }
 
 /**
- * Rules directories earlier releases copied team rules into, for tools that now
- * inline them instead (relative to the tool's base dir). The directory also
- * holds the tool's own files (Codex's `*.rules` exec policy), so only teamai's
- * copies may be removed from it.
+ * The rules directory each tool that now inlines rules into its instructions
+ * file received `<rule>.md` copies in before #938, relative to the tool's base
+ * dir in either scope. The tool never read them. It keeps its own `*.rules`
+ * exec-policy files there, so only teamai's copies may be removed from it.
  */
 export const LEGACY_RULE_DIRS: Readonly<Record<string, string>> = {
   codex: '.codex/rules',

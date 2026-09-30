@@ -1,10 +1,10 @@
 import path from 'node:path';
 import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
-import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile } from '../utils/fs.js';
+import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
-import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
+import { EXCLUDED_RULE_NAMES, isDeployedRecallRule } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
   copilotInstructionsBodyEqualsTeamMd,
@@ -26,6 +26,7 @@ import {
   usesCopilotInstructions,
   isLegacyCursorRuleFile,
   inlinesRulesIntoInstructions,
+  LEGACY_RULE_DIRS,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 
@@ -456,6 +457,7 @@ export class RulesHandler extends ResourceHandler {
 
     // Codex family: no rules directory, so the rules go into AGENTS.md.
     await this.syncInstructionFileRules(teamConfig, localConfig, rules);
+    await this.reclaimLegacyRuleCopies(teamConfig, localConfig, ledger);
 
     // OpenCode does not auto-scan a rules directory: the .md files are inert
     // until referenced from `instructions` in opencode.json. Activate (or, when
@@ -644,6 +646,75 @@ export class RulesHandler extends ResourceHandler {
       } catch (e) {
         log.warn(`Failed to update team rules in ${file}: ${(e as Error).message}`);
       }
+    }
+  }
+
+  /**
+   * Remove the `<rule>.md` copies earlier pulls wrote to a rules directory the
+   * tool never read (`LEGACY_RULE_DIRS`). A copy goes only while it holds what
+   * teamai delivered there: the team rule verbatim, now or at a revision this
+   * checkout pulled, or as the ledger recorded it; the built-in
+   * `teamai-recall.md` as any teamai version deployed it. Every team rule
+   * counts, not just the ones delivered here, since a copy outlives the role
+   * or tag that selected it. The copies kept are named in one warning per
+   * rules sync, until the member deletes them.
+   */
+  private async reclaimLegacyRuleCopies(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    ledger: DeliveryLedger | undefined,
+  ): Promise<void> {
+    const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
+    let deliveredRevs: readonly string[] | undefined;
+    const kept: string[] = [];
+    // A team `toolPaths` that still names one of these dirs delivers there.
+    const deliveredDirs = new Set(
+      Object.entries(scopedToolPaths(teamConfig, localConfig))
+        .filter(([, toolPath]) => toolPath.rules)
+        .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
+    );
+    for (const [tool, rel] of Object.entries(LEGACY_RULE_DIRS)) {
+      const dir = path.join(resolveToolBaseDir(tool, localConfig), rel);
+      if (deliveredDirs.has(dir) || !await pathExists(dir)) continue;
+      let removedAny = false;
+      for (const rule of teamRules) {
+        const file = path.join(dir, `${rule.name}.md`);
+        if (!await pathExists(file)) continue;
+        deliveredRevs ??= (
+          await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
+        ).revs;
+        const recorded = ledger?.previous?.[file];
+        const delivered = (recorded !== undefined && recorded === await fileHash(file))
+          || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+        if (!delivered) {
+          kept.push(file);
+          continue;
+        }
+        await remove(file);
+        if (ledger) forgetDelivered(ledger.hashes, file);
+        removedAny = true;
+        log.debug(`Removed ${file}: ${tool} reads team rules from its instructions file`);
+      }
+      const recall = path.join(dir, 'teamai-recall.md');
+      const recallContent = await readFileSafe(recall);
+      if (recallContent !== null) {
+        if (isDeployedRecallRule(recallContent)) {
+          await remove(recall);
+          removedAny = true;
+        } else {
+          kept.push(recall);
+        }
+      }
+      // Codex's own `*.rules` keep the directory; only an emptied one goes.
+      if (removedAny) await pruneEmptyDirs(dir);
+    }
+    if (kept.length > 0) {
+      log.warn(
+        `Kept ${kept.join(', ')}: ${kept.length === 1 ? 'it differs' : 'they differ'} from what teamai delivered there, `
+        + 'and Codex does not read .md files in its rules directory (team rules now reach it through AGENTS.md). '
+        + 'Delete what you did not edit; to keep your changes, move them into AGENTS.md outside the teamai markers, '
+        + 'then delete the copy.',
+      );
     }
   }
 
