@@ -36,13 +36,13 @@ import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, t
 const RESERVED_ALIASES = ['strong', 'fast'] as const;
 
 /** Repo-relative path of the team aliases file. */
-const TEAM_ALIASES_FILE = 'models/aliases.yaml';
+export const TEAM_ALIASES_FILE = 'models/aliases.yaml';
 
 /**
  * The member's override. Its keys have effect only where they name an alias
  * the team file or the reserved names define: one file serves every team.
  */
-function localAliasesPath(): string {
+export function localAliasesPath(): string {
   return path.join(getTeamaiHomeDir(), 'models', 'aliases.yaml');
 }
 

@@ -5,7 +5,7 @@
  * Asserted through the agents handler, on the files it leaves in tool dirs.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parse as parseToml } from 'smol-toml';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import matter from 'gray-matter';
 import path from 'node:path';
 import os from 'node:os';
@@ -37,7 +37,7 @@ import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutKey } from '../pull.js';
 import { ModelProfileSchema, resolveProfile, type ModelAgent } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
-import type { LocalConfig, TeamaiConfig } from '../types.js';
+import type { AgentModelRecords, LocalConfig, TeamaiConfig } from '../types.js';
 
 const STRONG = {
   aliases: {
@@ -132,6 +132,26 @@ describe('AgentsHandler pull: model aliases', () => {
     }
     return {};
   }
+
+  /** Rewrite `tool`'s deployed copy of `name`: `edit` changes its fields in place. */
+  async function editDeployed(tool: ToolName, name: string, edit: (fields: Record<string, unknown>) => void, body?: string): Promise<void> {
+    const dir = path.join(homeDir, `.${tool}/agents`);
+    const toml = path.join(dir, `${name}.toml`);
+    if (await fse.pathExists(toml)) {
+      const fields = { ...parseToml(await fse.readFile(toml, 'utf-8')) } as Record<string, unknown>;
+      edit(fields);
+      if (body !== undefined) fields['developer_instructions'] = body;
+      await fse.writeFile(toml, stringifyToml(fields));
+      return;
+    }
+    const md = path.join(dir, `${name}.md`);
+    const parsed = matter(await fse.readFile(md, 'utf-8'));
+    const fields = { ...parsed.data };
+    edit(fields);
+    await fse.writeFile(md, matter.stringify(body ?? parsed.content, fields));
+  }
+
+  const scan = (tools: readonly ToolName[]): Promise<AgentResourceItem[]> => handler.scanLocalForPush(teamConfigFor(tools), localConfig);
 
   it('writes the team model and effort in each tool\'s own field', async () => {
     await writeAliases(STRONG);
@@ -518,6 +538,19 @@ describe('AgentsHandler pull: model aliases', () => {
       expect((await pullTo(['codex'], makeSpec({ model: 'gpt-literal' })))['codex']).toMatchObject({ model: 'gpt-literal' });
     });
 
+    it('points push drift on a switched tool at models restore', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['codex']);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['codex'], spec);
+      await editDeployed('codex', spec.name, (fields) => { fields['model'] = 'gpt-5'; });
+
+      const [candidate] = await scan(['codex']);
+      expect(candidate.mergedSpec).toBeUndefined();
+      expect(candidate.skipReason).toContain('but model: strong gives codex no model, because codex is switched to a model profile.');
+      expect(candidate.skipReason).toContain('Run `teamai models restore --agent codex` to take codex off the profile, or switch it to another one.');
+    });
+
     it('holds alias agents in the tool whose switch state cannot be read, and only there', async () => {
       await writeAliases(EVERY_TOOL_STRONG);
       await switchTo(['codex']);
@@ -590,6 +623,175 @@ describe('AgentsHandler pull: model aliases', () => {
       const candidates = await handler.scanLocalForPush(teamConfigFor(['claude']), localConfig);
       expect(candidates).toHaveLength(1);
       expect(candidates[0].mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+    });
+
+    /** What the last pull recorded for this checkout's agent copies. */
+    async function recordModels(agentModels: AgentModelRecords): Promise<void> {
+      const state = await loadStateForScope(localConfig);
+      state.lastPullByWorkspace = { [await checkoutKey(homeDir)]: { rev: 'abc1234', targets: ['claude', 'codex'], agentModels } };
+      await saveStateForScope(state, localConfig);
+    }
+
+    it.each([
+      ['claude', { claude: { model: 'opus', effort: 'high' } }, 'color', 'blue'],
+      ['codex', { codex: { model: 'gpt-6-sol', effort: 'high' } }, 'sandbox_mode', 'read-only'],
+      ['opencode', { opencode: { model: 'anthropic/claude-opus-5-5', effort: 'max' } }, 'temperature', 0.2],
+      ['codebuddy', { codebuddy: { model: 'glm-5', effort: 'high' } }, 'color', 'blue'],
+      ['qoder-cn', { qoder: { model: 'performance', effort: 'high' } }, 'color', 'blue'],
+    ] as const)('proposes only the unrelated extras key added to %s, not the alias effort', async (tool, mapping, key, value) => {
+      await writeAliases({ aliases: { strong: mapping } });
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo([tool], spec);
+      await editDeployed(tool, spec.name, (fields) => { fields[key] = value; });
+
+      const [candidate, ...rest] = await scan([tool]);
+      expect(rest).toEqual([]);
+      expect(candidate.skipReason).toBeUndefined();
+      const { tool_extras: extras, ...root } = candidate.mergedSpec!;
+      expect(root).toEqual(spec);
+      // OpenCode's reverse also carries the `mode: subagent` teamai renders (pre-existing).
+      const { mode: _mode, ...own } = extras?.[tool] ?? {};
+      expect(Object.keys(extras ?? {})).toEqual([tool]);
+      expect(own).toEqual({ [key]: value });
+    });
+
+    it('does not read an effort the base tool\'s extras set as removed from tclaude', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong', tool_extras: { claude: { effort: 'low', color: 'blue' } } });
+      await pullTo(['tclaude'], spec);
+      await editDeployed('tclaude', spec.name, (fields) => { fields['memory'] = 'user'; });
+
+      const [candidate] = await scan(['tclaude']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.mergedSpec?.tool_extras).toEqual({ claude: { effort: 'low', color: 'blue' }, tclaude: { memory: 'user' } });
+    });
+
+    it('does not report a copy written with the recorded resolution after the team changed the alias', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude', 'codex'], spec);
+      await recordModels({ implementer: {
+        claude: { step: 'team', model: 'opus', effort: 'high' },
+        codex: { step: 'team', model: 'gpt-6-sol', effort: 'high' },
+      } });
+      await writeAliases({ aliases: { strong: { claude: 'fable', codex: { model: 'gpt-6-astra', effort: 'xhigh' } } } });
+      expect(await scan(['claude', 'codex'])).toEqual([]);
+      // What push's kept-copy warning compares with: the copy as recorded, not the new resolution.
+      const item = { name: spec.name, type: 'agents' as const, sourcePath: path.join(repoPath, 'agents/implementer.yaml'), relativePath: 'agents/implementer.yaml' };
+      const targets = await handler.recordedDeliveryTargets(teamConfigFor(['claude', 'codex']), localConfig, item);
+      expect(targets.map((target) => target.tool)).toEqual(['claude', 'codex']);
+      for (const target of targets) expect(target.content).toBe(await fse.readFile(target.dest, 'utf-8'));
+
+      await editDeployed('codex', spec.name, () => {}, 'Edited instructions.');
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.modelDrift).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+    });
+
+    it('never proposes a concrete model over an alias, and reports a copy unlike the current mapping as drift without a record', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude'], spec);
+      await writeAliases({ aliases: { strong: { claude: 'fable' } } });
+
+      const [candidate] = await scan(['claude']);
+      expect(candidate.mergedSpec).toBeUndefined();
+      expect(candidate.skipReason).toContain('its claude copy');
+      expect(candidate.skipReason).toContain('sets model "opus" and effort "high", but model: strong gives claude model "fable" from');
+    });
+
+    it('pushes edits made in two tools while one of them changed the model by hand', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude', 'codex'], spec);
+      await editDeployed('claude', spec.name, (fields) => { fields['model'] = 'sonnet'; }, 'Edited instructions.');
+      await editDeployed('codex', spec.name, () => {}, 'Edited instructions.');
+
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+      expect(candidate.modelDrift).toEqual([expect.stringContaining('its claude copy')]);
+    });
+
+    it('reports a hand-set model and effort as drift, pointing at the member\'s override and the team file', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['codex'], spec);
+      await editDeployed('codex', spec.name, (fields) => {
+        fields['model'] = 'gpt-5';
+        fields['model_reasoning_effort'] = 'low';
+      });
+
+      const [candidate] = await scan(['codex']);
+      expect(candidate.mergedSpec).toBeUndefined();
+      const localFile = path.join(homeDir, '.teamai/models/aliases.yaml');
+      expect(candidate.skipReason).toBe(
+        `its codex copy (${path.join(homeDir, '.codex/agents/implementer.toml')}) sets model "gpt-5" and model_reasoning_effort "low", `
+        + 'but model: strong gives codex model "gpt-6-sol" and model_reasoning_effort "high" from the team\'s models/aliases.yaml. '
+        + 'Push never writes a concrete model over a model alias, so this change stays on this machine. '
+        + `To use it on this machine, map strong.codex in ${localFile}; for the whole team, change strong.codex in models/aliases.yaml.`,
+      );
+    });
+
+    it('pushes instructions and unrelated extras while the effort drifted, without pinning it', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude'], spec);
+      await editDeployed('claude', spec.name, (fields) => {
+        fields['effort'] = 'max';
+        fields['color'] = 'blue';
+      }, 'Edited instructions.');
+
+      const [candidate] = await scan(['claude']);
+      expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.', tool_extras: { claude: { color: 'blue' } } });
+      expect(candidate.modelDrift).toEqual([expect.stringContaining('sets model "opus" and effort "max"')]);
+    });
+
+    it('points drift from the member\'s override at the override file', async () => {
+      await writeAliases(STRONG);
+      const localFile = path.join(homeDir, '.teamai/models/aliases.yaml');
+      await fse.outputFile(localFile, YAML.stringify({ aliases: { strong: { codex: 'gpt-6-astra' } } }));
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['codex'], spec);
+      await editDeployed('codex', spec.name, (fields) => { fields['model'] = 'gpt-5'; });
+
+      const [candidate] = await scan(['codex']);
+      expect(candidate.skipReason).toContain(`gives codex model "gpt-6-astra" from your ${localFile}.`);
+      expect(candidate.skipReason).toContain(`To use it, change strong.codex in ${localFile}.`);
+    });
+
+    it.each([['strong', 'fast'], ['opus', 'strong']])('adopts model: %s -> %s written in a deployed file', async (from, to) => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: from });
+      await pullTo(['claude', 'codex'], spec);
+      await editDeployed('claude', spec.name, (fields) => { fields['model'] = to; });
+
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.modelDrift).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, model: to });
+    });
+
+    it('pushes a new native agent\'s literal model', async () => {
+      await writeAliases(STRONG);
+      await fse.outputFile(path.join(homeDir, '.claude/agents/fresh.md'),
+        matter.stringify('Do it.', { name: 'fresh', description: 'New', model: 'opus', effort: 'high' }));
+
+      const [candidate] = await scan(['claude']);
+      expect(candidate.status).toBe('new');
+      expect(candidate.mergedSpec).toMatchObject({ model: 'opus', tool_extras: { claude: { effort: 'high' } } });
+    });
+
+    it('skips an alias agent with a reason while the aliases file cannot be read', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude'], spec);
+      await editDeployed('claude', spec.name, () => {}, 'Edited instructions.');
+      await writeAliases('aliases: [broken');
+
+      const [candidate] = await scan(['claude']);
+      expect(candidate.mergedSpec).toBeUndefined();
+      expect(candidate.skipReason).toContain('its model cannot be resolved: Invalid model aliases YAML at models/aliases.yaml');
     });
   });
 });

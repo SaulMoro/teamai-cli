@@ -1893,6 +1893,15 @@ A tool you switched with `teamai models switch` sends its requests to the profil
 
 No `model` field means the tool's native inheritance, not the profile's model: Codex, for example, uses `[agents].default_subagent_model` when your config sets one, otherwise the model of the session that starts the agent. `tool_extras.<tool>.model`, a concrete `model` such as `opus`, and your `~` or `default` are written as they are without a switch. The Claude and Codex variants (claude-internal, tclaude, codex-internal, tcodex) are never switched. A tool counts as switched only while its live settings path (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, ...) is the one the switch recorded and those settings still hold what TeamAI wrote, the same checks `teamai models restore` makes. While TeamAI cannot read its switch records (`~/.teamai/models/managed.json`), pull warns and holds alias agents in the five tools `models switch` supports; while it cannot read one switched tool's settings, in that tool only. An ordinary `teamai pull` after `teamai models switch` or `teamai models restore` rewrites the affected agents.
 
+##### Push
+
+For an agent whose `model` is an alias, each tool's `model` and the effort field the alias writes belong to the alias, not to the copy:
+
+- A copy with the model and effort the last pull wrote, or the ones a pull would write now, is unedited. So pushing before you pull a change to `models/aliases.yaml`, your override or a switch reports nothing, and push's warning about a kept copy whose deployed version changed ignores such a change.
+- Push never replaces `model: strong` with a concrete model and never writes the alias's effort into `tool_extras`. A model or effort you changed by hand in a copy is drift: push names the copy and where the value comes from, leaves the change out, and says where to make it: your override file for an entry that comes from it, your override file or the team's `models/aliases.yaml` for a team entry or an unmapped tool, `teamai models restore --agent <tool>` for a switched tool. `teamai push --dry-run` reports it too. Your other edits to that agent, such as its instructions or other fields, still push.
+- To move an agent to another alias, write the alias name in a deployed copy, such as `model: fast` in place of `opus`, or `model: strong` in an agent that set `model: opus`, and push: push proposes `model: <alias>`. Two copies that name different aliases conflict, as any two different values do.
+- A new agent that exists only in a tool's directory is pushed with the model it has there, which is never turned back into an alias.
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI is supported for its official custom-instructions, Rules, Skills, custom-agent, hooks, and MCP surfaces, plus TeamAI Docs and Env delivery:

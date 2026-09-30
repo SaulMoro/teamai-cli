@@ -1780,6 +1780,15 @@ aliases:
 
 不写 `model` 字段意味着使用工具自身的继承规则，而不是配置档的模型：例如 Codex 会在你的配置设置了 `[agents].default_subagent_model` 时使用它，否则使用启动该 agent 的会话的模型。`tool_extras.<tool>.model`、`opus` 这类具体 `model`，以及你的 `~` 或 `default`，都与未切换时一样写入。Claude 和 Codex 的变体（claude-internal、tclaude、codex-internal、tcodex）从不视为已切换。只有当工具当前的配置路径（`CLAUDE_CONFIG_DIR`、`CODEX_HOME` 等）与切换时记录的一致，且这些配置仍是 TeamAI 写入的内容时，该工具才算已切换，这与 `teamai models restore` 所做的检查相同。TeamAI 无法读取切换记录（`~/.teamai/models/managed.json`）时，pull 会警告并在 `models switch` 支持的五个工具中暂停别名 agent；无法读取某个已切换工具的配置时，只在该工具中暂停。执行 `teamai models switch` 或 `teamai models restore` 后，普通的 `teamai pull` 就会重写受影响的 agent。
 
+##### Push
+
+对 `model` 为别名的 agent，各工具中的 `model` 以及别名写入的推理强度字段归别名所有，而不归副本所有：
+
+- 副本中的模型和推理强度与上次 pull 写入的一致，或与现在 pull 会写入的一致，就视为未修改。因此在 pull `models/aliases.yaml`、你的覆盖文件或切换带来的变化之前先 push，也不会报告任何内容；push 对“保留的副本其部署版本已变化”的警告也会忽略这类变化。
+- push 从不把 `model: strong` 替换为具体模型，也从不把别名的推理强度写进 `tool_extras`。你在副本里手动修改的模型或推理强度属于偏差（drift）：push 会指出该副本及该值的来源，不提交这项修改，并说明应在哪里修改：来自你覆盖文件的条目，改你的覆盖文件；团队条目或未映射的工具，改你的覆盖文件或团队的 `models/aliases.yaml`；已切换的工具，运行 `teamai models restore --agent <tool>`。`teamai push --dry-run` 同样会报告。你对该 agent 的其他修改（例如 instructions 或其他字段）照常 push。
+- 要让 agent 改用另一个别名，在已部署的副本中写入别名名称（例如用 `model: fast` 替换 `opus`，或在原本设置 `model: opus` 的 agent 中写 `model: strong`），然后 push：push 会提议 `model: <alias>`。两个副本写了不同的别名时会冲突，与其他任何两个不同的值一样。
+- 只存在于某个工具目录中的新 agent 按其中的模型原样 push，不会被反推回别名。
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定义 Agent、Hooks 和 MCP 配置面，以及 TeamAI Docs 和 Env 下发：

@@ -16,6 +16,7 @@ import { getProvider } from './providers/index.js';
 import { log, spinner } from './utils/logger.js';
 import { getHandler } from './resources/index.js';
 import { scanTeamRepoNamespaces } from './resources/skills.js';
+import { AgentsHandler } from './resources/agents.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import type {
   GlobalOptions, ResourceItem, ResourceType, LocalConfig, TeamaiConfig, State,
@@ -230,8 +231,12 @@ async function resolveNamespaceForNew(
 
 /**
  * Warn about each copy of a modified item that pull kept because the member
- * changed it, when the team version has moved on since teamai delivered it:
- * pushing it as it is would replace that change (#822). The pull that kept it
+ * changed it, when what teamai would deploy there has moved on since it
+ * delivered the copy: pushing it as it is would replace that change (#822).
+ * The change may be the team's, or the member's own model alias override
+ * (#830), so the warning does not say whose. An agent's copy is judged with
+ * the model its record names: push never writes an alias's model, so a
+ * resolution that changed on its own is nothing it replaces. The pull that kept it
  * may have been the silent SessionStart one, so push is where the member hears
  * of it. A warning, not a hold: the member may have merged the change already.
  */
@@ -253,12 +258,16 @@ async function warnKeptCopiesTheTeamChanged(
       relativePath: item.relativePath,
     };
     try {
-      for (const target of await getHandler(item.type).deliveryTargets(teamConfig, localConfig, teamItem)) {
+      const handler = getHandler(item.type);
+      const targets = handler instanceof AgentsHandler
+        ? await handler.recordedDeliveryTargets(teamConfig, localConfig, teamItem)
+        : await handler.deliveryTargets(teamConfig, localConfig, teamItem);
+      for (const target of targets) {
         const verdict = await judgeCopy(previous, teamItem, target);
         if (verdict.kind === 'keep' && verdict.teamChanged) {
           log.warn(
-            `[${item.type}] The team changed ${item.relativePath} since teamai delivered ${target.dest}; `
-            + 'pushing replaces that change unless you merged it. Merge the team version first, '
+            `[${item.type}] The version teamai would deploy at ${target.dest} (${item.relativePath}) has changed since it delivered that copy; `
+            + 'pushing replaces that change unless you merged it. Merge that version first, '
             + 'or delete your copy and run `teamai pull --force`.',
           );
         }
@@ -1310,6 +1319,10 @@ async function pushCore(
       && typeof item.skipReason === 'string' && item.skipReason) {
       log.warn(`[agents] Skipped ${item.name}: ${item.skipReason}`);
       return false;
+    }
+    // A model alias kept its hand-edited model out (#830); the rest goes out.
+    if (item.type === 'agents' && 'modelDrift' in item && Array.isArray(item.modelDrift)) {
+      for (const drift of item.modelDrift) log.warn(`[agents] ${item.name}: ${drift} Its other edits are listed below.`);
     }
     return true;
   });

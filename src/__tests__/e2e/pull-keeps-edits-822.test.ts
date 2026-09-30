@@ -221,7 +221,7 @@ describe('pull keeps a delivered copy the member changed (#822 item 5)', () => {
     return r.output;
   };
   const teamChangedWarning = (relPath: string, dest: string): string => (
-    `The team changed ${relPath} since teamai delivered ${dest}; pushing replaces that change unless you merged it.`
+    `The version teamai would deploy at ${dest} (${relPath}) has changed since it delivered that copy; pushing replaces that change unless you merged it.`
   );
 
   it('warns at push about a kept copy the team changed since, after a silent pull kept it', async () => {
@@ -242,7 +242,7 @@ describe('pull keeps a delivered copy the member changed (#822 item 5)', () => {
   it('warns at push once the team amends a pushed copy, and not while the team is unchanged', async () => {
     await pull();
     fs.writeFileSync(claudeRule(), '# Team rule\n\nMy version.\n');
-    expect(await pushDryRun()).not.toContain('The team changed');
+    expect(await pushDryRun()).not.toContain('would deploy at');
 
     // The review amends the member's change before it merges.
     teamCommit((repo) => fs.writeFileSync(path.join(repo, 'rules', 'team-rule.md'), '# Team rule\n\nMy version, amended.\n'));

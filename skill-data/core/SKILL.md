@@ -112,7 +112,7 @@ is kept and named. Use a dedicated directory; preview with `--dry-run`.
 `teamai pull` keeps a skill, rule or agent copy the user changed since teamai
 delivered it, `--force` included, and names it (`Kept <path>: ...`). To share
 the change, `teamai push`; when pull says the version teamai would deploy has
-changed since, or push says the team changed it, merge that change into the copy first, or the push replaces it. To take the team version instead, delete
+changed since, or push says so for that copy, merge that change into the copy first, or the push replaces it. To take the team version instead, delete
 the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
@@ -152,6 +152,13 @@ while Codex, OpenCode, CodeBuddy and WorkBuddy get no `model`. No `model` means 
 tool's native inheritance (for Codex, `[agents].default_subagent_model` or the parent's
 model), not the profile's model. Variants such as tclaude are never switched. An ordinary
 `teamai pull` after `models switch` or `models restore` rewrites the affected agents.
+
+On push, an alias agent's model and alias effort are never read as edits: a copy that
+matches the last pull or the current mapping is unedited, and a hand-edited model or
+effort is reported as drift and not pushed (other edits still push), with where to change
+it: the member's override file, the team's `models/aliases.yaml`, or `teamai models restore
+--agent <tool>` for a switched tool. Writing an alias name in a deployed copy (`model: fast`)
+and pushing proposes `model: <alias>`. Never tell a user to push a concrete model over an alias.
 
 ## References
 
