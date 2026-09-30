@@ -902,13 +902,35 @@ export class AgentsHandler extends ResourceHandler {
         redeploy.push({ item, copies });
         continue;
       }
-      const content = await readFileSafe(item.sourcePath);
-      const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
-      if (parsed?.ok && parsed.spec.model !== undefined) {
-        ledger.held.push(...await this.modelHolds(item.name, parsed.spec, teamConfig, localConfig, aliases));
-      }
+      await this.queueHolds(item, teamConfig, localConfig, aliases, ledger);
     }
     return redeploy;
+  }
+
+  /** Queue on `ledger.held` the holds a pull of `items` would make, for `pull --dry-run` to say. */
+  async queueModelHolds(
+    items: readonly ResourceItem[],
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    ledger: DeliveryLedger,
+  ): Promise<void> {
+    const aliases = await aliasesForPull(localConfig, ledger);
+    for (const item of items) await this.queueHolds(item, teamConfig, localConfig, aliases, ledger);
+  }
+
+  private async queueHolds(
+    item: ResourceItem,
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    aliases: ModelAliases,
+    ledger: DeliveryLedger,
+  ): Promise<void> {
+    if (isLegacyAgent(item as AgentResourceItem)) return;
+    const content = await readFileSafe(item.sourcePath);
+    const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
+    if (parsed?.ok && parsed.spec.model !== undefined) {
+      ledger.held.push(...await this.modelHolds(item.name, parsed.spec, teamConfig, localConfig, aliases));
+    }
   }
 
   /**
@@ -1163,14 +1185,15 @@ function aliasesForPull(localConfig: LocalConfig, ledger: DeliveryLedger | undef
  * Say which agents pull held because their model cannot be resolved, one line
  * per reason and set of tools however many agents share it, and empty the
  * ledger's list. Returns how many of them no tool they target received.
+ * With `dryRunScope`, says it as `pull --dry-run` does: what it would hold.
  */
-export function reportHeldAgents(ledger: DeliveryLedger): number {
+export function reportHeldAgents(ledger: DeliveryLedger, dryRunScope?: string): number {
   const held = ledger.held.splice(0);
-  reportHeld(held);
+  reportHeld(held, dryRunScope === undefined ? '[agents] Held' : `[${dryRunScope}] [dry-run] Would hold`);
   return new Set(held.filter((hold) => hold.everyTool).map((hold) => hold.name)).size;
 }
 
-function reportHeld(held: DeliveryLedger['held']): void {
+function reportHeld(held: DeliveryLedger['held'], lead = '[agents] Held'): void {
   const byCause = new Map<string, { reason: string; tools?: string[]; names: string[] }>();
   for (const { name, reason, tools } of held) {
     const key = `${tools?.join(',') ?? ''}\n${reason}`;
@@ -1182,8 +1205,8 @@ function reportHeld(held: DeliveryLedger['held']): void {
     const files = names.map((name) => `${name}.yaml`).join(', ');
     const its = names.length === 1 ? 'Its' : 'Their';
     log.warn(tools
-      ? `[agents] Held ${files} for ${tools.join(', ')}: ${reason}. ${its} copies there are kept, and none are written, until that is fixed.`
-      : `[agents] Held ${files}: ${reason}. ${its} deployed copies are kept and no new ones are written until the file is fixed.`);
+      ? `${lead} ${files} for ${tools.join(', ')}: ${reason}. ${its} copies there are kept, and none are written, until that is fixed.`
+      : `${lead} ${files}: ${reason}. ${its} deployed copies are kept and no new ones are written until the file is fixed.`);
   }
 }
 

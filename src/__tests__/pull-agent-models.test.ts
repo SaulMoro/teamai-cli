@@ -522,6 +522,23 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       await pull({ silent: true });
       expect(logged('success', /Already synced at def5678/)).toBe(true);
     });
+
+    it('does not report a pull that held agents as complete', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      const first = { completed: false };
+      await pull({ silent: true }, first);
+      expect(first.completed).toBe(true);
+
+      await fse.outputFile(localFile(), 'aliases: [broken');
+      vi.mocked(getHeadRev).mockResolvedValue('def5678');
+      const held = { completed: false };
+      await pull({ silent: true }, held);
+
+      expect(logged('success', /Already synced/)).toBe(false);
+      expect(logged('warn', /Held implementer\.yaml/)).toBe(true);
+      expect(held.completed).toBe(false);
+    });
   });
 
   describe('agents held on an unchanged team revision', () => {
@@ -588,6 +605,85 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
       expect(logged('success', /\[project\] Already synced/)).toBe(false);
       expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'sonnet' });
+    });
+
+    it('does not report the pull as complete when another scope synced in full', async () => {
+      // The inherited user scope reads a repo of its own, with no alias agent, so it syncs in full and completes.
+      const userRepo = path.join(tmpDir, 'user-repo');
+      await fse.outputFile(path.join(userRepo, 'agents', 'plain.yaml'), serializeAgentYaml({ ...IMPLEMENTER, name: 'plain', model: 'sonnet' }));
+      vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+        ...localConfig,
+        repo: { localPath: userRepo, remote: 'https://example.com/test/user-repo.git' },
+      });
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      const projectRoot = path.join(tmpDir, 'project');
+      await fse.ensureDir(path.join(projectRoot, '.git'));
+      await fse.ensureDir(path.join(projectRoot, '.claude'));
+      vi.mocked(detectProjectConfig).mockResolvedValue({ ...localConfig, scope: 'project', projectRoot, inheritUserScope: true });
+      await pullOnce();
+
+      await fse.outputFile(localFile(), 'aliases: [broken');
+      vi.mocked(getHeadRev).mockImplementation(async (repo) => (repo === userRepo ? 'def5678' : 'abc1234'));
+      const outcome = { completed: false };
+      await pull({ silent: true }, outcome);
+
+      expect(logged('success', /\[user\] Already synced/)).toBe(false);
+      expect(logged('success', /\[project\] Already synced at abc1234/)).toBe(true);
+      expect(heldLines().some((line) => line.includes('Held implementer.yaml'))).toBe(true);
+      expect(outcome.completed).toBe(false);
+    });
+  });
+
+  describe('pull --dry-run', () => {
+    const localFile = (): string => path.join(homeDir, '.teamai/models/aliases.yaml');
+    const teamFile = (): string => path.join(repoPath, 'models/aliases.yaml');
+    const warned = (): string[] => vi.mocked(log.warn).mock.calls.map((args) => String(args[0]));
+    /** Every file under HOME, by path: state, delivery records and tool copies alike. */
+    const homeFiles = async (dir = homeDir): Promise<Record<string, string>> => {
+      const files: Record<string, string> = {};
+      for (const entry of await fse.readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) Object.assign(files, await homeFiles(full));
+        else files[full] = await fse.readFile(full, 'utf-8');
+      }
+      return files;
+    };
+
+    // The member's file holds alias agents only; a team file holds every agent with a model, as a real pull does.
+    it.each([
+      ['the member\'s local override', localFile, (): string => `implementer.yaml, planner.yaml: Invalid model aliases YAML at ${localFile()}`, '1 agents (2 held)'],
+      ['the team aliases file', teamFile, (): string => 'implementer.yaml, plain.yaml, planner.yaml: Invalid model aliases YAML at models/aliases.yaml', '0 agents (3 held)'],
+    ])('says which agents it would hold while %s is broken, and writes nothing', async (_case, file, held, count) => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await writeAgent({ ...IMPLEMENTER, name: 'planner' });
+      await writeAgent({ ...IMPLEMENTER, name: 'plain', model: 'sonnet' });
+      await pullOnce();
+
+      await fse.outputFile(file(), 'aliases: [broken');
+      // A team change the dry run must not deliver either.
+      await writeAgent({ ...IMPLEMENTER, instructions: 'Make the change carefully.' });
+      const before = await homeFiles();
+      await pull({ silent: true, dryRun: true });
+
+      const would = warned().filter((line) => line.includes('Would hold'));
+      expect(would).toHaveLength(1);
+      expect(would[0]).toContain(`[user] [dry-run] Would hold ${held()}`);
+      expect(would[0]).toContain('Their deployed copies are kept');
+      expect(warned().some((line) => line.includes('[agents] Held'))).toBe(false);
+      expect(vi.mocked(log.info).mock.calls.map((args) => String(args[0]))).toContain(`[user] [dry-run] Would pull ${count}`);
+      expect(await homeFiles()).toEqual(before);
+    });
+
+    it('says nothing about holds when every model resolves', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+
+      await pull({ silent: true, dryRun: true });
+
+      expect(warned().some((line) => line.includes('Would hold'))).toBe(false);
+      expect(logged('info', /\[user\] \[dry-run\] Would pull 1 agents$/)).toBe(true);
     });
   });
 
