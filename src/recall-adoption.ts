@@ -73,13 +73,22 @@ function actorOf(stdin: Record<string, unknown>, tool: string): Actor {
 }
 
 /**
- * Record what the recall log needs from one PostToolUse: a claim for each run
+ * Record what the recall log needs from one PostToolUse: a link when it names
+ * the child session a subagent ran in; a claim for each run
  * id a shell call printed, noting whether its command ran `teamai recall`
  * itself; evidence for each file under the knowledge roots it read, or whose
  * lines a search showed, unless it failed; nothing otherwise. Whether a claim or a read of unknown status
  * counts is the reducer's call. The command itself is never recorded.
  */
 export async function recordToolCall(stdin: Record<string, unknown>, tool: string, config: LocalConfig): Promise<void> {
+  // A subagent's own session, which a bridge names on the call that ran it (OpenCode's task tool).
+  const link = stdin.session_link !== null && typeof stdin.session_link === 'object' ? stdin.session_link as Record<string, unknown> : {};
+  const child = nonEmpty(link.child);
+  const parent = nonEmpty(link.parent);
+  if (child && parent && child !== parent) {
+    await appendRecallLine(config, { kind: 'link', ts: new Date().toISOString(), child, parent });
+  }
+
   const call = classifyToolCall(stdin, tool);
 
   if (call.command !== undefined && call.output !== undefined) {
@@ -159,11 +168,19 @@ function docsOpened(evidencePath: string, docs: RecalledDoc[]): RecalledDoc[] {
  * only command, of a path one of the session's runs printed. Only eligible
  * docs are credited: an inherited user-scope doc stays read-only while a
  * project is active.
+ *
+ * A subagent that ran in a child session (OpenCode's task tool) is linked to
+ * the session that started it: the runs and reads of every session linked up
+ * to the same root count as the root's, the ledger's session, whichever of
+ * them stopped. The child stays their actor, so a marked run's own reads are
+ * still excluded. Links apply whenever they arrived: evidence that did not
+ * count before its link is never consumed, so the next Stop re-evaluates it.
  */
 export async function creditAdoptedDocs(config: LocalConfig, sessionId: string): Promise<AdoptionResult> {
   const lines = await readRecallLog(config);
   const logged = new Set(lines.flatMap((l) => l.kind === 'run' ? [l.run] : []));
   const claimOf = new Map<string, ClaimLine>();
+  const parentOf = new Map<string, string>();
   const consumed = new Set<string>();
   for (const line of lines) {
     if (line.kind === 'claim') {
@@ -171,15 +188,34 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
       // Earliest by time: a claim a busy lock left in a side record reads after the file's lines.
       const first = claimOf.get(line.run);
       if (!first || line.ts < first.ts) claimOf.set(line.run, line);
+    } else if (line.kind === 'link') {
+      if (!parentOf.has(line.child)) parentOf.set(line.child, line.parent);
     } else if (line.kind === 'consumed') consumed.add(line.evidence);
   }
+  // The session a child's work counts for: its links followed up to the root. A cycle stops where it closes.
+  const rootOf = (session: string): string => {
+    const seen = new Set<string>([session]);
+    let root = session;
+    for (let up = parentOf.get(root); up !== undefined && !seen.has(up); up = parentOf.get(root)) {
+      seen.add(up);
+      root = up;
+    }
+    return root;
+  };
+  const target = rootOf(sessionId);
   const ownerOf = (r: RunLine): string | null => claimOf.get(r.run)?.session ?? (r.unambiguous === true ? r.session : null);
-  const runs = lines.filter((l): l is RunLine => l.kind === 'run' && ownerOf(l) === sessionId);
-  // A marked run's actor within the session: its claim's subagent, or the main agent (null).
-  const markedActor = new Map<RunLine, string | null>();
+  const runs = lines.filter((l): l is RunLine => {
+    if (l.kind !== 'run') return false;
+    const owner = ownerOf(l);
+    return owner !== null && rootOf(owner) === target;
+  });
+  // A marked run's actor: the session that ran it, and its claim's subagent there, or the main agent (null).
+  const markedActor = new Map<RunLine, { session: string; agentId: string | null }>();
   for (const r of runs) {
     const claim = claimOf.get(r.run);
-    if (r.caller === RECALL_SUBAGENT || claim?.agentType === RECALL_SUBAGENT) markedActor.set(r, claim?.agentId ?? null);
+    if (r.caller === RECALL_SUBAGENT || claim?.agentType === RECALL_SUBAGENT) {
+      markedActor.set(r, { session: ownerOf(r)!, agentId: claim?.agentId ?? null });
+    }
   }
   const recalled = new Set(runs.flatMap((r) => r.docs.map((d) => d.key))).size;
   if (runs.length === 0) return { credited: [], recalled };
@@ -187,13 +223,16 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   const keys = new Set<string>();
   const crediting: string[] = [];
   for (const e of lines) {
-    if (e.kind !== 'evidence' || e.session !== sessionId || consumed.has(e.id)) continue;
+    if (e.kind !== 'evidence' || consumed.has(e.id) || rootOf(e.session) !== target) continue;
     // A read of unknown status (Codex's shell) counts only as a simple read, never as a pipeline's head.
     if (e.status !== 'success' && !(e.status === 'unknown' && e.simple === true)) continue;
     const at = Date.parse(e.ts);
     const docs = runs
       .filter((r) => { const since = at - Date.parse(r.ts); return since >= 0 && since <= ADOPTION_WINDOW_MS; })
-      .filter((r) => !markedActor.has(r) || markedActor.get(r) !== (e.agentId ?? null))
+      .filter((r) => {
+        const actor = markedActor.get(r);
+        return !actor || actor.session !== e.session || actor.agentId !== (e.agentId ?? null);
+      })
       .flatMap((r) => r.docs);
     const eligible = docsOpened(e.path, docs).filter((d) => d.eligible);
     if (eligible.length === 0) continue;
@@ -203,7 +242,7 @@ export async function creditAdoptedDocs(config: LocalConfig, sessionId: string):
   if (keys.size === 0) return { credited: [], recalled };
 
   const { incrementUpvoted } = await import('./votes.js');
-  const credited = await incrementUpvoted(path.join(getVotesDir(config), `${config.username}.yaml`), [...keys], sessionId);
+  const credited = await incrementUpvoted(path.join(getVotesDir(config), `${config.username}.yaml`), [...keys], target);
   if (credited === null) return { credited: null, recalled };
   for (const evidence of crediting) {
     try {

@@ -25,6 +25,7 @@ import {
   OPENCODE_HOOK_FILE,
 } from '../opencode-hooks.js';
 import { reconcileHooksToAllTools } from '../hooks.js';
+import { loadOpencodePlugin } from './helpers/opencode-plugin.js';
 import { log } from '../utils/logger.js';
 
 describe('resolveOpencodePluginDir', () => {
@@ -40,9 +41,9 @@ describe('buildPluginSource', () => {
   const src = buildPluginSource();
   it('maps the four Claude built-in events to OpenCode events and teamai dispatch', () => {
     expect(src).toContain("event.type === 'session.created'");
-    expect(src).toContain("dispatch('session-start')");
+    expect(src).toContain("dispatch('session-start',");
     expect(src).toContain("event.type === 'session.idle'");
-    expect(src).toContain("dispatch('stop')");
+    expect(src).toContain("dispatch('stop',");
     expect(src).toContain("'chat.message'");
     expect(src).toContain("'prompt-submit'");
     expect(src).toContain("'tool.execute.after'");
@@ -112,6 +113,86 @@ describe('buildPluginSource', () => {
     expect(spawns.every(({ options }) => options.stdio[0] === 'pipe')).toBe(true);
     expect(spawns.every(({ child }) => child.listenerCount('close') === 0)).toBe(true);
     expect(spawns.every(({ child }) => child.listenerCount('error') === 0)).toBe(true);
+  });
+});
+
+// #884: every dispatch carries the host session, so recall attribution joins
+// the OpenCode session instead of a pid fallback.
+describe('OpenCode plugin: bridge payloads (#884)', () => {
+  const PARENT = 'ses_parent';
+  const CHILD = 'ses_child';
+
+  it('sends the host session id on session start, prompt submission and Stop', async () => {
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    await hooks.event({ event: { type: 'session.created', properties: { sessionID: PARENT, info: { id: PARENT } } } });
+    // Older hosts: session.created carries only the session info.
+    await hooks.event({ event: { type: 'session.created', properties: { info: { id: CHILD, parentID: PARENT } } } });
+    await hooks['chat.message']({ sessionID: PARENT }, { parts: [{ type: 'text', text: '/retry now' }] });
+    await hooks.event({ event: { type: 'session.idle', properties: { sessionID: PARENT } } });
+
+    expect(dispatches.map((d) => [d.args[1], d.payload])).toEqual([
+      ['session-start', { cwd: '/work/proj', session_id: PARENT }],
+      ['session-start', { cwd: '/work/proj', session_id: CHILD }],
+      ['prompt-submit', { cwd: '/work/proj', session_id: PARENT, prompt: '/retry now' }],
+      ['stop', { cwd: '/work/proj', session_id: PARENT }],
+    ]);
+  });
+
+  it('sends PostToolUse with the session, the tool output and a status normalized from what the host reports', async () => {
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    const after = hooks['tool.execute.after'];
+    await after({ tool: 'bash', sessionID: PARENT, callID: 'c1', args: { command: 'cat a.md' } },
+      { title: 'cat a.md', output: 'hello', metadata: { exit: 0, output: 'hello' } });
+    await after({ tool: 'bash', sessionID: PARENT, callID: 'c2', args: { command: 'cat b.md' } },
+      { title: 'cat b.md', output: 'cat: b.md: No such file', metadata: { exit: 1 } });
+    // Only bash reports an exit code; the other tools have no status to read.
+    await after({ tool: 'read', sessionID: PARENT, callID: 'c3', args: { filePath: '/kb/a.md' } },
+      { title: 'a.md', output: '<path>/kb/a.md</path>', metadata: {} });
+
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', session_id: PARENT, tool_name: 'bash', tool_input: { command: 'cat a.md' }, tool_response: 'hello', tool_status: 'success' },
+      { cwd: '/work/proj', session_id: PARENT, tool_name: 'bash', tool_input: { command: 'cat b.md' }, tool_response: 'cat: b.md: No such file', tool_status: 'failure' },
+      { cwd: '/work/proj', session_id: PARENT, tool_name: 'read', tool_input: { filePath: '/kb/a.md' }, tool_response: '<path>/kb/a.md</path>', tool_status: 'unknown' },
+    ]);
+  });
+
+  it('still dispatches when the host passes no output or session (older OpenCode)', async () => {
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    await hooks['tool.execute.after']({ tool: 'bash' });
+    await hooks.event({ event: { type: 'session.idle' } });
+    expect(dispatches.map((d) => d.payload)).toEqual([
+      { cwd: '/work/proj', tool_name: 'bash', tool_input: {}, tool_status: 'unknown' },
+      { cwd: '/work/proj' },
+    ]);
+  });
+
+  it('turns a task completion into a link from the child session to its parent', async () => {
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    await hooks['tool.execute.after']({ tool: 'task', sessionID: PARENT, callID: 'c1', args: { prompt: 'find docs' } },
+      { title: 'find docs', output: '<task id="ses_child" state="completed">', metadata: { sessionId: CHILD, parentSessionId: PARENT, model: {} } });
+    // Older hosts: the metadata names only the child; the task ran in the parent.
+    await hooks['tool.execute.after']({ tool: 'task', sessionID: PARENT, callID: 'c2', args: {} },
+      { title: 'x', output: '', metadata: { sessionId: 'ses_child2' } });
+    // No child id: no link.
+    await hooks['tool.execute.after']({ tool: 'task', sessionID: PARENT, callID: 'c3', args: {} }, { title: 'x', output: '', metadata: {} });
+
+    expect(dispatches.map((d) => d.payload.session_link)).toEqual([
+      { child: CHILD, parent: PARENT },
+      { child: 'ses_child2', parent: PARENT },
+      undefined,
+    ]);
+  });
+
+  it('sets TEAMAI_AGENT_SESSION_ID in the bash environment to the session the command runs in', async () => {
+    const { hooks } = await loadOpencodePlugin({ directory: '/work/proj' });
+    const output = { env: { KEEP: '1' } as Record<string, string> };
+    await hooks['shell.env']({ cwd: '/work/proj', sessionID: CHILD, callID: 'c1' }, output);
+    expect(output.env).toEqual({ KEEP: '1', TEAMAI_AGENT_SESSION_ID: CHILD });
+
+    // A terminal with no session: nothing to name.
+    const pty = { env: {} as Record<string, string> };
+    await hooks['shell.env']({ cwd: '/work/proj' }, pty);
+    expect(pty.env).toEqual({});
   });
 });
 

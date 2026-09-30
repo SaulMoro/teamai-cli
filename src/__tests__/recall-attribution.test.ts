@@ -53,6 +53,7 @@ const { loadUserVotes } = await import('../votes.js');
 const { getProjectSearchIndexPath, getUserLearningsDir, getUserSearchIndexPath, getVotesDir } = await import('../types.js');
 const { readRecallLog, recallLogPath } = await import('../recall-log.js');
 const { parseTranscriptForVotes } = await import('../transcript-parser.js');
+const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
 
 const SESSION = 'sess-main';
 /** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
@@ -69,6 +70,9 @@ const CURSOR_CHILD = 'conv-child';
 /** A Copilot CLI session, and a subagent's own session. */
 const COPILOT = '5f0c9d2e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
 const COPILOT_CHILD = '9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d';
+/** An OpenCode session, and the child session its `task` tool runs a subagent in. */
+const OPENCODE = 'ses_parent';
+const OPENCODE_CHILD = 'ses_child';
 
 /** Cursor's `tool_output`: the tool's result as a JSON string. */
 function cursorOutput(result: Record<string, unknown>): Record<string, unknown> {
@@ -326,6 +330,65 @@ class Harness {
       write.mockRestore();
     }
     return output;
+  }
+
+  private opencode?: Awaited<ReturnType<typeof loadOpencodePlugin>>;
+
+  /**
+   * The host calls `hook` of the generated OpenCode plugin (evaluated in a
+   * `vm`, from the project root), and each `teamai hook-dispatch` it spawns
+   * goes to the real dispatcher with the payload the plugin wrote.
+   */
+  async openCode(hook: string, ...args: unknown[]): Promise<void> {
+    this.opencode ??= await loadOpencodePlugin({ directory: this.root });
+    const { hooks, dispatches } = this.opencode;
+    await hooks[hook](...args);
+    for (const { args: argv, payload } of dispatches.splice(0)) {
+      // The Skill / TodoWrite matcher pass repeats the wildcard pass's payload.
+      if (argv.includes('--matcher')) continue;
+      await this.dispatch(argv[1], { session_id: undefined, ...payload }, null, 'opencode');
+    }
+  }
+
+  /**
+   * An OpenCode `bash` call in `session` runs `teamai recall`: its environment
+   * is what the plugin's `shell.env` sets, in OpenCode's shell (`OPENCODE=1`),
+   * plus `env` (variables it inherited). Its `tool.execute.after` claims the
+   * run unless `claim: false`.
+   */
+  async openCodeRecall(query: string, session: string, options: { caller?: string; env?: Record<string, string>; claim?: false } = {}): Promise<RecallRun> {
+    const shell = { env: {} as Record<string, string> };
+    this.opencode ??= await loadOpencodePlugin({ directory: this.root });
+    await this.opencode.hooks['shell.env']({ cwd: this.root, sessionID: session, callID: 'call-env' }, shell);
+    const run = await this.recall(query, { env: { OPENCODE: '1', ...options.env, ...shell.env }, caller: options.caller, claim: false });
+    if (options.claim !== false) {
+      const command = `teamai recall${options.caller ? ` --caller ${options.caller}` : ''} "${query}"`;
+      await this.openCodeBash(session, command, run.output);
+    }
+    return run;
+  }
+
+  /** An OpenCode `bash` call in `session` that exits with `exit`. */
+  async openCodeBash(session: string, command: string, output: string, exit = 0): Promise<void> {
+    await this.openCode('tool.execute.after', { tool: 'bash', sessionID: session, callID: 'call-bash', args: { command } },
+      { title: command, output, metadata: { output, exit, truncated: false } });
+  }
+
+  /** OpenCode's `read` of `filePath` in `session`. */
+  async openCodeRead(session: string, filePath: string): Promise<void> {
+    await this.openCode('tool.execute.after', { tool: 'read', sessionID: session, callID: 'call-read', args: { filePath } },
+      { title: path.basename(filePath), output: `<path>${filePath}</path>\n<type>file</type>\n<content>\n1: ---`, metadata: { preview: '---' } });
+  }
+
+  /** The `task` call in `parent` that ran subagent session `child` completes. */
+  async openCodeTask(parent: string, child: string): Promise<void> {
+    await this.openCode('tool.execute.after', { tool: 'task', sessionID: parent, callID: 'call-task', args: { description: 'find docs', prompt: 'find docs', subagent_type: 'teamai-recall' } },
+      { title: 'find docs', output: `<task id="${child}" state="completed">`, metadata: { parentSessionId: parent, sessionId: child, model: {} } });
+  }
+
+  /** `session` goes idle: OpenCode's Stop. */
+  async openCodeIdle(session: string): Promise<void> {
+    await this.openCode('event', { event: { type: 'session.idle', properties: { sessionID: session } } });
   }
 
   /** Upvotes per doc in a scope's own votes file. */
@@ -1195,11 +1258,86 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  {
+    name: '09: OpenCode recall in a task child; the parent reads the doc; the link arrives after the read; Stop → +1 for the parent',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE_CHILD, { caller: 'teamai-recall' });
+      await h.openCodeIdle(OPENCODE_CHILD);
+      await h.openCodeRead(OPENCODE, files[0]);
+      await h.openCodeIdle(OPENCODE);
+      // No link yet: the child's run is not the parent's.
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.openCodeTask(OPENCODE, OPENCODE_CHILD);
+      await h.openCodeIdle(OPENCODE);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '09: OpenCode recall subagent reads the doc itself in its task child → 0',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE_CHILD, { caller: 'teamai-recall' });
+      await h.openCodeRead(OPENCODE_CHILD, files[0]);
+      await h.openCodeIdle(OPENCODE_CHILD);
+      await h.openCodeTask(OPENCODE, OPENCODE_CHILD);
+      await h.openCodeIdle(OPENCODE);
+      await h.openCodeIdle(OPENCODE_CHILD);
+    },
+    project: {},
+  },
+  {
+    name: '09: OpenCode recall in the parent; a general subagent reads the doc in its task child → +1',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE);
+      await h.openCodeRead(OPENCODE_CHILD, files[0]);
+      await h.openCodeTask(OPENCODE, OPENCODE_CHILD);
+      await h.openCodeIdle(OPENCODE);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '09 (Carol): OpenCode recall with no later read → the run is recorded under her session, 0',
+    trace: async (h) => {
+      await h.openCodeRecall('redis timeout', 'ses_carol');
+      await h.openCodeIdle('ses_carol');
+      expect((await readRecallLog(h.project)).filter((l) => l.kind === 'run'))
+        .toEqual([expect.objectContaining({ session: 'ses_carol', agent: 'opencode', unambiguous: true })]);
+    },
+    project: {},
+  },
+  {
+    name: '09: a recall from an OpenCode shell, with no hook to claim it, resolves the session from TEAMAI_AGENT_SESSION_ID; read; Stop → +1',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE, { claim: false });
+      await h.openCodeRead(OPENCODE, files[0]);
+      await h.openCodeIdle(OPENCODE);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '09: OpenCode started from a Claude Code shell: its bash call claims the ambiguous run; a cat of the doc; Stop → +1 for the OpenCode session only',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE, { env: { CLAUDE_CODE_SESSION_ID: SESSION } });
+      await h.read(files[0]);
+      await h.stop();
+      expect(await h.upvotes(h.project)).toEqual({});
+      await h.openCodeBash(OPENCODE, `cat '${files[0]}'`, fs.readFileSync(files[0], 'utf-8'));
+      await h.openCodeIdle(OPENCODE);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '09: OpenCode cat of the doc that exits non-zero → 0',
+    trace: async (h) => {
+      const { files } = await h.openCodeRecall('redis timeout', OPENCODE);
+      await h.openCodeBash(OPENCODE, `cat '${files[0]}'`, `cat: ${files[0]}: Permission denied`, 1);
+      await h.openCodeIdle(OPENCODE);
+    },
+    project: {},
+  },
 ];
 
 /** Rows later tickets ship: each turns its `todo` into a ROWS entry. */
 const TODO_ROWS = [
-  '09:OpenCode recall in a task child; the parent reads the doc; task link; Stop → +1 for the parent',
   '11: final Stop; a background worker reads the doc; SubagentStop → +1',
   '13: teamai recall --check then a read → no run in stats',
   '13: recall with no hits → one run in stats',

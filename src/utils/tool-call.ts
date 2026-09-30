@@ -7,7 +7,7 @@
  *                                                  ├─ search  its output_mode, shownFiles(content)
  *                                                  ├─ list    nothing: it shows paths, not a file's lines
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
- *   responseOf ── statusOf, outputOf, searchOutputOf
+ *   responseOf ── statusOf (or a bridge's tool_status), outputOf, searchOutputOf
  *
  * Paths are resolved and compared by agent-path, the same on every OS, so a
  * Windows member's `C:\kb\x.md` is one file however it is written. A new
@@ -46,6 +46,8 @@ export interface ToolCall {
  */
 const CATEGORY_OF: Record<string, Exclude<ToolCategory, 'unknown'>> = {
   Read: 'read',
+  // OpenCode's (`filePath`).
+  read: 'read',
   // Copilot's; Qoder IDE's PascalCase spelling of `read_file` (unverified).
   view: 'read',
   ReadFile: 'read',
@@ -109,9 +111,12 @@ function responseOf(stdin: Record<string, unknown>): unknown {
  * The call's status from the agent's response. Claude sends PostToolUse only
  * on success; an `exitCode` (Cursor's Shell, CodeBuddy IDE, Qoder, ZCode)
  * tells a failure apart, and so does Copilot's `result_type`. Codex sends its
- * output as a plain string with no exit code: unknown.
+ * output as a plain string with no exit code: unknown. A generated bridge
+ * (OpenCode) sends the status it normalized from the host as `tool_status`.
  */
-function statusOf(response: unknown): ToolStatus {
+function statusOf(stdin: Record<string, unknown>, response: unknown): ToolStatus {
+  const bridged = stdin.tool_status;
+  if (bridged === 'success' || bridged === 'failure' || bridged === 'unknown') return bridged;
   const r = asObject(response);
   if (!r) return 'unknown';
   if (typeof r.exitCode === 'number') return r.exitCode !== 0 ? 'failure' : 'success';
@@ -177,7 +182,7 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const category = CATEGORY_OF[name];
   const input = asObject(stdin.tool_input);
   const response = responseOf(stdin);
-  const status = statusOf(response);
+  const status = statusOf(stdin, response);
   const cwd = resolveHookCwd(stdin);
   const unknown: ToolCall = { category: 'unknown', paths: [], status, simple: false };
   if (!input || !category) return unknown;

@@ -66,7 +66,11 @@ export function resolveOpencodePluginDir(baseDir: string, scope: 'project' | 'us
  *     provider-config gate reads `cwd` to pick the project-scope config. Without
  *     a payload those handlers no-op and project gating falls back to the user
  *     config. We forward the plugin's `directory` as `cwd` plus the per-event
- *     fields.
+ *     fields. For recall attribution (#884) every event also carries the host's
+ *     `session_id`, and PostToolUse the tool's output (`tool_response`), a
+ *     normalized `tool_status`, and for a `task` call the `session_link` from
+ *     the subagent's child session to its parent. `shell.env` names the session
+ *     in the bash tool's environment (`TEAMAI_AGENT_SESSION_ID`).
  *   - Tool-id casing: OpenCode passes lowercase tool ids (`skill`, `todowrite`),
  *     but the handler registry keys matchers on Claude's PascalCase names
  *     (`Skill`, `TodoWrite`). We map the id back before dispatching a
@@ -88,6 +92,9 @@ export function buildPluginSource(): string {
 
 /** OpenCode lowercase tool ids → Claude PascalCase matcher names. */
 const TOOL_MATCHER = { skill: 'Skill', todowrite: 'TodoWrite' };
+
+/** A host field read defensively: a non-empty string, or undefined. */
+const nonEmpty = (value) => (typeof value === 'string' && value ? value : undefined);
 
 /** @param {{ directory?: string, worktree?: string }} ctx */
 export const TeamaiHooks = async ({ directory, worktree }) => {
@@ -125,17 +132,21 @@ export const TeamaiHooks = async ({ directory, worktree }) => {
   };
 
   return {
+    // Lifecycle events name their session in event.properties: sessionID, or
+    // on an older host's session.created only the session info.
     event: async ({ event }) => {
+      const props = (event && event.properties) || {};
+      const session = { session_id: nonEmpty(props.sessionID) || nonEmpty(props.info && props.info.id) };
       if (event.type === 'session.created') {
-        await dispatch('session-start');
+        await dispatch('session-start', undefined, session);
       } else if (event.type === 'session.idle') {
-        await dispatch('stop');
+        await dispatch('stop', undefined, session);
       }
     },
     // A new user message maps to Claude's UserPromptSubmit. The prompt text
     // lives in output.parts (text parts); forward it so track-slash can see
     // slash-command usage.
-    'chat.message': async (_input, output) => {
+    'chat.message': async (input, output) => {
       let prompt = '';
       const parts = (output && output.parts) || [];
       for (const part of parts) {
@@ -143,18 +154,42 @@ export const TeamaiHooks = async ({ directory, worktree }) => {
           prompt += part.text;
         }
       }
-      await dispatch('prompt-submit', undefined, { prompt });
+      await dispatch('prompt-submit', undefined, { session_id: nonEmpty(input && input.sessionID), prompt });
     },
     // Fires after every tool call. Dispatch the wildcard matcher always, plus a
     // matcher-scoped pass so Skill / TodoWrite handlers can fire. input.tool is
-    // the lowercase OpenCode tool id; input.args is the tool input.
-    'tool.execute.after': async (input) => {
+    // the lowercase OpenCode tool id; input.args is the tool input; output.output
+    // is what the model saw. There is no error flag: only bash reports an exit
+    // code, so any other tool's status is unknown. A task call names the
+    // child session its subagent ran in, which links it to this session.
+    'tool.execute.after': async (input, output) => {
       const tool = (input && input.tool) || '';
       const matcher = TOOL_MATCHER[tool];
-      const payload = { tool_name: matcher || tool, tool_input: (input && input.args) || {} };
+      const metadata = (output && output.metadata) || {};
+      const exit = tool === 'bash' ? metadata.exit : undefined;
+      const payload = {
+        session_id: nonEmpty(input && input.sessionID),
+        tool_name: matcher || tool,
+        tool_input: (input && input.args) || {},
+        tool_response: typeof (output && output.output) === 'string' ? output.output : undefined,
+        tool_status: typeof exit === 'number' ? (exit === 0 ? 'success' : 'failure') : 'unknown',
+      };
+      const child = tool === 'task' ? nonEmpty(metadata.sessionId) : undefined;
+      const parent = nonEmpty(metadata.parentSessionId) || payload.session_id;
+      if (child && parent) {
+        payload.session_link = { child, parent };
+      }
       await dispatch('post-tool-use', undefined, payload);
       if (matcher) {
         await dispatch('post-tool-use', matcher, payload);
+      }
+    },
+    // Names the session in the bash tool's environment, so teamai recall
+    // run there records its run under the session its hooks carry.
+    'shell.env': async (input, output) => {
+      const session = nonEmpty(input && input.sessionID);
+      if (session && output && output.env) {
+        output.env.TEAMAI_AGENT_SESSION_ID = session;
       }
     },
   };

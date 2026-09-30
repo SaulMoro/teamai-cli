@@ -6,6 +6,7 @@
  *   run       recall searched: the session from the environment, its caller and the docs it returned
  *   claim     the PostToolUse of a shell call that printed a run id: its actor, and whether it ran the recall itself
  *   evidence  a PostToolUse read of a file under the knowledge roots, or a search that showed its lines, by its actor: its path and status, never its command or output
+ *   link      a child session a subagent ran in, and the session that started it (OpenCode's task tool)
  *   consumed  evidence that has been credited, so it never votes again
  *
  * It never holds a query, prompt, tool output or file content. It is local and
@@ -91,6 +92,17 @@ export interface EvidenceLine extends Actor {
   simple: boolean;
 }
 
+/**
+ * A subagent that ran in a session of its own: the reducer counts the child's
+ * runs and reads as the parent's, while the child stays their actor.
+ */
+export interface LinkLine {
+  kind: 'link';
+  ts: string;
+  child: string;
+  parent: string;
+}
+
 export interface ConsumedLine {
   kind: 'consumed';
   ts: string;
@@ -98,9 +110,9 @@ export interface ConsumedLine {
   evidence: string;
 }
 
-export type RecallLogLine = RunLine | ClaimLine | EvidenceLine | ConsumedLine;
+export type RecallLogLine = RunLine | ClaimLine | EvidenceLine | LinkLine | ConsumedLine;
 
-const KINDS = new Set<string>(['run', 'claim', 'evidence', 'consumed']);
+const KINDS = new Set<string>(['run', 'claim', 'evidence', 'link', 'consumed']);
 
 /**
  * The recall log of the scope `config` names, beside its votes: a historical

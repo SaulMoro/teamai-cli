@@ -14,9 +14,11 @@ import { COPILOT_TOOL_ID } from '../types.js';
 // the agent's shell (e.g. `teamai recall`) joins the hook's session.
 // Codex: CODEX_SESSION_ID (>= 0.148) is the root session, the id its hooks
 // get; CODEX_THREAD_ID is a subagent's own id. CodeBuddy also sets
-// CLAUDE_SESSION_ID as an alias, so its own variable comes first. Pi is absent:
-// its hook bridge sends no session id, so its hooks record under the pid
-// fallback and PI_SESSION_ID would name a session with no events.
+// CLAUDE_SESSION_ID as an alias, so its own variable comes first. OpenCode
+// exports none of its own: TeamAI's plugin sets TEAMAI_AGENT_SESSION_ID in its
+// bash tool (shell.env), the session its hooks carry. Pi is absent: its hook
+// bridge sends no session id, so its hooks record under the pid fallback and
+// PI_SESSION_ID would name a session with no events.
 export const AGENT_SESSION_ENV = [
     'CLAUDE_CODE_SESSION_ID',    // Claude Code
     'CODEX_SESSION_ID',          // Codex >= 0.148
@@ -24,24 +26,24 @@ export const AGENT_SESSION_ENV = [
     'COPILOT_AGENT_SESSION_ID',  // Copilot CLI >= 1.0.29
     'CURSOR_CONVERSATION_ID',    // Cursor: its hooks' conversation_id
     'CLAUDE_SESSION_ID',         // CodeBuddy's alias and older setups
+    'TEAMAI_AGENT_SESSION_ID',   // OpenCode, through TeamAI's plugin
 ] as const;
 
 // Set in the shell of an agent whose hook bridge sends no session id (Pi's
-// bash tool sets PI_SESSION_ID, OpenCode sets OPENCODE=1). Its hooks record
-// under the pid fallback, and any AGENT_SESSION_ENV value it sees is inherited
-// from the agent that started it. OMP exports no marker.
-export const BRIDGE_AGENT_ENV = ['PI_SESSION_ID', 'OPENCODE'] as const;
+// bash tool sets PI_SESSION_ID). Its hooks record under the pid fallback, and
+// any AGENT_SESSION_ENV value it sees is inherited from the agent that started
+// it. OMP exports no marker.
+export const BRIDGE_AGENT_ENV = ['PI_SESSION_ID'] as const;
 
 /**
  * The running agent's session id from its environment, or undefined when none
  * is set. For CLI commands an agent runs from its shell (`recall`,
  * `contribute`, `session save`), which get no hook payload. Hooks keep using
- * deriveSessionId: a bridge that sends no session_id (OpenCode, Pi, OMP) can
+ * deriveSessionId: a bridge that sends no session_id (Pi, OMP) can
  * inherit another agent's variable when started from that agent's shell.
  *
  * Under a bridge agent marker it returns undefined, so the caller's own
- * fallback applies; an agent started from a Pi or OpenCode shell then falls
- * back too. An agent started from another agent's shell inherits the outer
+ * fallback applies; an agent started from a Pi shell then falls back too. An agent started from another agent's shell inherits the outer
  * agent's variable next to its own, so when several are set the session whose
  * current run started last wins, as the inner agent starts after the outer one.
  * A run starts at the session's latest session_start event: the SessionStart
@@ -64,6 +66,7 @@ const AGENT_FAMILY: Record<typeof AGENT_SESSION_ENV[number], string> = {
     COPILOT_AGENT_SESSION_ID: 'copilot',
     CURSOR_CONVERSATION_ID: 'cursor',
     CLAUDE_SESSION_ID: 'claude',
+    TEAMAI_AGENT_SESSION_ID: 'opencode',
 };
 
 export interface EnvAgentSession {

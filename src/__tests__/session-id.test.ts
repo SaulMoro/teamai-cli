@@ -51,7 +51,7 @@ describe('deriveSessionId', () => {
     });
 
     it('keeps a hook without a session_id on its pid fallback when it inherits another agent\'s variable', () => {
-        // An OpenCode, Pi or OMP bridge started from a Claude Code shell sends no
+        // A Pi or OMP bridge started from a Claude Code shell sends no
         // session_id; its events must not be filed under the outer Claude session.
         delete process.env.CLAUDE_SESSION_ID;
         vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude-session');
@@ -102,6 +102,7 @@ describe('agentSessionIdFromEnv', () => {
             'COPILOT_AGENT_SESSION_ID',
             'CURSOR_CONVERSATION_ID',
             'CLAUDE_SESSION_ID',
+            'TEAMAI_AGENT_SESSION_ID',
         ]);
     });
 
@@ -133,16 +134,21 @@ describe('agentSessionIdFromEnv', () => {
         expect(await agentSessionIdFromEnv()).toBeUndefined();
     });
 
-    // Pi and OpenCode export none of AGENT_SESSION_ENV, and their hooks record
-    // under the pid fallback. Started from Claude Code's shell, they inherit
-    // its variable, which would file their work under the Claude session.
-    it.each([
-        ['PI_SESSION_ID', 'pi-session'],
-        ['OPENCODE', '1'],
-    ])('returns undefined under a bridge agent marker (%s), even with an inherited variable', async (marker, value) => {
+    // Pi exports none of AGENT_SESSION_ENV, and its hooks record under the pid
+    // fallback. Started from Claude Code's shell, it inherits its variable,
+    // which would file its work under the Claude session.
+    it('returns undefined under the Pi bridge marker, even with an inherited variable', async () => {
         vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
-        vi.stubEnv(marker, value);
+        vi.stubEnv('PI_SESSION_ID', 'pi-session');
         expect(await agentSessionIdFromEnv()).toBeUndefined();
+    });
+
+    // The OpenCode plugin sets TEAMAI_AGENT_SESSION_ID in its bash tool's
+    // environment, and its hooks carry that session (#884).
+    it('reads the OpenCode session from TEAMAI_AGENT_SESSION_ID in an OpenCode shell', async () => {
+        vi.stubEnv('OPENCODE', '1');
+        vi.stubEnv('TEAMAI_AGENT_SESSION_ID', 'ses_opencode');
+        expect(await agentSessionFromEnv()).toEqual({ id: 'ses_opencode', agent: 'opencode', unambiguous: true });
     });
 
     describe('in a nested agent session', () => {
@@ -209,6 +215,21 @@ describe('agentSessionIdFromEnv', () => {
             expect(await agentSessionIdFromEnv()).toBe('inner-claude');
         });
 
+        // OPENCODE=1 is no bridge marker: an agent started from an OpenCode
+        // shell inherits it with TEAMAI_AGENT_SESSION_ID, next to its own variable.
+        it('picks the inner agent started from an OpenCode shell, which OPENCODE does not mask', async () => {
+            home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
+            vi.stubEnv('HOME', home);
+            vi.stubEnv('OPENCODE', '1');
+            vi.stubEnv('TEAMAI_AGENT_SESSION_ID', 'outer-opencode');
+            vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'inner-claude');
+            writeEvents([
+                { sessionId: 'outer-opencode', timestamp: '2026-09-28T10:00:00.000Z', type: 'session_start' },
+                { sessionId: 'inner-claude', timestamp: '2026-09-28T10:05:00.000Z', type: 'session_start' },
+            ]);
+            expect(await agentSessionFromEnv()).toEqual({ id: 'inner-claude', agent: 'claude', unambiguous: false });
+        });
+
         it('falls back to the variable order when no set session has events', async () => {
             home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-id-'));
             vi.stubEnv('HOME', home);
@@ -252,7 +273,7 @@ describe('agentSessionFromEnv', () => {
     it('has no session and is not unambiguous when no variable is set, or under a bridge marker', async () => {
         expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
         vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'outer-claude');
-        vi.stubEnv('OPENCODE', '1');
+        vi.stubEnv('PI_SESSION_ID', 'pi-session');
         expect(await agentSessionFromEnv()).toEqual({ unambiguous: false });
     });
 });
