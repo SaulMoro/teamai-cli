@@ -120,6 +120,14 @@ delivered are at the new revision. A full pull that holds skills or agents on a
 namespace collision writes its revision as `rev` but keeps the entry's earlier
 bases as push bases, since the held copies stay at them. Like a full pull, an
 inherited pull already synced at the team's revision writes nothing (#823).
+The entry's `agentModels` records, by agent stem and tool, the model, effort
+and resolution step each YAML agent copy received when pull last wrote it
+(#830). A copy pull keeps as the member's edit, or holds because its model
+cannot be resolved, keeps its old entry. The fast path compares each agent's
+current resolution with it and redeploys only the agents that differ, through
+the same ledger, so HOME's entry and each project checkout's are separate. An
+agent with no entry is redeployed only where an alias replaces its `model`,
+which is what an older CLI wrote as is.
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

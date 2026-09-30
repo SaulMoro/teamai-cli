@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import matter from 'gray-matter';
 import { isToolInstalledForConfig, ResourceHandler, type ScanForPushOptions } from './base.js';
-import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
+import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { resolveToolBaseDir, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
@@ -17,7 +17,7 @@ import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from 
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
-import { isModelAlias, loadModelAliases, resolveAgentModel, type ModelAliases, type ModelResolution } from '../models/aliases.js';
+import { isModelAlias, loadModelAliases, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
   parseAgentYaml,
   serializeAgentYaml,
@@ -671,20 +671,24 @@ export class AgentsHandler extends ResourceHandler {
     if (aliases.ok) for (const warning of aliases.warnings) warnOnce(`[agents] ${warning}`);
     // Say why an agent reaches nothing before the loop silently delivers
     // nowhere: `resolveRenders` skips an unparsable spec for every tool alike.
+    let specModel: string | undefined;
     if (!isLegacyAgent(agentItem)) {
       const parseResult: ParseResult = parseAgentYaml(content, `${item.name}.yaml`);
       if (!parseResult.ok) {
         log.warn(`[agents] Skipped ${item.name}.yaml: ${parseResult.reason}`);
         return;
       }
-      if (!aliases.ok && parseResult.spec.model !== undefined) {
+      specModel = parseResult.spec.model;
+      if (!aliases.ok && specModel !== undefined) {
         log.warn(`[agents] Held ${item.name}.yaml: ${aliases.reason}. Its deployed copies are kept and no new ones are written until the file is fixed.`);
       }
     } else {
       warnLegacyAlias(item, content, aliases);
     }
 
-    for (const { tool, dest, render } of await this.resolveRenders(teamConfig, localConfig, item, aliases)) {
+    const renders = await this.resolveRenders(teamConfig, localConfig, item, aliases);
+    if (ledger && specModel !== undefined) warnAliasGone(item, specModel, renders, ledger.agentModels[item.name]);
+    for (const { tool, dest, render } of renders) {
       const destDir = path.dirname(dest);
       try {
         if (ledger && await keepsEditedCopy(ledger, item, { tool, dest, content: render.content })) continue;
@@ -698,7 +702,10 @@ export class AgentsHandler extends ResourceHandler {
           await removeStaleAgentSiblings(destDir, item.name, render.ext);
         }
         await writeFile(dest, render.content);
-        if (ledger) await recordDelivered(ledger.hashes, dest);
+        if (ledger) {
+          await recordDelivered(ledger.hashes, dest);
+          recordAgentModel(ledger.agentModels, item.name, tool, render.model?.recorded);
+        }
         log.debug(`Rendered agent ${item.name} → ${tool} (${render.ext})`);
       } catch (e) {
         log.warn(`Failed to sync agent ${item.name} to ${tool}: ${(e as Error).message}`);
@@ -810,13 +817,43 @@ export class AgentsHandler extends ResourceHandler {
   }
 
   /**
+   * The YAML agents among `items` that a pull would now write with another
+   * model or effort than `records` says a tool's copy received (#830). A copy
+   * with no record was written by a CLI that recorded nothing and resolved no
+   * alias, so it differs only where this CLI replaces the spec's `model`: an
+   * agent without an alias is never rewritten for want of a record. A tool
+   * whose model cannot be resolved is held, so it never counts.
+   */
+  async agentsWithChangedModels(
+    items: readonly ResourceItem[],
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    records: AgentModelRecords,
+  ): Promise<ResourceItem[]> {
+    const aliases = await loadModelAliases(localConfig);
+    const changed: ResourceItem[] = [];
+    for (const item of items) {
+      if (isLegacyAgent(item as AgentResourceItem)) continue;
+      const renders = await this.resolveRenders(teamConfig, localConfig, item, aliases);
+      const differs = renders.some(({ tool, render }) => {
+        if (!render.model) return false;
+        const recorded = records[item.name]?.[tool];
+        return recorded ? !sameAgentModel(recorded, render.model.recorded) : render.model.replacesSpecModel;
+      });
+      if (differs) changed.push(item);
+    }
+    return changed;
+  }
+
+  /**
    * Revocation pass for role/project scoping. Removes the deployed copies of
    * every agent whose namespace is no longer active, on every installed tool,
    * and of every root agent a namespace agent now replaces.
    *
    * Data-safety gate, same as inactive skills: a file is deleted only when it
-   * is byte-equal to what pull would render from the team source. A local edit
-   * is kept and reported so nothing unpushed is lost. An agent still deployed
+   * is byte-equal to what pull would render from the team source, with the
+   * model resolved now or with the one recorded when teamai wrote the copy
+   * (#830). A local edit is kept and reported so nothing unpushed is lost. An agent still deployed
    * to the same tool destination never qualifies, so a replaced root agent is
    * only removed from a tool its replacement does not target.
    */
@@ -847,6 +884,8 @@ export class AgentsHandler extends ResourceHandler {
       if (!await this.parsesAsAgent(item)) unusable.add(item.name);
     }
     const aliases = await loadModelAliases(localConfig);
+    const { recordedAgentModels } = await import('../pull.js');
+    const records = await recordedAgentModels(localConfig);
 
     for (const { tool, dir: destDir } of await this.agentToolDirs(teamConfig, localConfig)) {
       const activeDestinations = new Set<string>();
@@ -861,7 +900,9 @@ export class AgentsHandler extends ResourceHandler {
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
         const current = await readFileSafe(deployed);
         if (current === null) continue;
-        if (current !== expected.content) {
+        const recorded = records[item.name]?.[tool];
+        const recordedRender = recorded ? await this.renderedForTool(item, tool, aliases, recorded) : null;
+        if (current !== expected.content && current !== recordedRender?.content) {
           log.warn(`[${localConfig.scope}] Kept agent "${item.name}" (${tool}): it differs from the team source ${item.relativePath}. Back it up, then delete it manually.`);
           continue;
         }
@@ -885,9 +926,9 @@ export class AgentsHandler extends ResourceHandler {
     localConfig: LocalConfig,
     item: ResourceItem,
     aliases?: ModelAliases,
-  ): Promise<{ tool: ToolName; dest: string; render: RenderResult }[]> {
+  ): Promise<{ tool: ToolName; dest: string; render: AgentRender }[]> {
     const agentItem = item as AgentResourceItem;
-    const renders: { tool: ToolName; dest: string; render: RenderResult }[] = [];
+    const renders: { tool: ToolName; dest: string; render: AgentRender }[] = [];
     const modelAliases = aliases ?? await loadModelAliases(localConfig);
 
     for (const { tool, dir } of await this.agentToolDirs(teamConfig, localConfig)) {
@@ -947,9 +988,15 @@ export class AgentsHandler extends ResourceHandler {
    * What `pullItem` writes for this agent on this tool, or null when the tool
    * is not a target (legacy `.md` only reaches LEGACY_MD_TOOLS, a YAML spec
    * honours `targets`, an unparsable spec is skipped like pull skips it) or
-   * its model cannot be resolved, which holds the deployed copy.
+   * its model cannot be resolved, which holds the deployed copy. With
+   * `recorded`, the bytes it wrote with that recorded model instead.
    */
-  private async renderedForTool(item: AgentResourceItem, tool: ToolName, aliases: ModelAliases): Promise<RenderResult | null> {
+  private async renderedForTool(
+    item: AgentResourceItem,
+    tool: ToolName,
+    aliases: ModelAliases,
+    recorded?: RecordedAgentModel,
+  ): Promise<AgentRender | null> {
     const content = await readFileSafe(item.sourcePath);
     if (content === null) return null;
     if (isLegacyAgent(item)) {
@@ -958,6 +1005,7 @@ export class AgentsHandler extends ResourceHandler {
     const parsed = parseAgentYaml(content, `${item.name}.yaml`);
     if (!parsed.ok) return null;
     if (parsed.spec.targets && !parsed.spec.targets.includes(tool)) return null;
+    if (recorded) return renderWithModel(parsed.spec, tool, recorded);
     const resolved = renderResolved(parsed.spec, tool, aliases);
     return resolved.ok ? resolved.render : null;
   }
@@ -1102,6 +1150,16 @@ function mergeCanonicalEdits(
   return { ok: true, spec: merged };
 }
 
+/** What pull writes for one tool: the bytes, and for a YAML spec the model they carry. */
+type AgentRender = RenderResult & { model?: DeployedModel };
+
+interface DeployedModel {
+  /** What pull records for the copy once it writes these bytes. */
+  recorded: RecordedAgentModel;
+  /** The spec's own `model` is replaced, which a CLI without aliases wrote as is. */
+  replacesSpecModel: boolean;
+}
+
 /**
  * What `tool` receives for `spec`, its model aliases resolved: the one
  * rendering pull writes and push compares against. Fails while the model
@@ -1111,12 +1169,71 @@ function renderResolved(
   spec: AgentSpec,
   tool: ToolName,
   aliases: ModelAliases,
-): { ok: true; render: RenderResult; resolution: ModelResolution & { ok: true } } | { ok: false; reason: string } {
+): { ok: true; render: AgentRender } | { ok: false; reason: string } {
   const resolution = resolveAgentModel(aliases, spec, tool);
   if (!resolution.ok) return resolution;
-  // An extras model and a literal render as written; only an alias is replaced.
-  const replaced = resolution.step === 'team' || (resolution.step === 'default' && spec.model !== undefined);
-  return { ok: true, render: renderForTool(spec, tool, replaced ? resolution : undefined), resolution };
+  const { ok: _ok, ...resolved } = resolution;
+  return { ok: true, render: renderWithModel(spec, tool, resolved) };
+}
+
+/**
+ * `spec` rendered for `tool` with `resolved`, a resolution or its record. An
+ * extras model and a literal render as written; only an alias is replaced,
+ * so an agent without one has the same bytes as before aliases existed.
+ */
+function renderWithModel(spec: AgentSpec, tool: ToolName, resolved: RecordedAgentModel): AgentRender {
+  const replacesSpecModel = spec.model !== undefined && !KEEPS_SPEC_MODEL.has(resolved.step);
+  const recorded: RecordedAgentModel = {
+    step: resolved.step,
+    ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+    ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
+  };
+  return { ...renderForTool(spec, tool, replacesSpecModel ? recorded : undefined), model: { recorded, replacesSpecModel } };
+}
+
+/** The steps that leave the spec's `model` as written: every other one comes from an alias. */
+const KEEPS_SPEC_MODEL: ReadonlySet<string> = new Set<ResolutionStep>(['extras', 'literal']);
+
+function sameAgentModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
+  return a.step === b.step && a.model === b.model && a.effort === b.effort;
+}
+
+/**
+ * Record what `tool`'s copy of `stem` received. A legacy `.md` carries no
+ * resolved model, so writing one over a YAML agent's copy drops that record.
+ */
+function recordAgentModel(records: AgentModelRecords, stem: string, tool: ToolName, recorded: RecordedAgentModel | undefined): void {
+  if (recorded) {
+    records[stem] = { ...records[stem], [tool]: recorded };
+    return;
+  }
+  const byTool = records[stem];
+  if (!byTool) return;
+  delete byTool[tool];
+  if (Object.keys(byTool).length === 0) delete records[stem];
+}
+
+/**
+ * An alias the team removed turns `model: <name>` into a literal model name
+ * no tool knows. Said when a copy that received a model from the alias at
+ * the last pull is about to receive the name itself.
+ */
+function warnAliasGone(
+  item: ResourceItem,
+  specModel: string,
+  renders: readonly { tool: ToolName; render: AgentRender }[],
+  records: Record<string, RecordedAgentModel> | undefined,
+): void {
+  if (!records) return;
+  const was = renders.find(({ tool, render }) => {
+    const recorded = records[tool];
+    return render.model?.recorded.step === 'literal' && recorded !== undefined
+      && recorded.model !== undefined && !KEEPS_SPEC_MODEL.has(recorded.step);
+  });
+  if (!was) return;
+  const before = records[was.tool]!.model!;
+  log.warn(`[agents] ${item.relativePath} sets model: ${specModel}, which is no longer a model alias, so each tool now receives "${specModel}" literally `
+    + `(${was.tool} received "${before}" at the last pull). Define "${specModel}" in models/aliases.yaml again, or set a concrete model in ${item.relativePath}.`);
 }
 
 /**

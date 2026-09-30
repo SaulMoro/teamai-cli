@@ -33,6 +33,8 @@ import type { AgentSpec, ToolName } from '../resources/agent-format.js';
 import { serializeAgentYaml } from '../resources/agent-format.js';
 import { log } from '../utils/logger.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
+import { loadStateForScope, saveStateForScope } from '../config.js';
+import { checkoutKey } from '../pull.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 const STRONG = {
@@ -323,6 +325,30 @@ describe('AgentsHandler pull: model aliases', () => {
     expect(never['claude']).toEqual({});
     const plain = await pullTo(['claude'], makeSpec({ name: 'plain' }));
     expect(plain['claude']).toHaveProperty('name', 'plain');
+  });
+
+  it('removes an inactive namespace agent written with the model its record names', async () => {
+    await writeAliases(STRONG);
+    const spec = makeSpec({ name: 'vr', model: 'strong' });
+    const yamlPath = path.join(repoPath, 'agents', 'fe', 'vr.yaml');
+    await fse.outputFile(yamlPath, serializeAgentYaml(spec));
+    await fse.ensureDir(path.join(homeDir, '.claude'));
+    const config = teamConfigFor(['claude']);
+    await handler.pullItem({ name: 'vr', type: 'agents', sourcePath: yamlPath, relativePath: 'agents/fe/vr.yaml', namespace: 'fe' }, config, localConfig);
+    const deployed = path.join(homeDir, '.claude/agents/vr.md');
+    expect(matter(await fse.readFile(deployed, 'utf-8')).data).toMatchObject({ model: 'opus' });
+    // What that pull recorded; the alias has changed since.
+    const state = await loadStateForScope(localConfig);
+    state.lastPullByWorkspace = { [await checkoutKey(homeDir)]: {
+      rev: 'abc1234', targets: ['claude'], agentModels: { vr: { claude: { step: 'team', model: 'opus', effort: 'high' } } },
+    } };
+    await saveStateForScope(state, localConfig);
+    await writeAliases({ aliases: { strong: { claude: 'fable' } } });
+
+    await handler.cleanupInactiveNamespaces(config, localConfig, []);
+
+    expect(await fse.pathExists(deployed)).toBe(false);
+    expect(vi.mocked(log.warn).mock.calls.flat().join('\n')).not.toMatch(/Kept agent/);
   });
 
   describe('push', () => {

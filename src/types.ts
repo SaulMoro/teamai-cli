@@ -679,6 +679,20 @@ export const PendingPushSchema = z.object({
 export type PendingPushItem = z.infer<typeof PendingPushItemSchema>;
 export type PendingPush = z.infer<typeof PendingPushSchema>;
 
+/**
+ * The model and effort one tool's copy of an agent received, and the
+ * resolution step that produced them (`ResolutionStep` in models/aliases.ts).
+ * `step` is a plain string so a record a newer CLI wrote still parses.
+ */
+const RecordedAgentModelSchema = z.object({
+  step: z.string(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+});
+export type RecordedAgentModel = z.infer<typeof RecordedAgentModelSchema>;
+/** `RecordedAgentModel` by agent stem, then tool. */
+export type AgentModelRecords = Record<string, Record<string, RecordedAgentModel>>;
+
 export const StateSchema = z.object({
   lastPush: z.string().nullable().default(null),
   lastPull: z.string().nullable().default(null),
@@ -704,12 +718,17 @@ export const StateSchema = z.object({
    * rule and agent file path of the checkout, which pull and the pre-push sync
    * update. Pull keeps a copy that no longer matches it; without it, pull
    * overwrites as before (#822). An older CLI that saves state drops it.
+   * `agentModels` is what each YAML team agent's model resolved to in each
+   * tool when teamai last wrote that copy, by agent stem (copies deploy
+   * flattened, one file per stem) and tool (#830). An older CLI drops it too,
+   * which the next pull reads as agents it has to redeploy.
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),
     targets: z.array(z.string()),
     pushBaseRevs: z.array(z.string()).optional(),
     delivered: z.record(z.string(), z.string()).optional(),
+    agentModels: z.record(z.string(), z.record(z.string(), RecordedAgentModelSchema)).optional(),
   })).optional(),
   /** Git commit hash synchronized through the safe user-resource inheritance channel. */
   lastInheritedPullRev: z.string().nullable().optional(),

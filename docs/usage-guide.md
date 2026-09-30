@@ -1859,6 +1859,7 @@ aliases:
 - `tool_extras.<tool>.model` pins that tool to a concrete model and skips the alias, its effort included. An effort field in `tool_extras.<tool>` without a model overrides only the alias's effort.
 - A `model` that is not a string is rejected when the agent is read. A legacy `agents/<name>.md` is copied as is, so pull warns when its `model` is an alias.
 - While `models/aliases.yaml` cannot be read, pull warns and holds each agent whose model depends on it: deployed copies stay and new ones are not written. Push skips those agents and says why.
+- Pull records the model and effort each agent copy received, so an ordinary `teamai pull` applies a change even when the team repo has not moved, such as the first pull after upgrading from a CLI that wrote `model: strong` as is. It rewrites only the agents whose model changed and keeps a copy you edited. When the alias an agent used is removed, pull warns that its `model` is now written as is.
 
 ### GitHub Copilot CLI
 

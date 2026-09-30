@@ -25,7 +25,7 @@ import {
   forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
-import type { GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
+import type { AgentModelRecords, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
 import {
   getUserLearningsDir,
   TEAMAI_CULTURE_START,
@@ -689,15 +689,85 @@ export async function userScopeRecord(state: State): Promise<CheckoutRecord> {
   return record;
 }
 
+/** The record of the checkout `localConfig`'s pulls deliver into, if any. */
+async function deliveringCheckoutRecord(localConfig: LocalConfig, state?: State): Promise<CheckoutRecord | undefined> {
+  const key = await checkoutRecordKey(localConfig);
+  if (!key) return undefined;
+  return (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace?.[key];
+}
+
 /**
  * What teamai last wrote at each skill, rule and agent file of the checkout
  * `localConfig`'s pulls deliver into, or undefined when nothing is recorded
  * yet (#822).
  */
 export async function deliveredHashes(localConfig: LocalConfig, state?: State): Promise<DeliveredHashes | undefined> {
-  const key = await checkoutRecordKey(localConfig);
-  if (!key) return undefined;
-  return (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace?.[key]?.delivered;
+  return (await deliveringCheckoutRecord(localConfig, state))?.delivered;
+}
+
+/**
+ * The model and effort each agent copy in that checkout received when teamai
+ * last wrote it, by stem and tool (#830). Empty when nothing is recorded.
+ * The user scope's and each project checkout's records are separate, as
+ * their copies are.
+ */
+export async function recordedAgentModels(localConfig: LocalConfig, state?: State): Promise<AgentModelRecords> {
+  return (await deliveringCheckoutRecord(localConfig, state))?.agentModels ?? {};
+}
+
+/** Put `agentModels` on `record`, leaving the key out while there are none. */
+function setAgentModels(record: CheckoutRecord, agentModels: AgentModelRecords): void {
+  if (Object.keys(agentModels).length > 0) record.agentModels = agentModels;
+  else delete record.agentModels;
+}
+
+/** The ledger a pull of that checkout starts from (see DeliveryLedger). */
+async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Promise<DeliveryLedger> {
+  const record = await deliveringCheckoutRecord(localConfig, state);
+  return openLedger(record?.delivered, record?.agentModels);
+}
+
+/**
+ * Agents on the "Already synced" fast path (#830): an agent's model can
+ * change while the team repo stays put — a CLI upgrade that resolves an alias
+ * an older one wrote literally, and later the member's own alias file or a
+ * switched tool. Only the agents whose model a pull would now write
+ * differently from the record are redeployed, through the same `pullItem` a
+ * full sync uses, so a copy the member changed is kept. No git work: this
+ * runs on every session start.
+ */
+async function redeployAgentsWithChangedModels(
+  freshConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+  scopeLabel: string,
+): Promise<void> {
+  try {
+    const key = await checkoutRecordKey(localConfig);
+    if (!key) return;
+    const desired = await resolveDesiredAgents(freshConfig, localConfig, roleContext);
+    // The full sync that met this collision said so and kept the installed agents.
+    if (desired.kind === 'conflict') return;
+    const state = await loadStateForScope(localConfig);
+    const ledger = await openCheckoutLedger(localConfig, state);
+    const handler = getHandler('agents') as AgentsHandler;
+    const changed = await handler.agentsWithChangedModels(desired.items, freshConfig, localConfig, ledger.agentModels);
+    if (changed.length === 0) return;
+    for (const item of changed) await handler.pullItem(item, freshConfig, localConfig, ledger);
+    reportKept(ledger, scopeLabel);
+    // A project checkout reaches the fast path only through its own record.
+    const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];
+    if (!record) return;
+    record.delivered = ledger.hashes;
+    setAgentModels(record, ledger.agentModels);
+    await saveStateForScope(state, localConfig);
+    log.success(`[${scopeLabel}] Updated the model of ${changed.length} agent(s): ${changed.map((item) => item.name).join(', ')}`);
+  } catch (e) {
+    log.warn(
+      `[${scopeLabel}] Could not check whether agent models changed: ${(e as Error).message}. `
+      + 'Deployed agents may still carry the previous model; fix the cause, then run `teamai pull --force`.',
+    );
+  }
 }
 
 /**
@@ -712,6 +782,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
       rev: FORCED_FULL_SYNC_REV,
       targets: record.targets,
       ...(record.delivered ? { delivered: record.delivered } : {}),
+      ...(record.agentModels ? { agentModels: record.agentModels } : {}),
     };
     return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
   }));
@@ -1067,6 +1138,10 @@ async function pullForScope(
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
+          // The repo has not moved, but an agent's model may have (#830).
+          if (resourceTypes.includes('agents')) {
+            await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel);
+          }
           // A repo that has not moved can still carry a malformed env.yaml, or
           // scope a variable this CLI version now withholds; the Step 2 env
           // branch below is unreachable from here.
@@ -1098,7 +1173,7 @@ async function pullForScope(
 
   // What teamai last wrote into this checkout: a copy changed since is kept,
   // and this pull's writes are recorded when the state is saved (#822).
-  const ledger = openLedger(await deliveredHashes(localConfig));
+  const ledger = await openCheckoutLedger(localConfig);
 
   // Step 2: Sync each resource type
   let totalSynced = 0;
@@ -1447,6 +1522,7 @@ async function pullForScope(
         : state.lastPullByWorkspace?.[recordKey] ?? { rev: FORCED_FULL_SYNC_REV, targets: syncedTargets };
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
+      setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [recordKey]: record };
     } else if (recordKey && deliveredRev) {
       // A forced full sync (lastPullRev cleared) leaves every other checkout
@@ -1461,6 +1537,7 @@ async function pullForScope(
         : undefined;
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
       const record: CheckoutRecord = { rev: deliveredRev, targets: syncedTargets, delivered: ledger.hashes };
+      setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {
         ...others,
         [recordKey]: keptBases.length > 0 ? { ...record, pushBaseRevs: keptBases } : record,

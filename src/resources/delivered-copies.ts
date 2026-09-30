@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
-import type { DeliveryTarget, ResourceItem } from '../types.js';
+import type { AgentModelRecords, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 
@@ -53,10 +53,21 @@ export interface DeliveryLedger {
   /** What the pull leaves on record: `previous` with its writes and removals applied. */
   readonly hashes: DeliveredHashes;
   readonly kept: { dest: string; teamRelPath: string; teamChanged: boolean }[];
+  /**
+   * The model each agent copy received (#830): the record the pull started
+   * from until it writes that copy, then what it wrote. A copy pull kept or
+   * held keeps its old entry.
+   */
+  readonly agentModels: AgentModelRecords;
 }
 
-export function openLedger(previous: DeliveredHashes | undefined): DeliveryLedger {
-  return { previous, hashes: { ...previous }, kept: [] };
+export function openLedger(previous: DeliveredHashes | undefined, agentModels?: AgentModelRecords): DeliveryLedger {
+  return {
+    previous,
+    hashes: { ...previous },
+    kept: [],
+    agentModels: Object.fromEntries(Object.entries(agentModels ?? {}).map(([stem, byTool]) => [stem, { ...byTool }])),
+  };
 }
 
 function sha256(content: string | Buffer): string {
