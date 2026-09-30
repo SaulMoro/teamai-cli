@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
-import { injectClaudeMdSection } from '../utils/claudemd.js';
+import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 
 const START = '<!-- [test:start] -->';
 const END = '<!-- [test:end] -->';
@@ -73,5 +73,35 @@ describe('injectClaudeMdSection', () => {
         // Should contain both the corrupted original and the new appended block
         expect(result).toContain('fixed');
         expect(result).toContain(END);
+    });
+});
+
+describe('removeClaudeMdSection', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+        tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-claudemd-'));
+    });
+
+    afterEach(async () => {
+        await fse.remove(tmpDir);
+    });
+
+    it('with deleteIfEmpty, deletes a file that held only the section', async () => {
+        const filePath = path.join(tmpDir, 'AGENTS.md');
+        await fse.writeFile(filePath, `\n\n${makeBlock('x')}\n`);
+
+        expect(await removeClaudeMdSection(filePath, START, END, { deleteIfEmpty: true })).toBe(true);
+
+        expect(await fse.pathExists(filePath)).toBe(false);
+    });
+
+    it('with deleteIfEmpty, leaves an empty file that has no section', async () => {
+        const filePath = path.join(tmpDir, 'AGENTS.md');
+        await fse.writeFile(filePath, '\n');
+
+        expect(await removeClaudeMdSection(filePath, START, END, { deleteIfEmpty: true })).toBe(false);
+
+        expect(await fse.readFile(filePath, 'utf8')).toBe('\n');
     });
 });

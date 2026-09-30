@@ -656,10 +656,8 @@ export class RulesHandler extends ResourceHandler {
           await injectClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, block);
           continue;
         }
-        await removeClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END);
         // A file teamai created for the block alone goes with it.
-        const rest = await readFileSafe(file);
-        if (rest !== null && rest.trim() === '') await remove(file);
+        await removeClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, { deleteIfEmpty: true });
       } catch (e) {
         log.warn(`Failed to update team rules in ${file}: ${(e as Error).message}`);
       }

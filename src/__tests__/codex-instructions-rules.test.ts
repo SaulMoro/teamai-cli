@@ -197,6 +197,15 @@ describe('Codex reads team rules from AGENTS.md in project scope (#938)', () => 
     expect(await fse.pathExists(agentsMd())).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, `.${tool}`))).toBe(false);
   });
+
+  it.each([['empty', ''], ['whitespace-only', '\n  \n']])('keeps a member\'s %s AGENTS.md in a Pi-only project, which holds no block to remove', async (_label, content) => {
+    await fse.ensureDir(path.join(projectRoot, '.pi'));
+    await fse.writeFile(agentsMd(), content);
+
+    await handler.pullAllRules(teamConfig, { ...localConfig, enabledAgents: ['pi'] } as LocalConfig);
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe(content);
+  });
 });
 
 describe('pull on a machine without Codex (#938)', () => {
