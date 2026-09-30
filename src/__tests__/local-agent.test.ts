@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import { agentHookDescription } from '../hooks.js';
+import { TEAMAI_CLAUDEMD_START } from '../types.js';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -1682,6 +1683,36 @@ describe('local-agent: cmds[] migration', () => {
     const manifest = await fse.readJson(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'));
     expect(manifest.scopes.user.claudemd?.['doc-a']).toBeDefined();
     expect(manifest.scopes.user.rules?.['doc-a']).toBeUndefined();
+  });
+
+  // Codex's default `claudemd` (#938) makes a Codex report a target of this sync.
+  it('handle_type=prompt from Codex writes the prompt into ~/.codex/AGENTS.md when ~/.codex exists', async () => {
+    await fse.ensureDir(path.join(tmpDir, '.codex'));
+
+    const acks = await runResponse({
+      cmds: [{
+        id: 4, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-codex',
+        version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-codex.md', scope: 'user',
+      }],
+    }, undefined, 'codex');
+
+    expect(acks.find((a) => a.id === 4)?.status).toBe('success');
+    const content = await fse.readFile(path.join(tmpDir, '.codex', 'AGENTS.md'), 'utf8');
+    expect(content).toContain(TEAMAI_CLAUDEMD_START);
+    expect(content).toContain('# content');
+  });
+
+  it('handle_type=prompt from Codex creates no ~/.codex when Codex is not installed', async () => {
+    const acks = await runResponse({
+      cmds: [{
+        id: 5, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-codex',
+        version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-codex.md', scope: 'user',
+      }],
+    }, undefined, 'codex');
+
+    expect(await fse.pathExists(path.join(tmpDir, '.codex'))).toBe(false);
+    // The sync reached no tool, which the ack reports rather than claiming success.
+    expect(acks.find((a) => a.id === 5)?.status).toBe('failed');
   });
 
   it('syncs and removes prompts under custom COPILOT_HOME without replacing user content', async () => {
