@@ -2853,7 +2853,7 @@ function updateManifestRecord(
 ): void {
   const records = manifest[key] ?? [];
   const idx = records.findIndex((r: ManagedMcpRecord) => r.name === name);
-  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved }, ...bare ? { bare: true } : {} };
+  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved }, ...bare === undefined ? {} : { bare } };
   if (idx >= 0) {
     records[idx] = record;
   } else {
@@ -2941,7 +2941,7 @@ async function installMcpServer(
     if (!doc) {
       throw new Error(`install_mcp: cannot parse ${targetFile}`);
     }
-    if (doc.servers[slug] !== undefined && !ownsJsonMcpEntry(doc, slug, owned)) {
+    if (doc.servers[slug] !== undefined && !ownsJsonMcpEntry(doc, slug, owned, allowBare)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
     // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
@@ -2949,15 +2949,16 @@ async function installMcpServer(
     const bareCopy = isTeamaiBareCopy(doc, slug, owned);
     // Check Git without changing it until ownership is persisted. Recheck protection before writing the credential (#882).
     const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
-    updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
+    const priorPlacement = owned.find((record) => record.name === slug)?.bare;
+    updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, priorPlacement === doc.bare ? priorPlacement : undefined);
     await writeJsonAtomic(manifestPath, manifest);
     if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     if (bareCopy) delete doc.data[slug];
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
-    if (doc.bare) {
+    if (allowBare) {
       // Placement is evidence of a completed write, not just an attempted install.
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, true);
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, doc.bare);
       await writeJsonAtomic(manifestPath, manifest);
     }
   }
@@ -3057,7 +3058,7 @@ async function uninstallMcpServer(
     const doc = await readJsonDoc(targetFile, serverKey, allowBare);
     // Also a bare entry another tool's mcpServers now sits beside (#882).
     const bareCopy = doc !== null && isTeamaiBareCopy(doc, slug, owned);
-    const ownsEntry = doc !== null && ownsJsonMcpEntry(doc, slug, owned);
+    const ownsEntry = doc !== null && ownsJsonMcpEntry(doc, slug, owned, allowBare);
     if (doc && ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy)) {
       if (ownsEntry) delete doc.servers[slug];
       if (bareCopy) delete doc.data[slug];

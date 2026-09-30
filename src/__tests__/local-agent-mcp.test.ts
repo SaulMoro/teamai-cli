@@ -251,6 +251,83 @@ describe('local-agent: MCP install/uninstall commands', () => {
     }
   });
 
+  it.each([
+    ['legacy', 'install_mcp', false], ['legacy', 'uninstall_mcp', false],
+    ['failed placement write', 'install_mcp', false], ['failed placement write', 'uninstall_mcp', false],
+    ['legacy', 'install_mcp', true], ['legacy', 'uninstall_mcp', true],
+    ['failed placement write', 'install_mcp', true], ['failed placement write', 'uninstall_mcp', true],
+  ] as const)('preserves a keyed member entry after an unmarked bare install from %s during %s, identical=%s', async (source, type, identical) => {
+    const workspacePath = path.join(tmpDir, 'copilot-unmarked-member');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeFile(configFile, '');
+    const command = {
+      id: 9020, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0',
+      mcp_config: { transport: 'http', url: 'https://team.example/mcp' },
+    };
+    const fs = await import('../utils/fs.js');
+    const write = fs.writeJsonAtomic;
+    let writes = 0;
+    const spy = vi.spyOn(fs, 'writeJsonAtomic').mockImplementation(async (file, ...args) => {
+      if (source === 'failed placement write' && file.endsWith('/managed-mcp.json') && ++writes === 2) {
+        throw new Error('simulated placement write failure');
+      }
+      return write(file, ...args);
+    });
+    const installed = await runResponse({ cmds: [command] }, 'copilot');
+    spy.mockRestore();
+    expect(installed[0].status).toBe(source === 'legacy' ? 'success' : 'failed');
+    if (source === 'failed placement write') expect(installed[0].error).toContain('simulated placement write failure');
+    const wsDir = path.join(workspacePath, '.teamai', 'workspaces');
+    const [id] = await fse.readdir(wsDir);
+    const manifestFile = path.join(wsDir, id, 'managed-mcp.json');
+    const manifest = await fse.readJson(manifestFile);
+    if (source === 'legacy') {
+      delete manifest['copilot:project'][0].bare;
+      await fse.writeJson(manifestFile, manifest);
+    }
+    expect((await fse.readJson(manifestFile))['copilot:project'][0].bare).toBeUndefined();
+    const doc = await fse.readJson(configFile);
+    const mine = identical ? doc[COPILOT_SERVER] : { type: 'http', tools: ['*'], url: 'https://member.example/mcp' };
+    await fse.writeJson(configFile, { ...doc, mcpServers: { [COPILOT_SERVER]: mine } });
+
+    const acks = await runResponse({ cmds: [{ ...command, id: 9021, type }] }, 'copilot');
+
+    expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toEqual(mine);
+    expect((await fse.readJson(configFile))[COPILOT_SERVER]).toEqual(doc[COPILOT_SERVER]);
+    expect(acks[0].status).toBe(type === 'install_mcp' ? 'failed' : 'success');
+    if (type === 'install_mcp') expect(acks[0].error).toContain('not managed by teamai');
+  });
+
+  it('updates a legacy keyed Copilot entry with matching content and records keyed placement', async () => {
+    const workspacePath = path.join(tmpDir, 'copilot-legacy-keyed');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeJson(configFile, { mcpServers: {} });
+    const command = {
+      id: 9030, type: 'install_mcp', scope: 'workspace', workspace_path: workspacePath,
+      slug: COPILOT_SERVER, version: '1.0.0',
+      mcp_config: { transport: 'http', url: 'https://team.example/mcp' },
+    };
+    expect((await runResponse({ cmds: [command] }, 'copilot'))[0].status).toBe('success');
+    const wsDir = path.join(workspacePath, '.teamai', 'workspaces');
+    const [id] = await fse.readdir(wsDir);
+    const manifestFile = path.join(wsDir, id, 'managed-mcp.json');
+    const manifest = await fse.readJson(manifestFile);
+    expect(manifest['copilot:project'][0].bare).toBe(false);
+    delete manifest['copilot:project'][0].bare;
+    await fse.writeJson(manifestFile, manifest);
+
+    const updated = await runResponse({ cmds: [{ ...command, id: 9031, mcp_config: { transport: 'http', url: 'https://team.example/updated' } }] }, 'copilot');
+
+    expect(updated[0].status).toBe('success');
+    expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER].url).toBe('https://team.example/updated');
+    expect((await fse.readJson(manifestFile))['copilot:project'][0].bare).toBe(false);
+    expect((await runResponse({ cmds: [{ ...command, id: 9032, type: 'uninstall_mcp' }] }, 'copilot'))[0].status).toBe('success');
+    expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toBeUndefined();
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');

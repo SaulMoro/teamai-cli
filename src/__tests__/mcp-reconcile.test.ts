@@ -1187,6 +1187,25 @@ servers:
         if (action === 'drop' || action === 'remove') expect((await fse.readJson(file))['with-secret']).toBeUndefined();
       });
 
+      it.each([['update', false], ['remove', false], ['update', true], ['remove', true]] as const)('preserves a keyed member entry with an unmarked bare record during %s, identical=%s', async (action, identical) => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+        const manifest = await fse.readJson(manifestFile);
+        delete manifest['copilot:project'][0].bare;
+        await fse.writeJson(manifestFile, manifest);
+        const file = path.join(projectRoot, '.mcp.json');
+        const doc = await fse.readJson(file);
+        const mine = identical ? doc['with-secret'] : { type: 'http', tools: ['*'], url: 'https://member.example/mcp' };
+        await fse.writeJson(file, { ...doc, mcpServers: { 'with-secret': mine } });
+        if (action === 'update') await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'new-team-value')}    tools: [copilot]\n`);
+
+        const result = await reconcileMcpForConfig(shared(), projectConfig, action === 'remove' ? { removeAll: true } : {});
+
+        expect((await fse.readJson(file)).mcpServers['with-secret']).toEqual(mine);
+        expect((await fse.readJson(file))['with-secret']).toEqual(doc['with-secret']);
+        if (action === 'update') expect(result.changes).toContainEqual(expect.objectContaining({ tool: 'copilot', server: 'with-secret', action: 'skipped' }));
+      });
+
       it('keeps its line, pull after pull, while Copilot\'s bare entry holds the value beside the mcpServers Claude wrote', async () => {
         await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
         // No longer set: only the entry, not a scan for the value, says what the file holds.

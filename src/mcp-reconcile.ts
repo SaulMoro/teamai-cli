@@ -1785,9 +1785,22 @@ export function isTeamaiBareCopy(doc: { beside?: Record<string, unknown> }, name
   return bare !== undefined && owned.some((record) => record.name === name && record.bare === true && record.hash === entryHash(bare));
 }
 
-/** A bare ownership record cannot claim a same-named entry under mcpServers. */
-export function ownsJsonMcpEntry(doc: Pick<JsonDoc, 'bare'>, name: string, owned: readonly ManagedMcpRecord[]): boolean {
-  return owned.some((record) => record.name === name && (doc.bare || record.bare !== true));
+/** Copilot project ownership without placement needs a matching, unambiguous entry. */
+export function ownsJsonMcpEntry(
+  doc: Pick<JsonDoc, 'bare' | 'servers' | 'beside'>,
+  name: string,
+  owned: readonly ManagedMcpRecord[],
+  allowBare: boolean,
+): boolean {
+  return owned.some((record) => {
+    if (record.name !== name) return false;
+    if (!allowBare) return record.bare !== true;
+    if (record.bare !== undefined) return record.bare === doc.bare;
+    const entry = doc.servers[name];
+    const beside = doc.beside?.[name];
+    return entry !== undefined && record.hash === entryHash(entry)
+      && (beside === undefined || record.hash !== entryHash(beside));
+  });
 }
 
 // ─── Appliers ────────────────────────────────────────────────
@@ -1811,7 +1824,7 @@ async function applyJson(
     return null;
   }
 
-  const ownedHere = owned.filter((record) => doc.bare || record.bare !== true);
+  const ownedHere = owned.filter((record) => ownsJsonMcpEntry(doc, record.name, [record], allowBare));
   const ownedHash = new Map(ownedHere.map((r) => [r.name, r.hash]));
   let dirty = false;
   // A kept entry holds the value an earlier pull resolved (desiredMcpForTarget).
@@ -1819,7 +1832,7 @@ async function applyJson(
 
   for (const [name, { entry, hash, resolvedValue }] of desired) {
     const existing = doc.servers[name];
-    if (existing !== undefined && !ownsJsonMcpEntry(doc, name, owned) && !options.force) {
+    if (existing !== undefined && !ownsJsonMcpEntry(doc, name, owned, allowBare) && !options.force) {
       changes.push({
         tool: target.tool,
         server: name,
@@ -1831,6 +1844,7 @@ async function applyJson(
       continue;
     }
     const record: ManagedMcpRecord = { name, hash };
+    if (allowBare && !doc.bare) record.bare = false;
     if (doc.bare && owned.some((r) => r.name === name && r.bare === true)) record.bare = true;
     nextRecords.push(record);
     holdsResolvedValue ||= resolvedValue;
@@ -1849,12 +1863,12 @@ async function applyJson(
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
     const kept = keep.get(name);
-    if (kept && ((ownsJsonMcpEntry(doc, name, owned) && doc.servers[name] !== undefined) || isTeamaiBareCopy(doc, name, owned))) {
+    if (kept && ((ownsJsonMcpEntry(doc, name, owned, allowBare) && doc.servers[name] !== undefined) || isTeamaiBareCopy(doc, name, owned))) {
       nextRecords.push(kept);
       holdsResolvedValue = true;
       continue;
     }
-    if (ownsJsonMcpEntry(doc, name, owned) && doc.servers[name] !== undefined) {
+    if (ownsJsonMcpEntry(doc, name, owned, allowBare) && doc.servers[name] !== undefined) {
       delete doc.servers[name];
       dirty = true;
     }
