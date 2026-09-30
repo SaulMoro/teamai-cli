@@ -91,6 +91,18 @@ export const LEGACY_RULE_DIRS: Readonly<Record<string, string>> = {
   tcodex: '.tcodex/rules',
 };
 
+/** The globs a team rule's `paths:` frontmatter scopes it to; empty when unscoped. */
+export function rulePaths(data: Record<string, unknown>): string[] {
+  const value = data.paths;
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 /**
  * Every extension a rule file may carry on disk, newest layout first.
  *

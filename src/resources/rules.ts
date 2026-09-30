@@ -9,7 +9,6 @@ import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeam
 import {
   copilotInstructionsBodyEqualsTeamMd,
   mergeCopilotBodyIntoTeamMd,
-  rulePaths,
   teamRuleToCopilotInstructions,
 } from './copilot-instructions.js';
 import { splitFrontmatter } from '../utils/frontmatter.js';
@@ -29,6 +28,7 @@ import {
   instructionFileInstallProbe,
   writesInstructionBlock,
   LEGACY_RULE_DIRS,
+  rulePaths,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 
