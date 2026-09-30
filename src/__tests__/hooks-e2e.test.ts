@@ -39,18 +39,19 @@ async function readResult(filePath: string): Promise<Record<string, unknown>> {
 
 describe('hooks E2E — real file I/O', () => {
   describe('inject — full injection to temp directories', () => {
-    it('creates Claude settings.json with all 4 events and 6 dispatch hooks', async () => {
+    it('creates Claude settings.json with all 5 events and 7 dispatch hooks', async () => {
       const p = claudePath();
       await injectHooks(p, 'claude');
 
       const result = await readResult(p);
       const hooks = result.hooks as Record<string, unknown[]>;
 
-      expect(Object.keys(hooks)).toEqual(['SessionStart', 'Stop', 'PostToolUse', 'UserPromptSubmit']);
+      expect(Object.keys(hooks)).toEqual(['SessionStart', 'Stop', 'PostToolUse', 'UserPromptSubmit', 'SubagentStop']);
       expect(hooks.SessionStart).toHaveLength(1);
       expect(hooks.Stop).toHaveLength(1);
       expect(hooks.PostToolUse).toHaveLength(3);
       expect(hooks.UserPromptSubmit).toHaveLength(1);
+      expect(hooks.SubagentStop).toHaveLength(1);
     });
 
     it('creates Cursor hooks.json with all 4 events and 6 dispatch hooks', async () => {
@@ -277,7 +278,8 @@ describe('hooks E2E — real file I/O', () => {
       const claudeEvents = Object.keys(claudeResult.hooks);
       const cursorEvents = Object.keys(cursorResult.hooks);
 
-      expect(claudeEvents).toHaveLength(4);
+      expect(claudeEvents).toHaveLength(5);
+      // Cursor gets no SubagentStop: its subagents run in their own session.
       expect(cursorEvents).toHaveLength(4);
 
       for (const subcmd of TEAMAI_HOOK_SUBCOMMANDS) {
