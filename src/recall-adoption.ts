@@ -33,8 +33,11 @@ import { classifyToolCall } from './utils/tool-call.js';
 /** How long after a run a read of one of its docs counts as adoption. */
 const ADOPTION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** The run ids recall prints on its region's start line. */
-const RUN_ID_PATTERN = /^--- \[teamai:recall:start\] --- \(\d+ results?\) run=([0-9a-f-]{36})(?=\s|$)/gm;
+/**
+ * The run ids recall prints: on its region's start line, or at the end of the
+ * line it prints for no hits (after the logger's glyph).
+ */
+const RUN_ID_PATTERN = /^(?:--- \[teamai:recall:start\] --- \(\d+ results?\)|(?:\S* )?No matching learnings found for ".*"\.) run=([0-9a-f-]{36})(?=\s|$)/gm;
 
 /** The binary's file name; after `npx`, the package, with or without a version. */
 const TEAMAI_BINARY = /^teamai(?:\.cmd|\.exe)?$/i;

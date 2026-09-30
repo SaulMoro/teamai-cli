@@ -149,7 +149,7 @@ interface ScopedSearchResult extends SearchResult {
 //      │   └─ missing? → buildIndex() first
 //      │
 //      ├─ search(query, index)
-//      │   └─ 0 results? → "No matching learnings found"
+//      │   └─ 0 results? → "No matching learnings found … run=<id>"
 //      │
 //      ├─ formatResults(results)
 //      │   └─ STDOUT (AI-consumable format)
@@ -735,7 +735,8 @@ export async function recall(
   }
 
   if (topResults.length === 0) {
-    log.info(`No matching learnings found for "${query}".`);
+    // The run id lets the hook claim a run with no hits too (#884).
+    log.info(`No matching learnings found for "${query}".${runId ? ` run=${runId}` : ''}`);
     return;
   }
 

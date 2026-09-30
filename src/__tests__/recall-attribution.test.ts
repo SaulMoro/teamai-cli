@@ -62,6 +62,7 @@ const { parseTranscriptForVotes } = await import('../transcript-parser.js');
 const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
 const { loadOmpExtension, loadPiExtension } = await import('./helpers/pi-extensions.js');
 const { showStats } = await import('../stats.js');
+const { setStderrOnly } = await import('../utils/logger.js');
 
 const SESSION = 'sess-main';
 /** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
@@ -121,7 +122,7 @@ interface RecallRun {
   output: string;
   /** The `File:` paths it printed, in order. */
   files: string[];
-  /** The run id on the region's start line, if any. */
+  /** The run id on the region's start line, or on the no-hit line, if any. */
   run?: string;
 }
 
@@ -215,6 +216,11 @@ class Harness {
       output += chunk.toString();
       return true;
     }) as never);
+    // log.info's lines (the no-hit line) reach stdout through console.log, in
+    // a recall process of its own: the dispatcher's stderr-only mode, left on
+    // by an earlier hook in this process, is not recall's.
+    const print = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { output += `${args.map(String).join(' ')}\n`; });
+    const stderrOnly = setStderrOnly(false);
     const vars = options.env ?? { CLAUDE_CODE_SESSION_ID: SESSION };
     const before = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
     this.env(vars);
@@ -222,6 +228,8 @@ class Harness {
       await recall(query, { check: options.check, dryRun: options.dryRun, caller: options.caller });
     } finally {
       write.mockRestore();
+      print.mockRestore();
+      setStderrOnly(stderrOnly);
       this.env(before);
     }
     const flags = `${options.check ? ' --check' : ''}${options.caller ? ` --caller ${options.caller}` : ''}`;
@@ -232,7 +240,7 @@ class Harness {
     return {
       output,
       files: [...output.matchAll(/^File: (.+)$/gm)].map((m) => m[1]),
-      run: output.match(/^--- \[teamai:recall:start\] --- \(\d+ results?\) run=(\S+)$/m)?.[1],
+      run: output.match(/^(?:--- \[teamai:recall:start\] --- \(\d+ results?\)|.*No matching learnings found for ".*"\.) run=(\S+)$/m)?.[1],
     };
   }
 
@@ -1813,12 +1821,42 @@ const ROWS: Row[] = [
     project: {},
   },
   {
-    name: '13: recall with no hits → one run in stats',
+    name: '13: recall with no hits prints its run id on the no-hit line → one run in stats',
     trace: async (h) => {
-      const { run } = await h.recall('kubernetes');
-      expect(run).toBeUndefined();
+      const { output, run } = await h.recall('kubernetes');
+      expect(output).toMatch(/No matching learnings found for "kubernetes"\. run=[0-9a-f-]{36}\n$/);
+      expect(run).toMatch(/^[0-9a-f-]{36}$/);
       await h.stop();
       expect(recallRows(await h.stats())).toEqual([['sess-mai', 'claude', '1', '0', '0']]);
+    },
+    project: {},
+  },
+  {
+    name: '13: Codex recall with no hits, two session candidates, claimed from output whose logger glyph is colored → one settled run under Codex',
+    trace: async (h) => {
+      const { output } = await h.recall('kubernetes', { env: NESTED_ENV, claim: false });
+      await h.shell('teamai recall "kubernetes"', output.replace('ℹ ', '\u001b[34mℹ\u001b[39m '), { session: CODEX, tool: 'codex' });
+      expect(recallRows(await h.stats())).toEqual([[CODEX.slice(0, 8), 'codex', '1', '0', '0']]);
+    },
+    project: {},
+  },
+  {
+    name: '13: recall --check with no hits prints no run id → no run in stats',
+    trace: async (h) => {
+      const { output } = await h.recall('kubernetes', { check: true });
+      expect(output).not.toContain('run=');
+      await h.stop();
+      expect(recallRows(await h.stats())).toBeNull();
+    },
+    project: {},
+  },
+  {
+    name: '13: OMP recall with no hits and no session variable (via none), claimed through its bash tool_result → one settled run, 0 recalled',
+    trace: async (h) => {
+      const { run } = await h.ompRecall('kubernetes', OMP, { agent: OMP_MAIN_AGENT });
+      expect(run).toBeDefined();
+      await h.bridge('omp', 'session_stop', {}, OMP, OMP_MAIN_AGENT);
+      expect(recallRows(await h.stats())).toEqual([['omp-main', 'omp', '1', '0', '0']]);
     },
     project: {},
   },
