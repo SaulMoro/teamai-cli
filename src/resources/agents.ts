@@ -1141,13 +1141,15 @@ export class AgentsHandler extends ResourceHandler {
       if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
     }
     const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
-    // A load failure holds the agent whole, if any tool fails for it: an extras
-    // model pin needs no aliases, and the member's file only holds an alias agent.
+    // A load failure holds only the tools that fail for it: an extras model pin
+    // needs no aliases, and the member's file only holds an alias agent. The
+    // line names those tools when others were written.
     if (heldCount === 0) return [];
+    const everyTool = heldCount === targeted;
     const loadFailure = !aliases.ok ? aliases.reason : aliases.localFailure;
     return loadFailure !== undefined
-      ? [{ name, reason: loadFailure, everyTool: heldCount === targeted }]
-      : [...heldTools].map(([reason, tools]) => ({ name, reason, tools, everyTool: heldCount === targeted }));
+      ? [{ name, reason: loadFailure, ...(everyTool ? {} : { tools: [...heldTools.values()].flat() }), everyTool }]
+      : [...heldTools].map(([reason, tools]) => ({ name, reason, tools, everyTool }));
   }
 
   /** Whether `tool` would receive `item` but for a model that cannot be resolved. */

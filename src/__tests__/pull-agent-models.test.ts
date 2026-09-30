@@ -563,6 +563,19 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(alreadySynced()).toBe(true);
       expect(logged('warn', /Held /)).toBe(false);
     });
+
+    it('names the tools it holds when a broken team file holds some of an agent\'s tools and others are pinned', async () => {
+      const partlyPinned: AgentSpec = { ...IMPLEMENTER, targets: ['claude', 'codex'], tool_extras: { claude: { model: 'opus' } } };
+      await fse.outputFile(path.join(repoPath, 'models/aliases.yaml'), 'aliases: [broken');
+      await writeAgent(partlyPinned);
+
+      await pull({ silent: true });
+
+      expect(logged('warn', /Held implementer\.yaml for codex: Invalid model aliases YAML at models\/aliases\.yaml/)).toBe(true);
+      expect(logged('warn', /no new ones are written/)).toBe(false);
+      expect(await claudeModel()).toMatchObject({ model: 'opus' });
+      expect(await fse.pathExists(codexFile())).toBe(false);
+    });
   });
 
   describe('agents held on an unchanged team revision', () => {
