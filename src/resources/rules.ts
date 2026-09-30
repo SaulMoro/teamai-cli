@@ -9,8 +9,10 @@ import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeam
 import {
   copilotInstructionsBodyEqualsTeamMd,
   mergeCopilotBodyIntoTeamMd,
+  rulePaths,
   teamRuleToCopilotInstructions,
 } from './copilot-instructions.js';
+import { splitFrontmatter } from '../utils/frontmatter.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
@@ -446,7 +448,7 @@ export class RulesHandler extends ResourceHandler {
       const { getHermesHome } = await import('../hermes-home.js');
       if (await pathExists(getHermesHome())) {
         const { upsertSoulRules } = await import('../hermes-config.js');
-        await upsertSoulRules(await hermesRulesText(rules));
+        await upsertSoulRules(await inlinedRulesText(rules));
       }
     }
 
@@ -756,18 +758,25 @@ async function isDeliveredRender(
 }
 
 /**
- * The text `upsertSoulRules` inlines into the teamai block of Hermes SOUL.md.
+ * The team rules as one text, for a tool that reads standing instructions
+ * from a single file rather than a rules directory (Hermes SOUL.md, Codex
+ * AGENTS.md). Pull writes it into that file's managed block, and `doctor`
+ * compares the block with it, the same way it compares a rule file with its
+ * render.
  *
- * Hermes reads standing instructions from one file rather than a rules
- * directory, so its rules are delivered as this block's contents. `doctor`
- * compares what is in the block with this, the same way it compares a rule
- * file with its render.
+ * Frontmatter is dropped. An instructions file cannot scope a rule to paths,
+ * so a path-scoped rule is always on, led by a line naming its globs.
  */
-export async function hermesRulesText(rules: ResourceItem[]): Promise<string> {
+export async function inlinedRulesText(rules: ResourceItem[]): Promise<string> {
   const bodies: string[] = [];
   for (const rule of rules) {
-    const body = await readFileSafe(rule.sourcePath);
-    if (body && body.trim() !== '') bodies.push(body.trim());
+    const content = await readFileSafe(rule.sourcePath);
+    if (!content) continue;
+    const { data, body } = splitFrontmatter(content);
+    if (body.trim() === '') continue;
+    const paths = rulePaths(data);
+    const scope = paths.length > 0 ? `Applies to files matching: ${paths.join(', ')}\n` : '';
+    bodies.push(`${scope}${body.trim()}`);
   }
   return bodies.join('\n\n');
 }

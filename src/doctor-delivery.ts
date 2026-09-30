@@ -312,7 +312,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
-  const { RulesHandler, hermesRulesText } = await import('./resources/rules.js');
+  const { RulesHandler, inlinedRulesText } = await import('./resources/rules.js');
   const handler = new RulesHandler();
   const checks: Check[] = [];
 
@@ -339,7 +339,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const hermesHome = getHermesHome();
   if (!isAgentExcluded(localConfig, 'hermes') && await pathExists(hermesHome)) {
     const { getHermesSoulPath, readSoulRules } = await import('./hermes-config.js');
-    const expected = await hermesRulesText(items);
+    const expected = await inlinedRulesText(items);
     const delivered = await readSoulRules();
     checks.push({
       name: 'Team rules are inlined in Hermes SOUL.md',

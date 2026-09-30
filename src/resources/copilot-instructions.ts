@@ -6,7 +6,8 @@ function normalizeBody(body: string): string {
   return body.replace(/^\s+/, '').replace(/\s+$/, '');
 }
 
-function rulePaths(data: Record<string, unknown>): string[] {
+/** The globs a team rule's `paths:` frontmatter scopes it to; empty when unscoped. */
+export function rulePaths(data: Record<string, unknown>): string[] {
   const value = data.paths;
   if (Array.isArray(value)) {
     return value.map((entry) => String(entry).trim()).filter(Boolean);
