@@ -1024,7 +1024,7 @@ describe('init', () => {
 
       function settingsExistsAt(settingsPath: string): void {
         const cloneProbe = pathExistsFn;
-        pathExistsFn = (p: string) => p === settingsPath || cloneProbe(p);
+        pathExistsFn = (p: string) => p === settingsPath || p === path.dirname(settingsPath) || cloneProbe(p);
       }
 
       it('removes the hooks left in the previous root, and says what stays', async () => {
@@ -1105,6 +1105,20 @@ describe('init', () => {
           'project',
           process.cwd(),
         );
+      });
+
+      it('says nothing about a Codex root the member never synced to', async () => {
+        // A Claude-only member who happens to export CODEX_HOME: teamai wrote
+        // nothing under ~/.codex, so there is nothing "left in place" to report.
+        vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+          ...(previousConfig() as object),
+          enabledAgents: ['claude'],
+        } as never);
+        process.env.CODEX_HOME = path.join(HOME, '.codex-alt');
+
+        expect(await savedConfig()).toMatchObject({ toolRoots: { codex: path.join(HOME, '.codex-alt') } });
+        const { log } = await import('../utils/logger.js');
+        expect(vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).join('\n')).not.toContain('Codex now syncs');
       });
 
       it('never creates the previous settings file just to clean it', async () => {

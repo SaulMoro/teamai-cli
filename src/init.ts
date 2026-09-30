@@ -74,6 +74,7 @@ import { log, spinner } from './utils/logger.js';
 import {
   CLAUDE_TOOL_ID,
   detectToolRoot,
+  isAgentExcluded,
   RELOCATABLE_TOOLS,
   resolveHookScope,
   scopedToolPaths,
@@ -153,6 +154,8 @@ async function releasePreviousToolRoots(
   if (!previous || !teamConfig) return;
   const hookScope = resolveHookScope(next);
   for (const [tool, { label }] of Object.entries(RELOCATABLE_TOOLS)) {
+    // A tool this member does not sync got nothing from teamai in either root.
+    if (isAgentExcluded(previous, tool)) continue;
     const settingsOf = (config: LocalConfig): string | undefined =>
       scopedToolPaths(teamConfig, { ...config, scope: hookScope.scope })[tool]?.settings;
     const before = settingsOf(previous);
@@ -177,6 +180,8 @@ async function releasePreviousToolRoots(
         await releaseClaudeModelConfig(path.dirname(oldSettings));
       }
     }
+    // No previous root on disk means nothing teamai wrote was left behind.
+    if (!await pathExists(path.dirname(oldSettings))) continue;
     log.warn(
       `${label} now syncs to ${next.toolRoots?.[tool] ?? 'the default root'}; skills, rules and instruction files `
       + `that teamai wrote under ${path.dirname(oldSettings)} were left in place.`,
