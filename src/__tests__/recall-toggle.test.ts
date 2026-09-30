@@ -281,3 +281,67 @@ describe('recall toggle honors the enabledAgents whitelist', () => {
     expect(await fse.readFile(claudeMd, 'utf8')).toContain(TEAMAI_RECALL_RULES_START);
   });
 });
+
+// Codex reads instructions from AGENTS.md only (#938): the recall block has to
+// land there, and `recall off` has to take it out again.
+describe('recall toggle reaches Codex AGENTS.md with the default tool paths', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let projectRoot: string;
+  const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
+
+  function stub(scope: 'user' | 'project'): void {
+    const localConfig = {
+      repo: { localPath: path.join(tmpDir, 'team-repo'), remote: 'https://example.invalid/x/team.git' },
+      username: 'testuser',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope,
+      ...(scope === 'project' ? { projectRoot } : {}),
+      enabledAgents: ['codex'],
+    } as LocalConfig;
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-recall-codex-'));
+    homeDir = path.join(tmpDir, 'home');
+    projectRoot = path.join(tmpDir, 'project');
+    await fse.ensureDir(homeDir);
+    vi.stubEnv('HOME', homeDir);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('user scope: on writes the block to ~/.codex/AGENTS.md, off removes the file it created', async () => {
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    stub('user');
+    const agentsMd = path.join(homeDir, '.codex', 'AGENTS.md');
+
+    await recallEnable({});
+    expect(await fse.readFile(agentsMd, 'utf8')).toContain(TEAMAI_RECALL_RULES_START);
+    expect(await fse.pathExists(path.join(homeDir, '.codex', 'rules'))).toBe(false);
+
+    await recallDisable({});
+    expect(await fse.pathExists(agentsMd)).toBe(false);
+  });
+
+  it('project scope: on adds the block to <project>/AGENTS.md, off restores the user text', async () => {
+    await fse.ensureDir(path.join(projectRoot, '.codex'));
+    const agentsMd = path.join(projectRoot, 'AGENTS.md');
+    await fse.writeFile(agentsMd, '# Project notes\n');
+    stub('project');
+
+    await recallEnable({});
+    const enabled = await fse.readFile(agentsMd, 'utf8');
+    expect(enabled).toContain('# Project notes');
+    expect(enabled).toContain(TEAMAI_RECALL_RULES_START);
+
+    await recallDisable({});
+    expect(await fse.readFile(agentsMd, 'utf8')).toBe('# Project notes\n');
+  });
+});
