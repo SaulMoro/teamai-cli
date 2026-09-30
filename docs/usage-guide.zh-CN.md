@@ -1750,6 +1750,16 @@ aliases:
 - pull 会记录每个 agent 副本收到的模型和推理强度，因此即使团队仓库没有变化，普通的 `teamai pull` 也会应用变化，例如从把 `model: strong` 按原样写入的旧版 CLI 升级后的第一次 pull。它只重写模型发生变化的 agent，并保留你修改过的副本。agent 使用的别名被删除时，pull 会警告其 `model` 现在按原样写入。
 - `models/aliases.yaml` 中的 `default` 和其他模型值一样按原样写入，它是 CodeBuddy 表示其默认模型的原生值。在该文件中写 `~` 是错误：要让某个工具不产生 model 字段，不写该工具即可。
 
+##### 按 namespace 的别名
+
+角色或项目可以在 `models/<ns>/aliases.yaml` 中为别名赋予自己的含义，格式相同；与 `models/<ns>/models.yaml` 一样，只有 `<ns>` 在你的角色或项目的 `resources.models` 中生效时才读取。旧模式（未配置角色和项目）只读取 `models/aliases.yaml`。
+
+- namespace 中的别名整体替换根文件中的同名别名：它未映射的工具不会得到 `model` 字段，即使 `models/aliases.yaml` 映射了该工具。
+- 两个生效 namespace 定义同一个别名时，与结构性错误一样暂停带 `model` 字段的 agent，pull 会指出这两个文件。在其中一个文件里重命名或删除它，或不再声明其中一个 namespace。
+- 团队仓库中任一别名文件（根文件或 namespace 文件，无论对你是否生效）定义的名称都是别名。只由未生效 namespace 定义别名的 agent 不会得到 `model` 字段，而不是按原样写入名称；你对该名称的本地条目仍然生效。
+- 同理，团队仓库中任一别名文件出现结构性错误（包括对你未生效的 namespace 中的文件）都会暂停带 `model` 字段的 agent，pull 会指出该文件。
+- pull 的警告和 push 的偏差提示会指出条目所在的文件，例如 `models/checkout/aliases.yaml`。当你收到的 agent 使用的别名也由对你未生效的 namespace 定义时，`teamai doctor` 会给出提示。
+
 ##### 本地覆盖
 
 成员可以在自己机器上的 `~/.teamai/models/aliases.yaml` 中替换团队条目，格式同样是 `aliases:`：
@@ -1786,7 +1796,7 @@ aliases:
 对 `model` 为别名的 agent，各工具中的 `model` 以及别名写入的推理强度字段归别名所有，而不归副本所有：
 
 - 副本中的模型和推理强度与上次 pull 写入的一致，或与现在 pull 会写入的一致，就视为未修改。因此在 pull `models/aliases.yaml`、你的覆盖文件或切换带来的变化之前先 push，也不会报告任何内容；push 对“保留的副本其部署版本已变化”的警告也会忽略这类变化。
-- push 从不把 `model: strong` 替换为具体模型，也从不把别名的推理强度写进 `tool_extras`。你在副本里手动修改的模型或推理强度属于偏差（drift）：push 会指出该副本及该值的来源，不提交这项修改，并说明应在哪里修改：来自你覆盖文件的条目，改你的覆盖文件；团队条目或未映射的工具，改你的覆盖文件或团队的 `models/aliases.yaml`；已切换的工具，运行 `teamai models restore --agent <tool>`。`teamai push --dry-run` 同样会报告。你对该 agent 的其他修改（例如 instructions 或其他字段）照常 push。
+- push 从不把 `model: strong` 替换为具体模型，也从不把别名的推理强度写进 `tool_extras`。你在副本里手动修改的模型或推理强度属于偏差（drift）：push 会指出该副本及该值的来源，不提交这项修改，并说明应在哪里修改：来自你覆盖文件的条目，改你的覆盖文件；团队条目或未映射的工具，改你的覆盖文件或该别名所在的团队别名文件（`models/aliases.yaml` 或 `models/<ns>/aliases.yaml`）；已切换的工具，运行 `teamai models restore --agent <tool>`。`teamai push --dry-run` 同样会报告。你对该 agent 的其他修改（例如 instructions 或其他字段）照常 push。
 - 要让 agent 改用另一个别名，在已部署的副本中写入别名名称（例如用 `model: fast` 替换 `opus`，或在原本设置 `model: opus` 的 agent 中写 `model: strong`），然后 push：push 会提议 `model: <alias>`。两个副本写了不同的别名时会冲突，与其他任何两个不同的值一样。
 - 只存在于某个工具目录中的新 agent 按其中的模型原样 push，不会被反推回别名。
 

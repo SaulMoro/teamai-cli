@@ -683,11 +683,13 @@ export type PendingPush = z.infer<typeof PendingPushSchema>;
  * The model and effort one tool's copy of an agent received, and the
  * resolution step that produced them (`ResolutionStep` in models/aliases.ts).
  * `step` is a plain string so a record a newer CLI wrote still parses.
+ * `source` is the aliases file that decided it (`ModelResolution.source`).
  */
 const RecordedAgentModelSchema = z.object({
   step: z.string(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  source: z.string().optional(),
 });
 export type RecordedAgentModel = z.infer<typeof RecordedAgentModelSchema>;
 /** `RecordedAgentModel` by agent stem, then tool. */

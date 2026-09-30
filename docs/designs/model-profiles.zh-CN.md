@@ -77,3 +77,7 @@ Codex 按行编辑，以保留注释和格式。写入前会解析结果并与�
 ## 团队 Agent 与模型别名
 
 团队 agent 的 `model` 为别名（`strong`、`fast` 或 `models/aliases.yaml` 中的团队别名）时，每次 pull 都会按工具解析。已切换的工具使用网关，网关不认识账号下的模型，因此 pull 会过滤成员本地覆盖或团队条目给该工具的结果：Claude 保留 `opus`、`sonnet` 或 `haiku`，由上文的家族路由指向网关模型，其他模型丢弃；Codex、OpenCode、CodeBuddy 和 WorkBuddy 不写 `model` 字段。已切换的工具都不写别名的推理强度。不写 `model` 字段意味着使用工具自身的继承规则，而不是配置档的模型：Codex 可能使用 `[agents].default_subagent_model` 或父会话的模型。`tool_extras.<tool>.model`、具体的 `model` 以及成员的 `~`/`default` 不受过滤。判断工具是否已切换使用与恢复相同的检查，不持锁读取记录：记录的配置路径就是当前路径，且受管字段仍是 TeamAI 写入的内容。tclaude、codex-internal 等变体没有记录，从不视为已切换。pull 会记录每个 agent 副本收到的内容，因此 `models switch` 或 `models restore` 之后，普通的 pull 就会重写受影响的 agent。push 把在已切换工具的副本中手动修改的模型视为偏差，不提交它，并提示运行 `teamai models restore --agent <tool>`。
+
+### 按 namespace 的别名
+
+别名与配置遵循相同的 namespace 规则：`<ns>` 在 `resources.models` 中生效时读取 `models/<ns>/aliases.yaml`，所在目录与读取 `<ns>` 配置的目录相同；旧模式只读取 `models/aliases.yaml`。namespace 中的别名整体替换根文件中的同名别名，不按工具合并，因此 namespace 别名未映射的工具不写 `model` 字段，即使根文件映射了它。两个生效 namespace 定义同一个别名属于解析失败，与结构错误的处理相同：pull 保留带 `model` 字段的 agent，并指出两个文件。哪些名字是别名与是否生效无关：检出中任一别名文件（根文件或 namespace 文件，生效与否）定义的名字都是别名，因此只由未生效 namespace 定义的别名不写 `model` 字段，而不是把名字原样写入，成员对它的本地条目仍然生效。同理，检出中任一别名文件（生效与否）出现结构错误都会使解析失败。pull 会记录每个解析结果来自哪个文件，push 的偏差提示和 pull 的警告都会指出该文件。`doctor` 会为成员收到的 agent 所用、且由未生效 namespace 文件定义的别名给出提示。

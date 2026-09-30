@@ -1314,6 +1314,7 @@ function modelDrift({ tool, file, alias, relPath, deployed, expected, effortFiel
     return effortField === undefined || values.effort === undefined ? model : `${model} and ${effortField} "${String(values.effort)}"`;
   };
   const local = localAliasesPath();
+  const team = expected.source ?? TEAM_ALIASES_FILE;
   const entry = `${alias}.${tool}`;
   const [source, hint] = ((): [string, string] => {
     switch (expected.step) {
@@ -1325,11 +1326,11 @@ function modelDrift({ tool, file, alias, relPath, deployed, expected, effortFiel
       case 'extras':
         return [` from tool_extras.${tool}.model in ${relPath}`, `To pin another model, change tool_extras.${tool}.model in ${relPath}.`];
       case 'team':
-        return [` from the team's ${TEAM_ALIASES_FILE}`,
-          `To use it on this machine, map ${entry} in ${local}; for the whole team, change ${entry} in ${TEAM_ALIASES_FILE}.`];
+        return [` from the team's ${team}`,
+          `To use it on this machine, map ${entry} in ${local}; for the whole team, change ${entry} in ${team}.`];
       default:
         return [`, as no aliases file maps ${entry}`,
-          `To use it on this machine, map ${entry} in ${local}; for the whole team, map ${entry} in ${TEAM_ALIASES_FILE}.`];
+          `To use it on this machine, map ${entry} in ${local}; for the whole team, map ${entry} in ${team}.`];
     }
   })();
   return `its ${tool} copy (${file}) sets ${describe(deployed)}, but model: ${alias} gives ${tool} ${describe(expected)}${source}. `
@@ -1373,6 +1374,7 @@ function renderWithModel(spec: AgentSpec, tool: ToolName, resolved: RecordedAgen
     step: resolved.step,
     ...(resolved.model !== undefined ? { model: resolved.model } : {}),
     ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
+    ...(resolved.source !== undefined ? { source: resolved.source } : {}),
   };
   return { ...renderForTool(spec, tool, replacesSpecModel ? recorded : undefined), model: { recorded, replacesSpecModel } };
 }
@@ -1381,7 +1383,7 @@ function renderWithModel(spec: AgentSpec, tool: ToolName, resolved: RecordedAgen
 const KEEPS_SPEC_MODEL: ReadonlySet<string> = new Set<ResolutionStep>(['extras', 'literal']);
 
 function sameAgentModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
-  return a.step === b.step && a.model === b.model && a.effort === b.effort;
+  return a.step === b.step && a.model === b.model && a.effort === b.effort && a.source === b.source;
 }
 
 /**
@@ -1417,9 +1419,11 @@ function warnAliasGone(
       && recorded.model !== undefined && !KEEPS_SPEC_MODEL.has(recorded.step);
   });
   if (!was) return;
-  const before = records[was.tool]!.model!;
+  const { model: before, source } = records[was.tool]!;
+  // A local entry counts only for a name a team file defines, so the team file is where it goes back.
+  const file = source !== undefined && !path.isAbsolute(source) ? source : TEAM_ALIASES_FILE;
   log.warn(`[agents] ${item.relativePath} sets model: ${specModel}, which is no longer a model alias, so each tool now receives "${specModel}" literally `
-    + `(${was.tool} received "${before}" at the last pull). Define "${specModel}" in models/aliases.yaml again, or set a concrete model in ${item.relativePath}.`);
+    + `(${was.tool} received "${before}" at the last pull). Define "${specModel}" in ${file} again, or set a concrete model in ${item.relativePath}.`);
 }
 
 /**

@@ -1863,6 +1863,16 @@ aliases:
 - Pull records the model and effort each agent copy received, so an ordinary `teamai pull` applies a change even when the team repo has not moved, such as the first pull after upgrading from a CLI that wrote `model: strong` as is. It rewrites only the agents whose model changed and keeps a copy you edited. When the alias an agent used is removed, pull warns that its `model` is now written as is.
 - `default` in `models/aliases.yaml` is a model value like any other and is written as is, which is CodeBuddy's own value for its default model. `~` there is an error: leave the tool out to give it no model field.
 
+##### Namespaced aliases
+
+A role or project gives an alias its own meaning in `models/<ns>/aliases.yaml`, same shape, read where `<ns>` is active in `resources.models` of your roles or projects, as `models/<ns>/models.yaml` is. Legacy mode (no roles, no projects) reads `models/aliases.yaml` alone.
+
+- A namespace alias replaces the root alias of the same name whole: a tool it does not map gets no `model` field, even when `models/aliases.yaml` maps that tool.
+- The same alias in two active namespaces holds agents with a `model` field, as a structural error does, and pull names both files. Rename or remove it in one of them, or stop declaring one of the namespaces.
+- A name that any aliases file in the team repo defines, root or namespace, active for you or not, is an alias. An agent whose alias only an inactive namespace defines gets no `model` field, rather than the name as written, and your local entry for that name still applies.
+- For the same reason, a structural error in any aliases file of the team repo, including one in a namespace that is not active for you, holds agents with a `model` field, and pull names that file.
+- Pull warnings and push drift name the file an entry comes from, such as `models/checkout/aliases.yaml`. `teamai doctor` notes an alias that agents you receive use when a namespace that is not active for you also defines it.
+
 ##### Local override
 
 A member replaces a team entry on their own machine in `~/.teamai/models/aliases.yaml`, which has the same `aliases:` shape:
@@ -1899,7 +1909,7 @@ No `model` field means the tool's native inheritance, not the profile's model: C
 For an agent whose `model` is an alias, each tool's `model` and the effort field the alias writes belong to the alias, not to the copy:
 
 - A copy with the model and effort the last pull wrote, or the ones a pull would write now, is unedited. So pushing before you pull a change to `models/aliases.yaml`, your override or a switch reports nothing, and push's warning about a kept copy whose deployed version changed ignores such a change.
-- Push never replaces `model: strong` with a concrete model and never writes the alias's effort into `tool_extras`. A model or effort you changed by hand in a copy is drift: push names the copy and where the value comes from, leaves the change out, and says where to make it: your override file for an entry that comes from it, your override file or the team's `models/aliases.yaml` for a team entry or an unmapped tool, `teamai models restore --agent <tool>` for a switched tool. `teamai push --dry-run` reports it too. Your other edits to that agent, such as its instructions or other fields, still push.
+- Push never replaces `model: strong` with a concrete model and never writes the alias's effort into `tool_extras`. A model or effort you changed by hand in a copy is drift: push names the copy and where the value comes from, leaves the change out, and says where to make it: your override file for an entry that comes from it, your override file or the team aliases file the alias comes from (`models/aliases.yaml` or `models/<ns>/aliases.yaml`) for a team entry or an unmapped tool, `teamai models restore --agent <tool>` for a switched tool. `teamai push --dry-run` reports it too. Your other edits to that agent, such as its instructions or other fields, still push.
 - To move an agent to another alias, write the alias name in a deployed copy, such as `model: fast` in place of `opus`, or `model: strong` in an agent that set `model: opus`, and push: push proposes `model: <alias>`. Two copies that name different aliases conflict, as any two different values do.
 - A new agent that exists only in a tool's directory is pushed with the model it has there, which is never turned back into an alias.
 

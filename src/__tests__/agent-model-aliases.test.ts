@@ -935,4 +935,111 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(warnings()).toBe('');
     });
   });
+
+  describe('namespaced alias files', () => {
+    const warnings = (): string => vi.mocked(log.warn).mock.calls.flat().join('\n');
+    const writeNamespaced = (namespace: string, content: unknown): Promise<void> => fse.outputFile(
+      path.join(repoPath, `models/${namespace}/aliases.yaml`),
+      typeof content === 'string' ? content : YAML.stringify(content),
+    );
+
+    beforeEach(async () => {
+      await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'), [
+        'version: 1',
+        'projects:',
+        '  - id: checkout',
+        '    resources: { models: [checkout] }',
+        '  - id: billing',
+        '    resources: { models: [billing] }',
+        '',
+      ].join('\n'));
+      localConfig = { ...localConfig, projects: ['checkout'] };
+      await writeAliases(STRONG);
+    });
+
+    it('replaces the root alias of the same name whole, and warns naming the namespace file', async () => {
+      await writeNamespaced('checkout', { aliases: { strong: { claude: 'fable', kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+      const ledger = openLedger(undefined, {});
+      const spec = makeSpec({ model: 'strong' });
+      const yamlPath = path.join(repoPath, 'agents', `${spec.name}.yaml`);
+      await fse.writeFile(yamlPath, serializeAgentYaml(spec));
+      for (const tool of ['claude', 'codex', 'kiro']) await fse.ensureDir(path.join(homeDir, `.${tool}`));
+      await handler.pullItem({ name: spec.name, type: 'agents', sourcePath: yamlPath, relativePath: `agents/${spec.name}.yaml` },
+        teamConfigFor(['claude', 'codex', 'kiro']), localConfig, ledger);
+
+      expect(await readDeployed('claude', spec.name)).toMatchObject({ model: 'fable' });
+      expect(await readDeployed('claude', spec.name)).not.toHaveProperty('effort');
+      expect(await readDeployed('codex', spec.name)).not.toHaveProperty('model');
+      expect(await readDeployed('kiro', spec.name)).toMatchObject({ model: 'claude-opus-5' });
+      expect(ledger.agentModels['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/checkout/aliases.yaml' });
+      expect(ledger.agentModels['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/checkout/aliases.yaml' });
+      expect(warnings()).toContain('models/checkout/aliases.yaml: alias "strong" sets an effort for kiro');
+    });
+
+    it('does not warn about the root alias a namespace alias replaces', async () => {
+      await writeAliases({ aliases: { strong: { claude: 'opus', 'claude-next': 'opus-6' } } });
+      await writeNamespaced('checkout', { aliases: { strong: { claude: 'fable' } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'fable' });
+      expect(warnings()).toBe('');
+    });
+
+    it('reads the root alias while the namespace that redefines it is not active', async () => {
+      await writeNamespaced('billing', { aliases: { strong: { claude: 'fable' } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'opus', effort: 'high' });
+    });
+
+    it('writes no model field for an alias only an inactive namespace defines', async () => {
+      await writeNamespaced('billing', { aliases: { auditor: { claude: 'fable' } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'auditor' }));
+      expect(files['claude']).toHaveProperty('name', 'implementer');
+      expect(files['claude']).not.toHaveProperty('model');
+      expect(warnings()).toBe('');
+    });
+
+    it('holds agents with a model while two active namespaces define the same alias, naming both files', async () => {
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      const deployed = path.join(homeDir, '.claude/agents/implementer.md');
+      const before = await fse.readFile(deployed, 'utf-8');
+      await writeNamespaced('checkout', { aliases: { strong: { claude: 'fable' } } });
+      await writeNamespaced('billing', { aliases: { strong: { claude: 'haiku' } } });
+      localConfig = { ...localConfig, projects: ['checkout', 'billing'] };
+
+      await pullTo(['claude'], makeSpec({ model: 'strong', instructions: 'Changed.' }));
+      expect(await fse.readFile(deployed, 'utf-8')).toBe(before);
+      expect(warnings()).toContain('Held implementer.yaml: Model alias "strong" is defined in both models/checkout/aliases.yaml '
+        + 'and models/billing/aliases.yaml, and both namespaces are active here');
+      const never = await pullTo(['claude'], makeSpec({ name: 'never', model: 'opus' }));
+      expect(never['claude']).toEqual({});
+    });
+
+    it('holds agents with a model while a namespace file that is not active is broken, naming it', async () => {
+      await writeNamespaced('billing', 'aliases: [broken');
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toEqual({});
+      expect(warnings()).toContain('Held implementer.yaml: Invalid model aliases YAML at models/billing/aliases.yaml');
+    });
+
+    it('keeps the member\'s local entry for an alias only a namespace defines', async () => {
+      await writeNamespaced('billing', { aliases: { auditor: { claude: 'fable' } } });
+      await fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), YAML.stringify({ aliases: { auditor: { claude: 'sonnet' } } }));
+      const files = await pullTo(['claude'], makeSpec({ model: 'auditor' }));
+      expect(files['claude']).toMatchObject({ model: 'sonnet' });
+    });
+
+    it('points push drift at the namespace file the alias comes from', async () => {
+      await writeNamespaced('checkout', { aliases: { strong: { codex: 'gpt-6-luna' } } });
+      const spec = makeSpec({ model: 'strong' });
+      await pullTo(['claude', 'codex'], spec);
+      await editDeployed('codex', spec.name, (fields) => { fields['model'] = 'gpt-5'; });
+      await editDeployed('claude', spec.name, (fields) => { fields['model'] = 'sonnet'; });
+
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.skipReason).toContain('gives codex model "gpt-6-luna" from the team\'s models/checkout/aliases.yaml.');
+      expect(candidate.skipReason).toContain('for the whole team, change strong.codex in models/checkout/aliases.yaml.');
+      expect(candidate.skipReason).toContain('as no aliases file maps strong.claude.');
+      expect(candidate.skipReason).toContain('for the whole team, map strong.claude in models/checkout/aliases.yaml.');
+    });
+  });
 });

@@ -586,6 +586,50 @@ export async function entryNamespaceNotes(ctx: DoctorContext): Promise<string[]>
   return (await resolveEntryTypes(ctx.localConfig)).flatMap(({ type, resolution }) => describeEntryNotes(type, resolution));
 }
 
+/**
+ * Info lines for `doctor`: a model alias that agents this member receives use
+ * is also defined in a `models/<ns>/aliases.yaml` whose `<ns>` their roles and
+ * projects do not activate in `resources.models`. That file does not apply
+ * here, which is right unless the activation was forgotten. Nothing is said
+ * while the aliases cannot be read: pull reports that.
+ */
+export async function aliasNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig || localConfig.repo.kind === 'http') return [];
+  const { loadModelAliases } = await import('./models/aliases.js');
+  const aliases = await loadModelAliases(localConfig);
+  if (!aliases.ok || aliases.inactive.size === 0) return [];
+
+  const { buildRolePullContext, resolveDesiredAgents } = await import('./resources/desired.js');
+  const { parseAgentYaml } = await import('./resources/agent-format.js');
+  let items: ResourceItem[];
+  try {
+    const desired = await resolveDesiredAgents(teamConfig, localConfig, await buildRolePullContext(localConfig));
+    if (desired.kind === 'conflict') return [];
+    ({ items } = desired);
+  } catch {
+    return [];
+  }
+  const agentsByAlias = new Map<string, string[]>();
+  for (const item of items) {
+    if (!item.sourcePath.endsWith('.yaml')) continue;
+    const content = await readFileSafe(item.sourcePath);
+    const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
+    const model = parsed?.ok ? parsed.spec.model : undefined;
+    if (model === undefined || !aliases.inactive.has(model)) continue;
+    agentsByAlias.set(model, [...agentsByAlias.get(model) ?? [], item.name]);
+  }
+  return [...agentsByAlias].flatMap(([alias, agents]) => (aliases.inactive.get(alias) ?? []).map(({ namespace, source }) => {
+    const active = aliases.team.get(alias);
+    const instead = active
+      ? `"${alias}" comes from ${active.source} instead`
+      : `no active team file maps "${alias}", so each tool uses its default model unless your local aliases file maps it`;
+    return `models: alias "${alias}" in ${source}, used by agent${agents.length === 1 ? '' : 's'} ${nameList(agents)}, does not apply here, `
+      + `as your roles and projects do not list "${namespace}" in resources.models: ${instead}. If it should apply, add `
+      + `\`models: [${namespace}]\` to the resources of your role in manifest/roles.yaml or of your project in manifest/projects.yaml.`;
+  }));
+}
+
 async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: EntryType; resolution: EntryResolution<unknown> }[]> {
   if (localConfig.repo.kind === 'http') return [];
   const { resolveEntriesFor } = await import('./namespaced-entries.js');

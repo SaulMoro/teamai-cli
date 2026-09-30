@@ -44,14 +44,18 @@ const INSTALLED: Record<EntryType, string> = {
   models: 'agent model settings',
 };
 
-/** Repo-relative (`/`-separated) path of a type's file in the root (`null`) or a namespace. */
-export function entryFilePath(type: EntryType, namespace: string | null): string {
-  return namespace === null ? `${type}/${ENTRY_FILE[type]}` : `${type}/${namespace}/${ENTRY_FILE[type]}`;
+/**
+ * Repo-relative (`/`-separated) path of a type's file in the root (`null`) or
+ * a namespace. `fileName` names another file kept beside it, such as the model
+ * aliases next to the model profiles.
+ */
+export function entryFilePath(type: EntryType, namespace: string | null, fileName: string = ENTRY_FILE[type]): string {
+  return namespace === null ? `${type}/${fileName}` : `${type}/${namespace}/${fileName}`;
 }
 
 /** `entryFilePath` under a checkout. */
-export function entryFileAbsolutePath(repoPath: string, type: EntryType, namespace: string | null): string {
-  return path.join(repoPath, ...entryFilePath(type, namespace).split('/'));
+export function entryFileAbsolutePath(repoPath: string, type: EntryType, namespace: string | null, fileName?: string): string {
+  return path.join(repoPath, ...entryFilePath(type, namespace, fileName).split('/'));
 }
 
 /** One of a type's files that exists in a checkout. */
@@ -66,12 +70,12 @@ export interface EntryFile {
  * Every file of `type` in a checkout, active here or not: the root file, then
  * each `<type>/<ns>/` file in name order. Absent files are left out.
  */
-export async function listEntryFiles(repoPath: string, type: EntryType): Promise<EntryFile[]> {
+export async function listEntryFiles(repoPath: string, type: EntryType, fileName?: string): Promise<EntryFile[]> {
   const namespaces = (await listDirs(path.join(repoPath, type))).sort();
   const files: EntryFile[] = [];
   for (const namespace of [null, ...namespaces]) {
-    const absolutePath = entryFileAbsolutePath(repoPath, type, namespace);
-    if (await pathExists(absolutePath)) files.push({ namespace, relativePath: entryFilePath(type, namespace), absolutePath });
+    const absolutePath = entryFileAbsolutePath(repoPath, type, namespace, fileName);
+    if (await pathExists(absolutePath)) files.push({ namespace, relativePath: entryFilePath(type, namespace, fileName), absolutePath });
   }
   return files;
 }
@@ -237,7 +241,7 @@ export async function activeEntryNamespaces(
  * `checkout` on every filesystem, not only the case-insensitive ones. An exact
  * match wins on one that has both; with neither, the name itself.
  */
-function namespaceDir(dirs: readonly string[], namespace: string): string {
+export function namespaceDir(dirs: readonly string[], namespace: string): string {
   return dirs.includes(namespace)
     ? namespace
     : dirs.find((dir) => caseFoldKey(dir) === caseFoldKey(namespace)) ?? namespace;

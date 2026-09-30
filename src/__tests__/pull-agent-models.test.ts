@@ -185,8 +185,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
     expect((await homeRecord())?.agentModels).toEqual({
       implementer: {
-        claude: { step: 'team', model: 'opus', effort: 'high' },
-        codex: { step: 'team', model: 'gpt-6-sol', effort: 'high' },
+        claude: { step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' },
+        codex: { step: 'team', model: 'gpt-6-sol', effort: 'high', source: 'models/aliases.yaml' },
       },
     });
   });
@@ -218,7 +218,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(alreadySynced()).toBe(true);
     expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
     expect(logged('success', /Updated the model of 1 agent\(s\): implementer/)).toBe(true);
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
 
     // Recorded now, so the next pull leaves it alone.
     vi.clearAllMocks();
@@ -255,7 +255,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(claude).toMatchObject({ model: 'fable' });
     expect(claude).not.toHaveProperty('effort');
     expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/aliases.yaml' });
   });
 
   it('keeps a copy the member changed, and its record', async () => {
@@ -273,8 +273,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(logged('warn', /Kept .*implementer\.md: you changed it/)).toBe(true);
     expect(await codexModel()).toMatchObject({ model: 'gpt-6-luna' });
     const recorded = (await homeRecord())?.agentModels?.['implementer'];
-    expect(recorded?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high' });
-    expect(recorded?.['codex']).toEqual({ step: 'team', model: 'gpt-6-luna' });
+    expect(recorded?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
+    expect(recorded?.['codex']).toEqual({ step: 'team', model: 'gpt-6-luna', source: 'models/aliases.yaml' });
   });
 
   describe('local override', () => {
@@ -291,7 +291,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(alreadySynced()).toBe(true);
       expect(await codexModel()).toMatchObject({ model: 'gpt-6-astra', model_reasoning_effort: 'low' });
       expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
-      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', model: 'gpt-6-astra', effort: 'low' });
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', model: 'gpt-6-astra', effort: 'low', source: path.join(homeDir, '.teamai/models/aliases.yaml') });
 
       vi.clearAllMocks();
       await writeLocal('aliases:\n  strong:\n    codex: default\n');
@@ -302,7 +302,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(codex).toHaveProperty('name', 'implementer');
       expect(codex).not.toHaveProperty('model');
       expect(codex).not.toHaveProperty('model_reasoning_effort');
-      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local' });
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', source: path.join(homeDir, '.teamai/models/aliases.yaml') });
     });
 
     it('says a kept copy\'s deployed version changed without blaming the team', async () => {
@@ -371,8 +371,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(claude).toMatchObject({ model: 'opus' });
       expect(claude).not.toHaveProperty('effort');
       expect((await homeRecord())?.agentModels?.['implementer']).toEqual({
-        claude: { step: 'switched', model: 'opus' },
-        codex: { step: 'switched' },
+        claude: { step: 'switched', model: 'opus', source: 'models/aliases.yaml' },
+        codex: { step: 'switched', source: 'models/aliases.yaml' },
       });
 
       vi.clearAllMocks();
@@ -451,7 +451,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     const projectCopy = path.join(projectRoot, '.claude', 'agents', 'implementer.md');
     expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'opus' });
     const projectRecord = Object.values((await loadStateForScope(projectConfig)).lastPullByWorkspace ?? {})[0];
-    expect(projectRecord?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high' });
+    expect(projectRecord?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
 
     // The project checkout's copy goes back to an older CLI's; the user
     // scope's record is untouched, and the project pull fixes only its own.
@@ -470,6 +470,6 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(alreadySynced()).toBe(true);
     expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'opus', effort: 'high' });
     expect((await fse.stat(claudeFile())).mtimeMs).toBe(userCopyBefore.mtimeMs);
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
   });
 });

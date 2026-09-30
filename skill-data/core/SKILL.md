@@ -146,8 +146,17 @@ or a team alias; other names do nothing. One file serves every scope and every t
 with that alias name. An ordinary `teamai pull` applies an edit. In the team file,
 `default` is a literal model value and `~` is an error.
 
-A structural error in either file (bad YAML, a wrong type, a bad alias name, an effort
-without a model, `~` in the team file) holds every agent with a `model`: pull keeps
+A role or project redefines an alias in `models/<ns>/aliases.yaml`, read where `<ns>`
+is in `resources.models`, like `models/<ns>/models.yaml`. The namespace alias replaces
+the root alias whole (a tool it does not map gets no `model`); the same alias in two
+active namespaces holds alias agents, as a structural error does. A name defined in any
+aliases file of the team repo, active or not, is an alias: with no active definition it
+gives no `model`. `teamai doctor` notes an agent's alias defined in an inactive namespace;
+to use it, add `models: [<ns>]` to the role's or project's resources.
+
+A structural error in any aliases file, active or not, or in the local file (bad YAML, a
+wrong type, a bad alias name, an effort without a model, `~` in a team file) holds every
+agent with a `model`: pull keeps
 their copies and push skips them until the file its warning names is fixed. An unknown
 tool key, an unknown option field, or an alias named like `opus` or `inherit` is only
 dropped, with a warning when an agent uses that alias; `gateways` is ignored.
@@ -162,8 +171,8 @@ model), not the profile's model. Variants such as tclaude are never switched. An
 On push, an alias agent's model and alias effort are never read as edits: a copy that
 matches the last pull or the current mapping is unedited, and a hand-edited model or
 effort is reported as drift and not pushed (other edits still push), with where to change
-it: the member's override file, the team's `models/aliases.yaml`, or `teamai models restore
---agent <tool>` for a switched tool. Writing an alias name in a deployed copy (`model: fast`)
+it: the member's override file, the team aliases file the alias comes from, or `teamai models
+restore --agent <tool>` for a switched tool. Writing an alias name in a deployed copy (`model: fast`)
 and pushing proposes `model: <alias>`. Never tell a user to push a concrete model over an alias.
 
 ## References

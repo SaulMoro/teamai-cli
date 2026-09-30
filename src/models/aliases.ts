@@ -7,6 +7,13 @@
  *       claude: [{ model: opus, effort: high }, { model: fable }]
  *       codex:  { model: gpt-6-sol, effort: high }
  *
+ * A role or project gets its own meaning in `models/<ns>/aliases.yaml`, read
+ * where `<ns>` is active in `resources.models`, as model profiles are: its
+ * alias replaces the root alias of the same name whole, and one name in two
+ * active namespaces is a failure. A name any aliases file in the checkout
+ * defines is an alias, active here or not, so one with no active definition
+ * gives no model field rather than being written literally.
+ *
  * A member replaces an entry on their machine in `~/.teamai/models/aliases.yaml`,
  * same shape, one file for every scope and team. There `~` or `default` for a
  * tool means that tool gets no model field.
@@ -24,17 +31,19 @@
  * models, and every other switched tool gets no model, so it inherits one
  * natively. No switched tool gets an alias effort.
  *
- * A structural error in either file (bad YAML, wrong types, a bad alias name,
- * an effort without a model, `~` in the team file) fails the load: no model
- * can then be told from an alias, so agents with a `model` are held. What
- * this version does not know is dropped with a warning instead, so a newer
- * CLI's additions never freeze this one.
+ * A structural error in any of these files, active or not (bad YAML, wrong
+ * types, a bad alias name, an effort without a model, `~` in a team file),
+ * fails the load: no model can then be told from an alias, so agents with a
+ * `model` are held. What this version does not know is dropped with a
+ * warning instead, so a newer CLI's additions never freeze this one.
  */
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
-import { readEntryFileText } from '../namespaced-entries.js';
+import { activeEntryNamespaces, describeEntryFailure, listEntryFiles, namespaceDir, readEntryFileText } from '../namespaced-entries.js';
+import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
+import { listDirs } from '../utils/fs.js';
 import { liveModelSwitches, type LiveModelSwitch } from './switch.js';
 import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
 
@@ -57,8 +66,10 @@ const KNOWN_TOOLS: ReadonlySet<string> = new Set(ALL_SUPPORTED_TOOLS);
 
 const OPTION_FIELDS: ReadonlySet<string> = new Set(['model', 'effort']);
 
-/** Repo-relative path of the team aliases file. */
+/** Repo-relative path of the root team aliases file; a namespace's is `models/<ns>/aliases.yaml`. */
 export const TEAM_ALIASES_FILE = 'models/aliases.yaml';
+
+const ALIASES_FILE_NAME = 'aliases.yaml';
 
 /**
  * The member's override. Its keys have effect only where they name an alias
@@ -119,22 +130,38 @@ type AliasEntries = Record<string, AliasEntry>;
 /**
  * Something a file sets that no tool receives as written, dropped with a
  * message. With `tool`, it is about that tool key's entry of `alias` in
- * `file`; without, about the alias as a whole.
+ * `file`; without, about the alias as a whole. `file` is a team file's
+ * repo-relative path or the local file's absolute path.
  */
 export interface AliasWarning {
   readonly alias: string;
-  readonly file: 'team' | 'local';
+  readonly file: string;
   readonly tool?: ToolName;
   readonly message: string;
+}
+
+/** One team alias as this scope reads it, and the repo-relative file it comes from. */
+export interface TeamAlias {
+  readonly entries: AliasEntries;
+  readonly source: string;
+}
+
+/** A namespace aliases file `resources.models` does not activate here. */
+export interface InactiveAliasFile {
+  readonly namespace: string;
+  readonly source: string;
 }
 
 /** The aliases a scope reads, or why they cannot be read. */
 export type ModelAliases =
   | {
     readonly ok: true;
-    /** Every alias name: reserved, and defined in the team file. */
+    /** Every alias name: reserved, and defined in any team aliases file of the checkout, active or not. */
     readonly names: ReadonlySet<string>;
-    readonly team: ReadonlyMap<string, AliasEntries>;
+    /** The root aliases, each replaced whole by an active namespace's alias of its name. */
+    readonly team: ReadonlyMap<string, TeamAlias>;
+    /** By alias name, the inactive namespace files that define it. */
+    readonly inactive: ReadonlyMap<string, readonly InactiveAliasFile[]>;
     /** The member's override, for the names in `names` only. */
     readonly local: ReadonlyMap<string, AliasEntries>;
     /**
@@ -162,31 +189,26 @@ export type ResolutionStep = 'extras' | 'literal' | 'switched' | 'local' | 'team
  * What one tool receives for an agent's model, or why it cannot be resolved.
  * `effort` is present only when the alias produced it: an effort the tool's
  * extras set is the extras' own, and the step `extras` skips the alias whole.
+ * `source` is the file whose alias decided it: a team file's repo-relative
+ * path, or the local file's absolute path. A tool the team alias does not map
+ * gets `default` with that alias's file; a name no active file defines, none.
  */
 export type ModelResolution =
-  | { readonly ok: true; readonly step: ResolutionStep; readonly model?: string; readonly effort?: string }
+  | { readonly ok: true; readonly step: ResolutionStep; readonly model?: string; readonly effort?: string; readonly source?: string }
   | { readonly ok: false; readonly reason: string };
 
 /**
- * Load the aliases `localConfig`'s scope reads: the team file of its checkout
- * and the member's override. A missing file is an empty mapping, so `strong`
- * and `fast` resolve to no model field.
+ * Load the aliases `localConfig`'s scope reads: the team files of its
+ * checkout and the member's override. A missing file is an empty mapping, so
+ * `strong` and `fast` resolve to no model field.
  */
 export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelAliases> {
-  const team = await readAliasesFile(path.join(localConfig.repo.localPath, ...TEAM_ALIASES_FILE.split('/')), TEAM_ALIASES_FILE, 'team');
+  const team = await loadTeamAliases(localConfig);
   if (!team.ok) return team;
-  const optOut = [...team.aliases].flatMap(([alias, entries]) => Object.keys(entries).filter((tool) => entries[tool] === null).map((tool) => `${alias}.${tool}`));
-  if (optOut.length > 0) {
-    return {
-      ok: false,
-      reason: `Invalid model aliases file at ${TEAM_ALIASES_FILE}: ${optOut.join(', ')}: ~ is accepted only in a member's ${localAliasesPath()}. `
-        + 'Remove the entry to leave the tool on its default model',
-    };
-  }
   const localPath = localAliasesPath();
-  const local = await readAliasesFile(localPath, localPath, 'local');
+  const local = await readAliasesFile(localPath, localPath);
   if (!local.ok) return local;
-  const names = new Set<string>([...RESERVED_ALIASES, ...team.aliases.keys()]);
+  const names = new Set<string>([...RESERVED_ALIASES, ...team.names]);
   // Read once per load, and only matters for aliases: a literal model is written as is.
   const switches = await liveModelSwitches();
   // A local name no team here defines is another team's: it has no effect, so no warning either.
@@ -194,27 +216,112 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
   return {
     ok: true,
     names,
-    team: team.aliases,
+    team: team.active,
+    inactive: team.inactive,
     local: localHere,
     warnings: [
       ...team.warnings,
-      ...droppedEffortWarnings(team.aliases, TEAM_ALIASES_FILE, 'team'),
       // A native name is in no team's `names`: the member meant it for all of them.
       ...local.warnings.filter(({ alias }) => names.has(alias) || NATIVE_MODEL_ALIASES.has(alias)),
-      ...droppedEffortWarnings(localHere, localPath, 'local'),
+      ...[...localHere].flatMap(([alias, entries]) => droppedEffortWarnings(alias, entries, localPath)),
     ],
     switches,
   };
 }
 
 /**
- * One aliases file, `label` naming it in messages. A structural error fails
- * it whole; what this version does not know is dropped with a warning.
+ * Every team aliases file of the checkout, the root one and each
+ * `models/<ns>/aliases.yaml`, is read whole: a name any of them defines is an
+ * alias here, active or not, so one that cannot be read fails the load. Only
+ * the root and the namespaces active in `resources.models` are resolved, with
+ * the rule model profiles follow. Warnings are kept for the entries resolved.
+ */
+async function loadTeamAliases(localConfig: LocalConfig): Promise<
+  | {
+    ok: true;
+    names: Set<string>;
+    active: Map<string, TeamAlias>;
+    inactive: Map<string, InactiveAliasFile[]>;
+    warnings: AliasWarning[];
+  }
+  | { ok: false; reason: string }
+> {
+  const repoPath = localConfig.repo.localPath;
+  const files: Array<{ namespace: string | null; source: string; aliases: Map<string, AliasEntries>; warnings: AliasWarning[] }> = [];
+  for (const { namespace, relativePath, absolutePath } of await listEntryFiles(repoPath, 'models', ALIASES_FILE_NAME)) {
+    const read = await readAliasesFile(absolutePath, relativePath);
+    if (!read.ok) return read;
+    const optOut = [...read.aliases].flatMap(([alias, entries]) => Object.keys(entries).filter((tool) => entries[tool] === null).map((tool) => `${alias}.${tool}`));
+    if (optOut.length > 0) {
+      return {
+        ok: false,
+        reason: `Invalid model aliases file at ${relativePath}: ${optOut.join(', ')}: ~ is accepted only in a member's ${localAliasesPath()}. `
+          + 'Remove the entry to leave the tool on its default model',
+      };
+    }
+    files.push({ namespace, source: relativePath, ...read });
+  }
+
+  // Each active namespace reads the directory model profiles read for it. Its
+  // file is its candidate, named by the namespace as declared.
+  const activeDirs = new Map<string, string>();
+  const active = files.some((file) => file.namespace !== null) ? await activeEntryNamespaces(localConfig, 'models') : { ok: true as const, active: null };
+  if (!active.ok) {
+    const { failure } = active;
+    const cause = failure.kind === 'namespaces-unresolved' ? failure.reason : describeEntryFailure(failure);
+    return { ok: false, reason: `The models namespaces of your roles and projects cannot be resolved: ${cause}` };
+  }
+  if (active.active !== null) {
+    const dirs = await listDirs(path.join(repoPath, 'models'));
+    for (const namespace of active.active) {
+      const dir = namespaceDir(dirs, namespace);
+      if (!activeDirs.has(dir)) activeDirs.set(dir, namespace);
+    }
+  }
+
+  const candidates: NamespaceCandidate<AliasEntries>[] = [];
+  const inactive = new Map<string, InactiveAliasFile[]>();
+  for (const file of files) {
+    const namespace = file.namespace === null ? null : activeDirs.get(file.namespace);
+    for (const [name, entries] of file.aliases) {
+      if (namespace !== undefined) candidates.push({ name, source: file.source, namespace, value: entries });
+      else inactive.set(name, [...inactive.get(name) ?? [], { namespace: file.namespace!, source: file.source }]);
+    }
+  }
+  const resolution = resolveNamespacedItems(candidates, active.active ?? []);
+  if (resolution.kind === 'conflict') {
+    return {
+      ok: false,
+      reason: `Model alias "${resolution.name}" is defined in both ${resolution.first.source} and ${resolution.second.source}, and both `
+        + 'namespaces are active here, so nothing says which one you should receive. Rename or remove it in one of the files, '
+        + 'or stop declaring one of the namespaces for your roles and projects',
+    };
+  }
+  const resolved = new Map(resolution.items.map((item) => [item.name, { entries: item.value, source: item.source }]));
+  // A replaced root alias is not read, so neither are its warnings. An alias
+  // dropped for its native name is in no file's resolved set and keeps them.
+  const readSources = new Set([null, ...activeDirs.keys()]);
+  const warnings = files
+    .filter((file) => readSources.has(file.namespace))
+    .flatMap((file) => file.warnings)
+    .filter((warning) => (resolved.get(warning.alias)?.source ?? warning.file) === warning.file);
+  return {
+    ok: true,
+    names: new Set(files.flatMap((file) => [...file.aliases.keys()])),
+    active: resolved,
+    inactive,
+    warnings: [...warnings, ...[...resolved].flatMap(([alias, { entries, source }]) => droppedEffortWarnings(alias, entries, source))],
+  };
+}
+
+/**
+ * One aliases file, `label` naming it in messages and warnings. A structural
+ * error fails it whole; what this version does not know is dropped with a
+ * warning.
  */
 async function readAliasesFile(
   absolutePath: string,
   label: string,
-  file: AliasWarning['file'],
 ): Promise<{ ok: true; aliases: Map<string, AliasEntries>; warnings: AliasWarning[] } | { ok: false; reason: string }> {
   const read = await readEntryFileText(absolutePath, label);
   if (!read.ok) return read;
@@ -224,7 +331,7 @@ async function readAliasesFile(
   } catch (error) {
     return { ok: false, reason: `Invalid model aliases YAML at ${label}: ${error instanceof Error ? error.message : String(error)}` };
   }
-  const known = dropUnknownEntries(document ?? {}, label, file);
+  const known = dropUnknownEntries(document ?? {}, label);
   const parsed = AliasesFileSchema.safeParse(known.document);
   if (!parsed.success) {
     return {
@@ -243,13 +350,13 @@ async function readAliasesFile(
  * mappings keyed by model profile, silently. Whatever is not shaped like an
  * alias map is left for the schema to reject.
  */
-function dropUnknownEntries(document: unknown, label: string, file: AliasWarning['file']): { document: unknown; warnings: AliasWarning[] } {
+function dropUnknownEntries(document: unknown, file: string): { document: unknown; warnings: AliasWarning[] } {
   if (!isRecord(document) || !isRecord(document['aliases'])) return { document, warnings: [] };
   const warnings: AliasWarning[] = [];
   const aliases: Record<string, unknown> = {};
   for (const [alias, value] of Object.entries(document['aliases'])) {
     if (NATIVE_MODEL_ALIASES.has(alias)) {
-      warnings.push({ alias, file, message: `${label}: alias "${alias}" has the name of a tool's own model alias, so it is ignored `
+      warnings.push({ alias, file, message: `${file}: alias "${alias}" has the name of a tool's own model alias, so it is ignored `
         + `and agents with model: ${alias} receive ${alias} as written. Rename the alias, such as "${alias}-team".` });
       continue;
     }
@@ -261,7 +368,7 @@ function dropUnknownEntries(document: unknown, label: string, file: AliasWarning
     for (const [tool, entry] of Object.entries(value)) {
       if (tool === 'gateways') continue;
       if (!KNOWN_TOOLS.has(tool)) {
-        warnings.push({ alias, file, message: `${label}: alias "${alias}" maps "${tool}", which is not a tool teamai knows, so that entry `
+        warnings.push({ alias, file, message: `${file}: alias "${alias}" maps "${tool}", which is not a tool teamai knows, so that entry `
           + 'is ignored. Fix the tool id, or update teamai if a newer version added that tool.' });
         continue;
       }
@@ -275,7 +382,7 @@ function dropUnknownEntries(document: unknown, label: string, file: AliasWarning
       entries[tool] = Array.isArray(entry) ? entry.map(withoutUnknown) : withoutUnknown(entry);
       if (unknown.size > 0) {
         const fields = [...unknown].map((field) => `"${field}"`).join(', ');
-        warnings.push({ alias, file, tool: tool as ToolName, message: `${label}: alias "${alias}" sets ${fields} for ${tool}, which teamai `
+        warnings.push({ alias, file, tool: tool as ToolName, message: `${file}: alias "${alias}" sets ${fields} for ${tool}, which teamai `
           + `does not know, so ${tool} receives that entry without it. Remove it, or update teamai if a newer version added it.` });
       }
     }
@@ -289,20 +396,18 @@ function dropUnknownEntries(document: unknown, label: string, file: AliasWarning
  * for is dropped: the tool receives the model alone. One message per alias
  * and tool, however many of its options set an effort.
  */
-function droppedEffortWarnings(aliases: ReadonlyMap<string, AliasEntries>, label: string, file: AliasWarning['file']): AliasWarning[] {
+function droppedEffortWarnings(alias: string, entries: AliasEntries, file: string): AliasWarning[] {
   const warnings: AliasWarning[] = [];
-  for (const [alias, entries] of aliases) {
-    for (const tool of ALL_SUPPORTED_TOOLS) {
-      const entry = entries[tool];
-      if (entry === undefined || entry === null || agentEffortField(tool) !== undefined) continue;
-      const withEffort = (Array.isArray(entry) ? entry : [entry]).find((option) => typeof option !== 'string' && option.effort !== undefined);
-      if (withEffort === undefined || typeof withEffort === 'string') continue;
-      const hint = tool === 'cursor'
-        ? `Remove it, or write it into the model in Cursor's bracket form, such as "${withEffort.model}[effort=${withEffort.effort}]".`
-        : `Remove effort from ${alias}.${tool} to silence this warning.`;
-      warnings.push({ alias, file, tool, message: `${label}: alias "${alias}" sets an effort for ${tool}, but effort is not supported for `
-        + `${tool} agent files, so ${tool} receives the model without it. ${hint}` });
-    }
+  for (const tool of ALL_SUPPORTED_TOOLS) {
+    const entry = entries[tool];
+    if (entry === undefined || entry === null || agentEffortField(tool) !== undefined) continue;
+    const withEffort = (Array.isArray(entry) ? entry : [entry]).find((option) => typeof option !== 'string' && option.effort !== undefined);
+    if (withEffort === undefined || typeof withEffort === 'string') continue;
+    const hint = tool === 'cursor'
+      ? `Remove it, or write it into the model in Cursor's bracket form, such as "${withEffort.model}[effort=${withEffort.effort}]".`
+      : `Remove effort from ${alias}.${tool} to silence this warning.`;
+    warnings.push({ alias, file, tool, message: `${file}: alias "${alias}" sets an effort for ${tool}, but effort is not supported for `
+      + `${tool} agent files, so ${tool} receives the model without it. ${hint}` });
   }
   return warnings;
 }
@@ -335,11 +440,12 @@ export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, tool: T
 }
 
 /** Which file's entry, under which tool key, `fromEntries` reads for `tool`. */
-function entrySource(aliases: ModelAliases & { ok: true }, alias: string, tool: ToolName): { file: AliasWarning['file']; key: string } | undefined {
+function entrySource(aliases: ModelAliases & { ok: true }, alias: string, tool: ToolName): { file: string; key: string } | undefined {
   const local = entryKey(aliases.local.get(alias), tool);
-  if (local !== undefined) return { file: 'local', key: local };
-  const team = entryKey(aliases.team.get(alias), tool);
-  return team !== undefined ? { file: 'team', key: team } : undefined;
+  if (local !== undefined) return { file: localAliasesPath(), key: local };
+  const team = aliases.team.get(alias);
+  const key = entryKey(team?.entries, tool);
+  return team !== undefined && key !== undefined ? { file: team.source, key } : undefined;
 }
 
 /** What `tool` receives for `spec`'s model. */
@@ -364,12 +470,15 @@ export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, tool: 
 
 /** What the member's local entry, else the team entry, gives `tool` for `alias`. */
 function fromEntries(aliases: ModelAliases & { ok: true }, alias: string, tool: ToolName, extras: Record<string, unknown> | undefined): ModelResolution {
+  const localPath = localAliasesPath();
   const local = toolEntry(aliases.local.get(alias), tool);
-  if (local === null || local === LOCAL_DEFAULT) return { ok: true, step: 'local' };
-  if (local !== undefined) return fromOption('local', local, tool, extras);
-  const team = toolEntry(aliases.team.get(alias), tool);
-  if (team === undefined || team === null) return { ok: true, step: 'default' };
-  return fromOption('team', team, tool, extras);
+  if (local === null || local === LOCAL_DEFAULT) return { ok: true, step: 'local', source: localPath };
+  if (local !== undefined) return fromOption('local', local, tool, extras, localPath);
+  const team = aliases.team.get(alias);
+  const entry = toolEntry(team?.entries, tool);
+  if (team === undefined) return { ok: true, step: 'default' };
+  if (entry === undefined || entry === null) return { ok: true, step: 'default', source: team.source };
+  return fromOption('team', entry, tool, extras, team.source);
 }
 
 /**
@@ -379,9 +488,10 @@ function fromEntries(aliases: ModelAliases & { ok: true }, alias: string, tool: 
  */
 function throughSwitch(resolution: ModelResolution, tool: ToolName): ModelResolution {
   if (!resolution.ok || resolution.model === undefined) return resolution;
+  const source = resolution.source !== undefined ? { source: resolution.source } : {};
   return tool === 'claude' && SWITCH_ROUTED_CLAUDE_MODELS.has(resolution.model)
-    ? { ok: true, step: 'switched', model: resolution.model }
-    : { ok: true, step: 'switched' };
+    ? { ok: true, step: 'switched', model: resolution.model, ...source }
+    : { ok: true, step: 'switched', ...source };
 }
 
 /** `tool`'s entry in one file's alias, its own key before the tool it inherits from. */
@@ -407,6 +517,7 @@ function fromOption(
   entry: AliasOption | AliasOption[],
   tool: ToolName,
   extras: Record<string, unknown> | undefined,
+  source: string,
 ): ModelResolution {
   const first = Array.isArray(entry) ? entry[0]! : entry;
   const option = typeof first === 'string' ? { model: first } : first;
@@ -414,7 +525,7 @@ function fromOption(
   const effort = option.effort !== undefined && effortField !== undefined && extras?.[effortField] === undefined
     ? option.effort
     : undefined;
-  return { ok: true, step, model: option.model, ...(effort !== undefined ? { effort } : {}) };
+  return { ok: true, step, model: option.model, ...(effort !== undefined ? { effort } : {}), source };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

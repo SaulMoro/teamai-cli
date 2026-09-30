@@ -30,6 +30,7 @@ import {
   buildEntryResolutionChecks,
   buildEntryScopeKeyCheck,
   entryNamespaceNotes,
+  aliasNamespaceNotes,
   buildDocsCheck,
 } from './doctor-delivery.js';
 
@@ -551,10 +552,11 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ? codexTrustReminder()
     : null;
   // Info, not checks: which namespace item or entry replaces which root one
-  // (#707).
+  // (#707), and a model alias an agent uses from a namespace not active here (#830).
   const notes = [
     ...await buildNamespaceNotes(ctx),
     ...await entryNamespaceNotes(ctx),
+    ...await aliasNamespaceNotes(ctx),
     ...(codexNote ? [codexNote] : []),
   ];
 
