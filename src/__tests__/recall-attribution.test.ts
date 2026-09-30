@@ -930,6 +930,29 @@ const ROWS: Row[] = [
     project: {},
   },
   {
+    name: '05: Codex reads of the doc whose output is only the reader\'s error (status unknown) → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`cat '${files[0]}'`, `cat: ${files[0]}: Permission denied\n`);
+      await h.codexShell(`cat '${files[0]}'`, `cat: ${files[0]}: No such file or directory`);
+      await h.codexShell(`/bin/cat '${files[0]}'`, `/bin/cat: ${files[0]}: No such file or directory\n`);
+      await h.codexShell(`sed -n '1,80p' '${files[0]}'`, `sed: can't read ${files[0]}: Permission denied\n`);
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
+    name: '06: Codex searches of the doc or its directory whose output is only the search\'s error (status unknown) → 0',
+    trace: async (h) => {
+      const { files } = await h.codexRecall('redis timeout');
+      await h.codexShell(`grep needle '${files[0]}'`, `grep: ${files[0]}: Permission denied\n`);
+      await h.codexShell(`rg needle '${files[0]}'`, `rg: ${files[0]}: Permission denied (os error 13)\n`);
+      await h.codexShell(`grep -rn needle '${path.dirname(files[0])}'`, `grep: ${files[0]}: Permission denied\n`);
+      await h.stop(CODEX);
+    },
+    project: {},
+  },
+  {
     name: '05: Claude recall; cat <doc> | head (a pipeline that starts with the reader, status success) → +1',
     trace: async (h) => {
       const { files } = await h.recall('redis timeout');

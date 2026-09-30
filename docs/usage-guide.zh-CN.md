@@ -1217,7 +1217,7 @@ recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall �
 **什么算打开文档。** 打开的路径必须就是 run 打印出的路径。
 
 - agent 的读文件工具（`Read`、`read`、`view`、`read_file`、`ReadFile`）。
-- 单独运行、或位于管道开头的一个读取命令：`cat`、`bat`、`less`、`more`、`head`、`tail`、`nl`、打印行的 `sed -n`，或带位置参数路径、`-Path` 或 `-LiteralPath` 的 PowerShell `Get-Content`、`gc`、`type` 和 `cat`。含 `;`、`&&`、`||` 或 `&` 的命令不算读取。agent 未报告状态时（如 Codex 的 shell），只有单独运行的读取命令才计入。
+- 单独运行、或位于管道开头的一个读取命令：`cat`、`bat`、`less`、`more`、`head`、`tail`、`nl`、打印行的 `sed -n`，或带位置参数路径、`-Path` 或 `-LiteralPath` 的 PowerShell `Get-Content`、`gc`、`type` 和 `cat`。含 `;`、`&&`、`||` 或 `&` 的命令不算读取。agent 未报告状态时（如 Codex 的 shell），只有单独运行的读取命令才计入；输出中只有该命令自身的错误行（如 `cat: x.md: Permission denied`）时，视为读取失败。
 - 输出展示了文件内容行的搜索：以该文件路径加 `:<行号>:` 开头的行（不带行号的 `grep` 和 `rg` 输出、以及 OpenCode 的逐文件标题行中，只加 `:`），或者该文件是唯一的搜索对象时，输出中有搜索工具的无匹配或汇总行（`No files found`、`No matches found`、`Found N matches`）以外的行（`grep`、`rg`、`ag`、`ack` 或 `git grep`，规则与读取命令相同；或 content 模式下的 `Grep` 这类搜索工具）。
 - 列出文件（`Glob`、`ls`、`find`、`rg --files`、`grep -l`、搜索工具的文件列表）、计数（`grep -c`、count 模式）和失败的读取都不算。
 - 在 Windows 上，路径无论怎样书写都计入：盘符大小写不同、使用 `\` 或 `/`，或用 Git Bash 的 `/c/…` 表示 `C:\…`。

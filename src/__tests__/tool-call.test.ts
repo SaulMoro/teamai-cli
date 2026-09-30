@@ -110,6 +110,25 @@ describe('classifyToolCall', () => {
     expect(shell('cat doc.md', { stdout: '', exitCode: 1 })).toMatchObject({ status: 'failure' });
   });
 
+  it.each<[string, string]>([
+    ['cat doc.md', 'cat: doc.md: Permission denied'],
+    ['cat doc.md', 'cat: doc.md: No such file or directory\n'],
+    ['/usr/bin/head -n 5 doc.md', '/usr/bin/head: doc.md: No such file or directory\nhead: doc.md: x\n'],
+    ["sed -n '1,5p' doc.md", "sed: can't read doc.md: No such file or directory"],
+    ['grep needle doc.md', 'grep: doc.md: Permission denied'],
+    ['rg -n needle learnings', 'rg: learnings/a.md: Permission denied (os error 13)'],
+  ])('status unknown: %j with output %j, only its command\'s errors, is a failure', (command, output) => {
+    expect(shell(command, output)).toMatchObject({ status: 'failure', paths: [] });
+  });
+
+  it('status unknown: its command\'s error lines are no content, but the lines around them are', () => {
+    expect(shell('cat a.md doc.md', 'cat: a.md: No such file or directory\n---')).toMatchObject({ status: 'unknown', paths: [at('a.md'), at('doc.md')] });
+    expect(shell('grep -rn needle learnings', 'grep: learnings/b.md: Permission denied\nlearnings/a.md:3:x'))
+      .toMatchObject({ status: 'unknown', paths: [at('learnings/a.md')] });
+    expect(shell('cat doc.md', 'grep: doc.md: said by another command')).toMatchObject({ status: 'unknown', paths: [at('doc.md')] });
+    expect(shell('cat doc.md', { stdout: 'cat: doc.md: Permission denied' })).toMatchObject({ status: 'success' });
+  });
+
   it.each<[string, string, string[]]>([
     ['grep -rn timeout learnings', 'learnings/a.md:3:x\nlearnings/sub/b.md:9:y', ['learnings/a.md', 'learnings/sub/b.md']],
     ['grep -e timeout -e pool learnings', 'learnings/a.md:x', ['learnings/a.md']],

@@ -8,6 +8,7 @@
  *                                                  ├─ list    nothing: it shows paths, not a file's lines
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
  *   responseOf ── statusOf (or a bridge's tool_status), outputOf, searchOutputOf
+ *   status unknown: withoutErrors(output), a shell call that printed only its command's errors failed
  *
  * Paths are resolved and compared by agent-path, the same on every OS, so a
  * Windows member's `C:\kb\x.md` is one file however it is written. A new
@@ -210,6 +211,20 @@ function shownFiles(output: string, roots: string[], base: string | undefined, t
   return [...files];
 }
 
+/**
+ * A shell call's output without the lines its command printed as errors:
+ * those that start with its command word, as written or by name, and `: `
+ * (`cat: x.md: No such file or directory`, `/bin/cat: …`, `grep: …`). Null
+ * when those lines were all it printed, as when the call failed.
+ */
+function withoutErrors(output: string, verb: string): string | null {
+  const prefixes = [...new Set([verb, verb.split(/[\\/]/).pop()!])].map((name) => `${name}: `);
+  const lines = output.split('\n');
+  const kept = lines.filter((line) => !prefixes.some((prefix) => line.startsWith(prefix)));
+  if (kept.length === lines.length) return output;
+  return kept.some((line) => line.trim() !== '') ? kept.join('\n') : null;
+}
+
 /** Classify one PostToolUse payload from `agent` (the dispatch tool id). */
 export function classifyToolCall(stdin: Record<string, unknown>, agent?: string): ToolCall {
   const name = normalizeToolName(typeof stdin.tool_name === 'string' ? stdin.tool_name : '');
@@ -250,12 +265,15 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
   const shell = classifyShellCommand(command);
   const output = outputOf(response);
   const optional = output !== undefined ? { output } : {};
+  // With no status, only the command's own error lines tell a failure apart.
+  const content = status === 'unknown' && output !== undefined && shell.verb !== undefined ? withoutErrors(output, shell.verb) : output;
+  if (content === null) return { category: shell.category, paths: [], status: 'failure', simple: shell.simple, command, ...optional };
   if (shell.category === 'search') {
     // A shell search prints paths as its operands wrote them: relative to the cwd.
     const roots = shell.paths.map((f) => resolvePath(f, cwd));
     // Only a lone search prints its output; after a pipe, what shows may no longer be the file's lines.
     const target = shell.target !== undefined && shell.simple ? resolvePath(shell.target, cwd) : undefined;
-    const paths = output !== undefined ? shownFiles(output, roots, cwd, target, true) : [];
+    const paths = content !== undefined ? shownFiles(content, roots, cwd, target, true) : [];
     return { category: 'search', paths, status, simple: shell.simple, command, ...optional };
   }
   return {

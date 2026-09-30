@@ -40,6 +40,8 @@ export interface ShellClassification {
   target?: string;
   /** True when the reader or search is the call's only command, not the head of a pipeline. */
   simple: boolean;
+  /** A read's or search's command word, as written: `cat`, `/bin/cat`. */
+  verb?: string;
 }
 
 const REDIRECT = /^(?:&>>?|<<<|<<-?|<>|<&|>>|>&|>\||<|>)/;
@@ -391,16 +393,16 @@ function classifySimple(command: SimpleCommand, simple: boolean): ShellClassific
     ?? (Object.hasOwn(POWERSHELL_READERS, name.toLowerCase()) ? POWERSHELL_READERS[name.toLowerCase()] : undefined);
   if (read) {
     const files = read(args);
-    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple } : SHELL;
+    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verb } : SHELL;
   }
   if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
   const search = Object.hasOwn(SEARCHERS, name) ? SEARCHERS[name] : undefined;
   if (!search) return SHELL;
   const { shows, operands: roots } = searchArgs(args, search);
   if (shows === 'paths') return { category: 'list', paths: [], simple };
-  if (shows === 'counts') return { category: 'search', paths: [], simple };
+  if (shows === 'counts') return { category: 'search', paths: [], simple, verb };
   const target = roots.length === 1 && !EXPANDS.test(roots[0]) ? roots[0] : undefined;
-  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple };
+  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple, verb };
 }
 
 /**
