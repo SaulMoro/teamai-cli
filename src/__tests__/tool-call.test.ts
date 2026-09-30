@@ -40,6 +40,11 @@ describe('classifyToolCall', () => {
     ["sed -ne '1,5p' doc.md", ['doc.md']],
     ['sed -n -e 1p -e 9,12p doc.md', ['doc.md']],
     ['sed --quiet --expression=3p doc.md', ['doc.md']],
+    ['cat doc.md # other.md', ['doc.md']],
+    ['cat doc.md #other.md', ['doc.md']],
+    ['cat a#b.md', ['a#b.md']],
+    ['cat "#x.md" \'#y.md\'', ['#x.md', '#y.md']],
+    ['# a note\ncat doc.md', ['doc.md']],
   ])('%j reads %j', (command, files) => {
     expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple: true, status: 'success' });
   });
@@ -69,6 +74,7 @@ describe('classifyToolCall', () => {
     'sed -n -f print.sed doc.md',
     'nl -s doc.md',
     'head -n 5',
+    '# cat doc.md',
   ])('%j is no read', (command) => {
     expect(shell(command)).toMatchObject({ category: 'shell', paths: [], command });
   });

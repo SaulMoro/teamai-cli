@@ -47,8 +47,9 @@ const REDIRECT = /^(?:&>>?|<<<|<<-?|<>|<&|>>|>&|>\||<|>)/;
 /**
  * The simple commands of a shell command line, split on `;`, `&&`, `||`, `|`,
  * `&` and newlines outside quotes, each with the operator after it. A
- * redirect (`2>&1`, `> out`, `<in`) is kept apart with its target. A
- * backslash escapes only `"` or `\` inside double quotes, and a newline
+ * redirect (`2>&1`, `> out`, `<in`) is kept apart with its target. An
+ * unquoted `#` at the start of a word begins a comment that runs to the end
+ * of the line. A backslash escapes only `"` or `\` inside double quotes, and a newline
  * outside quotes, so a Windows path stays whole.
  */
 export function simpleCommands(command: string): SimpleCommand[] {
@@ -87,6 +88,9 @@ export function simpleCommands(command: string): SimpleCommand[] {
       word ??= '';
     } else if (c === '\\' && next === '\n') {
       i++;
+    } else if (c === '#' && word === null) {
+      // A `#` that starts a word starts a comment, up to the newline; `a#b` is a word.
+      while (i + 1 < line.length && line[i + 1] !== '\n') i++;
     } else if (c === '<' || c === '>' || (c === '&' && next === '>')) {
       // A file descriptor written just before the operator belongs to it: `2>&1`.
       const fd = word !== null && /^\d+$/.test(word) ? word : '';

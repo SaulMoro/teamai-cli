@@ -977,6 +977,35 @@ const ROWS: Row[] = [
     project: {},
   },
   {
+    name: '05: the doc only in a shell comment (cat notes.md # <doc>) → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`cat notes.md # ${files[0]}`, 'notes');
+      await h.shell(`cat notes.md #${files[0]}`, 'notes');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '05: a read with a trailing comment (cat <doc> # the fix) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`cat '${files[0]}' # the fix`, '---');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '05: Codex claims its run with teamai recall "…" # note (a comment after the claim) → +1',
+    trace: async (h) => {
+      const { output, files } = await h.recall('redis timeout', { env: NESTED_ENV, claim: false });
+      await h.codexShell('teamai recall "redis timeout" # note', output);
+      await h.codexShell(`cat '${files[0]}'`, '---');
+      await h.stop(CODEX);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
     name: '05: a read that fails (status failure: CodeBuddy IDE execute_command with exitCode 1) → 0',
     trace: async (h) => {
       const { files } = await h.recall('redis timeout');
