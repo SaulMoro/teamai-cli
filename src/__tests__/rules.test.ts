@@ -35,7 +35,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-import { RulesHandler } from '../resources/rules.js';
+import { RulesHandler, inlinedRulesText } from '../resources/rules.js';
 import { loadStateForScope } from '../config.js';
 import { openLedger, recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
 import type { TeamaiConfig, LocalConfig, State } from '../types.js';
@@ -1345,5 +1345,92 @@ describe('RulesHandler — Cursor-compatible .mdc handling', () => {
 
     await handler.removeItem('gone', teamConfig, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/gone.mdc'))).toBe(false);
+  });
+});
+
+describe('inlinedRulesText — rules inlined into one instructions file (#938)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-rules-inline-'));
+  });
+
+  afterEach(async () => {
+    await fse.remove(tmpDir);
+  });
+
+  async function rule(name: string, content: string) {
+    const sourcePath = path.join(tmpDir, `${name}.md`);
+    await fse.writeFile(sourcePath, content);
+    return { name, type: 'rules' as const, sourcePath, relativePath: `rules/${name}.md` };
+  }
+
+  it('drops frontmatter and names the globs a path-scoped rule applies to', async () => {
+    const rules = [
+      await rule('plain', 'Always write tests.\n'),
+      await rule('scoped', '---\npaths:\n  - "src/**/*.ts"\n  - "test/**"\n---\n\nUse strict types.\n'),
+      await rule('described', '---\ndescription: Reviews\n---\nReview every PR.\n'),
+      await rule('listed', '---\npaths: "docs/**, *.md"\n---\nKeep docs short.\n'),
+    ];
+
+    expect(await inlinedRulesText(rules)).toBe(
+      'Always write tests.\n\n'
+      + 'Applies to files matching: src/**/*.ts, test/**\nUse strict types.\n\n'
+      + 'Review every PR.\n\n'
+      + 'Applies to files matching: docs/**, *.md\nKeep docs short.',
+    );
+  });
+
+  it('skips a rule whose body is empty once its frontmatter is gone', async () => {
+    const rules = [
+      await rule('only-frontmatter', '---\npaths:\n  - "src/**"\n---\n\n'),
+      await rule('kept', 'Body\n'),
+    ];
+
+    expect(await inlinedRulesText(rules)).toBe('Body');
+  });
+});
+
+describe('RulesHandler.pullAllRules — Hermes SOUL.md (#938)', () => {
+  let tmpDir: string;
+  let hermesHome: string;
+  let localConfig: LocalConfig;
+  let teamConfig: TeamaiConfig;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-rules-hermes-'));
+    hermesHome = path.join(tmpDir, 'hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    teamConfig = {
+      team: 'test', description: '', repo: 'r', provider: 'tgit' as const, reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { hermes: { skills: 'skills' } },
+    } as unknown as TeamaiConfig;
+    localConfig = {
+      repo: { localPath: repoPath, remote: 'r' },
+      username: 'u', additionalRoles: [], scope: 'user',
+    } as unknown as LocalConfig;
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('inlines a path-scoped rule without its frontmatter', async () => {
+    await fse.writeFile(
+      path.join(localConfig.repo.localPath, 'rules', 'scoped.md'),
+      '---\npaths:\n  - "src/**/*.ts"\n---\n\nUse strict types.\n',
+    );
+
+    await new RulesHandler().pullAllRules(teamConfig, localConfig);
+
+    const soul = await fse.readFile(path.join(hermesHome, 'SOUL.md'), 'utf-8');
+    expect(soul).toContain('Applies to files matching: src/**/*.ts\nUse strict types.');
+    expect(soul).not.toContain('paths:');
   });
 });

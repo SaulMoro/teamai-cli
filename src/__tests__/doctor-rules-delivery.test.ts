@@ -313,6 +313,20 @@ describe('doctor — rules delivered on disk', () => {
     expect(await (await namedCheck('Team rules are inlined in Hermes SOUL.md'))!.check()).toBe(true);
   });
 
+  it('passes when the Hermes block holds a path-scoped rule the way pull inlines it (#938)', async () => {
+    await writeTeamRule('reviews', '---\npaths:\n  - "src/**"\n---\n');
+    const hermesHome = path.join(tempDir, 'hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    await fse.writeFile(
+      path.join(hermesHome, 'SOUL.md'),
+      '<!-- [teamai:rules:start] -->\nBody of coding-style\n\n'
+        + 'Applies to files matching: src/**\nBody of reviews\n<!-- [teamai:rules:end] -->\n',
+    );
+
+    expect(await (await namedCheck('Team rules are inlined in Hermes SOUL.md'))!.check()).toBe(true);
+  });
+
   it('emits no Hermes check while Hermes is not installed here', async () => {
     vi.stubEnv('HERMES_HOME', path.join(tempDir, 'no-hermes'));
 
