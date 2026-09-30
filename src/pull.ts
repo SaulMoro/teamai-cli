@@ -16,7 +16,7 @@ import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSa
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
-import { reportHeldAgents } from './resources/agents.js';
+import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
@@ -732,9 +732,9 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
  * Agents on the "Already synced" fast path (#830): an agent's model can
  * change while the team repo stays put — a CLI upgrade that resolves an alias
  * an older one wrote literally, and later the member's own alias file or a
- * switched tool. Only the agents whose model a pull would now write
- * differently from the record are redeployed, through the same `pullItem` a
- * full sync uses, so a copy the member changed is kept. No git work: this
+ * switched tool — and an older CLI may have rendered a copy differently.
+ * Only the agents `agentsToRedeploy` selects are redeployed, through the same
+ * `pullItem` a full sync uses, so a copy the member changed is kept. No git work: this
  * runs on every session start.
  */
 async function redeployAgentsWithChangedModels(
@@ -752,9 +752,9 @@ async function redeployAgentsWithChangedModels(
     const state = await loadStateForScope(localConfig);
     const ledger = await openCheckoutLedger(localConfig, state);
     const handler = getHandler('agents') as AgentsHandler;
-    const changed = await handler.agentsWithChangedModels(desired.items, freshConfig, localConfig, ledger.agentModels);
-    if (changed.length === 0) return;
-    for (const item of changed) await handler.pullItem(item, freshConfig, localConfig, ledger);
+    const redeploy = await handler.agentsToRedeploy(desired.items, freshConfig, localConfig, ledger);
+    if (redeploy.length === 0) return;
+    for (const { item } of redeploy) await handler.pullItem(item, freshConfig, localConfig, ledger);
     reportHeldAgents(ledger);
     reportKept(ledger, scopeLabel);
     // A project checkout reaches the fast path only through its own record.
@@ -763,7 +763,19 @@ async function redeployAgentsWithChangedModels(
     record.delivered = ledger.hashes;
     setAgentModels(record, ledger.agentModels);
     await saveStateForScope(state, localConfig);
-    log.success(`[${scopeLabel}] Updated the model of ${changed.length} agent(s): ${changed.map((item) => item.name).join(', ')}`);
+    // Named by what happened to the copies pull did write, the first reason that applies.
+    const written = new Map<RedeployedCopy['reason'], string[]>();
+    for (const { item, copies } of redeploy) {
+      const wrote = new Set<RedeployedCopy['reason']>();
+      for (const copy of copies) {
+        if (await readFileSafe(copy.dest) === copy.content) wrote.add(copy.reason);
+      }
+      const reason = (['model', 'missing', 'render'] as const).find((candidate) => wrote.has(candidate));
+      if (reason) written.set(reason, [...written.get(reason) ?? [], item.name]);
+    }
+    for (const [reason, names] of written) {
+      log.success(`[${scopeLabel}] ${REDEPLOYED[reason](names.length)}: ${names.join(', ')}`);
+    }
   } catch (e) {
     log.warn(
       `[${scopeLabel}] Could not check whether agent models changed: ${(e as Error).message}. `
@@ -771,6 +783,13 @@ async function redeployAgentsWithChangedModels(
     );
   }
 }
+
+/** How the fast path names the agents it wrote, by why it wrote them. */
+const REDEPLOYED: Record<RedeployedCopy['reason'], (count: number) => string> = {
+  model: (count) => `Updated the model of ${count} agent(s)`,
+  missing: (count) => `Delivered ${count} agent(s) missing from a tool`,
+  render: (count) => `Re-rendered ${count} agent(s) an older teamai wrote differently`,
+};
 
 /**
  * `records` after a forced full sync: see FORCED_FULL_SYNC_REV. Each keeps
@@ -1186,6 +1205,11 @@ async function pullForScope(
   let skillsHeld = false;
   // Set on the same collision among agents.
   let agentsHeld = false;
+  // Set when an agent's model could not be resolved in some tool (#830). Its
+  // cause may be the member's own (their aliases override, the switch state),
+  // which they fix without a new team revision, so the next pull must sync
+  // again to deliver what was held.
+  let agentModelsHeld = false;
   let knownRepoSkillNames: Set<string> | null = null;
   // name → team-repo source dir, for the data-safety check in Step 3b cleanup.
   let knownRepoSkillSources: Map<string, string> | null = null;
@@ -1333,6 +1357,7 @@ async function pullForScope(
         await handler.pullItem(item, freshConfig, localConfig, ledger);
       }
       // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
+      if (ledger.held.length > 0) agentModelsHeld = true;
       const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;
       if (held > 0) reported.add('model-aliases');
 
@@ -1514,11 +1539,11 @@ async function pullForScope(
         state.lastPull = new Date().toISOString();
       }
       // A failed submodule update keeps the previous rev so the next pull
-      // retries the update (see refreshTeamRepo).
-      if (!submodulesFailed) state[revisionField] = deliveredRev;
+      // retries the update (see refreshTeamRepo); so does a held agent.
+      if (!submodulesFailed && !agentModelsHeld) state[revisionField] = deliveredRev;
       state[targetsField] = syncedTargets;
     }
-    const complete = !docsSyncFailed && !submodulesFailed;
+    const complete = !docsSyncFailed && !submodulesFailed && !agentModelsHeld;
     if (recordKey && deliveredRev && (!complete || revisionField === 'lastInheritedPullRev')) {
       // An inherited pull moves HOME's skills, rules and agents, not the rest,
       // and an incomplete one keeps its marker for a retry, yet both delivered

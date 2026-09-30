@@ -145,9 +145,13 @@ function changedByYouFix(delivery: ToolDelivery): string {
  */
 const MODEL_CHANGED = 'model changed since the last pull';
 
-/** Whether a tool's delivery has a problem other than copies the member changed. */
+/**
+ * Whether a tool's delivery has a problem other than copies the member
+ * changed or whose model changed since the last pull, which the next pull
+ * redeploys (spec story 52 of #830).
+ */
 function hasDeliveryProblem(delivery: ToolDelivery): boolean {
-  return [...delivery.problems.keys()].some((label) => label !== CHANGED_BY_YOU);
+  return [...delivery.problems.keys()].some((label) => label !== CHANGED_BY_YOU && label !== MODEL_CHANGED);
 }
 
 /**

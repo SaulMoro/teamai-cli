@@ -114,20 +114,28 @@ stop there; its first push creates the entry from `lastPullRev`, with
 A project pull that inherits the user scope (`inheritUserScope`) moves HOME's
 skills, rules and agents too, so it adds its revision to that entry's push
 bases, creating the entry the same way if there is none, and leaves the entry's
-`rev` alone. So does any pull whose docs mirror or submodule update fails: it
-leaves its revision marker for the retry, but the skills, rules and agents it
-delivered are at the new revision. A full pull that holds skills or agents on a
+`rev` alone. So does any pull whose docs mirror or submodule update fails, or
+that holds an agent whose model cannot be resolved (#830), a cause the member
+may fix without a new team revision: it leaves its revision marker for the
+retry, but the skills, rules and agents it delivered are at the new revision. A full pull that holds skills or agents on a
 namespace collision writes its revision as `rev` but keeps the entry's earlier
 bases as push bases, since the held copies stay at them. Like a full pull, an
 inherited pull already synced at the team's revision writes nothing (#823).
 The entry's `agentModels` records, by agent stem and tool, the model, effort
 and resolution step each YAML agent copy received when pull last wrote it
-(#830). A copy pull keeps as the member's edit, or holds because its model
-cannot be resolved, keeps its old entry. The fast path compares each agent's
-current resolution with it and redeploys only the agents that differ, through
-the same ledger, so HOME's entry and each project checkout's are separate. An
-agent with no entry is redeployed only where an alias replaces its `model`,
-which is what an older CLI wrote as is.
+(#830), and for an alias step the alias name, so a removed alias is noticed
+even where it gave the tool no model. A copy pull keeps as the member's edit,
+or holds because its model cannot be resolved, keeps its old entry. The fast
+path compares each agent's current resolution with it and redeploys only the
+agents that differ, through the same ledger, so HOME's entry and each project
+checkout's are separate; a copy the ledger would keep as the member's edit is
+left to the next full sync. An agent with no entry is redeployed where an
+alias replaces its `model`, which is what an older CLI wrote as is; where its
+copy is missing (an agent held before it was ever deployed); and where its
+copy still has the bytes `delivered` records but not the current render (an
+older CLI's render, such as Claude extras in a Qoder copy). Without a
+`delivered` entry for the copy nothing tells that render from an edit, so it
+is left alone.
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

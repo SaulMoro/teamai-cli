@@ -518,6 +518,29 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(claude).not.toHaveProperty('model');
     });
 
+    it('drops an extras effort too, unless the extras also pin a model', async () => {
+      await writeAliases(EVERY_TOOL_STRONG);
+      await switchTo(['claude', 'codex']);
+      const files = await pullTo(['claude', 'codex'], makeSpec({
+        model: 'strong',
+        tool_extras: { claude: { effort: 'max', color: 'red' }, codex: { model_reasoning_effort: 'xhigh' } },
+      }));
+      expect(files['claude']).toMatchObject({ model: 'opus', color: 'red' });
+      expect(files['claude']).not.toHaveProperty('effort');
+      expect(files['codex']).not.toHaveProperty('model_reasoning_effort');
+
+      // The member's opt-out on a switched tool: still no effort.
+      await fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), 'aliases:\n  strong:\n    claude: ~\n');
+      const optedOut = (await pullTo(['claude'], makeSpec({ model: 'strong', tool_extras: { claude: { effort: 'max' } } })))['claude'];
+      expect(optedOut).not.toHaveProperty('model');
+      expect(optedOut).not.toHaveProperty('effort');
+
+      const pinned = (await pullTo(['codex'], makeSpec({
+        model: 'strong', tool_extras: { codex: { model: 'gpt-pinned', model_reasoning_effort: 'xhigh' } },
+      })))['codex'];
+      expect(pinned).toMatchObject({ model: 'gpt-pinned', model_reasoning_effort: 'xhigh' });
+    });
+
     it('never treats a variant as switched', async () => {
       await writeAliases(EVERY_TOOL_STRONG);
       await switchTo(['claude', 'codex']);
@@ -1064,8 +1087,8 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(await readDeployed('claude', spec.name)).not.toHaveProperty('effort');
       expect(await readDeployed('codex', spec.name)).not.toHaveProperty('model');
       expect(await readDeployed('kiro', spec.name)).toMatchObject({ model: 'claude-opus-5' });
-      expect(ledger.agentModels['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/checkout/aliases.yaml' });
-      expect(ledger.agentModels['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/checkout/aliases.yaml' });
+      expect(ledger.agentModels['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/checkout/aliases.yaml', alias: 'strong' });
+      expect(ledger.agentModels['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/checkout/aliases.yaml', alias: 'strong' });
       expect(warnings()).toContain('models/checkout/aliases.yaml: alias "strong" sets an effort for kiro');
     });
 

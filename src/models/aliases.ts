@@ -467,7 +467,7 @@ export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, tool: 
     return { ok: false, reason: `Cannot tell whether a tool is switched to a model profile: ${switched.reason}` };
   }
   const resolution = fromEntries(aliases, spec.model, tool, extras);
-  return switched?.switched ? throughSwitch(resolution, tool) : resolution;
+  return switched?.switched ? throughSwitch(resolution, tool, extras) : resolution;
 }
 
 /** What the member's local entry, else the team entry, gives `tool` for `alias`. */
@@ -485,12 +485,18 @@ function fromEntries(aliases: ModelAliases & { ok: true }, alias: string, tool: 
 
 /**
  * What a switched tool keeps of `resolution`: the gateway receives only what
- * the switch routes. A resolution with no model, such as the member's
- * opt-out, has nothing to filter and keeps its step.
+ * the switch routes, and no effort at all: step `switched` also drops the
+ * effort field the tool's extras set (only an extras `model`, a step above,
+ * keeps them). A resolution with no model, such as the member's opt-out, has
+ * nothing to filter and keeps its step, unless there is such an effort.
  */
-function throughSwitch(resolution: ModelResolution, tool: ToolName): ModelResolution {
-  if (!resolution.ok || resolution.model === undefined) return resolution;
+function throughSwitch(resolution: ModelResolution, tool: ToolName, extras: Record<string, unknown> | undefined): ModelResolution {
+  if (!resolution.ok) return resolution;
+  const effortField = agentEffortField(tool);
+  const extrasEffort = effortField !== undefined && extras?.[effortField] !== undefined;
+  if (resolution.model === undefined && !extrasEffort) return resolution;
   const source = resolution.source !== undefined ? { source: resolution.source } : {};
+  if (resolution.model === undefined) return { ok: true, step: 'switched', ...source };
   return tool === 'claude' && SWITCH_ROUTED_CLAUDE_MODELS.has(resolution.model)
     ? { ok: true, step: 'switched', model: resolution.model, ...source }
     : { ok: true, step: 'switched', ...source };

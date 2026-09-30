@@ -1743,11 +1743,11 @@ aliases:
 - 为没有推理强度字段的工具映射的 `effort` 会被丢弃：该工具只收到模型；pull 把使用该别名的 agent 交付给该工具时会警告一次，并指明别名和工具。
 - claude-internal 和 tclaude 使用 `claude` 条目，codex-internal 和 tcodex 使用 `codex` 条目，Qoder CN 使用 `qoder` 条目，除非该别名有它们自己的键。其他工具不继承任何条目：Qoder、ZCode、OMP 和 JoyCode 永远不会收到 `claude` 的模型。
 - 别名未映射的工具不会得到 `model` 字段，因此使用其默认模型运行该 agent。没有 `models/aliases.yaml` 时，`strong` 和 `fast` 在所有工具中都不产生 model 字段。
-- `tool_extras.<tool>.model` 把该工具固定到具体模型并跳过别名，包括别名的推理强度。`tool_extras.<tool>` 中只有推理强度字段而没有 model 时，只覆盖别名的推理强度。
+- `tool_extras.<tool>.model` 把该工具固定到具体模型并跳过别名，包括别名的推理强度。`tool_extras.<tool>` 中只有推理强度字段而没有 model 时，只覆盖别名的推理强度，且已切换到模型配置档的工具不会收到它。
 - 读取 agent 时会拒绝非字符串的 `model`。旧格式 `agents/<name>.md` 按原样复制，因此当其 `model` 是别名时 pull 会给出警告。
-- 结构性错误会让整个文件失效：无法解析的 YAML、类型错误的值、不符合命名规则的别名、有 `effort` 却没有 `model` 的选项，或 `~`。修复之前，pull 会警告并指明该文件，并在每个没有 `tool_extras.<tool>.model` 的工具中暂停所有带 `model` 字段的 agent（无法读取的文件可能定义任何名称）：已部署的副本保留，不写入新副本，pull 为它们记录的模型也保持不变。push 会跳过这些 agent 并说明原因，其他内容照常 push。文件修复后，普通的 `teamai pull` 就会交付被暂停的 agent，包括从未部署过的。
+- 结构性错误会让整个文件失效：无法解析的 YAML、类型错误的值、不符合命名规则的别名、有 `effort` 却没有 `model` 的选项，或 `~`。修复之前，pull 会警告并指明该文件，并在每个没有 `tool_extras.<tool>.model` 的工具中暂停所有带 `model` 字段的 agent（无法读取的文件可能定义任何名称）：已部署的副本保留，不写入新副本，pull 为它们记录的模型也保持不变。push 会跳过这些 agent 并说明原因，其他内容照常 push。文件修复后，普通的 `teamai pull` 就会交付被暂停的 agent，包括从未部署过的，以及其间团队对它们的修改：暂停了 agent 的 pull 不会把团队版本记为已同步，因此下一次 pull 会完整同步。
 - 其他当前 CLI 不认识的内容会被丢弃并给出警告，文件其余部分照常生效：不是 teamai 已知工具的工具键；`model` 和 `effort` 之外的选项字段（该条目去掉该字段后照常使用）；以及与工具自带模型别名同名的别名（`opus`、`sonnet`、`haiku`、`fable`、`inherit`、`default`、`auto`、`lite`，这是一个尽力而为的简短列表），该别名会被忽略，因此 `model: opus` 仍是 `opus`。别名中的 `gateways` 键保留给后续版本，会被忽略且不给出警告。pull 对每条警告只打印一次，并且只在交付使用该别名的 agent 时打印；关于某个工具条目的警告，只在该工具读取该条目时打印。
-- pull 会记录每个 agent 副本收到的模型和推理强度，因此即使团队仓库没有变化，普通的 `teamai pull` 也会应用变化，例如从把 `model: strong` 按原样写入的旧版 CLI 升级后的第一次 pull。它只重写模型发生变化的 agent，并保留你修改过的副本。agent 使用的别名被删除时，pull 会警告其 `model` 现在按原样写入。
+- pull 会记录每个 agent 副本收到的模型和推理强度，因此即使团队仓库没有变化，普通的 `teamai pull` 也会应用变化，例如从把 `model: strong` 按原样写入的旧版 CLI 升级后的第一次 pull。它只重写模型发生变化的 agent，以及旧版 CLI 渲染方式不同、而你之后没有改过的副本。你修改过的副本在这里不会被处理，下一次完整同步会保留它并指出。agent 使用的别名被删除时，pull 会警告其 `model` 现在按原样写入，该别名原本没有给该工具写 model 字段时也会警告。
 - `models/aliases.yaml` 中的 `default` 和其他模型值一样按原样写入，它是 CodeBuddy 表示其默认模型的原生值。在该文件中写 `~` 是错误：要让某个工具不产生 model 字段，不写该工具即可。
 
 ##### 引入别名
@@ -1796,7 +1796,7 @@ aliases:
 
 - Claude 保留解析出的 `opus`、`sonnet` 或 `haiku`（来自你的条目或团队条目），因为切换会把这几个系列分别指向网关模型。其他模型会被丢弃。
 - Codex、OpenCode、CodeBuddy 和 WorkBuddy 不会得到 `model` 字段。
-- 已切换的工具都不会得到别名的推理强度。
+- 已切换的工具都不会得到推理强度，无论来自别名还是 `tool_extras.<tool>`，除非 `tool_extras.<tool>` 同时固定了模型。
 
 不写 `model` 字段意味着使用工具自身的继承规则，而不是配置档的模型：例如 Codex 会在你的配置设置了 `[agents].default_subagent_model` 时使用它，否则使用启动该 agent 的会话的模型。`tool_extras.<tool>.model`、`opus` 这类具体 `model`，以及你的 `~` 或 `default`，都与未切换时一样写入。Claude 和 Codex 的变体（claude-internal、tclaude、codex-internal、tcodex）从不视为已切换。只有当工具当前的配置路径（`CLAUDE_CONFIG_DIR`、`CODEX_HOME` 等）与切换时记录的一致，且这些配置仍是 TeamAI 写入的内容时，该工具才算已切换，这与 `teamai models restore` 所做的检查相同。TeamAI 无法读取切换记录（`~/.teamai/models/managed.json`）时，pull 会警告并在 `models switch` 支持的五个工具中暂停别名 agent；无法读取某个已切换工具的配置时，只在该工具中暂停。执行 `teamai models switch` 或 `teamai models restore` 后，普通的 `teamai pull` 就会重写受影响的 agent。
 
@@ -1829,7 +1829,7 @@ models: how model: strong resolves for agents implementer, planner:
 | `default` | 不写 model 字段：别名未映射该工具，或没有生效的别名文件定义它 |
 
 - Codex 系工具有模型但没有推理强度时，该行会注明：沿用启动该 agent 的会话的推理强度。
-- 上次 pull 部署的内容不同时（例如你修改了覆盖文件但还没 pull），该行会写出已部署的内容；普通的 `teamai pull` 即可更新，`Agents delivered to <tool>` 会把该 agent 列为 `model changed since the last pull`。
+- 上次 pull 部署的内容不同时（例如你修改了覆盖文件但还没 pull），该行会写出已部署的内容；普通的 `teamai pull` 即可更新，`Agents delivered to <tool>` 会把该 agent 列为 `model changed since the last pull`，但检查不会因此失败。
 - 别名文件中被本 CLI 丢弃的每个条目也会作为说明列出。
 - 任一别名文件（无论是否生效，包括你自己的）存在结构错误、同一别名出现在两个生效的 namespace 中，或已切换工具的设置无法读取而导致 agent 被暂缓时，`Agent model aliases can be resolved` 检查失败，并给出原因、文件和被暂缓的 agent。团队仓库未变化时普通 pull 不会提示被暂缓的 agent，所以要在这个检查里看。
 

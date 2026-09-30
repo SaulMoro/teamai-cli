@@ -15,7 +15,7 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
+import { judgeCopy, keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
@@ -866,38 +866,50 @@ export class AgentsHandler extends ResourceHandler {
   }
 
   /**
-   * The YAML agents among `items` that a pull would now write with another
-   * model or effort than `records` says a tool's copy received (#830). A copy
-   * with no record was written by a CLI that recorded nothing and resolved no
-   * alias, so it differs only where this CLI replaces the spec's `model`: an
-   * agent without an alias is never rewritten for want of a record. No record
-   * and no copy is an agent held while its model could not be resolved, which
-   * is delivered now. A tool whose model cannot be resolved is held, so it
-   * never counts.
+   * The YAML agents among `items` whose copies the "Already synced" pull
+   * redeploys (#830), with each copy it would write and why:
+   *
+   * - `model`: a tool's resolution differs from what `ledger` recorded for its
+   *   copy. With no record, the copy was written by a CLI that recorded
+   *   nothing and resolved no alias, so it differs only where this CLI
+   *   replaces the spec's `model`. A copy the member changed is left to the
+   *   full sync, which names it; here it would only be kept again, every pull.
+   * - `missing`: no record and no copy, as an agent held before it was ever
+   *   delivered, or one the member deleted before records existed.
+   * - `render`: no record, and the copy is still what teamai delivered but
+   *   not what it renders now, such as another tool's extras an older CLI
+   *   wrote there. Without a delivered record nothing tells that copy from
+   *   the member's edit, so it is left alone.
+   *
+   * A tool whose model cannot be resolved is held, so it never counts.
    */
-  async agentsWithChangedModels(
+  async agentsToRedeploy(
     items: readonly ResourceItem[],
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
-    records: AgentModelRecords,
-  ): Promise<ResourceItem[]> {
+    ledger: DeliveryLedger,
+  ): Promise<{ item: ResourceItem; copies: RedeployedCopy[] }[]> {
     const aliases = await loadModelAliases(localConfig);
-    const changed: ResourceItem[] = [];
+    const redeploy: { item: ResourceItem; copies: RedeployedCopy[] }[] = [];
     for (const item of items) {
       if (isLegacyAgent(item as AgentResourceItem)) continue;
+      const copies: RedeployedCopy[] = [];
       for (const { tool, dest, render } of await this.resolveRenders(teamConfig, localConfig, item, aliases)) {
         if (!render.model) continue;
-        const recorded = records[item.name]?.[tool];
-        const differs = recorded
-          ? !sameAgentModel(recorded, render.model.recorded)
-          : render.model.replacesSpecModel || !await pathExists(dest);
-        if (differs) {
-          changed.push(item);
-          break;
-        }
+        const target = { tool, dest, content: render.content };
+        const recorded = ledger.agentModels[item.name]?.[tool];
+        const reason = recorded
+          ? (sameAgentModel(recorded, render.model.recorded) ? undefined : 'model')
+          : !await pathExists(dest) ? 'missing'
+            : render.model.replacesSpecModel ? 'model'
+              : await deliveredAndOutdated(ledger, dest, render.content) ? 'render' : undefined;
+        if (reason === undefined) continue;
+        if (reason === 'model' && (await judgeCopy(ledger.previous, item, target)).kind === 'keep') continue;
+        copies.push({ ...target, reason });
       }
+      if (copies.length > 0) redeploy.push({ item, copies });
     }
-    return changed;
+    return redeploy;
   }
 
   /**
@@ -1404,6 +1416,9 @@ function modelDrift({ tool, file, alias, relPath, deployed, expected, effortFiel
     + `Push never writes a concrete model over a model alias, so this change stays on this machine. ${hint}`;
 }
 
+/** A copy the "Already synced" pull writes, and why: see `AgentsHandler.agentsToRedeploy`. */
+export type RedeployedCopy = DeliveryTarget & { reason: 'model' | 'missing' | 'render' };
+
 /** What pull writes for one tool: the bytes, and for a YAML spec the model they carry. */
 type AgentRender = RenderResult & { model?: DeployedModel };
 
@@ -1442,15 +1457,37 @@ function renderWithModel(spec: AgentSpec, tool: ToolName, resolved: RecordedAgen
     ...(resolved.model !== undefined ? { model: resolved.model } : {}),
     ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
     ...(resolved.source !== undefined ? { source: resolved.source } : {}),
+    ...(replacesSpecModel ? { alias: spec.model } : {}),
   };
-  return { ...renderForTool(spec, tool, replacesSpecModel ? recorded : undefined), model: { recorded, replacesSpecModel } };
+  const rendered = resolved.step === 'switched' ? withoutExtrasEffort(spec, tool) : spec;
+  return { ...renderForTool(rendered, tool, replacesSpecModel ? recorded : undefined), model: { recorded, replacesSpecModel } };
+}
+
+/**
+ * `spec` without the effort its extras set for `tool`, which a tool switched
+ * to a model profile never receives. Only a tool id is switched, never a
+ * variant, so its own extras key is the one it reads.
+ */
+function withoutExtrasEffort(spec: AgentSpec, tool: ToolName): AgentSpec {
+  const field = agentEffortField(tool);
+  const own = spec.tool_extras?.[tool];
+  if (field === undefined || own?.[field] === undefined) return spec;
+  const { [field]: _dropped, ...rest } = own;
+  return { ...spec, tool_extras: { ...spec.tool_extras, [tool]: rest } };
 }
 
 /** The steps that leave the spec's `model` as written: every other one comes from an alias. */
 const KEEPS_SPEC_MODEL: ReadonlySet<string> = new Set<ResolutionStep>(['extras', 'literal']);
 
+/** Whether two records or resolutions give a copy the same model. The alias name is not compared: records written before it lack it. */
 function sameAgentModel(a: RecordedAgentModel, b: RecordedAgentModel): boolean {
   return a.step === b.step && a.model === b.model && a.effort === b.effort && a.source === b.source;
+}
+
+/** Whether the copy at `dest` is still what teamai delivered there, and not `content`. */
+async function deliveredAndOutdated(ledger: DeliveryLedger, dest: string, content: string): Promise<boolean> {
+  const delivered = ledger.previous?.[dest];
+  return delivered !== undefined && await fileHash(dest) === delivered && await readFileSafe(dest) !== content;
 }
 
 /**
@@ -1470,8 +1507,8 @@ function recordAgentModel(records: AgentModelRecords, stem: string, tool: ToolNa
 
 /**
  * An alias the team removed turns `model: <name>` into a literal model name
- * no tool knows. Said when a copy that received a model from the alias at
- * the last pull is about to receive the name itself.
+ * no tool knows. Said when a copy that received `<name>` as an alias at the
+ * last pull, a model or the tool's default, is about to receive the name itself.
  */
 function warnAliasGone(
   item: ResourceItem,
@@ -1482,15 +1519,18 @@ function warnAliasGone(
   if (!records) return;
   const was = renders.find(({ tool, render }) => {
     const recorded = records[tool];
-    return render.model?.recorded.step === 'literal' && recorded !== undefined
-      && recorded.model !== undefined && !KEEPS_SPEC_MODEL.has(recorded.step);
+    if (render.model?.recorded.step !== 'literal' || recorded === undefined || KEEPS_SPEC_MODEL.has(recorded.step)) return false;
+    // A record written before records named the alias tells only by a model,
+    // which a formerly model-less agent never had.
+    return recorded.alias !== undefined ? recorded.alias === specModel : recorded.model !== undefined;
   });
   if (!was) return;
   const { model: before, source } = records[was.tool]!;
+  const received = before === undefined ? 'no model field' : `"${before}"`;
   // A local entry counts only for a name a team file defines, so the team file is where it goes back.
   const file = source !== undefined && !path.isAbsolute(source) ? source : TEAM_ALIASES_FILE;
   log.warn(`[agents] ${item.relativePath} sets model: ${specModel}, which is no longer a model alias, so each tool now receives "${specModel}" literally `
-    + `(${was.tool} received "${before}" at the last pull). Define "${specModel}" in ${file} again, or set a concrete model in ${item.relativePath}.`);
+    + `(${was.tool} received ${received} at the last pull). Define "${specModel}" in ${file} again, or set a concrete model in ${item.relativePath}.`);
 }
 
 /**

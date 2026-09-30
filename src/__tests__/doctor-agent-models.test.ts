@@ -193,12 +193,25 @@ describe('doctor — how agents resolved their model alias', () => {
       `    claude: sonnet  [local: ${localFile()}]; the last pull deployed opus, effort high  [team: models/aliases.yaml], which \`teamai pull\` updates`,
       '    codex: tool default  [switched: codex runs a model profile and picks the model natively]',
     ].join('\n')]);
-    const claude = check(doctorReport, 'Agents delivered to claude');
+    // A changed override is not a delivery problem: the next pull redeploys it (spec story 52).
+    expect(check(doctorReport, 'Agents delivered to claude')?.ok).toBe(true);
+    expect(check(doctorReport, 'Agents delivered to codex')?.ok).toBe(true);
+  });
+
+  it('still names a changed model, and what fixes it, beside a real delivery problem', async () => {
+    await team('models/aliases.yaml', { aliases: { strong: { claude: 'opus' } } });
+    await agent({ name: 'implementer', model: 'strong', targets: ['claude'] });
+    await agent({ name: 'planner', targets: ['claude'] });
+    await pullAgents();
+    await writeLocal({ aliases: { strong: { claude: 'sonnet' } } });
+    await fse.remove(path.join(homeDir, '.claude/agents/planner.md'));
+
+    const claude = check(await report(), 'Agents delivered to claude');
+
     expect(claude?.ok).toBe(false);
     expect(claude?.fix).toContain('model changed since the last pull: implementer');
     expect(claude?.fix).toContain('A plain `teamai pull` redeploys an agent whose model changed.');
-    expect(claude?.fix).not.toContain('--force');
-    expect(check(doctorReport, 'Agents delivered to codex')?.ok).toBe(true);
+    expect(claude?.fix).toContain('For the rest, run `teamai pull --force`');
   });
 
   it('fails the check, naming the tool and the cause, while a switched tool\'s settings cannot be read', async () => {

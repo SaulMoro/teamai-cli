@@ -164,7 +164,8 @@ ordinary `teamai pull` delivers them. An unknown
 tool key, an unknown option field, or an alias named like `opus` or `inherit` is only
 dropped, with a warning when an agent uses that alias; `gateways` is ignored.
 
-On a tool switched with `teamai models switch`, alias agents get no alias effort, and
+On a tool switched with `teamai models switch`, alias agents get no effort (not even a
+`tool_extras.<tool>` one, unless the extras also pin a `model`), and
 Claude keeps only `opus`, `sonnet` or `haiku` (the switch routes those to the gateway)
 while Codex, OpenCode, CodeBuddy and WorkBuddy get no `model`. No `model` means the
 tool's native inheritance (for Codex, `[agents].default_subagent_model` or the parent's

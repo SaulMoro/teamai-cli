@@ -191,8 +191,9 @@ async function describeModel(spec: AgentSpec, tool: ToolName, resolved: Recorded
   const { agentEffortField, toolExtrasFor } = await import('./resources/agent-format.js');
   const { step, model, source } = resolved;
   const effortField = agentEffortField(tool);
-  // An effort the tool's extras set is written after the alias's, and wins.
-  const extrasEffort = effortField === undefined ? undefined : toolExtrasFor(spec, tool)?.[effortField];
+  // An effort the tool's extras set is written after the alias's, and wins,
+  // except on a switched tool, which receives none.
+  const extrasEffort = effortField === undefined || step === 'switched' ? undefined : toolExtrasFor(spec, tool)?.[effortField];
   const effort = resolved.effort ?? (typeof extrasEffort === 'string' ? extrasEffort : undefined);
 
   let value = model ?? (step === 'local' ? `tool default (chosen in ${source})` : 'tool default');

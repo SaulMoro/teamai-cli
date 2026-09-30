@@ -70,6 +70,7 @@ vi.mock('../update.js', () => ({
 
 import { pull } from '../pull.js';
 import { detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
+import { getHeadRev } from '../utils/git.js';
 import { log } from '../utils/logger.js';
 import { renderForTool, serializeAgentYaml, type AgentSpec } from '../resources/agent-format.js';
 import { ModelProfileSchema, resolveProfile, type ModelAgent } from '../models/profile.js';
@@ -142,6 +143,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    vi.mocked(getHeadRev).mockResolvedValue('abc1234');
     await fse.remove(tmpDir);
   });
 
@@ -185,8 +187,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
     expect((await homeRecord())?.agentModels).toEqual({
       implementer: {
-        claude: { step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' },
-        codex: { step: 'team', model: 'gpt-6-sol', effort: 'high', source: 'models/aliases.yaml' },
+        claude: { step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' },
+        codex: { step: 'team', model: 'gpt-6-sol', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' },
       },
     });
   });
@@ -218,7 +220,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(alreadySynced()).toBe(true);
     expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
     expect(logged('success', /Updated the model of 1 agent\(s\): implementer/)).toBe(true);
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' });
 
     // Recorded now, so the next pull leaves it alone.
     vi.clearAllMocks();
@@ -255,7 +257,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(claude).toMatchObject({ model: 'fable' });
     expect(claude).not.toHaveProperty('effort');
     expect(await codexModel()).toMatchObject({ model: 'gpt-6-sol', model_reasoning_effort: 'high' });
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/aliases.yaml' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'fable', source: 'models/aliases.yaml', alias: 'strong' });
   });
 
   it('keeps a copy the member changed, and its record', async () => {
@@ -273,8 +275,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(logged('warn', /Kept .*implementer\.md: you changed it/)).toBe(true);
     expect(await codexModel()).toMatchObject({ model: 'gpt-6-luna' });
     const recorded = (await homeRecord())?.agentModels?.['implementer'];
-    expect(recorded?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
-    expect(recorded?.['codex']).toEqual({ step: 'team', model: 'gpt-6-luna', source: 'models/aliases.yaml' });
+    expect(recorded?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' });
+    expect(recorded?.['codex']).toEqual({ step: 'team', model: 'gpt-6-luna', source: 'models/aliases.yaml', alias: 'strong' });
   });
 
   describe('local override', () => {
@@ -291,7 +293,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(alreadySynced()).toBe(true);
       expect(await codexModel()).toMatchObject({ model: 'gpt-6-astra', model_reasoning_effort: 'low' });
       expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
-      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', model: 'gpt-6-astra', effort: 'low', source: path.join(homeDir, '.teamai/models/aliases.yaml') });
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', model: 'gpt-6-astra', effort: 'low', source: path.join(homeDir, '.teamai/models/aliases.yaml'), alias: 'strong' });
 
       vi.clearAllMocks();
       await writeLocal('aliases:\n  strong:\n    codex: default\n');
@@ -302,7 +304,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(codex).toHaveProperty('name', 'implementer');
       expect(codex).not.toHaveProperty('model');
       expect(codex).not.toHaveProperty('model_reasoning_effort');
-      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', source: path.join(homeDir, '.teamai/models/aliases.yaml') });
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', source: path.join(homeDir, '.teamai/models/aliases.yaml'), alias: 'strong' });
     });
 
     it('says a kept copy\'s deployed version changed without blaming the team', async () => {
@@ -310,7 +312,9 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       await writeAgent(IMPLEMENTER);
       await pullOnce();
       await fse.writeFile(claudeFile(), `${await fse.readFile(claudeFile(), 'utf-8')}\nMy own note.\n`);
-      await writeLocal('aliases:\n  strong:\n    claude: sonnet\n');
+      // Codex's change is what makes the ordinary pull redeploy the agent;
+      // an edited copy alone is left to the full sync.
+      await writeLocal('aliases:\n  strong:\n    claude: sonnet\n    codex: gpt-6-luna\n');
 
       await pull({ silent: true });
 
@@ -371,8 +375,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       expect(claude).toMatchObject({ model: 'opus' });
       expect(claude).not.toHaveProperty('effort');
       expect((await homeRecord())?.agentModels?.['implementer']).toEqual({
-        claude: { step: 'switched', model: 'opus', source: 'models/aliases.yaml' },
-        codex: { step: 'switched', source: 'models/aliases.yaml' },
+        claude: { step: 'switched', model: 'opus', source: 'models/aliases.yaml', alias: 'strong' },
+        codex: { step: 'switched', source: 'models/aliases.yaml', alias: 'strong' },
       });
 
       vi.clearAllMocks();
@@ -455,13 +459,13 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     await fse.outputFile(localFile, 'aliases:\n  strong:\n    codex: gpt-6-luna\n');
     await pull({ silent: true });
 
-    expect(alreadySynced()).toBe(true);
+    // The pull that held them did not count the revision as synced.
+    expect(alreadySynced()).toBe(false);
     // A literal model needs no alias, but nothing delivered it while the file was broken.
     expect(await claudeModel('plain')).toMatchObject({ model: 'sonnet' });
     expect(await codexModel('plain')).toMatchObject({ model: 'sonnet' });
     expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
     expect(await codexModel()).toMatchObject({ model: 'gpt-6-luna' });
-    expect(logged('success', /Updated the model of 2 agent\(s\): (implementer, plain|plain, implementer)/)).toBe(true);
     expect((await homeRecord())?.agentModels?.['plain']?.['claude']).toEqual({ step: 'literal', model: 'sonnet' });
   });
 
@@ -473,7 +477,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
     expect(vi.mocked(log.warn)).not.toHaveBeenCalled();
     expect(await codexModel()).not.toHaveProperty('model');
-    expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/aliases.yaml' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'default', source: 'models/aliases.yaml', alias: 'strong' });
   });
 
   it('warns when a model resolved by an alias at the last pull is now written literally', async () => {
@@ -490,6 +494,181 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(logged('warn', /agents\/implementer\.yaml sets model: reviewer, which is no longer a model alias.*claude received "opus" at the last pull/)).toBe(true);
   });
 
+  describe('agents held on a full sync', () => {
+    const localFile = (): string => path.join(homeDir, '.teamai/models/aliases.yaml');
+
+    it('delivers a team change held by a broken local override once the member fixes it, on an ordinary pull', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+
+      // The member breaks their override; a teammate then changes the agent.
+      await fse.outputFile(localFile(), 'aliases: [broken');
+      await writeAgent({ ...IMPLEMENTER, instructions: 'Make the change carefully.' });
+      vi.mocked(getHeadRev).mockResolvedValue('def5678');
+      await pull({ silent: true });
+      expect(logged('warn', /Held implementer\.yaml/)).toBe(true);
+      expect(matter(await fse.readFile(claudeFile(), 'utf-8')).content.trim()).toBe('Make the change.');
+
+      await fse.remove(localFile());
+      vi.clearAllMocks();
+      await pull({ silent: true });
+
+      expect(matter(await fse.readFile(claudeFile(), 'utf-8')).content.trim()).toBe('Make the change carefully.');
+      expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
+
+      // Delivered, so the pull after it is the fast path again.
+      vi.clearAllMocks();
+      await pull({ silent: true });
+      expect(logged('success', /Already synced at def5678/)).toBe(true);
+    });
+  });
+
+  describe('what the fast path says it did', () => {
+    const writeLocal = (text: string): Promise<void> => fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), text);
+
+    it('leaves a copy the member changed out of the fast path, and says nothing about it there', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+      const edited = `${await fse.readFile(claudeFile(), 'utf-8')}\nMy own note.\n`;
+      await fse.writeFile(claudeFile(), edited);
+      await writeLocal('aliases:\n  strong:\n    claude: sonnet\n');
+
+      for (let i = 0; i < 2; i += 1) {
+        vi.clearAllMocks();
+        await pull({ silent: true });
+        expect(alreadySynced()).toBe(true);
+        expect(logged('success', /Updated the model/)).toBe(false);
+        expect(logged('warn', /Kept /)).toBe(false);
+      }
+      expect(await fse.readFile(claudeFile(), 'utf-8')).toBe(edited);
+
+      // The full sync still names it.
+      vi.clearAllMocks();
+      vi.mocked(getHeadRev).mockResolvedValue('def5678');
+      await pull({ silent: true });
+      expect(logged('warn', /Kept .*implementer\.md: you changed it/)).toBe(true);
+    });
+
+    it('says it delivered an agent that had no copy, not that it updated its model', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+      // An agent never delivered here: no copy and no record, as an older CLI or a held pull leaves it.
+      await fse.remove(claudeFile());
+      await fse.remove(codexFile());
+      const state = await loadStateForScope(localConfig);
+      delete Object.values(state.lastPullByWorkspace ?? {})[0]!.agentModels;
+      await saveStateForScope(state, localConfig);
+
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(await claudeModel()).toMatchObject({ model: 'opus' });
+      expect(logged('success', /Updated the model/)).toBe(false);
+      expect(logged('success', /Delivered 1 agent\(s\) missing from a tool: implementer/)).toBe(true);
+    });
+  });
+
+  describe('copies an older CLI rendered with another tool\'s extras', () => {
+    const COLORED: AgentSpec = { ...IMPLEMENTER, name: 'colored', model: 'sonnet', tool_extras: { claude: { color: 'red' } } };
+    const qoderFile = (): string => path.join(homeDir, '.qoder', 'agents', 'colored.md');
+    /** The Qoder copy an older CLI wrote: rendered with `tool_extras.claude`. */
+    const olderQoderRender = (): string => renderForTool({ ...COLORED, tool_extras: { qoder: { color: 'red' } } }, 'qoder').content;
+
+    beforeEach(async () => {
+      teamConfig.toolPaths = { ...teamConfig.toolPaths, qoder: { agents: '.qoder/agents' } };
+      await fse.ensureDir(path.join(homeDir, '.qoder'));
+    });
+
+    /** `bytes` at the Qoder copy, `recorded` as delivered (or no record at all), and no agent models. */
+    async function olderQoderCopy(bytes: string, recorded: string | null): Promise<void> {
+      await fse.writeFile(qoderFile(), bytes);
+      const state = await loadStateForScope(localConfig);
+      const record = Object.values(state.lastPullByWorkspace ?? {})[0]!;
+      if (recorded === null) delete record.delivered;
+      else record.delivered = { ...record.delivered, [qoderFile()]: crypto.createHash('sha256').update(recorded).digest('hex') };
+      delete record.agentModels;
+      await saveStateForScope(state, localConfig);
+    }
+
+    it('re-renders an untouched copy on an ordinary pull', async () => {
+      await writeAgent(COLORED);
+      await pullOnce();
+      await olderQoderCopy(olderQoderRender(), olderQoderRender());
+
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(matter(await fse.readFile(qoderFile(), 'utf-8')).data).not.toHaveProperty('color');
+      expect(logged('success', /colored/)).toBe(true);
+      expect(logged('success', /Updated the model/)).toBe(false);
+    });
+
+    it('leaves a copy the member edited, and one with no delivered record', async () => {
+      await writeAgent(COLORED);
+      await pullOnce();
+      const edited = `${olderQoderRender()}\nMy own note.\n`;
+      await olderQoderCopy(edited, olderQoderRender());
+
+      await pull({ silent: true });
+      expect(await fse.readFile(qoderFile(), 'utf-8')).toBe(edited);
+
+      await olderQoderCopy(olderQoderRender(), null);
+      vi.clearAllMocks();
+      await pull({ silent: true });
+      expect(await fse.readFile(qoderFile(), 'utf-8')).toBe(olderQoderRender());
+      expect(logged('success', /colored/)).toBe(false);
+    });
+  });
+
+  describe('an alias removed while it gave a tool no model', () => {
+    it('warns when the name would now be written literally', async () => {
+      await writeAliases({ aliases: { reviewer: { codex: 'gpt-6-sol' } } });
+      await writeAgent({ ...IMPLEMENTER, model: 'reviewer' });
+      await pullOnce();
+      expect(await claudeModel()).not.toHaveProperty('model');
+      await writeAliases({ aliases: {} });
+
+      await pull({ silent: true });
+
+      expect(await claudeModel()).toMatchObject({ model: 'reviewer' });
+      expect(logged('warn', /agents\/implementer\.yaml sets model: reviewer, which is no longer a model alias.*claude received no model field at the last pull/)).toBe(true);
+    });
+
+    it('does not warn when the team replaces the alias with a concrete model, or gives a model-less agent one', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await writeAgent({ ...IMPLEMENTER, name: 'bare', model: undefined });
+      await pullOnce();
+      await writeAgent({ ...IMPLEMENTER, model: 'sonnet' });
+      await writeAgent({ ...IMPLEMENTER, name: 'bare', model: 'sonnet' });
+      vi.mocked(getHeadRev).mockResolvedValue('def5678');
+
+      await pull({ silent: true });
+
+      expect(await claudeModel()).toMatchObject({ model: 'sonnet' });
+      expect(await claudeModel('bare')).toMatchObject({ model: 'sonnet' });
+      expect(logged('warn', /no longer a model alias/)).toBe(false);
+    });
+
+    it('still warns from a record written before it named the alias', async () => {
+      await writeAliases({ aliases: { reviewer: { claude: 'opus' } } });
+      await writeAgent({ ...IMPLEMENTER, model: 'reviewer' });
+      await pullOnce();
+      const state = await loadStateForScope(localConfig);
+      const record = Object.values(state.lastPullByWorkspace ?? {})[0]!;
+      record.agentModels = { implementer: { claude: { step: 'team', model: 'opus', source: 'models/aliases.yaml' } } };
+      await saveStateForScope(state, localConfig);
+      await writeAliases({ aliases: {} });
+
+      await pull({ silent: true });
+
+      expect(logged('warn', /sets model: reviewer, which is no longer a model alias.*claude received "opus" at the last pull/)).toBe(true);
+    });
+  });
+
   it('keeps separate records for the user scope and a project checkout', async () => {
     await writeAliases(STRONG);
     await writeAgent(IMPLEMENTER);
@@ -504,7 +683,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     const projectCopy = path.join(projectRoot, '.claude', 'agents', 'implementer.md');
     expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'opus' });
     const projectRecord = Object.values((await loadStateForScope(projectConfig)).lastPullByWorkspace ?? {})[0];
-    expect(projectRecord?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
+    expect(projectRecord?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' });
 
     // The project checkout's copy goes back to an older CLI's; the user
     // scope's record is untouched, and the project pull fixes only its own.
@@ -523,6 +702,6 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(alreadySynced()).toBe(true);
     expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'opus', effort: 'high' });
     expect((await fse.stat(claudeFile())).mtimeMs).toBe(userCopyBefore.mtimeMs);
-    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' });
+    expect((await homeRecord())?.agentModels?.['implementer']?.['claude']).toEqual({ step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml', alias: 'strong' });
   });
 });
