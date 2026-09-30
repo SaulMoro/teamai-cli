@@ -965,6 +965,30 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(warnings()).toContain(`Held implementer.yaml: Invalid model aliases YAML at ${localFile()}`);
     });
 
+    it('holds only alias agents while the local file cannot be parsed: a concrete model is delivered and pushable', async () => {
+      await writeAliases(STRONG);
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      await pullTo(['claude'], makeSpec({ name: 'literal', model: 'opus' }));
+      await editDeployed('claude', 'implementer', () => {}, 'Edited instructions.');
+      await editDeployed('claude', 'literal', () => {}, 'Edited instructions.');
+      await fse.outputFile(localFile(), 'aliases: [broken');
+
+      const byName = Object.fromEntries((await scan(['claude'])).map((item) => [item.name, item]));
+      expect(byName['implementer']?.mergedSpec).toBeUndefined();
+      expect(byName['implementer']?.skipReason).toContain(`its model cannot be resolved: Invalid model aliases YAML at ${localFile()}`);
+      expect(byName['literal']?.skipReason).toBeUndefined();
+      expect(byName['literal']?.mergedSpec).toMatchObject({ model: 'opus', instructions: 'Edited instructions.' });
+
+      vi.mocked(log.warn).mockClear();
+      const fresh = await pullTo(['claude', 'codex'], makeSpec({ name: 'fresh', model: 'opus' }));
+      expect(fresh['claude']).toMatchObject({ model: 'opus' });
+      expect(fresh['codex']).toMatchObject({ model: 'opus' });
+      const held = await pullTo(['claude'], makeSpec({ name: 'held', model: 'strong' }));
+      expect(held['claude']).toEqual({});
+      expect(warnings()).not.toContain('fresh.yaml');
+      expect(warnings()).toContain(`Held held.yaml: Invalid model aliases YAML at ${localFile()}`);
+    });
+
     it('keeps the root agent a held namespace agent replaces, and the held copy, without a warning', async () => {
       await writeAliases(STRONG);
       const config = teamConfigFor(['claude']);
@@ -1106,11 +1130,51 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(files['claude']).toMatchObject({ model: 'opus', effort: 'high' });
     });
 
-    it('writes no model field for an alias only an inactive namespace defines', async () => {
+    it('writes no model field for an alias only an inactive namespace defines, and warns once per alias naming the file', async () => {
       await writeNamespaced('billing', { aliases: { auditor: { claude: 'fable' } } });
-      const files = await pullTo(['claude'], makeSpec({ model: 'auditor' }));
+      const files = await pullTo(['claude', 'codex'], makeSpec({ model: 'auditor' }));
+      await pullTo(['claude', 'codex'], makeSpec({ name: 'second', model: 'auditor' }));
       expect(files['claude']).toHaveProperty('name', 'implementer');
       expect(files['claude']).not.toHaveProperty('model');
+      expect(files['codex']).not.toHaveProperty('model');
+      const lines = vi.mocked(log.warn).mock.calls.map((args) => String(args[0]));
+      expect(lines).toEqual([
+        '[agents] Model alias "auditor" is defined only in models/billing/aliases.yaml, whose namespace "billing" your roles and projects '
+          + 'do not list in resources.models, so agents with model: auditor get no model field here and each tool uses its default model. '
+          + 'If the alias should apply to you, add `models: [billing]` to the resources of your role in manifest/roles.yaml or of your '
+          + 'project in manifest/projects.yaml. If "auditor" is meant as a concrete model, rename the alias.',
+      ]);
+    });
+
+    it('warns when an inactive namespace\'s alias takes a concrete model id from agents of another namespace', async () => {
+      await writeNamespaced('billing', { aliases: { 'gpt-5-codex': { codex: 'gpt-5-codex-billing' } } });
+      await writeNamespaced('ops', { aliases: { 'gpt-5-codex': { codex: 'gpt-5-codex-ops' } } });
+      await fse.outputFile(path.join(repoPath, 'manifest/projects.yaml'), [
+        'version: 1',
+        'projects:',
+        '  - id: checkout',
+        '    resources: { models: [checkout] }',
+        '  - id: billing',
+        '    resources: { models: [billing] }',
+        '  - id: ops',
+        '    resources: { models: [ops] }',
+        '',
+      ].join('\n'));
+      const files = await pullTo(['codex'], makeSpec({ model: 'gpt-5-codex' }));
+      expect(files['codex']).not.toHaveProperty('model');
+      expect(warnings()).toContain('Model alias "gpt-5-codex" is defined only in models/billing/aliases.yaml and models/ops/aliases.yaml, '
+        + 'whose namespaces "billing" and "ops" your roles and projects do not list in resources.models, so agents with model: gpt-5-codex '
+        + 'get no model field here and each tool uses its default model. If the alias should apply to you, add `models: [billing]` '
+        + 'or `models: [ops]`');
+      expect(warnings()).toContain('If "gpt-5-codex" is meant as a concrete model, rename the alias.');
+    });
+
+    it('says nothing about an inactive-only alias where the agent is not delivered, the local entry maps it, or an extras model skips it', async () => {
+      await writeNamespaced('billing', { aliases: { auditor: { claude: 'fable' } } });
+      await pullTo(['claude'], makeSpec({ name: 'elsewhere', model: 'auditor', targets: ['codex'] }));
+      await pullTo(['claude'], makeSpec({ name: 'pinned', model: 'auditor', tool_extras: { claude: { model: 'sonnet' } } }));
+      await fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), YAML.stringify({ aliases: { auditor: { claude: 'sonnet' } } }));
+      await pullTo(['claude'], makeSpec({ model: 'auditor' }));
       expect(warnings()).toBe('');
     });
 

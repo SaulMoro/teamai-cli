@@ -719,8 +719,10 @@ export class AgentsHandler extends ResourceHandler {
           if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
         }
         const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
-        const holds = !aliases.ok
-          ? [{ name: item.name, reason: aliases.reason, everyTool: heldCount === targeted }]
+        // A load failure holds the agent whole; the member's file only holds an alias agent.
+        const loadFailure = !aliases.ok ? aliases.reason : heldCount > 0 ? aliases.localFailure : undefined;
+        const holds = loadFailure !== undefined
+          ? [{ name: item.name, reason: loadFailure, everyTool: heldCount === targeted }]
           : [...heldTools].map(([reason, tools]) => ({ name: item.name, reason, tools, everyTool: heldCount === targeted }));
         if (ledger) ledger.held.push(...holds);
         else reportHeld(holds);

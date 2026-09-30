@@ -259,6 +259,19 @@ describe('doctor — how agents resolved their model alias', () => {
     expect(failing?.fix).toContain(`Invalid model aliases YAML at ${localFile()}`);
   });
 
+  it('names only the alias agents a broken local file holds', async () => {
+    await team('models/aliases.yaml', { aliases: { strong: { claude: 'opus' } } });
+    await fse.outputFile(localFile(), 'aliases: [broken');
+    await agent({ name: 'implementer', model: 'strong' });
+    await agent({ name: 'plain', model: 'sonnet' });
+
+    const failing = check(await report(), CHECK);
+    expect(failing?.ok).toBe(false);
+    expect(failing?.fix).toContain(`Invalid model aliases YAML at ${localFile()}`);
+    expect(failing?.fix).toContain('pull keeps the deployed copies of every agent whose `model` is a model alias');
+    expect(failing?.fix).toContain('Held here: implementer.');
+  });
+
   it('prints each dropped aliases entry as a note', async () => {
     await team('models/aliases.yaml', { aliases: { strong: { claude: 'opus', 'claude-next': 'opus-6' } } });
     await agent({ name: 'implementer', model: 'strong' });

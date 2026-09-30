@@ -34,8 +34,10 @@
  * A structural error in any of these files, active or not (bad YAML, wrong
  * types, a bad alias name, an effort without a model, `~` in a team file),
  * fails the load: no model can then be told from an alias, so agents with a
- * `model` are held. What this version does not know is dropped with a
- * warning instead, so a newer CLI's additions never freeze this one.
+ * `model` are held. The member's file is the exception: it can make no name
+ * an alias, so while only it fails, only agents whose `model` is an alias are
+ * held. What this version does not know is dropped with a warning instead, so
+ * a newer CLI's additions never freeze this one.
  */
 import path from 'node:path';
 import YAML from 'yaml';
@@ -165,6 +167,12 @@ export type ModelAliases =
     /** The member's override, for the names in `names` only. */
     readonly local: ReadonlyMap<string, AliasEntries>;
     /**
+     * Why the member's override cannot be read. It may replace any entry, so
+     * no alias resolves meanwhile; a literal model still does, since only the
+     * team files make a name an alias.
+     */
+    readonly localFailure?: string;
+    /**
      * Every entry the files set that was dropped, one actionable message
      * each. Pull prints those an agent it delivers uses (`aliasWarningsFor`).
      */
@@ -206,8 +214,8 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
   const team = await loadTeamAliases(localConfig);
   if (!team.ok) return team;
   const localPath = localAliasesPath();
-  const local = await readAliasesFile(localPath, localPath);
-  if (!local.ok) return local;
+  const read = await readAliasesFile(localPath, localPath);
+  const local = read.ok ? read : { aliases: new Map<string, AliasEntries>(), warnings: [] };
   const names = new Set<string>([...RESERVED_ALIASES, ...team.names]);
   // Read once per load, and only matters for aliases: a literal model is written as is.
   const switches = await liveModelSwitches();
@@ -219,6 +227,7 @@ export async function loadModelAliases(localConfig: LocalConfig): Promise<ModelA
     team: team.active,
     inactive: team.inactive,
     local: localHere,
+    ...(read.ok ? {} : { localFailure: read.reason }),
     warnings: [
       ...team.warnings,
       // A native name is in no team's `names`: the member meant it for all of them.
@@ -432,13 +441,35 @@ export function isModelAlias(aliases: ModelAliases, model: string): boolean {
 export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, tool: ToolName): string[] {
   if (!aliases.ok || spec.model === undefined) return [];
   const alias = spec.model;
+  const extrasModel = toolExtrasFor(spec, tool)?.['model'] !== undefined;
   const switched = aliases.switches[tool];
-  const readsEntry = toolExtrasFor(spec, tool)?.['model'] === undefined && !(switched?.ok === true && switched.switched);
-  const source = readsEntry ? entrySource(aliases, alias, tool) : undefined;
-  return aliases.warnings
-    .filter((warning) => warning.alias === alias
-      && (warning.tool === undefined || (warning.file === source?.file && warning.tool === source.key)))
-    .map((warning) => warning.message);
+  const readsEntry = !extrasModel && !(switched?.ok === true && switched.switched);
+  const entry = entrySource(aliases, alias, tool);
+  const source = readsEntry ? entry : undefined;
+  // No active file defines the alias and no local entry maps this tool: its model is gone.
+  const inactiveOnly = !extrasModel && entry === undefined && !aliases.team.has(alias) ? aliases.inactive.get(alias) : undefined;
+  return [
+    ...aliases.warnings
+      .filter((warning) => warning.alias === alias
+        && (warning.tool === undefined || (warning.file === source?.file && warning.tool === source.key)))
+      .map((warning) => warning.message),
+    ...(inactiveOnly ? [inactiveOnlyWarning(alias, inactiveOnly)] : []),
+  ];
+}
+
+/**
+ * An alias only inactive namespace files define takes the agent's `model`
+ * away here, which a name that is also a model id makes easy to miss. The
+ * text names no tool or agent, so pull says it once per alias.
+ */
+function inactiveOnlyWarning(alias: string, files: readonly InactiveAliasFile[]): string {
+  const list = (items: string[]): string => (items.length === 1 ? items[0]! : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
+  const namespaces = [...new Set(files.map(({ namespace }) => namespace))];
+  const whose = namespaces.length === 1 ? `whose namespace "${namespaces[0]}"` : `whose namespaces ${list(namespaces.map((ns) => `"${ns}"`))}`;
+  return `Model alias "${alias}" is defined only in ${list(files.map(({ source }) => source))}, ${whose} your roles and projects `
+    + `do not list in resources.models, so agents with model: ${alias} get no model field here and each tool uses its default model. `
+    + `If the alias should apply to you, add ${namespaces.map((ns) => `\`models: [${ns}]\``).join(' or ')} to the resources of your role `
+    + `in manifest/roles.yaml or of your project in manifest/projects.yaml. If "${alias}" is meant as a concrete model, rename the alias.`;
 }
 
 /** Which file's entry, under which tool key, `fromEntries` reads for `tool`. */
@@ -458,9 +489,10 @@ export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, tool: 
     return { ok: true, step: 'extras', ...(typeof extrasModel === 'string' ? { model: extrasModel } : {}) };
   }
   if (spec.model === undefined) return { ok: true, step: 'default' };
-  // An unreadable file may define any name, so no model can be told literal.
+  // An unreadable team file may define any name, so no model can be told literal.
   if (!aliases.ok) return aliases;
   if (!aliases.names.has(spec.model)) return { ok: true, step: 'literal', model: spec.model };
+  if (aliases.localFailure !== undefined) return { ok: false, reason: aliases.localFailure };
 
   const switched = aliases.switches[tool];
   if (switched?.ok === false) {

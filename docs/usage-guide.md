@@ -1878,7 +1878,7 @@ A role or project gives an alias its own meaning in `models/<ns>/aliases.yaml`, 
 
 - A namespace alias replaces the root alias of the same name whole: a tool it does not map gets no `model` field, even when `models/aliases.yaml` maps that tool.
 - The same alias in two active namespaces holds agents with a `model` field, as a structural error does, and pull names both files. Rename or remove it in one of them, or stop declaring one of the namespaces.
-- A name that any aliases file in the team repo defines, root or namespace, active for you or not, is an alias. An agent whose alias only an inactive namespace defines gets no `model` field, rather than the name as written, and your local entry for that name still applies.
+- A name that any aliases file in the team repo defines, root or namespace, active for you or not, is an alias. An agent whose alias only an inactive namespace defines gets no `model` field, rather than the name as written, and your local entry for that name still applies. Pull warns once per such alias when it delivers an agent that uses it, naming the files: activate the namespace if the alias should apply to you, or rename the alias if its name was meant as a concrete model, such as `gpt-5-codex`.
 - For the same reason, a structural error in any aliases file of the team repo, including one in a namespace that is not active for you, holds agents with a `model` field, and pull names that file.
 - Pull warnings and push drift name the file an entry comes from, such as `models/checkout/aliases.yaml`. `teamai doctor` notes an alias that agents you receive use when a namespace that is not active for you also defines it.
 
@@ -1901,7 +1901,7 @@ aliases:
 - claude-internal and tclaude use your `claude` entry, codex-internal and tcodex your `codex` entry, and Qoder CN your `qoder` entry, unless you give them their own. Your `claude` entry wins over the team's `tclaude` entry.
 - The file is one per machine: it applies in every scope (user and each project checkout) and to every team that uses the alias name.
 - An ordinary `teamai pull` applies an edit to the file, even when the team repo has not moved.
-- The file follows the same rules as the team file, `~` aside: a structural error holds agents with a `model` field and the warning names the file by its path, and an entry this CLI does not know is dropped with a warning.
+- The file follows the same rules as the team file, `~` aside, with one difference: a structural error holds only the agents whose `model` is an alias, since this file can make no name an alias, and the warning names the file by its path. Agents with a concrete model are delivered and pushed as usual. An entry this CLI does not know is dropped with a warning.
 
 ##### Tools switched to a model profile
 

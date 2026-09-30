@@ -453,7 +453,8 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     await writeAgent({ ...IMPLEMENTER, name: 'plain', model: 'sonnet' });
     await fse.outputFile(localFile, 'aliases: [broken');
     await pullOnce();
-    expect(await fse.pathExists(claudeFile('plain'))).toBe(false);
+    // The local file can make no name an alias, so a literal model does not wait for it.
+    expect(await claudeModel('plain')).toMatchObject({ model: 'sonnet' });
     expect(await fse.pathExists(claudeFile())).toBe(false);
 
     await fse.outputFile(localFile, 'aliases:\n  strong:\n    codex: gpt-6-luna\n');
@@ -461,7 +462,6 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
 
     // The pull that held them did not count the revision as synced.
     expect(alreadySynced()).toBe(false);
-    // A literal model needs no alias, but nothing delivered it while the file was broken.
     expect(await claudeModel('plain')).toMatchObject({ model: 'sonnet' });
     expect(await codexModel('plain')).toMatchObject({ model: 'sonnet' });
     expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });

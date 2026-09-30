@@ -153,12 +153,13 @@ is in `resources.models`, like `models/<ns>/models.yaml`. The namespace alias re
 the root alias whole (a tool it does not map gets no `model`); the same alias in two
 active namespaces holds alias agents, as a structural error does. A name defined in any
 aliases file of the team repo, active or not, is an alias: with no active definition it
-gives no `model`. `teamai doctor` notes an agent's alias defined in an inactive namespace;
-to use it, add `models: [<ns>]` to the role's or project's resources.
+gives no `model`, and pull warns once per such alias. `teamai doctor` notes an agent's
+alias defined in an inactive namespace; to use it, add `models: [<ns>]` to the role's or
+project's resources, or rename the alias if it was meant as a concrete model id.
 
-A structural error in any aliases file, active or not, or in the local file (bad YAML, a
-wrong type, a bad alias name, an effort without a model, `~` in a team file) holds every
-agent with a `model`: pull keeps
+A structural error in any aliases file, active or not (bad YAML, a wrong type, a bad alias
+name, an effort without a model, `~` in a team file) holds every agent with a `model`; one
+in the local file holds only agents whose `model` is an alias. Pull keeps
 their copies and push skips them until the file its warning names is fixed; then an
 ordinary `teamai pull` delivers them. An unknown
 tool key, an unknown option field, or an alias named like `opus` or `inherit` is only

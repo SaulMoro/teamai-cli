@@ -8,7 +8,8 @@ import { nameList } from './doctor-delivery.js';
 /**
  * What `doctor` says about the model aliases agents use (#830): a failing
  * check while they cannot be resolved, since pull then holds every agent with
- * a `model` and says so only on a full sync; and, as notes, how each alias
+ * a `model` (only the alias agents, when only the member's file fails) and
+ * says so only on a full sync; and, as notes, how each alias
  * agent resolved in each tool, why, and what the alias files set that no tool
  * receives. Read-only, like every doctor check.
  */
@@ -99,8 +100,8 @@ export async function buildAgentModelChecks(ctx: DoctorContext, stage: CheckStag
 
   if (stage === 'pull') {
     const { loadModelAliases } = await import('./models/aliases.js');
-    const aliases = await loadModelAliases(localConfig);
-    return aliases.ok ? [] : failing(`${aliases.reason}. ${HELD_ON_LOAD_FAILURE}`);
+    const failure = loadFailure(await loadModelAliases(localConfig));
+    return failure ? failing(failure) : [];
   }
 
   const view = await loadView(ctx);
@@ -119,10 +120,12 @@ export async function buildAgentModelChecks(ctx: DoctorContext, stage: CheckStag
     }
   }
 
-  if (!view.aliases.ok) {
+  const failure = loadFailure(view.aliases);
+  if (failure) {
+    // Every agent held meanwhile is held for that reason.
     const held = new Set([...heldByCause.values()].flatMap(({ agents }) => [...agents]));
     const named = held.size > 0 ? ` Held here: ${nameList([...held])}.` : '';
-    return failing(`${view.aliases.reason}. ${HELD_ON_LOAD_FAILURE}${named}`);
+    return failing(`${failure}${named}`);
   }
   if (heldByCause.size > 0) {
     return failing([...heldByCause.values()].map(({ reason, tools, agents }) => {
@@ -134,8 +137,19 @@ export async function buildAgentModelChecks(ctx: DoctorContext, stage: CheckStag
   return usesAlias ? [{ name: CHECK_NAME, source: 'local', check: async () => true }] : [];
 }
 
-const HELD_ON_LOAD_FAILURE = 'Until that is fixed, pull keeps the deployed copies of every agent that sets a `model` and writes no new ones, '
-  + 'and push skips those agents. Fix it, then run `teamai pull`.';
+/**
+ * Why no agent's model, or no alias agent's while only the member's file
+ * fails, can be resolved, and what that holds.
+ */
+function loadFailure(aliases: ModelAliases): string | undefined {
+  if (!aliases.ok) {
+    return `${aliases.reason}. Until that is fixed, pull keeps the deployed copies of every agent that sets a \`model\` and writes no new ones, `
+      + 'and push skips those agents. Fix it, then run `teamai pull`.';
+  }
+  if (aliases.localFailure === undefined) return undefined;
+  return `${aliases.localFailure}. Until that is fixed, pull keeps the deployed copies of every agent whose \`model\` is a model alias `
+    + 'and writes no new ones, and push skips those agents; agents with a concrete model are not affected. Fix it, then run `teamai pull`.';
+}
 
 /**
  * Info lines for `doctor`: per agent that uses a model alias, what each

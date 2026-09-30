@@ -1765,7 +1765,7 @@ aliases:
 
 - namespace 中的别名整体替换根文件中的同名别名：它未映射的工具不会得到 `model` 字段，即使 `models/aliases.yaml` 映射了该工具。
 - 两个生效 namespace 定义同一个别名时，与结构性错误一样暂停带 `model` 字段的 agent，pull 会指出这两个文件。在其中一个文件里重命名或删除它，或不再声明其中一个 namespace。
-- 团队仓库中任一别名文件（根文件或 namespace 文件，无论对你是否生效）定义的名称都是别名。只由未生效 namespace 定义别名的 agent 不会得到 `model` 字段，而不是按原样写入名称；你对该名称的本地条目仍然生效。
+- 团队仓库中任一别名文件（根文件或 namespace 文件，无论对你是否生效）定义的名称都是别名。只由未生效 namespace 定义别名的 agent 不会得到 `model` 字段，而不是按原样写入名称；你对该名称的本地条目仍然生效。pull 交付使用这种别名的 agent 时，每个别名警告一次并指出这些文件：如果该别名应当对你生效，请启用该 namespace；如果这个名称原本指的是具体模型（例如 `gpt-5-codex`），请重命名该别名。
 - 同理，团队仓库中任一别名文件出现结构性错误（包括对你未生效的 namespace 中的文件）都会暂停带 `model` 字段的 agent，pull 会指出该文件。
 - pull 的警告和 push 的偏差提示会指出条目所在的文件，例如 `models/checkout/aliases.yaml`。当你收到的 agent 使用的别名也由对你未生效的 namespace 定义时，`teamai doctor` 会给出提示。
 
@@ -1788,7 +1788,7 @@ aliases:
 - claude-internal 和 tclaude 使用你的 `claude` 条目，codex-internal 和 tcodex 使用你的 `codex` 条目，Qoder CN 使用你的 `qoder` 条目，除非你为它们单独写了条目。你的 `claude` 条目优先于团队的 `tclaude` 条目。
 - 该文件每台机器一份：它适用于所有作用域（user 和每个项目检出），也适用于使用该别名名称的每个团队。
 - 修改该文件后，普通的 `teamai pull` 即会应用，即使团队仓库没有变化。
-- 除 `~` 外，该文件遵循与团队文件相同的规则：结构性错误会暂停带 `model` 字段的 agent，警告按路径指明该文件；当前 CLI 不认识的条目会被丢弃并给出警告。
+- 除 `~` 外，该文件遵循与团队文件相同的规则，只有一处不同：结构性错误只暂停 `model` 为别名的 agent，因为该文件不能把任何名称变成别名，警告按路径指明该文件。`model` 为具体模型的 agent 照常交付和 push。当前 CLI 不认识的条目会被丢弃并给出警告。
 
 ##### 已切换到模型配置档的工具
 
