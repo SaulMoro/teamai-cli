@@ -1870,7 +1870,7 @@ aliases:
 
 - 副本中的模型和推理强度与上次 pull 写入的一致，或与现在 pull 会写入的一致，就视为未修改。因此在 pull `models/aliases.yaml`、你的覆盖文件或切换带来的变化之前先 push，也不会报告任何内容；push 对“保留的副本其部署版本已变化”的警告也会忽略这类变化。
 - push 从不把 `model: strong` 替换为具体模型，也从不把别名的推理强度写进 `tool_extras`。你在副本里手动修改的模型或推理强度属于偏差（drift）：push 会指出该副本及该值的来源，不提交这项修改，并说明应在哪里修改：来自你覆盖文件的条目，改你的覆盖文件；团队条目或未映射的工具，改你的覆盖文件或该别名所在的团队别名文件（`models/aliases.yaml` 或 `models/<ns>/aliases.yaml`）；已切换的工具，运行 `teamai models restore --agent <tool>`。`teamai push --dry-run` 同样会报告。你对该 agent 的其他修改（例如 instructions 或其他字段）照常 push。
-- 要让 agent 改用另一个别名，在已部署的副本中写入别名名称（例如用 `model: fast` 替换 `opus`，或在原本设置 `model: opus` 的 agent 中写 `model: strong`），然后 push：push 会提议 `model: <alias>`。两个副本写了不同的别名时会冲突，与其他任何两个不同的值一样。
+- 要让 agent 改用另一个别名，在已部署的副本中写入别名名称（例如用 `model: fast` 替换 `opus`，或在原本设置 `model: opus` 的 agent 中写 `model: strong`），然后 push：push 会提议 `model: <alias>`。若某个工具的模型由 `tool_extras.<tool>.model` 固定，该工具的副本不会采用别名；在那里改动的值会作为该固定值的偏移报告。两个副本写了不同的别名时会冲突，与其他任何两个不同的值一样。
 - 只存在于某个工具目录中的新 agent 按其中的模型原样 push，不会被反推回别名。
 
 ##### 用 doctor 查看

@@ -190,7 +190,8 @@ matches the last pull or the current mapping is unedited, and a hand-edited mode
 effort is reported as drift and not pushed (other edits still push), with where to change
 it: the member's override file, the team aliases file the alias comes from, or `teamai models
 restore --agent <tool>` for a switched tool. Writing an alias name in a deployed copy (`model: fast`)
-and pushing proposes `model: <alias>`. Never tell a user to push a concrete model over an alias.
+and pushing proposes `model: <alias>`, except in a tool whose `tool_extras.<tool>.model` pins it,
+where a changed value is drift on that pin. Never tell a user to push a concrete model over an alias.
 
 To answer "why does this tool run this model", run `teamai doctor`. Each alias agent gets
 a note with one line per tool: the model and effort it receives, then `[step: source]`.
