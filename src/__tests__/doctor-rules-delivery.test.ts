@@ -476,13 +476,15 @@ describe('doctor — rules delivered on disk', () => {
       expect(await fse.pathExists(path.join(homeDir, '.codex'))).toBe(false);
     });
 
-    it('fails for a team codex entry with only skills once .codex/ exists, since it names no instructions file', async () => {
-      teamConfig.toolPaths.codex = { skills: '.codex/skills' };
+    // An entry with neither `rules` nor `claudemd` delivers no rules to Codex
+    // on purpose, like any tool without a rules path: nothing to check.
+    it.each([
+      ['only skills', { skills: '.codex/skills' }],
+      ['only agents', { agents: '.codex/agents' }],
+    ])('asks nothing of a team codex entry with %s once .codex/ exists, since it delivers no rules to Codex', async (_label, entry) => {
+      teamConfig.toolPaths.codex = entry;
 
-      const check = await namedCheck(CODEX);
-      expect(check).toBeDefined();
-      expect(await check!.check()).toBe(false);
-      expect(check!.fix).toContain('has no `claudemd` path');
+      expect(await namedCheck(CODEX)).toBeUndefined();
     });
 
     it('checks a file once and names every tool that maps it', async () => {

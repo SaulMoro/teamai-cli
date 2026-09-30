@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import {
-  getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, TEAMAI_TEAM_RULES_END, TEAMAI_TEAM_RULES_START,
+  getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, scopedToolPaths, TEAMAI_TEAM_RULES_END,
+  TEAMAI_TEAM_RULES_START,
 } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
@@ -381,6 +382,9 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
     }
     // A team `toolPaths` entry replaces the default one whole, so an entry
     // written before #938 leaves this tool with nowhere to read rules from.
+    // One with no `rules` path either delivers no rules to it on purpose,
+    // like any tool without one.
+    if (!scopedToolPaths(teamConfig, localConfig)[tool]?.rules) continue;
     checks.push({
       name: codexCheckName([tool]),
       source: 'local',
