@@ -904,6 +904,8 @@ export interface ManagedMcpRecord {
    * (#882). Absent in records an older teamai wrote.
    */
   resolved?: boolean;
+  /** TeamAI wrote this entry in Copilot's bare project map. Absent means unproven. */
+  bare?: true;
   /**
    * Project scope: this record was rebuilt after it was lost, or written by a
    * pull that found no managed-mcp.json, and the other servers in its file

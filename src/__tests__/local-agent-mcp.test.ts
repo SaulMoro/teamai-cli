@@ -205,6 +205,24 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect((doc.mcpServers as Record<string, unknown>)[COPILOT_SERVER]).toEqual(expect.objectContaining({ url: 'https://new.example.com/mcp' }));
   });
 
+  it('preserves an identical member-owned bare Copilot entry through install, update and uninstall', async () => {
+    const workspacePath = path.join(tmpDir, 'copilot-identical-member');
+    const configFile = path.join(workspacePath, '.github', 'mcp.json');
+    const mine = { type: 'http', tools: ['*'], url: 'https://copilot.example.com/mcp' };
+    await fse.ensureDir(path.dirname(configFile));
+    await fse.writeJson(configFile, { [COPILOT_SERVER]: mine, mcpServers: {} });
+    for (const [id, type] of [[8995, 'install_mcp'], [8996, 'install_mcp'], [8997, 'uninstall_mcp']] as const) {
+      const acks = await runResponse({ cmds: [{
+        id, type, scope: 'workspace', workspace_path: workspacePath,
+        slug: COPILOT_SERVER, version: '1.0.0',
+        mcp_config: { transport: 'http', url: mine.url },
+      }] }, 'copilot');
+      expect(acks[0].status).toBe('success');
+      expect((await fse.readJson(configFile))[COPILOT_SERVER]).toEqual(mine);
+    }
+    expect((await fse.readJson(configFile)).mcpServers[COPILOT_SERVER]).toBeUndefined();
+  });
+
   it('rejects an unmanaged collision in a bare Copilot project map', async () => {
     const workspacePath = path.join(tmpDir, 'copilot-collision-project');
     const configFile = path.join(workspacePath, '.github', 'mcp.json');
@@ -594,6 +612,29 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(Object.entries(sidecar.files)).toEqual([[expect.stringMatching(/\.mcp\.json$/), { tools: ['codebuddy'] }]]);
       const manifest = await fse.readJson(await workspaceFile('managed-mcp.json'));
       expect(manifest['codebuddy:project']).toEqual([expect.objectContaining({ name: 'clawpro', resolved: true })]);
+    });
+
+    it('leaves a user config visible to git when the ownership manifest cannot be written', async () => {
+      const original = { mcpServers: { mine: { command: 'my-server' } } };
+      await fse.writeJson(path.join(wsPath, '.mcp.json'), original);
+      const excludeBefore = await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8');
+      const fs = await import('../utils/fs.js');
+      const write = fs.writeJsonAtomic;
+      vi.spyOn(fs, 'writeJsonAtomic').mockImplementation(async (file, ...args) => {
+        if (file.endsWith('/managed-mcp.json')) throw new Error('simulated manifest write failure');
+        return write(file, ...args);
+      });
+
+      const acks = await install(9110, bearer);
+
+      expect(acks[0].status).toBe('failed');
+      expect(acks[0].error).toContain('simulated manifest write failure');
+      expect(await fse.readJson(path.join(wsPath, '.mcp.json'))).toEqual(original);
+      expect(await fse.readFile(path.join(wsPath, '.git', 'info', 'exclude'), 'utf-8')).toBe(excludeBefore);
+      expect(git('status', '--porcelain', '--untracked-files=all', '--', '.mcp.json')).toContain('?? .mcp.json');
+      const wsDir = path.join(wsPath, '.teamai', 'workspaces');
+      const ids = await fse.pathExists(wsDir) ? await fse.readdir(wsDir) : [];
+      for (const id of ids) expect(await fse.pathExists(path.join(wsDir, id, 'managed-mcp-files.json'))).toBe(false);
     });
 
     it('withholds it from a config git tracks, naming why, and leaves the file and its records as they were', async () => {

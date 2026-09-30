@@ -439,7 +439,7 @@ every checkout, so that is where they live now:
 ├── reports-wt/                                (the side-branch locks sit beside them)
 ├── pending-learnings/                         pendingLearningsDir → <dataHome>/pending-learnings
 └── workspaces/<managedMcpWorkspaceId(root)>/
-    ├── managed-mcp.json                       managedMcpManifestPath, one per checkout
+    ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot records mark completed bare writes with bare: true
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
     │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882);
     │                                          for an HTTP team, the configs the local agent wrote a credential to

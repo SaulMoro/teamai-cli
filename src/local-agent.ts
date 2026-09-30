@@ -2848,10 +2848,11 @@ function updateManifestRecord(
   hash: string,
   /** Project scope: whether the entry carries a credential, as `resolved` notes for a pull's (#882). */
   resolved?: boolean,
+  bare?: boolean,
 ): void {
   const records = manifest[key] ?? [];
   const idx = records.findIndex((r: ManagedMcpRecord) => r.name === name);
-  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved } };
+  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved }, ...bare ? { bare: true } : {} };
   if (idx >= 0) {
     records[idx] = record;
   } else {
@@ -2945,13 +2946,19 @@ async function installMcpServer(
     // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
     // Judged by the record as it was before this install updates it.
     const bareCopy = isTeamaiBareCopy(doc, slug, owned);
-    // A credential lands in a project config only once git leaves the file out of a commit, as a pull's does (#882).
-    const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
+    // Check Git without changing it until ownership is persisted. Recheck protection before writing the credential (#882).
+    const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
     updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
     await writeJsonAtomic(manifestPath, manifest);
+    if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     if (bareCopy) delete doc.data[slug];
     doc.servers[slug] = entry;
     await writeJsonDoc(targetFile, serverKey, doc);
+    if (doc.bare) {
+      // Placement is evidence of a completed write, not just an attempted install.
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, true);
+      await writeJsonAtomic(manifestPath, manifest);
+    }
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
@@ -2961,7 +2968,8 @@ async function installMcpServer(
  * For a project-scope install: whether `entry` carries a credential and, if
  * so, list `file` in `.git/info/exclude` and record it in
  * managed-mcp-files.json, as a pull does before writing a resolved value
- * (#882). Throws, before anything is written, when git would commit the file.
+ * (#882). With dryRun, checks protection without adding an exclusion or file record.
+ * Throws when git protection fails; the MCP config is left unchanged.
  */
 async function keepCredentialOutOfGit(
   localConfig: LocalConfig,
@@ -2969,17 +2977,19 @@ async function keepCredentialOutOfGit(
   slug: string,
   file: string,
   entry: unknown,
+  dryRun = false,
 ): Promise<boolean> {
   const { carriesLocalAgentCredential, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   if (!carriesLocalAgentCredential(entry)) return false;
   // Commands come from the server: no pull replays one.
-  const exclusion = await ensureExcludedFromGit(file, { rerun: 'install the MCP server again' });
+  const exclusion = await ensureExcludedFromGit(file, { dryRun, rerun: 'install the MCP server again' });
   if (exclusion.kind === 'failed') {
     throw new Error(
       `install_mcp: withheld "${slug}" from ${file}: it may carry a credential (a header, env value, argument or URL), and teamai could not keep the file `
       + `out of git: ${exclusion.reason}. The file is left as it was. ${exclusion.fix}`,
     );
   }
+  if (dryRun) return true;
   const { trackResolvedMcpFiles } = await import('./mcp-resolved-files.js');
   // A failure does not stop the write: the exclusion protects the file.
   const result = await trackResolvedMcpFiles(localConfig, [{ tool, file }]).catch((e: unknown) => e instanceof Error ? e.message : String(e));

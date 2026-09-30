@@ -386,8 +386,8 @@ export interface JsonDoc {
   /** The existing document stores server names directly at the top level. */
   bare: boolean;
   /**
-   * A Copilot project file holding `serverKey` as well: the servers at its top level beside it, which a bare
-   * write left before another tool added the key (#882). Read and removed, never written to.
+   * A Copilot project file holding `serverKey` as well: the servers at its top level beside it.
+   * These may belong to the member or come from a previous bare write (#882).
    */
   beside?: Record<string, unknown>;
 }
@@ -1777,12 +1777,12 @@ async function forgetUnwrittenMcpConfigs(localConfig: LocalConfig, targets: McpT
 
 /**
  * Whether the bare Copilot server `name` beside `mcpServers` is the copy a teamai write left before another tool
- * added the key (#882): exactly what `owned`'s record says teamai wrote. A member's own server of that name,
+ * added the key (#882): a completed bare write in `owned`, with matching content. A member's own server of that name,
  * or one edited since, is left alone.
  */
 export function isTeamaiBareCopy(doc: { beside?: Record<string, unknown> }, name: string, owned: readonly ManagedMcpRecord[]): boolean {
   const bare = doc.beside?.[name];
-  return bare !== undefined && owned.some((record) => record.name === name && record.hash === entryHash(bare));
+  return bare !== undefined && owned.some((record) => record.name === name && record.bare === true && record.hash === entryHash(bare));
 }
 
 // ─── Appliers ────────────────────────────────────────────────
@@ -1822,7 +1822,9 @@ async function applyJson(
       });
       continue;
     }
-    nextRecords.push({ name, hash });
+    const record: ManagedMcpRecord = { name, hash };
+    if (doc.bare && owned.some((r) => r.name === name && r.bare === true)) record.bare = true;
+    nextRecords.push(record);
     holdsResolvedValue ||= resolvedValue;
     // The copy a bare write left before another tool added the key would keep the old value beside this one (#882).
     if (isTeamaiBareCopy(doc, name, owned)) {
@@ -1831,6 +1833,7 @@ async function applyJson(
     }
     if (existing !== undefined && ownedHash.get(name) === hash) continue;
     doc.servers[name] = entry;
+    if (doc.bare) record.bare = true;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: existing === undefined ? 'added' : 'updated' });
   }

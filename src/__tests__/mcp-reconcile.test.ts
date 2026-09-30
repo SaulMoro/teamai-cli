@@ -1147,6 +1147,23 @@ servers:
         expect(first.mcpServers).toBeUndefined();
       });
 
+      it('does not infer bare ownership from an unchanged entry with a legacy record', async () => {
+        const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+        const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+        const manifest = await fse.readJson(manifestFile);
+        delete manifest['copilot:project'][0].bare;
+        await fse.writeJson(manifestFile, manifest);
+        const bare = (await fse.readJson(path.join(projectRoot, '.mcp.json')))['with-secret'];
+
+        await reconcileMcpForConfig(shared(), projectConfig);
+        expect((await fse.readJson(manifestFile))['copilot:project'][0].bare).toBeUndefined();
+        await writeMcpYaml(open);
+        await reconcileMcpForConfig(shared(), { ...projectConfig, disabledAgents: ['copilot'] } as LocalConfig);
+        await reconcileMcpForConfig(shared(), projectConfig);
+
+        expect((await fse.readJson(path.join(projectRoot, '.mcp.json')))['with-secret']).toEqual(bare);
+      });
+
       it('keeps its line, pull after pull, while Copilot\'s bare entry holds the value beside the mcpServers Claude wrote', async () => {
         await writeMcpYaml(`${withSecret}    tools: [copilot]\n${open.replace('servers:\n', '')}`);
         // No longer set: only the entry, not a scan for the value, says what the file holds.
@@ -1177,7 +1194,7 @@ servers:
       });
 
       it('never removes a bare server of the member\'s own that shares a name with one teamai writes under mcpServers', async () => {
-        const mine = { type: 'http', url: 'https://mine.example/mcp' };
+        const mine = { type: 'http', tools: ['*'], url: 'https://jira.example/mcp' };
         const doc = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
         await fse.writeJson(path.join(projectRoot, '.mcp.json'), { ...doc, jira: mine });
         const jira = '  - name: jira\n    transport: http\n    url: https://jira.example/mcp\n    tools: [copilot]\n';
