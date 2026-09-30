@@ -584,9 +584,16 @@ describe('placed agent in a stale linked worktree (#823 item 3)', () => {
     teammateRewrites();
     await run(['pull'], projectRoot);
 
+    // Still the bytes this checkout's pull wrote: not an edit, so nothing to hold (#830).
+    const untouched = await run(['--dry-run', 'push'], worktree);
+    expect(untouched).not.toContain(HELD);
+    expect(untouched).not.toContain('vr → agents/fe-agents/vr.yaml');
+
+    const edited = pulled.replace('You review.', 'You review carefully.');
+    fs.writeFileSync(agentIn(worktree), edited);
     const push = await run(['--dry-run', 'push'], worktree);
     expect(push).toContain(HELD);
-    expect(fs.readFileSync(agentIn(worktree), 'utf8')).toBe(pulled);
+    expect(fs.readFileSync(agentIn(worktree), 'utf8')).toBe(edited);
   }, 60_000);
 
   it('holds a placed agent a teammate changed after it landed, before this checkout pulled', async () => {

@@ -9,6 +9,7 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import matter from 'gray-matter';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 
@@ -620,12 +621,100 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(candidates[0].mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
     });
 
-    /** What the last pull recorded for this checkout's agent copies. */
-    async function recordModels(agentModels: AgentModelRecords): Promise<void> {
+    /** What the last pull recorded for this checkout's agent copies, and the bytes it wrote there. */
+    async function recordModels(agentModels: AgentModelRecords, delivered?: Record<string, string>): Promise<void> {
       const state = await loadStateForScope(localConfig);
-      state.lastPullByWorkspace = { [await checkoutKey(homeDir)]: { rev: 'abc1234', targets: ['claude', 'codex'], agentModels } };
+      state.lastPullByWorkspace = { [await checkoutKey(homeDir)]: {
+        rev: 'abc1234', targets: ['claude', 'codex'], agentModels, ...(delivered ? { delivered } : {}),
+      } };
       await saveStateForScope(state, localConfig);
     }
+
+    const STRONG_RECORD: AgentModelRecords = { implementer: {
+      claude: { step: 'team', model: 'opus', effort: 'high', source: 'models/aliases.yaml' },
+      codex: { step: 'team', model: 'gpt-6-sol', effort: 'high', source: 'models/aliases.yaml' },
+    } };
+
+    const writeCanonical = (spec: AgentSpec): Promise<void> =>
+      fse.writeFile(path.join(repoPath, 'agents', `${spec.name}.yaml`), serializeAgentYaml(spec));
+
+    it.each([
+      ['removed', {}],
+      ['changed to a literal model', { model: 'sonnet' }],
+    ] as const)('does not propose what the alias wrote after the canonical model was %s since the pull', async (_, now) => {
+      await writeAliases(STRONG);
+      await pullTo(['claude', 'codex'], makeSpec({ model: 'strong' }));
+      await recordModels(STRONG_RECORD);
+      const canonical = makeSpec(now);
+      await writeCanonical(canonical);
+      await editDeployed('claude', canonical.name, () => {}, 'Member edit.');
+
+      const [candidate, ...rest] = await scan(['claude', 'codex']);
+      expect(rest).toEqual([]);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.modelDrift).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...canonical, instructions: 'Member edit.' });
+    });
+
+    it('still proposes a model and effort the member changed after the canonical model stopped being an alias', async () => {
+      await writeAliases(STRONG);
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      await recordModels(STRONG_RECORD);
+      const canonical = makeSpec();
+      await writeCanonical(canonical);
+      await editDeployed('claude', canonical.name, (fields) => {
+        fields['model'] = 'haiku';
+        fields['effort'] = 'max';
+      });
+
+      const [candidate] = await scan(['claude']);
+      expect(candidate.mergedSpec).toEqual({ ...canonical, model: 'haiku', tool_extras: { claude: { effort: 'max' } } });
+    });
+
+    it.each([
+      ['tclaude', { claude: { model: 'sonnet' } }, 'color', 'blue'],
+      ['tcodex', { codex: { model: 'gpt-6-luna' } }, 'sandbox_mode', 'read-only'],
+    ] as const)('pushes an unrelated extras edit to %s while it inherits a model pin, and keeps the pin', async (tool, pin, key, value) => {
+      const spec = makeSpec({ model: 'opus', tool_extras: pin });
+      await pullTo([tool], spec);
+      await editDeployed(tool, spec.name, (fields) => { fields[key] = value; });
+
+      const [candidate] = await scan([tool]);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, tool_extras: { ...pin, [tool]: { [key]: value } } });
+    });
+
+    it.each([
+      ['tclaude', { claude: { model: 'sonnet' } }],
+      ['tcodex', { codex: { model: 'gpt-6-luna' } }],
+    ] as const)('writes a model changed in %s over an inherited pin to its own extras, and refuses its removal', async (tool, pin) => {
+      const spec = makeSpec({ model: 'opus', tool_extras: pin });
+      await pullTo([tool], spec);
+      await editDeployed(tool, spec.name, (fields) => { fields['model'] = 'haiku'; });
+      const [changed] = await scan([tool]);
+      expect(changed.skipReason).toBeUndefined();
+      expect(changed.mergedSpec).toEqual({ ...spec, tool_extras: { ...pin, [tool]: { model: 'haiku' } } });
+
+      await editDeployed(tool, spec.name, (fields) => { delete fields['model']; });
+      const [removed] = await scan([tool]);
+      expect(removed.mergedSpec).toBeUndefined();
+      expect(removed.skipReason).toContain(`tool_extras.${tool}: {"inheritedFrom":"tool_extras.${tool.slice(1)}","removed":["model"]}`);
+    });
+
+    it('does not propose a copy with the bytes teamai last delivered there, rendered by an older CLI', async () => {
+      const spec = makeSpec({ model: 'opus', tool_extras: { claude: { color: 'red' } } });
+      // A CLI before #830 gave Qoder the Claude extras.
+      await pullTo(['qoder'], { ...spec, tool_extras: { ...spec.tool_extras, qoder: { color: 'red' } } });
+      await writeCanonical(spec);
+      const copy = path.join(homeDir, '.qoder/agents/implementer.md');
+      const hash = crypto.createHash('sha256').update(await fse.readFile(copy)).digest('hex');
+      await recordModels({}, { [copy]: hash });
+      expect(await scan(['qoder'])).toEqual([]);
+
+      await editDeployed('qoder', spec.name, () => {}, 'Member edit.');
+      const [candidate] = await scan(['qoder']);
+      expect(candidate.mergedSpec?.instructions).toBe('Member edit.');
+    });
 
     it.each([
       ['claude', { claude: { model: 'opus', effort: 'high' } }, 'color', 'blue'],

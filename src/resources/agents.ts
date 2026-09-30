@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import matter from 'gray-matter';
 import { isToolInstalledForConfig, ResourceHandler, type ScanForPushOptions } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
-import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe } from '../utils/fs.js';
+import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { resolveToolBaseDir, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
 import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
@@ -344,8 +344,11 @@ export class AgentsHandler extends ResourceHandler {
     const aliases = await loadModelAliases(localConfig);
     // What each copy received at the last pull: a copy written with it is
     // unedited even after the alias has changed since (#830).
-    const { recordedAgentModels } = await import('../pull.js');
+    const { recordedAgentModels, deliveredHashes } = await import('../pull.js');
     const modelRecords = await recordedAgentModels(localConfig, state);
+    // A copy still holding the bytes teamai last wrote there is not an edit,
+    // even when this CLI would render it differently (#830).
+    const delivered = await deliveredHashes(localConfig, state);
     for (const [stem, toolFiles] of grouped) {
       // Determine if this agent is already in the team repo (root or agents/<ns>/).
       // A modified agent must be written back where it lives, so its namespace
@@ -447,7 +450,8 @@ export class AgentsHandler extends ResourceHandler {
           const content = await readFileSafe(filePath);
           const recorded = modelRecords[stem]?.[tool];
           if (content === expected.render.content
-            || (recorded !== undefined && content === renderWithModel(canonicalSpec, tool, recorded).content)) {
+            || (recorded !== undefined && content === renderWithModel(canonicalSpec, tool, recorded).content)
+            || (delivered?.[filePath] !== undefined && delivered[filePath] === await fileHash(filePath))) {
             toolFiles.delete(tool);
           }
         }
@@ -1213,6 +1217,9 @@ export async function findTeamAgentFiles(teamAgentsDir: string, stem: string): P
   return found;
 }
 
+/** The spec fields reverse parsing reads from a native copy, outside `tool_extras`. */
+const ROOT_AGENT_FIELDS = ['name', 'description', 'instructions', 'model', 'tools'] as const;
+
 /** What push needs to tell a deployed alias model from a member's edit. */
 interface PushModelContext {
   aliases: ModelAliases;
@@ -1264,6 +1271,29 @@ function mergeCanonicalEdits(
     if (!baseline.ok) return { merge: { ok: false, conflicts: [{ field: tool, values: { error: baseline.reason } }] }, drift };
     const before: Record<string, unknown> = { ...Object.values(baseline.spec.tool_extras ?? {})[0] };
     const after: Record<string, unknown> = { ...Object.values(edited.tool_extras ?? {})[0] };
+    // tclaude and tcodex also render what `claude` and `codex` carry.
+    const base = tool === 'tclaude' ? 'claude' : tool === 'tcodex' ? 'codex' : undefined;
+    const inherited: Record<string, unknown> = (base && canonical.tool_extras?.[base]) || {};
+    // An inherited model pin reaches the copy as its native `model`, which
+    // reverse parsing reads as the root field: compared as an extras key, a
+    // change to it stays this tool's, and the base tool's pin is kept.
+    const inheritedPin = !canonicalAlias && inherited['model'] !== undefined;
+    if (inheritedPin) {
+      before['model'] = baseline.spec.model;
+      if (edited.model !== undefined) after['model'] = edited.model;
+    }
+    // The canonical agent stopped using an alias since the last pull: the
+    // model and effort that alias wrote, still as recorded, are not edits.
+    let aliasWroteModel = false;
+    const recorded = context.recorded?.[tool];
+    if (!canonicalAlias && recorded !== undefined && !KEEPS_SPEC_MODEL.has(recorded.step)) {
+      aliasWroteModel = edited.model === recorded.model;
+      const field = agentEffortField(tool);
+      if (field !== undefined && recorded.effort !== undefined && after[field] === recorded.effort) {
+        if (field in before) after[field] = before[field];
+        else delete after[field];
+      }
+    }
 
     if (canonicalAlias) {
       const expected = rendered.model!.recorded;
@@ -1296,8 +1326,8 @@ function mergeCanonicalEdits(
       }
     }
 
-    for (const field of ['name', 'description', 'instructions', 'model', 'tools'] as const) {
-      if (field === 'model' && canonicalAlias) continue;
+    for (const field of ROOT_AGENT_FIELDS) {
+      if (field === 'model' && (canonicalAlias || aliasWroteModel || inheritedPin)) continue;
       if (isDeepStrictEqual(baseline.spec[field], edited[field])) continue;
       propose(field, edited[field], () => {
         const output = merged as unknown as Record<string, unknown>;
@@ -1306,15 +1336,15 @@ function mergeCanonicalEdits(
       });
     }
 
-    // Each tool owns the extras key renderForTool reads for it. tclaude and
-    // tcodex also render what `claude` and `codex` carry, so only the values
-    // that differ from those are theirs; a removed inherited key cannot be
-    // expressed there and is reported rather than dropped. Alias-owned
-    // fields are already out of `before` and `after`, and never inherited.
+    // Each tool owns the extras key renderForTool reads for it. For tclaude
+    // and tcodex only the values that differ from the base tool's are
+    // theirs; a removed inherited key cannot be expressed there and is
+    // reported rather than dropped. Keys reverse parsing reads as root fields
+    // are never in `after`, so only an inherited pin put there counts.
+    // Alias-owned fields are already out of `before` and `after`, and never inherited.
     if (!isDeepStrictEqual(before, after)) {
-      const base = tool === 'tclaude' ? 'claude' : tool === 'tcodex' ? 'codex' : undefined;
-      const inherited: Record<string, unknown> = (base && canonical.tool_extras?.[base]) || {};
-      const removed = Object.keys(inherited).filter((key) => !(key in after));
+      const removed = Object.keys(inherited)
+        .filter((key) => !(key in after) && (!(ROOT_AGENT_FIELDS as readonly string[]).includes(key) || (key === 'model' && inheritedPin)));
       if (base && removed.length) {
         conflicts.push({ field: `tool_extras.${tool}`, values: { inheritedFrom: `tool_extras.${base}`, removed } });
         continue;
