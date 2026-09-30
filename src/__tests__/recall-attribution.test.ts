@@ -1161,6 +1161,28 @@ const ROWS: Row[] = [
     },
     project: { 'redis-timeout': 1 },
   },
+  {
+    name: '06: grep tools whose path is the doc print their no-match text (OpenCode, Pi, CodeBuddy) → 0',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('grep', { pattern: 'zzzz', path: files[0] }, 'No files found', h.root, undefined, undefined, 'opencode');
+      await h.postToolUse('grep', { pattern: 'zzzz', path: files[0] }, 'No matches found', h.root, undefined, undefined, 'pi');
+      await h.postToolUse('Grep', { pattern: 'zzzz', path: files[0], output_mode: 'content' }, { content: 'No matches found' },
+        h.root, undefined, undefined, 'codebuddy');
+      await h.stop();
+    },
+    project: {},
+  },
+  {
+    name: '06: OpenCode grep whose path is the doc, with a match under its header → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.postToolUse('grep', { pattern: 'timeout', path: files[0] },
+        `Found 1 matches\n${files[0]}:\n  Line 5: tags: [redis, timeout]`, h.root, undefined, undefined, 'opencode');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
+  },
   ...[
     `Get-Content -LiteralPath '${WINDOWS_DOC}'`,
     `Get-Content -Path "${WINDOWS_DOC}" -TotalCount 40`,

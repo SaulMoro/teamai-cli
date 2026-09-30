@@ -158,21 +158,39 @@ function endsInFileName(p: string): boolean {
 }
 
 /**
+ * A search tool's line that stands for its matches or sums them up, never a
+ * line of a file: OpenCode's `No files found` and `Found N matches`, Pi's
+ * and CodeBuddy's `No matches found`. A shell search prints none.
+ */
+const STATUS_LINE = /^(?:No (?:files|matches) found|Found \d+ match(?:es)?\b.*)$/;
+
+/**
+ * Whether a search's output shows a line of a file: a line that is neither
+ * blank nor, from a search tool, its status line. Content has no shape to
+ * look for (`grep` without `-n`, `Grep` with `-n: false` print the bare
+ * line), so this names what is not content, which is only what a host
+ * prints in place of or above its matches.
+ */
+function showsLines(output: string, plain: boolean): boolean {
+  return output.split('\n').some((line) => line.trim() !== '' && (plain || !STATUS_LINE.test(line.trim())));
+}
+
+/**
  * The files a search's output shows lines of, never its text. A search of
  * one file (a `target` that ends in a file name) prints no path on its lines
  * (Pi prints the basename), so no line names a file: the target counts when
- * the output shows anything. Otherwise a line counts when it starts with a
+ * the output shows a line of it (showsLines). Otherwise a line counts when it starts with a
  * path under one of the search `roots` that ends in a file name, followed by
  * `:<line>:` (`path:12:text`), or by `:` in the formats without line numbers:
  * a shell search's `path:text` (`plain`: grep and rg without `-n`) and
  * OpenCode's `path:` header, alone on its line. Paths resolve against
  * `base`; a Windows path's drive colon (`C:\kb\x.md:12:`) is part of it. A
  * bare path line is a listing. A lone operand that names no file may be a
- * directory: it counts when the output shows something and names nothing
+ * directory: it counts when the output shows a line and names nothing
  * under it. Only the output held in memory is scanned: no file is read.
  */
 function shownFiles(output: string, roots: string[], base: string | undefined, target: string | undefined, plain: boolean): string[] {
-  if (target !== undefined && endsInFileName(target)) return output.trim() ? [target] : [];
+  if (target !== undefined && endsInFileName(target)) return showsLines(output, plain) ? [target] : [];
   const files = new Set<string>();
   let under = false;
   for (const line of output.split('\n')) {
@@ -188,7 +206,7 @@ function shownFiles(output: string, roots: string[], base: string | undefined, t
     files.add(file);
     if (target !== undefined && !samePath(file, target)) under = true;
   }
-  if (target !== undefined && !under && output.trim()) files.add(target);
+  if (target !== undefined && !under && showsLines(output, plain)) files.add(target);
   return [...files];
 }
 

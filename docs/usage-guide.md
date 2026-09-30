@@ -1338,7 +1338,7 @@ Recall counts every doc it returns (`recalled_count`). A returned doc is **adopt
 
 - The agent's file-read tool (`Read`, `read`, `view`, `read_file`, `ReadFile`).
 - One reader command, alone or at the head of a pipeline: `cat`, `bat`, `less`, `more`, `head`, `tail`, `nl`, `sed -n` printing lines, or PowerShell's `Get-Content`, `gc`, `type` and `cat` with a positional path, `-Path` or `-LiteralPath`. A command with `;`, `&&`, `||` or `&` is not a read. When the agent reports no status, as Codex's shell does, only a reader alone counts.
-- A search whose output shows the file's lines: a line that starts with the file's path and `:<line>:` (or `:` alone, in `grep` and `rg` output without line numbers and in OpenCode's per-file header), or any output when the file was the only thing searched (`grep`, `rg`, `ag`, `ack` or `git grep`, under the same rules as a reader command, or a search tool such as `Grep` in content mode).
+- A search whose output shows the file's lines: a line that starts with the file's path and `:<line>:` (or `:` alone, in `grep` and `rg` output without line numbers and in OpenCode's per-file header), or, when the file was the only thing searched, output with a line other than the search tool's no-match or summary line (`No files found`, `No matches found`, `Found N matches`) (`grep`, `rg`, `ag`, `ack` or `git grep`, under the same rules as a reader command, or a search tool such as `Grep` in content mode).
 - Not a listing (`Glob`, `ls`, `find`, `rg --files`, `grep -l`, a search tool's file list), a count (`grep -c`, count mode), or a failed read.
 - On Windows a path counts however it is written: either drive-letter case, `\` or `/`, or Git Bash's `/c/…` for `C:\…`.
 

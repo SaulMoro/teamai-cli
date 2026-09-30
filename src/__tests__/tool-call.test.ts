@@ -178,6 +178,13 @@ describe('classifyToolCall', () => {
     expect(grep({ path: at('learnings') }, 'Cause:5: x', 'pi')).not.toContain(at('learnings/Cause'));
   });
 
+  it.each(['No files found', 'No matches found', 'Found 0 matches', '\nNo matches found\n'])(
+    'a one-file search tool whose output is only its status line %j shows nothing; a shell search\'s is a line of the file', (output) => {
+      const doc = at('learnings/a.md');
+      expect(classifyToolCall({ tool_name: 'grep', tool_input: { pattern: 'x', path: doc }, tool_response: output, cwd: CWD }).paths).toEqual([]);
+      expect(shell('grep found learnings/a.md', { stdout: output }).paths).toEqual([doc]);
+    });
+
   it('an unknown tool name is unknown, whatever its input names', () => {
     expect(classifyToolCall({ tool_name: 'OpenDocument', tool_input: { file_path: '/w/doc.md', command: 'cat doc.md' }, tool_response: {} }))
       .toEqual({ category: 'unknown', paths: [], status: 'success', simple: false });
