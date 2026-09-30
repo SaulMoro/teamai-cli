@@ -1707,6 +1707,32 @@ namespace），不会成为目录名，因此不做校验。
 
 YAML agent 可以在 `tool_extras.<tool>` 下携带工具专属字段，每个工具只接收自己的键：`tool_extras.claude` 只到达 Claude，`tool_extras.qoder` 到达 Qoder，Qoder CN、ZCode 和 OMP 分别读取 `tool_extras.qoder-cn`、`tool_extras.zcode` 和 `tool_extras.omp`。tclaude 和 tcodex 还会收到 `tool_extras.claude` 和 `tool_extras.codex` 中、`tool_extras.tclaude` 和 `tool_extras.tcodex` 未设置的字段。`teamai push` 把修改写回该工具读取的键；对 tclaude 和 tcodex 只写入与基础工具不同的值，若修改删除了继承来的字段，则跳过并说明原因，因为只有基础工具的键才能删除它。
 
+#### 模型别名
+
+YAML agent 可以写一类模型而不是具体模型：`model: strong`、`model: fast`，或团队自定义的别名。团队在可选的 `models/aliases.yaml` 中按工具映射每个别名，使用该工具自己的模型值，并可附带推理强度（effort）：
+
+```yaml
+# models/aliases.yaml
+aliases:
+  strong:
+    claude: [{ model: opus, effort: high }, { model: fable }]
+    codex:  { model: gpt-6-sol, effort: high }
+  fast:
+    claude: haiku
+    codex:  { model: gpt-6-luna, effort: low }
+  reviewer:
+    claude: [{ model: opus, effort: max }]
+```
+
+- `strong` 和 `fast` 始终是别名，TeamAI 不为它们内置任何模型。团队可以添加自己的名称：以小写字母开头，后跟小写字母、数字或连字符。其他任何 `model`（如 `opus`）按原样写入。
+- 每个工具的条目是一个选项或有序列表；目前只使用第一个。选项是模型字符串或 `{ model, effort }`。
+- Claude、claude-internal 和 tclaude 以 `effort` 接收推理强度；Codex、codex-internal 和 tcodex 以 `model_reasoning_effort` 接收，且仅在映射设置了它时写入。
+- claude-internal 和 tclaude 使用 `claude` 条目，codex-internal 和 tcodex 使用 `codex` 条目，除非该别名有它们自己的键。
+- 别名未映射的工具不会得到 `model` 字段，因此使用其默认模型运行该 agent。没有 `models/aliases.yaml` 时，`strong` 和 `fast` 在所有工具中都不产生 model 字段。
+- `tool_extras.<tool>.model` 把该工具固定到具体模型并跳过别名，包括别名的推理强度。`tool_extras.<tool>` 中只有推理强度字段而没有 model 时，只覆盖别名的推理强度。
+- 读取 agent 时会拒绝非字符串的 `model`。旧格式 `agents/<name>.md` 按原样复制，因此当其 `model` 是别名时 pull 会给出警告。
+- `models/aliases.yaml` 无法读取时，pull 会警告并暂停所有模型依赖它的 agent：已部署的副本保留，不写入新副本。push 会跳过这些 agent 并说明原因。
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定义 Agent、Hooks 和 MCP 配置面，以及 TeamAI Docs 和 Env 下发：

@@ -39,6 +39,7 @@ import {
   reverseFromOpencode,
   renderForTool,
   mergeReverseResults,
+  ALL_SUPPORTED_TOOLS,
 } from '../resources/agent-format.js';
 import type { AgentSpec, ToolName, ParseResult } from '../resources/agent-format.js';
 import { AgentsHandler } from '../resources/agents.js';
@@ -119,6 +120,13 @@ describe('parseAgentYaml', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toContain('missing required field instructions');
+  });
+
+  it.each([['a list', 'model:\n  - opus\n'], ['a number', 'model: 4\n'], ['blank', 'model:\n']])('returns ok=false when model is %s', (_label, field) => {
+    const result = parseAgentYaml(`name: a\ndescription: b\ninstructions: c\n${field}`, 'bad.yaml');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toContain('bad.yaml field model must be a string');
   });
 
   it('returns ok=false on YAML syntax error', () => {
@@ -549,6 +557,12 @@ describe('renderForTool tool_extras dispatch', () => {
     const { ext, content } = renderForTool(spec, 'tcodex');
     expect(ext).toBe('.toml');
     expect(parseToml(content)).toMatchObject({ sandbox_mode: 'read-only', model_reasoning_effort: 'high' });
+  });
+
+  it('only claude and tclaude render tool_extras.claude', () => {
+    const spec = makeSpec({ tool_extras: { claude: { probe: 1 } } });
+    const reached = ALL_SUPPORTED_TOOLS.filter((tool) => renderForTool(spec, tool).content.includes('probe'));
+    expect(reached).toEqual(['claude', 'tclaude']);
   });
 
   it('claude and codex ignore the variant keys', () => {

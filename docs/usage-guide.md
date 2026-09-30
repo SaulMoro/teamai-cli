@@ -1820,6 +1820,32 @@ is not checked.
 
 A YAML agent carries tool-specific fields under `tool_extras.<tool>`, and each tool receives only its own key: `tool_extras.claude` reaches Claude alone, `tool_extras.qoder` reaches Qoder, and Qoder CN, ZCode and OMP read `tool_extras.qoder-cn`, `tool_extras.zcode` and `tool_extras.omp`. tclaude and tcodex also receive the fields of `tool_extras.claude` and `tool_extras.codex` that `tool_extras.tclaude` and `tool_extras.tcodex` do not set. `teamai push` writes an edit back to the key that tool reads; for tclaude and tcodex it writes only the values that differ from the base tool's, and skips, with the reason, an edit that removes a field the tool inherits, since only the base tool's key can drop it.
 
+#### Model aliases
+
+A YAML agent can name a kind of model instead of a model: `model: strong`, `model: fast`, or an alias the team defines. The team maps each alias per tool in an optional `models/aliases.yaml`, in the tool's own model value, with an optional reasoning effort:
+
+```yaml
+# models/aliases.yaml
+aliases:
+  strong:
+    claude: [{ model: opus, effort: high }, { model: fable }]
+    codex:  { model: gpt-6-sol, effort: high }
+  fast:
+    claude: haiku
+    codex:  { model: gpt-6-luna, effort: low }
+  reviewer:
+    claude: [{ model: opus, effort: max }]
+```
+
+- `strong` and `fast` are always aliases, and TeamAI ships no models for them. A team adds its own names, which start with a lowercase letter followed by lowercase letters, digits or hyphens. Any other `model`, such as `opus`, is written as is.
+- A tool entry is one option or an ordered list of them; only the first is used for now. An option is a model string or `{ model, effort }`.
+- Claude, claude-internal and tclaude receive the effort as `effort`; Codex, codex-internal and tcodex as `model_reasoning_effort`, only when the mapping sets one.
+- claude-internal and tclaude use the `claude` entry and codex-internal and tcodex the `codex` entry, unless the alias has a key of their own.
+- A tool the alias does not map gets no `model` field, so it runs the agent on its default. Without `models/aliases.yaml`, `strong` and `fast` give no model field in any tool.
+- `tool_extras.<tool>.model` pins that tool to a concrete model and skips the alias, its effort included. An effort field in `tool_extras.<tool>` without a model overrides only the alias's effort.
+- A `model` that is not a string is rejected when the agent is read. A legacy `agents/<name>.md` is copied as is, so pull warns when its `model` is an alias.
+- While `models/aliases.yaml` cannot be read, pull warns and holds each agent whose model depends on it: deployed copies stay and new ones are not written. Push skips those agents and says why.
+
 ### GitHub Copilot CLI
 
 GitHub Copilot CLI is supported for its official custom-instructions, Rules, Skills, custom-agent, hooks, and MCP surfaces, plus TeamAI Docs and Env delivery:

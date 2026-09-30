@@ -116,6 +116,23 @@ since, merge that change into the copy first, or the push replaces it. To take t
 the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
+A team agent (`agents/<name>.yaml`) can set `model: strong`, `model: fast`, or an
+alias the team defines, instead of one tool's model. The team maps each alias per
+tool in `models/aliases.yaml`, in that tool's own model value, with an optional effort:
+
+```yaml
+aliases:
+  strong:
+    claude: { model: opus, effort: high }
+    codex:  { model: gpt-6-sol, effort: high }
+```
+
+`teamai pull` writes the mapped model into each tool's agent file, with the effort
+as `effort` for Claude and `model_reasoning_effort` for Codex. A tool the alias does
+not map gets no `model` and uses its default; a concrete model such as `opus` is
+written as is; `tool_extras.<tool>.model` pins one tool and skips the alias. Suggest
+YAML agents: a legacy `agents/<name>.md` is copied as is, so its alias is not resolved.
+
 ## References
 
 In the files below, `{SKILL_DIR}` is the directory `teamai skill path core` prints; a reference file you open on its own writes that directory as `SKILL_DIR` in braces.
