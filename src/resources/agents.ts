@@ -866,8 +866,10 @@ export class AgentsHandler extends ResourceHandler {
    * model or effort than `records` says a tool's copy received (#830). A copy
    * with no record was written by a CLI that recorded nothing and resolved no
    * alias, so it differs only where this CLI replaces the spec's `model`: an
-   * agent without an alias is never rewritten for want of a record. A tool
-   * whose model cannot be resolved is held, so it never counts.
+   * agent without an alias is never rewritten for want of a record. No record
+   * and no copy is an agent held while its model could not be resolved, which
+   * is delivered now. A tool whose model cannot be resolved is held, so it
+   * never counts.
    */
   async agentsWithChangedModels(
     items: readonly ResourceItem[],
@@ -879,13 +881,17 @@ export class AgentsHandler extends ResourceHandler {
     const changed: ResourceItem[] = [];
     for (const item of items) {
       if (isLegacyAgent(item as AgentResourceItem)) continue;
-      const renders = await this.resolveRenders(teamConfig, localConfig, item, aliases);
-      const differs = renders.some(({ tool, render }) => {
-        if (!render.model) return false;
+      for (const { tool, dest, render } of await this.resolveRenders(teamConfig, localConfig, item, aliases)) {
+        if (!render.model) continue;
         const recorded = records[item.name]?.[tool];
-        return recorded ? !sameAgentModel(recorded, render.model.recorded) : render.model.replacesSpecModel;
-      });
-      if (differs) changed.push(item);
+        const differs = recorded
+          ? !sameAgentModel(recorded, render.model.recorded)
+          : render.model.replacesSpecModel || !await pathExists(dest);
+        if (differs) {
+          changed.push(item);
+          break;
+        }
+      }
     }
     return changed;
   }

@@ -442,6 +442,29 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(await fse.pathExists(claudeFile('bare'))).toBe(true);
   });
 
+  it('delivers an agent held while an aliases file was broken once the file is fixed, on an ordinary pull', async () => {
+    const localFile = path.join(homeDir, '.teamai/models/aliases.yaml');
+    await writeAliases(STRONG);
+    await writeAgent(IMPLEMENTER);
+    await writeAgent({ ...IMPLEMENTER, name: 'plain', model: 'sonnet' });
+    await fse.outputFile(localFile, 'aliases: [broken');
+    await pullOnce();
+    expect(await fse.pathExists(claudeFile('plain'))).toBe(false);
+    expect(await fse.pathExists(claudeFile())).toBe(false);
+
+    await fse.outputFile(localFile, 'aliases:\n  strong:\n    codex: gpt-6-luna\n');
+    await pull({ silent: true });
+
+    expect(alreadySynced()).toBe(true);
+    // A literal model needs no alias, but nothing delivered it while the file was broken.
+    expect(await claudeModel('plain')).toMatchObject({ model: 'sonnet' });
+    expect(await codexModel('plain')).toMatchObject({ model: 'sonnet' });
+    expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
+    expect(await codexModel()).toMatchObject({ model: 'gpt-6-luna' });
+    expect(logged('success', /Updated the model of 2 agent\(s\): (implementer, plain|plain, implementer)/)).toBe(true);
+    expect((await homeRecord())?.agentModels?.['plain']?.['claude']).toEqual({ step: 'literal', model: 'sonnet' });
+  });
+
   it('stays quiet about a tool the alias does not map, which gets no model field', async () => {
     await writeAliases({ aliases: { strong: { claude: 'opus' } } });
     await writeAgent(IMPLEMENTER);
