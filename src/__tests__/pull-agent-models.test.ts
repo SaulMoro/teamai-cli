@@ -524,6 +524,73 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     });
   });
 
+  describe('agents held on an unchanged team revision', () => {
+    const localFile = (): string => path.join(homeDir, '.teamai/models/aliases.yaml');
+    const teamFile = (): string => path.join(repoPath, 'models/aliases.yaml');
+    const heldLines = (): string[] => vi.mocked(log.warn).mock.calls.map((args) => String(args[0])).filter((line) => line.includes('Held '));
+
+    it.each([
+      ['the member\'s local override', localFile, (): string => `Invalid model aliases YAML at ${localFile()}`],
+      ['the team aliases file', teamFile, (): string => 'Invalid model aliases YAML at models/aliases.yaml'],
+    ])('says it held agents while %s is broken, and syncs in full once it is fixed', async (_case, file, reason) => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await writeAgent({ ...IMPLEMENTER, name: 'planner' });
+      await pullOnce();
+      const before = await fse.readFile(claudeFile(), 'utf-8');
+
+      await fse.outputFile(file(), 'aliases: [broken');
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(heldLines()).toHaveLength(1);
+      expect(heldLines()[0]).toContain(`[agents] Held implementer.yaml, planner.yaml: ${reason()}`);
+      expect(heldLines()[0]).toContain('Their deployed copies are kept');
+      expect(await fse.readFile(claudeFile(), 'utf-8')).toBe(before);
+
+      // Fixed: the checkout was not counted as synced, so this is a full sync.
+      await fse.outputFile(localFile(), 'aliases:\n  strong:\n    codex: gpt-6-luna\n');
+      if (file === teamFile) await writeAliases(STRONG);
+      vi.clearAllMocks();
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(false);
+      expect(heldLines()).toEqual([]);
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-luna' });
+
+      vi.clearAllMocks();
+      await pull({ silent: true });
+      expect(alreadySynced()).toBe(true);
+    });
+
+    it('does the same for a project checkout, leaving its record\'s push base', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      const projectRoot = path.join(tmpDir, 'project');
+      await fse.ensureDir(path.join(projectRoot, '.git'));
+      await fse.ensureDir(path.join(projectRoot, '.claude'));
+      const projectConfig: LocalConfig = { ...localConfig, scope: 'project', projectRoot };
+      vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
+      await pullOnce();
+      const projectCopy = path.join(projectRoot, '.claude', 'agents', 'implementer.md');
+      expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'opus' });
+
+      await fse.outputFile(localFile(), 'aliases: [broken');
+      await pull({ silent: true });
+
+      expect(heldLines().some((line) => line.includes(`Held implementer.yaml: Invalid model aliases YAML at ${localFile()}`))).toBe(true);
+      const record = Object.values((await loadStateForScope(projectConfig)).lastPullByWorkspace ?? {})[0];
+      expect(record?.pushBaseRevs).toEqual(['abc1234']);
+
+      await fse.outputFile(localFile(), 'aliases:\n  strong:\n    claude: sonnet\n');
+      vi.clearAllMocks();
+      await pull({ silent: true });
+
+      expect(logged('success', /\[project\] Already synced/)).toBe(false);
+      expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'sonnet' });
+    });
+  });
+
   describe('what the fast path says it did', () => {
     const writeLocal = (text: string): Promise<void> => fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), text);
 

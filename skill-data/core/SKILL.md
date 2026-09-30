@@ -169,7 +169,8 @@ alias defined in an inactive namespace; to use it, add `models: [<ns>]` to the r
 project's resources, or rename the alias if it was meant as a concrete model id.
 
 A structural error in any aliases file, active or not (bad YAML, a wrong type, a bad alias
-name, an effort without a model, `~` in a team file) holds every agent with a `model`; one
+name, an effort without a model, `~` in a team file, keys but no top-level `aliases:`)
+holds every agent with a `model`; one
 in the local file holds only agents whose `model` is an alias. Pull keeps
 their copies and push skips them until the file its warning names is fixed; then an
 ordinary `teamai pull` delivers them. An unknown

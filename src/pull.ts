@@ -781,6 +781,8 @@ async function redeployAgentsWithChangedModels(
   localConfig: LocalConfig,
   roleContext: RolePullContext | null,
   scopeLabel: string,
+  revisionField: 'lastPullRev' | 'lastInheritedPullRev',
+  reported: Set<string>,
 ): Promise<void> {
   try {
     const key = await checkoutRecordKey(localConfig);
@@ -792,15 +794,28 @@ async function redeployAgentsWithChangedModels(
     const ledger = await openCheckoutLedger(localConfig, state);
     const handler = getHandler('agents') as AgentsHandler;
     const redeploy = await handler.agentsToRedeploy(desired.items, freshConfig, localConfig, ledger);
-    if (redeploy.length === 0) return;
     for (const { item } of redeploy) await handler.pullItem(item, freshConfig, localConfig, ledger);
-    reportHeldAgents(ledger);
+    // Said as a full sync says it, and the checkout not counted as synced, so
+    // the next pull syncs in full and delivers what this one held.
+    const held = ledger.held.length > 0;
+    if (redeploy.length === 0 && !held) return;
+    if (held && reportHeldAgents(ledger) > 0) reported.add('model-aliases');
     reportKept(ledger, scopeLabel);
     // A project checkout reaches the fast path only through its own record.
     const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];
     if (!record) return;
     record.delivered = ledger.hashes;
     setAgentModels(record, ledger.agentModels);
+    if (held) {
+      // What gates this checkout's fast path: a project checkout's own record,
+      // reset as a forced full sync resets it, push bases kept; for the user
+      // scope, the revision field.
+      if (localConfig.scope === 'project' && revisionField === 'lastPullRev') {
+        state.lastPullByWorkspace = { ...state.lastPullByWorkspace, ...awaitingFullSync({ [key]: record }) };
+      } else {
+        state[revisionField] = null;
+      }
+    }
     await saveStateForScope(state, localConfig);
     // Named by what happened to the copies pull did write, the first reason that applies.
     const written = new Map<RedeployedCopy['reason'], string[]>();
@@ -1202,7 +1217,7 @@ async function pullForScope(
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
           // The repo has not moved, but an agent's model may have (#830).
           if (resourceTypes.includes('agents')) {
-            await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel);
+            await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel, revisionField, reported);
           }
           // A repo that has not moved can still carry a malformed env.yaml, or
           // scope a variable this CLI version now withholds; the Step 2 env

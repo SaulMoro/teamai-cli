@@ -349,6 +349,17 @@ async function readAliasesFile(
     const message = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.replace(/:\s*$/, '');
     return { ok: false, reason: `Invalid model aliases YAML at ${label}: ${message}` };
   }
+  // A file without its top-level key is broken, not empty, as for env.yaml
+  // (#662): a misspelled `aliases:` would otherwise take every alias away.
+  // Other keys beside it are left for a newer version.
+  if (isRecord(document) && Object.keys(document).length > 0 && !('aliases' in document)) {
+    const found = Object.keys(document).map((key) => `\`${key}\``).join(', ');
+    return {
+      ok: false,
+      reason: `Invalid model aliases file at ${label}: it has no top-level \`aliases:\` key (found ${found}), so it defines no aliases. `
+        + 'Put the alias names under `aliases:`',
+    };
+  }
   const known = dropUnknownEntries(document ?? {}, label);
   const parsed = AliasesFileSchema.safeParse(known.document);
   if (!parsed.success) {

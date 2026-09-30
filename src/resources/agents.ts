@@ -709,21 +709,7 @@ export class AgentsHandler extends ResourceHandler {
       spec = parseResult.spec;
       specModel = parseResult.spec.model;
       if (specModel !== undefined) {
-        // Some tools can fail alone, such as those whose model switch cannot be read.
-        const heldTools = new Map<string, ToolName[]>();
-        let targeted = 0;
-        for (const { tool } of await this.agentToolDirs(teamConfig, localConfig)) {
-          if (spec.targets && !spec.targets.includes(tool)) continue;
-          targeted += 1;
-          const resolution = resolveAgentModel(aliases, spec, tool);
-          if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
-        }
-        const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
-        // A load failure holds the agent whole; the member's file only holds an alias agent.
-        const loadFailure = !aliases.ok ? aliases.reason : heldCount > 0 ? aliases.localFailure : undefined;
-        const holds = loadFailure !== undefined
-          ? [{ name: item.name, reason: loadFailure, everyTool: heldCount === targeted }]
-          : [...heldTools].map(([reason, tools]) => ({ name: item.name, reason, tools, everyTool: heldCount === targeted }));
+        const holds = await this.modelHolds(item.name, spec, teamConfig, localConfig, aliases);
         if (ledger) ledger.held.push(...holds);
         else reportHeld(holds);
       }
@@ -884,7 +870,9 @@ export class AgentsHandler extends ResourceHandler {
    *   wrote there. Without a delivered record nothing tells that copy from
    *   the member's edit, so it is left alone.
    *
-   * A tool whose model cannot be resolved is held, so it never counts.
+   * A tool whose model cannot be resolved is held, so it never counts. The
+   * holds of an agent it does not select are queued on `ledger.held`, as a
+   * full sync queues them; `pullItem` queues those of an agent it selects.
    */
   async agentsToRedeploy(
     items: readonly ResourceItem[],
@@ -910,7 +898,15 @@ export class AgentsHandler extends ResourceHandler {
         if (reason === 'model' && (await judgeCopy(ledger.previous, item, target)).kind === 'keep') continue;
         copies.push({ ...target, reason });
       }
-      if (copies.length > 0) redeploy.push({ item, copies });
+      if (copies.length > 0) {
+        redeploy.push({ item, copies });
+        continue;
+      }
+      const content = await readFileSafe(item.sourcePath);
+      const parsed = content === null ? null : parseAgentYaml(content, `${item.name}.yaml`);
+      if (parsed?.ok && parsed.spec.model !== undefined) {
+        ledger.held.push(...await this.modelHolds(item.name, parsed.spec, teamConfig, localConfig, aliases));
+      }
     }
     return redeploy;
   }
@@ -1100,6 +1096,34 @@ export class AgentsHandler extends ResourceHandler {
     if (recorded) return renderWithModel(parsed.spec, tool, recorded);
     const resolved = renderResolved(parsed.spec, tool, aliases);
     return resolved.ok ? resolved.render : null;
+  }
+
+  /**
+   * The holds pull queues for an agent with a `model` while it cannot be
+   * resolved in a tool it targets. Some tools can fail alone, such as those
+   * whose model switch cannot be read.
+   */
+  private async modelHolds(
+    name: string,
+    spec: AgentSpec,
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    aliases: ModelAliases,
+  ): Promise<DeliveryLedger['held']> {
+    const heldTools = new Map<string, ToolName[]>();
+    let targeted = 0;
+    for (const { tool } of await this.agentToolDirs(teamConfig, localConfig)) {
+      if (spec.targets && !spec.targets.includes(tool)) continue;
+      targeted += 1;
+      const resolution = resolveAgentModel(aliases, spec, tool);
+      if (!resolution.ok) heldTools.set(resolution.reason, [...heldTools.get(resolution.reason) ?? [], tool]);
+    }
+    const heldCount = [...heldTools.values()].reduce((sum, tools) => sum + tools.length, 0);
+    // A load failure holds the agent whole; the member's file only holds an alias agent.
+    const loadFailure = !aliases.ok ? aliases.reason : heldCount > 0 ? aliases.localFailure : undefined;
+    return loadFailure !== undefined
+      ? [{ name, reason: loadFailure, everyTool: heldCount === targeted }]
+      : [...heldTools].map(([reason, tools]) => ({ name, reason, tools, everyTool: heldCount === targeted }));
   }
 
   /** Whether `tool` would receive `item` but for a model that cannot be resolved. */
@@ -1323,7 +1347,9 @@ function mergeCanonicalEdits(
         delete before[effortField];
         delete after[effortField];
       }
-      if (deployed.model !== undefined && isModelAlias(aliases, deployed.model)) {
+      // An extras model pin is the author's value, even one named like an
+      // alias: a change to it is an extras edit, not an adoption.
+      if (deployed.model !== undefined && expected.step !== 'extras' && isModelAlias(aliases, deployed.model)) {
         if (deployed.model !== canonical.model) {
           const alias = deployed.model;
           propose('model', alias, () => { merged.model = alias; });

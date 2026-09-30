@@ -879,6 +879,18 @@ describe('AgentsHandler pull: model aliases', () => {
       expect(candidate.mergedSpec).toEqual({ ...spec, model: to });
     });
 
+    it('does not read an extras model pin named like an alias as adopting that alias', async () => {
+      await writeAliases(STRONG);
+      const spec = makeSpec({ model: 'strong', tool_extras: { claude: { model: 'fast' } } });
+      await pullTo(['claude', 'codex'], spec);
+      await editDeployed('claude', spec.name, () => {}, 'Edited instructions.');
+
+      const [candidate] = await scan(['claude', 'codex']);
+      expect(candidate.skipReason).toBeUndefined();
+      expect(candidate.modelDrift).toBeUndefined();
+      expect(candidate.mergedSpec).toEqual({ ...spec, instructions: 'Edited instructions.' });
+    });
+
     it('pushes a new native agent\'s literal model', async () => {
       await writeAliases(STRONG);
       await fse.outputFile(path.join(homeDir, '.claude/agents/fresh.md'),
@@ -913,6 +925,7 @@ describe('AgentsHandler pull: model aliases', () => {
       ['an invalid alias name', { aliases: { Strong: { claude: 'opus' } } }, 'Invalid model aliases file at models/aliases.yaml: aliases.Strong'],
       ['an effort without a model', { aliases: { strong: { claude: { effort: 'high' } } } }, 'Invalid model aliases file at models/aliases.yaml: aliases.strong.claude'],
       ['~ in the team file', 'aliases:\n  strong:\n    claude: ~\n', 'Invalid model aliases file at models/aliases.yaml: strong.claude: ~ is accepted only in a member\'s'],
+      ['a misspelled top-level key', { alias: { strong: { claude: 'opus' } } }, 'Invalid model aliases file at models/aliases.yaml: it has no top-level `aliases:` key (found `alias`)'],
     ];
 
     it.each(structural)('holds agents with a model on %s, deployed or not, and keeps their records', async (_case, broken, reason) => {
@@ -963,6 +976,28 @@ describe('AgentsHandler pull: model aliases', () => {
       const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
       expect(files['claude']).toEqual({});
       expect(warnings()).toContain(`Held implementer.yaml: Invalid model aliases YAML at ${localFile()}`);
+    });
+
+    it('holds alias agents while the local file has no top-level aliases key, naming it', async () => {
+      await writeAliases(STRONG);
+      await fse.outputFile(localFile(), 'alias:\n  strong:\n    claude: sonnet\n');
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toEqual({});
+      expect(warnings()).toContain(`Held implementer.yaml: Invalid model aliases file at ${localFile()}: it has no top-level \`aliases:\` key (found \`alias\`)`);
+    });
+
+    it.each([
+      ['an empty file', '', undefined],
+      ['a file with only comments', '# strong: { claude: opus }\n', undefined],
+      ['an empty aliases key', 'aliases:\n', undefined],
+      ['an unknown key beside aliases', 'version: 2\naliases:\n  strong:\n    claude: sonnet\n', 'sonnet'],
+    ])('reads %s, team or local, as a valid aliases file', async (_case, text, model) => {
+      await writeAliases(text);
+      await fse.outputFile(localFile(), text);
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(warnings()).toBe('');
+      expect(files['claude']).toHaveProperty('name', 'implementer');
+      expect(files['claude']?.['model']).toBe(model);
     });
 
     it('holds only alias agents while the local file cannot be parsed: a concrete model is delivered and pushable', async () => {
