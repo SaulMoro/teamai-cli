@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
 import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
-import type { EntryResolution, EntryType } from './namespaced-entries.js';
+import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import type { ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
@@ -487,16 +487,18 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
   if (teamDefs.length === 0) return [];
 
   const targets = await resolveMcpTargets(teamConfig, localConfig);
-  const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig);
+  const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, { teamEnv: ctx.teamEnv });
   const excludedByUser = new Set(localConfig.excludedSkills ?? []);
 
   const checks: Check[] = [];
   for (const target of targets) {
     if (mcpTargetExcluded(localConfig, target)) continue;
 
-    const { desired, skipped } = desiredMcpForTarget(target, teamDefs, desiredContext);
+    const { desired, skipped, kept } = desiredMcpForTarget(target, teamDefs, desiredContext);
+    // A server skipped only for a missing declared secret (#875) is a note
+    // doctor prints with the command that fixes it, not a failed delivery.
     const blocked = skipped
-      .filter((change) => !excludedByUser.has(change.server))
+      .filter((change) => !excludedByUser.has(change.server) && !kept.has(change.server))
       .map((change) => `${change.server} (${change.reason ?? 'skipped'})`);
 
     const problems: string[] = [];
@@ -668,24 +670,40 @@ export async function buildEntryScopeKeyCheck(ctx: DoctorContext): Promise<Check
 }
 
 /**
- * A failing check for hooks and model profiles that do not resolve: pull keeps
- * what is installed and says why once, then every later run is silent, and
- * `teamai status` sends the member here. Env and MCP report the same failure
- * in their own delivery checks.
+ * A failing check for hooks, model profiles and team secrets that do not
+ * resolve: pull keeps what is installed and says why once, then every later
+ * run is silent, and `teamai status` sends the member here. Env and MCP report
+ * the same failure in their own delivery checks.
  */
 export async function buildEntryResolutionChecks(ctx: DoctorContext): Promise<Check[]> {
   const { describeEntryFailure } = await import('./namespaced-entries.js');
-  const names: Partial<Record<EntryType, string>> = {
-    hooks: 'Team hooks can be resolved',
-    models: 'Team model profiles can be resolved',
-  };
   const checks: Check[] = [];
-  for (const { type, resolution } of await resolveEntryTypes(ctx.localConfig)) {
-    const name = names[type];
-    if (name === undefined || resolution.kind !== 'failed') continue;
+  for (const { checkName: name, resolution } of await resolveEntryTypes(ctx.localConfig)) {
+    if (name === null || resolution.kind !== 'failed') continue;
     checks.push({ name, source: 'local', check: async () => false, fix: describeEntryFailure(resolution.failure) });
   }
   return checks;
+}
+
+/**
+ * The member's values for this team and machine can be read (#875). While one
+ * can't, every secret has no value and MCP keeps what the last pull wrote,
+ * which the MCP check can't see. Only for a scope whose secrets or variables
+ * read those files.
+ */
+export function buildSecretValuesCheck(ctx: DoctorContext): Check[] {
+  const { teamEnv } = ctx;
+  if (!teamEnv) return [];
+  const reads = (teamEnv.declarations.kind === 'resolved' && teamEnv.declarations.entries.length > 0)
+    || (teamEnv.variables.kind === 'resolved' && teamEnv.variables.entries.length > 0);
+  if (!reads) return [];
+  const unreadable = [teamEnv.secrets, teamEnv.variableValues].find((values) => values.kind === 'store-unreadable');
+  return [{
+    name: 'Your team secret values can be read',
+    source: 'local',
+    check: async () => unreadable === undefined,
+    fix: unreadable?.kind === 'store-unreadable' ? unreadable.reason : undefined,
+  }];
 }
 
 /**
@@ -695,21 +713,42 @@ export async function buildEntryResolutionChecks(ctx: DoctorContext): Promise<Ch
  */
 export async function entryNamespaceNotes(ctx: DoctorContext): Promise<string[]> {
   const { describeEntryNotes } = await import('./namespaced-entries.js');
-  return (await resolveEntryTypes(ctx.localConfig)).flatMap(({ type, resolution }) => describeEntryNotes(type, resolution));
+  return (await resolveEntryTypes(ctx.localConfig)).flatMap(({ layout, resolution }) => describeEntryNotes(layout, resolution));
 }
 
-async function resolveEntryTypes(localConfig: LocalConfig): Promise<{ type: EntryType; resolution: EntryResolution<unknown> }[]> {
+/**
+ * Every namespaced entry file set, each with the layout its messages use and
+ * the doctor check that fails when it does not resolve (null for env and MCP,
+ * whose delivery checks report it).
+ */
+async function resolveEntryTypes(
+  localConfig: LocalConfig,
+): Promise<{ layout: EntryLayout; resolution: EntryResolution<unknown>; checkName: string | null }[]> {
   if (localConfig.repo.kind === 'http') return [];
-  const { resolveEntriesFor } = await import('./namespaced-entries.js');
+  const { entryLayout, resolveEntriesFor } = await import('./namespaced-entries.js');
   const { envEntryReader } = await import('./resources/env.js');
+  const { SECRETS_LAYOUT, secretsEntryReader } = await import('./resources/secrets.js');
   const { hooksEntryReader } = await import('./resources/hooks.js');
   const { mcpEntryReader } = await import('./resources/mcp.js');
   const { modelsEntryReader } = await import('./models/profile.js');
   return [
-    { type: 'env', resolution: await resolveEntriesFor(envEntryReader, localConfig) },
-    { type: 'hooks', resolution: await resolveEntriesFor(hooksEntryReader, localConfig) },
-    { type: 'mcp', resolution: await resolveEntriesFor(mcpEntryReader, localConfig) },
-    { type: 'models', resolution: await resolveEntriesFor(modelsEntryReader, localConfig) },
+    { layout: entryLayout('env'), resolution: await resolveEntriesFor(envEntryReader, localConfig), checkName: null },
+    {
+      layout: SECRETS_LAYOUT,
+      resolution: await resolveEntriesFor(secretsEntryReader, localConfig),
+      checkName: 'Team secrets can be resolved',
+    },
+    {
+      layout: entryLayout('hooks'),
+      resolution: await resolveEntriesFor(hooksEntryReader, localConfig),
+      checkName: 'Team hooks can be resolved',
+    },
+    { layout: entryLayout('mcp'), resolution: await resolveEntriesFor(mcpEntryReader, localConfig), checkName: null },
+    {
+      layout: entryLayout('models'),
+      resolution: await resolveEntriesFor(modelsEntryReader, localConfig),
+      checkName: 'Team model profiles can be resolved',
+    },
   ];
 }
 
@@ -760,17 +799,26 @@ async function envDeliveryProblems(
   const none = { problems: [], staleProfiles: [] };
   if (teamConfig?.sharing?.env?.injectShellProfile === false) return none;
 
-  const { EnvHandler, envEntryReader } = await import('./resources/env.js');
+  const { EnvHandler } = await import('./resources/env.js');
   const envHandler = new EnvHandler();
 
   // The variables this member and directory receive: the same resolution pull
   // writes env.sh from, not a second copy of it. A file that cannot be used, or
   // a name defined twice, is reported here as pull reports it (#662), and a
   // deliberate `variables: []` is not.
-  const { resolveEntriesFor, describeEntryFailure } = await import('./namespaced-entries.js');
-  const resolution = await resolveEntriesFor(envEntryReader, localConfig);
+  const { describeEntryFailure } = await import('./namespaced-entries.js');
+  const { envShVariables, resolveTeamEnv } = await import('./env-resolution.js');
+  const teamEnv = ctx.teamEnv ?? await resolveTeamEnv(localConfig);
+  const { variables: resolution, declarations: secrets, variableValues: values } = teamEnv;
   if (resolution.kind === 'failed') return { problems: [describeEntryFailure(resolution.failure)], staleProfiles: [] };
-  const declared = resolution.entries.map((entry) => entry.entry);
+  // A key the team also declares as a secret is not delivered (#875); declarations
+  // that cannot be read keep env.sh as it is, as a broken env file does.
+  if (secrets.kind === 'failed') return { problems: [describeEntryFailure(secrets.failure)], staleProfiles: [] };
+  // A variable the member set for this team is owed their value, and one set
+  // with `--from-env` is not owed at all (#875); a values file that cannot be
+  // read keeps env.sh as it is, as pull does.
+  if (values.kind === 'store-unreadable') return { problems: [values.reason], staleProfiles: [] };
+  const declared = envShVariables(resolution.entries, values.values);
   const deliverable = new Set(declared.map((variable) => variable.key));
   const problems: string[] = [];
 
@@ -802,7 +850,7 @@ async function envDeliveryProblems(
     if (undelivered.length > 0) problems.push(`${envShPath} is missing ${nameList(undelivered)}`);
     if (stale.length > 0) {
       problems.push(
-        `${envShPath} has a stale value for ${nameList(stale)}: env.yaml declares a different one`,
+        `${envShPath} has a stale value for ${nameList(stale)}: env.yaml or your value for this team is a different one`,
       );
     }
     // env.sh holds only what pull wrote, so a key the resolved set lacks is

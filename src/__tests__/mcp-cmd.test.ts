@@ -21,6 +21,7 @@ vi.mock('../mcp-reconcile.js', async (importOriginal) => {
       sharing: { autoApply: true, allowedCommands: [], allowedHosts: [] },
       excluded: new Set(),
       vars: { JIRA_TOKEN: 'jira-token-value' },
+      secrets: { kind: 'absent' },
     }),
   };
 });
@@ -30,13 +31,15 @@ vi.mock('../mcp-git-exclude.js', async (importOriginal) => ({
 }));
 vi.mock('../utils/fs.js', () => ({
   readJson: vi.fn().mockResolvedValue(null),
+  // No teamai env.sh on this machine (member-env.ts, via the env advisories).
+  readFileSafe: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
 import { autoDetectInit } from '../config.js';
-import { resolveEntriesFor } from '../namespaced-entries.js';
+import { entryLayout, resolveEntriesFor } from '../namespaced-entries.js';
 import { mcpInject, mcpList, mcpRemove } from '../mcp-cmd.js';
 import { reconcileMcpForConfig, releaseCleanMcpGitExcludes, resolveMcpTargets } from '../mcp-reconcile.js';
 import { ensureExcludedFromGit } from '../mcp-git-exclude.js';
@@ -177,7 +180,10 @@ describe('mcpList', () => {
         kind: 'unknown-key',
         message: 'mcp/mcp.yaml: server "hidden" has unknown key `role:`, so this entry is not delivered.',
       }],
-      failure: { kind: 'two-namespaces', type: 'mcp', name: 'db', first: 'mcp/checkout/mcp.yaml', second: 'mcp/billing/mcp.yaml' },
+      failure: {
+        kind: 'two-namespaces', type: 'mcp', name: 'db', first: 'mcp/checkout/mcp.yaml', second: 'mcp/billing/mcp.yaml',
+        layout: entryLayout('mcp'),
+      },
     });
     const { log } = await import('../utils/logger.js');
     await listOutput();

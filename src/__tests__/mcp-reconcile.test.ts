@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
@@ -41,7 +42,7 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
   };
 });
 
-import { reconcileMcpForConfig, releaseCleanMcpGitExcludes, resolveMcpTargets, spliceCodexBlock, codexServerNames } from '../mcp-reconcile.js';
+import { reconcileMcpForConfig, releaseCleanMcpGitExcludes, resolveMcpTargets, spliceCodexBlock, codexServerNames, writeCodexAtomic } from '../mcp-reconcile.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
@@ -1488,6 +1489,25 @@ servers:
       });
     });
 
+    it('keeps excluding a config whose entry a pull kept for a missing declared secret', async () => {
+      await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: SECRET_TOKEN\n');
+      await writeMcpYaml(withSecret);
+      await reconcileMcpForConfig(teamConfig, projectConfig);
+      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+      vi.stubEnv('SECRET_TOKEN', undefined);
+      await writeMcpYaml(`${withSecret}  - name: open\n    transport: http\n    url: https://example.com/open\n`);
+
+      await reconcileMcpForConfig(teamConfig, { ...projectConfig, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('super-secret-value');
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf-8')).toContain('https://example.com/open');
+      const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+      const manifest = await fse.readJson(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+      expect(manifest['claude:project']).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'with-secret', resolved: true })]));
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+    });
+
     it('adds nothing for a disabled tool\'s config whose server never held a resolved value, after its definition changed', async () => {
       await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
       await reconcileMcpForConfig(teamConfig, projectConfig);
@@ -1511,6 +1531,25 @@ servers:
 
       await reconcileMcpForConfig(withCodex, { ...projectConfig, disabledAgents: ['codex'] } as LocalConfig);
 
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
+    });
+
+    it('writes a symlinked Codex project config at its own path, never into the tracked file it links to', async () => {
+      const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
+      const tracked = path.join(projectRoot, 'config', 'codex.toml');
+      const link = path.join(projectRoot, '.codex', 'config.toml');
+      await fse.outputFile(tracked, 'model = "gpt-5"\n');
+      git(projectRoot, 'add', 'config/codex.toml');
+      git(projectRoot, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'codex');
+      await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
+      await fse.symlink(path.join('..', 'config', 'codex.toml'), link);
+      await writeMcpYaml(`${withSecret}    tools: [codex]\n`);
+
+      await reconcileMcpForConfig(withCodex, projectConfig);
+
+      expect(await fse.readFile(tracked, 'utf-8')).toBe('model = "gpt-5"\n');
+      expect((await fse.lstat(link)).isSymbolicLink()).toBe(false);
+      expect(await fse.readFile(link, 'utf-8')).toContain('super-secret-value');
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
     });
 
@@ -2447,15 +2486,39 @@ servers:
         expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('teamai pull'));
       });
 
-      it('writes no value into a file git already tracks', async () => {
+      it('writes no value into a file git already tracks, names the fix once, and still writes an untracked config', async () => {
         await fse.writeJson(mcpJson(), { mcpServers: {} });
         git(projectRoot, 'add', '.mcp.json');
         await writeMcpYaml(withSecret);
 
-        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        const { changes } = await reconcileMcpForConfig(teamConfig, projectConfig);
 
         expect(await fse.readFile(mcpJson(), 'utf-8')).not.toContain('super-secret-value');
-        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('git rm --cached'));
+        expect(changes).toContainEqual(expect.objectContaining({
+          tool: 'claude', server: 'with-secret', action: 'skipped', reason: expect.stringContaining(`git already tracks ${mcpJson()}`),
+        }));
+        const warnings = vi.mocked(log.warn).mock.calls.map(([line]) => String(line)).filter((line) => line.includes(mcpJson()));
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(new RegExp(`git already tracks[\\s\\S]*git rm --cached ${mcpJson()}[\\s\\S]*rotate`));
+        expect((await fse.readJson(path.join(projectRoot, '.cursor', 'mcp.json'))).mcpServers['with-secret'].headers.Authorization)
+          .toBe('Bearer super-secret-value');
+        expect(await excludeOf(projectRoot)).toMatch(/^\/\.cursor\/mcp\.json$/m);
+      });
+
+      it('keeps the entry an earlier pull wrote to a file git now tracks, and updates it once the file is untracked (#879)', async () => {
+        await writeMcpYaml(withSecret);
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        git(projectRoot, 'add', '-f', '.mcp.json');
+        const before = await fse.readFile(mcpJson(), 'utf-8');
+        vi.stubEnv('SECRET_TOKEN', 'rotated-secret-value');
+
+        await reconcileMcpForConfig(teamConfig, claudeOnly());
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toBe(before);
+
+        git(projectRoot, 'rm', '-q', '--cached', '.mcp.json');
+        const { changes } = await reconcileMcpForConfig(teamConfig, claudeOnly());
+        expect(changes).toContainEqual({ tool: 'claude', server: 'with-secret', action: 'updated' });
+        expect(await fse.readFile(mcpJson(), 'utf-8')).toContain('rotated-secret-value');
       });
 
       it('still writes a config that carries no resolved value', async () => {
@@ -3097,6 +3160,160 @@ servers:
     expect(changes.some((c) => c.server === 'volces-search' && c.action === 'added')).toBe(true);
   });
 
+  // #879: a resolved ${VAR} may be a team secret, so the file holding it is the member's alone.
+  describe.skipIf(process.platform === 'win32')('file modes', () => {
+    let previousUmask: number;
+    const mode = async (file: string): Promise<number> => (await fse.stat(file)).mode & 0o777;
+    const SECRET_SERVER = `
+servers:
+  - name: with-secret
+    transport: http
+    url: https://example.com/mcp
+    headers:
+      Authorization: Bearer \${SECRET_TOKEN}
+`;
+    beforeEach(() => {
+      previousUmask = process.umask(0o022);
+      vi.stubEnv('SECRET_TOKEN', 'super-secret-value');
+    });
+    afterEach(() => {
+      process.umask(previousUmask);
+      vi.restoreAllMocks();
+    });
+
+    it('writes an existing 0644 .mcp.json and ~/.claude.json 0600 once they hold a resolved value', async () => {
+      const projectRoot = path.join(tmpDir, 'proj-mode');
+      await fse.ensureDir(path.join(projectRoot, '.claude', 'skills'));
+      const projectFile = path.join(projectRoot, '.mcp.json');
+      const userFile = path.join(homeDir, '.claude.json');
+      for (const file of [projectFile, userFile]) {
+        await fse.writeFile(file, '{}\n');
+        await fse.chmod(file, 0o644);
+      }
+      await writeMcpYaml(SECRET_SERVER);
+
+      await reconcileMcpForConfig(teamConfig, { ...localConfig, scope: 'project', projectRoot } as unknown as LocalConfig);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      for (const file of [projectFile, userFile]) {
+        expect((await fse.readJson(file)).mcpServers['with-secret'].headers.Authorization).toBe('Bearer super-secret-value');
+        expect(await mode(file)).toBe(0o600);
+      }
+    });
+
+    it('tightens a 0644 project config it protects without writing, as for a disabled tool', async () => {
+      const projectRoot = path.join(tmpDir, 'proj-mode-disabled');
+      for (const d of ['.claude', '.cursor']) await fse.ensureDir(path.join(projectRoot, d, 'skills'));
+      execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+      const project = { ...localConfig, scope: 'project', projectRoot } as unknown as LocalConfig;
+      await writeMcpYaml(SECRET_SERVER);
+      await reconcileMcpForConfig(teamConfig, project);
+      const cursorFile = path.join(projectRoot, '.cursor', 'mcp.json');
+      expect(await fse.readFile(cursorFile, 'utf-8')).toContain('super-secret-value');
+      await fse.chmod(cursorFile, 0o644);
+
+      await reconcileMcpForConfig(teamConfig, { ...project, disabledAgents: ['cursor'] } as LocalConfig);
+
+      expect(await fse.readFile(cursorFile, 'utf-8')).toContain('super-secret-value');
+      expect(await mode(cursorFile)).toBe(0o600);
+    });
+
+    it('keeps the mode of an existing config whose servers hold no resolved value', async () => {
+      const userFile = path.join(homeDir, '.claude.json');
+      await fse.writeFile(userFile, '{}\n');
+      await fse.chmod(userFile, 0o644);
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect((await fse.readJson(userFile)).mcpServers.open).toBeDefined();
+      expect(await mode(userFile)).toBe(0o644);
+    });
+
+    it('tightens a 0644 config whose managed entry holds a resolved value, though nothing changed', async () => {
+      await fse.ensureDir(path.join(homeDir, '.codex', 'skills'));
+      await writeMcpYaml(SECRET_SERVER);
+      // Twice: the second pull pads the Codex block it appended last with a blank line.
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      const files = [path.join(homeDir, '.claude.json'), path.join(homeDir, '.codex', 'config.toml')];
+      const contents: string[] = [];
+      for (const file of files) {
+        await fse.chmod(file, 0o644);
+        contents.push(await fse.readFile(file, 'utf-8'));
+      }
+
+      await reconcileMcpForConfig(teamConfig, localConfig, { dryRun: true });
+      for (const file of files) expect(await mode(file)).toBe(0o644);
+
+      const { wrote, changes } = await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect(changes).toEqual([]);
+      expect(wrote).toBe(false);
+      for (const [i, file] of files.entries()) {
+        expect(await fse.readFile(file, 'utf-8')).toBe(contents[i]);
+        expect(await mode(file)).toBe(0o600);
+      }
+    });
+
+    it('tightens a 0644 config whose kept entry holds an earlier resolved value', async () => {
+      await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: SECRET_TOKEN\n');
+      await writeMcpYaml(SECRET_SERVER);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      const userFile = path.join(homeDir, '.claude.json');
+      await fse.chmod(userFile, 0o644);
+      vi.stubEnv('SECRET_TOKEN', undefined);
+
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect((await fse.readJson(userFile)).mcpServers['with-secret']).toBeDefined();
+      expect(await mode(userFile)).toBe(0o600);
+    });
+
+    it('keeps the mode of an unchanged config whose servers hold no resolved value', async () => {
+      await writeMcpYaml('servers:\n  - name: open\n    transport: http\n    url: https://example.com/open\n');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      const userFile = path.join(homeDir, '.claude.json');
+      await fse.chmod(userFile, 0o644);
+
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect(await mode(userFile)).toBe(0o644);
+    });
+
+    it('never lets the Codex config temp file be wider than 0600, and names it at random', async () => {
+      await fse.ensureDir(path.join(homeDir, '.codex', 'skills'));
+      await writeMcpYaml(`${SECRET_SERVER}    tools: [codex]\n`);
+      const isCodexTemp = (file: string): boolean => path.basename(file).startsWith('config.toml.');
+      const renamed: { file: string; mode: number }[] = [];
+      const rename = fs.promises.rename.bind(fs.promises);
+      vi.spyOn(fs.promises, 'rename').mockImplementation(async (from: fs.PathLike, to: fs.PathLike) => {
+        if (typeof from === 'string' && isCodexTemp(from)) renamed.push({ file: from, mode: await mode(from) });
+        return rename(from, to);
+      });
+      const created: number[] = [];
+      const writeFile = fs.promises.writeFile.bind(fs.promises);
+      vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
+        await writeFile(...args);
+        const [file] = args;
+        if (typeof file === 'string' && isCodexTemp(file)) created.push(await mode(file));
+      });
+      const configToml = path.join(homeDir, '.codex', 'config.toml');
+
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      await writeCodexAtomic(configToml, 'model = "gpt-5"\n');
+
+      expect(created).toHaveLength(2);
+      expect(created.every((m) => (m & 0o077) === 0)).toBe(true);
+      expect(renamed.map((r) => path.basename(r.file))).toEqual([
+        expect.stringMatching(/^config\.toml\.\d+\.[0-9a-f]{12}\.tmp$/),
+        expect.stringMatching(/^config\.toml\.\d+\.[0-9a-f]{12}\.tmp$/),
+      ]);
+      expect(renamed.every((r) => r.mode === 0o600)).toBe(true);
+      expect(await mode(configToml)).toBe(0o600);
+    });
+  });
+
   // Verified against codex-cli 0.142.5: it speaks streamable HTTP. Secrets are
   // resolved to plaintext like every other tool — codex's env-var naming
   // (`bearer_token_env_var`) is not used, so the token is present regardless of
@@ -3452,6 +3669,177 @@ servers:
     // The true old path no longer owns it.
     const oldFile = await fse.readJson(path.join(projectRoot, '.teamai', 'managed-mcp.json'));
     expect(oldFile['claude:project']).toBeUndefined();
+  });
+
+  // #875: the session-start pull inherits the agent's environment, which often
+  // lacks the member's shell export, so a declared secret is there for one
+  // pull and gone for the next. Removing the entry then would undo the pull
+  // that found it.
+  describe('a missing declared secret (#875)', () => {
+    const GITHUB = `
+  - name: github
+    transport: http
+    url: https://api.example.com/mcp
+    headers:
+      Authorization: Bearer \${GITHUB_TOKEN}
+`;
+    const DOCS = `
+  - name: docs
+    transport: http
+    url: https://docs.example.com/mcp
+`;
+    const claudeJson = () => path.join(homeDir, '.claude.json');
+    const codexToml = () => path.join(homeDir, '.codex', 'config.toml');
+    const manifestNames = async (key: string): Promise<string[]> => {
+      const manifest = await fse.readJson(path.join(homeDir, '.teamai', 'managed-mcp.json'));
+      return (manifest[key] ?? []).map((r: { name: string }) => r.name).sort();
+    };
+
+    beforeEach(async () => {
+      await fse.ensureDir(path.join(homeDir, '.codex', 'skills'));
+      await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: GITHUB_TOKEN\n');
+    });
+
+    it('keeps the entry an earlier pull wrote, in a JSON config and in Codex', async () => {
+      await writeMcpYaml(`servers:${GITHUB}`);
+      vi.stubEnv('GITHUB_TOKEN', 'first-token');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      const jsonBefore = (await fse.readJson(claudeJson())).mcpServers.github;
+      const tomlBefore = await fse.readFile(codexToml(), 'utf-8');
+      expect(tomlBefore).toContain('Bearer first-token');
+
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect(changes.filter((c) => c.action !== 'skipped')).toEqual([]);
+      expect((await fse.readJson(claudeJson())).mcpServers.github).toEqual(jsonBefore);
+      expect(await fse.readFile(codexToml(), 'utf-8')).toBe(tomlBefore);
+    });
+
+    it('keeps its ownership record when another server is written in the same pull', async () => {
+      await writeMcpYaml(`servers:${GITHUB}`);
+      vi.stubEnv('GITHUB_TOKEN', 'first-token');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      await writeMcpYaml(`servers:${GITHUB}${DOCS}`);
+      const { wrote } = await reconcileMcpForConfig(teamConfig, localConfig);
+      expect(wrote).toBe(true);
+      expect(await manifestNames('claude')).toEqual(['docs', 'github']);
+      expect(await manifestNames('codex')).toEqual(['docs', 'github']);
+
+      // Still teamai's: a later pull that finds a new value updates it rather
+      // than treating it as a server the member added.
+      vi.stubEnv('GITHUB_TOKEN', 'second-token');
+      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig);
+      expect(changes.filter((c) => c.server === 'github').map((c) => `${c.tool}:${c.action}`).sort())
+        .toEqual(['claude:updated', 'codex:updated', 'cursor:updated']);
+      expect((await fse.readJson(claudeJson())).mcpServers.github.headers.Authorization).toBe('Bearer second-token');
+      expect(await fse.readFile(codexToml(), 'utf-8')).toContain('Bearer second-token');
+    });
+
+    it('skips a server no pull has written yet', async () => {
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      await writeMcpYaml(`servers:${GITHUB}${DOCS}`);
+
+      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect(changes.filter((c) => c.server === 'github').map((c) => `${c.tool}:${c.action}`).sort())
+        .toEqual(['claude:skipped', 'codex:skipped', 'cursor:skipped']);
+      expect((await fse.readJson(claudeJson())).mcpServers.github).toBeUndefined();
+      expect(await fse.readFile(codexToml(), 'utf-8')).not.toContain('[mcp_servers.github]');
+      expect(await manifestNames('claude')).toEqual(['docs']);
+    });
+
+    it('removes a kept server once it leaves mcp.yaml', async () => {
+      await writeMcpYaml(`servers:${GITHUB}`);
+      vi.stubEnv('GITHUB_TOKEN', 'first-token');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      await writeMcpYaml('servers: []\n');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect((await fse.readJson(claudeJson())).mcpServers.github).toBeUndefined();
+      expect(await fse.readFile(codexToml(), 'utf-8')).not.toContain('[mcp_servers.github]');
+    });
+
+    it('keeps every managed server as it is while the declarations cannot be read', async () => {
+      await writeMcpYaml(`servers:${GITHUB}${DOCS}`);
+      vi.stubEnv('GITHUB_TOKEN', 'first-token');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      const jsonBefore = await fse.readFile(claudeJson(), 'utf-8');
+      const tomlBefore = await fse.readFile(codexToml(), 'utf-8');
+
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets: [unclosed\n');
+      await writeMcpYaml(`servers:${GITHUB}`);
+      const { changes, wrote, unresolved } = await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect({ changes, wrote, unresolved }).toEqual({ changes: [], wrote: false, unresolved: true });
+      expect(await fse.readFile(claudeJson(), 'utf-8')).toBe(jsonBefore);
+      expect(await fse.readFile(codexToml(), 'utf-8')).toBe(tomlBefore);
+      const { log } = await import('../utils/logger.js');
+      expect(vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).join('\n')).toContain('env/secrets.yaml');
+    });
+
+    it('still removes a server whose missing variable is not declared as a secret', async () => {
+      await writeMcpYaml(`
+servers:
+  - name: plain
+    transport: http
+    url: https://plain.example.com/mcp
+    headers:
+      X-Key: \${PLAIN_KEY}
+`);
+      vi.stubEnv('PLAIN_KEY', 'k');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      expect((await fse.readJson(claudeJson())).mcpServers.plain).toBeDefined();
+
+      vi.stubEnv('PLAIN_KEY', undefined);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect((await fse.readJson(claudeJson())).mcpServers.plain).toBeUndefined();
+      expect(await fse.readFile(codexToml(), 'utf-8')).not.toContain('[mcp_servers.plain]');
+    });
+
+    it('still removes a server that also misses a variable not declared as a secret', async () => {
+      await writeMcpYaml(`
+servers:
+  - name: both
+    transport: http
+    url: https://both.example.com/mcp
+    headers:
+      Authorization: Bearer \${GITHUB_TOKEN}
+      X-Key: \${PLAIN_KEY}
+    tools: [claude]
+`);
+      vi.stubEnv('GITHUB_TOKEN', 't');
+      vi.stubEnv('PLAIN_KEY', 'k');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      vi.stubEnv('PLAIN_KEY', undefined);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+
+      expect((await fse.readJson(claudeJson())).mcpServers.both).toBeUndefined();
+    });
+
+    it('removeAll removes a kept server, while the declarations cannot be read too', async () => {
+      await writeMcpYaml(`servers:${GITHUB}`);
+      vi.stubEnv('GITHUB_TOKEN', 'first-token');
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      vi.stubEnv('GITHUB_TOKEN', undefined);
+      await reconcileMcpForConfig(teamConfig, localConfig);
+      await fse.outputFile(path.join(repoPath, 'env', 'secrets.yaml'), 'secrets: [unclosed\n');
+
+      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig, { removeAll: true });
+
+      expect(changes.map((c) => `${c.tool}:${c.action}`).sort()).toEqual(['claude:removed', 'codex:removed', 'cursor:removed']);
+      expect((await fse.readJson(claudeJson())).mcpServers.github).toBeUndefined();
+      expect(await fse.readFile(codexToml(), 'utf-8')).not.toContain('[mcp_servers.github]');
+    });
   });
 });
 

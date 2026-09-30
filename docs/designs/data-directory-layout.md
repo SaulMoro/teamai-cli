@@ -909,3 +909,29 @@ user finds partitions safe to `rm -rf` by hand.
 `teamai migrate` / `gc` / `--revert` commands; cross-project shared team-repo clone.
 Downgrade to an older teamai after
 P1 migration is not supported (`.teamai.bak/` is the manual rollback path).
+
+## Team secret values (#875)
+
+A member's values for their teams' declared secrets live in `~/.teamai/secrets/`,
+a class-A2 (machine-level) directory: `teams/<hash>.json`, one file per
+team repo, named by the full SHA-256 hex digest (64 characters, never shortened) of the team repo URL in `~/.teamai/config.yaml` (never
+`teamai.yaml`'s `repo:`), without the team name, so renaming `team:` keeps the values;
+the hash covers the URL's scheme (the ssh forms count as one; https and http are two),
+ssh user, host, non-default port and path (an scp-style path not starting with `/` or `~`
+is in the user's home, as `ssh://host/~/path`; `ssh://host/path` is from the root), so an
+scp path in the home and the `ssh://` path from the root, two ssh users' repos on one host, two
+repos on one host with different ports, or repos behind http and https, get different files,
+and `machine.json`, the values set with `teamai env set --global` for every team.
+Every scope that uses the same team, and every worktree of it, reads the same file.
+Each entry records whether it is a secret's value or the member's value for an
+`env.yaml` variable (`kind`), so one is never used as the other.
+It never goes to a partition or to `<dataHome>`, which in single-repo mode is inside
+the business repo, and it is not `~/.teamai/env`, which is already the user scope's
+env backup file. Files are written atomically with mode `0600`. Uninstalling a
+project scope removes only its partition, so the values stay; uninstalling the user
+scope removes `~/.teamai` and them with it. See [Team secrets](team-secrets.md#storage).
+
+Beside each scope's `env.sh`, in `<dataHome>`, `env.sh.exports.json` records what
+that `env.sh` has exported: per key, a SHA-256 of `KEY=VALUE` for the last 20
+values, never a value, mode `0600`. It is machine data like `env.sh` and is
+removed with it. See [Team secrets](team-secrets.md#resolution).

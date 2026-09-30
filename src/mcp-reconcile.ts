@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
-import fse from 'fs-extra';
 import type {
   LocalConfig,
   TeamaiConfig,
@@ -34,7 +34,10 @@ import {
   type McpFormat,
 } from './resources/mcp-format.js';
 import { mcpEntryReader, teamMcpToDef } from './resources/mcp.js';
-import { envEntryReader } from './resources/env.js';
+import { envName, envTable } from './resources/env-key.js';
+import { declaredSecretKeys, type SecretDeclarations } from './resources/secrets.js';
+import { resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
+import { isEnvShMarker } from './env-sh-exports.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
 import {
@@ -45,6 +48,7 @@ import {
   expandHome,
 } from './utils/fs.js';
 import { log } from './utils/logger.js';
+import { warnOnce } from './utils/warn-once.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
 import {
@@ -98,6 +102,8 @@ export interface McpReconcileOptions {
    * without mutating the host platform.
    */
   lookPath?: LookPathOptions;
+  /** This scope's env, when the caller already resolved it (env-resolution.ts). */
+  teamEnv?: TeamEnv;
 }
 
 export interface McpChange {
@@ -112,8 +118,9 @@ export interface McpReconcileResult {
   /** True when any file was actually written. */
   wrote: boolean;
   /**
-   * Set when the team's servers could not be resolved (a file that does not
-   * parse, a name twice): nothing was changed, and the reason was reported.
+   * Set when the team's servers, or the secrets they may need, could not be
+   * resolved (a file that does not parse, a name twice): nothing was changed,
+   * and the reason was reported.
    */
   unresolved?: true;
 }
@@ -130,32 +137,53 @@ async function readManifest(manifestPath: string): Promise<ManagedMcpManifest> {
 /**
  * Build the ${VAR} lookup table: the team env variables this member receives
  * (root plus active namespace files, the same set pull writes env.sh from),
- * then process env on top.
+ * each with the member's value for this team when they set one, then process
+ * env for every other key; it no longer overrides a team variable (#875).
+ * A declared secret (#875) resolves from the
+ * member's value for this team, then their value for the machine, then their
+ * own environment (not a value a teamai env.sh exported); its env.yaml value,
+ * if the team also sets one, is ignored.
  *
  * The installed KEY=value backup is read instead only when that set cannot be
- * resolved (pull then keeps env.sh as it is, so MCP sees what the shell sees)
- * or the team has no repo tree to resolve it from (HTTP mode).
+ * resolved, or the secret declarations or the member's values cannot (pull
+ * then keeps env.sh as it is, so MCP sees what the shell sees), or the team has no repo tree to
+ * resolve it from (HTTP mode, which declares no secrets).
+ *
+ * `teamEnv` is for a caller that already resolved it, so one command reads
+ * each file once. HTTP mode ignores it.
  */
-export async function buildVarTable(localConfig: LocalConfig): Promise<Record<string, string>> {
-  const table: Record<string, string> = {};
-  const env = localConfig.repo.kind === 'http'
-    ? null
-    : await resolveEntriesFor(envEntryReader, localConfig);
-  if (env?.kind === 'resolved') {
-    for (const variable of env.entries) table[variable.name] = variable.entry.value;
+export async function buildVarTable(localConfig: LocalConfig, teamEnv?: TeamEnv): Promise<Record<string, string>> {
+  const table = envTable<string>();
+  const resolved = localConfig.repo.kind === 'http' ? null : teamEnv ?? await resolveTeamEnv(localConfig);
+  const secretKeys = resolved ? declaredSecretKeys(resolved.declarations) : new Set<string>();
+  const isSecret = (key: string): boolean => secretKeys?.has(key) ?? false;
+  const variables = resolved?.variables.kind === 'resolved' && secretKeys ? resolved.variableValues : null;
+  if (variables?.kind === 'resolved') {
+    for (const [key, variable] of variables.values) table[key] = variable.value;
   } else {
-    Object.assign(table, await readEnvBackup(localConfig));
+    if (variables) warnOnce(variablesKeptWarning(variables.reason));
+    for (const [key, value] of Object.entries(await readEnvBackup(localConfig))) if (!isSecret(key)) table[key] = value;
   }
-  // process.env wins: it lets a user override a team-provided value locally.
+  // The environment fills only what the team sets nothing for (#875): a
+  // member overrides a team variable with `teamai env set`, for that team.
+  // An env.sh marker says what a shell sourced, and is no server's value.
+  // On Windows `api_url` is the team's `API_URL`: names compare as the platform does.
+  const teamSet = new Set(Object.keys(table).map(envName));
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined) table[k] = v;
+    if (v !== undefined && !isSecret(k) && !isEnvShMarker(k) && !teamSet.has(envName(k))) table[k] = v;
   }
+  if (!resolved || !secretKeys || secretKeys.size === 0) return table;
+  if (resolved.secrets.kind === 'store-unreadable') {
+    warnOnce(`${resolved.secrets.reason} Team secrets have no value until it is fixed.`);
+    return table;
+  }
+  for (const [key, secret] of resolved.secrets.values) table[key] = secret.value;
   return table;
 }
 
 /** The KEY=value file the env channel last wrote. */
 async function readEnvBackup(localConfig: LocalConfig): Promise<Record<string, string>> {
-  const table: Record<string, string> = {};
+  const table = envTable<string>();
   // Must use the same path the env channel wrote (getEnvBackupPath) — self mode
   // uses env.local, not env (which is a committed directory there).
   const envFile = getEnvBackupPath(localConfig);
@@ -395,18 +423,22 @@ export async function readJsonDoc(
   }
 }
 
-/** Write a parsed JSON MCP config while preserving its original container shape. */
+/**
+ * Write a parsed JSON MCP config while preserving its original container
+ * shape, and its mode unless `options.mode` forces one.
+ */
 export async function writeJsonDoc(
   file: string,
   serverKey: string,
   doc: JsonDoc,
+  options?: { mode?: number },
 ): Promise<void> {
   if (doc.bare) {
-    await writeJsonAtomic(file, doc.servers);
+    await writeJsonAtomic(file, doc.servers, options);
     return;
   }
   doc.data[serverKey] = doc.servers;
-  await writeJsonAtomic(file, doc.data);
+  await writeJsonAtomic(file, doc.data, options);
 }
 
 // ─── Codex TOML target I/O ───────────────────────────────────
@@ -473,6 +505,8 @@ export interface DesiredMcpEntry {
   hash: string;
   /** Codex alone stores a TOML block rather than a JSON value. */
   block?: string;
+  /** The entry holds a `${VAR}` value teamai resolved, which may be a team secret. */
+  resolvedValue: boolean;
 }
 
 /** Everything the per-server filters need, resolved once per run. */
@@ -480,6 +514,8 @@ export interface DesiredMcpContext {
   sharing: ReturnType<typeof getMcpSharing>;
   excluded: Set<string>;
   vars: Record<string, string>;
+  /** Which `${VAR}` names are declared secrets, whose missing value keeps an entry (#875). */
+  secrets: SecretDeclarations;
   lookPath?: McpReconcileOptions['lookPath'];
 }
 
@@ -488,10 +524,13 @@ export async function buildDesiredMcpContext(
   localConfig: LocalConfig,
   options: McpReconcileOptions = {},
 ): Promise<DesiredMcpContext> {
+  // HTTP mode has no repo tree to declare secrets in.
+  const teamEnv = localConfig.repo.kind === 'http' ? undefined : options.teamEnv ?? await resolveTeamEnv(localConfig);
   return {
     sharing: getMcpSharing(teamConfig),
     excluded: new Set(localConfig.excludedSkills ?? []),
-    vars: await buildVarTable(localConfig),
+    vars: await buildVarTable(localConfig, teamEnv),
+    secrets: teamEnv?.declarations ?? { kind: 'absent' },
     lookPath: options.lookPath,
   };
 }
@@ -504,14 +543,24 @@ export async function buildDesiredMcpContext(
  * the filters (#624). A second copy of them is how an MCP server ends up
  * skipped for `unresolved variable(s)` during one pull and reported as
  * correctly delivered forever after.
+ *
+ * `kept` names the skipped servers whose only missing variables are declared
+ * secrets (#875): the session-start pull inherits the agent's environment, so
+ * a secret that lives in the member's shell is there for one pull and gone for
+ * the next, and an entry an earlier pull wrote stays as it is. With
+ * declarations that failed, every skipped server is kept.
  */
 export function desiredMcpForTarget(
   target: McpTarget,
   teamDefs: McpServerDef[],
   ctx: DesiredMcpContext,
-): { desired: Map<string, DesiredMcpEntry>; skipped: McpChange[] } {
+): { desired: Map<string, DesiredMcpEntry>; skipped: McpChange[]; kept: Set<string> } {
   const desired = new Map<string, DesiredMcpEntry>();
   const skipped: McpChange[] = [];
+  const kept = new Set<string>();
+  // Declarations that failed can't say which variables are secrets, so every
+  // missing one may be: pull keeps every installed entry then.
+  const declared = declaredSecretKeys(ctx.secrets);
 
   for (const raw of teamDefs) {
     if (raw.tools && !raw.tools.includes(target.tool)) continue;
@@ -541,9 +590,8 @@ export function desiredMcpForTarget(
 
     // Pass ${VAR} through where the tool expands it itself, so the secret
     // never lands on disk; otherwise resolve and require every var to exist.
-    // A resolved value is written verbatim into the target file, including
-    // project-scope files that get committed — the team has opted into that
-    // by declaring the server with a ${VAR} a tool cannot expand itself.
+    // A resolved value is written verbatim into the target file; a project
+    // file gets one only once it is kept out of git (#882, reconcileTargets).
     const passthrough = supportsEnvExpansion(target.format, target.projectScope, raw);
     let def = raw;
     if (!passthrough) {
@@ -555,6 +603,7 @@ export function desiredMcpForTarget(
           action: 'skipped',
           reason: `unresolved variable(s): ${missing.join(', ')}`,
         });
+        if (missing.every((key) => declared?.has(key) ?? true)) kept.add(raw.name);
         continue;
       }
       def = resolved;
@@ -562,16 +611,17 @@ export function desiredMcpForTarget(
       log.debug(`${raw.name}: passing ${referencedVars(raw).join(', ')} through to ${target.tool}`);
     }
 
+    const resolvedValue = !passthrough && referencedVars(raw).length > 0;
     if (target.format === 'codex') {
       const block = renderCodexBlock(def);
-      desired.set(raw.name, { entry: block, hash: entryHash(block), block });
+      desired.set(raw.name, { entry: block, hash: entryHash(block), block, resolvedValue });
     } else {
       const entry = renderJsonEntry(target.format, def);
-      desired.set(raw.name, { entry, hash: entryHash(entry) });
+      desired.set(raw.name, { entry, hash: entryHash(entry), resolvedValue });
     }
   }
 
-  return { desired, skipped };
+  return { desired, skipped, kept };
 }
 
 /**
@@ -614,6 +664,57 @@ async function shadowedBareCopilotServer(target: McpTarget): Promise<string | un
   if (!doc?.beside) return undefined;
   return Object.keys(doc.beside).find((name) => doc.servers[name] !== undefined
     && JSON.stringify(doc.servers[name]) !== JSON.stringify(doc.beside?.[name]));
+}
+
+/**
+ * The manifest of the servers teamai wrote for this scope. Project scope uses a
+ * PER-WORKTREE manifest under the partition (migrating this worktree's records
+ * out of any legacy shared file on first read, unless `dryRun`); user scope
+ * keeps the single global file. Either way a reconcile owns exactly one file.
+ */
+async function loadMcpManifest(
+  localConfig: LocalConfig,
+  dryRun: boolean | undefined,
+): Promise<{ manifestPath: string; manifest: ManagedMcpManifest }> {
+  const dataHome = getDataHome(localConfig);
+  if (localConfig.scope === 'project' && localConfig.projectRoot) {
+    return loadProjectMcpManifest(dataHome, localConfig.projectRoot, { dryRun });
+  }
+  const manifestPath = managedMcpManifestPath(dataHome);
+  return { manifestPath, manifest: await readManifest(manifestPath) };
+}
+
+/**
+ * The team servers whose entry an earlier pull wrote and a pull now keeps,
+ * because a declared secret has no value (#875), with the tools holding one.
+ * Read-only: for the note that such an entry may hold an old value.
+ */
+export async function keptMcpEntries(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  teamEnv?: TeamEnv,
+): Promise<Map<string, string[]>> {
+  const kept = new Map<string, string[]>();
+  if (localConfig.repo.kind === 'http') return kept;
+  const resolution = await resolveEntriesFor(mcpEntryReader, localConfig);
+  if (resolution.kind === 'failed' || resolution.entries.length === 0) return kept;
+  const teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+  const targets = await resolveMcpTargets(teamConfig, localConfig);
+  if (targets.length === 0) return kept;
+  const ctx = await buildDesiredMcpContext(teamConfig, localConfig, { teamEnv });
+  if (ctx.secrets.kind !== 'resolved') return kept;
+  const { manifest } = await loadMcpManifest(localConfig, true);
+
+  for (const target of targets) {
+    if (mcpTargetExcluded(localConfig, target)) continue;
+    const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []).map((r) => r.name));
+    const installed = await installedMcpEntries(target);
+    for (const name of desiredMcpForTarget(target, teamDefs, ctx).kept) {
+      if (!owned.has(name) || !installed?.has(name)) continue;
+      kept.set(name, [...kept.get(name) ?? [], target.tool]);
+    }
+  }
+  return kept;
 }
 
 /**
@@ -969,7 +1070,7 @@ export async function mcpConfigsNotProvenClean(
     ownedByFormat: Array<{ format: McpFormat; names: string[] }>;
   }>();
   const realRoot = (root: string | undefined): Promise<string | undefined> =>
-    root ? fse.realpath(root).catch(() => root) : Promise.resolve(undefined);
+    root ? fs.promises.realpath(root).catch(() => root) : Promise.resolve(undefined);
   const ownRoot = await realRoot(localConfig.projectRoot);
   const recordedBy = new Map<LocalConfig, McpTarget[]>();
   // A built-in location no mapping reaches today, in each worktree: judged as a file an earlier mapping reached.
@@ -986,8 +1087,7 @@ export async function mcpConfigsNotProvenClean(
     const unmapped = [...await unmappedMcpDefaults(await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true }))];
     unmappedBy.set(cfg, unmapped);
     for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) {
-      const dir = await fse.realpath(path.dirname(target.file)).catch(() => path.dirname(target.file));
-      const key = path.join(dir, path.basename(target.file));
+      const key = await realFilePath(target.file);
       cfgTargets.push(target);
       // Judged below, as a file an earlier mapping reached.
       if (unmapped.some((t) => t.tool === target.tool && t.file === target.file)) continue;
@@ -1294,7 +1394,11 @@ async function protectProjectMcpConfigs(
   const holding = new Set(observations.filter((o) => o.holding).map((o) => o.file));
   const unproven = new Set(observations.filter((o) => !o.holding).map((o) => o.file));
   // Also a file listed before its write: a concurrent uninstall may have taken its line out since.
-  for (const file of holding) await excludeFromGit(file);
+  // And readable by this user only (#879), written this run or not: a disabled or moved tool's too.
+  for (const file of holding) {
+    await excludeFromGit(file);
+    await tightenMode(file).catch((e: unknown) => log.debug(`Could not make ${file} 0600: ${e instanceof Error ? e.message : String(e)}`));
+  }
   // A line this run added for a file it then did not write restores the file's state before the run.
   // One it wrote holds the value even when no scan finds it (shorter than eight characters).
   const addedNow = [...unproven].filter((file) => {
@@ -1466,19 +1570,7 @@ async function reconcileTargets(
   const targets = await resolveMcpTargets(teamConfig, localConfig);
   if (targets.length === 0) return { changes, wrote };
 
-  const dataHome = getDataHome(localConfig);
-  const projectScope = localConfig.scope === 'project';
-  // Project scope uses a PER-WORKTREE manifest under the partition (migrating this
-  // worktree's records out of any legacy shared file on first read); user scope
-  // keeps the single global file. Either way this reconcile owns exactly one file.
-  let manifestPath: string;
-  let manifest: ManagedMcpManifest;
-  if (projectScope && localConfig.projectRoot) {
-    ({ manifestPath, manifest } = await loadProjectMcpManifest(dataHome, localConfig.projectRoot, { dryRun: options.dryRun }));
-  } else {
-    manifestPath = managedMcpManifestPath(dataHome);
-    manifest = await readManifest(manifestPath);
-  }
+  const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
 
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
@@ -1493,6 +1585,14 @@ async function reconcileTargets(
     ? targets.filter((t) => manifest[managedMcpManifestKey(t.tool, true)] === undefined).map((t) => t.tool) : []);
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
+  // A failed declaration is not "no secrets": read as none, every server whose
+  // secret the member left in their shell would be removed. Keep what is
+  // installed rather than guess which variables are secrets. `removeAll`
+  // (mcp remove, uninstall) still removes everything.
+  if (!removeAll && desiredContext.secrets.kind === 'failed') {
+    reportEntryResolution(desiredContext.secrets);
+    return { changes, wrote, unresolved: true };
+  }
 
   for (const target of targets) {
     // Same enabledAgents / disabledAgents gate as the other resource syncs. The
@@ -1505,8 +1605,10 @@ async function reconcileTargets(
     const nextRecords: ManagedMcpRecord[] = [];
 
     // Which of this team's servers apply to this tool, and in what rendered form.
-    const { desired, skipped } = desiredMcpForTarget(target, teamDefs, desiredContext);
+    const { desired, skipped, kept } = desiredMcpForTarget(target, teamDefs, desiredContext);
     changes.push(...skipped);
+    // Their old records, so a manifest this run writes still claims them.
+    const keep = new Map(owned.filter((r) => kept.has(r.name)).map((r) => [r.name, r]));
 
     // A resolved value lands only in a file git leaves out of a commit (#882).
     // Otherwise the file stays as it was, its manifest entry with it.
@@ -1530,8 +1632,8 @@ async function reconcileTargets(
     }
 
     const wroteTarget = target.format === 'codex'
-      ? await applyCodex(target, desired, ownedNames, nextRecords, changes, options)
-      : await applyJson(target, desired, owned, ownedNames, nextRecords, changes, options);
+      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, options)
+      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, options);
     if (wroteTarget) written.add(target.file);
     wrote = wroteTarget || wrote;
     // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
@@ -1653,7 +1755,8 @@ export function isTeamaiBareCopy(doc: { beside?: Record<string, unknown> }, name
 /** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
 async function applyJson(
   target: McpTarget,
-  desired: Map<string, { entry: unknown; hash: string }>,
+  desired: Map<string, DesiredMcpEntry>,
+  keep: Map<string, ManagedMcpRecord>,
   owned: ManagedMcpRecord[],
   ownedNames: Set<string>,
   nextRecords: ManagedMcpRecord[],
@@ -1670,8 +1773,10 @@ async function applyJson(
 
   const ownedHash = new Map(owned.map((r) => [r.name, r.hash]));
   let dirty = false;
+  // A kept entry holds the value an earlier pull resolved (desiredMcpForTarget).
+  let holdsResolvedValue = false;
 
-  for (const [name, { entry, hash }] of desired) {
+  for (const [name, { entry, hash, resolvedValue }] of desired) {
     const existing = doc.servers[name];
     if (existing !== undefined && !ownedNames.has(name) && !options.force) {
       changes.push({
@@ -1683,6 +1788,7 @@ async function applyJson(
       continue;
     }
     nextRecords.push({ name, hash });
+    holdsResolvedValue ||= resolvedValue;
     // The copy a bare write left before another tool added the key would keep the old value beside this one (#882).
     if (isTeamaiBareCopy(doc, name, owned)) {
       delete doc.data[name];
@@ -1696,6 +1802,12 @@ async function applyJson(
 
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
+    const kept = keep.get(name);
+    if (kept && doc.servers[name] !== undefined) {
+      nextRecords.push(kept);
+      holdsResolvedValue = true;
+      continue;
+    }
     if (doc.servers[name] !== undefined) {
       delete doc.servers[name];
       dirty = true;
@@ -1708,19 +1820,25 @@ async function applyJson(
     changes.push({ tool: target.tool, server: name, action: 'removed' });
   }
 
-  if (!dirty || options.dryRun) return false;
+  if (options.dryRun) return false;
+  if (!dirty) {
+    if (holdsResolvedValue) await tightenMode(target.file);
+    return false;
+  }
 
   // Key-level surgery: every unrelated top-level key is carried over untouched.
   // Some tools (OpenCode) key the server map under `mcp`, not `mcpServers`;
   // writing the wrong key would strip the servers and, worse, leave a phantom
   // empty `mcpServers` in a file the tool never reads under that name.
-  await writeJsonDoc(target.file, serverKey, doc);
+  // A file that holds a resolved value is the member's alone, an existing one tightened.
+  await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
   return true;
 }
 
 async function applyCodex(
   target: McpTarget,
-  desired: Map<string, { entry: unknown; hash: string; block?: string }>,
+  desired: Map<string, DesiredMcpEntry>,
+  keep: Map<string, ManagedMcpRecord>,
   ownedNames: Set<string>,
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
@@ -1729,8 +1847,9 @@ async function applyCodex(
   let source = (await readFileSafe(target.file)) ?? '';
   const present = new Set(codexServerNames(source));
   let dirty = false;
+  let holdsResolvedValue = false;
 
-  for (const [name, { hash, block }] of desired) {
+  for (const [name, { hash, block, resolvedValue }] of desired) {
     if (present.has(name) && !ownedNames.has(name) && !options.force) {
       changes.push({
         tool: target.tool,
@@ -1741,6 +1860,7 @@ async function applyCodex(
       continue;
     }
     nextRecords.push({ name, hash });
+    holdsResolvedValue ||= resolvedValue;
     const next = spliceCodexBlock(source, name, block!);
     if (next === source) continue;
     source = next;
@@ -1750,6 +1870,12 @@ async function applyCodex(
 
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
+    const kept = keep.get(name);
+    if (kept && present.has(name)) {
+      nextRecords.push(kept);
+      holdsResolvedValue = true;
+      continue;
+    }
     const next = spliceCodexBlock(source, name, null);
     if (next !== source) {
       source = next;
@@ -1758,21 +1884,41 @@ async function applyCodex(
     changes.push({ tool: target.tool, server: name, action: 'removed' });
   }
 
-  if (!dirty || options.dryRun) return false;
+  if (options.dryRun) return false;
+  if (!dirty) {
+    if (holdsResolvedValue) await tightenMode(target.file);
+    return false;
+  }
 
-  await fse.ensureDir(path.dirname(target.file));
-  const tmp = `${target.file}.${process.pid}.tmp`;
-  await fse.writeFile(tmp, source, 'utf-8');
-  await fse.chmod(tmp, 0o600);
-  await fse.rename(tmp, target.file);
+  await writeCodexAtomic(target.file, source);
   return true;
 }
 
+/**
+ * Make an unchanged config readable by this user only, without rewriting it:
+ * an entry a CLI before #879 wrote holds its resolved value in a file that may
+ * still be 0644.
+ */
+async function tightenMode(file: string): Promise<void> {
+  const { mode } = await fs.promises.stat(file);
+  if ((mode & 0o077) !== 0) await fs.promises.chmod(file, 0o600);
+}
+
+/**
+ * Write a Codex config.toml atomically, readable by this user only: it may
+ * hold resolved values. A symlink at `file` is replaced, as `writeJsonAtomic`
+ * does for the JSON configs: git protection judges `file`, so a value must
+ * never land in the file it links to (#882).
+ */
 export async function writeCodexAtomic(file: string, content: string): Promise<void> {
-  await fse.ensureDir(path.dirname(file));
-  const suffix = crypto.randomBytes(6).toString('hex');
-  const tmp = `${file}.${process.pid}.${suffix}.tmp`;
-  await fse.writeFile(tmp, content, 'utf-8');
-  await fse.chmod(tmp, 0o600);
-  await fse.rename(tmp, file);
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.promises.writeFile(tmp, content, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+    await fs.promises.chmod(tmp, 0o600);
+    await fs.promises.rename(tmp, file);
+  } catch (error) {
+    await fs.promises.rm(tmp, { force: true });
+    throw error;
+  }
 }

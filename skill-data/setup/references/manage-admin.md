@@ -191,10 +191,12 @@ teamai push                                 # share the updated teamai.yaml
 
 ```bash
 teamai env list              # what reaches this directory, each with its namespace (values masked)
-teamai env list --reveal     # show values in plaintext
+teamai env list --reveal     # show variable values in plaintext (never a secret's)
 teamai env add <KEY> <VALUE> # add or update in env/env.yaml
 teamai env add <KEY> <VALUE> --project <id>   # or --role <ns>: in that namespace's env/<ns>/env.yaml (warns if nothing declares <ns>)
 teamai env remove <KEY>      # remove (same --role / --project)
+teamai env add <KEY> --secret -d "<what it is for>" --url <where to get one>   # declare a secret in env/secrets.yaml, no value (same --role / --project)
+teamai env remove <KEY> --secret   # remove a declared secret (plain `env remove` does too when env.yaml does not set <KEY>)
 teamai remove mcp <name>     # root mcp/mcp.yaml if it has the name, else the one namespace file; --role / --project pick a namespace
 ```
 
@@ -228,6 +230,22 @@ and push it with git. `teamai doctor` lists each override.
   have `<ns>` active. A member's API key is bound to the profile's gateway origin:
   when an override points at another host, their pull leaves the agent alone and
   asks them to run `teamai models switch team:<id>` to set the key for it.
+- Secrets are declared with no value in `env/secrets.yaml` or `env/<ns>/secrets.yaml`
+  (active through `resources.env`; a namespace entry replaces the root entry with the
+  same key): a `secrets:` list of `key`, optional `description` and optional `url`
+  (where a member gets one). Never put a value there: `teamai env add <KEY> --secret`
+  takes none and rejects one. Declare with it or edit the file in the team repo;
+  `teamai push` picks it up. Each member sets their own value with `teamai env set KEY`
+  in their terminal (`--global` for every team on their machine; a team value still
+  wins). `teamai env list` shows each secret as `team`, `global`, `environment`,
+  `missing` or `unreadable` and never shows a value, `--reveal` included. The `description` is what
+  agents see: the session-start hook lists each declared key with it and tells the
+  agent to run the CLIs that need them through `teamai env exec --`, so say which
+  tool or server uses the key. As the agent, run `teamai env add <KEY> --secret`
+  yourself and leave the value to each member's own terminal. A key declared as a secret
+  and also set in `env.yaml` is a secret: its `env.yaml` value is not delivered. A
+  secrets file that does not parse keeps `env.sh` and MCP servers as they were, and
+  `teamai doctor` fails a check naming the file.
 - Have every member upgrade before declaring `env`, `hooks`, `mcp`, `models` or `docs` in a
   manifest: teamai 0.25.0 and the 0.26.0 betas reject those keys and their pull stops.
 

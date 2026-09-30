@@ -193,13 +193,23 @@ Generated: do not edit by hand. Regenerate with
   - `--reveal` — Show env variable values in plaintext (default: masked)
   - `teamai env list` — List team environment variables
     - `--reveal` — Show env variable values in plaintext (default: masked)
-  - `teamai env add <key> <value>` — Add or update a team environment variable
-    - `-d, --description <desc>` — Description for the variable
-    - `--role <ns>` — Write to env/<ns>/env.yaml instead of env/env.yaml
+  - `teamai env add <key> [value]` — Add or update a team environment variable, or declare a secret with --secret
+    - `-d, --description <desc>` — Description for the variable or secret
+    - `--secret` — Declare a secret in env/secrets.yaml: no value, each member sets their own
+    - `--url <url>` — Where a member gets a value for the secret (with --secret)
+    - `--role <ns>` — Write to env/<ns>/ instead of env/ (env.yaml, or secrets.yaml with --secret)
     - `--project <id>` — Write to the project's env namespace (resources.env in manifest/projects.yaml)
-  - `teamai env remove <key>` — Remove a team environment variable
-    - `--role <ns>` — Remove from env/<ns>/env.yaml instead of env/env.yaml
+  - `teamai env remove <key>` — Remove a team environment variable or declared secret
+    - `--secret` — Remove the declared secret only (env/secrets.yaml), for a key env.yaml also sets
+    - `--role <ns>` — Remove from env/<ns>/ instead of env/
     - `--project <id>` — Remove from the project's env namespace (resources.env in manifest/projects.yaml)
+  - `teamai env set <key>` — Set your value for a secret the team declares, or an env variable it sets, for this directory's team, on this machine (prompts without echo)
+    - `--stdin` — Read the value from piped stdin
+    - `--from-env <var>` — Read the value from this environment variable each time it is used; no copy is stored
+    - `--global` — Set a secret for every team on this machine; a value set for a team still wins
+  - `teamai env unset <key>` — Remove your value for a secret or env variable, for this directory's team, from this machine
+    - `--global` — Remove the value set for every team on this machine instead
+  - `teamai env exec <command...>` — Run a command with this directory's team env variables and secrets (put -- before the command)
 
 ## hooks
 

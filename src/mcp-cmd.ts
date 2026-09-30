@@ -12,7 +12,9 @@ import {
   type McpChange,
   type McpTarget,
 } from './mcp-reconcile.js';
-import { referencedVars } from './resources/mcp-format.js';
+import { placeholderValue, referencedVars } from './resources/mcp-format.js';
+import { reportMissingSecrets } from './env-advisories.js';
+import { resolveTeamEnv } from './env-resolution.js';
 import { carriesResolvedValue, ensureExcludedFromGit } from './mcp-git-exclude.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions } from './types.js';
@@ -43,13 +45,25 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
   reportUndeliveredEntryNotices(resolution);
   const servers = resolution.entries;
 
+  // HTTP mode has no repo tree to declare secrets in.
+  const teamEnv = localConfig.repo.kind === 'http' ? undefined : await resolveTeamEnv(localConfig);
+  // A failed declaration is not "no secrets" (#879 Conflict 14): nothing says
+  // which of a server's variables are secrets, so none is called set.
+  const declarationsFailed = teamEnv?.declarations.kind === 'failed';
+  if (teamEnv?.declarations.kind === 'failed') {
+    log.error(describeEntryFailure(teamEnv.declarations.failure));
+    process.exitCode = 1;
+  }
+
   if (servers.length === 0) {
     log.info('No team MCP servers reach this directory (mcp/mcp.yaml and active mcp/<ns>/mcp.yaml files are absent or empty)');
+    await reportMissingSecrets(localConfig, teamEnv);
     return;
   }
 
   const targets = await resolveMcpTargets(teamConfig, localConfig);
-  const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig);
+  // The team env already resolved above: resolving it again repeats its warnings.
+  const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, { teamEnv });
   const { vars } = desiredContext;
   // Project scope reads THIS worktree's own per-worktree manifest; user the global file.
   const manifest = (await readJson<ManagedMcpManifest>(
@@ -73,8 +87,8 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
 
     const needed = referencedVars(s);
     if (needed.length > 0) {
-      const missing = needed.filter((v) => !vars[v]);
-      const state = missing.length === 0 ? 'all set' : `MISSING: ${missing.join(', ')}`;
+      const missing = needed.filter((v) => !placeholderValue(vars, v));
+      const state = declarationsFailed ? 'not resolved' : missing.length === 0 ? 'all set' : `MISSING: ${missing.join(', ')}`;
       console.log(`    secrets:  ${needed.join(', ')} (${state})`);
     }
 
@@ -100,6 +114,7 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
   } else {
     for (const t of targets) console.log(`  ${t.tool.padEnd(16)} ${displayPath(t.file)}`);
   }
+  await reportMissingSecrets(localConfig, teamEnv);
 }
 
 function reportChanges(changes: McpChange[]): void {
