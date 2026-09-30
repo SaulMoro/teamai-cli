@@ -15,7 +15,7 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { judgeCopy, keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
+import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
@@ -861,8 +861,9 @@ export class AgentsHandler extends ResourceHandler {
    * - `model`: a tool's resolution differs from what `ledger` recorded for its
    *   copy. With no record, the copy was written by a CLI that recorded
    *   nothing and resolved no alias, so it differs only where this CLI
-   *   replaces the spec's `model`. A copy the member changed is left to the
-   *   full sync, which names it; here it would only be kept again, every pull.
+   *   replaces the spec's `model`. A copy the member changed is kept and
+   *   queued on `ledger.kept`, so the pull names it and the step that takes
+   *   the new model.
    * - `missing`: no copy, as an agent held before it was ever delivered, or
    *   one the member deleted.
    * - `render`: no record, and the copy is still what teamai delivered but
@@ -894,7 +895,7 @@ export class AgentsHandler extends ResourceHandler {
             : render.model.replacesSpecModel ? 'model'
               : await deliveredAndOutdated(ledger, dest, render.content) ? 'render' : undefined;
         if (reason === undefined) continue;
-        if (reason === 'model' && (await judgeCopy(ledger.previous, item, target)).kind === 'keep') continue;
+        if (reason === 'model' && await keepsEditedCopy(ledger, item, target)) continue;
         copies.push({ ...target, reason });
       }
       if (copies.length > 0) {

@@ -128,11 +128,11 @@ even where it gave the tool no model. A copy pull keeps as the member's edit,
 or holds because its model cannot be resolved, keeps its old entry. The fast
 path compares each agent's current resolution with it and redeploys only the
 agents that differ, through the same ledger, so HOME's entry and each project
-checkout's are separate; a copy the ledger would keep as the member's edit is
-left to the next full sync. An agent with no entry is redeployed where an
-alias replaces its `model`, which is what an older CLI wrote as is; where its
-copy is missing (an agent held before it was ever deployed); and where its
-copy still has the bytes `delivered` records but not the current render (an
+checkout's are separate; a copy the ledger keeps as the member's edit is
+named, as a full sync names it, and its entry kept. A missing copy is
+delivered, entry or not. An agent with no entry is also redeployed where an
+alias replaces its `model`, which is what an older CLI wrote as is, and where
+its copy still has the bytes `delivered` records but not the current render (an
 older CLI's render, such as Claude extras in a Qoder copy). Without a
 `delivered` entry for the copy nothing tells that render from an edit, so it
 is left alone.

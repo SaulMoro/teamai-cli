@@ -727,7 +727,7 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
   describe('what the fast path says it did', () => {
     const writeLocal = (text: string): Promise<void> => fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), text);
 
-    it('leaves a copy the member changed out of the fast path, and says nothing about it there', async () => {
+    it('keeps a copy the member changed on the fast path, and names it with the step that takes the new model', async () => {
       await writeAliases(STRONG);
       await writeAgent(IMPLEMENTER);
       await pullOnce();
@@ -735,12 +735,13 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
       await fse.writeFile(claudeFile(), edited);
       await writeLocal('aliases:\n  strong:\n    claude: sonnet\n');
 
+      // Said on every pull while the copy stays edited, as nothing else would tell the member.
       for (let i = 0; i < 2; i += 1) {
         vi.clearAllMocks();
         await pull({ silent: true });
         expect(alreadySynced()).toBe(true);
         expect(logged('success', /Updated the model/)).toBe(false);
-        expect(logged('warn', /Kept /)).toBe(false);
+        expect(logged('warn', /Kept .*implementer\.md: you changed it, .*`teamai pull --force`/)).toBe(true);
       }
       expect(await fse.readFile(claudeFile(), 'utf-8')).toBe(edited);
 

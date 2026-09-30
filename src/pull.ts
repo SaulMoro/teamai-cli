@@ -801,7 +801,11 @@ async function redeployAgentsWithChangedModels(
     // Said as a full sync says it, and the checkout not counted as synced, so
     // the next pull syncs in full and delivers what this one held.
     const held = ledger.held.length > 0;
-    if (redeploy.length === 0 && !held) return false;
+    if (redeploy.length === 0 && !held) {
+      // A copy kept for the member's edit changes nothing on record.
+      reportKept(ledger, scopeLabel);
+      return false;
+    }
     if (held && reportHeldAgents(ledger) > 0) reported.add('model-aliases');
     reportKept(ledger, scopeLabel);
     // A project checkout reaches the fast path only through its own record.
