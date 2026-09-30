@@ -1010,6 +1010,29 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
     });
 
+    it('never lets a tool that maps a moved Copilot\'s file today claim its stale bare server by the name it owns under mcpServers', async () => {
+      const copilot = { skills: '.github/skills', mcp: '.copilot/mcp-config.json' };
+      const before = { ...teamConfig, toolPaths: { ...TOOL_PATHS, copilot: { ...copilot, mcpProject: '.mcp.json' } } } as TeamaiConfig;
+      const after = { ...teamConfig, toolPaths: { ...TOOL_PATHS, copilot: { ...copilot, mcpProject: '.github/mcp.json' } } } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.github', 'skills'));
+      // An empty file reads as Copilot's bare map: its write stays bare.
+      await fse.writeFile(path.join(projectRoot, '.mcp.json'), '');
+      await writeMcpYaml(`${withSecret}    tools: [copilot]\n`);
+      await reconcileMcpForConfig(before, projectConfig);
+      expect((await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>)['with-secret']).toBeDefined();
+      // Copilot moves to .github/mcp.json; Claude, on .mcp.json, now owns a literal with-secret under mcpServers.
+      await writeMcpYaml(`${withSecret.replace('${SECRET_TOKEN}', 'published-literal')}    tools: [claude]\n`);
+      vi.stubEnv('SECRET_TOKEN', '');
+      await fse.writeFile(path.join(projectRoot, '.git', 'info', 'exclude'), '');
+
+      await reconcileMcpForConfig(after, projectConfig);
+
+      const doc = await fse.readJson(path.join(projectRoot, '.mcp.json')) as Record<string, unknown>;
+      expect((doc.mcpServers as Record<string, unknown>)['with-secret']).toBeDefined();
+      expect(JSON.stringify(doc['with-secret'])).toContain('super-secret-value');
+      expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
+    });
+
     it('never lets one format\'s record claim a server of the same name under another format\'s key', async () => {
       const toolPaths = {
         ...UNMOVED_TOOL_PATHS,

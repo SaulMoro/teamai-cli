@@ -368,6 +368,34 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix ?? '').toContain(shared);
     });
 
+    it('fails for a moved Copilot\'s file while the tool mapping it today owns that server name only under mcpServers', async () => {
+      const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+      teamConfig.toolPaths = {
+        ...teamConfig.toolPaths,
+        cursor: { skills: '.cursor/skills', mcp: '.cursor/mcp.json', mcpProject: 'shared/mcp.json' },
+        copilot: { skills: '.github/skills', mcp: '.copilot/mcp-config.json', mcpProject: '.github/mcp.json' },
+      };
+      const shared = path.join(projectRoot, 'shared', 'mcp.json');
+      await fse.outputJson(shared, {
+        x: { type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer t0ken-of-copilot' } },
+        mcpServers: { x: { type: 'http', url: 'https://x.example/mcp' } },
+      });
+      expect(await trackResolvedMcpFiles(localConfig, [{ tool: 'copilot', file: shared }])).toBe('written');
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
+        [managedMcpManifestKey('cursor', true)]: [{ name: 'x', hash: 'fixture-hash', resolved: false }],
+        // Copilot's record describes the file its mapping reaches today, not this one.
+        [managedMcpManifestKey('copilot', true)]: [],
+      });
+      // Cursor's x is still the team's, now a literal: its own rules find nothing to keep.
+      await writeTeamMcp('servers:\n  - name: x\n    transport: http\n    url: https://x.example/mcp\n');
+      await fse.appendFile(path.join(projectRoot, '.git', 'info', 'exclude'), '/.mcp.json\n');
+
+      const check = await excludeCheck();
+      if (!check) throw new Error('no git exclude check');
+      expect(await check.check()).toBe(false);
+      expect(check.fix ?? '').toContain(shared);
+    });
+
     describe('for an HTTP-backed team, judged by the records the local agent wrote', () => {
       const writeRecord = (record: Record<string, unknown>): Promise<void> =>
         fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), { [managedMcpManifestKey('claude', true)]: [record] });

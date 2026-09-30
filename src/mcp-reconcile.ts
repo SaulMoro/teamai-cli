@@ -916,9 +916,9 @@ export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: McpO
   }
   // Each target's key read alone: another key's owner proves nothing of it (OpenCode's `mcp` beside `mcpServers`).
   for (const target of targets) {
-    const own = await mcpFileState([target]);
-    const names = own.kind === 'parsed' ? own.servers : [];
-    const other = names.find((name) => !owned(target).includes(name));
+    const { underKey, bare } = await serverNamesByPlacement(target);
+    const other = underKey.find((name) => !owned(target).includes(name))
+      ?? bare.find((name) => !owned(target, { bare: true }).includes(name));
     if (other !== undefined) {
       return `teamai may have written a resolved value to it for ${targets.map((t) => t.tool).join(', ')} under an earlier toolPaths mapping, `
         + `and it holds ${other}, which no tool that maps it now owns`;
@@ -927,8 +927,26 @@ export async function recordedMcpFileEvidence(targets: McpTarget[], owned?: McpO
   return null;
 }
 
-/** For a target of a file other tools map today, the servers their records own under its key. */
-export type McpOwnedFor = (target: McpTarget) => readonly string[];
+/**
+ * `target`'s server names under its format's key, and apart, a Copilot project file's bare ones: a name
+ * another tool owns under `mcpServers` says nothing of a bare server beside it (#882).
+ */
+async function serverNamesByPlacement(target: McpTarget): Promise<{ underKey: string[]; bare: string[] }> {
+  if (target.format !== 'copilot' || !target.projectScope) {
+    return { underKey: [...(await installedMcpEntries(target))?.keys() ?? []], bare: [] };
+  }
+  const doc = await readJsonDoc(target.file, MCP_SERVER_KEY.copilot, true);
+  if (!doc) return { underKey: [], bare: [] };
+  return doc.bare
+    ? { underKey: [], bare: Object.keys(doc.servers) }
+    : { underKey: Object.keys(doc.servers), bare: Object.keys(doc.beside ?? {}) };
+}
+
+/**
+ * For a target of a file other tools map today, the servers their records own under its key, or, with
+ * `bare`, at a Copilot project file's top level, where only Copilot writes.
+ */
+export type McpOwnedFor = (target: McpTarget, options?: { bare?: boolean }) => readonly string[];
 
 /**
  * `McpOwnedFor` from `mappedBy`, the tools a file's mapping reaches today: only the records of those that
@@ -936,8 +954,11 @@ export type McpOwnedFor = (target: McpTarget) => readonly string[];
  */
 export function ownedByMappers(mappedBy: readonly string[], manifest: ManagedMcpManifest | undefined): McpOwnedFor | undefined {
   if (mappedBy.length === 0) return undefined;
-  return (target) => mappedBy
-    .filter((tool) => { const format = detectMcpFormat(tool); return format !== null && sameServerKey(format, target.format); })
+  return (target, options = {}) => mappedBy
+    .filter((tool) => {
+      const format = detectMcpFormat(tool);
+      return format !== null && (options.bare ? format === 'copilot' : sameServerKey(format, target.format));
+    })
     .flatMap((tool) => manifest?.[managedMcpManifestKey(tool, true)] ?? []).map((record) => record.name);
 }
 
