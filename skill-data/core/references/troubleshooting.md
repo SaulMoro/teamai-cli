@@ -209,8 +209,8 @@ session's runs, recalled docs and adopted docs. Per agent:
 - **OpenClaw, Hermes, Kiro, JoyCode**: no PostToolUse hook, so recalls never
   vote.
 
-A read after the session's last Stop is credited at SubagentStop or at the next
-`teamai pull`.
+A read after the session's last Stop is credited at SubagentStop, at Copilot CLI's
+SessionEnd, or at the next `teamai pull`.
 
 ## Still stuck
 

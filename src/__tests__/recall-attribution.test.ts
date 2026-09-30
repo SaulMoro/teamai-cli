@@ -339,6 +339,16 @@ class Harness {
     return this.dispatch('stop', { hook_event_name: 'Stop', session_id: undefined, ...fields }, this.root, tool);
   }
 
+  /**
+   * Copilot's SessionEnd of `session`, as its PascalCase hook config sends it:
+   * the session's end, after its last turn. Returns the hook's stdout.
+   */
+  async copilotSessionEnd(session: string): Promise<string> {
+    return this.dispatch('session-end', {
+      hook_event_name: 'SessionEnd', session_id: session, timestamp: new Date().toISOString(), reason: 'complete',
+    }, this.root, 'copilot');
+  }
+
   /** Claude's SubagentStop of `agent` in the main session: it carries the parent's `session_id`. Returns the hook's stdout. */
   async subagentStop(agent: Subagent): Promise<string> {
     return this.dispatch('subagent-stop', {
@@ -1394,7 +1404,7 @@ const ROWS: Row[] = [
       await h.agentCall('copilot', 'bash', { command: 'teamai recall "redis timeout"', description: 'Search team knowledge' },
         { session_id: COPILOT, ...copilotResult(output) });
       await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT, ...copilotResult(fs.readFileSync(files[0], 'utf-8')) });
-      await h.agentStop('copilot', { session_id: COPILOT });
+      await h.copilotSessionEnd(COPILOT);
     },
     project: { 'redis-timeout': 1 },
   },
@@ -1404,7 +1414,7 @@ const ROWS: Row[] = [
       const { files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT }, claim: false });
       await h.agentCall('copilot', 'grep', { pattern: 'timeout', path: path.dirname(files[0]), output_mode: 'content', '-n': true },
         { session_id: COPILOT, ...copilotResult(`${files[0]}:5:tags: [redis, timeout]`) });
-      await h.agentStop('copilot', { session_id: COPILOT });
+      await h.copilotSessionEnd(COPILOT);
     },
     project: { 'redis-timeout': 1 },
   },
@@ -1414,7 +1424,7 @@ const ROWS: Row[] = [
       const { output, files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT, CLAUDE_CODE_SESSION_ID: SESSION }, claim: false });
       await h.agentCall('copilot', 'Bash', { command: 'teamai recall "redis timeout"' }, { session_id: COPILOT, ...copilotResult(output) });
       await h.agentCall('copilot', 'Read', { path: files[0] }, { session_id: COPILOT, ...copilotResult('---') });
-      await h.agentStop('copilot', { session_id: COPILOT });
+      await h.copilotSessionEnd(COPILOT);
     },
     project: { 'redis-timeout': 1 },
   },
@@ -1425,9 +1435,28 @@ const ROWS: Row[] = [
       await h.agentCall('copilot', 'bash', { command: 'teamai recall --caller teamai-recall "redis timeout"' },
         { session_id: COPILOT_CHILD, ...copilotResult(output) });
       await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT_CHILD, ...copilotResult('---') });
-      await h.agentStop('copilot', { session_id: COPILOT_CHILD });
+      await h.copilotSessionEnd(COPILOT_CHILD);
     },
     project: {},
+  },
+  {
+    name: '08: Copilot recall settled from its session variable; view of the doc; SessionEnd (no Stop) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT }, claim: false });
+      await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT, ...copilotResult('---') });
+      await h.copilotSessionEnd(COPILOT);
+    },
+    project: { 'redis-timeout': 1 },
+  },
+  {
+    name: '08: Copilot fires Stop for the turn, then SessionEnd: the doc counts once → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT }, claim: false });
+      await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT, ...copilotResult('---') });
+      await h.agentStop('copilot', { session_id: COPILOT, transcript_path: '', stop_reason: 'end_turn', stop_hook_active: false });
+      await h.copilotSessionEnd(COPILOT);
+    },
+    project: { 'redis-timeout': 1 },
   },
   {
     name: '08: CodeBuddy CLI recall claimed by its Bash call; Read of the doc → +1 [unverified payload: Bash tool_response shape]',
@@ -1857,6 +1886,17 @@ describe('recall attribution acceptance (#884)', () => {
     expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
     expect(updateReports).not.toHaveBeenCalled();
     await h.stop();
+    expect(updateReports).toHaveBeenCalledTimes(1);
+  });
+
+  it('08: Copilot SessionEnd pushes the votes it credits and prints no adopted summary', async () => {
+    await h.setUp();
+    const { updateReports } = await import('../utils/reports-branch.js');
+    vi.mocked(updateReports).mockClear();
+    const { files } = await h.recall('redis timeout', { env: { COPILOT_AGENT_SESSION_ID: COPILOT }, claim: false });
+    await h.agentCall('copilot', 'view', { path: files[0] }, { session_id: COPILOT, ...copilotResult('---') });
+    expect(await h.copilotSessionEnd(COPILOT)).toBe('');
+    expect(await h.upvotes(h.project)).toEqual({ 'redis-timeout': 1 });
     expect(updateReports).toHaveBeenCalledTimes(1);
   });
 

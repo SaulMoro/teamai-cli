@@ -242,7 +242,7 @@ const trackHandler: HookHandler = {
 
 /**
  * PostToolUse: record a recall claim or a read of team knowledge in the recall
- * log, for the reducer votes-sync runs at Stop and SubagentStop (#884). One
+ * log, for the reducer votes-sync runs at Stop, SubagentStop and SessionEnd (#884). One
  * write per call, whatever number of run ids, docs read or files a search
  * showed lines of it records, and never a read of the log or of a file, so it
  * stays inside the foreground budget.
@@ -431,7 +431,11 @@ const votesSyncHandler: HookHandler = {
       // A subagent's end is not the end of the turn: the main agent waits on
       // this hook, so it only credits locally. The ledger prune and the vote
       // push, a git round trip, wait for the next Stop or pull.
-      const subagentStop = typeof stdin.hook_event_name === 'string' && stdin.hook_event_name.toLowerCase() === 'subagentstop';
+      const hookEvent = typeof stdin.hook_event_name === 'string' ? stdin.hook_event_name.toLowerCase() : '';
+      const subagentStop = hookEvent === 'subagentstop';
+      // Copilot's SessionEnd ends the session: it pushes as Stop does, but no
+      // one reads its reply, so it prints no summary.
+      const sessionEnd = hookEvent === 'sessionend';
 
       // Bound the in-file session ledger even in the default (judge-off) config,
       // where a recall-but-never-adopt session never reaches incrementUpvoted and
@@ -498,8 +502,8 @@ const votesSyncHandler: HookHandler = {
       // context (additionalContext); routing an FYI summary there would pollute
       // the next turn, so we simply skip it for those tools rather than misuse
       // the model channel.
-      // The summary waits for Stop too.
-      if (adoptedDocIds.length > 0 && !subagentStop) {
+      // The summary is for Stop alone.
+      if (adoptedDocIds.length > 0 && !subagentStop && !sessionEnd) {
         const { stopStdoutUnsupported } = await import('./utils/tool-names.js');
         if (!stopStdoutUnsupported(tool)) {
           const { formatStopHookOutput } = await import('./utils/hook-output.js');
@@ -833,6 +837,10 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // notification (#702). Detached, mirroring the stop registration.
     { event: 'session-end', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
     { event: 'session-end', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
+    // Copilot's last turn can end with SessionEnd and no Stop, so the recall
+    // reducer runs here too and pushes the votes (#884). A Stop before it
+    // already credited the same reads, and the ledger counts a doc once.
+    { event: 'session-end', matcher: '*', handler: votesSyncHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
 
     // ─── Stop ─────────────────────────────────────────
     // votes-sync and contribute-check may return a hint the host injects back

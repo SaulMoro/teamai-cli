@@ -196,10 +196,11 @@ describe('hook-handlers registry', () => {
     expect(events).toContain('session-end');
   });
 
-  it('session-end records the final dashboard snapshot and dispatches the webhook, both in the background', () => {
+  it('session-end records the final dashboard snapshot and dispatches the webhook in the background, and syncs votes in the foreground', () => {
     const handlers = buildHandlerRegistry().filter((r) => r.event === 'session-end');
     // Copilot fires SessionEnd (not Stop), so the webhook handler must run here
     // too — otherwise those sessions emit no session-stop notification (#702).
+    // votes-sync credits and pushes the last turn's reads (#884).
     expect(handlers).toEqual([
       expect.objectContaining({
         matcher: '*',
@@ -211,7 +212,14 @@ describe('hook-handlers registry', () => {
         background: true,
         handler: expect.objectContaining({ name: 'webhook-dispatch' }),
       }),
+      expect.objectContaining({
+        matcher: '*',
+        gitOnly: true,
+        requiresConfig: true,
+        handler: expect.objectContaining({ name: 'votes-sync' }),
+      }),
     ]);
+    expect(handlers[2].background).toBeUndefined();
   });
 
   it('session-start has pull and dashboard-report handlers', () => {
