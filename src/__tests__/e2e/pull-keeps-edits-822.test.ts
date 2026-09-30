@@ -206,9 +206,9 @@ describe('pull keeps a delivered copy the member changed (#822 item 5)', () => {
     expect(read(claudeScript())).toBe('echo mine\n');
     expect(read(claudeRule())).toContain('My version.');
     expect(read(claudeAgent())).toBe(agentEdit);
-    expect(output).toContain(`Kept ${claudeSkill()}: you changed it, and the team version (skills/team-skill) has changed since.`);
-    expect(output).toContain(`Kept ${claudeRule()}: you changed it, and the team version (rules/team-rule.md) has changed since.`);
-    expect(output).toContain(`Kept ${claudeAgent()}: you changed it, and the team version (agents/team-helper.yaml) has changed since.`);
+    expect(output).toContain(`Kept ${claudeSkill()}: you changed it, and the version teamai would deploy there (skills/team-skill) has changed since.`);
+    expect(output).toContain(`Kept ${claudeRule()}: you changed it, and the version teamai would deploy there (rules/team-rule.md) has changed since.`);
+    expect(output).toContain(`Kept ${claudeAgent()}: you changed it, and the version teamai would deploy there (agents/team-helper.yaml) has changed since.`);
     // Per tool: the Cursor render of the same rule and agent is not the member's, so it updates.
     expect(read(cursorRule())).toContain('Version two.');
     expect(read(cursorAgent())).toContain('Version two.');
@@ -335,7 +335,7 @@ describe('pull keeps a delivered copy the member changed (#822 item 5)', () => {
     const output = await inWorktree();
 
     expect(read(worktreeRule)).toContain('My version.');
-    expect(output).toContain(`Kept ${worktreeRule}: you changed it, and the team version (rules/team-rule.md) has changed since.`);
+    expect(output).toContain(`Kept ${worktreeRule}: you changed it, and the version teamai would deploy there (rules/team-rule.md) has changed since.`);
   });
 
   it('overwrites an edited copy teamai has no record of, as before, and protects it from then on', async () => {
@@ -356,6 +356,6 @@ describe('pull keeps a delivered copy the member changed (#822 item 5)', () => {
     teamCommit((repo) => fs.writeFileSync(path.join(repo, 'rules', 'team-rule.md'), '# Team rule\n\nVersion three.\n'));
     const protectedPull = await pull();
     expect(read(claudeRule())).toContain('My version again.');
-    expect(protectedPull).toContain(`Kept ${claudeRule()}: you changed it, and the team version (rules/team-rule.md) has changed since.`);
+    expect(protectedPull).toContain(`Kept ${claudeRule()}: you changed it, and the version teamai would deploy there (rules/team-rule.md) has changed since.`);
   });
 });

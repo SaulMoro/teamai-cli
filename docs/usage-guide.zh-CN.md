@@ -574,7 +574,7 @@ teamai pull --dry-run    # 试运行，不实际修改
 
 手动执行 `teamai pull` 会在结束时运行 `teamai doctor` 的检查，并逐条打印失败项及其修复建议——包括它刚刚报告同步的 skill 是否真的落到每个启用工具的磁盘上、且可被读取。全部通过时不会有任何额外输出，退出码也不变。SessionStart hook 路径和 `--dry-run` 完全不运行检查，会话启动速度保持不变。托管平台相关的检查（`gh`/`gf` 认证）留给 `teamai doctor`：这次 pull 刚刚用过该平台。
 
-**pull 会保留你修改过的 skill、rule 和 agent。** pull 按检出记录它在每个 skill、rule、agent 路径写入的内容。完整同步时，与记录不一致的副本会被保留并由 pull 指出，其他工具的副本照常更新。一个 skill 算作一份副本：它的任一团队文件被改动，整个 skill 都会保留；只有你自己添加的文件不计入。团队版本没有变化时，pull 输出 ``Kept <path>: you changed it since teamai delivered it. Share it with `teamai push`, or delete it and run `teamai pull --force` to get the team version back.``；团队版本也变了时，pull 给出警告，请你先把团队的改动合并进自己的副本，再 push；由于 SessionStart 时的 pull 不输出信息，`teamai push` 也会对该副本给出警告。`--force` 同样保留这些副本，`--dry-run` 会逐个输出 `Would keep <path>`。团队删除某项资源时，你修改过的副本也会保留，并由 pull 指出。升级后第一次完整 pull 之前还没有记录，因此那次 pull 仍像旧版本一样覆盖，此后你的修改才受保护。新 worktree 的第一次 pull、以及 teamai 从未写入过该路径的副本，同样如此。`teamai remove` 和本地 agent 的安装仍会不经这项检查重写团队 rule。旧版 CLI 保存 state 时会丢弃这份记录。
+**pull 会保留你修改过的 skill、rule 和 agent。** pull 按检出记录它在每个 skill、rule、agent 路径写入的内容。完整同步时，与记录不一致的副本会被保留并由 pull 指出，其他工具的副本照常更新。一个 skill 算作一份副本：它的任一团队文件被改动，整个 skill 都会保留；只有你自己添加的文件不计入。团队版本没有变化时，pull 输出 ``Kept <path>: you changed it since teamai delivered it. Share it with `teamai push`, or delete it and run `teamai pull --force` to get the team version back.``；团队版本也变了时（无论是团队改的，还是你的[本地模型别名覆盖](#本地覆盖)导致的），pull 给出警告，请你先把这项改动合并进自己的副本，再 push；由于 SessionStart 时的 pull 不输出信息，`teamai push` 也会对该副本给出警告。`--force` 同样保留这些副本，`--dry-run` 会逐个输出 `Would keep <path>`。团队删除某项资源时，你修改过的副本也会保留，并由 pull 指出。升级后第一次完整 pull 之前还没有记录，因此那次 pull 仍像旧版本一样覆盖，此后你的修改才受保护。新 worktree 的第一次 pull、以及 teamai 从未写入过该路径的副本，同样如此。`teamai remove` 和本地 agent 的安装仍会不经这项检查重写团队 rule。旧版 CLI 保存 state 时会丢弃这份记录。
 
 > Project scope 默认与 user scope 隔离。当前工作目录包含 project scope 的 `.teamai/config.yaml` 时，`pull` 会处理该项目并跳过 user scope；仅当本地配置包含 `inheritUserScope: true` 时，才会先刷新安全的 user 资源通道。当前目录没有 project 配置时，`pull` 处理 user scope。project 模式下，user 的 `env`、MCP 定义、sources、reporting 和写入行为仍保持隔离。hooks 是唯一例外：project scope 的 hooks 会注入到你的 **HOME** 工具设置（`~/.claude/settings.json` 等），而非 `<projectRoot>`——因为内置 hooks 依据传给 `hook-dispatch` 的 `cwd` 门控，且 `~/.claude` 恒存在、能通过「已安装工具」门槛（详见 Hooks 章节）。在没有 teamai 配置的目录中（既没有 project 配置也没有 user scope），团队 hooks 不做任何事：不显示提醒，也不记录会话或 skill 使用；只运行机器级别的工作（CLI 更新检查、SessionStart 时的 pull、本地 agent，以及 pull 暂存的包提示）。对团队 hooks 和 skill 使用记录而言，存在但无法读取的 project 配置视为没有配置，而不会退回 user scope，也不会退回其后优先级更低的 project 配置（如旧的 `.teamai/config.yaml`）。`pull` 遵循同一规则：此时不同步任何 scope，输出 ``Nothing was synced: <file>: <reason>. Fix the file, or move it aside and run `teamai init` to write a new one.`` 并以 exit 1 退出（加 `--silent` 时不输出，但仍以 exit 1 退出）；会话启动时不运行 pull，也不创建 agent 目录、不暂存包提示。`cwd` 已被删除的 hook（会话比它的 worktree 活得更久）沿用该会话最后记录的 scope，因此会话最后的事件和 skill 使用仍归属项目，分享提醒也遵循项目的设置，而不是 user scope 的。这需要本地事件日志中仍保留该会话之前的事件（压缩只保留活跃会话），且不适用于 Copilot，因为它的事件不记录目录。self 单仓模式则把 hooks 保留在业务仓库里，随 clone 传播。
 
@@ -1747,6 +1747,28 @@ aliases:
 - 读取 agent 时会拒绝非字符串的 `model`。旧格式 `agents/<name>.md` 按原样复制，因此当其 `model` 是别名时 pull 会给出警告。
 - `models/aliases.yaml` 无法读取时，pull 会警告并暂停所有模型依赖它的 agent：已部署的副本保留，不写入新副本。push 会跳过这些 agent 并说明原因。
 - pull 会记录每个 agent 副本收到的模型和推理强度，因此即使团队仓库没有变化，普通的 `teamai pull` 也会应用变化，例如从把 `model: strong` 按原样写入的旧版 CLI 升级后的第一次 pull。它只重写模型发生变化的 agent，并保留你修改过的副本。agent 使用的别名被删除时，pull 会警告其 `model` 现在按原样写入。
+- `models/aliases.yaml` 中的 `default` 和其他模型值一样按原样写入，它是 CodeBuddy 表示其默认模型的原生值。在该文件中写 `~` 是错误：要让某个工具不产生 model 字段，不写该工具即可。
+
+##### 本地覆盖
+
+成员可以在自己机器上的 `~/.teamai/models/aliases.yaml` 中替换团队条目，格式同样是 `aliases:`：
+
+```yaml
+# ~/.teamai/models/aliases.yaml
+aliases:
+  strong:
+    codex: { model: gpt-6-astra, effort: xhigh }
+  fast:
+    codex: default          # fast 在 Codex 中使用 Codex 自己的默认模型
+```
+
+- 每个工具的顺序是：`tool_extras.<tool>.model`，然后是你的条目，然后是团队条目，最后是不写 model 字段。你的条目会整体替换该工具的团队条目，包括推理强度，因此即使团队映射了推理强度，`codex: gpt-6-astra` 也不会给 Codex 写推理强度。
+- 某个工具写 `~` 或 `default` 时，无论团队如何映射，它都不会得到 model 字段和推理强度。
+- 键可以是保留名称（`strong`、`fast`）或团队定义的别名，值可以是任意模型。团队还没有 `models/aliases.yaml` 时，你也可以映射 `strong`。两者都不是的名称不起作用，因为该文件服务于这台机器上的所有团队。
+- claude-internal 和 tclaude 使用你的 `claude` 条目，codex-internal 和 tcodex 使用你的 `codex` 条目，Qoder CN 使用你的 `qoder` 条目，除非你为它们单独写了条目。你的 `claude` 条目优先于团队的 `tclaude` 条目。
+- 该文件每台机器一份：它适用于所有作用域（user 和每个项目检出），也适用于使用该别名名称的每个团队。
+- 修改该文件后，普通的 `teamai pull` 即会应用，即使团队仓库没有变化。
+- 该文件无法读取时，pull 会警告并指明该文件，并像团队文件一样暂停所有模型依赖它的 agent。
 
 ### GitHub Copilot CLI
 

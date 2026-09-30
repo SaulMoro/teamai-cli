@@ -351,6 +351,103 @@ describe('AgentsHandler pull: model aliases', () => {
     expect(vi.mocked(log.warn).mock.calls.flat().join('\n')).not.toMatch(/Kept agent/);
   });
 
+  describe('local override', () => {
+    const localFile = (): string => path.join(homeDir, '.teamai/models/aliases.yaml');
+    async function writeLocal(content: unknown): Promise<void> {
+      await fse.outputFile(localFile(), typeof content === 'string' ? content : YAML.stringify(content));
+    }
+
+    it('replaces the whole team entry for that tool, effort included', async () => {
+      await writeAliases(STRONG);
+      await writeLocal({ aliases: { strong: { codex: 'gpt-6-astra' } } });
+      const files = await pullTo(['claude', 'codex'], makeSpec({ model: 'strong' }));
+      expect(files['codex']).toMatchObject({ model: 'gpt-6-astra' });
+      expect(files['codex']).not.toHaveProperty('model_reasoning_effort');
+      expect(files['claude']).toMatchObject({ model: 'opus', effort: 'high' });
+    });
+
+    it('writes the local effort in the tool\'s own field', async () => {
+      await writeAliases(STRONG);
+      await writeLocal({ aliases: { strong: { codex: { model: 'gpt-6-astra', effort: 'xhigh' } } } });
+      const files = await pullTo(['codex'], makeSpec({ model: 'strong' }));
+      expect(files['codex']).toMatchObject({ model: 'gpt-6-astra', model_reasoning_effort: 'xhigh' });
+    });
+
+    it('sends a tool back to its default with ~ or default', async () => {
+      await writeAliases(STRONG);
+      await writeLocal('aliases:\n  strong:\n    claude: ~\n    codex: default\n');
+      const files = await pullTo(['claude', 'codex'], makeSpec({ model: 'strong' }));
+      for (const tool of ['claude', 'codex']) {
+        expect(files[tool]).toHaveProperty('name', 'implementer');
+        expect(files[tool]).not.toHaveProperty('model');
+      }
+      expect(files['claude']).not.toHaveProperty('effort');
+      expect(files['codex']).not.toHaveProperty('model_reasoning_effort');
+    });
+
+    it('maps strong without a team aliases file', async () => {
+      await writeLocal({ aliases: { strong: { claude: { model: 'sonnet', effort: 'low' } } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toMatchObject({ model: 'sonnet', effort: 'low' });
+    });
+
+    it('does not make a name an alias the team does not define', async () => {
+      await writeLocal({ aliases: { reviewer: { claude: 'opus', kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'reviewer' }));
+      expect(files['claude']).toMatchObject({ model: 'reviewer' });
+      expect(vi.mocked(log.warn)).not.toHaveBeenCalled();
+    });
+
+    it('a local claude entry wins over the team\'s tclaude entry, and a local tclaude entry over it', async () => {
+      await writeAliases({ aliases: { strong: { claude: 'opus', tclaude: 'opus-internal' } } });
+      await writeLocal({ aliases: { strong: { claude: 'sonnet' } } });
+      expect((await pullTo(['tclaude'], makeSpec({ model: 'strong' })))['tclaude']).toMatchObject({ model: 'sonnet' });
+      await writeLocal({ aliases: { strong: { claude: 'sonnet', tclaude: 'haiku' } } });
+      expect((await pullTo(['tclaude'], makeSpec({ model: 'strong' })))['tclaude']).toMatchObject({ model: 'haiku' });
+    });
+
+    it('an extras model wins over the local entry', async () => {
+      await writeLocal({ aliases: { strong: { claude: 'sonnet' } } });
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong', tool_extras: { claude: { model: 'fable' } } }));
+      expect(files['claude']).toMatchObject({ model: 'fable' });
+    });
+
+    it('holds agents with a model while the local file is invalid, naming it', async () => {
+      await writeAliases(STRONG);
+      await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      const deployed = path.join(homeDir, '.claude/agents/implementer.md');
+      const before = await fse.readFile(deployed, 'utf-8');
+
+      await writeLocal({ aliases: { strong: { claude: { effort: 'high' } } } });
+      await pullTo(['claude'], makeSpec({ model: 'strong', instructions: 'Changed.' }));
+      expect(await fse.readFile(deployed, 'utf-8')).toBe(before);
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(`Held implementer.yaml: Invalid model aliases file at ${localFile()}`));
+    });
+
+    it('warns about a dropped local effort naming the local file', async () => {
+      await writeLocal({ aliases: { strong: { kiro: { model: 'claude-opus-5', effort: 'high' } } } });
+      await pullTo(['kiro'], makeSpec({ model: 'strong' }));
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(`${localFile()}: alias "strong" sets an effort for kiro`));
+    });
+  });
+
+  describe('team file opt-out values', () => {
+    it('passes default through as a model value', async () => {
+      await writeAliases({ aliases: { strong: { codebuddy: 'default' } } });
+      const files = await pullTo(['codebuddy'], makeSpec({ model: 'strong' }));
+      expect(files['codebuddy']).toMatchObject({ model: 'default' });
+    });
+
+    it('rejects ~, holding agents with a model', async () => {
+      await writeAliases('aliases:\n  strong:\n    claude: ~\n');
+      const files = await pullTo(['claude'], makeSpec({ model: 'strong' }));
+      expect(files['claude']).toEqual({});
+      expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining(
+        'Held implementer.yaml: Invalid model aliases file at models/aliases.yaml: strong.claude: ~ is accepted only in a member\'s',
+      ));
+    });
+  });
+
   describe('push', () => {
     it('does not report a pulled alias agent as edited', async () => {
       await writeAliases(STRONG);

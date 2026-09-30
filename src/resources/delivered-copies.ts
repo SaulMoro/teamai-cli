@@ -165,9 +165,10 @@ export function reportKept(ledger: DeliveryLedger, scopeLabel: string): void {
     named.add(dest);
     if (teamChanged) {
       log.warn(
-        `[${scopeLabel}] Kept ${dest}: you changed it, and the team version (${teamRelPath}) has changed since. `
-        + 'Merge the team change into your copy and share it with `teamai push`, '
-        + 'or delete your copy and run `teamai pull --force` to take the team version.',
+        // The change may be the team's or the member's own model alias override.
+        `[${scopeLabel}] Kept ${dest}: you changed it, and the version teamai would deploy there (${teamRelPath}) has changed since. `
+        + 'Merge that change into your copy and share it with `teamai push`, '
+        + 'or delete your copy and run `teamai pull --force` to take that version.',
       );
     } else {
       log.info(

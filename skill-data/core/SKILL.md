@@ -111,8 +111,8 @@ is kept and named. Use a dedicated directory; preview with `--dry-run`.
 
 `teamai pull` keeps a skill, rule or agent copy the user changed since teamai
 delivered it, `--force` included, and names it (`Kept <path>: ...`). To share
-the change, `teamai push`; when pull or push says the team version has changed
-since, merge that change into the copy first, or the push replaces it. To take the team version instead, delete
+the change, `teamai push`; when pull says the version teamai would deploy has
+changed since, or push says the team changed it, merge that change into the copy first, or the push replaces it. To take the team version instead, delete
 the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
@@ -137,6 +137,14 @@ an entry, so never expect a `claude` model in Qoder or ZCode. A tool the alias d
 not map gets no `model` and uses its default; a concrete model such as `opus` is
 written as is; `tool_extras.<tool>.model` pins one tool and skips the alias. Suggest
 YAML agents: a legacy `agents/<name>.md` is copied as is, so its alias is not resolved.
+
+A member overrides an entry on their machine in `~/.teamai/models/aliases.yaml`
+(same `aliases:` shape). For one tool it replaces the team's whole entry, effort
+included, and `~` or `default` gives that tool no model and no effort. Order per
+tool: extras model, local entry, team entry, no model. Keys must be `strong`, `fast`
+or a team alias; other names do nothing. One file serves every scope and every team
+with that alias name. An ordinary `teamai pull` applies an edit. In the team file,
+`default` is a literal model value and `~` is an error.
 
 ## References
 

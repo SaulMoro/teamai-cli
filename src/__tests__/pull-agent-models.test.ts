@@ -273,6 +273,63 @@ describe('pull: recorded agent models on an unchanged team revision', () => {
     expect(recorded?.['codex']).toEqual({ step: 'team', model: 'gpt-6-luna' });
   });
 
+  describe('local override', () => {
+    const writeLocal = (text: string): Promise<void> => fse.outputFile(path.join(homeDir, '.teamai/models/aliases.yaml'), text);
+
+    it('applies an edited override on an ordinary pull, and ~ or default sends the tool to its default', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+      await writeLocal('aliases:\n  strong:\n    codex: { model: gpt-6-astra, effort: low }\n');
+
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      expect(await codexModel()).toMatchObject({ model: 'gpt-6-astra', model_reasoning_effort: 'low' });
+      expect(await claudeModel()).toMatchObject({ model: 'opus', effort: 'high' });
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local', model: 'gpt-6-astra', effort: 'low' });
+
+      vi.clearAllMocks();
+      await writeLocal('aliases:\n  strong:\n    codex: default\n');
+      await pull({ silent: true });
+
+      expect(alreadySynced()).toBe(true);
+      const codex = await codexModel();
+      expect(codex).toHaveProperty('name', 'implementer');
+      expect(codex).not.toHaveProperty('model');
+      expect(codex).not.toHaveProperty('model_reasoning_effort');
+      expect((await homeRecord())?.agentModels?.['implementer']?.['codex']).toEqual({ step: 'local' });
+    });
+
+    it('says a kept copy\'s deployed version changed without blaming the team', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await pullOnce();
+      await fse.writeFile(claudeFile(), `${await fse.readFile(claudeFile(), 'utf-8')}\nMy own note.\n`);
+      await writeLocal('aliases:\n  strong:\n    claude: sonnet\n');
+
+      await pull({ silent: true });
+
+      expect(logged('warn', /Kept .*implementer\.md: you changed it, and the version teamai would deploy there \(agents\/implementer\.yaml\) has changed since/)).toBe(true);
+      expect(logged('warn', /team version/)).toBe(false);
+    });
+
+    it('applies in a project checkout too', async () => {
+      await writeAliases(STRONG);
+      await writeAgent(IMPLEMENTER);
+      await writeLocal('aliases:\n  strong:\n    claude: sonnet\n');
+      const projectRoot = path.join(tmpDir, 'project');
+      await fse.ensureDir(path.join(projectRoot, '.git'));
+      await fse.ensureDir(path.join(projectRoot, '.claude'));
+      vi.mocked(detectProjectConfig).mockResolvedValue({ ...localConfig, scope: 'project', projectRoot });
+
+      await pull({ silent: true });
+
+      const projectCopy = path.join(projectRoot, '.claude', 'agents', 'implementer.md');
+      expect(matter(await fse.readFile(projectCopy, 'utf-8')).data).toMatchObject({ model: 'sonnet' });
+    });
+  });
+
   it('warns when a model resolved by an alias at the last pull is now written literally', async () => {
     await writeAliases({ aliases: { reviewer: { claude: { model: 'opus', effort: 'max' } } } });
     await writeAgent({ ...IMPLEMENTER, model: 'reviewer' });
