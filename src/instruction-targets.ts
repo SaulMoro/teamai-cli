@@ -37,6 +37,8 @@ interface TargetEntry {
    * takes no file in this scope.
    */
   readonly file: (paths: ToolPaths) => string | undefined;
+  /** The tool gets this scope's blocks from teamai's session hook or extension instead of a file. */
+  readonly hook?: boolean;
   /** Text teamai writes above the blocks when it creates the file, e.g. the frontmatter a rules loader needs. */
   readonly header?: string;
   /** teamai owns the whole file: one it did not write is left alone, and it is deleted once its blocks are gone. */
@@ -79,7 +81,9 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   // Hermes loads SOUL.md in every session; teamai's rules block is already there.
   hermes: { file: () => getHermesSoulPath(), retired: ['AGENTS.md'] },
   copilot: { file: configured, retired: [] },
-  omp: { file: configured, retired: [] },
+  // RULES.md is an always-applied rule beside OMP's single user context file,
+  // which ~/.omp/agent/AGENTS.md would take from ~/.agents/AGENTS.md.
+  omp: { file: () => '.omp/agent/RULES.md', retired: ['.omp/agent/AGENTS.md'] },
   pi: { file: configured, retired: [] },
   // WorkBuddy reads user rules from ~/.workbuddy/rules; nothing else reads them.
   workbuddy: { file: contextRule('.md'), header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
@@ -97,7 +101,10 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   tclaude: { file: configured, retired: [] },
   hermes: { file: configured, retired: [] },
   copilot: { file: configured, retired: [] },
-  omp: { file: configured, retired: [] },
+  // OMP reads project rules only from the root and keeps one context file per
+  // level, so .omp/AGENTS.md would hide the project's AGENTS.md: teamai's OMP
+  // extension adds the blocks to each turn's system prompt instead.
+  omp: { file: () => undefined, hook: true, retired: ['.omp/AGENTS.md'] },
   pi: { file: configured, retired: [] },
   workbuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['.codebuddy/CODEBUDDY.md'] },
@@ -154,6 +161,21 @@ export interface InstructionBlocks {
  */
 export function instructionTargetFile(tool: string, paths: ToolPaths, scope: Scope): string | undefined {
   return (entryFor(tool, scope)?.file ?? configured)(paths);
+}
+
+/** Whether `tool` gets this scope's blocks from teamai's session hook or extension rather than a file. */
+export function deliversInstructionsByHook(tool: string, scope: Scope): boolean {
+  return entryFor(tool, scope)?.hook === true;
+}
+
+/**
+ * The text a session hook adds to the prompt: the same blocks a file target
+ * holds, recall included only for a tool with the `teamai-recall` subagent.
+ */
+export function instructionHookText(blocks: InstructionBlocks, recall: boolean): string {
+  return [blocks.culture, blocks.claudemd, recall ? blocks.recall : null]
+    .filter((block): block is string => typeof block === 'string' && block !== '')
+    .join('\n\n');
 }
 
 /** Absolute instruction file of `tool` in the active scope, or undefined when it takes none. */

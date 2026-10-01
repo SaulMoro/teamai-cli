@@ -18,7 +18,11 @@
  *   - `tool_result`        → post-tool-use  (dashboard; wildcard only)
  *
  * The generated extension runs each dispatch for its side effects and never
- * blocks the agent: all shell errors are swallowed. `session_stop` IS awaited
+ * blocks the agent: all shell errors are swallowed. One dispatch has a
+ * result: \`instructions\` returns the member's culture, claudemd and recall
+ * blocks for a project session, which \`before_agent_start\` appends to the
+ * system prompt (#945). OMP rebuilds that prompt from its base every turn, so
+ * the blocks reach each request once. `session_stop` IS awaited
  * by OMP before the main session settles — the dispatch carries its own
  * timeout, and the handler deliberately returns nothing: the `continue` /
  * `decision: "block"` fields of SessionStopEventResult would force a session
@@ -177,7 +181,23 @@ export default function teamaiHooks(pi) {
     }
   };
 
+  // The member's culture, claudemd and recall blocks for a project session,
+  // or "" (user scope, or teamai unavailable). Fetched once per session.
+  let instructions;
+  const loadInstructions = async (ctx) => {
+    try {
+      const stdin = JSON.stringify({ cwd: ctx.cwd, ...sessionOf(ctx) });
+      const args = ["hook-dispatch", "instructions", "--tool", "omp"];
+      const out = await $\`teamai \${args} < \${new Response(stdin)}\`.quiet().nothrow().text();
+      const text = out.trim() ? JSON.parse(out).hookSpecificOutput?.additionalContext : undefined;
+      return typeof text === "string" ? text : "";
+    } catch {
+      return "";
+    }
+  };
+
   pi.on("session_start", async (_event, ctx) => {
+    instructions = loadInstructions(ctx);
     await dispatch("session-start", ctx);
   });
 
@@ -185,8 +205,12 @@ export default function teamaiHooks(pi) {
     await dispatch("stop", ctx);
   });
 
+  // OMP rebuilds the system prompt from its base each turn, so appending
+  // here adds the blocks to every request once, without piling up.
   pi.on("before_agent_start", async (event, ctx) => {
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
+    const text = await (instructions ??= loadInstructions(ctx));
+    return text ? { systemPrompt: [...event.systemPrompt, text] } : undefined;
   });
 
   // Subagent sessions already linked: a session's parent never changes.

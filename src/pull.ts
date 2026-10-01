@@ -1833,21 +1833,16 @@ export function compileClaudemd(contents: string[]): string | null {
 }
 
 /**
- * Deliver the culture, shared-instruction and recall blocks to every installed
- * tool's target, and strip them from files no installed tool loads them from
- * (#945). Runs on the "Already synced" fast path too, so a CLI upgrade that
- * moves a target or ships a new recall block takes effect without a repo
- * change. The recall block goes to targets whose tool has the `teamai-recall`
- * subagent; the block itself tells an agent without one to run
- * `teamai recall` directly. A dry run reports the files it would change.
+ * The culture, shared-instruction and recall blocks this member gets in this
+ * scope: the same text whether a pull writes it to a file or a session hook
+ * adds it to the prompt (#945). A block whose source cannot be read is left
+ * undefined, so a write keeps what is there.
  */
-async function syncManagedInstructions(
+export async function resolveInstructionBlocks(
   config: TeamaiConfig,
   localConfig: LocalConfig,
   roleContext: RolePullContext | null,
-  scopeLabel: string,
-  dryRun = false,
-): Promise<void> {
+): Promise<{ blocks: InstructionBlocks; claudemdFiles: number }> {
   const culturePath = path.join(localConfig.repo.localPath, 'culture.md');
   const blocks: InstructionBlocks = {
     recall: isRecallEnabled(localConfig, config) ? compileRecallRulesBlock() : null,
@@ -1873,7 +1868,26 @@ async function syncManagedInstructions(
   } catch (e) {
     log.debug(`Shared instructions sync skipped: ${(e as Error).message}`);
   }
+  return { blocks, claudemdFiles };
+}
 
+/**
+ * Deliver the culture, shared-instruction and recall blocks to every installed
+ * tool's target, and strip them from files no installed tool loads them from
+ * (#945). Runs on the "Already synced" fast path too, so a CLI upgrade that
+ * moves a target or ships a new recall block takes effect without a repo
+ * change. The recall block goes to targets whose tool has the `teamai-recall`
+ * subagent; the block itself tells an agent without one to run
+ * `teamai recall` directly. A dry run reports the files it would change.
+ */
+async function syncManagedInstructions(
+  config: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+  scopeLabel: string,
+  dryRun = false,
+): Promise<void> {
+  const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
   const { targets, stale } = await resolveInstructionTargets(config, localConfig);
   const plan = await planInstructionFiles(targets, blocks, stale);
   for (const warning of plan.warnings) log.warn(`[${scopeLabel}] ${warning}`);

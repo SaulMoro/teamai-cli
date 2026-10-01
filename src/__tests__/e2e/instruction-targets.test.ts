@@ -31,7 +31,7 @@ interface RunResult {
   output: string;
 }
 
-function runCLI(args: string[], env: Record<string, string>, cwd: string): Promise<RunResult> {
+function runCLI(args: string[], env: Record<string, string>, cwd: string, stdin = ''): Promise<RunResult & { stdout: string }> {
   return new Promise((resolve) => {
     const child = spawn('node', [CLI, ...args], {
       env: { ...process.env, FORCE_COLOR: '0', ...env },
@@ -39,11 +39,20 @@ function runCLI(args: string[], env: Record<string, string>, cwd: string): Promi
       cwd,
     });
     let output = '';
-    child.stdout.on('data', (data: Buffer) => { output += data.toString(); });
+    let stdout = '';
+    child.stdout.on('data', (data: Buffer) => { output += data.toString(); stdout += data.toString(); });
     child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
-    child.stdin.end();
-    child.on('close', (code) => resolve({ code, output }));
+    child.stdin.end(stdin);
+    child.on('close', (code) => resolve({ code, output, stdout }));
   });
+}
+
+/** The context `teamai hook-dispatch instructions` hands an extension for a session in `cwd`. */
+async function sessionInstructions(tool: string, home: string, cwd: string): Promise<string> {
+  const result = await runCLI(['hook-dispatch', 'instructions', '--tool', tool], { HOME: home }, cwd, JSON.stringify({ cwd }));
+  expect(result.code, result.output).toBe(0);
+  if (!result.stdout.trim()) return '';
+  return JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string;
 }
 
 function git(args: string[], cwd: string): void {
@@ -422,5 +431,47 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(rule.startsWith('---\nalwaysApply: true\n---\n\n')).toBe(true);
     expect(rule).toContain(CLAUDEMD_START);
     expect(fs.existsSync(path.join(home, 'AGENTS.md'))).toBe(false);
+  });
+
+  it('gives Oh My Pi its project blocks through the extension, its user blocks in RULES.md, and frees both context files', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox);
+    const developer = makeProjectMember(sandbox, fixture, 'dev', 'developer', ['.omp/skills']);
+    const product = makeProjectMember(sandbox, fixture, 'pm', 'product', ['.omp/skills']);
+    const legacy = path.join(developer.projectRoot, '.omp', 'AGENTS.md');
+    fs.writeFileSync(legacy, `${CLAUDEMD_START}\nold selection\n${CLAUDEMD_END}\n`);
+    for (const member of [developer, product]) {
+      fs.mkdirSync(path.join(member.home, '.omp'), { recursive: true });
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+    }
+
+    expect(fs.existsSync(legacy)).toBe(false);
+    const sub = path.join(developer.projectRoot, 'src');
+    fs.mkdirSync(sub, { recursive: true });
+    const devContext = await sessionInstructions('omp', developer.home, sub);
+    expect(devContext).toContain('DEVELOPMENT-SENTINEL');
+    expect(devContext).not.toContain('PRODUCT-SENTINEL');
+    expect(devContext).toContain('Acme');
+    expect(devContext).toContain('teamai-recall');
+    const pmContext = await sessionInstructions('omp', product.home, product.projectRoot);
+    expect(pmContext).toContain('PRODUCT-SENTINEL');
+    expect(pmContext).not.toContain('DEVELOPMENT-SENTINEL');
+    expect(await sessionInstructions('claude', developer.home, developer.projectRoot)).toBe('');
+    for (const member of [developer, product]) {
+      expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
+    }
+
+    const user = makeUserSandbox(['.omp']);
+    sandboxes.push(user.sandbox);
+    const userContextFile = path.join(user.home, '.omp', 'agent', 'AGENTS.md');
+    fs.mkdirSync(path.dirname(userContextFile), { recursive: true });
+    fs.writeFileSync(userContextFile, `${CULTURE_START}\nold culture\n${CULTURE_END}\n`);
+    const userPull = await runCLI(['pull'], { HOME: user.home }, user.sandbox);
+    expect(userPull.code, userPull.output).toBe(0);
+    expect(fs.readFileSync(path.join(user.home, '.omp', 'agent', 'RULES.md'), 'utf8')).toContain(CLAUDEMD_START);
+    expect(fs.existsSync(userContextFile)).toBe(false);
+    expect(await sessionInstructions('omp', user.home, user.sandbox)).toBe('');
   });
 });

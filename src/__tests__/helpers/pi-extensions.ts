@@ -18,7 +18,7 @@ export interface ExtensionContext {
   agent?: { kind: 'main' | 'sub'; id: string; name: string; depth?: number; parentId?: string };
 }
 
-export type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<void>;
+export type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 
 export interface LoadedExtension {
   /** The handler the extension registered for each host event. */
@@ -59,13 +59,14 @@ export function loadPiExtension(): LoadedExtension {
  * instead of running `teamai`: the argv is the template's first value, the
  * STDIN the Response redirected into it.
  */
-export function loadOmpExtension(): LoadedExtension {
+export function loadOmpExtension(stdoutFor: (args: string[]) => string = () => ''): LoadedExtension {
   const dispatches: ExtensionDispatch[] = [];
   const $ = (_strings: TemplateStringsArray, args: string[], stdin: Response) => {
     const run = (async () => {
       dispatches.push({ args, payload: JSON.parse(await stdin.text()) as Record<string, unknown> });
     })();
-    return { quiet: () => ({ nothrow: () => run }) };
+    const output = Object.assign(run, { text: async () => { await run; return stdoutFor(args); } });
+    return { quiet: () => ({ nothrow: () => output }) };
   };
   const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer });
   return { on, dispatches };
