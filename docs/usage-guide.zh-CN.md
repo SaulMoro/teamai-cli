@@ -1556,6 +1556,8 @@ Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用�
 - Oh My Pi：`~/.omp/agent/AGENTS.md` 和 `.omp/AGENTS.md`。Oh My Pi 每一层只读取一个上下文文件，因此它们会遮蔽 `~/.agents/AGENTS.md` 和项目的 `AGENTS.md`。
 - Pi：项目 `AGENTS.md`
 
+`teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件，Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
+
 与 teamai 目标同名但并非 teamai 写入的文件保持不变，pull 会给出警告。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
 
 ### 查看效果

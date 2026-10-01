@@ -1678,6 +1678,8 @@ A pull from an earlier release may have left these blocks in a file listed below
 - Oh My Pi: `~/.omp/agent/AGENTS.md` and `.omp/AGENTS.md`. Oh My Pi reads one context file per level, so these hid `~/.agents/AGENTS.md` and the project's `AGENTS.md`.
 - Pi: the project `AGENTS.md`
 
+`teamai doctor` checks that each installed tool can load these blocks: that each file holds the current blocks, that OpenCode's config lists its file, that the Pi or Oh My Pi extension and the Hermes plugin are installed and enabled, that the Hermes section fits its limit, and that no file an earlier release wrote still holds blocks.
+
 A file named like a teamai target that teamai did not write is left alone, and the pull warns about it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
 
 ### Viewing the result

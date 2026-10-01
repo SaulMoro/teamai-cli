@@ -578,4 +578,30 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
     expect(viaClaude.output).toContain('OpenCode reads the team instructions from');
   });
+
+  it('has doctor report what keeps a tool from loading its instructions, not just whether a file was written', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.opencode/skills']);
+    const pulled = await pullAs(member);
+    expect(pulled.code, pulled.output).toBe(0);
+    const doctor = async (): Promise<Map<string, { ok: boolean; fix?: string }>> => {
+      const run = await runCLI(['doctor', '--json'], { HOME: member.home }, member.projectRoot);
+      const report = JSON.parse(run.stdout) as { checks: Array<{ name: string; ok: boolean; fix?: string }> };
+      return new Map(report.checks.map((c) => [c.name, c]));
+    };
+
+    const healthy = await doctor();
+    expect(healthy.get('Team instructions are current for opencode')?.ok).toBe(true);
+    expect(healthy.get('Team instructions are listed in opencode instructions')?.ok).toBe(true);
+    expect(healthy.get('No team instruction blocks are left in files no tool loads them from')?.ok).toBe(true);
+
+    fs.writeFileSync(path.join(member.projectRoot, '.opencode', 'opencode.json'), '{}\n');
+    fs.appendFileSync(path.join(member.projectRoot, 'AGENTS.md'), `\n${CLAUDEMD_START}\nold\n${CLAUDEMD_END}\n`);
+    const broken = await doctor();
+    expect(broken.get('Team instructions are listed in opencode instructions')).toMatchObject({ ok: false });
+    expect(broken.get('Team instructions are listed in opencode instructions')?.fix).toContain('.opencode/teamai-context.md');
+    expect(broken.get('No team instruction blocks are left in files no tool loads them from')).toMatchObject({ ok: false });
+    expect(broken.get('No team instruction blocks are left in files no tool loads them from')?.fix).toContain('AGENTS.md');
+  });
 });
