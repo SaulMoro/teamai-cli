@@ -46,8 +46,9 @@ and create-repo URLs, and the per-provider caveats, and points at
    install. Let `teamai init` set up every AI tool already installed (omitting
    `--agent` gives an interactive picker; select all detected tools). **After init,
    report which agents were set up** — in the user's language, which tools now
-   auto-start TeamAI, and which detected tools were skipped and why (e.g. Codex
-   hooks not trusted, CodeBuddy design). Verify the real per-tool result with
+   auto-start TeamAI, which detected tools were skipped and why (e.g. CodeBuddy
+   design), and any installed hooks that still need trust (e.g. Codex with
+   automatic trust disabled or unavailable). Verify the real per-tool result with
    `teamai doctor` and `teamai hooks list`.
 3. **After init, resources appear on the NEXT session.** `teamai init` injects a
    session-start hook that auto-runs `teamai pull`. Empty skills/rules directories

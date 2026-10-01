@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import YAML from 'yaml';
+vi.mock('../providers/index.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../providers/index.js')>(),
+  getProvider: vi.fn(() => ({
+    isAuthenticated: () => true,
+    authenticate: async () => 'tester',
+    parseRepoInput: (remote: string) => ({ httpsUrl: remote }),
+  })),
+}));
+
+import { installFakeCodex, readFakeCodexState } from './helpers/fake-codex.js';
 import { bootstrapSelfRepo } from '../bootstrap.js';
 import { detectProjectConfig } from '../config.js';
 
@@ -13,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -31,6 +42,32 @@ describe('bootstrapSelfRepo', () => {
     );
     const result = await bootstrapSelfRepo(tmpDir, { silent: true });
     expect(result).toBe('skip');
+  });
+
+  it('trusts self project hooks during a silent bootstrap', async () => {
+    tmpDir = fs.realpathSync.native(tmpDir);
+    const home = path.join(tmpDir, 'home');
+    const project = path.join(tmpDir, 'project');
+    const teamaiDir = path.join(project, '.teamai');
+    const codexHome = path.join(home, '.codex');
+    fs.mkdirSync(teamaiDir, { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    const fakeBin = installFakeCodex();
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('PATH', `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`);
+    fs.writeFileSync(path.join(teamaiDir, 'teamai.yaml'), YAML.stringify({
+      team: 'test', mode: 'self', repo: 'https://github.com/acme/app.git', provider: 'github',
+      toolPaths: { codex: { skills: '.codex/skills', settings: '.codex/hooks.json' } },
+    }));
+    try {
+      expect(await bootstrapSelfRepo(project, { silent: true })).toBe('bootstrapped');
+      const state = readFakeCodexState(codexHome);
+      expect(state.projects[project]).toEqual({ trust_level: 'trusted' });
+      expect(Object.keys(state.hooksState).length).toBeGreaterThan(0);
+      expect(Object.keys(state.hooksState).every((key) => key.startsWith(path.join(project, '.codex', 'hooks.json')))).toBe(true);
+    } finally {
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
   });
 
   it("returns 'already' when a local config.yaml is already present", async () => {

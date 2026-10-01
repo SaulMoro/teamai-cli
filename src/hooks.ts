@@ -1940,16 +1940,18 @@ interface CodexTrustTargets {
   mcpRecords: unknown[];
 }
 
-/** The teamai entries of one Codex hooks file: built-ins by marker, team hooks by manifest. */
+/** The teamai entries of one Codex hooks file: built-ins by exact rendered command, team hooks by manifest. */
 async function teamaiCodexHooks(file: string, manifestPath: string): Promise<Array<{ file: string; command: string }>> {
   const json = await readJson<CodexHooksJson>(file);
   if (!json?.hooks) return [];
   const teamCommands = new Set(((await readManifest(manifestPath))[CODEX_TOOL_ID] ?? []).map((r) => r.command));
+  const builtinCommands = new Set(builtinHookDefs(CODEX_TOOL_ID).flatMap((def) =>
+    toCodexEntry(def).hooks.map((hook) => hook.command)));
   return Object.values(json.hooks)
     .flatMap((groups) => (groups ?? []).flatMap((group) => group.hooks ?? []))
     .map((hook) => hook.command)
     .filter((command) => typeof command === 'string'
-      && (TEAMAI_COMMAND_MARKERS.some((marker) => command.includes(marker)) || teamCommands.has(command)))
+      && (builtinCommands.has(command) || teamCommands.has(command)))
     .map((command) => ({ file, command }));
 }
 
@@ -1984,7 +1986,7 @@ async function codexTrustTargets(
       sources.push({ file: mainFile, manifestPath: mainCheckout.manifestPath });
     } else if (isSelfMode(localConfig) && path.join(anchor, paths.settings) !== primary) {
       // A linked worktree of a self repo: Codex reads the main checkout's file.
-      sources.push({ file: path.join(anchor, paths.settings), manifestPath });
+      sources[0] = { file: path.join(anchor, paths.settings), manifestPath };
     }
   }
   const hooks = (await Promise.all(sources.map((s) => teamaiCodexHooks(s.file, s.manifestPath)))).flat();
@@ -2000,7 +2002,7 @@ async function codexTrustTargets(
   const codexHome = resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots);
   return {
     codexHome,
-    cwd: localConfig.projectRoot ?? baseDir,
+    cwd: anchor ?? baseDir,
     hooks,
     ...(anchor && projectLayer ? { project: anchor } : {}),
     inputs: [...sources.map((s) => s.file), path.join(codexHome, 'config.toml')],
@@ -2076,7 +2078,7 @@ export async function readCodexHookTrustForScope(
   const targets = await codexTrustTargets(teamConfig, localConfig);
   if (!targets || targets.hooks.length === 0) return null;
   const { readCodexHookTrust } = await import('./codex-trust.js');
-  return readCodexHookTrust(targets);
+  return readCodexHookTrust({ ...targets, cwd: localConfig.projectRoot ?? targets.cwd });
 }
 
 /**

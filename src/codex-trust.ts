@@ -226,7 +226,16 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
   const project = req.project ? canonical(req.project) : undefined;
   return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
     const level = project ? await ensureProjectTrusted(server, project) : undefined;
-    const toTrust = (await listHooks(server, req.cwd)).filter((h) =>
+    const listed = await listHooks(server, req.cwd);
+    const loaded = new Set(listed.map((h) => hookId(h.sourcePath, h.command)));
+    const missing = req.hooks.filter((h) => !loaded.has(hookId(h.file, h.command)));
+    if (missing.length > 0 && level !== 'untrusted') {
+      return {
+        kind: 'failed',
+        reason: `hooks/list: ${missing.map((h) => `${h.command} in ${h.file}`).join('; ')} not loaded for ${req.cwd}. Check that Codex loads these hook files, then run teamai pull again.`,
+      };
+    }
+    const toTrust = listed.filter((h) =>
       h.trustStatus !== 'trusted' && wanted.has(hookId(h.sourcePath, h.command)));
     if (toTrust.length > 0) {
       await batchWrite(

@@ -2615,11 +2615,7 @@ async function reconcileHooksAllScopes(
   }
 }
 
-/**
- * Reconcile team MCP servers across all active scopes. MCP servers load at
- * session start, so a change applied here takes effect in the user's next
- * session — which is exactly when the SessionStart pull hook runs.
- */
+/** Trust Codex hooks and projects after both hooks and MCP reconciliation. */
 async function trustCodexAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,
@@ -2641,6 +2637,11 @@ async function trustCodexAllScopes(
   }
 }
 
+/**
+ * Reconcile team MCP servers across all active scopes. MCP servers load at
+ * session start, so a change applied here takes effect in the user's next
+ * session — which is exactly when the SessionStart pull hook runs.
+ */
 async function reconcileMcpAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -88,13 +89,17 @@ import { pull } from '../pull.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
-import { installFakeCodex, readFakeCodexState } from './helpers/fake-codex.js';
+import { readCodexHookTrustForScope } from '../hooks.js';
+import { log } from '../utils/logger.js';
+import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
 
 describe('pull trusts the Codex project after writing its MCP servers', () => {
   let tempDir: string;
   let homeDir: string;
   let project: string;
   let fakeBin: string;
+  let localConfig: LocalConfig;
+  let teamConfig: TeamaiConfig;
 
   beforeEach(async () => {
     tempDir = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-pull-codex-trust-')));
@@ -109,7 +114,7 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
     await fse.ensureDir(path.join(repoPath, 'manifest'));
     await fse.writeFile(path.join(repoPath, 'manifest', 'roles.yaml'), 'version: 1\n');
 
-    const localConfig = {
+    localConfig = {
       repo: { localPath: repoPath, remote: 'owner/repo' },
       username: 'tester',
       scope: 'project',
@@ -117,7 +122,7 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
       primaryRole: 'dev',
       additionalRoles: [],
     } as unknown as LocalConfig;
-    const teamConfig = {
+    teamConfig = {
       team: 'test',
       description: '',
       repo: 'owner/repo',
@@ -151,4 +156,50 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
     expect(reconcileMcpForConfig).toHaveBeenCalled();
     expect(readFakeCodexState(path.join(homeDir, '.codex')).projects[project]).toEqual({ trust_level: 'trusted' });
   });
+  it('pull from a worktree without .codex trusts the main keys before SessionStart', async () => {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: project });
+    git('init', '-q');
+    git('-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '--allow-empty', '-m', 'init');
+    const worktree = path.join(tempDir, 'worktree');
+    git('worktree', 'add', '-q', '--detach', worktree);
+    localConfig.projectRoot = worktree;
+    writeFakeCodexOptions(path.join(homeDir, '.codex'), { projectLayers: { [worktree]: project } });
+    vi.mocked(reconcileMcpForConfig).mockResolvedValue({ changes: [], wrote: false } as never);
+    await fse.outputFile(path.join(localConfig.repo.localPath, 'hooks', 'hooks.yaml'),
+      'hooks:\n  - id: added\n    description: new hook\n    event: PreToolUse\n    command: echo new-team-hook\n');
+
+    await pull({ force: true });
+
+    expect(await fse.pathExists(path.join(worktree, '.codex'))).toBe(false);
+    const state = readFakeCodexState(path.join(homeDir, '.codex'));
+    expect(Object.keys(state.hooksState).some((key) => key.startsWith(path.join(project, '.codex', 'hooks.json')))).toBe(true);
+    expect(state.calls.filter((c) => c.method === 'hooks/list').map((c) => c.params)).toEqual([{ cwds: [project] }]);
+    expect(await readCodexHookTrustForScope(teamConfig, localConfig)).toEqual({
+      kind: 'listed', notTrusted: [{ file: path.join(project, '.codex', 'hooks.json'), command: 'echo new-team-hook', status: 'not loaded' }],
+    });
+    await fse.ensureDir(path.join(worktree, '.codex'));
+    expect(await readCodexHookTrustForScope(teamConfig, localConfig)).toEqual({ kind: 'listed', notTrusted: [] });
+  });
+
+  it('does not ask Codex on a dry run', async () => {
+    await pull({ force: true, dryRun: true });
+    expect(readFakeCodexState(path.join(homeDir, '.codex')).calls).toEqual([]);
+  });
+
+  it.each([false, true])('reports app-server failure only when silent=%s is false', async (silent) => {
+    writeFakeCodexOptions(path.join(homeDir, '.codex'), { failMethod: 'hooks/list' });
+    await pull({ force: true, silent });
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => message).filter((message) => message.includes('Could not trust'));
+    expect(warnings).toHaveLength(silent ? 0 : 1);
+    if (!silent) expect(warnings[0]).toContain('hooks/list: fake failure');
+  });
+
+  it('keeps an interactive pull quiet when Codex is absent', async () => {
+    const empty = path.join(tempDir, 'empty-bin');
+    await fse.ensureDir(empty);
+    vi.stubEnv('PATH', empty);
+    await pull({ force: true });
+    expect(vi.mocked(log.warn).mock.calls.map(([message]) => message).filter((message) => /trust.*Codex|Codex.*trust/i.test(message))).toEqual([]);
+  });
+
 });

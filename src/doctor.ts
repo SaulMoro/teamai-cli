@@ -361,13 +361,15 @@ async function codexHookTrust(ctx: DoctorContext): Promise<{ checks: Check[]; no
     const reason = report.kind === 'failed' ? ` (could not ask Codex: ${report.reason})` : '';
     return { checks: [], notes: [`${codexTrustReminder()}${reason}`] };
   }
+  const notLoaded = report.notTrusted.some((h) => h.status === 'not loaded');
   const notTrusted = report.notTrusted.map((h) => `${h.command} in ${h.file} (${h.status})`);
   return {
     checks: [{
       name: 'Codex trusts the teamai hooks',
       source: 'local',
       check: async () => notTrusted.length === 0,
-      fix: `Codex will not run: ${notTrusted.join('; ')}. Run \`teamai pull\` to trust them, `
+      fix: (notLoaded ? 'For hooks not loaded in a linked worktree, create `.codex/` or start Codex there, then open a new session. ' : '')
+        + `Codex will not run: ${notTrusted.join('; ')}. Run \`teamai pull\` to trust them, `
         + 'or trust them in Codex /hooks. If `codexTrustEnabled: false` is set in config.yaml, '
         + 'teamai leaves trusting them to you.',
     }],

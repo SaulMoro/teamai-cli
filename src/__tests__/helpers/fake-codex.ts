@@ -32,6 +32,7 @@ function layer(file, source, s, out) {
   const src = real(file);
   for (const [event, groups] of Object.entries(json.hooks)) {
     (groups || []).forEach((g, gi) => (g.hooks || []).forEach((h, hi) => {
+      if ((opts.omitCommands || []).includes(h.command)) return;
       const key = src + ':' + snake(event) + ':' + gi + ':' + hi;
       const currentHash = 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(h)).digest('hex');
       const trusted = s.hooksState[key] && s.hooksState[key].trusted_hash;
@@ -45,7 +46,7 @@ function list(cwd, s) {
   layer(path.join(home, 'hooks.json'), 'user', s, out);
   const c = real(cwd);
   const mapped = (opts.projectLayers || {})[c];
-  const projects = mapped ? [real(mapped)] : Object.keys(s.projects).filter((p) => c === p || c.startsWith(p + path.sep));
+  const projects = mapped ? (fs.existsSync(path.join(c, '.codex')) ? [real(mapped)] : []) : Object.keys(s.projects).filter((p) => c === p || c.startsWith(p + path.sep));
   for (const p of projects) {
     if ((s.projects[p] || {}).trust_level !== 'trusted') continue;
     layer(path.join(p, '.codex', 'hooks.json'), 'project', s, out);
@@ -110,7 +111,7 @@ export function readFakeCodexState(codexHome: string): FakeCodexState {
 
 export function writeFakeCodexOptions(
   codexHome: string,
-  options: { failMethod?: string; exit?: boolean; projectLayers?: Record<string, string> },
+  options: { failMethod?: string; exit?: boolean; omitCommands?: string[]; projectLayers?: Record<string, string> },
 ): void {
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(path.join(codexHome, 'fake.json'), JSON.stringify(options));

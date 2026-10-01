@@ -469,6 +469,22 @@ describe('doctor — hook checks', () => {
             expect(fix).toContain('codexTrustEnabled');
         });
 
+        it('explains how to load main hooks in a new linked worktree', async () => {
+            mockedReadCodexHookTrust.mockResolvedValueOnce({ kind: 'listed', notTrusted: [
+                { file: '/main/.codex/hooks.json', command: 'echo team', status: 'not loaded' },
+            ] });
+            await doctor({});
+            const fix = consoleSpy.mock.calls.map((c) => String(c[0])).find((msg) => msg.includes('Codex will not run'));
+            expect(fix).toContain('create `.codex/` or start Codex there');
+            expect(fix).toContain('then open a new session');
+        });
+
+        it('includes the app-server failure cause in the note', async () => {
+            mockedReadCodexHookTrust.mockResolvedValueOnce({ kind: 'failed', reason: 'hooks/list: boom' });
+            await doctor({});
+            expect(mockedLog.info.mock.calls.some(([message]) => String(message).includes('hooks/list: boom'))).toBe(true);
+        });
+
         it('keeps the trust note when Codex cannot be asked', async () => {
             mockedReadCodexHookTrust.mockResolvedValueOnce({ kind: 'unavailable', reason: 'codex not found on PATH' });
             await doctor({});

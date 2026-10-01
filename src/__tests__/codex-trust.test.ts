@@ -9,6 +9,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { readCodexHookTrustForScope, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from '../hooks.js';
+import { trustCodexHooks, trustCodexProject } from '../codex-trust.js';
 import { log } from '../utils/logger.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
@@ -107,6 +108,25 @@ describe('Codex hook trust — user scope', () => {
     expect(teamai.some((e) => e.command === 'npm run lint')).toBe(true);
     expect(trustedKeys().sort()).toEqual(teamai.map((e) => e.key).sort());
     expect(reconciled.codexTrust).toEqual({ kind: 'trusted', hooks: teamai.length });
+  });
+
+  it('does not trust a member command containing a teamai marker', async () => {
+    await writeAndTrust(userConfig());
+    const file = path.join(codexHome(), 'hooks.json');
+    const json = await fse.readJson(file);
+    json.hooks.Stop.push({ hooks: [{ type: 'command', command: 'teamai pull --silent && my-script' }] });
+    await fse.writeJson(file, json);
+
+    await trustCodexForScope(teamConfig, userConfig());
+
+    const member = (await codexEntries(file)).find((e) => e.command === 'teamai pull --silent && my-script')!;
+    expect(trustedKeys()).not.toContain(member.key);
+  });
+
+  it('fails actionably when Codex does not list a requested hook', async () => {
+    const file = path.join(codexHome(), 'hooks.json');
+    const result = await trustCodexHooks({ codexHome: codexHome(), cwd: home, hooks: [{ file, command: 'missing' }] });
+    expect(result).toEqual({ kind: 'failed', reason: expect.stringMatching(/hooks\/list.*missing.*not loaded.*teamai pull/) });
   });
 
   it('writes nothing to Codex when every teamai hook is already trusted', async () => {
@@ -261,6 +281,16 @@ describe('Codex trust — skipping a pass that has nothing new', () => {
     expect(calls('initialize')).toBe(2);
   });
 
+  it('does not cache a pass with a requested hook missing from hooks/list', async () => {
+    await writeYaml(LINT_HOOK);
+    writeFakeCodexOptions(codexHome(), { omitCommands: ['npm run lint'] });
+    expect((await writeAndTrust(userConfig())).codexTrust?.kind).toBe('failed');
+    expect((await writeAndTrust(userConfig())).codexTrust?.kind).toBe('failed');
+    expect(calls('initialize')).toBe(2);
+    writeFakeCodexOptions(codexHome(), {});
+    expect((await writeAndTrust(userConfig())).codexTrust?.kind).toBe('trusted');
+  });
+
   it('keeps asking while the last pass did not end trusted', async () => {
     writeFakeCodexOptions(codexHome(), { failMethod: 'hooks/list' });
     await writeAndTrust(userConfig());
@@ -318,6 +348,17 @@ describe('Codex trust — project scopes', () => {
     } as Partial<LocalConfig>);
   }
 
+  it('trustCodexProject resolves symlinks and preserves an explicit untrusted choice', async () => {
+    const alias = path.join(home, 'project-link');
+    await fse.ensureSymlink(project, alias, 'dir');
+    expect(await trustCodexProject({ codexHome: codexHome(), project: alias })).toEqual({ kind: 'trusted', hooks: 0, project });
+    await fse.outputJson(path.join(codexHome(), 'fake-state.json'), {
+      projects: { [project]: { trust_level: 'untrusted' } }, hooksState: {}, calls: [],
+    });
+    expect(await trustCodexProject({ codexHome: codexHome(), project: alias })).toEqual({ kind: 'project-untrusted', hooks: 0, project });
+    expect(calls('config/batchWrite')).toBe(0);
+  });
+
   it('self mode trusts the repo, then every teamai hook in its .codex/hooks.json', async () => {
     await fse.ensureDir(path.join(project, '.codex'));
     await fse.outputFile(path.join(project, '.teamai', 'hooks', 'hooks.yaml'), LINT_HOOK);
@@ -357,6 +398,28 @@ describe('Codex trust — project scopes', () => {
       expect(readFakeCodexState(codexHome()).projects[project]).toEqual({ trust_level: 'trusted' });
     } finally {
       git(project, 'worktree', 'remove', '--force', worktree);
+    }
+  });
+
+  it('shares the trusted fingerprint when alternating project checkouts', async () => {
+    const git = (...args: string[]) => {
+      const result = spawnSync('git', args, { cwd: project, encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(result.stderr);
+    };
+    git('init', '-q');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    const worktree = `${project}-wt`;
+    git('worktree', 'add', '-q', '--detach', worktree);
+    try {
+      await writeYaml(LINT_HOOK);
+      const { resolveProjectDataHome } = await import('../config.js');
+      const dataHome = await resolveProjectDataHome(project);
+      await writeAndTrust(projectConfig({ projectRoot: worktree, dataHome }));
+      await writeAndTrust(projectConfig({ dataHome }));
+      await writeAndTrust(projectConfig({ projectRoot: worktree, dataHome }));
+      expect(calls('initialize')).toBe(1);
+    } finally {
+      git('worktree', 'remove', '--force', worktree);
     }
   });
 

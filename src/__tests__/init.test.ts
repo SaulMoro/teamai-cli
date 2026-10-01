@@ -753,6 +753,13 @@ describe('init', () => {
       );
     });
 
+    it('trusts Codex after injecting hooks and forces the initialization pass', async () => {
+      const { reconcileTeamHooksForConfig, trustCodexForScope } = await import('../hooks.js');
+      await initWithTeamConfig();
+      expect(trustCodexForScope).toHaveBeenCalledWith(expect.anything(), expect.anything(), { filterAgents: undefined, force: true });
+      expect(vi.mocked(reconcileTeamHooksForConfig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(trustCodexForScope).mock.invocationCallOrder[0]);
+    });
+
     it('announces the stub as ready only when it landed', async () => {
       const { log } = await import('../utils/logger.js');
       mockDeployBuiltinSkills.mockResolvedValueOnce(1);
