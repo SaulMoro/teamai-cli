@@ -323,15 +323,16 @@ export const TeamaiConfigSchema = z.object({
   // wrong guess can never create a junk config file on a user's machine.
   toolPaths: z.record(z.string(), ToolPathsSchema).default({
     claude: { skills: '.claude/skills', rules: '.claude/rules', settings: '.claude/settings.json', claudemd: '.claude/CLAUDE.md', agents: '.claude/agents', mcp: '.claude.json', mcpProject: '.mcp.json' },
-    // Codex reads instructions from AGENTS.md (project root, and ~/.codex at
-    // user scope), not from a rules directory: `.codex/rules` holds its
-    // exec-policy `*.rules` files. Team rules are inlined into that file.
+    // Codex reads no rules directory: `.codex/rules` holds its exec-policy
+    // `*.rules` files. In user scope teamai's blocks go to ~/.codex/AGENTS.md,
+    // which only Codex reads. In project scope they come from the session-start
+    // hook, since the project AGENTS.md is the owners' file and other tools
+    // read it too (#938, #945); so the entry has no project `claudemd`.
     codex: {
       skills: '.codex/skills',
       settings: '.codex/hooks.json',
       agents: '.codex/agents',
       mcp: '.codex/config.toml',
-      claudemd: 'AGENTS.md',
       userScope: { claudemd: '.codex/AGENTS.md' },
     },
     // codex-internal and tcodex run the same Codex from their own home root, so
@@ -342,7 +343,6 @@ export const TeamaiConfigSchema = z.object({
       skills: '.codex-internal/skills',
       settings: '.codex-internal/hooks.json',
       agents: '.codex-internal/agents',
-      claudemd: 'AGENTS.md',
       userScope: { claudemd: '.codex-internal/AGENTS.md' },
     },
     'claude-internal': { skills: '.claude-internal/skills', rules: '.claude-internal/rules', settings: '.claude-internal/settings.json', claudemd: '.claude-internal/CLAUDE.md', agents: '.claude-internal/agents' },
@@ -357,7 +357,6 @@ export const TeamaiConfigSchema = z.object({
       skills: '.tcodex/skills',
       settings: '.tcodex/hooks.json',
       agents: '.tcodex/agents',
-      claudemd: 'AGENTS.md',
       userScope: { claudemd: '.tcodex/AGENTS.md' },
     },
     cursor: { skills: '.cursor/skills', rules: '.cursor/rules', settings: '.cursor/hooks.json', agents: '.cursor/agents', mcp: '.cursor/mcp.json', mcpProject: '.cursor/mcp.json' },
@@ -1125,6 +1124,13 @@ export const TEAMAI_AGENT_HOOK_PREFIX = '[teamai:agent-hook:';
 export const TEAMAI_ENV_START = '# [teamai:env:start]';
 export const TEAMAI_ENV_END = '# [teamai:env:end]';
 
+/**
+ * The team rules inlined into the user-scope instructions file of a tool with
+ * no rules format (the Codex family, #938). Not `[teamai:rules]`: pull strips
+ * that legacy marker from every `claudemd` file.
+ */
+export const TEAMAI_TEAM_RULES_START = '<!-- [teamai:team-rules:start] -->';
+export const TEAMAI_TEAM_RULES_END = '<!-- [teamai:team-rules:end] -->';
 export const TEAMAI_CULTURE_START = '<!-- [teamai:culture:start] -->';
 export const TEAMAI_CULTURE_END = '<!-- [teamai:culture:end] -->';
 

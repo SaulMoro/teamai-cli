@@ -1224,15 +1224,17 @@ async function pullForScope(
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
-          // Same reason: a CLI that gives Codex the team rules through its
-          // session-start hook reclaims the old .codex/rules copies here (#938).
+          // Same reason: a CLI that moves Codex's team rules into its own
+          // AGENTS.md (user scope) and its session-start hook (project scope)
+          // writes that block and reclaims the old .codex/rules copies here (#938).
           if (resourceTypes.includes('rules')) {
             try {
-              await (getHandler('rules') as RulesHandler).reclaimLegacyRuleCopies(
-                freshConfig, localConfig, openLedger(await deliveredHashes(localConfig, state)),
+              const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
+              await (getHandler('rules') as RulesHandler).syncCodexInstructionRules(
+                freshConfig, localConfig, items, openLedger(await deliveredHashes(localConfig, state)),
               );
             } catch (error) {
-              log.warn(`[${scopeLabel}] The old team rule copies in Codex's rules directory were not removed: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+              log.warn(`[${scopeLabel}] Codex's team rules were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
           }
           // The repo has not moved, but an agent's model may have (#830).
@@ -2040,6 +2042,46 @@ export function compileRecallRulesBlock(): string {
         TEAMAI_RECALL_RULES_END,
     ];
     return lines.join('\n');
+}
+
+/** The text of a managed block, without its markers and DO NOT EDIT line. */
+function managedBlockBody(block: string): string {
+    return block
+        .split('\n')
+        .filter((line) => !/^<!-- (\[teamai:[a-z-]+:(start|end)\]|DO NOT EDIT\b).*-->$/.test(line.trim()))
+        .join('\n')
+        .trim();
+}
+
+/**
+ * The culture, shared-instruction and recall blocks a tool whose project
+ * instructions come from its session-start hook (the Codex family) gets in a
+ * project, resolved as pull resolves them. In user scope they are in the
+ * tool's own instructions file instead (#945). A block another tool already
+ * wrote into the project AGENTS.md is skipped, since the tool reads that file
+ * too.
+ */
+export async function sessionInstructionBlocks(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    tool: string,
+): Promise<string[]> {
+    const projectAgents = localConfig.projectRoot
+        ? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.md')) ?? ''
+        : '';
+    const blocks: Array<[string, string | null]> = [];
+    const culture = await readFileSafe(path.join(localConfig.repo.localPath, 'culture.md'));
+    blocks.push([TEAMAI_CULTURE_START, culture === null ? null : compileCulture(culture)]);
+    const { contents } = await collectClaudemdFiles(localConfig.repo.localPath, await buildRolePullContext(localConfig));
+    blocks.push([TEAMAI_CLAUDEMD_START, compileClaudemd(contents)]);
+    const toolPath = scopedToolPaths(teamConfig, localConfig)[tool];
+    if (toolPath?.agents && isRecallEnabled(localConfig, teamConfig)) {
+        blocks.push([TEAMAI_RECALL_RULES_START, compileRecallRulesBlock()]);
+    }
+    return blocks
+        .filter((entry): entry is [string, string] => entry[1] !== null && !projectAgents.includes(entry[0]))
+        .map(([, block]) => managedBlockBody(block))
+        .filter((body) => body !== '');
 }
 
 /**

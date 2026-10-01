@@ -330,16 +330,14 @@ describe('recall toggle reaches Codex AGENTS.md with the default tool paths', ()
     expect(await fse.pathExists(agentsMd)).toBe(false);
   });
 
-  it('project scope: on adds the block to <project>/AGENTS.md, off restores the user text', async () => {
+  it('project scope: on and off leave <project>/AGENTS.md as it was, since the session-start hook adds recall there', async () => {
     await fse.ensureDir(path.join(projectRoot, '.codex'));
     const agentsMd = path.join(projectRoot, 'AGENTS.md');
     await fse.writeFile(agentsMd, '# Project notes\n');
     stub('project');
 
     await recallEnable({});
-    const enabled = await fse.readFile(agentsMd, 'utf8');
-    expect(enabled).toContain('# Project notes');
-    expect(enabled).toContain(TEAMAI_RECALL_RULES_START);
+    expect(await fse.readFile(agentsMd, 'utf8')).toBe('# Project notes\n');
 
     await recallDisable({});
     expect(await fse.readFile(agentsMd, 'utf8')).toBe('# Project notes\n');

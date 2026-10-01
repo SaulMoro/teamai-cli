@@ -677,11 +677,16 @@ describe('buildChecks', () => {
 // tokens Codex keeps only the start and end of a hook's context unless the
 // entry sets additionalContextLimit: 0.
 describe('buildChecks — the Codex team rules hook (#938)', () => {
-    const NAME = 'Team rules reach codex whole through its session-start hook';
-    const sessionStart = (entry: Record<string, unknown>) => JSON.stringify({
-        hooks: { SessionStart: [{ hooks: [{ type: 'command', ...entry }] }] },
-    });
+    const NAME = 'Project rules and instructions reach codex whole through its session hooks';
     const DISPATCH = 'bash -lc "teamai hook-dispatch session-start --tool codex 2>/dev/null" || true';
+    const SUBAGENT = 'bash -lc "teamai hook-dispatch subagent-start --tool codex 2>/dev/null" || true';
+    // An entry for SubagentStart with the limit, unless a test passes its own.
+    const sessionStart = (entry: Record<string, unknown>, subagent: Record<string, unknown> | null = { command: SUBAGENT, additionalContextLimit: 0 }) => JSON.stringify({
+        hooks: {
+            SessionStart: [{ hooks: [{ type: 'command', ...entry }] }],
+            ...(subagent ? { SubagentStart: [{ hooks: [{ type: 'command', ...subagent }] }] } : {}),
+        },
+    });
 
     async function codexCheck(hooksJson: string) {
         mockedLoadLocalConfig.mockResolvedValue({ ...mockLocalConfig, enabledAgents: ['claude', 'codex'] });
@@ -720,11 +725,22 @@ describe('buildChecks — the Codex team rules hook (#938)', () => {
         expect(await check!.check()).toBe(true);
     });
 
+    it.each([
+        ['missing', null],
+        ['without the limit', { command: SUBAGENT }],
+    ])('fails when the SubagentStart entry is %s, since a fresh subagent fires no SessionStart', async (_label, subagent) => {
+        const check = await codexCheck(sessionStart({ command: DISPATCH, additionalContextLimit: 0 }, subagent));
+
+        expect(await check!.check()).toBe(false);
+        expect(check!.fix).toContain('SubagentStart');
+        expect(check!.fix).toContain('Run `teamai pull`');
+    });
+
     it('asks nothing of a tool that reads its own rules directory', async () => {
         await codexCheck(sessionStart({ command: DISPATCH, additionalContextLimit: 0 }));
         const ctx = await resolveDoctorContext();
 
-        expect((await buildChecks(ctx!)).map((c) => c.name).filter((n) => n.startsWith('Team rules reach'))).toEqual([NAME]);
+        expect((await buildChecks(ctx!)).map((c) => c.name).filter((n) => n.startsWith('Project rules and instructions reach'))).toEqual([NAME]);
     });
 });
 

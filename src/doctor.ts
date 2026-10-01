@@ -302,39 +302,48 @@ async function buildHookChecks(
 }
 
 /**
- * The Codex family gets the team rules from its session-start hook (#938).
- * Past 2,500 tokens Codex keeps only the start and end of a hook's context
- * unless the entry sets `additionalContextLimit: 0`. A missing entry is the
- * hooks check's to report.
+ * In a project the Codex family gets the team rules and instruction blocks
+ * from its session hooks (#938, #945): SessionStart, and SubagentStart for a
+ * fresh subagent, which fires no SessionStart. Past 2,500 tokens Codex keeps
+ * only the start and end of a hook's context unless the entry sets
+ * `additionalContextLimit: 0`. A missing session-start entry is the hooks
+ * check's to report.
  */
 function sessionHookRulesCheck(tool: string, settingsPath: string): Check {
   return {
-    name: `Team rules reach ${tool} whole through its session-start hook`,
+    name: `Project rules and instructions reach ${tool} whole through its session hooks`,
     source: 'local',
     check: async () => {
-      const entries = await teamaiSessionStartEntries(settingsPath);
-      return entries.length === 0 || entries.some((entry) => entry.additionalContextLimit === 0);
+      const sessionStart = await teamaiHookEntries(settingsPath, 'SessionStart', 'session-start');
+      if (sessionStart.length === 0) return true;
+      const subagentStart = await teamaiHookEntries(settingsPath, 'SubagentStart', 'subagent-start');
+      return [sessionStart, subagentStart].every((entries) => entries.some((entry) => entry.additionalContextLimit === 0));
     },
-    fix: `The teamai session-start entry in ${settingsPath} does not set \`additionalContextLimit: 0\`, `
-      + `so ${tool} keeps only the start and end of a large set of team rules. Run \`teamai pull\` to rewrite it`
-      + (isCodexTrustGatedTool(tool) ? ', then approve the changed hook in Codex (/hooks).' : '.'),
+    fix: `The teamai SessionStart and SubagentStart entries in ${settingsPath} must both exist and set `
+      + `\`additionalContextLimit: 0\`. Without them ${tool} keeps only the start and end of a large set of `
+      + 'team rules and instructions, and a fresh subagent gets none. Run `teamai pull` to rewrite them'
+      + (isCodexTrustGatedTool(tool) ? ', then approve the changed hooks in Codex (/hooks).' : '.'),
   };
 }
 
-/** The teamai `session-start` handlers in a Codex hooks.json; none when it does not parse. */
-async function teamaiSessionStartEntries(settingsPath: string): Promise<Array<{ additionalContextLimit?: unknown }>> {
+/** The teamai handlers for one event in a Codex hooks.json; none when it does not parse. */
+async function teamaiHookEntries(
+  settingsPath: string,
+  event: 'SessionStart' | 'SubagentStart',
+  subcommand: string,
+): Promise<Array<{ additionalContextLimit?: unknown }>> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFileSafe(settingsPath) ?? '');
   } catch {
     return [];
   }
-  const groups = (parsed as { hooks?: { SessionStart?: unknown } } | null)?.hooks?.SessionStart;
+  const groups = (parsed as { hooks?: Record<string, unknown> } | null)?.hooks?.[event];
   if (!Array.isArray(groups)) return [];
   return groups
     .flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : []))
     .filter((entry): entry is { command: string; additionalContextLimit?: unknown } =>
-      typeof entry?.command === 'string' && entry.command.includes('teamai hook-dispatch session-start'));
+      typeof entry?.command === 'string' && entry.command.includes(`teamai hook-dispatch ${subcommand}`));
 }
 
 

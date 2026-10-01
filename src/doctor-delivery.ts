@@ -257,7 +257,14 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
 
   const roleContext = await buildRolePullContext(localConfig);
   const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
-  if (items.length === 0) return [];
+  if (items.length === 0) {
+    // No rule reaches this member, but a team-rules block a failed removal
+    // left in Codex's AGENTS.md is still read: report that and nothing else.
+    const codex = await buildCodexUserRulesChecks(ctx, items);
+    const failing: Check[] = [];
+    for (const check of codex) if (!await check.check()) failing.push(check);
+    return failing;
+  }
 
   const activation = await buildRulesActivationChecks(ctx, items);
 
@@ -355,6 +362,76 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
     });
   }
 
+  checks.push(...await buildCodexUserRulesChecks(ctx, items));
+  return checks;
+}
+
+/**
+ * In user scope the Codex family reads the team rules from a managed block of
+ * its own AGENTS.md (#938); in a project its session-start hook adds them, and
+ * doctor checks that hook instead. One check per enabled, installed tool.
+ */
+async function buildCodexUserRulesChecks(ctx: DoctorContext, items: ResourceItem[]): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig || localConfig.scope !== 'user') return [];
+
+  const { teamRulesBlock } = await import('./resources/rules.js');
+  const { getsRulesFromSessionHook, instructionFileInstallProbe, writesInstructionBlock } = await import('./resources/rule-format.js');
+  const { isToolInstalledForConfig } = await import('./resources/base.js');
+  const { TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveToolBaseDir, scopedToolPaths } = await import('./types.js');
+  const expected = await teamRulesBlock(items);
+  const checks: Check[] = [];
+  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    if (!getsRulesFromSessionHook(tool) || isAgentExcluded(localConfig, tool)) continue;
+    const probe = instructionFileInstallProbe(tool, toolPath);
+    if (probe !== undefined && !await isToolInstalledForConfig(tool, probe, localConfig)) continue;
+    const name = tool === 'codex'
+      ? 'Team rules are inlined in Codex AGENTS.md'
+      : `Team rules are inlined in Codex AGENTS.md (${tool})`;
+    if (!writesInstructionBlock(tool, toolPath, 'team-rules')) {
+      // A team `toolPaths` entry replaces the default one whole, so an entry
+      // written before #938 leaves this tool nowhere to read user rules from.
+      // One with no `rules` path delivers no rules to it on purpose; with no
+      // team rules it misses none.
+      if (items.length === 0 || !toolPath.rules) continue;
+      checks.push({
+        name,
+        source: 'local',
+        check: async () => false,
+        fix: `The toolPaths entry for ${tool} has no \`claudemd\` path, so pull has no instructions `
+          + `file to inline the team rules into and ${tool} reads none of them. Add `
+          + `\`userScope.claudemd: .${tool}/AGENTS.md\` to that entry in the team teamai.yaml, `
+          + 'then run `teamai pull`.',
+      });
+      continue;
+    }
+    const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
+    const content = await readFileSafe(file);
+    const start = content?.indexOf(TEAMAI_TEAM_RULES_START) ?? -1;
+    const end = content?.indexOf(TEAMAI_TEAM_RULES_END) ?? -1;
+    const delivered = content !== null && start !== -1 && end > start
+      ? content.slice(start, end + TEAMAI_TEAM_RULES_END.length)
+      : null;
+    // Codex reads AGENTS.override.md instead of AGENTS.md in the same
+    // directory, so a current block there is never seen. An empty or
+    // whitespace-only override shadows it too (checked with `codex exec`).
+    const override = path.join(path.dirname(file), 'AGENTS.override.md');
+    const problems: string[] = [];
+    // With no rule body to inline (`expected === null`), pull writes no block.
+    if (delivered === null && expected !== null) {
+      problems.push(`${file} carries no team-rules block, so ${tool} reads none of the team `
+        + 'rules. Run `teamai pull` to restore it.');
+    } else if (delivered !== expected) {
+      problems.push(`The team-rules block in ${file} is not what the team rules inline to: Codex reads `
+        + 'standing instructions from this file rather than a rules directory, so a stale block '
+        + 'is a stale rule set. Run `teamai pull` to rewrite it.');
+    }
+    if (expected !== null && await isReadableFile(override)) {
+      problems.push(`${override} exists, so Codex reads it instead of ${file} and never sees the `
+        + 'team rules. Move its content into AGENTS.md, or delete it.');
+    }
+    checks.push({ name, source: 'local', check: async () => problems.length === 0, fix: problems.join(' ') });
+  }
   return checks;
 }
 

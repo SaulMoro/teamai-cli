@@ -59,6 +59,8 @@ import {
   TEAMAI_RULES_START,
   TEAMAI_RULES_END,
   TEAMAI_CULTURE_START,
+  TEAMAI_TEAM_RULES_START,
+  TEAMAI_TEAM_RULES_END,
   TEAMAI_CLAUDEMD_START,
   TEAMAI_RECALL_RULES_START,
 } from '../types.js';
@@ -251,7 +253,7 @@ describe('pull on a machine without Codex (#938)', () => {
   });
 });
 
-describe('a user-scope rules sync writes no team rules for Codex (#938)', () => {
+describe('a user-scope rules sync puts the team rules in Codex\'s own AGENTS.md (#938)', () => {
   let tmpDir: string;
   let homeDir: string;
   let repoPath: string;
@@ -260,9 +262,9 @@ describe('a user-scope rules sync writes no team rules for Codex (#938)', () => 
     tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-user-'));
     homeDir = path.join(tmpDir, 'home');
     repoPath = path.join(tmpDir, 'team-repo');
-    await fse.ensureDir(path.join(homeDir, '.codex'));
     await fse.ensureDir(path.join(repoPath, 'rules'));
     await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    await fse.writeFile(path.join(repoPath, 'rules', 'scoped.md'), '---\npaths:\n  - "src/**"\n---\nPrefer named exports.\n');
     vi.stubEnv('HOME', homeDir);
   });
 
@@ -271,26 +273,74 @@ describe('a user-scope rules sync writes no team rules for Codex (#938)', () => 
     await fse.remove(tmpDir);
   });
 
-  it.each(CODEX_FAMILY)('writes no team rules for %s to ~/.<tool>/AGENTS.md, a home-level AGENTS.md or its rules dir', async (tool) => {
+  const teamConfig = () => TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
+  const userConfig = (enabledAgents: string[]) => ({
+    repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+    username: 'u',
+    additionalRoles: [],
+    scope: 'user',
+    enabledAgents,
+  }) as unknown as LocalConfig;
+  const agentsMd = (tool: string) => path.join(homeDir, `.${tool}`, 'AGENTS.md');
+
+  it.each(CODEX_FAMILY)('writes a team-rules block for %s to ~/.<tool>/AGENTS.md, beside the member\'s text, and nothing elsewhere', async (tool) => {
     await fse.ensureDir(path.join(homeDir, `.${tool}`));
-    const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
-    const localConfig = {
-      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
-      username: 'u',
-      additionalRoles: [],
-      scope: 'user',
-      enabledAgents: [tool],
-    } as unknown as LocalConfig;
+    await fse.writeFile(agentsMd(tool), '# My notes\n');
 
-    await new RulesHandler().pullAllRules(teamConfig, localConfig);
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig([tool]));
 
-    expect(await fse.pathExists(path.join(homeDir, `.${tool}`, 'AGENTS.md'))).toBe(false);
+    const content = await fse.readFile(agentsMd(tool), 'utf8');
+    expect(content.startsWith('# My notes\n')).toBe(true);
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(content).toContain('The team codeword is PELICAN-42.');
+    expect(content).toContain('Applies to files matching: src/**\nPrefer named exports.');
+    expect(content).not.toContain('paths:');
     expect(await fse.pathExists(path.join(homeDir, 'AGENTS.md'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, `.${tool}`, 'rules'))).toBe(false);
   });
+
+  it('removes the block, and a file that held only it, once the team has no rules', async () => {
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']));
+    expect(await fse.pathExists(agentsMd('codex'))).toBe(true);
+    await fse.remove(path.join(repoPath, 'rules'));
+
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']), []);
+
+    expect(await fse.pathExists(agentsMd('codex'))).toBe(false);
+  });
+
+  it('removes the block once Codex is no longer enabled, and creates nothing when it is not installed', async () => {
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await fse.writeFile(agentsMd('codex'), '# My notes\n');
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']));
+
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['claude']));
+
+    expect(await fse.readFile(agentsMd('codex'), 'utf8')).toBe('# My notes\n');
+    await fse.remove(path.join(homeDir, '.codex'));
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']));
+    expect(await fse.pathExists(path.join(homeDir, '.codex'))).toBe(false);
+  });
+
+  it('keeps the whole rule when its text mentions the block markers inline', async () => {
+    await fse.ensureDir(path.join(homeDir, '.codex'));
+    await fse.writeFile(
+      path.join(repoPath, 'rules', 'codeword.md'),
+      `Never edit ${TEAMAI_TEAM_RULES_START} or ${TEAMAI_TEAM_RULES_END} by hand.\nThe team codeword is PELICAN-42.\n`,
+    );
+
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']));
+    await new RulesHandler().pullAllRules(teamConfig(), userConfig(['codex']));
+
+    const content = await fse.readFile(agentsMd('codex'), 'utf8');
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(count(content, TEAMAI_TEAM_RULES_END)).toBe(1);
+    expect(content).toContain('by hand.\nThe team codeword is PELICAN-42.');
+  });
 });
 
-describe('a project-scope pull gives Codex its instruction blocks in one AGENTS.md (#938)', () => {
+describe('instruction blocks reach Codex from its own file in user scope, and never through the project AGENTS.md (#938, #945)', () => {
   let tmpDir: string;
   let homeDir: string;
   let projectRoot: string;
@@ -302,47 +352,58 @@ describe('a project-scope pull gives Codex its instruction blocks in one AGENTS.
     projectRoot = path.join(tmpDir, 'project');
     repoPath = path.join(tmpDir, 'team-repo');
     await fse.ensureDir(homeDir);
-    await fse.ensureDir(path.join(projectRoot, '.codex'));
     await fse.ensureDir(path.join(repoPath, 'rules'));
     await fse.writeFile(path.join(repoPath, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
     await fse.writeFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
     await fse.ensureDir(path.join(repoPath, 'claudemd'));
     await fse.writeFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
     vi.stubEnv('HOME', homeDir);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
   });
 
   afterEach(async () => {
     vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    vi.mocked(loadLocalConfigForScope).mockReset();
     vi.unstubAllEnvs();
     await fse.remove(tmpDir);
   });
 
-  it('writes culture, shared instructions and recall into <project>/AGENTS.md, and no team rules', async () => {
-    // The three instruction writers and recall each decide "installed" on
-    // their own; one pull shows they agree on the same file.
-    vi.mocked(loadTeamConfig).mockResolvedValue(
-      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
-    );
-    vi.mocked(detectProjectConfig).mockResolvedValue({
-      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
-      username: 'u',
-      updatePolicy: 'auto',
-      additionalRoles: [],
-      scope: 'project',
-      projectRoot,
-      enabledAgents: ['codex'],
-      recallEnabled: true,
-    } as LocalConfig);
+  const config = (scope: 'project' | 'user', tool: string) => ({
+    repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+    username: 'u',
+    updatePolicy: 'auto',
+    additionalRoles: [],
+    scope,
+    ...(scope === 'project' ? { projectRoot } : {}),
+    enabledAgents: [tool],
+    recallEnabled: true,
+  }) as LocalConfig;
+
+  it.each(CODEX_FAMILY)('a project-scope pull for %s leaves the project AGENTS.md byte for byte', async (tool) => {
+    await fse.ensureDir(path.join(projectRoot, `.${tool}`));
+    const owners = '# Project notes\n\nKeep commits small.\n';
+    await fse.writeFile(path.join(projectRoot, 'AGENTS.md'), owners);
+    vi.mocked(detectProjectConfig).mockResolvedValue(config('project', tool));
 
     await pull({});
 
-    const content = await fse.readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8');
+    expect(await fse.readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8')).toBe(owners);
+  });
+
+  it.each(CODEX_FAMILY)('a user-scope pull writes culture, shared instructions and recall into ~/.%s/AGENTS.md', async (tool) => {
+    await fse.ensureDir(path.join(homeDir, `.${tool}`));
+    vi.mocked(loadLocalConfigForScope).mockImplementation(async (scope) => (scope === 'user' ? config('user', tool) : null) as never);
+
+    await pull({});
+
+    const content = await fse.readFile(path.join(homeDir, `.${tool}`, 'AGENTS.md'), 'utf8');
     for (const marker of [TEAMAI_CULTURE_START, TEAMAI_CLAUDEMD_START, TEAMAI_RECALL_RULES_START]) {
       expect(count(content, marker)).toBe(1);
     }
     expect(content).toContain('Be kind to teammates.');
     expect(content).toContain('Shared team instructions.');
-    expect(content).not.toContain('PELICAN-42');
   });
 });
 
@@ -395,11 +456,14 @@ describe('a pull at an unchanged team revision after a CLI upgrade (#938)', () =
     await fse.remove(tmpDir);
   });
 
-  it('removes the old .codex/rules copy and writes no rules into AGENTS.md', async () => {
+  it('removes the old .codex/rules copy and writes the team-rules block into ~/.codex/AGENTS.md', async () => {
     await pull({});
 
     expect(vi.mocked(log.success).mock.calls.some(([message]) => String(message).includes('Already synced at abc1234'))).toBe(true);
-    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('My own notes.\n');
+    const content = await fse.readFile(agentsMd(), 'utf8');
+    expect(content.startsWith('My own notes.\n')).toBe(true);
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(content).toContain('PELICAN-42');
     expect(await fse.pathExists(legacyCopy())).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.codex', 'rules'))).toBe(false);
   });
@@ -471,7 +535,7 @@ describe('a project-scope pull at an unchanged team revision after a CLI upgrade
   });
 });
 
-describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#938)', () => {
+describe('Codex leaves the project AGENTS.md to the tools that write it (#938, #945)', () => {
   const BLOCK_START: Record<string, string> = {
     culture: TEAMAI_CULTURE_START,
     claudemd: TEAMAI_CLAUDEMD_START,
@@ -515,9 +579,8 @@ describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#9
       skills: '.workbuddy/skills', rules: '.workbuddy/rules', settings: '.workbuddy/settings.json',
       claudemd: 'AGENTS.md', agents: '.workbuddy/agents',
     }, ['culture', 'claudemd', 'recall']],
-    ['tcodex', 'the default entry', defaults.tcodex, ['culture', 'claudemd', 'recall']],
-    ['tcodex', 'no agents', { skills: '.tcodex/skills', settings: '.tcodex/hooks.json', claudemd: 'AGENTS.md' }, ['culture', 'claudemd']],
-  ])('uninstall --agent codex leaves %s (%s) the blocks its own pull writes', async (tool, _label, entry, written) => {
+    ['tcodex', 'the default entry', defaults.tcodex, []],
+  ])('Codex adds nothing to the AGENTS.md %s (%s) writes, and uninstall --agent codex leaves it', async (tool, _label, entry, written) => {
     const teamConfig = TeamaiConfigSchema.parse({
       team: 'test', repo: 'https://example.invalid/x/team.git', toolPaths: { codex: defaults.codex, [tool]: entry },
     });
@@ -539,21 +602,21 @@ describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#9
     };
 
     await pullAs([tool]);
-    const own = await blocksIn();
-    expect(own).toEqual(written.map((block) => BLOCK_START[block]));
+    expect(await blocksIn()).toEqual(written.map((block) => BLOCK_START[block]));
+    const own = await fse.readFile(agentsMd(), 'utf8').catch(() => null);
     await pullAs(['codex', tool]);
-    expect(await blocksIn()).toEqual(BLOCKS);
+    expect(await fse.readFile(agentsMd(), 'utf8').catch(() => null)).toBe(own);
     vi.mocked(autoDetectInit).mockResolvedValue({ localConfig: localConfig(['codex', tool]), teamConfig } as never);
 
     await uninstall({ force: true, agent: 'codex' });
 
-    expect(await blocksIn()).toEqual(own);
+    expect(await fse.readFile(agentsMd(), 'utf8').catch(() => null)).toBe(own);
   });
 
   it.each([
-    ['gives back a member\'s empty AGENTS.md as it was', ''],
-    ['removes the AGENTS.md teamai created', null],
-  ])('uninstall --agent codex %s', async (_label, before) => {
+    ['keeps a member\'s empty AGENTS.md as it was', ''],
+    ['creates no AGENTS.md', null],
+  ])('a Codex-only project: pull and uninstall --agent codex %s', async (_label, before) => {
     const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
     if (before !== null) await fse.writeFile(agentsMd(), before);
     const localConfig = {
@@ -568,13 +631,15 @@ describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#9
     } as LocalConfig;
     vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig);
     vi.mocked(detectProjectConfig).mockResolvedValue(localConfig);
+    const unchanged = async () => {
+      if (before === null) expect(await fse.pathExists(agentsMd())).toBe(false);
+      else expect(await fse.readFile(agentsMd(), 'utf8')).toBe(before);
+    };
+
     await pull({});
-    expect(await blocksIn()).toEqual(BLOCKS);
+    await unchanged();
     vi.mocked(autoDetectInit).mockResolvedValue({ localConfig, teamConfig } as never);
-
     await uninstall({ force: true, agent: 'codex' });
-
-    if (before === null) expect(await fse.pathExists(agentsMd())).toBe(false);
-    else expect(await fse.readFile(agentsMd(), 'utf8')).toBe(before);
+    await unchanged();
   });
 });

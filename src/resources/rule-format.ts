@@ -44,12 +44,13 @@ export function getsRulesFromSessionHook(tool: string): boolean {
 }
 
 /** A managed block pull writes into a tool's instructions file (`claudemd`). */
-export type InstructionBlock = 'culture' | 'claudemd' | 'recall';
+export type InstructionBlock = 'culture' | 'claudemd' | 'recall' | 'team-rules';
 
 /**
  * Whether pull writes `block` into this tool's instructions file: culture and
  * shared instructions for every tool that has one, recall for a tool that
- * also has `agents`. Pull's writers
+ * also has `agents`, the team rules for a tool with no rules format (the
+ * Codex family has an instructions file in user scope only). Pull's writers
  * and uninstall both ask this, so what uninstall keeps for a remaining tool is
  * what that tool's next pull refreshes. Whether the tool is installed is a
  * separate question (`instructionFileInstallProbe`).
@@ -63,6 +64,7 @@ export function writesInstructionBlock(
 export function writesInstructionBlock(tool: string, toolPath: ToolPath, block: InstructionBlock): boolean {
   if (!toolPath.claudemd) return false;
   if (block === 'recall') return toolPath.agents !== undefined;
+  if (block === 'team-rules') return getsRulesFromSessionHook(tool);
   return true;
 }
 

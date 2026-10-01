@@ -8,7 +8,7 @@ import type { LocalConfig } from '../types.js';
 
 const CODEX_FAMILY = ['codex', 'codex-internal', 'tcodex'];
 
-describe('Codex gets the team rules from its session-start hook (#938)', () => {
+describe('Codex gets the project\'s rules and instruction blocks from its session-start hook (#938, #945)', () => {
   let tmpDir: string;
   let repoPath: string;
   let localConfig: LocalConfig;
@@ -73,22 +73,72 @@ describe('Codex gets the team rules from its session-start hook (#938)', () => {
     expect(await context({ hook_event_name: 'SessionStart', source: 'resume' })).toBeNull();
   });
 
-  it('adds the user-scope rules before the project\'s when the session starts in a project', async () => {
+  it('adds nothing from the user scope, which reaches Codex through its own AGENTS.md', async () => {
     await userScope({ 'personal.md': 'The personal codeword is WREN-5.\n' });
 
     const text = (await context({ hook_event_name: 'SessionStart', source: 'startup' }))!;
 
-    expect(text).toContain('WREN-5');
     expect(text).toContain('PELICAN-42');
-    expect(text.indexOf('WREN-5')).toBeLessThan(text.indexOf('PELICAN-42'));
+    expect(text).not.toContain('WREN-5');
   });
 
-  it('adds a rule both scopes deliver once', async () => {
-    await userScope({ 'codeword.md': 'The team codeword is PELICAN-42.\n' });
+  it('adds nothing when the session starts outside a teamai project', async () => {
+    localConfig = { ...localConfig, scope: 'user', projectRoot: undefined } as unknown as LocalConfig;
+
+    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).toBeNull();
+  });
+
+  it('adds the project\'s culture, shared instructions and recall, without their file markers', async () => {
+    await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
+    localConfig = { ...localConfig, recallEnabled: true } as LocalConfig;
 
     const text = (await context({ hook_event_name: 'SessionStart', source: 'startup' }))!;
 
-    expect(text.split('PELICAN-42')).toHaveLength(2);
+    expect(text).toContain('Be kind to teammates.');
+    expect(text).toContain('Shared team instructions.');
+    expect(text).toContain('Team Knowledge Recall (teamai)');
+    expect(text).toContain('PELICAN-42');
+    expect(text).not.toContain('<!--');
+  });
+
+  it('adds no recall block when recall is off', async () => {
+    localConfig = { ...localConfig, recallEnabled: false } as LocalConfig;
+
+    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).not.toContain('Team Knowledge Recall');
+  });
+
+  it('adds only the shared instructions of the member\'s namespaces', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), `
+version: 1
+projects:
+  - id: alpha
+    resources: { knowledge: [alpha] }
+  - id: billing
+    resources: { knowledge: [billing] }
+`);
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'alpha', 'a.md'), 'Alpha instructions.\n');
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'billing', 'b.md'), 'Billing instructions.\n');
+    localConfig = { ...localConfig, projects: ['alpha'] } as LocalConfig;
+
+    const text = await context({ hook_event_name: 'SessionStart', source: 'startup' });
+
+    expect(text).toContain('Alpha instructions.');
+    expect(text).not.toContain('Billing instructions.');
+  });
+
+  it('skips a block another tool already wrote into the project AGENTS.md, which Codex reads', async () => {
+    await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
+    await fse.outputFile(
+      path.join(tmpDir, 'project', 'AGENTS.md'),
+      '# Notes\n\n<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n',
+    );
+
+    const text = (await context({ hook_event_name: 'SessionStart', source: 'startup' }))!;
+
+    expect(text).not.toContain('Be kind to teammates.');
+    expect(text).toContain('Shared team instructions.');
   });
 
   it('adds no rules from a scope that does not enable the tool', async () => {
