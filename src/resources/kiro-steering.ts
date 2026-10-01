@@ -1,5 +1,5 @@
 import type { RuleFormat } from './rule-format.js';
-import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
+import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData, verbatimRule } from './team-rule.js';
 
 /**
  * Kiro steering files (`.kiro/steering/*.md`, `~/.kiro/steering/*.md`) choose
@@ -12,6 +12,10 @@ import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody,
  * Kiro ignores `paths:`, so a verbatim copy of a scoped rule was always on.
  * The pattern is always a list, Kiro's documented form for several globs, so
  * a brace glob stays one entry.
+ *
+ * Kiro reads only the top level of its steering directory
+ * (https://github.com/kirodotdev/Kiro/issues/10448), so a namespaced rule is
+ * written flat (`flat`): `rules/fe/style.md` becomes `fe.style.md`.
  */
 export function teamRuleToKiroSteering(rawTeamRule: string): string {
   const paths = rulePaths(teamRuleData(rawTeamRule));
@@ -28,4 +32,8 @@ export const KIRO_STEERING_FORMAT: RuleFormat = {
   bodyEquals: ruleBodyEqualsTeamMd,
   mergeBodyIntoTeam: mergeRuleBodyIntoTeamMd,
   scopeFields: ['inclusion', 'fileMatchPattern'],
+  // An older teamai copied the team rule verbatim.
+  previousRenders: [verbatimRule],
+  // Kiro does not read steering subdirectories (kirodotdev/Kiro#10448).
+  flat: true,
 };

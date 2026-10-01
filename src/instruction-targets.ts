@@ -81,9 +81,10 @@ const configured = (paths: ToolPaths): string | undefined => paths.claudemd;
  * also what says OpenClaw is not installed here (`isInstructionToolInstalled`).
  */
 const openclawWorkspace = async (): Promise<string | undefined> => {
-  const { resolveOpenclawWorkspaceDir } = await import('./openclaw-hooks.js');
-  const workspace = await resolveOpenclawWorkspaceDir();
-  return workspace === null ? undefined : path.join(workspace, 'AGENTS.md');
+  const { resolveOpenclawWorkspace } = await import('./openclaw-hooks.js');
+  const workspace = await resolveOpenclawWorkspace();
+  // An openclaw.json teamai cannot read may name another workspace: guess none (#946).
+  return workspace.kind === 'found' ? path.join(workspace.dir, 'AGENTS.md') : undefined;
 };
 
 /** DeepSeek Harness reads `$DSH_HOME/AGENTS.md` (`~/.dsh` by default) in its first request. */
@@ -448,6 +449,19 @@ export interface UserRulesFile {
   readonly installed: boolean;
   /** How doctor names the file: "Team rules are inlined in <label>". */
   readonly label: string;
+  /** The tool's config, which names the file, could not be read: pull writes no block and doctor fails (OpenClaw's openclaw.json). */
+  readonly unreadable?: { readonly config: string; readonly error: string };
+}
+
+/**
+ * What happened and what to do when `tool`'s config, which names its rules
+ * file, cannot be read (`UserRulesFile.unreadable`): pull warns with it and
+ * doctor's fix says it.
+ */
+export function unreadableRulesFileMessage(tool: string, unreadable: NonNullable<UserRulesFile['unreadable']>): string {
+  return `teamai cannot read ${unreadable.config} as plain JSON (${unreadable.error}), so it cannot tell which `
+    + `workspace ${tool} reads: it writes no team-rules block, and ${tool} gets none of the team rules from teamai. `
+    + 'Make that file plain JSON (no comments or trailing commas), then run `teamai pull`.';
 }
 
 /** Whether `tool` reads the team rules from a file of its own in user scope. */
@@ -465,11 +479,20 @@ export async function userRulesFile(tool: string, paths: ToolPaths, localConfig:
   if (localConfig.scope !== 'user') return undefined;
   const entry = entryFor(tool, 'user');
   if (entry?.teamRules === undefined) return undefined;
+  const { label } = entry.teamRules;
+  if (tool === 'openclaw') {
+    // Installed where its workspace resolves, or where openclaw.json says
+    // where it is in a form teamai cannot read.
+    const { resolveOpenclawWorkspace } = await import('./openclaw-hooks.js');
+    const workspace = await resolveOpenclawWorkspace();
+    if (workspace.kind === 'unreadable-config') {
+      return { file: undefined, installed: true, label, unreadable: { config: workspace.file, error: workspace.error } };
+    }
+    return { file: workspace.kind === 'found' ? path.join(workspace.dir, 'AGENTS.md') : undefined, installed: workspace.kind === 'found', label };
+  }
   const relative = await (entry.teamRules.file ?? entry.file)(paths);
   const file = relative === undefined ? undefined : path.resolve(resolveToolBaseDir(tool, localConfig), relative);
-  // OpenClaw is installed where its workspace resolves, which its file already says.
-  const installed = tool === 'openclaw' ? file !== undefined : await isInstructionToolInstalled(tool, paths, localConfig);
-  return { file, installed, label: entry.teamRules.label };
+  return { file, installed: await isInstructionToolInstalled(tool, paths, localConfig), label };
 }
 
 /**

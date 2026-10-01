@@ -375,8 +375,9 @@ async function reportWouldKeep(
   ledger: DeliveryLedger,
   scopeLabel: string,
 ): Promise<void> {
+  const received = items.map((item) => item.name);
   for (const item of items) {
-    for (const target of await handler.deliveryTargets(freshConfig, localConfig, item)) {
+    for (const target of await handler.deliveryTargets(freshConfig, localConfig, item, received)) {
       if ((await judgeCopy(ledger.previous, item, target)).kind === 'keep') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: you changed it since teamai delivered it.`);
       }
@@ -861,14 +862,13 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
 async function rerenderOutdatedRules(
   freshConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  roleContext: RolePullContext | null,
+  items: ResourceItem[],
   scopeLabel: string,
 ): Promise<void> {
   try {
     const key = await checkoutRecordKey(localConfig);
     const state = await loadStateForScope(localConfig);
     const ledger = await openCheckoutLedger(localConfig, state);
-    const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
     const handler = getHandler('rules') as RulesHandler;
     const reclaimed = await handler.reclaimLegacyRuleCopies(freshConfig, localConfig, items, ledger);
     // With no record yet, it still rewrites a copy its bytes prove teamai's.
@@ -886,7 +886,7 @@ async function rerenderOutdatedRules(
   } catch (e) {
     log.warn(
       `[${scopeLabel}] Could not check whether delivered rules need their tool's format or a new place: ${(e as Error).message}. `
-      + 'Copies may still be in an older format, or where the tool does not read them; fix the cause, then run `teamai pull --force`.',
+      + 'Copies may still be in an older format, or where the tool does not read them; fix the cause, then run `teamai pull`.',
     );
   }
 }
@@ -1370,27 +1370,35 @@ async function pullForScope(
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
           // Same reason: a CLI that moves a tool's user team rules into a file
           // only it reads (Codex's AGENTS.md, #938; ZCode, DeepSeek Harness,
-          // OpenClaw, Pi and JoyCode, #946) writes that block here.
+          // OpenClaw, Pi and JoyCode, #946) writes that block here, and
+          // Hermes' SOUL.md block, which an older project pull overwrote.
           if (resourceTypes.includes('rules')) {
+            // A plain pull runs this path again, so it is the retry for each step.
+            let items: ResourceItem[] | undefined;
             try {
-              const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-              await (getHandler('rules') as RulesHandler).syncUserRulesFiles(freshConfig, localConfig, items);
+              ({ items } = await resolveDesiredRules(freshConfig, localConfig, roleContext));
             } catch (error) {
-              // A file that fails is named by syncUserRulesFiles; this is resolving the rules.
-              log.warn(`[${scopeLabel}] Could not resolve the team rules, so no tool's own user rules file (such as ~/.codex/AGENTS.md or ~/.zcode/AGENTS.md) was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
+              log.warn(`[${scopeLabel}] Could not resolve the team rules, so no tool's own user rules file (such as ~/.codex/AGENTS.md or ~/.zcode/AGENTS.md), OpenCode rules glob or older rule copy was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
             }
-            // Same reason: a CLI that moves OpenCode's rules globs writes them
-            // to their new config file and reclaims the old ones (#946).
-            try {
-              const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-              await (getHandler('rules') as RulesHandler).activateOpencodeInstructions(freshConfig, localConfig, items);
-            } catch (error) {
-              log.warn(`[${scopeLabel}] OpenCode's rules globs were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+            if (items !== undefined) {
+              try {
+                await (getHandler('rules') as RulesHandler).syncUserRulesFiles(freshConfig, localConfig, items);
+              } catch (error) {
+                // A file that fails is named by syncUserRulesFiles.
+                log.warn(`[${scopeLabel}] No tool's own user rules file (such as ~/.codex/AGENTS.md or ~/.zcode/AGENTS.md) was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
+              }
+              // Same reason: a CLI that moves OpenCode's rules globs writes them
+              // to their new config file and reclaims the old ones (#946).
+              try {
+                await (getHandler('rules') as RulesHandler).activateOpencodeInstructions(freshConfig, localConfig, items);
+              } catch (error) {
+                log.warn(`[${scopeLabel}] OpenCode's rules globs were not updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
+              }
+              // Same reason: a CLI that gives a tool its own rules format must
+              // re-render the copies an older one wrote verbatim, and reclaim the
+              // ones it left where the tool does not read them (#938, #946).
+              await rerenderOutdatedRules(freshConfig, localConfig, items, scopeLabel);
             }
-            // Same reason: a CLI that gives a tool its own rules format must
-            // re-render the copies an older one wrote verbatim, and reclaim the
-            // ones it left where the tool does not read them (#938, #946).
-            await rerenderOutdatedRules(freshConfig, localConfig, roleContext, scopeLabel);
           }
           // The repo has not moved, but an agent's model may have (#830).
           if (resourceTypes.includes('agents')) {

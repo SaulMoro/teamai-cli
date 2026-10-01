@@ -227,7 +227,8 @@ export function isCodexTrustGatedTool(tool: string): boolean {
  * Shared with `doctor` (installed-hooks note) so the wording stays identical.
  */
 export function codexTrustReminder(): string {
-  return 'Codex hooks written, but Codex may require you to review/trust them before they run — open /hooks or Settings → Hooks in Codex to trust them.';
+  return 'Codex hooks written, but Codex may require you to review/trust them before they run — open /hooks or Settings → Hooks in Codex to trust them. '
+    + 'Until you do, a project\'s team rules do not reach Codex: they come through those hooks.';
 }
 
 /**

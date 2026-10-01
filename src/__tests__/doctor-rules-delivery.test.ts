@@ -175,6 +175,33 @@ describe('doctor — rules delivered on disk', () => {
     expect(cursor.fix).toContain('delivered from an older copy: reviews');
   });
 
+  it('names --force for an unrecorded older copy, and a plain pull for one on record (#946)', async () => {
+    await deliverPlain(CLAUDE_RULES, 'coding-style');
+    await deliverPlain(CLAUDE_RULES, 'reviews');
+    await deliverMdc('coding-style');
+    await deliverMdc('reviews', '');
+
+    const unrecorded = await rulesCheck('cursor');
+    expect(await unrecorded.check()).toBe(false);
+    expect(unrecorded.fix).toContain('teamai pull --force');
+
+    // What an older CLI wrote and recorded: the "Already synced" pull re-renders it.
+    const older = path.join(homeDir, CURSOR_RULES, 'reviews.mdc');
+    const delivered = { [older]: crypto.createHash('sha256').update('Body of reviews\n').digest('hex') };
+    vi.mocked(loadStateForScope).mockResolvedValue(StateSchema.parse({
+      lastPullByWorkspace: { [await checkoutKey(homeDir)]: { rev: 'r1', targets: [], delivered } },
+    }));
+    try {
+      const recorded = await rulesCheck('cursor');
+      expect(await recorded.check()).toBe(false);
+      expect(recorded.fix).toContain('reviews');
+      expect(recorded.fix).toContain('Run `teamai pull`');
+      expect(recorded.fix).not.toContain('--force');
+    } finally {
+      vi.mocked(loadStateForScope).mockResolvedValue(StateSchema.parse({}));
+    }
+  });
+
   it('reports a .mdc whose globs no longer match the team rule', async () => {
     // The frontmatter fields are all present and `alwaysApply` is a legal
     // value, so checking that the keys exist calls this delivered. Cursor
@@ -225,22 +252,25 @@ describe('doctor — rules delivered on disk', () => {
     expect(check.fix).not.toContain('.mdc');
   });
 
-  it('checks the flat file OMP reads for a namespaced rule, not the nested path (#946)', async () => {
+  it.each([
+    ['omp', '.omp/agent/rules', '---\nalwaysApply: true\n---\n\n'],
+    ['kiro', '.kiro/steering', '---\ninclusion: always\n---\n\n'],
+  ])('checks the flat file %s reads for a namespaced rule, not the nested path (#946)', async (tool, rulesDir, always) => {
     await writeTeamRule('fe/style');
-    teamConfig.toolPaths = { omp: { rules: '.omp/agent/rules' } };
-    const dir = path.join(homeDir, '.omp/agent/rules');
+    teamConfig.toolPaths = { [tool]: { rules: rulesDir } };
+    const dir = path.join(homeDir, rulesDir);
     for (const name of ['coding-style', 'reviews']) {
-      await fse.outputFile(path.join(dir, `${name}.md`), `---\nalwaysApply: true\n---\n\nBody of ${name}\n`);
+      await fse.outputFile(path.join(dir, `${name}.md`), `${always}Body of ${name}\n`);
     }
-    // Where an older teamai left it: OMP does not read below the top level.
+    // Where an older teamai left it: the tool does not read below the top level.
     await fse.outputFile(path.join(dir, 'fe', 'style.md'), 'Body of fe/style\n');
 
-    const missing = await rulesCheck('omp');
+    const missing = await rulesCheck(tool);
     expect(await missing.check()).toBe(false);
     expect(missing.fix).toContain('not delivered: fe/style');
 
-    await fse.outputFile(path.join(dir, 'fe.style.md'), '---\nalwaysApply: true\n---\n\nBody of fe/style\n');
-    expect(await (await rulesCheck('omp')).check()).toBe(true);
+    await fse.outputFile(path.join(dir, 'fe.style.md'), `${always}Body of fe/style\n`);
+    expect(await (await rulesCheck(tool)).check()).toBe(true);
   });
 
   it('fails for a namespaced rule OMP gets no file for, as a root rule has its flat name (#946)', async () => {

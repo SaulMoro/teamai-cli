@@ -271,4 +271,3 @@ describe('CodeBuddy and WorkBuddy rules (#946)', () => {
     });
   });
 });
-

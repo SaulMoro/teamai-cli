@@ -13,14 +13,15 @@
  * `agentFileExtensionForTool` in `./agent-format.ts`. Every site that writes,
  * scans, compares, pushes or deletes files in a tool's rules directory must go
  * through it, so a new format never has to be re-discovered call site by call
- * site. Adding one is a render module exporting a `RuleFormat` plus one entry
- * below.
+ * site. Adding one is a render module exporting a `RuleFormat`, whose
+ * `previousRenders` names what the tool got before (the team `.md` verbatim,
+ * usually), plus one entry below.
  */
 
 import type { Scope } from '../types.js';
 import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
-import { CURSOR_MDC_FORMAT, teamRuleToCursorMdc } from './cursor-mdc.js';
+import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
 import { JOYCODE_RULE_FORMAT } from './joycode-rule.js';
 import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
 import { OMP_RULE_FORMAT } from './omp-rule.js';
@@ -40,6 +41,12 @@ export interface RuleFormat {
   readonly scopeFields: readonly string[];
   /** The tool reads only the top level of its rules directory, so a namespaced rule is written flat (`ruleStemsForTool`). */
   readonly flat?: true;
+  /**
+   * What an older teamai wrote for the tool from the team rule before this
+   * format, so a copy holding one is still known as teamai's: reclaimed,
+   * re-rendered or removed like a current one (`deliveredRenders`).
+   */
+  readonly previousRenders?: readonly ((rawTeamRule: string) => string)[];
 }
 
 /**
@@ -88,6 +95,14 @@ export function ruleFormatForTool(tool: string): RuleFormat | undefined {
  */
 export function renderRuleForTool(tool: string, rawTeamRule: string): string {
   return ruleFormatForTool(tool)?.render(rawTeamRule) ?? rawTeamRule;
+}
+
+/**
+ * Every render a copy teamai delivered for `tool` may hold: the current one,
+ * then the ones an older teamai wrote (`RuleFormat.previousRenders`).
+ */
+export function deliveredRenders(tool: string): Array<(rawTeamRule: string) => string> {
+  return [(raw) => renderRuleForTool(tool, raw), ...(ruleFormatForTool(tool)?.previousRenders ?? [])];
 }
 
 /** `fe/style` as a tool that reads only the top of its rules directory gets it: `fe.style`. */
@@ -198,10 +213,10 @@ export type InstructionBlock = 'culture' | 'claudemd' | 'recall' | 'team-rules';
  * delivered is replaced by its current delivery, others are removed, and an
  * edited one is kept and named. `uninstall` removes the same unedited ones.
  *
- * Adding a directory is one entry. A copy is unedited when it holds
- * `legacyRender` of the team rule (now or at a revision this checkout
- * pulled), the tool's current render, or the hash the delivery ledger
- * recorded for it, or for its namesake in `copiedFrom.dir`.
+ * Adding a directory is one entry. A copy is unedited when it holds one of
+ * the tool's `deliveredRenders` of the team rule (now or at a revision this
+ * checkout pulled), or the hash the delivery ledger recorded for it, or for
+ * its namesake in `copiedFrom.dir`.
  */
 export interface LegacyRuleDir {
   readonly tool: string;
@@ -211,8 +226,6 @@ export interface LegacyRuleDir {
   readonly dir: string;
   /** The extension the copies were written with. */
   readonly ext: '.md' | '.mdc';
-  /** What an older teamai wrote there from the team rule; the team `.md` verbatim when absent. */
-  readonly legacyRender?: (rawTeamRule: string) => string;
   /**
    * For a directory the tool does read, whose copies the tool itself copied
    * from another one: that directory, relative to the same base dir, and the
@@ -225,6 +238,12 @@ export interface LegacyRuleDir {
   readonly copiedFrom?: { readonly dir: string; readonly marker: string };
   /** Why a copy kept there is a problem, completing "Kept <files>: ..., and". */
   readonly why: string;
+  /**
+   * For a directory the tool does not read: what to change in a team
+   * `toolPaths.<tool>` entry that still sends rules there, completing
+   * "In the team teamai.yaml, ..." (doctor's fix).
+   */
+  readonly toolPathsFix?: string;
   /** What to do with a kept copy, as one sentence. */
   readonly advice: string;
 }
@@ -246,6 +265,7 @@ const codexLegacyDir = (tool: string, dir: string): LegacyRuleDir => ({
   // Codex keeps its own `*.rules` exec-policy files there, so only teamai's
   // copies may be removed from it.
   why: 'Codex does not read .md files in its rules directory (team rules now reach it through its session-start hook)',
+  toolPathsFix: `remove \`rules\` and \`userScope.rules\` from toolPaths.${tool}`,
   advice: 'Delete what you did not edit; to keep your changes, move them into AGENTS.md outside the teamai markers, then delete the copy.',
 });
 
@@ -261,6 +281,7 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     dir: '.workbuddy/rules',
     ext: '.md',
     why: 'WorkBuddy reads a project\'s rules from .codebuddy/rules, not from .workbuddy/rules',
+    toolPathsFix: 'set `rules: .codebuddy/rules` in toolPaths.workbuddy (keep `userScope.rules: .workbuddy/rules`)',
     advice: 'Delete what you did not edit; to keep your changes, move them into .codebuddy/rules under a name of your own, then delete the copy.',
   },
   // WorkBuddy's one-time migration (`migrateLegacyDataOnce`) copied
@@ -283,6 +304,7 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     dir: '.openclaw/rules',
     ext: '.md',
     why: 'OpenClaw does not read .openclaw/rules (team rules now reach it through its workspace AGENTS.md, in user scope only)',
+    toolPathsFix: 'remove `rules` and `userScope.rules` from toolPaths.openclaw',
     advice: 'Delete what you did not edit; to keep your changes, move them into the workspace AGENTS.md outside the teamai markers, then delete the copy.',
   },
   {
@@ -291,6 +313,7 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     dir: '.pi/agent/rules',
     ext: '.md',
     why: 'Pi does not read ~/.pi/agent/rules (team rules now reach it through ~/.pi/agent/AGENTS.md)',
+    toolPathsFix: 'remove `userScope.rules` (and `rules`) from toolPaths.pi',
     advice: 'Delete what you did not edit; to keep your changes, move them into ~/.pi/agent/AGENTS.md outside the teamai markers, then delete the copy.',
   },
   {
@@ -299,6 +322,7 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     dir: '.pi/rules',
     ext: '.md',
     why: 'Pi does not read .pi/rules (a project\'s team rules now reach it through teamai\'s Pi extension)',
+    toolPathsFix: 'remove `rules` (and `userScope.rules`) from toolPaths.pi',
     advice: 'Delete what you did not edit; to keep your changes, move them into the project\'s AGENTS.md, then delete the copy.',
   },
   {
@@ -306,9 +330,8 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     scopes: ['user'],
     dir: '.joycode/rules',
     ext: '.mdc',
-    // An older teamai gave JoyCode Cursor's render.
-    legacyRender: teamRuleToCursorMdc,
     why: 'JoyCode does not read ~/.joycode/rules (team rules now reach it through ~/.joycode/rules.txt)',
+    toolPathsFix: 'add `userScope.rules: null` to toolPaths.joycode (its project `rules: .joycode/rules` stays)',
     advice: 'Delete what you did not edit; to keep your changes, move them into ~/.joycode/rules.txt outside the teamai markers, then delete the copy.',
   },
 ];

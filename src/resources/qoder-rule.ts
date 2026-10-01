@@ -6,6 +6,7 @@ import {
   rulePaths,
   teamRuleBody,
   teamRuleData,
+  verbatimRule,
 } from './team-rule.js';
 
 /**
@@ -34,4 +35,6 @@ export const QODER_RULE_FORMAT: RuleFormat = {
   bodyEquals: ruleBodyEqualsTeamMd,
   mergeBodyIntoTeam: mergeRuleBodyIntoTeamMd,
   scopeFields: ['trigger', 'glob'],
+  // An older teamai copied the team rule verbatim.
+  previousRenders: [verbatimRule],
 };

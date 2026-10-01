@@ -260,6 +260,28 @@ describe('a user-scope rules sync puts the team rules in a file only the tool re
       expect(await fse.pathExists(home('.openclaw/workspace/AGENTS.md'))).toBe(false);
     });
 
+    it('writes no block, and warns naming openclaw.json, its parse error and the next step, when teamai cannot read that file', async () => {
+      // OpenClaw reads JSON5; a workspace set there is invisible to teamai, so
+      // the default workspace may not be the one OpenClaw uses.
+      await fse.ensureDir(home('.openclaw/workspace'));
+      await fse.outputFile(home('.openclaw/openclaw.json'), '{ // JSON5\n  agents: { defaults: { workspace: "~/elsewhere" } },\n}\n');
+      vi.mocked(loadLocalConfigForScope).mockImplementation(async (scope) => (scope === 'user' ? config('user', ['openclaw']) : null) as never);
+      vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig());
+
+      try {
+        await pull({ force: true });
+      } finally {
+        vi.mocked(loadLocalConfigForScope).mockReset();
+      }
+
+      expect(await fse.pathExists(home('.openclaw/workspace/AGENTS.md'))).toBe(false);
+      const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+      const warning = warnings.find((message) => message.includes(home('.openclaw/openclaw.json')));
+      expect(warning).toBeDefined();
+      expect(warning).toMatch(/JSON/);
+      expect(warning).toContain('teamai pull');
+    });
+
     it('follows OPENCLAW_STATE_DIR', async () => {
       const stateDir = path.join(tmpDir, 'oc-state');
       await fse.ensureDir(path.join(stateDir, 'workspace'));
@@ -463,6 +485,18 @@ describe('doctor checks the block in the file each tool reads (#946)', () => {
     expect(failing.fix).toContain('Run `teamai pull` to restore it.');
   });
 
+  it('fails for OpenClaw with the parse error when teamai cannot read openclaw.json', async () => {
+    await fse.ensureDir(home('.openclaw/workspace'));
+    await fse.outputFile(home('.openclaw/workspace/AGENTS.md'), `${BLOCK}\n`);
+    await fse.outputFile(home('.openclaw/openclaw.json'), '{ // JSON5\n  agents: {},\n}\n');
+
+    const failing = (await check('openclaw'))!;
+    expect(failing).toBeDefined();
+    expect(await failing.check()).toBe(false);
+    expect(failing.fix).toContain(home('.openclaw/openclaw.json'));
+    expect(failing.fix).toMatch(/JSON/);
+  });
+
   it.each(TOOLS)('asks nothing of $tool when it is not installed', async ({ tool }) => {
     expect(await check(tool)).toBeUndefined();
   });
@@ -555,5 +589,79 @@ describe('init and doctor say why OpenClaw gets no project rules (#946)', () => 
     const notes = await ruleChannelNotes(config(scope, enabled));
 
     expect(notes.some((note) => note.startsWith('OpenClaw'))).toBe(false);
+  });
+});
+
+/**
+ * A team `toolPaths` entry replaces the default one whole, so one written
+ * before #946 still sends rules to a directory the tool never reads; doctor
+ * must not pass that delivery (#946).
+ */
+describe('doctor fails a delivery to a rules directory the tool does not read (#946)', () => {
+  const OLD_ENTRIES: ReadonlyArray<{
+    tool: string; scope: 'user' | 'project'; root: string; dir: string; name: string; entry: Record<string, unknown>; change: string;
+  }> = [
+    {
+      tool: 'pi', scope: 'user', root: '.pi/agent', dir: '.pi/agent/rules', name: 'Rules delivered to pi',
+      entry: { skills: '.pi/skills', rules: '.pi/rules', claudemd: 'AGENTS.md', userScope: { skills: '.pi/agent/skills', rules: '.pi/agent/rules', claudemd: '.pi/agent/AGENTS.md' } },
+      change: '`userScope.rules`',
+    },
+    {
+      tool: 'pi', scope: 'project', root: '.pi', dir: '.pi/rules', name: 'Rules delivered to pi',
+      entry: { skills: '.pi/skills', rules: '.pi/rules', claudemd: 'AGENTS.md', userScope: { skills: '.pi/agent/skills', rules: '.pi/agent/rules', claudemd: '.pi/agent/AGENTS.md' } },
+      change: '`rules`',
+    },
+    {
+      tool: 'workbuddy', scope: 'project', root: '.workbuddy', dir: '.workbuddy/rules', name: 'Rules delivered to workbuddy',
+      entry: { skills: '.workbuddy/skills', rules: '.workbuddy/rules', settings: '.workbuddy/settings.json' },
+      change: '`rules: .codebuddy/rules`',
+    },
+    {
+      tool: 'joycode', scope: 'user', root: '.joycode', dir: '.joycode/rules', name: 'Rules delivered to joycode',
+      entry: { skills: '.joycode/skills', rules: '.joycode/rules' },
+      change: '`userScope.rules: null`',
+    },
+  ];
+
+  afterEach(() => {
+    vi.mocked(detectProjectConfig).mockResolvedValue(null);
+  });
+
+  it.each(OLD_ENTRIES)('$tool ($scope): fails for $dir, naming the directory, why and the toolPaths change', async ({ tool, scope, root, dir, name, entry, change }) => {
+    await fse.ensureDir(path.join(base(scope), root));
+    const team = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git', toolPaths: { [tool]: entry } });
+    const localConfig = config(scope, [tool]);
+    await new RulesHandler().pullAllRules(team, localConfig);
+    // The old entry still delivers there; this is the case doctor must catch.
+    expect(await fse.pathExists(path.join(base(scope), dir, `codeword${tool === 'joycode' ? '.mdc' : '.md'}`))).toBe(true);
+
+    vi.mocked(loadLocalConfig).mockResolvedValue(localConfig);
+    if (scope === 'project') vi.mocked(detectProjectConfig).mockResolvedValue(localConfig);
+    vi.mocked(loadTeamConfig).mockResolvedValue(team);
+    const ctx = await resolveDoctorContext();
+    const failing = (await buildChecks(ctx!)).find((c) => c.name === name);
+
+    expect(failing).toBeDefined();
+    expect(await failing!.check()).toBe(false);
+    expect(failing!.fix).toContain(`toolPaths.${tool} entry still sends the rules to ${path.join(base(scope), dir)}`);
+    expect(failing!.fix).toContain(`toolPaths.${tool}`);
+    expect(failing!.fix).toContain(change);
+    // A copy there is inert, so restoring it is no fix.
+    expect(failing!.fix).not.toContain('--force');
+  });
+
+  it('still passes the default WorkBuddy delivery to .codebuddy/rules in a project', async () => {
+    await fse.ensureDir(path.join(projectRoot, '.workbuddy'));
+    const localConfig = config('project', ['workbuddy']);
+    await new RulesHandler().pullAllRules(teamConfig(), localConfig);
+
+    vi.mocked(loadLocalConfig).mockResolvedValue(localConfig);
+    vi.mocked(detectProjectConfig).mockResolvedValue(localConfig);
+    vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig());
+    const ctx = await resolveDoctorContext();
+    const check = (await buildChecks(ctx!)).find((c) => c.name.startsWith('Rules delivered to') && c.name.includes('workbuddy'));
+
+    expect(check).toBeDefined();
+    expect(await check!.check()).toBe(true);
   });
 });

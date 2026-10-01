@@ -123,6 +123,8 @@ vi.mock('../local-agent.js', async (importOriginal) => ({
 }));
 vi.mock('../hooks.js', async (importOriginal) => ({
   describeUnappliedTeamHooks: (await importOriginal<typeof import('../hooks.js')>()).describeUnappliedTeamHooks,
+  codexTrustReminder: (await importOriginal<typeof import('../hooks.js')>()).codexTrustReminder,
+  hasInstalledCodexTrustGatedTool: (await importOriginal<typeof import('../hooks.js')>()).hasInstalledCodexTrustGatedTool,
   injectHooksToAllTools: vi.fn(),
   reconcileTeamHooksForConfig: vi.fn(async () => ({ ok: true, defs: [] })),
   hasTeamaiHooks: vi.fn(async () => true),
@@ -814,6 +816,45 @@ describe('init', () => {
 
       const warned = vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
       expect(warned).toContain('Fix hooks/hooks.yaml in the team repo');
+    });
+  });
+
+  // #946: a project's team rules reach Codex only through its hooks, which
+  // Codex runs once the member trusts them.
+  describe('the Codex trust reminder', () => {
+    async function initWithCodex(enabledAgents: string[]): Promise<string> {
+      const { log } = await import('../utils/logger.js');
+      const { TeamaiConfigSchema } = await import('../types.js');
+      const { toolPaths } = TeamaiConfigSchema.parse({ team: 'my-team', repo: 'https://git.woa.com/HyperAI/teamai-test.git' });
+      let cloneDone = false;
+      pathExistsFn = (p: string) => (p === localPath ? cloneDone : p === path.join(HOME, '.codex'));
+      mockGfRepoClone.mockImplementation(() => {
+        cloneDone = true;
+      });
+      vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
+        team: 'my-team',
+        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+        provider: 'tgit',
+        reviewers: [],
+        sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '~/.teamai/docs' }, env: { injectShellProfile: true } },
+        toolPaths: { codex: toolPaths.codex, claude: toolPaths.claude },
+      } as never);
+      questionAnswers = ['n', '1'];
+      await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', scope: 'user', agent: enabledAgents.join(',') });
+      return vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
+    }
+
+    it('is printed when Codex is installed, and says a project\'s team rules wait on it', async () => {
+      const warned = await initWithCodex(['codex', 'claude']);
+
+      expect(warned).toContain('open /hooks');
+      expect(warned).toContain('team rules');
+    });
+
+    it('is not printed when Codex is not enabled', async () => {
+      const warned = await initWithCodex(['claude']);
+
+      expect(warned).not.toContain('open /hooks');
     });
   });
 

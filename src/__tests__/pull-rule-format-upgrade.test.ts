@@ -50,7 +50,15 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
+// Pass-through, so a test can count how often a pull resolves the rules:
+// each resolve filters the team rules by tag once.
+vi.mock('../utils/tags.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../utils/tags.js')>();
+  return { ...original, filterByTags: vi.fn(original.filterByTags) };
+});
+
 import { pull } from '../pull.js';
+import { filterByTags } from '../utils/tags.js';
 import { log } from '../utils/logger.js';
 import { loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
 import { TeamaiConfigSchema, type LocalConfig, type State } from '../types.js';
@@ -228,6 +236,96 @@ describe('a pull at an unchanged team revision after OMP rules go flat (#946)', 
 });
 
 /**
+ * Kiro reads only the top of its steering directory (kirodotdev/Kiro#10448),
+ * so a namespaced rule moved from `fe/style.md` to `fe.style.md`, as OMP's did.
+ */
+describe('a pull at an unchanged team revision after Kiro steering goes flat (#946)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let saved: State;
+
+  const NS = 'Namespaced rule.\n';
+  const KIRO_NS = '---\ninclusion: always\n---\n\nNamespaced rule.\n';
+  const steering = () => path.join(homeDir, '.kiro', 'steering');
+  const record = () => Object.values(saved.lastPullByWorkspace ?? {})[0];
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-kiro-flat-upgrade-'));
+    homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(steering());
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), NS);
+    await fse.outputFile(path.join(repoPath, 'rules', 'be', 'api.md'), 'Backend rule.\n');
+    vi.stubEnv('HOME', homeDir);
+    saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['kiro'],
+    } as LocalConfig);
+    await pull({});
+    // What an older CLI left at this revision: each rule verbatim and nested,
+    // on record; the member then edited the backend copy.
+    const delivered: Record<string, string> = {};
+    for (const name of ['fe.style.md', 'be.api.md']) await fse.remove(path.join(steering(), name));
+    for (const [rel, text] of [['fe/style.md', NS], ['be/api.md', 'Backend rule.\n']]) {
+      await fse.outputFile(path.join(steering(), rel), text);
+      delivered[path.join(steering(), rel)] = sha256(text);
+    }
+    record().delivered = delivered;
+    await fse.writeFile(path.join(steering(), 'be', 'api.md'), 'My own backend wording.\n');
+    vi.mocked(log.success).mockClear();
+    vi.mocked(log.warn).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes the flat file Kiro reads, and reclaims the nested one unless the member edited it', async () => {
+    await pull({});
+
+    const successes = vi.mocked(log.success).mock.calls.map(([message]) => String(message));
+    expect(successes.some((message) => message.includes('Already synced at abc1234'))).toBe(true);
+    const flat = path.join(steering(), 'fe.style.md');
+    expect(await fse.readFile(flat, 'utf8')).toBe(KIRO_NS);
+    expect(await fse.pathExists(path.join(steering(), 'fe'))).toBe(false);
+    expect(await fse.readFile(path.join(steering(), 'be', 'api.md'), 'utf8')).toBe('My own backend wording.\n');
+    expect(await fse.readFile(path.join(steering(), 'be.api.md'), 'utf8')).toBe('---\ninclusion: always\n---\n\nBackend rule.\n');
+    expect(record().delivered?.[flat]).toBe(sha256(KIRO_NS));
+    expect(record().delivered?.[path.join(steering(), 'fe', 'style.md')]).toBeUndefined();
+    // The edited nested copy is named: Kiro does not read it.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings.filter((message) => message.includes(`Kept ${path.join(steering(), 'be', 'api.md')}`))).toHaveLength(1);
+  });
+
+  it('does the same on a machine an older CLI left with no delivery record', async () => {
+    delete record().delivered;
+
+    await pull({});
+
+    expect(await fse.readFile(path.join(steering(), 'fe.style.md'), 'utf8')).toBe(KIRO_NS);
+    expect(await fse.pathExists(path.join(steering(), 'fe'))).toBe(false);
+    expect(await fse.readFile(path.join(steering(), 'be', 'api.md'), 'utf8')).toBe('My own backend wording.\n');
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings.filter((message) => message.includes(`Kept ${path.join(steering(), 'be', 'api.md')}`))).toHaveLength(1);
+  });
+});
+
+/**
  * JoyCode got Cursor's `.mdc`, whose quoted globs it never matches; a project
  * whose team revision has not moved must still get JoyCode's own render (#946).
  */
@@ -387,5 +485,165 @@ describe('a pull at an unchanged team revision after the OpenCode rules globs mo
     expect(alreadySynced()).toBe(true);
     expect(await fse.readJson(dot)).toEqual({ instructions: ['.opencode/rules/**/*.md'] });
     expect(await fse.readJson(root)).toEqual({ theme: 'dark' });
+  });
+});
+
+/**
+ * When no team rule reaches a tool any more, the copies teamai delivered go,
+ * including the ones an older CLI wrote before the tool got its own render
+ * (#946).
+ */
+describe('a rules sync that delivers no rule reclaims an older-format copy (#946)', () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('removes the verbatim Kiro copy of a rule this member no longer receives, and keeps an edited one', async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-unselected-old-render-'));
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const SCOPED = '---\npaths:\n  - "src/**"\n---\n\nUse named exports.\n';
+    await fse.outputFile(path.join(repoPath, 'rules', 'scoped.md'), SCOPED);
+    await fse.outputFile(path.join(repoPath, 'rules', 'other.md'), 'Other rule.\n');
+    const old = path.join(homeDir, '.kiro', 'steering', 'scoped.md');
+    const edited = path.join(homeDir, '.kiro', 'steering', 'other.md');
+    await fse.outputFile(old, SCOPED);
+    await fse.outputFile(edited, 'Other rule, my way.\n');
+    vi.stubEnv('HOME', homeDir);
+    const { RulesHandler } = await import('../resources/rules.js');
+    const localConfig = {
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['kiro'],
+    } as LocalConfig;
+
+    await new RulesHandler().pullAllRules(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }), localConfig, [],
+    );
+
+    expect(await fse.pathExists(old)).toBe(false);
+    expect(await fse.readFile(edited, 'utf8')).toBe('Other rule, my way.\n');
+  });
+});
+
+/**
+ * An older CLI let a project pull rewrite the global SOUL.md block with the
+ * project's rules. The upgrade must repair it on the next user pull, even
+ * at an unchanged team revision (#946).
+ */
+describe('a user pull at an unchanged team revision repairs the Hermes SOUL.md block (#946)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let saved: State;
+  const soul = () => path.join(homeDir, '.hermes', 'SOUL.md');
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-soul-repair-'));
+    homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(homeDir, '.hermes'));
+    await fse.outputFile(path.join(repoPath, 'rules', 'codeword.md'), 'The user codeword is HERON-7.\n');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', '');
+    saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['hermes'],
+    } as LocalConfig);
+    await pull({});
+    vi.mocked(log.success).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('rewrites a block an older project pull filled with the project\'s rules', async () => {
+    const before = await fse.readFile(soul(), 'utf8');
+    expect(before).toContain('HERON-7');
+    await fse.writeFile(soul(), before.replace('The user codeword is HERON-7.', 'The project codeword is OTTER-9.'));
+
+    await pull({});
+
+    const successes = vi.mocked(log.success).mock.calls.map(([message]) => String(message));
+    expect(successes.some((message) => message.includes('Already synced at abc1234'))).toBe(true);
+    expect(await fse.readFile(soul(), 'utf8')).toBe(before);
+  });
+});
+
+/**
+ * OMP writes namespaced rules flat, and judges a clash of flat names among
+ * the rules this member receives. Pull already holds that list, so the
+ * number of times it resolves the rules must not grow with the rules (#946).
+ */
+describe('a pull for OMP with namespaced rules resolves the rules a fixed number of times (#946)', () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  async function resolvesFor(namespaced: number): Promise<number> {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-omp-resolves-'));
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(homeDir, '.omp', 'agent'));
+    await fse.outputFile(path.join(repoPath, 'rules', 'root.md'), 'Root rule.\n');
+    for (let i = 0; i < namespaced; i++) await fse.outputFile(path.join(repoPath, 'rules', 'fe', `r${i}.md`), `Rule ${i}.\n`);
+    vi.stubEnv('HOME', homeDir);
+    let saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['omp'],
+    } as LocalConfig);
+    vi.mocked(filterByTags).mockClear();
+
+    await pull({ force: true });
+
+    expect(await fse.pathExists(path.join(homeDir, '.omp', 'agent', 'rules', 'fe.r0.md'))).toBe(true);
+    const calls = vi.mocked(filterByTags).mock.calls.filter((call) => call[3] === 'rules').length;
+    await fse.remove(tmpDir);
+    return calls;
+  }
+
+  it('resolves as often with five namespaced rules as with one', async () => {
+    const one = await resolvesFor(1);
+    const five = await resolvesFor(5);
+
+    expect(five).toBe(one);
   });
 });

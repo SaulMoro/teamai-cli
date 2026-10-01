@@ -1,3 +1,4 @@
+import { teamRuleToCursorMdc } from './cursor-mdc.js';
 import type { RuleFormat } from './rule-format.js';
 import {
   expandBraces,
@@ -47,4 +48,6 @@ export const JOYCODE_RULE_FORMAT: RuleFormat = {
   bodyEquals: ruleBodyEqualsTeamMd,
   mergeBodyIntoTeam: mergeRuleBodyIntoTeamMd,
   scopeFields: ['globs', 'alwaysApply'],
+  // An older teamai gave JoyCode Cursor's render.
+  previousRenders: [teamRuleToCursorMdc],
 };

@@ -125,9 +125,16 @@ Rule pre-sync leaves tools excluded by `enabledAgents` or `disabledAgents` untou
 When only team `paths` change, `applyTo` refreshes if the local file still matches
 a recorded version's generated copy; locally edited headers are kept.
 The copies push refreshes are recorded, so a later `teamai pull` still updates them.
-Oh My Pi reads only the top of its rules directory, so a namespaced rule is
-written flat there (`rules/fe/style.md` as `fe.style.md`); an edit of that file
+Oh My Pi and Kiro read only the top of their rules directories, so a namespaced
+rule is written flat there (`rules/fe/style.md` as `fe.style.md`); an edit of that file
 pushes back to `rules/fe/style.md`.
+
+A new file in the rules directory of a tool with a rules format of its own
+(Cursor, JoyCode, Copilot, Kiro, Qoder, CodeBuddy, WorkBuddy, Oh My Pi) is the
+member's own rule in that tool's format: push never offers it, and pull leaves
+it. To author a new team rule, write it as a plain `.md` in `.claude/rules/`
+(scope it with `paths:` frontmatter, which teamai renders into each tool's
+format), then run `teamai push`.
 
 ## If push is denied
 

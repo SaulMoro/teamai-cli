@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { teamRuleToCodebuddyRule } from '../resources/codebuddy-rule.js';
+import { teamRuleToCopilotInstructions } from '../resources/copilot-instructions.js';
 import { teamRuleToJoycodeRule } from '../resources/joycode-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
 import { teamRuleToOmpRule } from '../resources/omp-rule.js';
@@ -7,7 +8,9 @@ import { teamRuleToQoderRule } from '../resources/qoder-rule.js';
 
 /**
  * The exact bytes each tool's rule render writes (#946). Kiro and Qoder ship
- * no parser to run, so these pin the documented form.
+ * no parser to run, so these pin the documented form. This file is the test
+ * of kiro-steering.ts, qoder-rule.ts, omp-rule.ts, codebuddy-rule.ts,
+ * joycode-rule.ts, copilot-instructions.ts and team-rule.ts's `paths:` parse.
  */
 const UNSCOPED = 'Use named exports.\n';
 const INLINE = '---\npaths: ["src/**/*.ts", "test/**"]\n---\n\nUse named exports.\n';
@@ -137,6 +140,26 @@ describe('JoyCode rule render', () => {
     expect(teamRuleToJoycodeRule(source)).toBe(
       '---\nglobs: src/a/**, src/b/**, test/**\nalwaysApply: false\n---\n\nUse named exports.\n',
     );
+  });
+});
+
+describe('Copilot instructions render', () => {
+  it('applies an unscoped rule to every file', () => {
+    expect(teamRuleToCopilotInstructions(UNSCOPED)).toBe("---\napplyTo: '**'\n---\n\nUse named exports.\n");
+  });
+
+  it.each([
+    ['an inline list', INLINE],
+    ['a block list', BLOCK],
+  ])('scopes %s with one comma-joined applyTo', (_label, source) => {
+    expect(teamRuleToCopilotInstructions(source)).toBe(
+      "---\napplyTo: 'src/**/*.ts, test/**'\n---\n\nUse named exports.\n",
+    );
+  });
+
+  it('scopes an unquoted alias-like glob, as every other render does', () => {
+    const source = '---\npaths: **/*.ts\n---\n\nUse named exports.\n';
+    expect(teamRuleToCopilotInstructions(source)).toBe("---\napplyTo: '**/*.ts'\n---\n\nUse named exports.\n");
   });
 });
 

@@ -1,5 +1,5 @@
 import type { RuleFormat } from './rule-format.js';
-import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
+import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData, verbatimRule } from './team-rule.js';
 
 /**
  * Oh My Pi rules (`.omp/rules/*.md`, `~/.omp/agent/rules/*.md`), in the
@@ -51,5 +51,7 @@ export const OMP_RULE_FORMAT: RuleFormat = {
   bodyEquals: ruleBodyEqualsTeamMd,
   mergeBodyIntoTeam: mergeRuleBodyIntoTeamMd,
   scopeFields: ['alwaysApply', 'globs', 'description'],
+  // An older teamai copied the team rule verbatim.
+  previousRenders: [verbatimRule],
   flat: true,
 };

@@ -321,13 +321,11 @@ export async function removeOpenClawHooks(hooksDir: string): Promise<void> {
     await remove(dir);
     log.success(`Removed teamai OpenClaw hook from ${dir}`);
   }
-  // Also check OPENCLAW_STATE_DIR in case the hook was installed there
-  if (process.env.OPENCLAW_STATE_DIR) {
-    const altDir = path.join(process.env.OPENCLAW_STATE_DIR, 'hooks', OPENCLAW_HOOK_DIR);
-    if (altDir !== dir && await pathExists(altDir)) {
-      await remove(altDir);
-      log.success(`Removed teamai OpenClaw hook from ${altDir}`);
-    }
+  // Also check the state dir (OPENCLAW_STATE_DIR or the profile's) in case the hook was installed there
+  const altDir = path.join(resolveOpenclawStateDir(), 'hooks', OPENCLAW_HOOK_DIR);
+  if (altDir !== dir && await pathExists(altDir)) {
+    await remove(altDir);
+    log.success(`Removed teamai OpenClaw hook from ${altDir}`);
   }
 }
 
@@ -429,6 +427,13 @@ export async function removeOpenClawAgentHook(opts: {
   if (tool === 'openclaw') await removeOpenClawHookEntry(agentHookKey(opts.slug));
 }
 
+/** Where OpenClaw's default agent reads its workspace from, as far as teamai can tell (`resolveOpenclawWorkspace`). */
+export type OpenclawWorkspace =
+  | { readonly kind: 'found'; readonly dir: string }
+  | { readonly kind: 'none'; readonly tried: string }
+  /** openclaw.json is there but not plain JSON, so a workspace it sets is unknown. */
+  | { readonly kind: 'unreadable-config'; readonly file: string; readonly error: string; readonly fallback: string | null };
+
 /**
  * Resolve the OpenClaw workspace directory the way OpenClaw resolves its
  * default agent's workspace (agents/agent-scope-config.ts,
@@ -438,18 +443,16 @@ export async function removeOpenClawAgentHook(opts: {
  * 3. `OPENCLAW_WORKSPACE_DIR`
  * 4. `<state dir>/workspace` (`OPENCLAW_STATE_DIR`, profile, `~/.openclaw`)
  *
- * Returns the directory from that order when it exists, or null: another
- * workspace that happens to exist is not the one OpenClaw reads.
+ * Found only when the directory from that order exists: another workspace
+ * that happens to exist is not the one OpenClaw reads. An openclaw.json
+ * teamai cannot parse (OpenClaw reads JSON5) hides step 2, so the result says
+ * so, with the directory steps 3-4 give as `fallback`.
  * Per-agent workspaces in `agents.list` are not followed.
  */
-export async function resolveOpenclawWorkspaceDir(workspacePath?: string): Promise<string | null> {
-  if (workspacePath && await pathExists(workspacePath)) {
-    log.debug(`openclaw: resolved workspace dir to ${workspacePath}`);
-    return workspacePath;
-  }
+export async function resolveOpenclawWorkspace(workspacePath?: string): Promise<OpenclawWorkspace> {
+  if (workspacePath && await pathExists(workspacePath)) return { kind: 'found', dir: workspacePath };
   const cfgPath = resolveOpenclawConfigPath();
   const read = await readJsonObject(cfgPath);
-  if (read.kind === 'invalid') log.debug(`openclaw: could not parse ${cfgPath} as JSON: ${read.error}`);
   const agents = read.kind === 'ok' ? read.value.agents as { defaults?: { workspace?: unknown } } | undefined : undefined;
   const configured = agents?.defaults?.workspace;
   const envDir = process.env.OPENCLAW_WORKSPACE_DIR?.trim();
@@ -458,14 +461,33 @@ export async function resolveOpenclawWorkspaceDir(workspacePath?: string): Promi
     : envDir
       ? path.resolve(expandHome(envDir))
       : path.join(resolveOpenclawStateDir(), 'workspace');
-  if (await pathExists(candidate)) {
-    log.debug(`openclaw: resolved workspace dir to ${candidate}`);
-    return candidate;
+  const exists = await pathExists(candidate);
+  if (read.kind === 'invalid') {
+    return { kind: 'unreadable-config', file: cfgPath, error: read.error, fallback: exists ? candidate : null };
+  }
+  return exists ? { kind: 'found', dir: candidate } : { kind: 'none', tried: [workspacePath, candidate].filter(Boolean).join(', ') };
+}
+
+/**
+ * The workspace directory OpenClaw's hooks and skills go to, or null
+ * (`resolveOpenclawWorkspace`). An unreadable openclaw.json falls back to
+ * the workspace `OPENCLAW_WORKSPACE_DIR` or the state dir gives.
+ */
+export async function resolveOpenclawWorkspaceDir(workspacePath?: string): Promise<string | null> {
+  const workspace = await resolveOpenclawWorkspace(workspacePath);
+  if (workspace.kind === 'unreadable-config') {
+    log.debug(`openclaw: could not parse ${workspace.file} as JSON: ${workspace.error}`);
+    if (workspace.fallback !== null) log.debug(`openclaw: resolved workspace dir to ${workspace.fallback}`);
+    return workspace.fallback;
+  }
+  if (workspace.kind === 'found') {
+    log.debug(`openclaw: resolved workspace dir to ${workspace.dir}`);
+    return workspace.dir;
   }
   // A missing workspace dir is the normal case when OpenClaw is not installed;
   // callers treat null as "skip openclaw" and log their own debug line, so keep
   // this at debug level to avoid warning noise (one line per skill/file) on
   // machines without OpenClaw.
-  log.debug(`openclaw: no workspace dir found (tried: ${[workspacePath, candidate].filter(Boolean).join(', ')})`);
+  log.debug(`openclaw: no workspace dir found (tried: ${workspace.tried})`);
   return null;
 }

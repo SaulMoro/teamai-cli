@@ -1,5 +1,5 @@
 import type { RuleFormat } from './rule-format.js';
-import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
+import { mergeRuleBodyIntoTeamMd, ruleBodyEqualsTeamMd, rulePaths, teamRuleBody, teamRuleData, verbatimRule } from './team-rule.js';
 
 /**
  * CodeBuddy rule files (`.codebuddy/rules/*.md`, `~/.codebuddy/rules/*.md`),
@@ -30,4 +30,6 @@ export const CODEBUDDY_RULE_FORMAT: RuleFormat = {
   bodyEquals: ruleBodyEqualsTeamMd,
   mergeBodyIntoTeam: mergeRuleBodyIntoTeamMd,
   scopeFields: ['alwaysApply', 'paths'],
+  // An older teamai copied the team rule verbatim.
+  previousRenders: [verbatimRule],
 };

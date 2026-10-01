@@ -68,6 +68,9 @@ export function teamRuleData(raw: string): Record<string, unknown> {
   }
 }
 
+/** The team rule as it is: what a tool with no rules format of its own gets, and what an older teamai gave the rest. */
+export const verbatimRule = (rawTeamRule: string): string => rawTeamRule;
+
 /** Normalize a markdown body for comparison (ignore leading/trailing whitespace). */
 function normalizeBody(body: string): string {
   return body.replace(/^\s+/, '').replace(/\s+$/, '');

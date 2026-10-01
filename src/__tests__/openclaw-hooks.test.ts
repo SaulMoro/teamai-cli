@@ -404,6 +404,21 @@ describe('removeOpenClawHooks', () => {
     // second removal does not throw
     await expect(removeOpenClawHooks(hooksDir)).resolves.toBeUndefined();
   });
+
+  it('also removes the copy in the state dir a profile selects', async () => {
+    const home = path.join(tmpDir, 'home');
+    const profileHook = path.join(home, '.openclaw-work', 'hooks', OPENCLAW_HOOK_DIR);
+    fs.mkdirSync(profileHook, { recursive: true });
+    delete process.env.OPENCLAW_STATE_DIR;
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('OPENCLAW_PROFILE', 'work');
+    try {
+      await removeOpenClawHooks(path.join(wsDir, 'hooks'));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(fs.existsSync(profileHook)).toBe(false);
+  });
 });
 
 describe('reconcileHooksToAllTools routes the OpenClaw family to its adapter', () => {

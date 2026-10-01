@@ -96,6 +96,8 @@ async function walkDelivery(
   items: ResourceItem[],
   classify: (target: DeliveryTarget, item: ResourceItem) => Promise<string | null>,
 ): Promise<{ byTool: Map<string, ToolDelivery>; unreceived: string[] }> {
+  // `items` is what this member receives, so the handler need not resolve it again.
+  const received = items.map((item) => item.name);
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return { byTool: new Map(), unreceived: [] };
 
@@ -103,7 +105,7 @@ async function walkDelivery(
   const unreceived: string[] = [];
 
   for (const item of items) {
-    const targets = await handler.deliveryTargets(teamConfig, localConfig, item);
+    const targets = await handler.deliveryTargets(teamConfig, localConfig, item, received);
     if (targets.length === 0) unreceived.push(item.name);
 
     for (const target of targets) {
@@ -166,15 +168,19 @@ function hasDeliveryProblem(delivery: ToolDelivery): boolean {
 
 /**
  * What `pullItem` did not write at `target`: an older render, or a copy the
- * member changed since teamai delivered it, which pull keeps.
+ * member changed since teamai delivered it, which pull keeps. With
+ * `recordedLabel`, an older render still holding what teamai recorded writing
+ * gets that label instead.
  */
 async function differingCopyLabel(
-  item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig,
+  item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig, recordedLabel?: string,
 ): Promise<string> {
   const { deliveredHashes } = await import('./pull.js');
-  const { judgeCopy } = await import('./resources/delivered-copies.js');
-  const verdict = await judgeCopy(await deliveredHashes(localConfig), item, target);
-  return verdict.kind === 'keep' ? CHANGED_BY_YOU : olderLabel;
+  const { judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
+  const previous = await deliveredHashes(localConfig);
+  const verdict = await judgeCopy(previous, item, target);
+  if (verdict.kind === 'keep') return CHANGED_BY_YOU;
+  return recordedLabel !== undefined && await recordedUnchanged(previous, target.dest) ? recordedLabel : olderLabel;
 }
 
 /** `a, b, c and 4 more` — a fix a human reads, not a wall of paths. */
@@ -281,7 +287,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   // scopes the rule by fields of it (Cursor `globs`, Kiro `inclusion`, …);
   // comparing against the render catches a wrong value there, which checking
   // the keys were present did not.
-  const ruleLabels = ['not delivered', 'delivered from an older copy', FLAT_NAME_TAKEN, CHANGED_BY_YOU] as const;
+  const ruleLabels = ['not delivered', 'delivered from an older copy', RECORDED_OLDER_RULE, FLAT_NAME_TAKEN, CHANGED_BY_YOU] as const;
   const { byTool } = await walkDelivery(
     getHandler('rules'),
     ctx,
@@ -292,7 +298,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
       const delivered = await readFileSafe(target.dest);
       if (delivered === null) return ruleLabels[0];
       if (target.content === undefined || delivered === target.content) return null;
-      return differingCopyLabel(item, target, ruleLabels[1], localConfig);
+      return differingCopyLabel(item, target, ruleLabels[1], localConfig, RECORDED_OLDER_RULE);
     },
   );
   // A tool that reads only the top of its rules directory gets no file for a
@@ -302,23 +308,49 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
     const stems = ruleStemsForTool(tool, items.map((item) => item.name));
     for (const item of items) if (!stems.has(item.name)) appendTo(delivery.problems, FLAT_NAME_TAKEN, item.name);
   }
-  const perTool: Check[] = [...byTool].map(([tool, delivery]) => ({
-    name: `Rules delivered to ${tool}`,
-    source: 'local',
-    check: async () => !hasDeliveryProblem(delivery),
-    // The fix names the directory rather than the tool: a rule's delivered
-    // filename carries a per-tool extension the reader would have to derive.
-    fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ruleLabels)}. `
-      + (delivery.problems.has(FLAT_NAME_TAKEN)
-        ? `${tool} reads only the top level of that directory, so a rule not written there never reaches it: `
-          + 'rename one of them in the team repo; `teamai pull` names the rules that share the file. '
-        : '')
-      + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + `so it cannot restore this. ${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}`,
-  }));
+  const { unreadRulesDir } = await import('./resources/rules.js');
+  const perTool: Check[] = [];
+  for (const [tool, delivery] of byTool) {
+    // A team `toolPaths` entry written before the tool's rules moved still
+    // sends them to a directory it never reads (#946).
+    const rulesPath = scopedToolPaths(teamConfig, localConfig)[delivery.tool]?.rules;
+    const rulesDir = rulesPath ? path.join(resolveToolBaseDir(delivery.tool, localConfig), rulesPath) : undefined;
+    const unread = rulesDir ? unreadRulesDir(delivery.tool, rulesDir, localConfig) : undefined;
+    const problems = describeProblems(delivery.problems, ruleLabels);
+    const restore = delivery.problems.has(ruleLabels[0]) || delivery.problems.has(ruleLabels[1]);
+    perTool.push({
+      name: `Rules delivered to ${tool}`,
+      source: 'local',
+      check: async () => !hasDeliveryProblem(delivery) && unread === undefined,
+      // The fix names the directory rather than the tool: a rule's delivered
+      // filename carries a per-tool extension the reader would have to derive.
+      // A copy there is inert whatever its state, so only the entry is worth fixing.
+      fix: unread
+        ? `${unread.why}, but the team teamai.yaml's toolPaths.${delivery.tool} entry still sends the rules to `
+          + `${rulesDir}: a team entry replaces teamai's default for ${delivery.tool} whole, so ${delivery.tool} gets `
+          + `none of the rules copied there. In the team teamai.yaml, ${unread.toolPathsFix}, then run \`teamai pull\`.`
+        : `In ${delivery.dir}, ${problems}. `
+          + (delivery.problems.has(FLAT_NAME_TAKEN)
+            ? `${tool} reads only the top level of that directory, so a rule not written there never reaches it: `
+              + 'rename one of them in the team repo; `teamai pull` names the rules that share the file. '
+            : '')
+          + (restore
+            ? 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
+              + 'so it cannot restore a missing copy or one teamai has no record of writing. '
+            : '')
+          + (delivery.problems.has(RECORDED_OLDER_RULE)
+            ? 'Run `teamai pull` to rewrite a copy that still holds what teamai recorded writing: it re-renders '
+              + 'one even when the team repo has not changed. '
+            : '')
+          + `${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}`,
+    });
+  }
 
   return [...activation, ...perTool];
 }
+
+/** An older render of a rule that still holds what teamai recorded writing, which a plain pull re-renders. */
+const RECORDED_OLDER_RULE = 'delivered in an older render teamai recorded';
 
 /** A namespaced rule a tool reading only the top of its rules directory gets no file for. */
 const FLAT_NAME_TAKEN = 'not written, as another team rule has its flat name';
@@ -411,11 +443,10 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
       check: async () => delivered !== null && delivered === expected.trim(),
       fix: delivered === null
         ? `${getHermesSoulPath()} carries no teamai rules block, so Hermes reads none of the `
-          + 'team rules. Run `teamai pull --force`: a plain pull skips a scope whose team repo '
-          + 'has not changed, so it cannot restore this.'
+          + 'team rules. Run `teamai pull` to restore it.'
         : `The teamai block in ${getHermesSoulPath()} is not what the team rules inline to: `
           + 'Hermes reads standing instructions from this file rather than a rules directory, '
-          + 'so a stale block is a stale rule set. Run `teamai pull --force` to rewrite it.',
+          + 'so a stale block is a stale rule set. Run `teamai pull` to rewrite it.',
     });
   }
 
@@ -526,6 +557,11 @@ async function buildUserRulesFileChecks(ctx: DoctorContext, items: ResourceItem[
     const name = codexFamily && tool !== 'codex'
       ? `Team rules are inlined in ${target.label} (${tool})`
       : `Team rules are inlined in ${target.label}`;
+    if (target.unreadable) {
+      const { unreadableRulesFileMessage } = await import('./instruction-targets.js');
+      checks.push({ name, source: 'local', check: async () => false, fix: unreadableRulesFileMessage(tool, target.unreadable) });
+      continue;
+    }
     const { file } = target;
     if (file === undefined) {
       // A team `toolPaths` entry replaces the default one whole, so a Codex

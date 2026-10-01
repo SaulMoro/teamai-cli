@@ -126,11 +126,16 @@ export abstract class ResourceHandler {
    * destination at all. Docs land in one directory, env in one shell profile,
    * and hooks and MCP are entries inside a tool's own config file, so those
    * keep checks of their own instead of a sentinel tool.
+   *
+   * `received` names the items this member receives in this scope, when the
+   * caller already resolved them; a handler that needs them otherwise
+   * resolves them itself (rules, for a tool that writes them flat).
    */
   async deliveryTargets(
     _teamConfig: TeamaiConfig,
     _localConfig: LocalConfig,
     _item: ResourceItem,
+    _received?: readonly string[],
   ): Promise<DeliveryTarget[]> {
     return [];
   }

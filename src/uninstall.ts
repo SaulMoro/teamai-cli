@@ -6,6 +6,7 @@ import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
   OPENCLAW_HOOK_DIR,
+  OPENCLAW_HOOK_KEY,
   resolveOpenClawHooksDir,
   resolveOpenclawWorkspaceDir,
 } from './openclaw-hooks.js';
@@ -1244,7 +1245,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     try {
       await removeOpenClawHookEntry();
     } catch (e) {
-      log.warn(`Failed to remove the teamai hook entry from OpenClaw's config: ${(e as Error).message}`);
+      log.warn(`Failed to remove the teamai hook entry from OpenClaw's config: ${(e as Error).message}. `
+        + 'OpenClaw keeps it, and while it is there OpenClaw loads only the hooks openclaw.json names. '
+        + `Run \`openclaw hooks disable ${OPENCLAW_HOOK_KEY}\`, or remove it from openclaw.json by hand.`);
     }
   }
 
@@ -1400,7 +1403,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
         log.success(`Removed ${entries.length} OpenCode rules globs from ${configFile}`);
       }
     } catch (e) {
-      log.warn(`Failed to remove the OpenCode rules globs from ${configFile}: ${(e as Error).message}`);
+      log.warn(`Failed to remove the OpenCode rules globs from ${configFile}: ${(e as Error).message}. `
+        + `They stay listed in its \`instructions\` and point at rule files uninstall deleted. `
+        + `Remove ${entries.map((entry) => `\`${entry}\``).join(', ')} from that list by hand.`);
     }
   }
 
