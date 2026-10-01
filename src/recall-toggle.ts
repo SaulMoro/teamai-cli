@@ -1,9 +1,8 @@
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfigForScope } from './config.js';
 import { log } from './utils/logger.js';
-import { remove, pathExists } from './utils/fs.js';
-import { removeClaudeMdSection } from './utils/claudemd.js';
-import { isToolInstalledForConfig } from './resources/base.js';
+import { readFileSafe, writeFile, remove, pathExists } from './utils/fs.js';
+import { knownInstructionTargets, resolveInstructionTargets } from './instruction-targets.js';
 import {
   ALL_SUPPORTED_TOOLS,
   agentFileExtensionForTool,
@@ -65,12 +64,24 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
         }
       }
     }
+  }
 
-    // Remove recall block from CLAUDE.md
-    if (toolPath.claudemd) {
-      const claudeMdPath = path.join(baseDir, toolPath.claudemd);
-      if (await removeClaudeMdSection(claudeMdPath, TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END, { deleteIfEmpty: true })) {
-        log.debug(`Removed recall rules block from ${tool} CLAUDE.md`);
+  // Remove the recall block from every file teamai may have written it to.
+  for (const claudeMdPath of knownInstructionTargets(teamConfig, localConfig)) {
+    const content = await readFileSafe(claudeMdPath);
+    if (content && content.includes(TEAMAI_RECALL_RULES_START)) {
+      const startIdx = content.indexOf(TEAMAI_RECALL_RULES_START);
+      const endIdx = content.indexOf(TEAMAI_RECALL_RULES_END);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
+        const after = content.substring(endIdx + TEAMAI_RECALL_RULES_END.length).replace(/^\n+/, '\n');
+        const cleaned = (before + after).trim();
+        if (cleaned.length === 0) {
+          await remove(claudeMdPath);
+        } else {
+          await writeFile(claudeMdPath, cleaned + '\n');
+        }
+        log.debug(`Removed recall rules block from ${claudeMdPath}`);
       }
     }
   }
@@ -90,13 +101,8 @@ async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
   const { compileRecallRulesBlock } = await import('./pull.js');
   const recallBlock = compileRecallRulesBlock();
 
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (isAgentExcluded(localConfig, tool)) continue;
-    if (!writesInstructionBlock(tool, toolPath, 'recall')) continue;
-    if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) continue;
-
-    const baseDir = resolveToolBaseDir(tool, localConfig);
-    const claudeMdPath = path.join(baseDir, toolPath.claudemd);
+  const { recallTargets } = await resolveInstructionTargets(teamConfig, localConfig);
+  for (const { path: claudeMdPath } of recallTargets) {
     try {
       await injectClaudeMdSection(
         claudeMdPath,

@@ -1642,6 +1642,8 @@ teamai pull
 
 The injected content sits between the `<!-- [teamai:culture:start] -->` and `<!-- [teamai:culture:end] -->` markers, is automatically updated on every `pull`, and does not affect any other content in the file.
 
+A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed. When no installed tool reads a file that an earlier pull wrote these blocks to (for example `~/AGENTS.md` after Hermes and WorkBuddy are gone), the next pull removes the teamai blocks from it, and deletes the file when nothing else is left.
+
 ### Viewing the result
 
 After pulling, you can view the AI tool's CLAUDE.md directly:

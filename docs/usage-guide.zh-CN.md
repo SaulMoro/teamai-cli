@@ -1520,6 +1520,8 @@ teamai pull
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
+pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如 Hermes 和 WorkBuddy 都已移除后的 `~/AGENTS.md`），下一次 pull 会移除其中的 teamai 块；文件中没有其他内容时一并删除该文件。
+
 ### 查看效果
 
 pull 后可以直接查看 AI 工具的 CLAUDE.md：

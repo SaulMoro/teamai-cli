@@ -53,6 +53,7 @@ import {
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
+import { instructionTargetFile } from './instruction-targets.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
   resolveBaseDir,
@@ -2094,7 +2095,8 @@ async function syncClaudemd(
   let syncedAny = false;
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (!toolPath.claudemd) continue;
+    const targetFile = instructionTargetFile(tool, toolPath, localConfig.scope);
+    if (!targetFile) continue;
 
     let baseDir = resolveToolBaseDir(tool, localConfig);
     let resolvedAbsPath: string | null = null;
@@ -2102,7 +2104,7 @@ async function syncClaudemd(
     if (tool === 'openclaw' && localConfig.scope !== 'project') {
       const openclawWs = await resolveOpenclawWorkspaceDir(workspacePath);
       if (openclawWs) {
-        resolvedAbsPath = path.join(openclawWs, path.basename(toolPath.claudemd));
+        resolvedAbsPath = path.join(openclawWs, path.basename(targetFile));
       }
     } else if (tool === 'hermes' && localConfig.scope !== 'project') {
       const hermesBase = workspacePath ?? await resolveHermesUserBaseDir();
@@ -2115,16 +2117,16 @@ async function syncClaudemd(
     const toolInstalled = resolvedAbsPath
       ? await pathExists(resolvedAbsPath)
       : tool === COPILOT_TOOL_ID && localConfig.scope === 'user'
-        ? await isToolInstalledForConfig(tool, toolPath.claudemd, localConfig)
-      : toolPath.claudemd.includes('/')
-        ? await ResourceHandler.isToolInstalled(toolPath.claudemd, baseDir)
+        ? await isToolInstalledForConfig(tool, targetFile, localConfig)
+      : targetFile.includes('/')
+        ? await ResourceHandler.isToolInstalled(targetFile, baseDir)
         : await pathExists(path.join(baseDir, `.${tool}`));
     if (!toolInstalled) {
       log.debug(`Skipped CLAUDE.md sync for ${tool}: target not found`);
       continue;
     }
 
-    const claudeMdPath = resolvedAbsPath ?? path.join(baseDir, toolPath.claudemd);
+    const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
     try {
       if (block) {
         await injectClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, block);

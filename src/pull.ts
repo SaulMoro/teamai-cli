@@ -15,6 +15,7 @@ import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
+import { resolveInstructionTargets, stripInstructionBlocks } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
@@ -1865,13 +1866,19 @@ async function syncManagedInstructions(
     }
   }
 
-  if (compiledCulture !== undefined) {
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
-      if (isAgentExcluded(localConfig, tool) || !writesInstructionBlock(tool, toolPath, 'culture')) continue;
-      const installProbe = instructionFileInstallProbe(tool, toolPath);
-      if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
+  const { targets, stale } = await resolveInstructionTargets(config, localConfig);
+  for (const file of stale) {
+    try {
+      if (await stripInstructionBlocks(file)) {
+        log.info(`Removed teamai instruction blocks from ${file}: no installed tool reads it`);
+      }
+    } catch (e) {
+      log.warn(`Failed to remove teamai instruction blocks from ${file}: ${(e as Error).message}. Check that the file is writable, or remove the blocks by hand.`);
+    }
+  }
 
-      const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
+  if (compiledCulture !== undefined) {
+    for (const { path: claudeMdPath, tools } of targets) {
       try {
         if (compiledCulture) {
           await injectClaudeMdSection(
@@ -1880,13 +1887,13 @@ async function syncManagedInstructions(
             TEAMAI_CULTURE_END,
             compiledCulture,
           );
-          log.debug(`Injected culture into ${tool} CLAUDE.md`);
+          log.debug(`Injected culture into ${claudeMdPath}`);
         } else {
           await removeClaudeMdSection(claudeMdPath, TEAMAI_CULTURE_START, TEAMAI_CULTURE_END);
         }
       } catch (e) {
         const action = compiledCulture ? 'inject culture into' : 'remove culture from';
-        log.warn(`Failed to ${action} ${tool} CLAUDE.md: ${(e as Error).message}`);
+        log.warn(`Failed to ${action} ${tools.join(', ')} (${claudeMdPath}): ${(e as Error).message}`);
       }
     }
   }
@@ -1898,12 +1905,7 @@ async function syncManagedInstructions(
     const { contents: claudemdContents } = await collectClaudemdFiles(localConfig.repo.localPath, roleContext);
     const compiled = compileClaudemd(claudemdContents);
 
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
-      if (isAgentExcluded(localConfig, tool) || !writesInstructionBlock(tool, toolPath, 'claudemd')) continue;
-      const installProbe = instructionFileInstallProbe(tool, toolPath);
-      if (installProbe && !await isToolInstalledForConfig(tool, installProbe, localConfig)) continue;
-
-      const claudeMdPath = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
+    for (const { path: claudeMdPath, tools } of targets) {
       try {
         if (compiled) {
           await injectClaudeMdSection(
@@ -1912,13 +1914,13 @@ async function syncManagedInstructions(
             TEAMAI_CLAUDEMD_END,
             compiled,
           );
-          log.debug(`Injected shared instructions into ${tool} CLAUDE.md`);
+          log.debug(`Injected shared instructions into ${claudeMdPath}`);
         } else {
           await removeClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END);
         }
       } catch (e) {
         const action = compiled ? 'inject shared instructions into' : 'remove shared instructions from';
-        log.warn(`Failed to ${action} ${tool} CLAUDE.md: ${(e as Error).message}`);
+        log.warn(`Failed to ${action} ${tools.join(', ')} (${claudeMdPath}): ${(e as Error).message}`);
       }
     }
     if (compiled) {
@@ -1952,13 +1954,8 @@ export async function injectRecallBlockIntoTools(
     try {
         const recallBlock = compileRecallRulesBlock();
         let injected = 0;
-        for (const [tool, toolPath] of Object.entries(scopedToolPaths(config, localConfig))) {
-            if (isAgentExcluded(localConfig, tool)) continue;
-            if (!writesInstructionBlock(tool, toolPath, 'recall')) continue;
-            if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) continue;
-
-            const baseDir = resolveToolBaseDir(tool, localConfig);
-            const claudeMdPath = path.join(baseDir, toolPath.claudemd);
+        const { recallTargets } = await resolveInstructionTargets(config, localConfig);
+        for (const { path: claudeMdPath, tools } of recallTargets) {
             try {
                 await injectClaudeMdSection(
                     claudeMdPath,
@@ -1967,13 +1964,13 @@ export async function injectRecallBlockIntoTools(
                     recallBlock,
                 );
                 injected++;
-                log.debug(`Injected recall rules into ${tool} CLAUDE.md`);
+                log.debug(`Injected recall rules into ${claudeMdPath}`);
             } catch (e) {
-                log.warn(`Failed to inject recall rules into ${tool} CLAUDE.md: ${(e as Error).message}`);
+                log.warn(`Failed to inject recall rules into ${tools.join(', ')} (${claudeMdPath}): ${(e as Error).message}`);
             }
         }
         if (injected > 0) {
-            log.debug(`[${scopeLabel}] Injected recall rules into ${injected} tool(s) CLAUDE.md`);
+            log.debug(`[${scopeLabel}] Injected recall rules into ${injected} instruction file(s)`);
         }
     } catch (e) {
         log.debug(`[${scopeLabel}] Recall rules injection skipped: ${(e as Error).message}`);

@@ -54,6 +54,7 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
+import { instructionTargetFile } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -433,8 +434,9 @@ async function discoverToolResources(
   }
 
   // (b) CLAUDE.md teamai section blocks
-  if (toolPath.claudemd) {
-    const claudeMdPath = path.join(baseDir, toolPath.claudemd);
+  const instructionFile = instructionTargetFile(tool, toolPath, scope);
+  if (instructionFile) {
+    const claudeMdPath = path.resolve(baseDir, instructionFile);
     const content = await readFileSafe(claudeMdPath);
     if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
       res.claudeMdFiles.push(claudeMdPath);
