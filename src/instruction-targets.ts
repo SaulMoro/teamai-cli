@@ -54,9 +54,18 @@ const configured = (paths: ToolPaths): string | undefined => paths.claudemd;
 const contextRule = (extension: string) => (paths: ToolPaths): string | undefined =>
   paths.rules === undefined ? undefined : path.posix.join(paths.rules, `${TEAMAI_CONTEXT_RULE_NAME}${extension}`);
 
-/** Cursor applies an `.mdc` rule in every session only with this frontmatter. */
-const CURSOR_ALWAYS_APPLY = '---\nalwaysApply: true\n---\n';
-const cursor: TargetEntry = { file: contextRule('.mdc'), header: CURSOR_ALWAYS_APPLY, owned: true, retired: [] };
+/**
+ * Cursor applies an `.mdc` rule in every session only with this frontmatter;
+ * CodeBuddy and WorkBuddy read the same key.
+ */
+const ALWAYS_APPLY = '---\nalwaysApply: true\n---\n';
+const cursor: TargetEntry = { file: contextRule('.mdc'), header: ALWAYS_APPLY, owned: true, retired: [] };
+
+/**
+ * CodeBuddy and WorkBuddy both read the project's .codebuddy/rules, so they
+ * share one copy there; uninstalling one keeps it while the other remains.
+ */
+const codebuddyProjectRule = (): string => `.codebuddy/rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
 
 // One line per tool, so a change to one tool's target edits one line.
 const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
@@ -69,7 +78,8 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   copilot: { file: configured, retired: [] },
   omp: { file: configured, retired: [] },
   pi: { file: configured, retired: [] },
-  workbuddy: { file: configured, retired: [] },
+  // WorkBuddy reads user rules from ~/.workbuddy/rules; nothing else reads them.
+  workbuddy: { file: contextRule('.md'), header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: configured, retired: [] },
   openclaw: { file: configured, retired: [] },
 };
@@ -86,8 +96,8 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   copilot: { file: configured, retired: [] },
   omp: { file: configured, retired: [] },
   pi: { file: configured, retired: [] },
-  workbuddy: { file: configured, retired: [] },
-  codebuddy: { file: configured, retired: [] },
+  workbuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
+  codebuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['.codebuddy/CODEBUDDY.md'] },
   openclaw: { file: configured, retired: [] },
 };
 
@@ -304,7 +314,7 @@ async function planFile(
 }
 
 /** Every header a target writes, so a file teamai created can be recognised later. */
-const KNOWN_HEADERS = [CURSOR_ALWAYS_APPLY];
+const KNOWN_HEADERS = [ALWAYS_APPLY];
 
 /**
  * Remove every teamai instruction block from `file`, as uninstall does. A

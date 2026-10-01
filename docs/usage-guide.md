@@ -1652,12 +1652,18 @@ Two members of the same project can have different roles, so their shared instru
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
 | Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with WorkBuddy |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy |
 
 Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: true`). Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
+
+The CodeBuddy and WorkBuddy rule files are applied in every session (`alwaysApply: true`). Uninstalling one of the two keeps the shared project copy while the other is still installed.
 
 A pull from an earlier release may have left these blocks in a file listed below. The next pull removes them, and names each file it changes:
 
 - Claude Code, project scope: `.claude/CLAUDE.md`
+- CodeBuddy, project scope: `.codebuddy/CODEBUDDY.md`
+- WorkBuddy: `~/AGENTS.md` and the project `AGENTS.md`
 
 A file named like a teamai target that teamai did not write is left alone, and the pull warns about it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
 

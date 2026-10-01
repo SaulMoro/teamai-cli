@@ -366,4 +366,43 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(userRule).toContain(CLAUDEMD_START);
     expect(fs.existsSync(path.join(user.home, 'AGENTS.md'))).toBe(false);
   });
+
+  it('gives CodeBuddy and WorkBuddy one shared rule file and keeps it while either tool remains', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.codebuddy/skills', '.workbuddy/skills']);
+    const rule = path.join(member.projectRoot, '.codebuddy', 'rules', 'teamai-context.md');
+    const legacy = path.join(member.projectRoot, '.codebuddy', 'CODEBUDDY.md');
+    const agentsMd = path.join(member.projectRoot, 'AGENTS.md');
+    fs.writeFileSync(legacy, `# CodeBuddy notes\n\n${CLAUDEMD_START}\nold selection\n${CLAUDEMD_END}\n`);
+    fs.writeFileSync(agentsMd, `${PROJECT_AGENTS_MD}\n${CULTURE_START}\nold culture\n${CULTURE_END}\n`);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    const content = fs.readFileSync(rule, 'utf8');
+    expect(content.startsWith('---\nalwaysApply: true\n---\n\n')).toBe(true);
+    expect(content).toContain('DEVELOPMENT-SENTINEL');
+    expect(content.split(CLAUDEMD_START).length - 1).toBe(1);
+    expect(fs.existsSync(path.join(member.projectRoot, '.workbuddy', 'rules', 'teamai-context.md'))).toBe(false);
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('# CodeBuddy notes\n');
+    expect(fs.readFileSync(agentsMd, 'utf8')).toBe(PROJECT_AGENTS_MD);
+
+    const uninstall = await runCLI(['uninstall', '--agent', 'workbuddy', '--force'], { HOME: member.home }, member.projectRoot);
+    expect(uninstall.code, uninstall.output).toBe(0);
+    expect(fs.readFileSync(rule, 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+  });
+
+  it('gives WorkBuddy its user blocks in ~/.workbuddy/rules, not ~/AGENTS.md', async () => {
+    const { sandbox, home } = makeUserSandbox(['.workbuddy']);
+    sandboxes.push(sandbox);
+
+    const result = await runCLI(['pull'], { HOME: home }, sandbox);
+    expect(result.code, result.output).toBe(0);
+
+    const rule = fs.readFileSync(path.join(home, '.workbuddy', 'rules', 'teamai-context.md'), 'utf8');
+    expect(rule.startsWith('---\nalwaysApply: true\n---\n\n')).toBe(true);
+    expect(rule).toContain(CLAUDEMD_START);
+    expect(fs.existsSync(path.join(home, 'AGENTS.md'))).toBe(false);
+  });
 });

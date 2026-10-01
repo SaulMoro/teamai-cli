@@ -584,54 +584,35 @@ describe('uninstall', () => {
     expect(await fse.readFile(projectPiHook, 'utf8')).toBe('// user-owned extension');
   });
 
-  it('targeted Pi uninstall preserves a shared AGENTS.md used by another installed agent', async () => {
+  it('targeted WorkBuddy uninstall keeps the .codebuddy rule CodeBuddy still reads (#945)', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
 
-    const sharedInstructions = path.join(projectRoot, 'AGENTS.md');
-    const projectPiHook = path.join(projectRoot, '.pi', 'extensions', 'teamai-hooks.ts');
-    await fse.ensureDir(path.dirname(projectPiHook));
-    // WorkBuddy is actually installed here (its own resource dir exists),
-    // not just present in toolPaths — see the sibling "not installed" test.
+    // CodeBuddy and WorkBuddy share one project instruction file.
+    const sharedInstructions = path.join(projectRoot, '.codebuddy', 'rules', 'teamai-context.md');
+    await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
     await fse.ensureDir(path.join(projectRoot, '.workbuddy', 'skills'));
-    // A block WorkBuddy's pull writes: the legacy rules block is kept for nobody.
-    await fse.writeFile(sharedInstructions, `${TEAMAI_CULTURE_START}\nteam culture\n${TEAMAI_CULTURE_END}\n`);
-    await fse.writeFile(projectPiHook, TEAMAI_PI_HOOK);
+    await fse.ensureDir(path.dirname(sharedInstructions));
+    await fse.writeFile(sharedInstructions, `---\nalwaysApply: true\n---\n\n${TEAMAI_CULTURE_START}\nculture\n${TEAMAI_CULTURE_END}\n`);
 
     const teamConfig = makeTeamConfig({
       toolPaths: {
-        pi: {
-          skills: '.pi/skills',
-          rules: '.pi/rules',
-          claudemd: 'AGENTS.md',
-          userScope: {
-            skills: '.pi/agent/skills',
-            rules: '.pi/agent/rules',
-            claudemd: '.pi/agent/AGENTS.md',
-          },
-        },
-        workbuddy: {
-          skills: '.workbuddy/skills',
-          rules: '.workbuddy/rules',
-          settings: '.workbuddy/settings.json',
-          claudemd: 'AGENTS.md',
-        },
+        codebuddy: { skills: '.codebuddy/skills', rules: '.codebuddy/rules', settings: '.codebuddy/settings.json', claudemd: '.codebuddy/CODEBUDDY.md' },
+        workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules', settings: '.workbuddy/settings.json', claudemd: 'AGENTS.md' },
       },
     });
     const localConfig = makeLocalConfig(homeDir, repoPath, {
       scope: 'project',
       projectRoot,
-      enabledAgents: ['pi', 'workbuddy'],
+      enabledAgents: ['codebuddy', 'workbuddy'],
       repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
     });
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
-    await uninstall({ force: true, agent: 'pi' });
+    await uninstall({ force: true, agent: 'workbuddy' });
 
-    expect(await fse.pathExists(projectPiHook)).toBe(false);
-    expect(await fse.pathExists(sharedInstructions)).toBe(true);
     expect(await fse.readFile(sharedInstructions, 'utf8')).toContain(TEAMAI_CULTURE_START);
   });
 

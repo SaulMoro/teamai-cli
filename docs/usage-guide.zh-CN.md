@@ -1530,12 +1530,18 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
 | Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份 |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份 |
 
 Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysApply: true`）。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
+
+CodeBuddy 和 WorkBuddy 的规则文件在每个会话中应用（`alwaysApply: true`）。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
 
 早期版本的 pull 可能把这些块留在下列文件中。下一次 pull 会移除它们，并列出所修改的每个文件：
 
 - Claude Code，项目范围：`.claude/CLAUDE.md`
+- CodeBuddy，项目范围：`.codebuddy/CODEBUDDY.md`
+- WorkBuddy：`~/AGENTS.md` 和项目 `AGENTS.md`
 
 与 teamai 目标同名但并非 teamai 写入的文件保持不变，pull 会给出警告。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
 

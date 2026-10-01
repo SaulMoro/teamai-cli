@@ -2039,14 +2039,14 @@ describe('local-agent: per-worktree claudemd isolation (issue #374 P1-2C)', () =
     syncFor = { ws: wtBReal, slug: 'b-doc' };
     await reportAndSyncLocalAgent({ cwd: wtBReal, tool: 'codebuddy', status: 'running' });
 
-    // B's injected claudemd (.codebuddy/CODEBUDDY.md) must contain ONLY B's
+    // B's injected claudemd (.codebuddy/rules/teamai-context.md, #945) must contain ONLY B's
     // instruction (the pre-fix shared cache made syncClaudemd merge A's in too).
     const readTxt = async (p: string) => (await fse.pathExists(p)) ? fse.readFile(p, 'utf-8') : '';
-    const bClaudemd = await readTxt(path.join(wtBReal, '.codebuddy', 'CODEBUDDY.md'));
+    const bClaudemd = await readTxt(path.join(wtBReal, '.codebuddy', 'rules', 'teamai-context.md'));
     expect(bClaudemd).toContain('INSTRUCTION-FROM-B');
     expect(bClaudemd).not.toContain('INSTRUCTION-FROM-A');
     // A keeps only A's.
-    const aClaudemd = await readTxt(path.join(repo, '.codebuddy', 'CODEBUDDY.md'));
+    const aClaudemd = await readTxt(path.join(repo, '.codebuddy', 'rules', 'teamai-context.md'));
     expect(aClaudemd).toContain('INSTRUCTION-FROM-A');
     expect(aClaudemd).not.toContain('INSTRUCTION-FROM-B');
 
