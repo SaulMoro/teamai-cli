@@ -39,6 +39,7 @@ import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
 import { isToolInstalledForConfig } from './resources/base.js';
+import { removeClaudeMdSection } from './utils/claudemd.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import {
   BUILTIN_SKILL_NAMES,
@@ -1023,24 +1024,10 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // (b) Clean CLAUDE.md teamai section blocks
   for (const { path: claudeMdPath, blocks } of plan.claudeMdFiles) {
     try {
-      const raw = await readFileSafe(claudeMdPath);
-      if (!raw) continue;
-
-      let content: string = raw;
+      // A file teamai created goes with its last block; a member's file,
+      // even an empty one, stays.
       for (const [startMarker, endMarker] of blocks) {
-        const startIdx = content.indexOf(startMarker);
-        const endIdx = content.indexOf(endMarker);
-        if (startIdx === -1 || endIdx === -1) continue;
-
-        const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
-        const after = content.substring(endIdx + endMarker.length).replace(/^\n+/, '\n');
-        content = (before + after).trim();
-      }
-
-      if (content.length === 0) {
-        await remove(claudeMdPath);
-      } else {
-        await writeFile(claudeMdPath, content + '\n');
+        await removeClaudeMdSection(claudeMdPath, startMarker, endMarker, { deleteIfEmpty: true });
       }
       log.success(`Cleaned ${claudeMdPath}`);
     } catch (e) {

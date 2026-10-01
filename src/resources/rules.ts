@@ -421,8 +421,11 @@ export class RulesHandler extends ResourceHandler {
       }
     }
 
-    // Refresh CLAUDE.md references
-    await this.pullAllRules(teamConfig, localConfig);
+    // Refresh with the rules this member's pull delivers, so the role, project
+    // and tag selection still applies to the files the refresh writes.
+    const { buildRolePullContext, resolveDesiredRules } = await import('./desired.js');
+    const { items, replaced } = await resolveDesiredRules(teamConfig, localConfig, await buildRolePullContext(localConfig));
+    await this.pullAllRules(teamConfig, localConfig, items, replaced);
 
     return removed;
   }
@@ -596,20 +599,9 @@ export class RulesHandler extends ResourceHandler {
       const baseDir = resolveToolBaseDir(tool, localConfig);
       const claudeMdPath = path.join(baseDir, toolPath.claudemd);
       try {
-        const content = await readFileSafe(claudeMdPath);
-        if (!content || !content.includes(TEAMAI_RULES_START)) continue;
-        const startIdx = content.indexOf(TEAMAI_RULES_START);
-        const endIdx = content.indexOf(TEAMAI_RULES_END);
-        if (startIdx === -1 || endIdx === -1) continue;
-        const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
-        const after = content.substring(endIdx + TEAMAI_RULES_END.length).replace(/^\n+/, '\n');
-        const newContent = (before + after).trim();
-        if (newContent.length === 0) {
-          await remove(claudeMdPath);
-        } else {
-          await writeFile(claudeMdPath, newContent + '\n');
+        if (await removeClaudeMdSection(claudeMdPath, TEAMAI_RULES_START, TEAMAI_RULES_END, { deleteIfEmpty: true })) {
+          log.debug(`Removed legacy rules section from ${claudeMdPath}`);
         }
-        log.debug(`Removed legacy rules section from ${claudeMdPath}`);
       } catch {
         // Best-effort cleanup
       }
@@ -954,10 +946,14 @@ export async function inlinedRulesText(rules: ResourceItem[]): Promise<string> {
  * has a body. The body is the same render Hermes gets in SOUL.md.
  */
 export async function teamRulesBlock(rules: ResourceItem[]): Promise<string | null> {
-  // A marker line inside a rule body would cut the block short on the next read.
+  // A marker anywhere in a rule body would cut the block short on the next
+  // read, which finds the markers by substring. A line that held only one goes.
   const body = (await inlinedRulesText(rules))
     .split('\n')
-    .filter((line) => line.trim() !== TEAMAI_TEAM_RULES_START && line.trim() !== TEAMAI_TEAM_RULES_END)
+    .flatMap((line) => {
+      const cleaned = line.replaceAll(TEAMAI_TEAM_RULES_START, '').replaceAll(TEAMAI_TEAM_RULES_END, '');
+      return cleaned !== line && cleaned.trim() === '' ? [] : [cleaned];
+    })
     .join('\n')
     .trim();
   if (body === '') return null;

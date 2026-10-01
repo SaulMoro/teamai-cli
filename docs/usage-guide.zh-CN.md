@@ -2566,7 +2566,7 @@ teamai uninstall --agent claude
 
 `--agent <tool>` 只移除该工具的 teamai 资源（hooks、CLAUDE.md 块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
-多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是项目 `AGENTS.md`：Pi 仍启用时，`--agent codex` 会移除 team-rules 和 recall 区块，保留 Pi 写入的 culture 和共享指令区块。
+多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是项目 `AGENTS.md`：Pi 仍启用时，`--agent codex` 会移除 team-rules 和 recall 区块，保留 Pi 写入的 culture 和共享指令区块。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。
 
 跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。（因此，定向卸载一个自身没有任何 teamai 资源的工具是 no-op，即便它恰好是唯一的工具，也不会删除共享资源。）
 

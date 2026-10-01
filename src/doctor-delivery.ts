@@ -260,7 +260,14 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
 
   const roleContext = await buildRolePullContext(localConfig);
   const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
-  if (items.length === 0) return [];
+  if (items.length === 0) {
+    // No rule reaches this member, but a team-rules block a failed removal
+    // left behind is still read by Codex: report that and nothing else.
+    const codex = await buildCodexInstructionsChecks(ctx, items);
+    const failing: Check[] = [];
+    for (const check of codex) if (!await check.check()) failing.push(check);
+    return failing;
+  }
 
   const activation = await buildRulesActivationChecks(ctx, items);
 
@@ -383,8 +390,8 @@ async function buildCodexInstructionsChecks(ctx: DoctorContext, items: ResourceI
     // A team `toolPaths` entry replaces the default one whole, so an entry
     // written before #938 leaves this tool with nowhere to read rules from.
     // One with no `rules` path either delivers no rules to it on purpose,
-    // like any tool without one.
-    if (!scopedToolPaths(teamConfig, localConfig)[tool]?.rules) continue;
+    // like any tool without one; with no team rules it misses none.
+    if (items.length === 0 || !scopedToolPaths(teamConfig, localConfig)[tool]?.rules) continue;
     checks.push({
       name: codexCheckName([tool]),
       source: 'local',

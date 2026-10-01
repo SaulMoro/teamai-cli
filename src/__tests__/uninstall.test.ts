@@ -724,8 +724,8 @@ describe('uninstall', () => {
       const { projectRoot, agentsMd } = await projectFixture({ [tool]: toolPaths }, [tool]);
       await fse.ensureDir(path.join(projectRoot, `.${tool}`));
       await fse.writeJson(path.join(projectRoot, `.${tool}`, 'hooks.json'), {});
-      // Only the block, plus the blank lines around it: nothing left worth a file.
-      await fse.writeFile(agentsMd, `\n${teamRules}\n\n`);
+      // The file as teamai creates it for the block: nothing left worth a file.
+      await fse.writeFile(agentsMd, `${teamRules}\n`);
       const legacyRules = path.join(projectRoot, `.${tool}`, 'rules');
       await fse.ensureDir(legacyRules);
       await fse.writeFile(path.join(legacyRules, 'team-rule.md'), '# Team Rule');

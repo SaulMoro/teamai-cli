@@ -392,6 +392,23 @@ describe('doctor — rules delivered on disk', () => {
       expect(await check.check()).toBe(true);
     });
 
+    it('fails when the team has no rules left but AGENTS.md still carries a block', async () => {
+      await fse.remove(path.join(repoPath, 'rules'));
+      await fse.writeFile(agentsMd, `My own instructions\n\n${CURRENT_BLOCK}\n`);
+
+      const check = (await namedCheck(CODEX))!;
+      expect(check).toBeDefined();
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(agentsMd);
+    });
+
+    it('adds no Codex check when the team has no rules and AGENTS.md carries no block', async () => {
+      await fse.remove(path.join(repoPath, 'rules'));
+      await fse.writeFile(agentsMd, 'My own instructions\n');
+
+      expect(await namedCheck(CODEX)).toBeUndefined();
+    });
+
     it.each(CODEX_FAMILY)('fails for %s when the block holds a stale rule set', async (tool) => {
       await installCodex(tool);
       await fse.writeFile(agentsMd, CURRENT_BLOCK.replace('\n\nBody of reviews', '') + '\n');

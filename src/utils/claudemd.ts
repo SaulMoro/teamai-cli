@@ -64,7 +64,9 @@ export async function removeClaudeMdSection(
     if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return false;
 
     const before = existing.substring(0, startIdx).replace(/\n+$/, '\n');
-    const after = existing.substring(endIdx + endMarker.length).replace(/^\n+/, '\n');
+    // A file that opened with this section opens with whatever follows it, so
+    // a teamai-created file still reads as teamai's when its next section goes.
+    const after = existing.substring(endIdx + endMarker.length).replace(/^\n+/, startIdx === 0 ? '' : '\n');
     const rest = (before + after).trimEnd();
     if (options.deleteIfEmpty && rest.trim() === '') {
         if (startIdx === 0) await remove(filePath);

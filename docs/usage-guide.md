@@ -2753,7 +2753,7 @@ What gets removed:
 
 `--agent <tool>` removes only that tool's teamai resources (hooks, CLAUDE.md block, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
 
-An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The project `AGENTS.md` is the common case: with Pi still enabled, `--agent codex` removes the team-rules and recall blocks and keeps the culture and shared-instructions blocks Pi writes.
+An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The project `AGENTS.md` is the common case: with Pi still enabled, `--agent codex` removes the team-rules and recall blocks and keeps the culture and shared-instructions blocks Pi writes. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. (So targeting a tool that has no teamai resources of its own is a no-op and leaves shared resources in place, even if it happens to be the only tool.)
 

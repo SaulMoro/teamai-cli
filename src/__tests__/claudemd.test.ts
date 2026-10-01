@@ -96,6 +96,17 @@ describe('removeClaudeMdSection', () => {
         expect(await fse.pathExists(filePath)).toBe(false);
     });
 
+    it('with deleteIfEmpty, deletes a file injectClaudeMdSection created once its sections go one by one', async () => {
+        const filePath = path.join(tmpDir, 'AGENTS.md');
+        await injectClaudeMdSection(filePath, START, END, makeBlock('x'));
+        await injectClaudeMdSection(filePath, '<!-- other:start -->', '<!-- other:end -->', '<!-- other:start -->\ny\n<!-- other:end -->');
+
+        await removeClaudeMdSection(filePath, START, END, { deleteIfEmpty: true });
+        await removeClaudeMdSection(filePath, '<!-- other:start -->', '<!-- other:end -->', { deleteIfEmpty: true });
+
+        expect(await fse.pathExists(filePath)).toBe(false);
+    });
+
     it('with deleteIfEmpty, gives back a member\'s empty file the section was appended to', async () => {
         const filePath = path.join(tmpDir, 'AGENTS.md');
         await fse.writeFile(filePath, '');

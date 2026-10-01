@@ -159,6 +159,42 @@ describe('Codex reads team rules from AGENTS.md in project scope (#938)', () => 
     expect(await fse.pathExists(agentsMd())).toBe(false);
   });
 
+  it('keeps the whole rule when its text mentions the block markers inline', async () => {
+    await fse.writeFile(
+      path.join(repoPath, 'rules', 'codeword.md'),
+      `Never edit ${TEAMAI_TEAM_RULES_START} or ${TEAMAI_TEAM_RULES_END} by hand.\nThe team codeword is PELICAN-42.\n`,
+    );
+
+    await handler.pullAllRules(teamConfig, localConfig);
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    const content = await fse.readFile(agentsMd(), 'utf8');
+    expect(count(content, TEAMAI_TEAM_RULES_START)).toBe(1);
+    expect(count(content, TEAMAI_TEAM_RULES_END)).toBe(1);
+    expect(content).toContain('by hand.\nThe team codeword is PELICAN-42.');
+  });
+
+  it('keeps the block to the member\'s projects after `remove rules`', async () => {
+    await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), `
+version: 1
+projects:
+  - id: alpha
+    resources: { knowledge: [alpha] }
+  - id: billing
+    resources: { knowledge: [billing] }
+`);
+    await fse.outputFile(path.join(repoPath, 'rules', 'alpha', 'alpha-rule.md'), 'Alpha rule.\n');
+    await fse.outputFile(path.join(repoPath, 'rules', 'billing', 'billing-rule.md'), 'Billing rule.\n');
+    localConfig = { ...localConfig, projects: ['alpha'] } as LocalConfig;
+
+    await handler.removeItem('codeword', teamConfig, localConfig);
+
+    const content = await fse.readFile(agentsMd(), 'utf8');
+    expect(content).toContain('Alpha rule.');
+    expect(content).not.toContain('Billing rule.');
+    expect(content).not.toContain('PELICAN-42');
+  });
+
   it('gives back a member\'s empty AGENTS.md as it was when the team has no rules left', async () => {
     await fse.writeFile(agentsMd(), '');
     await handler.pullAllRules(teamConfig, localConfig);
@@ -610,5 +646,33 @@ describe('uninstall keeps exactly the blocks a remaining tool\'s pull writes (#9
     await uninstall({ force: true, agent: 'codex' });
 
     expect(await blocksIn()).toEqual(own);
+  });
+
+  it.each([
+    ['gives back a member\'s empty AGENTS.md as it was', ''],
+    ['removes the AGENTS.md teamai created', null],
+  ])('uninstall --agent codex %s', async (_label, before) => {
+    const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
+    if (before !== null) await fse.writeFile(agentsMd(), before);
+    const localConfig = {
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['codex'],
+      recallEnabled: true,
+    } as LocalConfig;
+    vi.mocked(loadTeamConfig).mockResolvedValue(teamConfig);
+    vi.mocked(detectProjectConfig).mockResolvedValue(localConfig);
+    await pull({});
+    expect(await blocksIn()).toEqual(BLOCKS);
+    vi.mocked(autoDetectInit).mockResolvedValue({ localConfig, teamConfig } as never);
+
+    await uninstall({ force: true, agent: 'codex' });
+
+    if (before === null) expect(await fse.pathExists(agentsMd())).toBe(false);
+    else expect(await fse.readFile(agentsMd(), 'utf8')).toBe(before);
   });
 });
