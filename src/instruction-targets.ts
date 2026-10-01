@@ -244,7 +244,8 @@ export function hookLimitProblem(hook: InstructionHook, text: string): string | 
   if (hook.limit === undefined || text.length <= hook.limit) return null;
   return `${hook.tool} cannot load this project's team instructions: they are ${text.length} characters, over the `
     + `${hook.limit}-character limit of its prompt section, so ${hook.tool} skips them. Shorten culture.md or the `
-    + 'claudemd/ files for this scope. teamai does not cut them or write them to AGENTS.md.';
+    + 'claudemd/ files for this scope, or run `teamai recall disable`, which drops the recall block from them. '
+    + 'teamai does not cut them or write them to AGENTS.md.';
 }
 
 /**
@@ -353,6 +354,9 @@ function retiredTargets(localConfig: LocalConfig): Map<string, InstructionTarget
 async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalConfig): Promise<boolean> {
   // Hermes lives in $HERMES_HOME, which ~/.hermes need not be.
   if (tool === 'hermes') return pathExists(getHermesHome());
+  // teamai installs the OMP extension only where ~/.omp exists; a project's
+  // own .omp/ says nothing about this member using OMP.
+  if (tool === 'omp') return pathExists(path.join(getUserHome(), '.omp'));
   const probe = paths.skills ?? paths.rules ?? paths.agents ?? paths.settings;
   return probe !== undefined && isToolInstalledForConfig(tool, probe, localConfig);
 }

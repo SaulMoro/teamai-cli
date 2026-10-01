@@ -686,17 +686,19 @@ describe('instruction block targets on real CLI pull (#945)', () => {
   it('removes the generated content when recall is disabled, a source is deleted, or a namespace is left', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
     sandboxes.push(sandbox);
-    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills', '.omp/skills']);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills', '.omp/skills', '.pi/skills']);
     fs.mkdirSync(path.join(member.home, '.omp'), { recursive: true });
     const context = () => fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8');
     expect((await pullAs(member)).code).toBe(0);
     expect(context()).toContain(RECALL_START);
     expect(await sessionInstructions('omp', member.home, member.projectRoot)).toContain('teamai-recall');
+    expect(await sessionInstructions('pi', member.home, member.projectRoot)).toContain('teamai recall "');
 
     const disable = await runCLI(['recall', 'disable'], { HOME: member.home }, member.projectRoot);
     expect(disable.code, disable.output).toBe(0);
     expect(context()).not.toContain(RECALL_START);
     expect(await sessionInstructions('omp', member.home, member.projectRoot)).not.toContain('teamai-recall');
+    expect(await sessionInstructions('pi', member.home, member.projectRoot)).not.toContain('teamai recall "');
 
     const { config, teamRepo } = memberData(member);
     fs.rmSync(path.join(teamRepo, 'claudemd', 'common.md'));
@@ -708,6 +710,17 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(omp).not.toContain('COMMON-SENTINEL');
     expect(omp).not.toContain('DEVELOPMENT-SENTINEL');
     expect(omp).toContain('PRODUCT-SENTINEL');
+  });
+
+  it('reports no OMP channel problem for a member without OMP in a project that has .omp/', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills', '.omp/skills']);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(result.output).not.toMatch(/omp sessions in this project get no team instructions/);
   });
 
   it('leaves a tracked Copilot file alone for a member without Copilot', async () => {

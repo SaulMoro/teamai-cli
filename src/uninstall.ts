@@ -200,14 +200,14 @@ const INSTRUCTION_BLOCK_STARTS: Record<InstructionBlock, string> = {
 
 /**
  * Start markers of the blocks a pull writes into a tool's instruction target
- * (#945): culture and claudemd always, recall when the tool has the
- * `teamai-recall` subagent, and team rules where `writesInstructionBlock`
- * says so. Nobody writes the legacy `[teamai:rules]` block any more.
+ * (#945): culture, claudemd and recall always (a tool without the
+ * `teamai-recall` subagent gets the direct variant, under the same markers),
+ * and team rules where `writesInstructionBlock` says so. Nobody writes the
+ * legacy `[teamai:rules]` block any more.
  */
 function instructionBlocksWrittenBy(tool: string, toolPath: TeamaiConfig['toolPaths'][string]): string[] {
   return (Object.keys(INSTRUCTION_BLOCK_STARTS) as InstructionBlock[])
-    .filter((block) => block === 'culture' || block === 'claudemd'
-      || (block === 'recall' ? toolPath.agents !== undefined : writesInstructionBlock(tool, toolPath, block)))
+    .filter((block) => block !== 'team-rules' || writesInstructionBlock(tool, toolPath, block))
     .map((block) => INSTRUCTION_BLOCK_STARTS[block]);
 }
 
