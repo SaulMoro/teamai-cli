@@ -177,11 +177,14 @@ older CLI's render, such as Claude extras in a Qoder copy). Without a
 is left alone.
 
 Rules get the same treatment for a render change (#946): when a CLI upgrade
-gives a tool its own rules format (Kiro, Qoder), the fast path rewrites each
-rule copy that still has the bytes `delivered` records but is not the current
-render, records the new bytes, and leaves a copy without an entry alone. A
-copy the member changed is kept and named when teamai would now deliver other
-bytes there.
+gives a tool its own rules format (Kiro, Qoder, CodeBuddy), the fast path
+rewrites each rule copy that still has the bytes `delivered` records but is not
+the current render, records the new bytes, and leaves a copy without an entry
+alone. A copy the member changed is kept and named when teamai would now
+deliver other bytes there. A destination that moved (WorkBuddy's project rules,
+from `.workbuddy/rules` to `.codebuddy/rules`) has no entry at its new path, so
+the fast path first reclaims the old copies (`LEGACY_RULE_DIRS`), writes the
+new path where it is missing, and records the change.
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

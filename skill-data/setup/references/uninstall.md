@@ -17,7 +17,8 @@ machine** (all tools)?"*
   them. An instructions file several tools read (CodeBuddy and WorkBuddy share
   `.codebuddy/rules/teamai-context.md`) is cleaned block by block: a teamai
   block stays while a remaining tool on that file still writes it, so
-  `--agent workbuddy` keeps that file while CodeBuddy is installed. A file an
+  `--agent workbuddy` keeps that file while CodeBuddy is installed. The team
+  rules in a project's `.codebuddy/rules` are shared the same way. A file an
   earlier release wrote the blocks to, such as the project `AGENTS.md`, loses
   its teamai blocks, since no tool reads them there now. A file teamai created
   goes with its last block; one the user had before stays, even if empty.
@@ -67,7 +68,8 @@ and give it your team repo URL."*
   and deletes `.opencode/opencode.json` when nothing else is left in it.
   The user's own entries stay.
 - Uninstall cleans legacy Codex rule copies at the recorded `toolRoots`
-  location, including publishers' bare local filenames. It keeps edited copies.
+  location, including publishers' bare local filenames, and the copies earlier
+  releases left in a project's `.workbuddy/rules`. It keeps edited copies.
   For a rule the team has
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any

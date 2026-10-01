@@ -3,9 +3,9 @@
  *
  * The team repo always stores rules as tool-neutral `<name>.md`. A tool with
  * a rules format of its own gets a render of it (`RULE_FORMATS`): Cursor and
- * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering and Qoder rules
- * `.md` with their own frontmatter. Every other tool takes a verbatim `.md`
- * copy.
+ * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering, Qoder and
+ * CodeBuddy (which WorkBuddy shares) rules `.md` with their own frontmatter.
+ * Every other tool takes a verbatim `.md` copy.
  *
  * This module is the single place that decision lives, mirroring
  * `agentFileExtensionForTool` in `./agent-format.ts`. Every site that writes,
@@ -15,7 +15,8 @@
  * below.
  */
 
-import type { TeamaiConfig } from '../types.js';
+import type { Scope, TeamaiConfig } from '../types.js';
+import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
 import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
 import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
@@ -50,6 +51,9 @@ const RULE_FORMATS: Readonly<Record<string, RuleFormat>> = {
   kiro: KIRO_STEERING_FORMAT,
   qoder: QODER_RULE_FORMAT,
   'qoder-cn': QODER_RULE_FORMAT,
+  codebuddy: CODEBUDDY_RULE_FORMAT,
+  // Same engine as CodeBuddy; in a project it reads .codebuddy/rules too.
+  workbuddy: CODEBUDDY_RULE_FORMAT,
 };
 
 const SESSION_HOOK_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
@@ -141,16 +145,89 @@ export function instructionFileInstallProbe(tool: string, toolPath: ToolPath): s
 }
 
 /**
- * The rules directory each tool that now gets rules from its session-start
- * hook received `<rule>.md` copies in before #938, relative to the tool's base
- * dir in either scope. The tool never read them. It keeps its own `*.rules`
- * exec-policy files there, so only teamai's copies may be removed from it.
+ * A rules directory where earlier pulls left team rule copies the tool does
+ * not load as teamai means it to. Pull reclaims the unedited ones on every
+ * rules sync (`RulesHandler.reclaimLegacyRuleCopies`): a copy of a rule still
+ * delivered is replaced by its current delivery, others are removed, and an
+ * edited one is kept and named. `uninstall` removes the same unedited ones.
+ *
+ * Adding a directory is one entry. A copy is unedited when it holds
+ * `legacyRender` of the team rule (now or at a revision this checkout
+ * pulled), the tool's current render, or the hash the delivery ledger
+ * recorded for it, or for its namesake in `copiedFrom.dir`.
  */
-export const LEGACY_RULE_DIRS: Readonly<Record<string, string>> = {
-  codex: '.codex/rules',
-  'codex-internal': '.codex-internal/rules',
-  tcodex: '.tcodex/rules',
-};
+export interface LegacyRuleDir {
+  readonly tool: string;
+  /** The scopes earlier pulls wrote it in. */
+  readonly scopes: readonly Scope[];
+  /** Relative to the tool's base dir in that scope (HOME or the project root). */
+  readonly dir: string;
+  /** The extension the copies were written with. */
+  readonly ext: '.md' | '.mdc';
+  /** What an older teamai wrote there from the team rule; the team `.md` verbatim when absent. */
+  readonly legacyRender?: (rawTeamRule: string) => string;
+  /**
+   * For a directory the tool does read, whose copies the tool itself copied
+   * from another one: that directory, relative to the same base dir, and the
+   * file the tool leaves once it has copied. The ledger hash recorded in
+   * `dir` for the same file also proves a copy unedited, or edited when it
+   * differs. Such a directory is reclaimed only once the marker exists and
+   * while the tool is not excluded, even while teamai delivers to it, and the
+   * built-in rules teamai deploys there are left to that delivery.
+   */
+  readonly copiedFrom?: { readonly dir: string; readonly marker: string };
+  /** Why a copy kept there is a problem, completing "Kept <files>: ..., and". */
+  readonly why: string;
+  /** What to do with a kept copy, as one sentence. */
+  readonly advice: string;
+}
+
+/**
+ * The warning naming the copies kept in a legacy rules directory: why they
+ * matter there, and what to do with them.
+ */
+export function keptLegacyCopiesWarning(files: readonly string[], entry: LegacyRuleDir): string {
+  return `Kept ${files.join(', ')}: teamai could not verify that ${files.length === 1 ? 'it matches' : 'they match'} `
+    + `what it delivered there, and ${entry.why}. ${entry.advice}`;
+}
+
+const codexLegacyDir = (tool: string, dir: string): LegacyRuleDir => ({
+  tool,
+  scopes: ['user', 'project'],
+  dir,
+  ext: '.md',
+  // Codex keeps its own `*.rules` exec-policy files there, so only teamai's
+  // copies may be removed from it.
+  why: 'Codex does not read .md files in its rules directory (team rules now reach it through its session-start hook)',
+  advice: 'Delete what you did not edit; to keep your changes, move them into AGENTS.md outside the teamai markers, then delete the copy.',
+});
+
+export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
+  // Before #938 the Codex family got `<rule>.md` copies it never read.
+  codexLegacyDir('codex', '.codex/rules'),
+  codexLegacyDir('codex-internal', '.codex-internal/rules'),
+  codexLegacyDir('tcodex', '.tcodex/rules'),
+  // WorkBuddy reads a project's rules from CodeBuddy's .codebuddy/rules (#946).
+  {
+    tool: 'workbuddy',
+    scopes: ['project'],
+    dir: '.workbuddy/rules',
+    ext: '.md',
+    why: 'WorkBuddy reads a project\'s rules from .codebuddy/rules, not from .workbuddy/rules',
+    advice: 'Delete what you did not edit; to keep your changes, move them into .codebuddy/rules under a name of your own, then delete the copy.',
+  },
+  // WorkBuddy's one-time migration (`migrateLegacyDataOnce`) copied
+  // ~/.codebuddy/rules, team copies included, into the rules it loads.
+  {
+    tool: 'workbuddy',
+    scopes: ['user'],
+    dir: '.workbuddy/rules',
+    ext: '.md',
+    copiedFrom: { dir: '.codebuddy/rules', marker: '.workbuddy/.migrated-from-codebuddy' },
+    why: 'WorkBuddy copied it from ~/.codebuddy/rules into the rules it loads, and teamai no longer delivers it here',
+    advice: 'Delete it if you did not edit it; to keep your changes, rename it to a name of your own.',
+  },
+];
 
 /**
  * Every extension a rule file may carry on disk, newest layout first.

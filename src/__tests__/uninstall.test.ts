@@ -1347,6 +1347,72 @@ describe('uninstall', () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`Kept \`/.mcp.json\` in ${await fse.realpath(excludeFile)}`));
   });
 
+  describe('CodeBuddy and WorkBuddy share a project\'s .codebuddy/rules (#946)', () => {
+    async function sharedFixture(agent: 'codebuddy' | 'workbuddy' | undefined, others: { disabled?: boolean } = {}) {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      const projectRoot = path.join(tmpDir, 'business-repo');
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' }).toolPaths;
+      const teamConfig = makeTeamConfig({ toolPaths: { codebuddy: defaults.codebuddy, workbuddy: defaults.workbuddy } });
+      const other = agent === 'codebuddy' ? 'workbuddy' : 'codebuddy';
+      const localConfig = makeLocalConfig(homeDir, repoPath, {
+        scope: 'project',
+        projectRoot,
+        ...(others.disabled ? { disabledAgents: [other] } : {}),
+        repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+      });
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+      await fse.ensureDir(path.join(projectRoot, '.workbuddy'));
+      const copy = path.join(projectRoot, '.codebuddy', 'rules', 'team-rule.md');
+      await fse.outputFile(copy, '---\nalwaysApply: true\n---\n\n# Team Rule\n');
+      return copy;
+    }
+
+    it.each(['codebuddy', 'workbuddy'] as const)('uninstall --agent %s keeps the copy the other still reads', async (agent) => {
+      const copy = await sharedFixture(agent);
+
+      await uninstall({ force: true, agent });
+
+      expect(await fse.pathExists(copy)).toBe(true);
+    });
+
+    it.each(['codebuddy', 'workbuddy'] as const)('uninstall --agent %s removes the copy once the other is excluded', async (agent) => {
+      const copy = await sharedFixture(agent, { disabled: true });
+
+      await uninstall({ force: true, agent });
+
+      expect(await fse.pathExists(copy)).toBe(false);
+    });
+
+    it('removes an unedited copy an older pull left in .workbuddy/rules, and names an edited one with why', async () => {
+      const copy = await sharedFixture('workbuddy');
+      const legacy = (file: string) => path.join(path.dirname(path.dirname(path.dirname(copy))), '.workbuddy', 'rules', file);
+      await fse.outputFile(legacy('team-rule.md'), '# Team Rule');
+      await fse.outputFile(path.join(tmpDir, 'team-repo', 'rules', 'other.md'), 'Other rule.\n');
+      await fse.outputFile(legacy('other.md'), 'Other rule.\nMy own note.\n');
+
+      await uninstall({ force: true, agent: 'workbuddy' });
+
+      expect(await fse.pathExists(legacy('team-rule.md'))).toBe(false);
+      expect(await fse.readFile(legacy('other.md'), 'utf8')).toBe('Other rule.\nMy own note.\n');
+      const kept = vi.mocked(log.warn).mock.calls.map(([message]) => String(message))
+        .filter((message) => message.includes(legacy('other.md')));
+      expect(kept).toHaveLength(1);
+      expect(kept[0]).toContain('WorkBuddy reads a project\'s rules from .codebuddy/rules');
+      expect(kept[0]).not.toContain('Codex');
+    });
+
+    it('a full uninstall removes the copy, counted once', async () => {
+      const copy = await sharedFixture(undefined);
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(copy)).toBe(false);
+      expect(log.success).toHaveBeenCalledWith('Removed 1 rule files');
+    });
+  });
+
   describe('the block protects a config holding a resolved value (#882)', () => {
     const block = [
       '# [teamai:mcp-exclude:start] project MCP configs holding resolved ${VAR} values',

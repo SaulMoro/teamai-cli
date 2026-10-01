@@ -36,7 +36,7 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
-import { ruleStemFromFilename, writesInstructionBlock, type InstructionBlock } from './resources/rule-format.js';
+import { keptLegacyCopiesWarning, ruleStemFromFilename, writesInstructionBlock, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
@@ -113,8 +113,8 @@ interface RemovalPlan {
   skillDirs: SkillDirEntry[];
   /** Rule .md files synced from team repo (plus CLI built-in rules). */
   ruleFiles: string[];
-  /** Copies in a tool's legacy rules directory the member edited: never removed, only named. */
-  keptRuleFiles: string[];
+  /** Copies in a tool's legacy rules directory the member edited, by directory: never removed, only named. */
+  keptRuleFiles: { files: string[]; entry: LegacyRuleDir }[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -179,7 +179,7 @@ interface ToolResources {
   keptGlobal: string[];
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
-  keptRuleFiles: string[];
+  keptRuleFiles: { files: string[]; entry: LegacyRuleDir }[];
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   agentFiles: string[];
 }
@@ -737,11 +737,13 @@ async function buildRemovalPlan(
   // pull would reclaim go, and the ones the member edited stay, named.
   const legacyCopies = await new RulesHandler()
     .legacyRuleCopies(teamConfig, localConfig, await deliveredHashes(localConfig));
-  for (const { tool, owned, edited } of legacyCopies) {
-    const res = perTool.get(tool);
+  for (const { entry, owned, edited } of legacyCopies) {
+    // A directory the tool reads is its rules directory, collected above.
+    if (entry.copiedFrom !== undefined) continue;
+    const res = perTool.get(entry.tool);
     if (!res) continue;
     res.ruleFiles.push(...owned);
-    res.keptRuleFiles.push(...edited);
+    if (edited.length > 0) res.keptRuleFiles.push({ files: edited, entry });
   }
 
   // (d) continued: OpenCode loads its rules through globs in opencode.json,
@@ -849,6 +851,14 @@ async function buildRemovalPlan(
     }
   }
 
+  // A rule file another enabled, installed tool reads stays: in a project
+  // CodeBuddy and WorkBuddy share `.codebuddy/rules` (#946).
+  const retainedRuleFiles = new Set<string>();
+  for (const [tool, resources] of perTool) {
+    if (toolsToMerge.includes(tool) || !activeTools.has(tool)) continue;
+    for (const file of resources.ruleFiles) retainedRuleFiles.add(file);
+  }
+
   // Merge tool-specific resources for selected tools
   for (const tool of toolsToMerge) {
     const res = perTool.get(tool);
@@ -882,7 +892,7 @@ async function buildRemovalPlan(
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned: false });
     }
     plan.skillDirs.push(...res.skillDirs);
-    plan.ruleFiles.push(...res.ruleFiles);
+    plan.ruleFiles.push(...res.ruleFiles.filter((file) => !retainedRuleFiles.has(file) && !plan.ruleFiles.includes(file)));
     plan.keptRuleFiles.push(...res.keptRuleFiles);
     plan.opencodeOwnedGlobs.push(...res.opencodeOwnedGlobs);
     plan.agentFiles.push(...res.agentFiles);
@@ -1484,14 +1494,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
     const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
     // Uninstall never removes these, so they are named whatever happens next.
-    if (plan.keptRuleFiles.length > 0) {
-      const one = plan.keptRuleFiles.length === 1;
-      log.warn(
-        `Kept ${plan.keptRuleFiles.join(', ')}: teamai could not verify that ${one ? 'it matches' : 'they match'} what it delivered there. `
-        + 'Codex does not read .md files in its rules directory; '
-        + `delete ${one ? 'it' : 'them'} once you have saved what you need.`,
-      );
-    }
+    for (const { files, entry } of plan.keptRuleFiles) log.warn(keptLegacyCopiesWarning(files, entry));
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
       && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);

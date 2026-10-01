@@ -833,6 +833,11 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
  * teamai wrote is rewritten (`RulesHandler.rerenderOutdatedCopies`), and the
  * record follows, so the next pull does not read the new bytes as an edit. A
  * copy the member changed is kept and named, as a full sync names it.
+ *
+ * The copies an older CLI left where the tool does not read them are
+ * reclaimed first (`reclaimLegacyRuleCopies`, #938). That is also what writes
+ * a rule whose destination moved, such as WorkBuddy's from `.workbuddy/rules`
+ * to `.codebuddy/rules`: the new path has no record to rewrite.
  */
 async function rerenderOutdatedRules(
   freshConfig: TeamaiConfig,
@@ -842,26 +847,28 @@ async function rerenderOutdatedRules(
 ): Promise<void> {
   try {
     const key = await checkoutRecordKey(localConfig);
-    if (!key) return;
     const state = await loadStateForScope(localConfig);
     const ledger = await openCheckoutLedger(localConfig, state);
-    if (ledger.previous === undefined) return;
     const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-    const rewritten = await (getHandler('rules') as RulesHandler).rerenderOutdatedCopies(
-      freshConfig, localConfig, items, ledger,
-    );
+    const handler = getHandler('rules') as RulesHandler;
+    const reclaimed = await handler.reclaimLegacyRuleCopies(freshConfig, localConfig, items, ledger);
+    const rewritten = key && ledger.previous !== undefined
+      ? await handler.rerenderOutdatedCopies(freshConfig, localConfig, items, ledger)
+      : [];
     reportKept(ledger, scopeLabel);
-    if (rewritten.length === 0) return;
+    if (!key || (reclaimed === 0 && rewritten.length === 0)) return;
     const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];
     if (record) {
       record.delivered = ledger.hashes;
       await saveStateForScope(state, localConfig);
     }
-    log.success(`[${scopeLabel}] Rewrote ${rewritten.length} rule(s) in their tool's own format: ${rewritten.join(', ')}`);
+    if (rewritten.length > 0) {
+      log.success(`[${scopeLabel}] Rewrote ${rewritten.length} rule(s) in their tool's own format: ${rewritten.join(', ')}`);
+    }
   } catch (e) {
     log.warn(
-      `[${scopeLabel}] Could not check whether delivered rules need their tool's format: ${(e as Error).message}. `
-      + 'Copies may still be in an older format; fix the cause, then run `teamai pull --force`.',
+      `[${scopeLabel}] Could not check whether delivered rules need their tool's format or a new place: ${(e as Error).message}. `
+      + 'Copies may still be in an older format, or where the tool does not read them; fix the cause, then run `teamai pull --force`.',
     );
   }
 }
@@ -1349,9 +1356,7 @@ async function pullForScope(
           if (resourceTypes.includes('rules')) {
             try {
               const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-              await (getHandler('rules') as RulesHandler).syncCodexInstructionRules(
-                freshConfig, localConfig, items, openLedger(await deliveredHashes(localConfig, state)),
-              );
+              await (getHandler('rules') as RulesHandler).syncCodexInstructionRules(freshConfig, localConfig, items);
             } catch (error) {
               log.warn(`[${scopeLabel}] Codex's team rules were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
@@ -1364,7 +1369,8 @@ async function pullForScope(
               log.warn(`[${scopeLabel}] OpenCode's rules globs were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
             // Same reason: a CLI that gives a tool its own rules format must
-            // re-render the copies an older one wrote verbatim (#946).
+            // re-render the copies an older one wrote verbatim, and reclaim the
+            // ones it left where the tool does not read them (#938, #946).
             await rerenderOutdatedRules(freshConfig, localConfig, roleContext, scopeLabel);
           }
           // The repo has not moved, but an agent's model may have (#830).

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { teamRuleToCodebuddyRule } from '../resources/codebuddy-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
 import { teamRuleToQoderRule } from '../resources/qoder-rule.js';
 
@@ -56,6 +57,30 @@ describe('Qoder rule render', () => {
     const source = '---\npaths: "src/{a,b}/**, test/**"\n---\n\nUse named exports.\n';
     expect(teamRuleToQoderRule(source)).toBe(
       '---\ntrigger: glob\nglob: src/a/**, src/b/**, test/**\n---\n\nUse named exports.\n',
+    );
+  });
+});
+
+describe('CodeBuddy rule render (CodeBuddy and WorkBuddy)', () => {
+  const SCOPED = '---\nalwaysApply: false\npaths:\n  - "src/**/*.ts"\n  - "test/**"\n---\n\nUse named exports.\n';
+
+  it('makes an unscoped rule always applied', () => {
+    expect(teamRuleToCodebuddyRule(UNSCOPED)).toBe('---\nalwaysApply: true\n---\n\nUse named exports.\n');
+  });
+
+  // Its frontmatter parser reads lines, not YAML: an inline list keeps its
+  // brackets in the globs, so the render always writes a block list.
+  it.each([
+    ['an inline list', INLINE],
+    ['a block list', BLOCK],
+    ['a comma-separated string', '---\npaths: src/**/*.ts, test/**\n---\n\nUse named exports.\n'],
+  ])('scopes %s with alwaysApply false and paths as a block list', (_label, source) => {
+    expect(teamRuleToCodebuddyRule(source)).toBe(SCOPED);
+  });
+
+  it('keeps a brace glob whole, since a list item is not split on commas', () => {
+    expect(teamRuleToCodebuddyRule(BRACE)).toBe(
+      '---\nalwaysApply: false\npaths:\n  - "src/{a,b}/**"\n---\n\nUse named exports.\n',
     );
   });
 });

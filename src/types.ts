@@ -509,7 +509,20 @@ export const TeamaiConfigSchema = z.object({
     // provider scans as user-dsh root (rank 400). dsh discovers both directory
     // bundles (<name>/SKILL.md) and flat Markdown files there natively.
     dsh: { skills: '.dsh/skills' },
-    workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules', settings: '.workbuddy/settings.json', claudemd: 'AGENTS.md', agents: '.workbuddy/agents', mcp: '.workbuddy/mcp.json', mcpProject: '.workbuddy/mcp.json' },
+    // WorkBuddy runs CodeBuddy's engine: in a project it reads CodeBuddy's
+    // .codebuddy/rules, which the two share (one copy), and in user scope its
+    // own ~/.workbuddy/rules (#946). Its install probe stays .workbuddy
+    // (`isToolInstalledForConfig`), whatever directory its rules land in.
+    workbuddy: {
+      skills: '.workbuddy/skills',
+      rules: '.codebuddy/rules',
+      settings: '.workbuddy/settings.json',
+      claudemd: 'AGENTS.md',
+      agents: '.workbuddy/agents',
+      mcp: '.workbuddy/mcp.json',
+      mcpProject: '.workbuddy/mcp.json',
+      userScope: { rules: '.workbuddy/rules' },
+    },
     // OpenCode reads project config from <root>/.opencode/ but user config from
     // ~/.config/opencode/ — a different prefix, hence userScope. Skills are also
     // read natively from .claude/skills, but we write .opencode/skills so an
@@ -902,6 +915,11 @@ export interface DeliveryTarget {
    * rule twice.
    */
   supersedes?: string;
+  /**
+   * The other tools that read this same `dest`, served by the one copy: in a
+   * project CodeBuddy and WorkBuddy both read `.codebuddy/rules` (#946).
+   */
+  sharedWith?: string[];
   /**
    * The exact bytes `pullItem` writes at `dest`, for a handler that renders
    * its destination rather than copying a tree there. It is what tells a copy

@@ -75,6 +75,8 @@ function appendTo(buckets: Map<string, string[]>, tool: string, name: string): v
 
 /** What one tool was owed, and which of it did not arrive intact. */
 interface ToolDelivery {
+  /** The tool whose format its items land in; the map key also names the tools sharing the copy. */
+  tool: string;
   /** Where its items land — the fix names it when the filename is derived. */
   dir: string;
   /** Item names grouped by the problem label `classify` gave them. */
@@ -105,10 +107,12 @@ async function walkDelivery(
     if (targets.length === 0) unreceived.push(item.name);
 
     for (const target of targets) {
-      let delivery = byTool.get(target.tool);
+      // One check for a copy several tools read, naming them all (#946).
+      const key = [target.tool, ...target.sharedWith ?? []].join(', ');
+      let delivery = byTool.get(key);
       if (!delivery) {
-        delivery = { dir: path.dirname(target.dest), problems: new Map() };
-        byTool.set(target.tool, delivery);
+        delivery = { tool: target.tool, dir: path.dirname(target.dest), problems: new Map() };
+        byTool.set(key, delivery);
       }
       const problem = await classify(target, item);
       if (problem !== null) appendTo(delivery.problems, problem, item.name);
@@ -298,7 +302,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
     // filename carries a per-tool extension the reader would have to derive.
     fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ruleLabels)}. `
       + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + `so it cannot restore this. ${olderRuleCopyMeaning(tool)}${changedByYouFix(delivery)}`,
+      + `so it cannot restore this. ${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}`,
   }));
 
   return [...activation, ...perTool];

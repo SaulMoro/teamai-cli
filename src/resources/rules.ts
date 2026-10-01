@@ -23,11 +23,26 @@ import {
   sharesRulesDirWithMember,
   isLegacyCursorRuleFile,
   LEGACY_RULE_DIRS,
+  keptLegacyCopiesWarning,
+  type LegacyRuleDir,
   type RuleFormat,
   writesInstructionBlock,
   instructionFileInstallProbe,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
+
+/** The copies earlier pulls left in one of `LEGACY_RULE_DIRS` (`RulesHandler.legacyRuleCopies`). */
+export interface LegacyRuleCopies {
+  entry: LegacyRuleDir;
+  /** The directory, resolved for this scope. */
+  dir: string;
+  /** `entry.copiedFrom.dir`, resolved; undefined for a directory the tool does not read. */
+  copiedFrom: string | undefined;
+  /** The copies still teamai's. */
+  owned: string[];
+  /** The copies the member edited, or that teamai cannot prove it wrote. */
+  edited: string[];
+}
 
 export class RulesHandler extends ResourceHandler {
   readonly type = 'rules' as const;
@@ -251,8 +266,9 @@ export class RulesHandler extends ResourceHandler {
    * Where `item` lands for each tool that receives rules. The filename and
    * bytes are tool-dependent (`RULE_FORMATS`) — `.md` verbatim, `.mdc` for
    * Cursor-compatible tools, `.instructions.md` for Copilot, `.md` with its
-   * own frontmatter for Kiro and Qoder — so a reader cannot derive them from
-   * the rule's name alone.
+   * own frontmatter for Kiro, Qoder and CodeBuddy — so a reader cannot derive
+   * them from the rule's name alone. Tools that read the same file in the same
+   * render get one target, naming the others in `sharedWith`.
    */
   async deliveryTargets(
     teamConfig: TeamaiConfig,
@@ -279,10 +295,18 @@ export class RulesHandler extends ResourceHandler {
 
       const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
       const ext = ruleFileExtensionForTool(tool);
+      const dest = path.join(destDir, `${localName}${ext}`);
+      const content = source === null ? undefined : renderRuleForTool(tool, source);
+      // Tools that read one directory in one format share the copy (#946).
+      const shared = targets.find((target) => target.dest === dest && target.content === content);
+      if (shared) {
+        (shared.sharedWith ??= []).push(tool);
+        continue;
+      }
       targets.push({
         tool,
-        dest: path.join(destDir, `${localName}${ext}`),
-        content: source === null ? undefined : renderRuleForTool(tool, source),
+        dest,
+        content,
         ...(localName !== item.name
           ? { supersedes: path.join(destDir, `${item.name}${ext}`) }
           : {}),
@@ -544,7 +568,9 @@ export class RulesHandler extends ResourceHandler {
       }
     }
 
-    await this.syncCodexInstructionRules(teamConfig, localConfig, rules, ledger);
+    await this.syncCodexInstructionRules(teamConfig, localConfig, rules);
+    // Before the empty-set return: a copy outlives the rule that selected it.
+    await this.reclaimLegacyRuleCopies(teamConfig, localConfig, rules, ledger);
 
     // OpenCode does not auto-scan a rules directory: the .md files are inert
     // until referenced from `instructions` in opencode.json. Activate (or, when
@@ -642,7 +668,7 @@ export class RulesHandler extends ResourceHandler {
             continue;
           }
           const deployed = path.join(destDir, localFile);
-          if (await isDeliveredRender(tool, deployed, replaced, localConfig.repo.localPath, deliveredRevs)) {
+          if (await isDeliveredRender([toolRender(tool)], deployed, replaced, localConfig.repo.localPath, deliveredRevs)) {
             await remove(deployed);
             log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
           } else {
@@ -706,15 +732,13 @@ export class RulesHandler extends ResourceHandler {
   /**
    * The Codex family's part of a rules sync: the team rules go into its
    * user-scope AGENTS.md, which only it reads; in a project its session-start
-   * hook adds them (#938). The copies earlier pulls left in its rules
-   * directory are reclaimed. Public so the "Already synced" pull can run it
+   * hook adds them (#938). Public so the "Already synced" pull can run it
    * after a CLI upgrade.
    */
   async syncCodexInstructionRules(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: ResourceItem[],
-    ledger?: DeliveryLedger,
   ): Promise<void> {
     const block = await teamRulesBlock(rules);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
@@ -738,54 +762,106 @@ export class RulesHandler extends ResourceHandler {
         log.warn(`Failed to update team rules in ${file}: ${(e as Error).message}`);
       }
     }
-    await this.reclaimLegacyRuleCopies(teamConfig, localConfig, ledger);
   }
 
   /**
-   * Remove the `<rule>.md` copies earlier pulls wrote to a rules directory the
-   * tool never read (`LEGACY_RULE_DIRS`) that are still teamai's
-   * (`legacyRuleCopies`). The copies kept are named in one warning per rules
-   * sync, until the member deletes them. Public so the "Already synced" pull
-   * can run it after a CLI upgrade without a full sync (#938).
+   * Reclaim the copies earlier pulls left in `LEGACY_RULE_DIRS` that are
+   * still teamai's (`legacyRuleCopies`). One of a rule in `rules` (what this
+   * sync delivers) is replaced by the rule's current delivery: rewritten in
+   * place where the tool still reads that path, otherwise removed. Either
+   * way, kept or not, the rule's current destination is written when it is
+   * missing: that is what moves a rule on the "Already synced" pull, where
+   * nothing else writes the new path (#946). Other unedited copies are
+   * removed. The edited ones are named in one warning per directory, until
+   * the member deletes them. One at a path pull delivers to is left to pull,
+   * which keeps and names it as an edit (#822) once it carries the record of
+   * the copy the tool copied it from. Public so the "Already synced" pull can
+   * run it after a CLI upgrade (#938). Returns how many files it wrote or
+   * removed, whose records changed in `ledger`.
    */
   async reclaimLegacyRuleCopies(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
+    rules: readonly ResourceItem[],
     ledger: DeliveryLedger | undefined,
-  ): Promise<void> {
-    const kept: string[] = [];
-    for (const { tool, dir, owned, edited } of await this.legacyRuleCopies(teamConfig, localConfig, ledger?.previous)) {
+  ): Promise<number> {
+    let changed = 0;
+    const write = async (dest: string, content: string): Promise<void> => {
+      await ensureDir(path.dirname(dest));
+      await writeFile(dest, content);
+      if (ledger) await recordDelivered(ledger.hashes, dest);
+      changed++;
+    };
+    for (const { entry, dir, copiedFrom, owned, edited } of await this.legacyRuleCopies(teamConfig, localConfig, ledger?.previous)) {
+      // Where each copy's rule is delivered to this tool now.
+      const delivery = new Map<string, DeliveryTarget>();
+      for (const rule of rules) {
+        const target = (await this.deliveryTargets(teamConfig, localConfig, rule))
+          .find(({ tool, sharedWith }) => tool === entry.tool || sharedWith?.includes(entry.tool));
+        if (!target) continue;
+        for (const name of new Set([rule.name, await this.localNameFor(rule.name, localConfig)])) {
+          delivery.set(path.join(dir, `${name}${entry.ext}`), target);
+        }
+      }
+      let removed = 0;
       for (const file of owned) {
+        const target = delivery.get(file);
+        if (target?.dest === file) {
+          if (target.content !== undefined && await readFileSafe(file) !== target.content) await write(file, target.content);
+          continue;
+        }
         await remove(file);
         if (ledger) forgetDelivered(ledger.hashes, file);
-        log.debug(`Removed ${file}: ${tool} gets the team rules from its session-start hook`);
+        changed++;
+        removed++;
+        log.debug(`Removed ${file}: ${entry.why}`);
       }
-      kept.push(...edited);
-      // Codex's own `*.rules` keep the directory; only an emptied one goes.
-      if (owned.length > 0) await pruneEmptyDirs(dir);
+      // The rule's current destination, when it moved and nothing wrote it yet:
+      // kept or not, the old copy is not where the tool reads it.
+      for (const file of [...owned, ...edited]) {
+        const target = delivery.get(file);
+        if (target === undefined || target.dest === file || target.content === undefined) continue;
+        if (!await pathExists(target.dest)) await write(target.dest, target.content);
+      }
+      const kept: string[] = [];
+      for (const file of edited) {
+        if (delivery.get(file)?.dest !== file) {
+          kept.push(file);
+          continue;
+        }
+        // A copy the tool made of one teamai recorded is that copy, edited:
+        // with its record, pull keeps it rather than writing over it.
+        const source = copiedFrom === undefined ? undefined : ledger?.previous?.[path.join(copiedFrom, path.relative(dir, file))];
+        if (source !== undefined && ledger?.previous !== undefined && ledger.previous[file] === undefined) {
+          ledger.previous[file] = source;
+          ledger.hashes[file] = source;
+          changed++;
+        }
+      }
+      if (kept.length > 0) log.warn(keptLegacyCopiesWarning(kept, entry));
+      // Files of the tool's own (Codex's `*.rules`) keep the directory; only an
+      // emptied one goes, and never one the tool reads.
+      if (removed > 0 && entry.copiedFrom === undefined) await pruneEmptyDirs(dir);
     }
-    if (kept.length > 0) {
-      log.warn(
-        `Kept ${kept.join(', ')}: teamai could not verify that ${kept.length === 1 ? 'it matches' : 'they match'} what it delivered there, `
-        + 'and Codex does not read .md files in its rules directory (team rules now reach it through its session-start hook). '
-        + 'Delete what you did not edit; to keep your changes, move them into AGENTS.md outside the teamai markers, '
-        + 'then delete the copy.',
-      );
-    }
+    return changed;
   }
 
   /**
-   * The `<rule>.md` copies earlier pulls wrote to each rules directory a tool
-   * never read (`LEGACY_RULE_DIRS`), split into the ones still teamai's and the
-   * ones the member edited. A copy is teamai's while it holds what teamai
-   * delivered there: the team rule verbatim, now or at a revision this
-   * checkout pulled, or as `previous` (the delivery ledger) recorded it; the
-   * built-in `teamai-recall.md` as any teamai version deployed it. Every team
-   * rule counts, not just the ones delivered here, since a copy outlives the
-   * role or tag that selected it. A copy of a rule the team removed is teamai's
-   * only while it matches its recorded delivery hash. Without that record,
-   * the copy stays because it may contain the member's edits. A directory a team
-   * `toolPaths` still delivers rules to is not listed.
+   * The copies earlier pulls left in each of `LEGACY_RULE_DIRS` for this
+   * scope, split into the ones still teamai's and the ones the member edited.
+   * A copy is teamai's while it holds what teamai delivered there: the
+   * entry's legacy render of the team rule (verbatim by default) or the
+   * tool's current render, now or at a revision this checkout pulled; the
+   * hash `previous` (the delivery ledger) recorded for it or, for an entry
+   * with `copiedFrom`, for its namesake there; the built-in `teamai-recall.md`
+   * as any teamai version deployed it. Every team rule counts, not just the
+   * ones delivered here, since a copy outlives the role or tag that selected
+   * it. A copy of a rule the team removed is teamai's only on a recorded
+   * hash. Without that record, the copy stays because it may contain the
+   * member's edits. A directory a team `toolPaths` delivers rules to is not
+   * listed, unless the entry is for one the tool reads (`copiedFrom`), which
+   * is listed only once the tool's marker says it copied into it and while the
+   * tool is not excluded.
    *
    * Read-only and public so `uninstall` removes exactly what a pull reclaims.
    */
@@ -793,53 +869,71 @@ export class RulesHandler extends ResourceHandler {
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     previous: DeliveredHashes | undefined,
-  ): Promise<Array<{ tool: string; dir: string; owned: string[]; edited: string[] }>> {
+  ): Promise<LegacyRuleCopies[]> {
     const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
     const tombstoned = [...await this.readTombstones(localConfig)]
       .filter((name) => !teamRules.some((rule) => rule.name === name));
     let deliveredRevs: readonly string[] | undefined;
-    const out: Array<{ tool: string; dir: string; owned: string[]; edited: string[] }> = [];
+    const out: LegacyRuleCopies[] = [];
     // A team `toolPaths` that still names one of these dirs delivers there.
     const deliveredDirs = new Set(
       Object.entries(scopedToolPaths(teamConfig, localConfig))
         .filter(([, toolPath]) => toolPath.rules)
         .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
     );
-    for (const [tool, rel] of Object.entries(LEGACY_RULE_DIRS)) {
+    for (const entry of LEGACY_RULE_DIRS) {
+      const { tool, dir: rel, ext } = entry;
+      if (!entry.scopes.includes(localConfig.scope)) continue;
       const dir = localConfig.scope === 'user'
         ? path.join(resolveToolRootDir(tool, path.dirname(rel), localConfig.toolRoots), path.basename(rel))
         : path.join(resolveToolBaseDir(tool, localConfig), rel);
-      if (deliveredDirs.has(dir) || !await pathExists(dir)) continue;
+      const baseDir = resolveToolBaseDir(tool, localConfig);
+      if (entry.copiedFrom === undefined
+        ? deliveredDirs.has(dir)
+        // A directory the tool reads is the tool's, until it has copied into
+        // it, and not teamai's while the tool is excluded.
+        : isAgentExcluded(localConfig, tool) || !await pathExists(path.join(baseDir, entry.copiedFrom.marker))) continue;
+      if (!await pathExists(dir)) continue;
+      const copiedFrom = entry.copiedFrom === undefined ? undefined : path.join(baseDir, entry.copiedFrom.dir);
+      // The hash teamai recorded writing this copy, or the one the tool copied it from.
+      const recordedUnchanged = async (file: string): Promise<boolean> => {
+        const disk = await fileHash(file);
+        if (disk === null) return false;
+        if (previous?.[file] === disk) return true;
+        return copiedFrom !== undefined && previous?.[path.join(copiedFrom, path.relative(dir, file))] === disk;
+      };
+      const renders = [entry.legacyRender ?? ((raw: string) => raw), toolRender(tool)];
       const owned: string[] = [];
       const edited: string[] = [];
       for (const rule of teamRules) {
         // A publisher's copy uses its bare local name; older namespaced copies
         // can remain beside it, so check both against the same delivery proof.
         for (const name of new Set([rule.name, await this.localNameFor(rule.name, localConfig)])) {
-          const file = path.join(dir, `${name}.md`);
+          const file = path.join(dir, `${name}${ext}`);
           if (!await pathExists(file)) continue;
           deliveredRevs ??= (
             await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
           ).revs;
-          const recorded = previous?.[file];
-          const delivered = (recorded !== undefined && recorded === await fileHash(file))
-            || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+          const delivered = await recordedUnchanged(file)
+            || await isDeliveredRender(renders, file, rule, localConfig.repo.localPath, deliveredRevs);
           (delivered ? owned : edited).push(file);
         }
       }
       // The source is gone, so only a recorded hash proves a copy is unchanged.
       for (const name of tombstoned) {
         for (const localName of new Set([name, await this.localNameFor(name, localConfig)])) {
-          const file = path.join(dir, `${localName}.md`);
+          const file = path.join(dir, `${localName}${ext}`);
           if (!await pathExists(file)) continue;
-          const recorded = previous?.[file];
-          (recorded !== undefined && recorded === await fileHash(file) ? owned : edited).push(file);
+          (await recordedUnchanged(file) ? owned : edited).push(file);
         }
       }
-      const recall = path.join(dir, 'teamai-recall.md');
-      const recallContent = await readFileSafe(recall);
-      if (recallContent !== null) (isDeployedRecallRule(recallContent) ? owned : edited).push(recall);
-      out.push({ tool, dir, owned: [...new Set(owned)], edited: [...new Set(edited)].filter((file) => !owned.includes(file)) });
+      // A directory the tool reads gets teamai's built-in rules too.
+      if (entry.copiedFrom === undefined) {
+        const recall = path.join(dir, `teamai-recall${ext}`);
+        const recallContent = await readFileSafe(recall);
+        if (recallContent !== null) (isDeployedRecallRule(recallContent) ? owned : edited).push(recall);
+      }
+      out.push({ entry, dir, copiedFrom, owned: [...new Set(owned)], edited: [...new Set(edited)].filter((file) => !owned.includes(file)) });
     }
     return out;
   }
@@ -956,7 +1050,7 @@ export class RulesHandler extends ResourceHandler {
       for (const { tool, dest, supersedes } of await this.deliveryTargets(teamConfig, localConfig, item)) {
         // `supersedes` marks the author's own root copy, not a delivered one.
         if (supersedes) continue;
-        if (!await isDeliveredRender(tool, dest, item, localConfig.repo.localPath, deliveredRevs)) continue;
+        if (!await isDeliveredRender([toolRender(tool)], dest, item, localConfig.repo.localPath, deliveredRevs)) continue;
         await remove(dest);
         if (ledger) forgetDelivered(ledger.hashes, dest);
         touchedDirs.add(path.join(resolveToolBaseDir(tool, localConfig), scopedToolPaths(teamConfig, localConfig)[tool].rules!));
@@ -982,19 +1076,24 @@ export class RulesHandler extends ResourceHandler {
   }
 }
 
+/** What pull writes for `tool` from a team rule. */
+function toolRender(tool: string): (rawTeamRule: string) => string {
+  return (raw) => renderRuleForTool(tool, raw);
+}
+
 /** sha256 of `content`, as `fileHash` and the delivery ledger spell it. */
 function contentHash(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 /**
- * Whether `deployed` holds exactly what pull renders for `tool` from the team
- * rule, as it is now or as it was at one of `deliveredRevs`: a root rule
- * edited in the same push that adds its namespace override leaves the older
- * render behind, which nobody edited.
+ * Whether `deployed` holds exactly one of `renders` of the team rule, as it is
+ * now or as it was at one of `deliveredRevs`: a root rule edited in the same
+ * push that adds its namespace override leaves the older render behind, which
+ * nobody edited.
  */
 async function isDeliveredRender(
-  tool: string,
+  renders: ReadonlyArray<(rawTeamRule: string) => string>,
   deployed: string,
   rule: ResourceItem,
   repoPath: string,
@@ -1002,11 +1101,12 @@ async function isDeliveredRender(
 ): Promise<boolean> {
   const current = await readFileSafe(deployed);
   if (current === null) return false;
+  const matches = (raw: string): boolean => renders.some((render) => current === render(raw));
   const team = await readFileSafe(rule.sourcePath);
-  if (team !== null && current === renderRuleForTool(tool, team)) return true;
+  if (team !== null && matches(team)) return true;
   for (const rev of deliveredRevs) {
     const delivered = await getFileContentAtRev(repoPath, rev, `./${rule.relativePath}`);
-    if (delivered !== null && current === renderRuleForTool(tool, delivered.toString('utf-8'))) return true;
+    if (delivered !== null && matches(delivered.toString('utf-8'))) return true;
   }
   return false;
 }

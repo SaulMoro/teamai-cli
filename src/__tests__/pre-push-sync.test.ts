@@ -323,15 +323,16 @@ describe('syncTeamUpdatesToLocal — rules', () => {
   });
 
   it('should sync all installed tool directories', async () => {
-    // Add a second tool
-    await fse.ensureDir(path.join(homeDir, '.workbuddy', 'rules'));
-    teamConfig.toolPaths.workbuddy = { skills: '.workbuddy/skills', rules: '.workbuddy/rules' };
+    // Add a second tool that takes the team rule verbatim (WorkBuddy now gets
+    // CodeBuddy's render, #946)
+    await fse.ensureDir(path.join(homeDir, '.tclaude', 'rules'));
+    teamConfig.toolPaths.tclaude = { skills: '.tclaude/skills', rules: '.tclaude/rules' };
 
     // Team repo has v2
     await fse.writeFile(path.join(repoPath, 'rules', 'shared.md'), 'v2');
     // Both tool dirs have v1
     await fse.writeFile(path.join(homeDir, '.claude/rules', 'shared.md'), 'v1');
-    await fse.writeFile(path.join(homeDir, '.workbuddy/rules', 'shared.md'), 'v1');
+    await fse.writeFile(path.join(homeDir, '.tclaude/rules', 'shared.md'), 'v1');
     // Old team repo was v1
     mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1'));
 
@@ -339,7 +340,7 @@ describe('syncTeamUpdatesToLocal — rules', () => {
 
     // Both should now have v2
     const claudeContent = await fse.readFile(path.join(homeDir, '.claude/rules', 'shared.md'), 'utf-8');
-    const wbContent = await fse.readFile(path.join(homeDir, '.workbuddy/rules', 'shared.md'), 'utf-8');
+    const wbContent = await fse.readFile(path.join(homeDir, '.tclaude/rules', 'shared.md'), 'utf-8');
     expect(claudeContent).toBe('v2');
     expect(wbContent).toBe('v2');
   });

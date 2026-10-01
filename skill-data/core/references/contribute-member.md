@@ -119,7 +119,7 @@ The doc lands in the team's `learnings/` and appears for teammates on their next
 Before listing rules, `push` refreshes copies whose bodies still match a recorded
 sync revision. The header teamai generates for a tool's own rules format
 (Cursor and JoyCode `.mdc`, Copilot `applyTo`, Kiro `inclusion`, Qoder
-`trigger`) does not count as a local edit: unedited old copies update in that
+`trigger`, CodeBuddy and WorkBuddy `alwaysApply`) does not count as a local edit: unedited old copies update in that
 format, including under `COPILOT_HOME` in user scope. Genuine local body edits remain push candidates.
 Rule pre-sync leaves tools excluded by `enabledAgents` or `disabledAgents` untouched.
 When only team `paths` change, `applyTo` refreshes if the local file still matches

@@ -225,6 +225,49 @@ describe('doctor — rules delivered on disk', () => {
     expect(check.fix).not.toContain('.mdc');
   });
 
+  describe('CodeBuddy and WorkBuddy (#946)', () => {
+    const ALWAYS = '---\nalwaysApply: true\n---\n\n';
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+
+    async function deliverCodebuddy(dir: string): Promise<void> {
+      for (const name of ['coding-style', 'reviews']) await fse.outputFile(path.join(dir, `${name}.md`), `${ALWAYS}Body of ${name}\n`);
+    }
+
+    beforeEach(() => {
+      teamConfig.toolPaths = { codebuddy: defaults.codebuddy, workbuddy: defaults.workbuddy };
+    });
+
+    it('checks the shared project .codebuddy/rules once, naming both tools', async () => {
+      const projectRoot = path.join(tempDir, 'project');
+      Object.assign(localConfig, { scope: 'project', projectRoot });
+      await fse.ensureDir(path.join(projectRoot, '.workbuddy'));
+      await deliverCodebuddy(path.join(projectRoot, '.codebuddy/rules'));
+
+      const rules = (await checks()).filter((c) => c.name.startsWith('Rules delivered to'));
+      expect(rules.map((c) => c.name)).toEqual(['Rules delivered to codebuddy, workbuddy']);
+      expect(await rules[0].check()).toBe(true);
+
+      // A verbatim copy, as teamai wrote it before: CodeBuddy ignores its `paths:` form.
+      await fse.writeFile(path.join(projectRoot, '.codebuddy/rules/reviews.md'), 'Body of reviews\n');
+      const check = await rulesCheck('codebuddy, workbuddy');
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(path.join(projectRoot, '.codebuddy/rules'));
+      expect(check.fix).toContain('delivered from an older copy: reviews');
+      expect(check.fix).toContain('`alwaysApply` or `paths`');
+    });
+
+    it('checks WorkBuddy\'s user rules in ~/.workbuddy/rules', async () => {
+      await fse.ensureDir(path.join(homeDir, '.codebuddy'));
+      await deliverCodebuddy(path.join(homeDir, '.workbuddy/rules'));
+
+      const workbuddy = await rulesCheck('workbuddy');
+      expect(await workbuddy.check()).toBe(true);
+      const codebuddy = await rulesCheck('codebuddy');
+      expect(await codebuddy.check()).toBe(false);
+      expect(codebuddy.fix).toContain(path.join(homeDir, '.codebuddy/rules'));
+    });
+  });
+
   it('passes a copy the member changed since teamai delivered it, which pull keeps (#822)', async () => {
     const edited = path.join(homeDir, CLAUDE_RULES, 'reviews.md');
     await fse.writeFile(edited, 'My own version\n');

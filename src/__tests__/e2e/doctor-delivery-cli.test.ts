@@ -171,7 +171,7 @@ describe('teamai doctor delivery checks (e2e)', () => {
     // the delivered copy with the render, so a placeholder is a stale copy.
     write(path.join(home, '.claude/agents/reviewer.md'), CLAUDE_AGENT_MD);
     write(path.join(home, '.codex/agents/reviewer.toml'), CODEX_AGENT_TOML);
-    write(path.join(home, '.codebuddy/rules/coding-style.md'), 'Coding style body\n');
+    write(path.join(home, '.codebuddy/rules/coding-style.md'), '---\nalwaysApply: true\n---\n\nCoding style body\n');
     write(path.join(home, '.codebuddy/agents/reviewer.md'), CLAUDE_AGENT_MD);
     write(path.join(home, '.config/opencode/rules/coding-style.md'), 'Coding style body\n');
     // The glob the pull adds; without it every .md above is inert.
