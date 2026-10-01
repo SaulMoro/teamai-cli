@@ -54,7 +54,7 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
-import { instructionTargetFile } from './instruction-targets.js';
+import { clearInstructionFile, instructionTargetFile } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -1043,12 +1043,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // (b) Clean CLAUDE.md teamai section blocks
   for (const { path: claudeMdPath, blocks } of plan.claudeMdFiles) {
     try {
-      // A file teamai created goes with its last block; a member's file,
-      // even an empty one, stays.
-      for (const [startMarker, endMarker] of blocks) {
-        await removeClaudeMdSection(claudeMdPath, startMarker, endMarker, { deleteIfEmpty: true });
-      }
-      log.success(`Cleaned ${claudeMdPath}`);
+      const { changed, warnings } = await clearInstructionFile(claudeMdPath);
+      for (const warning of warnings) log.warn(warning);
+      if (changed) log.success(`Cleaned CLAUDE.md: ${claudeMdPath}`);
     } catch (e) {
       log.warn(`Failed to clean ${claudeMdPath}: ${(e as Error).message}`);
     }

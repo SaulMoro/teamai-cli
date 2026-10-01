@@ -1529,6 +1529,9 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | 工具 | 用户范围 | 项目范围 |
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+| Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
+
+Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysApply: true`）。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
 
 早期版本的 pull 可能把这些块留在下列文件中。下一次 pull 会移除它们，并列出所修改的每个文件：
 

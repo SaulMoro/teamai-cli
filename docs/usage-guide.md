@@ -1651,6 +1651,9 @@ Two members of the same project can have different roles, so their shared instru
 | Tool | User scope | Project scope |
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+| Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
+
+Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: true`). Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
 
 A pull from an earlier release may have left these blocks in a file listed below. The next pull removes them, and names each file it changes:
 

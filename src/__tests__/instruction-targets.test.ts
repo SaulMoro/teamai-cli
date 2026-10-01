@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   applyInstructionPlan,
+  clearInstructionFile,
   planInstructionFiles,
   type InstructionTarget,
 } from '../instruction-targets.js';
@@ -132,5 +133,22 @@ describe('instruction file planning (#945)', () => {
 
     await applyInstructionPlan(await planInstructionFiles([owned], { culture: null, claudemd: null }), { dryRun: false });
     expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('clears teamai\'s own teamai-context file whole, header included, on uninstall', async () => {
+    const file = path.join(dir, 'teamai-context.mdc');
+    fs.writeFileSync(file, `---\nalwaysApply: true\n---\n\n${culture('c')}\n`);
+
+    expect((await clearInstructionFile(file)).changed).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('keeps the member\'s text when uninstall clears another instruction file', async () => {
+    const file = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(file, `# Mine\n\n${claudemd('s')}\n`);
+
+    await clearInstructionFile(file);
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('# Mine\n');
   });
 });

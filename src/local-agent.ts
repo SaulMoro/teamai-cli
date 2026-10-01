@@ -52,8 +52,7 @@ import {
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
-import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
-import { instructionTargetFile } from './instruction-targets.js';
+import { applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles } from './instruction-targets.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
   resolveBaseDir,
@@ -2127,19 +2126,15 @@ async function syncClaudemd(
     }
 
     const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
-    try {
-      if (block) {
-        await injectClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, block);
-        log.debug(`local-agent: synced CLAUDE.md instructions to ${tool}`);
-        syncedAny = true;
-      } else {
-        await removeClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END);
-        log.debug(`local-agent: removed CLAUDE.md instructions from ${tool}`);
-        syncedAny = true;
-      }
-    } catch (e) {
-      log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${(e as Error).message}`);
+    const plan = await planInstructionFiles([instructionTargetAt(tool, claudeMdPath, localConfig.scope)], { claudemd: block });
+    for (const warning of plan.warnings) log.warn(warning);
+    const { failures } = await applyInstructionPlan(plan, { dryRun: false });
+    if (failures.length > 0) {
+      log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${failures.join(' ')}`);
+      continue;
     }
+    log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
+    syncedAny = true;
   }
 
   if (files.length > 0 && !syncedAny) {

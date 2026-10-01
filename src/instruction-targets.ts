@@ -54,9 +54,15 @@ const configured = (paths: ToolPaths): string | undefined => paths.claudemd;
 const contextRule = (extension: string) => (paths: ToolPaths): string | undefined =>
   paths.rules === undefined ? undefined : path.posix.join(paths.rules, `${TEAMAI_CONTEXT_RULE_NAME}${extension}`);
 
+/** Cursor applies an `.mdc` rule in every session only with this frontmatter. */
+const CURSOR_ALWAYS_APPLY = '---\nalwaysApply: true\n---\n';
+const cursor: TargetEntry = { file: contextRule('.mdc'), header: CURSOR_ALWAYS_APPLY, owned: true, retired: [] };
+
 // One line per tool, so a change to one tool's target edits one line.
 const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   claude: { file: configured, retired: [] },
+  // Cursor CLI reads ~/.cursor/rules when the session starts under $HOME.
+  cursor,
   'claude-internal': { file: configured, retired: [] },
   tclaude: { file: configured, retired: [] },
   hermes: { file: configured, retired: [] },
@@ -73,6 +79,7 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   // subdirectory, and still reads AGENTS.md and an authored CLAUDE.md as it
   // chose to. CLAUDE.local.md would stop the native AGENTS.md load (#945).
   claude: { file: contextRule('.md'), owned: true, retired: ['.claude/CLAUDE.md'] },
+  cursor,
   'claude-internal': { file: configured, retired: [] },
   tclaude: { file: configured, retired: [] },
   hermes: { file: configured, retired: [] },
@@ -146,7 +153,8 @@ export function instructionTargetPath(
   return file === undefined ? undefined : path.resolve(resolveToolBaseDir(tool, localConfig), file);
 }
 
-function targetFor(tool: string, file: string, scope: Scope): InstructionTarget {
+/** The target `tool` reads from `file` in `scope`, with the header and ownership its entry declares. */
+export function instructionTargetAt(tool: string, file: string, scope: Scope): InstructionTarget {
   const entry = entryFor(tool, scope);
   return { path: file, tools: [], recall: false, header: entry?.header, owned: entry?.owned };
 }
@@ -159,7 +167,7 @@ function knownInstructionTargets(teamConfig: TeamaiConfig, localConfig: LocalCon
   const known = new Map<string, InstructionTarget>();
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     const file = instructionTargetPath(tool, paths, localConfig);
-    if (file && !known.has(file)) known.set(file, targetFor(tool, file, localConfig.scope));
+    if (file && !known.has(file)) known.set(file, instructionTargetAt(tool, file, localConfig.scope));
   }
   const table = localConfig.scope === 'user' ? USER_TARGETS : PROJECT_TARGETS;
   for (const [tool, entry] of Object.entries(table)) {
@@ -196,7 +204,7 @@ export async function resolveInstructionTargets(
     if (!file || !await isInstalled(tool, paths, localConfig)) continue;
     inUse.add(file);
     if (isAgentExcluded(localConfig, tool)) continue;
-    const target = targets.get(file) ?? targetFor(tool, file, localConfig.scope);
+    const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope);
     target.tools.push(tool);
     if (paths.agents) target.recall = true;
     targets.set(file, target);
@@ -293,6 +301,31 @@ async function planFile(
     return { path: target.path, content: '', kind };
   }
   return { path: target.path, content, kind };
+}
+
+/** Every header a target writes, so a file teamai created can be recognised later. */
+const KNOWN_HEADERS = [CURSOR_ALWAYS_APPLY];
+
+/**
+ * Remove every teamai instruction block from `file`, as uninstall does. A
+ * `teamai-context` file is teamai's own and goes once its blocks are gone;
+ * another file goes only if nothing else was in it and git does not track it.
+ * Returns warnings about blocks it could not delimit.
+ */
+export async function clearInstructionFile(file: string): Promise<{ changed: boolean; warnings: string[] }> {
+  const existing = await readFileSafe(file);
+  if (existing === null) return { changed: false, warnings: [] };
+  const target: InstructionTarget = {
+    path: file,
+    tools: [],
+    recall: false,
+    header: KNOWN_HEADERS.find((header) => existing.startsWith(header)),
+    owned: path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`),
+  };
+  const plan = await planInstructionFiles([], {}, [target]);
+  const { failures } = await applyInstructionPlan(plan, { dryRun: false });
+  if (failures.length > 0) throw new Error(failures.join(' '));
+  return { changed: plan.changes.length > 0, warnings: plan.warnings };
 }
 
 /**

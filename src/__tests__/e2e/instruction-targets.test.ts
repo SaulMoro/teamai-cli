@@ -340,4 +340,30 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(fs.readFileSync(legacy, 'utf8')).toBe('# Team notes\n');
     expect(fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8')).toContain('DEVELOPMENT-SENTINEL');
   });
+
+  it('gives Cursor an always-applied teamai-context.mdc in both scopes', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.cursor/skills']);
+    const projectRule = path.join(member.projectRoot, '.cursor', 'rules', 'teamai-context.mdc');
+
+    for (let i = 0; i < 2; i++) {
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+    }
+    const rule = fs.readFileSync(projectRule, 'utf8');
+    expect(rule.startsWith('---\nalwaysApply: true\n---\n\n')).toBe(true);
+    expect(rule).toContain('DEVELOPMENT-SENTINEL');
+    expect(rule).toContain(RECALL_START);
+    expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
+
+    const user = makeUserSandbox(['.cursor']);
+    sandboxes.push(user.sandbox);
+    const userPull = await runCLI(['pull'], { HOME: user.home }, user.sandbox);
+    expect(userPull.code, userPull.output).toBe(0);
+    const userRule = fs.readFileSync(path.join(user.home, '.cursor', 'rules', 'teamai-context.mdc'), 'utf8');
+    expect(userRule.startsWith('---\nalwaysApply: true\n---\n\n')).toBe(true);
+    expect(userRule).toContain(CLAUDEMD_START);
+    expect(fs.existsSync(path.join(user.home, 'AGENTS.md'))).toBe(false);
+  });
 });
