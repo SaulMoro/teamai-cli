@@ -1202,7 +1202,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
 
   const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
   const opencodeFile = opencodePaths && instructionTargetPath('opencode', opencodePaths, localConfig);
-  if (opencodeFile && !claudeFallback && targets.some((t) => t.path === opencodeFile)) {
+  // Only a file that exists needs listing; pull registers it once it writes one.
+  if (opencodeFile && !claudeFallback && targets.some((t) => t.path === opencodeFile) && await pathExists(opencodeFile)) {
     const { config, entry } = opencodeContextReference(opencodeFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
     const instructions = await readOpencodeInstructions(config);
     checks.push({
