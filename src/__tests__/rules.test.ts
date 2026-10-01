@@ -618,6 +618,8 @@ scope: 'user',
     });
 
     it('reclaims delivered copies from a rule directory shared with user rules (JoyCode)', async () => {
+      // A team entry that keeps a user rules directory for JoyCode; the
+      // default one reads none in user scope since #946.
       teamConfig.toolPaths.joycode = { rules: '.joycode/rules' };
       await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
       const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
@@ -1222,7 +1224,8 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
       toolPaths: {
         claude: { skills: '.claude/skills', rules: '.claude/rules', settings: '.claude/settings.json', claudemd: '.claude/CLAUDE.md' },
         cursor: { skills: '.cursor/skills', rules: '.cursor/rules', settings: '.cursor/hooks.json' },
-        joycode: { skills: '.joycode/skills', rules: '.joycode/rules' },
+        // The default shape: in user scope JoyCode reads no rules directory (#946).
+        joycode: { skills: '.joycode/skills', rules: '.joycode/rules', userScope: { rules: null } },
       },
     };
 
@@ -1240,7 +1243,7 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     await fse.remove(tmpDir);
   });
 
-  it('pull writes .mdc (not .md) with derived frontmatter for Cursor, and .mdc for JoyCode', async () => {
+  it('pull writes .mdc (not .md) with derived frontmatter for Cursor, and JoyCode\'s user rules to rules.txt', async () => {
     await fse.writeFile(
       path.join(repoPath, 'rules', 'ts-style.md'),
       '---\npaths:\n  - "**/*.ts"\n---\n\nUse named exports.',
@@ -1254,8 +1257,11 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     const content = await fse.readFile(mdcPath, 'utf-8');
     expect(content).toContain('globs: "**/*.ts"');
     expect(content).toContain('alwaysApply: false');
-    expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.mdc'))).toBe(true);
+    // JoyCode reads its user rules from one text file, not ~/.joycode/rules (#946).
+    expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.mdc'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.md'))).toBe(false);
+    expect(await fse.readFile(path.join(homeDir, '.joycode/rules.txt'), 'utf-8'))
+      .toContain('Applies to files matching: **/*.ts\nUse named exports.');
     // claude still gets a plain .md copy
     expect(await fse.pathExists(path.join(homeDir, '.claude/rules/ts-style.md'))).toBe(true);
   });
@@ -1302,8 +1308,10 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
       expect(await fse.readFile(path.join(homeDir, '.joycode/rules', file), 'utf-8'))
         .toBe(`Personal content: ${file}`);
     }
-    expect(await fse.readFile(path.join(homeDir, '.joycode/rules/team.mdc'), 'utf-8'))
-      .toContain('Team rule.');
+    // In user scope the team rule reaches JoyCode through rules.txt (#946).
+    const delivered = scope === 'user' ? '.joycode/rules.txt' : '.joycode/rules/team.mdc';
+    expect(await fse.readFile(path.join(homeDir, delivered), 'utf-8')).toContain('Team rule.');
+    if (scope === 'user') expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/team.mdc'))).toBe(false);
   });
 
   it.each(['user', 'project'] as const)('cleans only explicitly removed JoyCode rules in %s scope', async (scope) => {
@@ -1311,19 +1319,28 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     if (scope === 'project') localConfig.projectRoot = homeDir;
     await fse.writeFile(path.join(repoPath, 'rules', 'keep.md'), 'Current team rule.');
     await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'nested/removed\n');
-    for (const ext of ['.mdc', '.md']) {
-      await fse.outputFile(path.join(homeDir, '.joycode/rules/nested', `removed${ext}`), 'Former team rule.');
+    // Older layouts left `.md` copies in the project's `.mdc` directory; the
+    // user-scope ~/.joycode/rules only ever held teamai's `.mdc` copies.
+    const extensions = scope === 'user' ? ['.mdc'] : ['.mdc', '.md'];
+    const previous: DeliveredHashes = {};
+    for (const ext of extensions) {
+      const removed = path.join(homeDir, '.joycode/rules/nested', `removed${ext}`);
+      await fse.outputFile(removed, 'Former team rule.');
+      await recordDelivered(previous, removed);
     }
     const personalPath = path.join(homeDir, '.joycode/rules/nested/personal.mdc');
     await fse.outputFile(personalPath, 'Personal rule.');
 
-    await handler.pullAllRules(teamConfig, localConfig);
+    // In user scope ~/.joycode/rules is a directory JoyCode no longer gets
+    // rules in: a removed rule's copy goes on the record of its delivery (#946).
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], openLedger(previous));
 
-    for (const ext of ['.mdc', '.md']) {
+    for (const ext of extensions) {
       expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/nested', `removed${ext}`))).toBe(false);
     }
     expect(await fse.readFile(personalPath, 'utf-8')).toBe('Personal rule.');
-    expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/keep.mdc'))).toBe(true);
+    const kept = scope === 'user' ? '.joycode/rules.txt' : '.joycode/rules/keep.mdc';
+    expect(await fse.pathExists(path.join(homeDir, kept))).toBe(true);
   });
 
   it('detects a genuine edit to a cursor .mdc body as modified', async () => {

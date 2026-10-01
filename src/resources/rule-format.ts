@@ -5,7 +5,9 @@
  * a rules format of its own gets a render of it (`RULE_FORMATS`): Cursor and
  * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering, Qoder, CodeBuddy
  * (which WorkBuddy shares) and Oh My Pi rules `.md` with their own
- * frontmatter. Every other tool takes a verbatim `.md` copy.
+ * frontmatter. A tool with no rules format reads the team rules from a block
+ * in a file of its own in user scope (`userRulesFile`, instruction-targets.ts),
+ * or takes a verbatim `.md` copy.
  *
  * This module is the single place that decision lives, mirroring
  * `agentFileExtensionForTool` in `./agent-format.ts`. Every site that writes,
@@ -15,16 +17,14 @@
  * below.
  */
 
-import type { Scope, TeamaiConfig } from '../types.js';
+import type { Scope } from '../types.js';
 import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
-import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
+import { CURSOR_MDC_FORMAT, teamRuleToCursorMdc } from './cursor-mdc.js';
 import { JOYCODE_RULE_FORMAT } from './joycode-rule.js';
 import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
 import { OMP_RULE_FORMAT } from './omp-rule.js';
 import { QODER_RULE_FORMAT } from './qoder-rule.js';
-
-type ToolPath = TeamaiConfig['toolPaths'][string];
 
 /** How one tool's rule file is written from, and read back into, the team `.md`. */
 export interface RuleFormat {
@@ -174,40 +174,6 @@ export function getsRulesFromSessionHook(tool: string): boolean {
 export type InstructionBlock = 'culture' | 'claudemd' | 'recall' | 'team-rules';
 
 /**
- * Whether pull writes `block` into this tool's instructions file: culture and
- * shared instructions for every tool that has one, recall for a tool that
- * also has `agents`, the team rules for a tool with no rules format (the
- * Codex family has an instructions file in user scope only). The team-rules
- * writer and doctor ask this; culture, shared instructions and recall follow
- * the targets in instruction-targets.ts (#945). Whether the tool is installed
- * is a separate question (`instructionFileInstallProbe`).
- */
-export function writesInstructionBlock(
-  tool: string, toolPath: ToolPath, block: 'recall',
-): toolPath is ToolPath & { claudemd: string; agents: string };
-export function writesInstructionBlock(
-  tool: string, toolPath: ToolPath, block: InstructionBlock,
-): toolPath is ToolPath & { claudemd: string };
-export function writesInstructionBlock(tool: string, toolPath: ToolPath, block: InstructionBlock): boolean {
-  if (!toolPath.claudemd) return false;
-  if (block === 'recall') return toolPath.agents !== undefined;
-  if (block === 'team-rules') return getsRulesFromSessionHook(tool);
-  return true;
-}
-
-/**
- * The tool path whose root says a tool is installed, for the culture and
- * shared-instruction writers; undefined when there is none to
- * probe. Never `claudemd`: a root-level AGENTS.md exists without the tool. A
- * Codex-family entry may carry neither `rules` nor `settings` (a team entry
- * replaces the default whole), so its `skills` root is the last resort.
- */
-export function instructionFileInstallProbe(tool: string, toolPath: ToolPath): string | undefined {
-  const probe = toolPath.rules ?? toolPath.settings;
-  return getsRulesFromSessionHook(tool) ? probe ?? toolPath.skills : probe;
-}
-
-/**
  * A rules directory where earlier pulls left team rule copies the tool does
  * not load as teamai means it to. Pull reclaims the unedited ones on every
  * rules sync (`RulesHandler.reclaimLegacyRuleCopies`): a copy of a rule still
@@ -289,6 +255,34 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     copiedFrom: { dir: '.codebuddy/rules', marker: '.workbuddy/.migrated-from-codebuddy' },
     why: 'WorkBuddy copied it from ~/.codebuddy/rules into the rules it loads, and teamai no longer delivers it here',
     advice: 'Delete it if you did not edit it; to keep your changes, rename it to a name of your own.',
+  },
+  // Before #946 OpenClaw, Pi and JoyCode got rule copies in directories they
+  // never read; their user rules are now a block in a file only each reads.
+  {
+    tool: 'openclaw',
+    scopes: ['user', 'project'],
+    dir: '.openclaw/rules',
+    ext: '.md',
+    why: 'OpenClaw does not read .openclaw/rules (team rules now reach it through its workspace AGENTS.md, in user scope only)',
+    advice: 'Delete what you did not edit; to keep your changes, move them into the workspace AGENTS.md outside the teamai markers, then delete the copy.',
+  },
+  {
+    tool: 'pi',
+    scopes: ['user'],
+    dir: '.pi/agent/rules',
+    ext: '.md',
+    why: 'Pi does not read ~/.pi/agent/rules (team rules now reach it through ~/.pi/agent/AGENTS.md)',
+    advice: 'Delete what you did not edit; to keep your changes, move them into ~/.pi/agent/AGENTS.md outside the teamai markers, then delete the copy.',
+  },
+  {
+    tool: 'joycode',
+    scopes: ['user'],
+    dir: '.joycode/rules',
+    ext: '.mdc',
+    // An older teamai gave JoyCode Cursor's render.
+    legacyRender: teamRuleToCursorMdc,
+    why: 'JoyCode does not read ~/.joycode/rules (team rules now reach it through ~/.joycode/rules.txt)',
+    advice: 'Delete what you did not edit; to keep your changes, move them into ~/.joycode/rules.txt outside the teamai markers, then delete the copy.',
   },
 ];
 

@@ -13,7 +13,8 @@ describe('Pi adapter configuration', () => {
       claudemd: 'AGENTS.md',
       userScope: {
         skills: '.pi/agent/skills',
-        rules: '.pi/agent/rules',
+        // User rules are a block in ~/.pi/agent/AGENTS.md (#946).
+        rules: null,
         claudemd: '.pi/agent/AGENTS.md',
       },
     });
@@ -21,9 +22,9 @@ describe('Pi adapter configuration', () => {
     expect(scopedToolPaths(config, { scope: 'project' }).pi).toEqual(config.toolPaths.pi);
     expect(scopedToolPaths(config, { scope: 'user' }).pi).toMatchObject({
       skills: '.pi/agent/skills',
-      rules: '.pi/agent/rules',
       claudemd: '.pi/agent/AGENTS.md',
     });
+    expect(scopedToolPaths(config, { scope: 'user' }).pi).not.toHaveProperty('rules');
   });
 
   it('registers Pi for discovery and single-repo selection', () => {

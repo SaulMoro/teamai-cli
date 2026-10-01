@@ -67,9 +67,16 @@ and give it your team repo URL."*
   `.opencode/rules/*.md` an earlier release wrote to the root `opencode.json`,
   and deletes `.opencode/opencode.json` when nothing else is left in it.
   The user's own entries stay.
+- Uninstall removes the team-rules block from the file a tool with no rules
+  format reads in user scope (`~/.codex/AGENTS.md`, `~/.zcode/AGENTS.md`,
+  `$DSH_HOME/AGENTS.md`, the OpenClaw workspace `AGENTS.md`,
+  `~/.pi/agent/AGENTS.md`, `~/.joycode/rules.txt`), and the file when teamai
+  created it for the block alone.
 - Uninstall cleans legacy Codex rule copies at the recorded `toolRoots`
   location, including publishers' bare local filenames, and the copies earlier
-  releases left in a project's `.workbuddy/rules`. It keeps edited copies.
+  releases left in a project's `.workbuddy/rules`, in `.openclaw/rules`,
+  `~/.pi/agent/rules` and `~/.joycode/rules`. It keeps edited copies and
+  names them.
   For a rule the team has
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any

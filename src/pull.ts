@@ -1368,15 +1368,16 @@ async function pullForScope(
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
           await cleanupTombstonedResources(freshConfig, localConfig, scopeLabel, openLedger(await deliveredHashes(localConfig, state)));
-          // Same reason: a CLI that moves Codex's team rules into its own
-          // AGENTS.md (user scope) and its session-start hook (project scope)
-          // writes that block and reclaims the old .codex/rules copies here (#938).
+          // Same reason: a CLI that moves a tool's user team rules into a file
+          // only it reads (Codex's AGENTS.md, #938; ZCode, DeepSeek Harness,
+          // OpenClaw, Pi and JoyCode, #946) writes that block here.
           if (resourceTypes.includes('rules')) {
             try {
               const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
-              await (getHandler('rules') as RulesHandler).syncCodexInstructionRules(freshConfig, localConfig, items);
+              await (getHandler('rules') as RulesHandler).syncUserRulesFiles(freshConfig, localConfig, items);
             } catch (error) {
-              log.warn(`[${scopeLabel}] Codex's team rules were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+              // A file that fails is named by syncUserRulesFiles; this is resolving the rules.
+              log.warn(`[${scopeLabel}] Could not resolve the team rules, so no tool's own user rules file (such as ~/.codex/AGENTS.md or ~/.zcode/AGENTS.md) was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
             }
             // Same reason: a CLI that moves OpenCode's rules globs writes them
             // to their new config file and reclaims the old ones (#946).

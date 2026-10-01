@@ -36,7 +36,7 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
-import { keptLegacyCopiesWarning, ruleStemFromFilename, writesInstructionBlock, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
+import { keptLegacyCopiesWarning, ruleStemFromFilename, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
@@ -56,7 +56,7 @@ import {
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
-import { clearInstructionFile, instructionTargetFile, retiredInstructionFiles, resolveInstructionTargets } from './instruction-targets.js';
+import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -231,12 +231,13 @@ const INSTRUCTION_BLOCK_STARTS: Record<InstructionBlock, string> = {
  * Start markers of the blocks a pull writes into a tool's instruction target
  * (#945): culture, claudemd and recall always (a tool without the
  * `teamai-recall` subagent gets the direct variant, under the same markers),
- * and team rules where `writesInstructionBlock` says so. Nobody writes the
+ * and team rules for a tool that reads them from a file of its own
+ * (`readsTeamRulesFromFile`). Nobody writes the
  * legacy `[teamai:rules]` block any more.
  */
-function instructionBlocksWrittenBy(tool: string, toolPath: TeamaiConfig['toolPaths'][string]): string[] {
+function instructionBlocksWrittenBy(tool: string): string[] {
   return (Object.keys(INSTRUCTION_BLOCK_STARTS) as InstructionBlock[])
-    .filter((block) => block !== 'team-rules' || writesInstructionBlock(tool, toolPath, block))
+    .filter((block) => block !== 'team-rules' || readsTeamRulesFromFile(tool))
     .map((block) => INSTRUCTION_BLOCK_STARTS[block]);
 }
 
@@ -507,7 +508,7 @@ async function discoverToolResources(
   }
 
   // (b) CLAUDE.md teamai section blocks
-  const instructionFile = instructionTargetFile(tool, toolPath, scope);
+  const instructionFile = await instructionTargetFile(tool, toolPath, scope);
   if (instructionFile) {
     const claudeMdPath = path.resolve(baseDir, instructionFile);
     const content = await readFileSafe(claudeMdPath);
@@ -517,7 +518,7 @@ async function discoverToolResources(
   }
   // OpenCode's instructions entry goes only when teamai recorded adding it
   // (buildRemovalPlan): an entry the member listed is theirs, whatever the file holds.
-  for (const retired of retiredInstructionFiles(tool, toolPath, scope)) {
+  for (const retired of await retiredInstructionFiles(tool, toolPath, scope)) {
     const file = path.resolve(baseDir, retired);
     const content = await readFileSafe(file);
     if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
@@ -717,7 +718,7 @@ async function buildRemovalPlan(
   if (opencodeRes) {
     const { loadStateForScope } = await import('./config.js');
     const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const contextFile = toolPaths.opencode && instructionTargetFile('opencode', toolPaths.opencode, localConfig.scope);
+    const contextFile = toolPaths.opencode && await instructionTargetFile('opencode', toolPaths.opencode, localConfig.scope);
     // Worktrees share state.json: only this checkout's own record counts.
     const own = contextFile
       ? opencodeContextReference(path.resolve(resolveToolBaseDir('opencode', localConfig), contextFile), localConfig.scope, resolveToolBaseDir('opencode', localConfig))
@@ -753,6 +754,16 @@ async function buildRemovalPlan(
   const teamRules = await rulesHandler.scanTeamForPull(teamConfig, localConfig);
   for (const { tool, file } of await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig))) {
     perTool.get(tool)?.ruleFiles.push(file);
+  }
+
+  // (b) continued: the team-rules block in the user file a tool with no
+  // rules format reads them from (#938, #946), when that is not its
+  // instruction file already.
+  for (const [tool, toolPath] of Object.entries(toolPaths)) {
+    const res = perTool.get(tool);
+    const file = (await userRulesFile(tool, toolPath, localConfig))?.file;
+    if (!res || file === undefined || res.claudeMdFiles.includes(file)) continue;
+    if ((await readFileSafe(file))?.includes(TEAMAI_TEAM_RULES_START)) res.claudeMdFiles.push(file);
   }
 
   // (d) continued: OpenCode loads its rules through globs in opencode.json,
@@ -852,7 +863,7 @@ async function buildRemovalPlan(
   const retainedBlocks = new Map<string, Set<string>>();
   for (const [tool, resources] of perTool) {
     if (toolsToMerge.includes(tool) || !activeTools.has(tool)) continue;
-    const written = instructionBlocksWrittenBy(tool, toolPaths[tool]);
+    const written = instructionBlocksWrittenBy(tool);
     for (const file of resources.claudeMdFiles) {
       const kept = retainedBlocks.get(file) ?? new Set<string>();
       for (const start of written) kept.add(start);
@@ -887,7 +898,7 @@ async function buildRemovalPlan(
       const blocks = CLAUDEMD_MARKER_PAIRS
         .filter(([start]) => content.includes(start) && !kept?.has(start));
       // The configured `claudemd` (no `rules`) is the member's, whatever its name.
-      const owned = instructionTargetFile(tool, toolPaths[tool], localConfig.scope) !== toolPaths[tool].claudemd;
+      const owned = await instructionTargetFile(tool, toolPaths[tool], localConfig.scope) !== toolPaths[tool].claudemd;
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned });
     }
     // A retired file keeps only the blocks a remaining tool still writes

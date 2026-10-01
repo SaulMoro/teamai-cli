@@ -923,7 +923,7 @@ teamai push
 
 > 管理员可在 `teamai.yaml` 中设置强制规则（`sharing.rules.enforced`），成员不可删除。
 
-大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 不为它们写任何 rule 文件。user scope 下，团队 rule 写入该工具自己的 `AGENTS.md`（`~/.codex/AGENTS.md`、`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`；`toolRoots` 条目可改变其位置）中的 `<!-- [teamai:team-rules:start] -->` 区块，只有该工具读取这个文件。在项目中，改由它们的 session-start hook 把项目的团队 rule 加入每个会话：项目 `AGENTS.md` 属于项目维护者，其他拥有自己 rules 格式的工具也会读取它。Hermes 的 `SOUL.md` 区块得到同样的内容，且只由 user scope 的 pull 写入：`SOUL.md` 是全局文件，项目 pull 会让它保持 user scope pull 写入时的样子。Hermes 不会得到项目 rule，在项目中 `init` 和 `doctor` 会说明原因：`.hermes.md` 会遮蔽项目 `AGENTS.md`，`pre_llm_call` hook 会在每一轮重复添加 rule，而唯一的插件提示段落（最多 4,000 个字符）已用于团队指令。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。Codex 在压缩上下文或 clear 之后会再次运行该 hook；恢复会话时不添加任何内容，因为会话中已包含这些 rule。Codex 启动的子 agent 通过 `SubagentStart` hook 获得它们。公开版 Codex 只运行已信任的 hook。teamai 会自动信任它写入的 hooks；如果自动信任被禁用或失败，请在 `/hooks` 中批准它们以获得项目的 rule。
+大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 不为它们写任何 rule 文件。user scope 下，团队 rule 写入该工具自己的 `AGENTS.md`（`~/.codex/AGENTS.md`、`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`；`toolRoots` 条目可改变其位置）中的 `<!-- [teamai:team-rules:start] -->` 区块，只有该工具读取这个文件。在项目中，改由它们的 session-start hook 把项目的团队 rule 加入每个会话：项目 `AGENTS.md` 属于项目维护者，其他拥有自己 rules 格式的工具也会读取它。ZCode、DeepSeek Harness、OpenClaw、Pi 和 JoyCode 同样没有 rules 格式，在 user scope 下把同样的区块写入只有该工具读取的文件：`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`（未设置 `DSH_HOME` 时为 `~/.dsh/AGENTS.md`）、OpenClaw 工作区的 `AGENTS.md`（按其 hook 的方式查找）、与指令区块并列的 `~/.pi/agent/AGENTS.md`，以及 `~/.joycode/rules.txt`。pull 只为已安装的工具写入，项目 pull 不写这些文件。OpenClaw 不会得到项目 rule，因为它唯一的项目文件是其他工具也会读取的 `AGENTS.md`；在项目中 `init` 和 `doctor` 会说明这一点。旧版本把 rule 复制到这些工具从不读取的 `.openclaw/rules`、`~/.pi/agent/rules` 和 `~/.joycode/rules`：下一次 pull（即使团队版本未变）会删除仍是 teamai 所下发内容的副本，并点名你改过的副本。Hermes 的 `SOUL.md` 区块得到同样的内容，且只由 user scope 的 pull 写入：`SOUL.md` 是全局文件，项目 pull 会让它保持 user scope pull 写入时的样子。Hermes 不会得到项目 rule，在项目中 `init` 和 `doctor` 会说明原因：`.hermes.md` 会遮蔽项目 `AGENTS.md`，`pre_llm_call` hook 会在每一轮重复添加 rule，而唯一的插件提示段落（最多 4,000 个字符）已用于团队指令。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。Codex 在压缩上下文或 clear 之后会再次运行该 hook；恢复会话时不添加任何内容，因为会话中已包含这些 rule。Codex 启动的子 agent 通过 `SubagentStart` hook 获得它们。公开版 Codex 只运行已信任的 hook。teamai 会自动信任它写入的 hooks；如果自动信任被禁用或失败，请在 `/hooks` 中批准它们以获得项目的 rule。
 
 culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。
 
@@ -1582,6 +1582,7 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | OpenCode | `~/.config/opencode/teamai-context.md`，以绝对路径列在 `~/.config/opencode/opencode.json` 的 `instructions` 中 | `.opencode/teamai-context.md`，列在 `.opencode/opencode.json` 的 `instructions` 中 |
 | Oh My Pi | `~/.omp/agent/RULES.md` | 由 teamai 的 OMP 扩展加入每轮的系统提示 |
 | Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
+| OpenClaw | 工作区的 `AGENTS.md`，按其 hook 的方式查找（`agents.defaults.workspace`、`OPENCLAW_WORKSPACE_DIR` 或 `<state dir>/workspace`），与团队 rule 并列（未验证） | 无：它唯一的项目文件是共享的 `AGENTS.md` |
 | Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
 
 团队 `toolPaths` 中没有 `rules` 的条目，Claude Code、Cursor、CodeBuddy 和 WorkBuddy 继续使用其配置的 `claudemd`，因为它们没有可放置 `teamai-context` 文件的 rules 目录。只有 `claudemd` 的条目在该文件所在目录存在时视为已安装；对 `AGENTS.md` 这类不在目录中的文件则始终视为已安装。
@@ -1614,6 +1615,7 @@ pull 会列出所修改的每个文件：
 - Hermes：`~/AGENTS.md`
 - Oh My Pi：`~/.omp/agent/AGENTS.md` 和 `.omp/AGENTS.md`。Oh My Pi 每一层只读取一个上下文文件，因此它们会遮蔽 `~/.agents/AGENTS.md` 和项目的 `AGENTS.md`。
 - Pi：项目 `AGENTS.md`
+- OpenClaw，项目 scope：OpenClaw 从不读取的 `.openclaw/workspace/AGENTS.md`
 - Codex 系列：项目 `AGENTS.md`（当团队的 `toolPaths` 或早期构建把 Codex 指向那里时）
 - 目标文件已改变的任一工具：团队 `toolPaths` 为它设置的 `claudemd` 路径，除非现在另一个工具的块写在那里
 
@@ -2127,7 +2129,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) 通过其公开的 Skills、指令文件和扩展机制接入：
 
-- **作用域。** 项目级 Skills 和 TeamAI 管理的 Rules 写入 `.pi/skills/`、`.pi/rules/`；用户级副本写入 `~/.pi/agent/skills/`、`~/.pi/agent/rules/`。
+- **作用域。** 项目级 Skills 和 TeamAI 管理的 Rules 写入 `.pi/skills/`、`.pi/rules/`；用户级 Skills 写入 `~/.pi/agent/skills/`。Pi 不读取用户级 rules 目录，因此 user scope 的团队 rule 是 `~/.pi/agent/AGENTS.md` 中的一个区块，不按路径限定作用范围；pull 会删除旧版本留在 `~/.pi/agent/rules/` 中未修改的副本，并点名你改过的副本。
 - **指令文件。** Pi 读取项目自己的 `AGENTS.md`（或 `CLAUDE.md`），TeamAI 不修改它。用户范围的团队指令写入 `~/.pi/agent/AGENTS.md`。在项目中，TeamAI 的 Pi 扩展在会话开始时向 `teamai` 获取成员的团队指令，并加入每次运行的系统提示。
 - **Hooks。** TeamAI 只在用户级 `~/.pi/agent/extensions/` 生成一份 `teamai-hooks.ts`，把 `session_start` 映射为 session-start、`before_agent_start` 映射为 prompt-submit、`agent_settled` 映射为 stop；`tool_execution_start` 缓存工具输入，`tool_execution_end` 派发 post-tool-use 时把缓存的输入转发为 `tool_input`，并附上结果文本 `tool_response` 和根据错误标志得出的 `tool_status`。每个事件都携带 Pi 会话 id（`ctx.sessionManager.getSessionId()`），与 Pi 的 bash 工具导出的 `PI_SESSION_ID` 相同，因此在其中运行的 `teamai recall` 会归入其 hooks 携带的同一会话，upvote **采纳（adoption）**在 Pi 上同样生效。Pi 会同时加载用户级与项目级扩展目录，因此 TeamAI 不创建项目副本——第二份副本会导致每个事件被派发两次，这与 OMP 适配器的单副本策略一致。早期版本遗留且带 TeamAI 标记的项目副本会在下次同步时移除，注入逻辑也不会覆盖没有 TeamAI 标记的同名文件。Pi 没有可供 self mode 提交的设置文件，所以 fresh clone 仍需在该机器上手动跑一次 `teamai init`/`pull` 才能激活 Pi hooks。显式执行 `teamai hooks remove` 或用户级 `teamai uninstall --agent pi` 会删除这份共享扩展。项目级卸载为其他项目保留它，并移除旧的项目副本；没有 TeamAI 标记的同名文件不会被删除。`teamai hooks list` 始终显示这个全局路径。Pi 的 profile 覆盖项（`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）在 hooks 中暂不支持，与 OMP 适配器一致，使用默认的 `~/.pi/agent/` 布局。模型配置是另一回事，会读取 `PI_CODING_AGENT_DIR`。项目级卸载后共享扩展仍已安装；指令派发会先检查此项目对该工具的排除设置。
 - **团队 Hooks 边界。** Pi 适配器只安装内置生命周期桥接。`hooks/hooks.yaml` 声明的自定义团队 Hooks 和内置 Hook 覆盖会被跳过并给出警告。完整团队 Hooks 与逐项目归属语义需要单独的跨适配器设计，留待后续 PR。
@@ -2163,7 +2165,7 @@ ZCode 已作为内置目标支持。Skills 下发到 `.zcode/skills/`（ZCode �
 - Windows 上，钩子条目通过隐藏的 **wscript VBS 启动器**执行（`wscript.exe <teamai-hook-dispatch.vbs> <分发命令尾段>`）：wscript 属 GUI 子系统，钩子运行绝不弹控制台黑框；启动器把 STDIN 暂存为临时文件再转发，保证 payload 完整到达 `hook-dispatch`。超时按事件放宽（会话启动 180 秒、stop / prompt 提交 60 秒、工具调用后 30 秒），避免会话启动时携带仓库拉取的分发被中途掐断。含多字节文本（如中文）的 payload 在启动器的 ANSI 代码页暂存环节可能降级——身份字段会被抢救，降级分发仍能正确关联到会话；卸载时会同时清除条目与脚本文件。
 - POSIX 上条目就是普通的 `bash -lc <分发命令尾段>` argv 向量，不写入启动器；两个平台上，命令尾段都以 argv 末位元素原样存储——这正是托管条目识别与托管清单比对的依据。
 
-以上路径已对照 ZCode 桌面端实测验证：设置页「新建子智能体」写入的就是 `~/.zcode/agents/*.md`，反向放入的文件也会出现在页面的已安装列表中。MCP Server 下发到 `~/.agents/mcp.json`（用户级，Claude 的 `mcpServers` 结构——正是 ZCode 自己的 MCP 设置页读取的文件）。项目级暂未接入：ZCode 的工作区 MCP 使用不同的键（`.zcode/config.json` 内的 `mcp.servers`），Claude 写入器无法生成该结构。ZCode 暂无用户级 Rules 目录约定，因此 Rules 不同步。
+以上路径已对照 ZCode 桌面端实测验证：设置页「新建子智能体」写入的就是 `~/.zcode/agents/*.md`，反向放入的文件也会出现在页面的已安装列表中。MCP Server 下发到 `~/.agents/mcp.json`（用户级，Claude 的 `mcpServers` 结构——正是 ZCode 自己的 MCP 设置页读取的文件）。项目级暂未接入：ZCode 的工作区 MCP 使用不同的键（`.zcode/config.json` 内的 `mcp.servers`），Claude 写入器无法生成该结构。ZCode 不读取 rules 目录：user scope 下团队 rule 是 `~/.zcode/AGENTS.md` 中的一个区块，ZCode 把它作为用户上下文读取，不按路径限定作用范围。项目不会得到团队 rule。
 
 ### Oh My Pi
 
@@ -2175,6 +2177,8 @@ Rules 以 OMP 自己的 frontmatter 写入 `.omp/rules/` 与 `~/.omp/agent/rules
 
 DeepSeek Harness（`dsh`）支持 TeamAI Skills 和共享资源。DSH 官方的 Claude Hook Bridge 是通过 profile 插件加载的，并不是设置文件中的 Hooks；因此检测到用户级 `~/.dsh/` 安装后，`teamai init`、`teamai pull` 或 `teamai hooks inject` 会在 `~/.teamai/dsh/` 下生成兼容 Claude 的 Hook 配置和 Cordis patch。
 
+dsh 不读取 rules 目录。user scope 下团队 rule 是 `$DSH_HOME/AGENTS.md`（未设置 `DSH_HOME` 时为 `~/.dsh/AGENTS.md`）中的一个区块，dsh 会把它放进第一次请求，不按路径限定作用范围。与 Skills 和 Hook 一样，只有 `~/.dsh/` 存在时 teamai 才写入它。项目不会得到团队 rule。
+
 TeamAI 会打印带绝对路径的 patch。将这个 `--patch` 参数加到启动 DSH profile 的命令中，例如 `dsh tui --patch "<打印出的路径>"`。这是一次性的启动器选择；`teamai hooks remove` 和 `teamai uninstall` 会移除 TeamAI patch，同时保留生成配置中的其他 Hook 条目。
 
 ### JoyCode
@@ -2182,6 +2186,8 @@ TeamAI 会打印带绝对路径的 patch。将这个 `--patch` 参数加到启�
 JoyCode 已作为内置目标支持。Skills、Rules 和 Subagents 分别下发到 `.joycode/skills/`、`.joycode/rules/` 和 `.joycode/agents/`。Subagents 使用带 YAML frontmatter 的 Markdown 文件。
 
 Rules 是采用 JoyCode 自有渲染的 `.mdc` 文件。JoyCode 逐行读取 frontmatter，而不是按 YAML 解析：它会保留 Cursor 渲染给 `globs` 加的引号，并按每个逗号拆分取值，因此 Cursor 形式的带 `paths:` 的 rule 从未生效。带 `paths:` 的 rule 写成不加引号、逗号分隔的 `globs:`，每个 `{a,b}` 选择项都展开为单独的 glob，并加上 `alwaysApply: false`；不带 `paths` 的 rule 写成 `alwaysApply: true`。`push` 时只有 Markdown 正文回流，与 Cursor 相同。旧版 teamai 以 Cursor 形式写入的副本，若仍是 teamai 所下发的内容，会在下一次 `pull` 时重写；你改过的副本会保留并被点名；只要其 `globs` 仍带引号，`pull` 会指出它不作用于任何文件，并说明如何修正。`doctor` 将项目 `.joycode/rules/` 中的每份副本与该渲染比对。
+
+user scope 下 JoyCode 不读取 rules 目录：团队 rule 是 `~/.joycode/rules.txt` 中的一个区块，不按路径限定作用范围。pull 会删除旧版本留在 `~/.joycode/rules/` 中未修改的 `.mdc` 副本，并点名你改过的副本。
 
 JoyCode 规则清理采用保守策略：不在团队规则列表中的本地 `.mdc` 和 `.md` 文件会被保留，只有团队明确记录了删除标记（tombstone）才会清理。这能保护同一目录中的个人规则；缺少删除记录的旧团队副本也会保留，不会猜测其已过期。
 
@@ -2231,7 +2237,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 `Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`（JoyCode 的不加引号）、`.instructions.md` 带 `applyTo`、Kiro 的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
 
-有三个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json`（项目中为 `.opencode/opencode.json`）的 `instructions` 中是否列着 teamai 所拥有的每条 glob，且没有过时的条目（如旧版本写入的相对 `rules/*.md`）：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。user scope 下，`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in Codex AGENTS.md` 把该工具 `AGENTS.md` 中的 team-rules 区块与团队 rule 内联后的内容比对，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。Codex 没有 `Rules delivered to <tool>` 检查。
+有几个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json`（项目中为 `.opencode/opencode.json`）的 `instructions` 中是否列着 teamai 所拥有的每条 glob，且没有过时的条目（如旧版本写入的相对 `rules/*.md`）：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。user scope 下，`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in <file>`（`Codex AGENTS.md`、`ZCode AGENTS.md`、`DeepSeek Harness AGENTS.md`、`OpenClaw workspace AGENTS.md`、`Pi AGENTS.md`、`JoyCode rules.txt`）把该工具所读文件中的 team-rules 区块与团队 rule 内联后的内容比对；对 Codex，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。Codex 没有 `Rules delivered to <tool>` 检查。
 
 `MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；过期的旧副本同样等于没送达。两者都报告为 `not the team's definition`，而覆盖非 teamai 写入的条目只有 `teamai pull --force` 能做到。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。没有值的已声明密钥不算失败：doctor 把它作为备注打印（`--json` 中的 `notes`），并附上设置它的命令，退出码与没有它时相同；备注还会说明为它保留的条目可能含有旧值，以及某个 key 既声明为密钥、又在 `env.yaml` 中设置的情况。无法解析的 `mcp.yaml` 并不等于团队没有 MCP：它会作为 `Team MCP servers can be read` 连同解析错误一起报告，因为这种文件不会向任何工具注入内容，而且除第一次之外的每次运行都对此保持沉默。无法解析的团队 hooks 与团队模型配置（文件无法解析、同一文件内重复的名字，或两个活动 namespace 中的同名条目）会让 `Team hooks can be resolved` 与 `Team model profiles can be resolved` 失败，并给出 pull 只记录一次的原因；`teamai status` 把它们计为 0 时会指向这里。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 能否解析、以及是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明；而显式写成 `variables: []` 属于没有内容要下发的配置，不会判为失败）、每个变量是否以 `env.yaml` 声明的值（或你为该团队设置的值；用 `--from-env` 设置的不会写入）写进了 `env.sh`（残留的旧值会一直被导出到每个 shell 和 MCP server，直到下次 pull；比对时会用生成器自身的逆运算读回 `env.sh`，因此跨多行引用的多行值能够正确匹配，而不会被误判为过期），以及本作用域注入的代码块（即 source 本作用域 `env.sh` 的那一块，因为同一个 profile 里还可能有其他作用域的代码块）是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。`No stale env blocks left behind` 是独立的一项检查：pull 优先选用哪个文件会随时间变化（Windows 上 Git Bash 的登录 shell 读取的是 `.bash_profile`/`.bash_login`/`.profile`，从不读取 `.bashrc`），而 pull 只会新增代码块，从不迁移旧的，因此早期安装或平台变化留下的失效代码块可能一直留在另一个候选文件里。它会列出每一个这样的文件（检查 `.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login` 和 `.profile`，新旧写法都算），并指向 `teamai uninstall` 来清除它们——这与投递检查分开进行，因此不会因为还留着一个旧副本，就让一个正常工作的 env 代码块被判成故障。
 

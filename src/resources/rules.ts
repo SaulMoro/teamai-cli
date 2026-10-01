@@ -33,8 +33,6 @@ import {
   keptLegacyCopiesWarning,
   type LegacyRuleDir,
   type RuleFormat,
-  writesInstructionBlock,
-  instructionFileInstallProbe,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 
@@ -680,7 +678,7 @@ export class RulesHandler extends ResourceHandler {
       }
     }
 
-    await this.syncCodexInstructionRules(teamConfig, localConfig, rules);
+    await this.syncUserRulesFiles(teamConfig, localConfig, rules);
     // Before the empty-set return: a copy outlives the rule that selected it.
     await this.reclaimLegacyRuleCopies(teamConfig, localConfig, rules, ledger);
 
@@ -853,36 +851,43 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
-   * The Codex family's part of a rules sync: the team rules go into its
-   * user-scope AGENTS.md, which only it reads; in a project its session-start
-   * hook adds them (#938). Public so the "Already synced" pull can run it
-   * after a CLI upgrade.
+   * The user-scope part of a rules sync for each tool with no rules format:
+   * the team rules go into a file only that tool reads (`userRulesFile`: the
+   * Codex family's AGENTS.md, ZCode, DeepSeek Harness, the OpenClaw
+   * workspace, Pi, JoyCode's rules.txt). A project pull writes none of them;
+   * there the Codex family's session-start hook adds the rules (#938, #946).
+   * Public so the "Already synced" pull can run it after a CLI upgrade.
    */
-  async syncCodexInstructionRules(
+  async syncUserRulesFiles(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: ResourceItem[],
   ): Promise<void> {
+    if (localConfig.scope !== 'user') return;
     const block = await teamRulesBlock(rules);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!writesInstructionBlock(tool, toolPath, 'team-rules')) continue;
-      // Its session hook carries the rules in this scope, and a project file
-      // such as AGENTS.md belongs to the project (#945).
-      const { deliversInstructionsByHook } = await import('../instruction-targets.js');
-      if (deliversInstructionsByHook(tool, localConfig.scope)) continue;
-      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
-      const probe = instructionFileInstallProbe(tool, toolPath);
-      const active = !isAgentExcluded(localConfig, tool)
-        && (probe === undefined || await isToolInstalledForConfig(tool, probe, localConfig));
+      // One tool's failure leaves the others' files to be written.
+      let file: string | undefined;
+      let writing = false;
       try {
-        if (active && block !== null) {
-          await injectClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, block);
+        const { userRulesFile } = await import('../instruction-targets.js');
+        const target = await userRulesFile(tool, toolPath, localConfig);
+        file = target?.file;
+        if (target === undefined || file === undefined) continue;
+        const wanted = target.installed && !isAgentExcluded(localConfig, tool) ? block : null;
+        writing = wanted !== null;
+        if (wanted !== null) {
+          await injectClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, wanted);
         } else {
           // A file teamai created for the block alone goes with it.
           await removeClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, { deleteIfEmpty: true });
         }
       } catch (e) {
-        log.warn(`Failed to update team rules in ${file}: ${(e as Error).message}`);
+        const action = writing ? 'write the team-rules block to' : 'remove the team-rules block from';
+        log.warn(file === undefined
+          ? `Could not find the file ${tool} reads the team rules from: ${(e as Error).message}. Run \`teamai pull\` to retry.`
+          : `Could not ${action} ${file}: ${(e as Error).message}. ${tool} reads that file as it is until this succeeds; `
+            + 'run `teamai pull` again once the cause above is fixed.');
       }
     }
   }
@@ -1339,8 +1344,9 @@ async function isDeliveredRender(
 
 /**
  * The team rules as one text, for a tool with no rules directory: Hermes,
- * whose SOUL.md block pull writes and `doctor` compares, and the Codex
- * family, whose session-start hook adds it (`teamRulesContext`).
+ * whose SOUL.md block pull writes and `doctor` compares, the tools with a
+ * user-scope file of their own (`teamRulesBlock`), and the Codex family,
+ * whose session-start hook adds it (`teamRulesContext`).
  *
  * Frontmatter is dropped. Neither can scope a rule to paths, so a path-scoped
  * rule is always on, led by a line naming its globs.
@@ -1360,8 +1366,9 @@ export async function inlinedRulesText(rules: ResourceItem[]): Promise<string> {
 }
 
 /**
- * The team-rules block for a tool's user-scope instructions file (the Codex
- * family, #938), markers included. Null when no rule has a body. The body is
+ * The team-rules block for the user-scope file a tool with no rules format
+ * reads (`userRulesFile`: the Codex family, #938; ZCode, DeepSeek Harness,
+ * OpenClaw, Pi, JoyCode, #946), markers included. Null when no rule has a body. The body is
  * the same render Hermes gets in SOUL.md.
  */
 export async function teamRulesBlock(rules: ResourceItem[]): Promise<string | null> {
@@ -1403,7 +1410,8 @@ export async function teamRulesContext(teamConfig: TeamaiConfig, localConfig: Lo
 /**
  * Why an installed tool gets no rules in this scope, for init and doctor to
  * print as notes rather than failures (#946). Hermes reads its rules from the
- * global SOUL.md, which only a user-scope pull writes.
+ * global SOUL.md and OpenClaw from its workspace AGENTS.md, which only a
+ * user-scope pull writes.
  */
 export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string[]> {
   const notes: string[] = [];
@@ -1416,6 +1424,16 @@ export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string
         + 'it gives: .hermes.md would hide the project AGENTS.md, a pre_llm_call hook repeats the rules '
         + 'on every turn, and the plugin prompt section (at most 4,000 characters) already carries '
         + 'the team instructions.',
+      );
+    }
+  }
+  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'openclaw')) {
+    const { resolveOpenclawWorkspaceDir } = await import('../openclaw-hooks.js');
+    if (await resolveOpenclawWorkspaceDir() !== null) {
+      notes.push(
+        'OpenClaw gets no project rules: its only project file is the AGENTS.md other tools read too, '
+        + 'and it reads no rules directory. It reads the team rules from its workspace AGENTS.md, which a '
+        + 'user-scope pull writes (`teamai init --scope user`).',
       );
     }
   }

@@ -245,6 +245,8 @@ describe('pull: an active namespace item replaces the root item of the same name
       if (!base) throw new Error('no team config');
       vi.mocked(loadTeamConfig).mockResolvedValue({
         ...base,
+        // A team entry that keeps a user rules directory for JoyCode, shared
+        // with the member's own rules; the default reads none since #946.
         toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
       });
       await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
@@ -276,6 +278,8 @@ describe('pull: an active namespace item replaces the root item of the same name
       if (!base) throw new Error('no team config');
       vi.mocked(loadTeamConfig).mockResolvedValue({
         ...base,
+        // A team entry that keeps a user rules directory for JoyCode, shared
+        // with the member's own rules; the default reads none since #946.
         toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
       });
       await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
@@ -306,6 +310,8 @@ describe('pull: an active namespace item replaces the root item of the same name
       if (!base) throw new Error('no team config');
       vi.mocked(loadTeamConfig).mockResolvedValue({
         ...base,
+        // A team entry that keeps a user rules directory for JoyCode, shared
+        // with the member's own rules; the default reads none since #946.
         toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
       });
       await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));

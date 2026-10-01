@@ -757,13 +757,16 @@ describe('every tool and toolPaths shape keeps its instructions (#945)', () => {
       for (const value of Object.values(paths)) {
         if (typeof value === 'string') fs.mkdirSync(path.join(base, toolInstallRoot(value)), { recursive: true });
       }
+      // OpenClaw is installed where its workspace resolves (#946).
+      if (tool === 'openclaw') fs.mkdirSync(path.join(process.env.HOME, '.openclaw', 'workspace'), { recursive: true });
       const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git', toolPaths: { [tool]: paths } });
 
       const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
 
       const targetPaths = new Set(targets.map((t) => t.path));
       expect(stale.filter((t) => targetPaths.has(t.path))).toEqual([]);
-      if (paths.claudemd !== undefined) {
+      // OpenClaw reads no project file of its own, only the shared AGENTS.md (#946).
+      if (paths.claudemd !== undefined && !(scope === 'project' && tool === 'openclaw')) {
         expect([...targets.flatMap((t) => t.tools), ...hooks.map((h) => h.tool)]).toContain(tool);
       }
     } finally {
