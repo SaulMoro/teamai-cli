@@ -115,8 +115,8 @@ interface RemovalPlan {
   ruleFiles: string[];
   /** Copies in a tool's legacy rules directory the member edited: never removed, only named. */
   keptRuleFiles: string[];
-  /** The rules globs teamai owns in OpenCode's opencode.json `instructions` (#946). */
-  opencodeOwnedGlobs: OpencodeRuleGlobEntries | null;
+  /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
+  opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
   agentFiles: string[];
   /** teamai-managed MCP servers from managed-mcp.json (`tool/server` or `tool:project/server`). */
@@ -180,7 +180,7 @@ interface ToolResources {
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
   keptRuleFiles: string[];
-  opencodeOwnedGlobs: OpencodeRuleGlobEntries | null;
+  opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   agentFiles: string[];
 }
 
@@ -188,6 +188,8 @@ interface ToolResources {
 interface OpencodeRuleGlobEntries {
   configFile: string;
   entries: string[];
+  /** A file teamai creates (a project's `.opencode/opencode.json`): deleted once nothing else is left in it. */
+  deleteIfEmpty: boolean;
 }
 
 function hasToolResources(r: ToolResources): boolean {
@@ -203,7 +205,7 @@ function hasToolResources(r: ToolResources): boolean {
     r.opencodeInstructions.length > 0 ||
     r.skillDirs.length > 0 ||
     r.ruleFiles.length > 0 ||
-    r.opencodeOwnedGlobs !== null ||
+    r.opencodeOwnedGlobs.length > 0 ||
     r.agentFiles.length > 0
   );
 }
@@ -369,7 +371,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: null, agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -749,9 +751,17 @@ async function buildRemovalPlan(
     : null;
   if (opencodeRes && opencodeTarget) {
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const entries = ((await readOpencodeInstructionList(opencodeTarget.configFile)) ?? [])
-      .filter((entry): entry is string => typeof entry === 'string' && opencodeTarget.owns(entry));
-    if (entries.length > 0) opencodeRes.opencodeOwnedGlobs = { configFile: opencodeTarget.configFile, entries };
+    // In a project, also the root opencode.json glob an earlier release wrote.
+    const { retired } = opencodeTarget;
+    const files = [
+      { configFile: opencodeTarget.configFile, owns: opencodeTarget.owns, deleteIfEmpty: localConfig.scope === 'project' },
+      ...(retired ? [{ ...retired, deleteIfEmpty: false }] : []),
+    ];
+    for (const { configFile, owns, deleteIfEmpty } of files) {
+      const entries = ((await readOpencodeInstructionList(configFile)) ?? [])
+        .filter((entry): entry is string => typeof entry === 'string' && owns(entry));
+      if (entries.length > 0) opencodeRes.opencodeOwnedGlobs.push({ configFile, entries, deleteIfEmpty });
+    }
   }
 
   // A tool only still "uses" a shared resource (AGENTS.md, .teamai/) if it is
@@ -806,7 +816,7 @@ async function buildRemovalPlan(
     skillDirs: [],
     ruleFiles: [],
     keptRuleFiles: [],
-    opencodeOwnedGlobs: null,
+    opencodeOwnedGlobs: [],
     agentFiles: [],
     mcpServers: [],
     shellProfiles: [],
@@ -874,7 +884,7 @@ async function buildRemovalPlan(
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
     plan.keptRuleFiles.push(...res.keptRuleFiles);
-    if (res.opencodeOwnedGlobs) plan.opencodeOwnedGlobs = res.opencodeOwnedGlobs;
+    plan.opencodeOwnedGlobs.push(...res.opencodeOwnedGlobs);
     plan.agentFiles.push(...res.agentFiles);
   }
 
@@ -980,7 +990,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.opencodeInstructions.length === 0 &&
     plan.skillDirs.length === 0 &&
     plan.ruleFiles.length === 0 &&
-    plan.opencodeOwnedGlobs === null &&
+    plan.opencodeOwnedGlobs.length === 0 &&
     plan.agentFiles.length === 0 &&
     plan.mcpServers.length === 0 &&
     plan.shellProfiles.length === 0 &&
@@ -1077,8 +1087,8 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('');
   }
 
-  if (plan.opencodeOwnedGlobs) {
-    console.log(`   OpenCode rules globs (${plan.opencodeOwnedGlobs.entries.length}) in ${plan.opencodeOwnedGlobs.configFile}`);
+  for (const { configFile, entries } of plan.opencodeOwnedGlobs) {
+    console.log(`   OpenCode rules globs (${entries.length}) in ${configFile}`);
     console.log('');
   }
 
@@ -1353,11 +1363,10 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   if (plan.ruleFiles.length > 0) {
     log.success(`Removed ${plan.ruleFiles.length} rule files`);
   }
-  if (plan.opencodeOwnedGlobs) {
-    const { configFile, entries } = plan.opencodeOwnedGlobs;
+  for (const { configFile, entries, deleteIfEmpty } of plan.opencodeOwnedGlobs) {
     try {
       const { reconcileOpencodeInstructionSet } = await import('./resources/opencode-config.js');
-      if (await reconcileOpencodeInstructionSet(configFile, [], (entry) => entries.includes(entry))) {
+      if (await reconcileOpencodeInstructionSet(configFile, [], (entry) => entries.includes(entry), undefined, { deleteIfEmpty })) {
         log.success(`Removed ${entries.length} OpenCode rules globs from ${configFile}`);
       }
     } catch (e) {

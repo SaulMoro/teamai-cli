@@ -1136,6 +1136,59 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
     await handler.pullAllRules(teamConfig, localConfig);
     expect(await fse.pathExists(ocConfig())).toBe(false);
   });
+
+  describe('project scope (#946)', () => {
+    let projectRoot: string;
+    let projectConfig: LocalConfig;
+    const rootConfig = () => path.join(projectRoot, 'opencode.json');
+    const dotConfig = () => path.join(projectRoot, '.opencode', 'opencode.json');
+
+    beforeEach(async () => {
+      projectRoot = path.join(tmpDir, 'project');
+      await fse.ensureDir(path.join(projectRoot, '.opencode'));
+      projectConfig = { ...localConfig, scope: 'project', projectRoot } as LocalConfig;
+      const teamRules = path.join(localConfig.repo.localPath, 'rules');
+      await fse.writeFile(path.join(teamRules, 'root-rule.md'), 'root');
+      await fse.ensureDir(path.join(teamRules, 'fe'));
+      await fse.writeFile(path.join(teamRules, 'fe', 'style.md'), 'fe style');
+    });
+
+    // A relative entry resolves from the session cwd up to the worktree, so
+    // one recursive glob from the project root loads the namespaced rules too.
+    it('registers .opencode/rules/**/*.md in .opencode/opencode.json, not in the root opencode.json', async () => {
+      await handler.pullAllRules(teamConfig, projectConfig);
+
+      expect(await fse.pathExists(path.join(projectRoot, '.opencode', 'rules', 'fe', 'style.md'))).toBe(true);
+      expect(await fse.readJson(dotConfig())).toEqual({ instructions: ['.opencode/rules/**/*.md'] });
+      expect(await fse.pathExists(rootConfig())).toBe(false);
+    });
+
+    it('reclaims the glob an earlier release wrote to the root opencode.json, leaving its other keys', async () => {
+      await fse.writeJson(rootConfig(), { mcp: { x: { type: 'local' } }, instructions: ['docs/style.md', '.opencode/rules/*.md'] });
+
+      await handler.pullAllRules(teamConfig, projectConfig);
+
+      expect(await fse.readJson(rootConfig())).toEqual({ mcp: { x: { type: 'local' } }, instructions: ['docs/style.md'] });
+      expect((await fse.readJson(dotConfig())).instructions).toEqual(['.opencode/rules/**/*.md']);
+    });
+
+    it('keeps the root glob while .opencode/opencode.json cannot be parsed, so the rules stay registered', async () => {
+      await fse.writeJson(rootConfig(), { instructions: ['.opencode/rules/*.md'] });
+      await fse.writeFile(dotConfig(), '{ // a comment\n}\n');
+
+      await handler.pullAllRules(teamConfig, projectConfig);
+
+      expect(await fse.readFile(dotConfig(), 'utf8')).toBe('{ // a comment\n}\n');
+      expect(await fse.readJson(rootConfig())).toEqual({ instructions: ['.opencode/rules/*.md'] });
+    });
+
+    it('removes the glob from .opencode/opencode.json when the team has no rules left', async () => {
+      await handler.pullAllRules(teamConfig, projectConfig);
+      await handler.pullAllRules(teamConfig, projectConfig, []);
+
+      expect((await fse.readJson(dotConfig())).instructions).toBeUndefined();
+    });
+  });
 });
 
 describe('RulesHandler — Cursor-compatible .mdc handling', () => {

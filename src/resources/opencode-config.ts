@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFileSafe, writeJsonAtomic, pathExists } from '../utils/fs.js';
+import { readFileSafe, writeJsonAtomic, pathExists, remove } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 
 // ─── OpenCode config activation ──────────────────────────────
@@ -19,18 +19,18 @@ import { log } from '../utils/logger.js';
  * The rules glob relative to the directory that holds opencode.json.
  *
  * OpenCode resolves a relative `instructions` entry from the session's working
- * directory, not from the config file. In project scope opencode.json sits at
- * the repo root and rules at `<root>/.opencode/rules`, giving
- * `.opencode/rules/*.md`, which resolves the same from the root. In user scope
- * this gives `rules/*.md`, the entry earlier releases wrote and which loaded the
- * project's `rules/` instead; `opencodeRuleGlobs` uses it only to reclaim that
- * entry (#946).
+ * directory, not from the config file. This gives the entry earlier releases
+ * wrote: `.opencode/rules/*.md` in a project's root opencode.json, which loaded
+ * no namespaced rule, and `rules/*.md` in the user one, which loaded the
+ * project's `rules/` instead. It is used only to reclaim those entries (#946).
  */
 export function opencodeRulesGlob(configFileAbs: string, rulesDirAbs: string): string {
-  const rel = path.relative(path.dirname(configFileAbs), rulesDirAbs);
-  // Always use forward slashes: opencode.json globs are POSIX-style.
-  const relPosix = rel.split(path.sep).join('/');
-  return `${relPosix}/*.md`;
+  return `${posix(path.relative(path.dirname(configFileAbs), rulesDirAbs))}/*.md`;
+}
+
+/** Forward slashes: opencode.json entries are POSIX-style. */
+function posix(p: string): string {
+  return p.split(path.sep).join('/');
 }
 
 /** The `instructions` globs that load teamai's rules, and which entries teamai owns. */
@@ -42,33 +42,69 @@ export interface OpencodeRuleGlobs {
 }
 
 /**
- * The rules globs for one scope's opencode.json.
+ * The opencode.json teamai registers its project entries in. The root
+ * opencode.json stays the project's (#945, #946).
+ */
+export function opencodeProjectConfig(projectRoot: string): string {
+  return path.join(projectRoot, '.opencode', 'opencode.json');
+}
+
+/** Where one scope registers the rules globs, and where an earlier release did. */
+export interface OpencodeRulesTarget extends OpencodeRuleGlobs {
+  /** The opencode.json `globs` are registered in. */
+  configFile: string;
+  /** Another opencode.json and the entries earlier releases wrote there: removed, never written. */
+  retired: { configFile: string; owns: (entry: string) => boolean } | null;
+}
+
+/**
+ * The rules glob for a project, registered in `.opencode/opencode.json`.
  *
- * Project scope keeps the one relative glob from the root opencode.json.
+ * OpenCode resolves a relative `instructions` entry from the session's working
+ * directory, globbing it in that directory and each parent up to the worktree,
+ * whichever config file lists it. So the entry is relative to the project
+ * root, and one recursive glob loads the namespaced rules as well (#946).
+ * Earlier releases wrote `.opencode/rules/*.md` to the root opencode.json,
+ * which loaded no namespaced rule; that entry is reclaimed.
  *
- * In user scope a relative entry resolves from the session cwd, not from the
- * config file, so the old `rules/*.md` loaded the project's `rules/` instead
- * of the user rules (#946). The globs are absolute, and since OpenCode globs
- * only the basename of an absolute entry (`**` never matches), each directory
- * a rule lands in gets its own: the rules root plus one per namespace.
- * teamai owns the root glob, the glob of each directory a team rule can land
- * in, and the old relative one. A glob for any other directory is the
- * member's own.
+ * @param rootConfigAbs The root opencode.json, or null when the team config names none.
+ */
+export function opencodeProjectRuleGlobs(
+  projectRoot: string,
+  rulesDirAbs: string,
+  rootConfigAbs: string | null,
+): OpencodeRulesTarget {
+  const glob = `${posix(path.relative(projectRoot, rulesDirAbs))}/**/*.md`;
+  const old = rootConfigAbs === null ? null : opencodeRulesGlob(rootConfigAbs, rulesDirAbs);
+  return {
+    configFile: opencodeProjectConfig(projectRoot),
+    globs: [glob],
+    owns: (entry) => entry === glob,
+    retired: rootConfigAbs === null ? null : { configFile: rootConfigAbs, owns: (entry) => entry === old },
+  };
+}
+
+/**
+ * The user rules globs for `~/.config/opencode/opencode.json`.
+ *
+ * A relative entry resolves from the session cwd, not from the config file,
+ * so the old `rules/*.md` loaded the project's `rules/` instead of the user
+ * rules (#946). The globs are absolute, and since OpenCode globs only the
+ * basename of an absolute entry (`**` never matches), each directory a rule
+ * lands in gets its own: the rules root plus one per namespace. teamai owns
+ * the root glob, the glob of each directory a team rule can land in, and the
+ * old relative one. A glob for any other directory is the member's own.
  *
  * @param ruleDirsAbs The directories the delivered rules land in.
  * @param teamDirsAbs The directories any team rule can land in, delivered here or not.
  */
 export function opencodeRuleGlobs(
-  scope: 'user' | 'project',
   configFileAbs: string,
   rulesDirAbs: string,
   ruleDirsAbs: readonly string[],
   teamDirsAbs: readonly string[],
 ): OpencodeRuleGlobs {
   const relative = opencodeRulesGlob(configFileAbs, rulesDirAbs);
-  if (scope === 'project') return { globs: [relative], owns: (entry) => entry === relative };
-
-  const posix = (p: string): string => p.split(path.sep).join('/');
   const root = posix(rulesDirAbs);
   const under = (dirs: readonly string[]): string[] =>
     [...new Set(dirs.map(posix))].filter((dir) => dir.startsWith(`${root}/`)).sort();
@@ -87,13 +123,15 @@ export function opencodeRuleGlobs(
  * A missing file is created with just `desired`, or left missing when nothing
  * is desired. A file that exists but cannot be parsed as a JSON object is left
  * strictly alone (it may hold config we do not understand), and the function
- * returns false.
+ * returns false. With `deleteIfEmpty`, a file left holding nothing but the
+ * `$schema` OpenCode adds is deleted: for a config file teamai creates.
  */
 export async function reconcileOpencodeInstructionSet(
   configFileAbs: string,
   desired: readonly string[],
   owns: (entry: string) => boolean,
   purpose = 'rules activation',
+  { deleteIfEmpty = false }: { deleteIfEmpty?: boolean } = {},
 ): Promise<boolean> {
   const exists = await pathExists(configFileAbs);
 
@@ -141,6 +179,11 @@ export async function reconcileOpencodeInstructionSet(
     data.instructions = next;
   }
 
+  if (deleteIfEmpty && Object.keys(data).every((key) => key === '$schema')) {
+    await remove(configFileAbs);
+    log.debug(`Removed ${configFileAbs}: it held only teamai ${purpose} entries`);
+    return true;
+  }
   await writeJsonAtomic(configFileAbs, data);
   log.debug(`Reconciled teamai ${purpose} entries in ${configFileAbs}`);
   return true;
@@ -201,8 +244,8 @@ export function opencodeContextReference(contextFile: string, scope: 'user' | 'p
     return { config: path.join(path.dirname(contextFile), 'opencode.json'), entry: contextFile };
   }
   return {
-    config: path.join(projectRoot, '.opencode', 'opencode.json'),
-    entry: path.relative(projectRoot, contextFile).split(path.sep).join('/'),
+    config: opencodeProjectConfig(projectRoot),
+    entry: posix(path.relative(projectRoot, contextFile)),
   };
 }
 

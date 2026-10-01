@@ -130,3 +130,84 @@ describe('a pull at an unchanged team revision after the rule formats change (#9
     expect(warnings.filter((message) => message.includes(`Kept ${qoderCopy()}`))).toHaveLength(1);
   });
 });
+
+/**
+ * A CLI upgrade that moves OpenCode's rules globs must reach a machine whose
+ * team revision has not moved, or OpenCode keeps loading through the old
+ * entry until the team next changes (#946).
+ */
+describe('a pull at an unchanged team revision after the OpenCode rules globs move (#946)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let projectRoot: string;
+  let saved: State;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-oc-glob-upgrade-'));
+    homeDir = path.join(tmpDir, 'home');
+    projectRoot = path.join(tmpDir, 'project');
+    await fse.ensureDir(path.join(homeDir, '.config', 'opencode'));
+    await fse.ensureDir(path.join(projectRoot, '.opencode'));
+    vi.stubEnv('HOME', homeDir);
+    saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  /** Pull once at revision abc1234, then put back what an older CLI left there. */
+  async function pullThenDowngrade(scope: 'user' | 'project', configFile: string, old: unknown): Promise<void> {
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.outputFile(path.join(repoPath, 'rules', 'team-rule.md'), 'Use named exports.\n');
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope,
+      projectRoot: scope === 'project' ? projectRoot : undefined,
+      enabledAgents: ['opencode'],
+    } as LocalConfig);
+    await pull({});
+    await fse.outputJson(configFile, old);
+    vi.mocked(log.success).mockClear();
+  }
+
+  const alreadySynced = (): boolean => vi.mocked(log.success).mock.calls
+    .some(([message]) => String(message).includes('Already synced at abc1234'));
+
+  it('user scope: replaces the old relative glob with the absolute one', async () => {
+    const config = path.join(homeDir, '.config', 'opencode', 'opencode.json');
+    await pullThenDowngrade('user', config, { model: 'mine', instructions: ['rules/*.md'] });
+
+    await pull({});
+
+    expect(alreadySynced()).toBe(true);
+    const rules = path.join(homeDir, '.config', 'opencode', 'rules');
+    expect(await fse.readJson(config)).toEqual({ model: 'mine', instructions: [`${rules}/*.md`] });
+  });
+
+  it('project scope: moves the glob from the root opencode.json to .opencode/opencode.json', async () => {
+    const root = path.join(projectRoot, 'opencode.json');
+    const dot = path.join(projectRoot, '.opencode', 'opencode.json');
+    await pullThenDowngrade('project', root, { theme: 'dark', instructions: ['.opencode/rules/*.md'] });
+    await fse.outputJson(dot, {});
+
+    await pull({});
+
+    expect(alreadySynced()).toBe(true);
+    expect(await fse.readJson(dot)).toEqual({ instructions: ['.opencode/rules/**/*.md'] });
+    expect(await fse.readJson(root)).toEqual({ theme: 'dark' });
+  });
+});

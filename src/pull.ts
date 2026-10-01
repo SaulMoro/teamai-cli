@@ -1355,6 +1355,14 @@ async function pullForScope(
             } catch (error) {
               log.warn(`[${scopeLabel}] Codex's team rules were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
+            // Same reason: a CLI that moves OpenCode's rules globs writes them
+            // to their new config file and reclaims the old ones (#946).
+            try {
+              const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
+              await (getHandler('rules') as RulesHandler).activateOpencodeInstructions(freshConfig, localConfig, items);
+            } catch (error) {
+              log.warn(`[${scopeLabel}] OpenCode's rules globs were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+            }
             // Same reason: a CLI that gives a tool its own rules format must
             // re-render the copies an older one wrote verbatim (#946).
             await rerenderOutdatedRules(freshConfig, localConfig, roleContext, scopeLabel);

@@ -321,6 +321,26 @@ describe('doctor — rules delivered on disk', () => {
     const active = await namedCheck('Team rules are active in opencode');
     expect(await active!.check()).toBe(false);
     expect(active!.fix).toContain('could not be read');
+    expect(active!.fix).toContain('Fix the file, then run `teamai pull`.');
+  });
+
+  it('checks .opencode/opencode.json in a project, not the root opencode.json (#946)', async () => {
+    await installOpencode();
+    const projectRoot = path.join(tempDir, 'project');
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'rules'));
+    Object.assign(localConfig, { scope: 'project', projectRoot });
+    // Only the root file lists a glob, the one earlier releases wrote.
+    await fse.writeJson(path.join(projectRoot, 'opencode.json'), { instructions: ['.opencode/rules/*.md'] });
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(await active!.check()).toBe(false);
+    // The file is missing, not broken: a plain pull writes it.
+    expect(active!.fix).toContain(`${path.join(projectRoot, '.opencode', 'opencode.json')} does not list \`.opencode/rules/**/*.md\``);
+    expect(active!.fix).not.toContain('could not be read');
+    expect(active!.fix).toContain('Run `teamai pull`.');
+
+    await fse.writeJson(path.join(projectRoot, '.opencode', 'opencode.json'), { instructions: ['.opencode/rules/**/*.md'] });
+    expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
   });
 
   it('emits no opencode activation check while opencode is not installed here', async () => {

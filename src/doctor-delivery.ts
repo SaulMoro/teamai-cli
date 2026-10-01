@@ -340,15 +340,16 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig, items);
   if (opencode !== null) {
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const instructions = await readOpencodeInstructionList(opencode.configFile);
+    // A missing file just lists nothing yet; null is one the pull cannot parse.
+    const instructions = await pathExists(opencode.configFile) ? await readOpencodeInstructionList(opencode.configFile) : [];
     const missing = opencode.globs.filter((glob) => !instructions?.includes(glob));
     const stale = (instructions ?? []).filter((entry): entry is string =>
       typeof entry === 'string' && opencode.owns(entry) && !opencode.globs.includes(entry));
     const relativeStale = stale.filter((entry) => !path.isAbsolute(entry));
     const namespaceStale = stale.filter((entry) => path.isAbsolute(entry));
     const quoted = (entries: string[]): string => entries.map((entry) => `\`${entry}\``).join(', ');
-    const rerun = 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + 'so it cannot restore this.';
+    // Pull sets these globs even when the team repo has not moved (#946).
+    const rerun = 'Run `teamai pull`.';
     checks.push({
       name: 'Team rules are active in opencode',
       source: 'local',
@@ -356,7 +357,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
       fix: instructions === null
         ? `${opencode.configFile} could not be read as a JSON object, so the pull left it alone `
           + `and never added ${quoted(opencode.globs)} to \`instructions\`. Fix the file, then run `
-          + '`teamai pull --force`.'
+          + '`teamai pull`.'
         : [
           ...(missing.length > 0
             ? [`${opencode.configFile} does not list ${quoted(missing)} under \`instructions\`. `

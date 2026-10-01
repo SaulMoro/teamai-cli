@@ -8,7 +8,7 @@ import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_T
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { splitFrontmatter } from '../utils/frontmatter.js';
 import { rulePaths } from './team-rule.js';
-import type { OpencodeRuleGlobs } from './opencode-config.js';
+import type { OpencodeRulesTarget } from './opencode-config.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
@@ -849,9 +849,10 @@ export class RulesHandler extends ResourceHandler {
    * match the rules delivered, so copied rule files are actually loaded, and
    * remove them all when no rule is. No-op when opencode is disabled or not
    * installed (we never create an opencode.json for a user who doesn't use
-   * OpenCode).
+   * OpenCode). Public so the "Already synced" pull can move the globs a CLI
+   * upgrade relocates (#946).
    */
-  private async activateOpencodeInstructions(
+  async activateOpencodeInstructions(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: readonly ResourceItem[],
@@ -859,19 +860,31 @@ export class RulesHandler extends ResourceHandler {
     const target = await this.opencodeInstructionsTarget(teamConfig, localConfig, rules);
     if (target === null) return;
 
-    const { reconcileOpencodeInstructionSet } = await import('./opencode-config.js');
+    const { readOpencodeInstructionList, reconcileOpencodeInstructionSet } = await import('./opencode-config.js');
     try {
       await reconcileOpencodeInstructionSet(target.configFile, rules.length > 0 ? target.globs : [], target.owns);
     } catch (e) {
       log.warn(`Failed to update OpenCode instructions in ${target.configFile}: ${(e as Error).message}`);
+      return;
+    }
+    // The old glob goes only once the new one is listed (a config the pull
+    // cannot parse is left alone), so the rules are never left unregistered.
+    if (target.retired === null) return;
+    if (rules.length > 0 && await readOpencodeInstructionList(target.configFile) === null) return;
+    try {
+      await reconcileOpencodeInstructionSet(target.retired.configFile, [], target.retired.owns);
+    } catch (e) {
+      log.warn(`Failed to update OpenCode instructions in ${target.retired.configFile}: ${(e as Error).message}`);
     }
   }
 
   /**
    * The opencode.json this scope activates rules through, the globs that load
-   * `rules` from it, and which `instructions` entries teamai owns there. Null
-   * when OpenCode receives no rules here: excluded, not installed, or
-   * configured without a rules or config path.
+   * `rules` from it, and which `instructions` entries teamai owns there. In a
+   * project that is `.opencode/opencode.json`, and `retired` names the root
+   * opencode.json glob earlier releases wrote. Null when OpenCode receives no
+   * rules here: excluded, not installed, or configured without a rules or
+   * config path.
    *
    * Read-only, and public for the same reason `deliveryTargets` is: OpenCode
    * does not auto-scan its rules directory, so a `.md` sitting there is inert
@@ -882,7 +895,7 @@ export class RulesHandler extends ResourceHandler {
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: readonly ResourceItem[],
-  ): Promise<({ configFile: string } & OpencodeRuleGlobs) | null> {
+  ): Promise<OpencodeRulesTarget | null> {
     if (isAgentExcluded(localConfig, 'opencode')) return null;
     const paths = scopedToolPaths(teamConfig, localConfig)['opencode'];
     if (!paths?.rules) return null;
@@ -891,13 +904,15 @@ export class RulesHandler extends ResourceHandler {
     // Only touch opencode.json when OpenCode is actually installed for this scope.
     if (!await ResourceHandler.isToolInstalled(paths.rules, baseDir)) return null;
 
-    // The config file mirrors the MCP scope fields: <root>/opencode.json in
-    // project scope, ~/.config/opencode/opencode.json in user scope.
-    const configRel = localConfig.scope === 'project' ? paths.mcpProject : paths.mcp;
-    if (!configRel) return null;
-
-    const configFile = path.join(baseDir, configRel);
     const rulesDir = path.join(baseDir, paths.rules);
+    const { opencodeProjectRuleGlobs, opencodeRuleGlobs } = await import('./opencode-config.js');
+    if (localConfig.scope === 'project') {
+      return opencodeProjectRuleGlobs(baseDir, rulesDir, paths.mcpProject ? path.join(baseDir, paths.mcpProject) : null);
+    }
+
+    // The user config file mirrors the MCP field: ~/.config/opencode/opencode.json.
+    if (!paths.mcp) return null;
+    const configFile = path.join(baseDir, paths.mcp);
     // The directories pull writes the rules to, from the same seam it uses.
     const ruleDirs: string[] = [];
     for (const rule of rules) {
@@ -909,8 +924,7 @@ export class RulesHandler extends ResourceHandler {
     // longer receives still has its glob reclaimed.
     const teamDirs = (await this.scanTeamForPull(teamConfig, localConfig))
       .map((rule) => path.dirname(path.join(rulesDir, `${rule.name}.md`)));
-    const { opencodeRuleGlobs } = await import('./opencode-config.js');
-    return { configFile, ...opencodeRuleGlobs(localConfig.scope, configFile, rulesDir, ruleDirs, teamDirs) };
+    return { configFile, ...opencodeRuleGlobs(configFile, rulesDir, ruleDirs, teamDirs), retired: null };
   }
 
   /**

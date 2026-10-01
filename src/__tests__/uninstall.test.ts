@@ -1978,6 +1978,81 @@ describe('uninstall', () => {
     expect(await fse.readJson(configFile)).toEqual({ model: 'mine', instructions: ['CONVENTIONS.md', `${rulesDir}/mine/*.md`] });
   });
 
+  it('removes the project rules glob from .opencode/opencode.json and the old one from the root opencode.json (#946)', async () => {
+    const homeDir = path.join(tmpDir, 'oc-home');
+    const repoPath = path.join(tmpDir, 'oc-team-repo');
+    const projectRoot = path.join(tmpDir, 'oc-project');
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'team-rule.md'), '# Team Rule');
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'rules'));
+    await fse.writeFile(path.join(projectRoot, '.opencode', 'rules', 'team-rule.md'), '# Team Rule');
+    const dotConfig = path.join(projectRoot, '.opencode', 'opencode.json');
+    const rootConfig = path.join(projectRoot, 'opencode.json');
+    await fse.writeJson(dotConfig, { instructions: ['docs/style.md', '.opencode/rules/**/*.md'] });
+    await fse.writeJson(rootConfig, { theme: 'dark', instructions: ['.opencode/rules/*.md'] });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        opencode: {
+          skills: '.opencode/skills', rules: '.opencode/rules',
+          mcp: '.config/opencode/opencode.json', mcpProject: 'opencode.json',
+          userScope: { skills: '.config/opencode/skills', rules: '.config/opencode/rules' },
+        },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'opencode' });
+
+    expect(await fse.readJson(dotConfig)).toEqual({ instructions: ['docs/style.md'] });
+    expect(await fse.readJson(rootConfig)).toEqual({ theme: 'dark' });
+  });
+
+  it('deletes the .opencode/opencode.json the rules glob alone filled, and keeps the root opencode.json (#946)', async () => {
+    const homeDir = path.join(tmpDir, 'oc-home');
+    const repoPath = path.join(tmpDir, 'oc-team-repo');
+    const projectRoot = path.join(tmpDir, 'oc-project');
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'team-rule.md'), '# Team Rule');
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'rules'));
+    await fse.writeFile(path.join(projectRoot, '.opencode', 'rules', 'team-rule.md'), '# Team Rule');
+    const dotConfig = path.join(projectRoot, '.opencode', 'opencode.json');
+    const rootConfig = path.join(projectRoot, 'opencode.json');
+    // OpenCode adds `$schema` to a config it loads.
+    await fse.writeJson(dotConfig, { $schema: 'https://opencode.ai/config.json', instructions: ['.opencode/rules/**/*.md'] });
+    await fse.writeJson(rootConfig, { instructions: ['.opencode/rules/*.md'] });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        opencode: {
+          skills: '.opencode/skills', rules: '.opencode/rules',
+          mcp: '.config/opencode/opencode.json', mcpProject: 'opencode.json',
+          userScope: { skills: '.config/opencode/skills', rules: '.config/opencode/rules' },
+        },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'opencode' });
+
+    expect(await fse.pathExists(dotConfig)).toBe(false);
+    expect(await fse.readJson(rootConfig)).toEqual({});
+  });
+
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the
   // legacy <projectRoot> copy was written by a CLI that knew nothing about it —
   // so the two targets must be looked for at different paths.
