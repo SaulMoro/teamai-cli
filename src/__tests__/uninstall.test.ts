@@ -1757,6 +1757,11 @@ describe('uninstall', () => {
     await fse.ensureDir(ocHookDir);
     await fse.writeFile(path.join(ocHookDir, 'HOOK.md'), '---\nname: [teamai] status-report\n---\n');
     await fse.writeFile(path.join(ocHookDir, 'handler.ts'), '// teamai');
+    // The entry teamai added to enable the hook, beside one of the user's.
+    const ocConfig = path.join(homeDir, '.openclaw', 'openclaw.json');
+    await fse.writeJson(ocConfig, {
+      hooks: { internal: { entries: { 'teamai-status-report': { enabled: true }, mine: { enabled: true } } } },
+    });
 
     const teamConfig = makeTeamConfig({
       toolPaths: {
@@ -1777,6 +1782,7 @@ describe('uninstall', () => {
 
     // The OpenClaw HOOK.md dir must be removed (regression: previously leaked).
     expect(await fse.pathExists(ocHookDir)).toBe(false);
+    expect(await fse.readJson(ocConfig)).toEqual({ hooks: { internal: { entries: { mine: { enabled: true } } } } });
   });
 
   it('project scope 卸载同时清掉用户级和项目级的 OpenCode plugin', async () => {

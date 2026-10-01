@@ -492,8 +492,9 @@ const ADAPTER_BUILTIN_HOOKS: Record<string, { keys: string[]; suffix?: string }>
       'Hook dispatch prompt-submit',
     ],
   },
-  // openclaw-hooks.ts EVENT_MAP maps session:start and command:new only, and
-  // its generated handler spawns the dispatcher with argv. Only `openclaw`:
+  // openclaw-hooks.ts EVENT_MAP maps OpenClaw's events onto session-start and
+  // prompt-submit only, and its generated handler spawns the dispatcher with
+  // argv. Only `openclaw`:
   // the other claw variants share its workspace resolver, so reconciliation
   // does not route them (see reconcileHooksToAllTools).
   openclaw: { keys: ['Hook dispatch session-start', 'Hook dispatch prompt-submit'] },

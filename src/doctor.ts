@@ -262,6 +262,23 @@ async function buildHookChecks(
       });
       continue;
     }
+    if (tool === 'openclaw') {
+      // OpenClaw has no settings file: its hook is a workspace hook directory,
+      // which OpenClaw loads only once openclaw.json enables its entry.
+      const { resolveOpenclawWorkspaceDir, isOpenclawHookEnabled, OPENCLAW_HOOK_DIR, OPENCLAW_HOOK_KEY } = await import('./openclaw-hooks.js');
+      const workspace = await resolveOpenclawWorkspaceDir();
+      if (!workspace || !await pathExists(path.join(workspace, 'hooks', OPENCLAW_HOOK_DIR))) continue;
+      checks.push({
+        name: 'OpenClaw hook enabled',
+        source: 'local',
+        check: isOpenclawHookEnabled,
+        fix: `OpenClaw loads teamai's hook only when openclaw.json sets hooks.internal.entries.${OPENCLAW_HOOK_KEY}.enabled `
+          + `(and internal hooks are not switched off), so OpenClaw sends no status report or sync. `
+          + `Run \`openclaw hooks enable ${OPENCLAW_HOOK_KEY}\`. If it is enabled already, openclaw.json is not plain JSON `
+          + `(comments, JSON5), which teamai cannot read: \`openclaw hooks info ${OPENCLAW_HOOK_KEY}\` shows what OpenClaw sees.`,
+      });
+      continue;
+    }
     // A standalone hooks file (Copilot) is injected at the config's own scope
     // (`reconcileTeamHooksForConfig` joins resolveToolBaseDir with the
     // config-scoped `hooks`), so it is probed from `toolPaths`. Settings-based

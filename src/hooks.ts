@@ -1879,9 +1879,10 @@ export async function reconcileHooksToAllTools(
       if (opts.settingsOnly) continue;
       try {
         if (opts.removeAll) {
-          const { removeOpenClawHooks, resolveOpenclawWorkspaceDir } = await import('./openclaw-hooks.js');
+          const { removeOpenClawHooks, removeOpenClawHookEntry, resolveOpenclawWorkspaceDir } = await import('./openclaw-hooks.js');
           const wsDir = await resolveOpenclawWorkspaceDir();
           if (wsDir) await removeOpenClawHooks(path.join(wsDir, 'hooks'));
+          await removeOpenClawHookEntry();
         } else {
           const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
           await injectOpenClawHooks(undefined, tool);

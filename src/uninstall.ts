@@ -4,6 +4,7 @@ import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadablePro
 import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
 import {
   removeOpenClawHooks,
+  removeOpenClawHookEntry,
   OPENCLAW_HOOK_DIR,
   resolveOpenClawHooksDir,
   resolveOpenclawWorkspaceDir,
@@ -476,9 +477,9 @@ async function discoverToolResources(
   } else {
     // OpenClaw-style agents (no settings file) inject a HOOK.md + handler.ts
     // under <hooksDir>/<OPENCLAW_HOOK_DIR>. Check the default path, the
-    // OPENCLAW_STATE_DIR override (imate containers), and the resolved
-    // workspace dir — injection now targets `<workspace>/hooks`, so teardown
-    // must cover it too, otherwise the hook is orphaned on uninstall.
+    // resolved state dir (OPENCLAW_STATE_DIR or OPENCLAW_PROFILE), and the
+    // resolved workspace dir — injection now targets `<workspace>/hooks`, so
+    // teardown must cover it too, otherwise the hook is orphaned on uninstall.
     const defaultHooksDir = path.join(baseDir, `.${tool}`, 'hooks');
     const resolvedHooksDir = resolveOpenClawHooksDir(tool);
     const dirsToCheck = new Set([defaultHooksDir, resolvedHooksDir]);
@@ -1161,12 +1162,19 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     }
   }
 
-  // (a2) Remove OpenClaw-style hook dirs
+  // (a2) Remove OpenClaw-style hook dirs, and OpenClaw's entry enabling ours
   for (const { hooksDir } of plan.openclawHookDirs) {
     try {
       await removeOpenClawHooks(hooksDir);
     } catch (e) {
       log.warn(`Failed to remove OpenClaw hook from ${hooksDir}: ${(e as Error).message}`);
+    }
+  }
+  if (plan.openclawHookDirs.some(({ tool }) => tool === 'openclaw')) {
+    try {
+      await removeOpenClawHookEntry();
+    } catch (e) {
+      log.warn(`Failed to remove the teamai hook entry from OpenClaw's config: ${(e as Error).message}`);
     }
   }
 
