@@ -2332,6 +2332,12 @@ export async function pull(
   // hooks. User-scope MCP remains isolated in project mode.
   await reconcileMcpAllScopes(reconcileUser, reconcileProject, options, teamEnvs);
 
+  // 3.6a. Trust in Codex what the two stages above wrote for it: its hooks and,
+  // for a project, the main checkout whose `.codex/` holds team hooks or MCP
+  // servers (#955). After both, so a project whose only Codex content is its MCP
+  // servers is trusted by this same pull.
+  await trustCodexAllScopes(reconcileUser, reconcileProject, options);
+
   // 3.6b. What the member should run for a team secret with no value (#875).
   // Not on the silent session-start pull: its output is discarded, and it runs
   // on every session.
@@ -2614,6 +2620,27 @@ async function reconcileHooksAllScopes(
  * session start, so a change applied here takes effect in the user's next
  * session — which is exactly when the SessionStart pull hook runs.
  */
+async function trustCodexAllScopes(
+  userConfig: LocalConfig | null,
+  projectConfig: LocalConfig | null,
+  options: GlobalOptions,
+): Promise<void> {
+  if (options.dryRun) return;
+  const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
+  for (const localConfig of scopes) {
+    try {
+      const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+      if (!teamConfig) continue;
+      const { reportCodexTrust, trustCodexForScope } = await import('./hooks.js');
+      const trust = await trustCodexForScope(teamConfig, localConfig);
+      if (!options.silent) reportCodexTrust(trust, 'problems');
+      else if (trust) log.debug(`[${localConfig.scope}] Codex trust: ${trust.kind}${'reason' in trust ? ` (${trust.reason})` : ''}`);
+    } catch (e) {
+      log.debug(`[${localConfig.scope}] Codex trust skipped: ${(e as Error).message}`);
+    }
+  }
+}
+
 async function reconcileMcpAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,

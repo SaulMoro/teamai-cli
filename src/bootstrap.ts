@@ -272,7 +272,7 @@ export async function bootstrapSelfRepo(
 
     // Inject hooks so session-start pull/report fire from now on.
     try {
-      const { describeUnappliedTeamHooks, reconcileTeamHooksForConfig } = await import('./hooks.js');
+      const { describeUnappliedTeamHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } = await import('./hooks.js');
       const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {});
       if (!reconciled.ok) {
         // A session-start bootstrap is silent, so debug.log is the only trace.
@@ -280,6 +280,9 @@ export async function bootstrapSelfRepo(
         if (silent) log.persist(message);
         else log.warn(message);
       }
+      const codexTrust = await trustCodexForScope(teamConfig, localConfig);
+      if (!silent) reportCodexTrust(codexTrust, 'all');
+      else if (codexTrust) log.debug(`[bootstrap] Codex trust: ${codexTrust.kind}`);
     } catch (e) {
       log.debug(`[bootstrap] hook injection failed (non-blocking): ${(e as Error).message}`);
     }

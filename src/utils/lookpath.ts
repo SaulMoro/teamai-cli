@@ -82,15 +82,21 @@ export function pathDirs(options: LookPathOptions = {}): string[] {
  * runs. On win32, `uvx` also matches `uvx.exe` / `uvx.cmd` via PATHEXT.
  */
 export function isOnPath(bin: string, options: LookPathOptions = {}): boolean {
-  if (!SAFE_BIN_RE.test(bin)) return false;
+  return findOnPath(bin, options) !== null;
+}
+
+/** The first file on PATH that `bin` names (see isOnPath), or null. */
+export function findOnPath(bin: string, options: LookPathOptions = {}): string | null {
+  if (!SAFE_BIN_RE.test(bin)) return null;
   const platform = options.platform ?? process.platform;
   const names = candidateNames(bin, platform, options.pathExt ?? process.env.PATHEXT);
   const requireExecute = platform !== 'win32';
 
   for (const dir of pathDirs(options)) {
     for (const name of names) {
-      if (isPresent(path.join(dir, name), requireExecute)) return true;
+      const candidate = path.join(dir, name);
+      if (isPresent(candidate, requireExecute)) return candidate;
     }
   }
-  return false;
+  return null;
 }

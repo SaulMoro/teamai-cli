@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { autoDetectInit } from './config.js';
-import { reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, getHookStatus, hasInstalledCodexTrustGatedTool, codexTrustReminder, type HookStatus } from './hooks.js';
+import { reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, getHookStatus, reportCodexTrust, resolveMainCheckoutHooks, trustCodexForScope, type HookStatus } from './hooks.js';
 import { applyBuiltinOverride, installedBuiltinHookDefs } from './builtin-hooks.js';
 import { resolveTeamHookEntries } from './resources/hooks.js';
 import { describeEntryFailure, describeOrigin, reportUndeliveredEntryNotices } from './namespaced-entries.js';
@@ -98,7 +98,6 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
     const { localConfig, teamConfig } = await autoDetectInit();
 
     // Explicit user action → not gated by sharing.hooks.autoApply (auto: false).
-    const { baseDir } = resolveHookScope(localConfig);
     const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
         auto: false,
         silent: options.silent,
@@ -108,19 +107,14 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
         process.exitCode = 1;
         return;
     }
-    let codexTrustGated = false;
-    if (await hasInstalledCodexTrustGatedTool(teamConfig.toolPaths, baseDir)) {
-        codexTrustGated = true;
-    }
+    // The public Codex skips a hook it does not trust, so trust what was just
+    // written (#955). An explicit inject always asks Codex, whatever the last
+    // pass recorded.
+    const codexTrust = await trustCodexForScope(teamConfig, localConfig, { force: true });
 
     if (!options.silent) {
         log.success('Hooks injected into all AI tool settings');
-        // The public Codex gates non-managed hooks behind an explicit trust step;
-        // remind the user to trust them in Codex. teamai never edits [hooks.state]
-        // to auto-trust (constraint: reminder only, no bypass).
-        if (codexTrustGated) {
-            log.warn(codexTrustReminder());
-        }
+        reportCodexTrust(codexTrust, 'all');
     }
 }
 
@@ -284,6 +278,8 @@ export async function hooksRemove(_options: GlobalOptions): Promise<void> {
         removeAll: true,
         scope: localConfig.scope,
         installedBaseDir: localConfig.scope === 'project' ? localConfig.projectRoot : undefined,
+        // The project's Claude and Codex team hooks live in the main checkout.
+        mainCheckout: await resolveMainCheckoutHooks(localConfig),
     });
 
     const copilotPaths = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID];

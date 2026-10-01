@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
-import { reconcileHooks, hasTeamaiHooks } from './hooks.js';
+import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
 import {
   removeOpenClawHooks,
   OPENCLAW_HOOK_DIR,
@@ -288,6 +288,17 @@ function opencodePluginTargets(baseDir: string, scope: Scope): Array<{ baseDir: 
 
 // ─── Discovery ─────────────────────────────────────────
 
+/**
+ * A location teamai injected hooks into. `fileFor` names the file per tool for
+ * a location that holds only some tools' files (the main checkout's team hook
+ * files, #955); without it the tool's settings path is probed.
+ */
+interface HookTarget {
+  baseDir: string;
+  manifestPath: string;
+  fileFor?: (tool: string) => string | null;
+}
+
 async function discoverToolResources(
   tool: string,
   toolPath: TeamaiConfig['toolPaths'][string],
@@ -297,7 +308,7 @@ async function discoverToolResources(
   teamSkillNames: Set<string>,
   teamRuleNames: Set<string>,
   teamAgentNames: Set<string>,
-  hookTargets: Array<{ baseDir: string; manifestPath: string }>,
+  hookTargets: HookTarget[],
   standaloneHookManifestPath: string,
   scope: Scope,
   /**
@@ -401,12 +412,12 @@ async function discoverToolResources(
     // from the same scope decision (`hookSettingsPath`), not from `toolPath` —
     // except for the legacy copy, written into <projectRoot> by a CLI that knew
     // nothing about a member's relocated root, so it sits at the team path.
-    for (const { baseDir: hookBaseDir, manifestPath } of hookTargets) {
+    for (const { baseDir: hookBaseDir, manifestPath, fileFor } of hookTargets) {
       const settingsRel = path.resolve(hookBaseDir) === path.resolve(getUserHome())
         ? (hookSettingsPath ?? toolPath.settings)
         : toolPath.settings;
-      const settingsPath = path.join(hookBaseDir, settingsRel);
-      if (await pathExists(settingsPath)
+      const settingsPath = fileFor ? fileFor(tool) : path.join(hookBaseDir, settingsRel);
+      if (settingsPath && await pathExists(settingsPath)
         && (await hasTeamaiHooks(settingsPath, tool, manifestPath)
           || isEmptyHooksResidue(await readJson<Record<string, unknown>>(settingsPath)))) {
         res.hookFiles.push({ path: settingsPath, tool, manifestPath });
@@ -566,9 +577,18 @@ async function buildRemovalPlan(
   // the SessionStart hook live in HOME forever. A legacy <projectRoot> copy from
   // a pre-#370 CLI is swept too, tagged with its project manifest.
   const primaryHookScope = resolveHookScope(localConfig);
-  const hookTargets = [primaryHookScope];
+  const hookTargets: HookTarget[] = [primaryHookScope];
   const legacyHookScope = resolveLegacyProjectHookScope(localConfig);
   if (legacyHookScope) hookTargets.push(legacyHookScope);
+  // The project's Claude and Codex team hooks, in the main checkout (#955).
+  const mainCheckout = await resolveMainCheckoutHooks(localConfig);
+  if (mainCheckout) {
+    hookTargets.push({
+      baseDir: mainCheckout.root,
+      manifestPath: mainCheckout.manifestPath,
+      fileFor: (tool) => mainCheckoutHookFile(mainCheckout, tool),
+    });
+  }
   // Hook discovery resolves its file name at the same scope as the targets: a
   // non-self project scope discovers under HOME, so the tool paths there must be
   // the user-scope ones (previously the project-scope name was used, and a tool

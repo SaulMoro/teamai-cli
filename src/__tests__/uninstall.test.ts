@@ -1995,6 +1995,32 @@ describe('uninstall', () => {
     expect(targetedProjectRoot).toBe(false);
   });
 
+  it('non-self project scope removes the Claude and Codex team hooks kept in the main checkout (#955)', async () => {
+    const projectRoot = path.join(tmpDir, 'proj-main-hooks');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    const homeDir = path.join(tmpDir, 'home');
+    await fse.ensureDir(repoPath);
+    await fse.writeFile(path.join(projectRoot, '.teamai', 'config.yaml'), 'scope: project');
+    await fse.ensureDir(path.join(homeDir, '.claude'));
+    const teamEntry = { matcher: '*', hooks: [{ type: 'command', command: 'npm run lint' }], description: '[teamai:hook:lint] lint' };
+    await fse.outputJson(path.join(projectRoot, '.claude', 'settings.local.json'), { hooks: { Stop: [teamEntry] } });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const teamConfig = makeTeamConfig();
+    const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
+    expect(mockReconcileHooks).toHaveBeenCalledWith(
+      path.join(await fse.realpath(projectRoot), '.claude', 'settings.local.json'),
+      'claude',
+      [],
+      expect.objectContaining({ removeAll: true, manifestPath: expect.stringContaining('managed-main-checkout-hooks.json') }),
+    );
+  });
+
   // #667: hook discovery must resolve the settings *file* at the scope hooks
   // were injected into, not at the config's scope. Qoder CN reads
   // `~/.qoder-cn/` for its user scope, so a non-self project scope (which

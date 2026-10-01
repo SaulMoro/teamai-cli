@@ -127,6 +127,8 @@ vi.mock('../hooks.js', async (importOriginal) => ({
   reconcileTeamHooksForConfig: vi.fn(async () => ({ ok: true, defs: [] })),
   hasTeamaiHooks: vi.fn(async () => true),
   reconcileHooks: vi.fn(),
+  trustCodexForScope: vi.fn(async () => undefined),
+  reportCodexTrust: vi.fn(),
 }));
 
 const mockDeployBuiltinSkills = vi.fn().mockResolvedValue(0);

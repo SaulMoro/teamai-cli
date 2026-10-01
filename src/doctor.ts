@@ -21,7 +21,7 @@ import {
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
 import { getsRulesFromSessionHook } from './resources/rule-format.js';
-import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
+import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, readCodexHookTrustForScope } from './hooks.js';
 import {
   buildDeliveryChecks,
   buildRulesDeliveryChecks,
@@ -122,7 +122,7 @@ export interface DoctorReport {
   packages?: { ok: boolean; lines: string[] };
   /**
    * Advisories that are not checks: namespace overrides, a team secret with no
-   * value (#875), the Codex trust-gate reminder.
+   * value (#875), the Codex trust reminder when Codex cannot be asked.
    */
   notes?: string[];
 }
@@ -321,7 +321,9 @@ function sessionHookRulesCheck(tool: string, settingsPath: string): Check {
     fix: `The teamai SessionStart and SubagentStart entries in ${settingsPath} must both exist and set `
       + `\`additionalContextLimit: 0\`. Without them ${tool} keeps only the start and end of a large set of `
       + 'team rules and instructions, and a fresh subagent gets none. Run `teamai pull` to rewrite them'
-      + (isCodexTrustGatedTool(tool) ? ', then approve the changed hooks in Codex (/hooks).' : '.'),
+      + (isCodexTrustGatedTool(tool)
+        ? ' (teamai trusts them in Codex; with `codexTrustEnabled: false`, approve them in Codex /hooks).'
+        : '.'),
   };
 }
 
@@ -347,21 +349,30 @@ async function teamaiHookEntries(
 
 
 /**
- * True if a trust-gated Codex tool (the public `codex`) already has teamai hooks
- * installed on disk (settings file exists and contains the hook-dispatch
- * command). Used to emit a lightweight reminder that Codex may still require the
- * user to trust them. Read-only — never inspects or modifies Codex's
- * [hooks.state] trust store. Internal variants are excluded (no trust gate).
+ * Whether the public Codex will run the hooks teamai wrote in this scope (#955),
+ * asked read-only through `codex app-server` `hooks/list`. A check when Codex
+ * answers; the trust reminder as a note when it cannot (no `codex` on PATH, the
+ * app-server failed). Nothing when teamai wrote no Codex hook here.
  */
-async function hasInstalledCodexHooks(toolPaths: TeamaiConfig['toolPaths'], baseDir: string): Promise<boolean> {
-  for (const [tool, paths] of Object.entries(toolPaths)) {
-    if (!isCodexTrustGatedTool(tool) || !paths.settings) continue;
-    const settingsPath = path.join(baseDir, paths.settings);
-    if (!await pathExists(settingsPath)) continue;
-    const content = await readFileSafe(settingsPath);
-    if (content?.includes('teamai hook-dispatch')) return true;
+async function codexHookTrust(ctx: DoctorContext): Promise<{ checks: Check[]; notes: string[] }> {
+  const report = ctx.teamConfig ? await readCodexHookTrustForScope(ctx.teamConfig, ctx.localConfig) : null;
+  if (!report) return { checks: [], notes: [] };
+  if (report.kind !== 'listed') {
+    const reason = report.kind === 'failed' ? ` (could not ask Codex: ${report.reason})` : '';
+    return { checks: [], notes: [`${codexTrustReminder()}${reason}`] };
   }
-  return false;
+  const notTrusted = report.notTrusted.map((h) => `${h.command} in ${h.file} (${h.status})`);
+  return {
+    checks: [{
+      name: 'Codex trusts the teamai hooks',
+      source: 'local',
+      check: async () => notTrusted.length === 0,
+      fix: `Codex will not run: ${notTrusted.join('; ')}. Run \`teamai pull\` to trust them, `
+        + 'or trust them in Codex /hooks. If `codexTrustEnabled: false` is set in config.yaml, '
+        + 'teamai leaves trusting them to you.',
+    }],
+    notes: [],
+  };
 }
 
 /**
@@ -598,26 +609,22 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     return false;
   }
 
-  const { localConfig, toolPaths, baseDir } = ctx;
+  const { localConfig } = ctx;
   const scope = localConfig.scope ?? 'user';
   if (!jsonMode) {
     const scopeLabel = `${scope}${scope === 'project' && localConfig.projectRoot ? ` (${localConfig.projectRoot})` : ''}`;
     console.log(`  Scope: ${scopeLabel}\n`);
   }
 
-  const results = await runChecks(await buildChecks(ctx), jsonMode ? undefined : renderResult);
+  // Doctor only: it spawns `codex app-server`, which the post-pull pass skips.
+  const codexTrust = await codexHookTrust(ctx);
+  const results = await runChecks([...await buildChecks(ctx), ...codexTrust.checks], jsonMode ? undefined : renderResult);
   let allPassed = results.every((r) => r.ok);
 
   const { pkgDoctorReport } = await import('./pkg/commands.js');
   const packageReport = await pkgDoctorReport(localConfig, process.cwd());
   if (packageReport && !packageReport.allPassed) allPassed = false;
 
-  // Codex trust-gate reminder: even when hooks are installed, Codex may not run
-  // them until the user reviews/trusts them. Note only — teamai never writes
-  // [hooks.state] to auto-trust.
-  const codexNote = await hasInstalledCodexHooks(toolPaths, baseDir)
-    ? codexTrustReminder()
-    : null;
   // Info, not checks: which namespace item or entry replaces which root one
   // (#707), a model alias an agent uses from a namespace not active here, and
   // how each alias agent's model resolved in each tool (#830).
@@ -627,7 +634,7 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...await aliasNamespaceNotes(ctx),
     ...await agentModelNotes(ctx),
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
-    ...(codexNote ? [codexNote] : []),
+    ...codexTrust.notes,
   ];
 
   if (jsonMode) {

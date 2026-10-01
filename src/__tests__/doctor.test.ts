@@ -55,11 +55,18 @@ vi.mock('../providers/tgit/index.js', () => ({
     gfIsAuthenticated: vi.fn().mockResolvedValue(true),
 }));
 
+// What Codex says about the hooks teamai wrote; null = teamai wrote no Codex hook.
+// The app-server conversation itself is covered by codex-trust.test.ts.
+vi.mock('../hooks.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../hooks.js')>()),
+    readCodexHookTrustForScope: vi.fn().mockResolvedValue(null),
+}));
+
 // ── Imports (after mocks) ────────────────────────────────
 
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { pathExists, readFileSafe } from '../utils/fs.js';
-import { TEAMAI_HOOK_SUBCOMMANDS } from '../hooks.js';
+import { TEAMAI_HOOK_SUBCOMMANDS, readCodexHookTrustForScope } from '../hooks.js';
 import { log, setStderrOnly } from '../utils/logger.js';
 import { isGfInstalled, gfIsAuthenticated } from '../providers/tgit/index.js';
 import { buildChecks, doctor, resolveDoctorContext } from '../doctor.js';
@@ -69,6 +76,7 @@ const mockedLoadLocalConfig = loadLocalConfig as Mock;
 const mockedLoadTeamConfig = loadTeamConfig as Mock;
 const mockedPathExists = pathExists as Mock;
 const mockedReadFileSafe = readFileSafe as Mock;
+const mockedReadCodexHookTrust = readCodexHookTrustForScope as Mock;
 const mockedLog = log as unknown as { info: Mock; success: Mock; warn: Mock; error: Mock; debug: Mock };
 const mockedIsGfInstalled = isGfInstalled as Mock;
 const mockedGfIsAuthenticated = gfIsAuthenticated as Mock;
@@ -437,35 +445,44 @@ describe('doctor — hook checks', () => {
         expect(envLine).toContain('✔');
     });
 
-    it('notes Codex may require trust when Codex hooks are installed', async () => {
-        mockedLoadTeamConfig.mockResolvedValue({
-            ...mockTeamConfig,
-            toolPaths: {
-                claude: { settings: '.claude/settings.json', skills: '.claude/skills' },
-                codex: { settings: '.codex/hooks.json', skills: '.codex/skills' },
-            },
-        });
-        // Both settings files exist and contain the hook-dispatch command.
-        mockedReadFileSafe.mockImplementation(async (filePath: string) => {
-            if (filePath.includes('settings.json') || filePath.includes('hooks.json')) {
-                return buildFullHooksContent();
-            }
-            return null;
+    describe('Codex hook trust', () => {
+        const trustCheck = () => consoleSpy.mock.calls.map((c) => String(c[0]))
+            .filter((msg) => msg.includes('Codex trusts the teamai hooks'));
+
+        it('passes when Codex trusts every teamai hook', async () => {
+            mockedReadCodexHookTrust.mockResolvedValueOnce({ kind: 'listed', notTrusted: [] });
+            await doctor({});
+            expect(trustCheck()).toEqual([expect.stringContaining('✔')]);
         });
 
-        await doctor({});
+        it('fails naming each teamai hook Codex will not run', async () => {
+            mockedReadCodexHookTrust.mockResolvedValueOnce({
+                kind: 'listed',
+                notTrusted: [{ file: '/home/u/.codex/hooks.json', command: 'teamai hook-dispatch session-start', status: 'modified' }],
+            });
+            const ok = await doctor({});
+            expect(ok).toBe(false);
+            expect(trustCheck()).toEqual([expect.stringContaining('✖')]);
+            const fix = consoleSpy.mock.calls.map((c) => String(c[0])).find((msg) => msg.includes('Codex will not run'));
+            expect(fix).toContain('teamai hook-dispatch session-start in /home/u/.codex/hooks.json (modified)');
+            expect(fix).toContain('teamai pull');
+            expect(fix).toContain('codexTrustEnabled');
+        });
 
-        const infoLines = mockedLog.info.mock.calls.map((c) => String(c[0]));
-        const note = infoLines.find((msg) => msg.includes('review/trust'));
-        expect(note).toBeDefined();
-        expect(note).toContain('Codex');
-    });
+        it('keeps the trust note when Codex cannot be asked', async () => {
+            mockedReadCodexHookTrust.mockResolvedValueOnce({ kind: 'unavailable', reason: 'codex not found on PATH' });
+            await doctor({});
+            expect(trustCheck()).toEqual([]);
+            const infoLines = mockedLog.info.mock.calls.map((c) => String(c[0]));
+            expect(infoLines.some((msg) => msg.includes('review/trust') && msg.includes('Codex'))).toBe(true);
+        });
 
-    it('does not note Codex trust when no Codex hooks are installed', async () => {
-        // Default mockTeamConfig has only claude; readFileSafe returns full hooks.
-        await doctor({});
-        const infoLines = mockedLog.info.mock.calls.map((c) => String(c[0]));
-        expect(infoLines.some((msg) => msg.includes('review/trust'))).toBe(false);
+        it('says nothing about Codex trust when teamai wrote no Codex hook', async () => {
+            await doctor({});
+            expect(trustCheck()).toEqual([]);
+            const infoLines = mockedLog.info.mock.calls.map((c) => String(c[0]));
+            expect(infoLines.some((msg) => msg.includes('review/trust'))).toBe(false);
+        });
     });
 
     it('should skip tools whose parent directory does not exist', async () => {

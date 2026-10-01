@@ -18,9 +18,10 @@ vi.mock('../hooks.js', async () => {
         reconcileHooksToAllTools: vi.fn(),
         reconcileTeamHooksForConfig: vi.fn(),
         sweepLegacyProjectHooks: vi.fn(),
-        hasInstalledCodexTrustGatedTool: vi.fn(),
-        // Keep the real reminder text so assertions verify the actual wording.
-        codexTrustReminder: actual.codexTrustReminder,
+        trustCodexForScope: vi.fn(),
+        resolveMainCheckoutHooks: vi.fn(),
+        // Keep the real report so assertions verify the actual wording.
+        reportCodexTrust: actual.reportCodexTrust,
     };
 });
 
@@ -42,7 +43,7 @@ vi.mock('../utils/logger.js', () => ({
 // ── Imports (after mocks) ────────────────────────────────
 
 import { autoDetectInit } from '../config.js';
-import { getHookStatus, reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, hasInstalledCodexTrustGatedTool } from '../hooks.js';
+import { getHookStatus, reconcileHooks, reconcileHooksToAllTools, reconcileTeamHooksForConfig, sweepLegacyProjectHooks, trustCodexForScope, resolveMainCheckoutHooks } from '../hooks.js';
 import { resolveTeamHookEntries } from '../resources/hooks.js';
 import { log } from '../utils/logger.js';
 import { hooksInject, hooksRemove, hooksList } from '../hooks-cmd.js';
@@ -55,7 +56,8 @@ const mockedSweep = sweepLegacyProjectHooks as Mock;
 const mockedReconcileStandalone = reconcileHooks as Mock;
 const mockedReconcile = reconcileHooksToAllTools as Mock;
 const mockedReconcileForConfig = reconcileTeamHooksForConfig as Mock;
-const mockedHasCodexTrustGated = hasInstalledCodexTrustGatedTool as Mock;
+const mockedTrustCodex = trustCodexForScope as Mock;
+const mockedMainCheckout = resolveMainCheckoutHooks as Mock;
 const mockedParseTeamHooks = resolveTeamHookEntries as Mock;
 
 /**
@@ -132,7 +134,8 @@ beforeEach(() => {
     mockedReconcileStandalone.mockResolvedValue(undefined);
     mockedReconcile.mockResolvedValue(undefined);
     mockedReconcileForConfig.mockResolvedValue({ ok: true, defs: [] });
-    mockedHasCodexTrustGated.mockResolvedValue(false);
+    mockedTrustCodex.mockResolvedValue(undefined);
+    mockedMainCheckout.mockResolvedValue(null);
     mockedParseTeamHooks.mockResolvedValue(hooksYaml(TEAM_DEFS));
 });
 
@@ -160,8 +163,16 @@ describe('hooksInject', () => {
         expect(mockedLog.success).not.toHaveBeenCalled();
     });
 
-    it('warns to trust Codex hooks when the public Codex is installed', async () => {
-        mockedHasCodexTrustGated.mockResolvedValue(true);
+    it('trusts the Codex hooks it wrote, whatever the last pass recorded, and says how many', async () => {
+        mockedTrustCodex.mockResolvedValue({ kind: 'trusted', hooks: 9 });
+        await hooksInject({});
+        expect(mockedTrustCodex).toHaveBeenCalledWith(mockTeamConfig, mockLocalConfig, { force: true });
+        expect(mockedLog.success).toHaveBeenCalledWith('Trusted 9 teamai hook(s) in Codex');
+        expect(mockedLog.warn).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the trust reminder when Codex cannot be reached', async () => {
+        mockedTrustCodex.mockResolvedValue({ kind: 'unavailable', reason: 'codex is not on PATH' });
         await hooksInject({});
         expect(mockedLog.success).toHaveBeenCalledWith(expect.stringContaining('Hooks injected'));
         const warned = mockedLog.warn.mock.calls.map((c) => String(c[0])).join('\n');
@@ -170,14 +181,14 @@ describe('hooksInject', () => {
         expect(warned).toContain('/hooks');
     });
 
-    it('does not warn about Codex trust when no trust-gated Codex is installed', async () => {
-        mockedHasCodexTrustGated.mockResolvedValue(false);
+    it('does not mention Codex trust when nothing was written for the public Codex', async () => {
+        mockedTrustCodex.mockResolvedValue(undefined);
         await hooksInject({});
         expect(mockedLog.warn).not.toHaveBeenCalled();
     });
 
-    it('suppresses the Codex trust reminder with --silent', async () => {
-        mockedHasCodexTrustGated.mockResolvedValue(true);
+    it('suppresses the Codex trust report with --silent', async () => {
+        mockedTrustCodex.mockResolvedValue({ kind: 'unavailable', reason: 'codex is not on PATH' });
         await hooksInject({ silent: true });
         expect(mockedLog.success).not.toHaveBeenCalled();
         expect(mockedLog.warn).not.toHaveBeenCalled();
@@ -688,7 +699,7 @@ describe('hooksRemove', () => {
             expect.any(String),
             [],
             expect.stringContaining('managed-hooks.json'),
-            { removeAll: true, scope: 'user', installedBaseDir: undefined },
+            { removeAll: true, scope: 'user', installedBaseDir: undefined, mainCheckout: null },
         );
         expect(mockedLog.success).toHaveBeenCalledWith(expect.stringContaining('Hooks removed'));
     });
@@ -712,7 +723,7 @@ describe('hooksRemove', () => {
             '/home/testuser',
             [],
             expect.any(String),
-            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project' },
+            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', mainCheckout: null },
         );
         const userManifest = mockedReconcile.mock.calls[0][3] as string;
         expect(userManifest).toContain('/home/testuser');
@@ -749,7 +760,7 @@ describe('hooksRemove', () => {
             '/path/to/project',
             [],
             expect.any(String),
-            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project' },
+            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', mainCheckout: null },
         );
     });
 

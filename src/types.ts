@@ -615,6 +615,10 @@ export const LocalConfigSchema = z.object({
    *  takes precedence over the team `sharing.coAuthor` default. Undefined means
    *  "defer to the team" (see resolveCoAuthor). */
   coAuthorEnabled: z.boolean().optional(),
+  /** Per-machine opt-out of trusting in Codex what teamai writes for it: the
+   *  hooks (`hooks.state`) and, for project hooks, the project (#955).
+   *  Undefined means on. */
+  codexTrustEnabled: z.boolean().optional(),
   /** When set, only inject hooks into these agents. Additive across multiple init --agent runs. */
   enabledAgents: z.array(z.string()).optional(),
   /**
@@ -825,6 +829,13 @@ export const StateSchema = z.object({
    * literals stay valid; the reconciler treats absent as an empty map.
    */
   coAuthorManaged: z.record(z.string(), z.boolean()).optional(),
+  /**
+   * Fingerprint of what the last Codex trust pass that ended `trusted` saw:
+   * the hooks teamai wrote for Codex, the Codex project MCP record, and the
+   * bytes of those hook files and of Codex's `config.toml` (#955). A pull whose
+   * inputs still match skips spawning `codex app-server`. Absent = run it.
+   */
+  codexTrustFingerprint: z.string().optional(),
   lastUpdateCheck: z.string().nullable().default(null),
   availableUpdate: z.string().nullable().default(null),
 });

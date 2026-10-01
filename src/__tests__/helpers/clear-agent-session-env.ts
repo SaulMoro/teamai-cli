@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll } from 'vitest';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
@@ -17,3 +21,17 @@ for (const name of AGENT_SESSION_ENV) {
 for (const name of ['CLAUDE_CONFIG_DIR', 'COPILOT_HOME', 'OPENCLAW_STATE_DIR']) {
   delete process.env[name];
 }
+
+// Writing Codex hooks makes teamai run `codex app-server` to trust them (#955),
+// which would edit the developer's real Codex config. Shadow any `codex` on
+// PATH with one that exits at once, so every test file — and the CLIs it
+// spawns — sees a failing Codex. A test that needs one prepends the fake from
+// helpers/fake-codex.ts.
+const shadow = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-no-codex-')));
+fs.writeFileSync(path.join(shadow, 'codex'), '#!/bin/sh\nexit 1\n');
+fs.chmodSync(path.join(shadow, 'codex'), 0o755);
+fs.writeFileSync(path.join(shadow, 'codex.cmd'), '@exit /b 1\r\n');
+process.env.PATH = `${shadow}${path.delimiter}${process.env.PATH ?? ''}`;
+afterAll(() => {
+  fs.rmSync(shadow, { recursive: true, force: true });
+});

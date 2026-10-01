@@ -495,6 +495,8 @@ every checkout, so that is where they live now:
 ├── learnings-wt/                              getWorktreeDir → <dataHome>/<dirname>
 ├── reports-wt/                                (the side-branch locks sit beside them)
 ├── pending-learnings/                         pendingLearningsDir → <dataHome>/pending-learnings
+├── managed-main-checkout-hooks.json           team hooks teamai wrote ungated into the main checkout's Claude Code / Codex
+│                                              settings, shared by every checkout (#955; the built-in hooks stay in HOME)
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether

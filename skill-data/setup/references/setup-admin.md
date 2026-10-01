@@ -213,7 +213,7 @@ login` run in an interactive shell (see Step 3).
 Claude Code"). Omitting `--agent` gives an interactive picker — select **every AI
 tool already installed** on the machine. Then **report back which agents were set
 up**, in the user's language: name the tools that will now auto-start TeamAI, and
-any detected tool that was skipped and why (e.g. Codex trust-gate,
+any detected tool that was skipped and why (e.g. Codex hooks not trusted,
 CodeBuddy/WorkBuddy by design — see the troubleshooting reference, `"$(teamai skill path core)/references/troubleshooting.md"`).
 
 ## Step 6 — Verify with doctor
