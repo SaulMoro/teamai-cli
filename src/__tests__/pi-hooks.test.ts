@@ -53,7 +53,7 @@ import {
 import { reconcileHooksToAllTools } from '../hooks.js';
 import { log } from '../utils/logger.js';
 import type { HookDef } from '../types.js';
-import { loadPiExtension } from './helpers/pi-extensions.js';
+import { loadPiExtension, type ExtensionDispatch } from './helpers/pi-extensions.js';
 
 describe('Pi hook extension', () => {
   let tmp: string;
@@ -367,6 +367,34 @@ describe('Pi hook extension', () => {
 });
 
 // Recall attribution (#884): the extension evaluated in `vm`, with a fake host.
+/** The lifecycle dispatches, without the team-instructions request (#945), which has its own tests. */
+const lifecycle = (dispatches: ExtensionDispatch[]) => dispatches.filter((d) => d.args[1] !== 'instructions');
+
+// Team instructions (#945): the extension adds hook-dispatch's context to the prompt.
+describe('Pi extension: team instructions in the system prompt (#945)', () => {
+  const ctx = { cwd: '/work/proj/src', sessionManager: { getSessionId: () => 'pi-sess' } };
+  const context = (text: string) => (args: string[]) => args[1] === 'instructions'
+    ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+    : '';
+
+  it('appends the blocks to each run\'s system prompt, asking hook-dispatch once per session', async () => {
+    const { on, dispatches } = loadPiExtension(context('TEAM-BLOCKS'));
+    await on.session_start({}, ctx);
+    const first = await on.before_agent_start({ prompt: 'one', systemPrompt: 'BASE' }, ctx);
+    const second = await on.before_agent_start({ prompt: 'two', systemPrompt: 'BASE' }, ctx);
+    expect(first).toEqual({ systemPrompt: 'BASE\n\nTEAM-BLOCKS' });
+    expect(second).toEqual({ systemPrompt: 'BASE\n\nTEAM-BLOCKS' });
+    expect(dispatches.filter((d) => d.args[1] === 'instructions')).toHaveLength(1);
+    expect(dispatches.find((d) => d.args[1] === 'instructions')?.payload).toEqual({ cwd: '/work/proj/src', session_id: 'pi-sess' });
+  });
+
+  it('leaves the system prompt alone when there are no blocks (user scope, or teamai unavailable)', async () => {
+    const { on } = loadPiExtension();
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: 'BASE' }, ctx)).toBeUndefined();
+  });
+});
+
 describe('Pi extension: bridge payloads (#884)', () => {
   const ctx = { cwd: '/work/proj', sessionManager: { getSessionId: () => 'pi-sess' } };
 
@@ -375,12 +403,12 @@ describe('Pi extension: bridge payloads (#884)', () => {
     await on.session_start({}, ctx);
     await on.before_agent_start({ prompt: 'hi' }, ctx);
     await on.agent_settled({}, ctx);
-    expect(dispatches.map((d) => [d.args[1], d.payload])).toEqual([
+    expect(lifecycle(dispatches).map((d) => [d.args[1], d.payload])).toEqual([
       ['session-start', { cwd: '/work/proj', session_id: 'pi-sess' }],
       ['prompt-submit', { cwd: '/work/proj', session_id: 'pi-sess', prompt: 'hi' }],
       ['stop', { cwd: '/work/proj', session_id: 'pi-sess' }],
     ]);
-    expect(dispatches.every((d) => d.args.join(' ').endsWith('--tool pi'))).toBe(true);
+    expect(lifecycle(dispatches).every((d) => d.args.join(' ').endsWith('--tool pi'))).toBe(true);
   });
 
   it('sends the cached input, the text output and the status on post-tool-use', async () => {
@@ -392,7 +420,7 @@ describe('Pi extension: bridge payloads (#884)', () => {
     await end('c1', false, [{ type: 'text', text: 'line one' }, { type: 'image', data: 'AAAA' }, { type: 'text', text: 'line two' }]);
     await end('c2', true, [{ type: 'text', text: 'cat: x.md: No such file\n\nCommand exited with code 1' }]);
     await end('c3', undefined, []);
-    expect(dispatches.map((d) => d.payload)).toEqual([
+    expect(lifecycle(dispatches).map((d) => d.payload)).toEqual([
       { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: 'line one\nline two', tool_status: 'success' },
       { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: 'cat: x.md: No such file\n\nCommand exited with code 1', tool_status: 'failure' },
       { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'bash', tool_input: { command: 'cat x.md' }, tool_response: '', tool_status: 'unknown' },
@@ -403,7 +431,7 @@ describe('Pi extension: bridge payloads (#884)', () => {
     const { on, dispatches } = loadPiExtension();
     await on.session_start({}, { cwd: '/work/proj' });
     await on.tool_execution_end({ toolCallId: 'c1', toolName: 'read' }, { cwd: '/work/proj' });
-    expect(dispatches.map((d) => d.payload)).toEqual([
+    expect(lifecycle(dispatches).map((d) => d.payload)).toEqual([
       { cwd: '/work/proj' },
       { cwd: '/work/proj', tool_name: 'read', tool_input: {}, tool_status: 'unknown' },
     ]);

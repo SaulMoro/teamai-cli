@@ -105,7 +105,9 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   // level, so .omp/AGENTS.md would hide the project's AGENTS.md: teamai's OMP
   // extension adds the blocks to each turn's system prompt instead.
   omp: { file: () => undefined, hook: true, retired: ['.omp/AGENTS.md'] },
-  pi: { file: configured, retired: [] },
+  // Pi reads the project's AGENTS.md itself; teamai's Pi extension adds the
+  // blocks to each run's system prompt.
+  pi: { file: () => undefined, hook: true, retired: ['AGENTS.md'] },
   workbuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['.codebuddy/CODEBUDDY.md'] },
   openclaw: { file: configured, retired: [] },

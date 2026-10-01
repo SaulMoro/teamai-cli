@@ -116,7 +116,46 @@ export default function teamaiHooks(pi) {
     }
   };
 
+  // The member's culture, claudemd and recall blocks for a project session,
+  // or "" (user scope, or teamai unavailable). Fetched once per session.
+  let instructions;
+  const loadInstructions = (ctx) => new Promise((resolve) => {
+    try {
+      const cwd = ctx.cwd;
+      const command = process.platform === "win32" ? "teamai.cmd" : "teamai";
+      const child = spawn(command, ["hook-dispatch", "instructions", "--tool", "pi"], {
+        cwd,
+        stdio: ["pipe", "pipe", "ignore"],
+        windowsHide: true,
+        shell: process.platform === "win32",
+      });
+      let out = "";
+      const finish = () => {
+        clearTimeout(timer);
+        try {
+          const text = out.trim() ? JSON.parse(out).hookSpecificOutput?.additionalContext : undefined;
+          resolve(typeof text === "string" ? text : "");
+        } catch {
+          resolve("");
+        }
+      };
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch {}
+        out = "";
+        finish();
+      }, 15000);
+      child.stdout?.on("data", (chunk) => { out += chunk; });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(JSON.stringify({ cwd, ...sessionOf(ctx) }));
+      child.once("close", finish);
+      child.once("error", () => { out = ""; finish(); });
+    } catch {
+      resolve("");
+    }
+  });
+
   pi.on("session_start", async (_event, ctx) => {
+    instructions = loadInstructions(ctx);
     await dispatch("session-start", ctx);
   });
 
@@ -124,8 +163,12 @@ export default function teamaiHooks(pi) {
     await dispatch("stop", ctx);
   });
 
+  // Pi renders the system prompt again for every run, so adding the blocks
+  // to this run's prompt reaches the model once, without piling up.
   pi.on("before_agent_start", async (event, ctx) => {
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
+    const text = await (instructions ??= loadInstructions(ctx));
+    return text ? { systemPrompt: \`\${event.systemPrompt}\\n\\n\${text}\` } : undefined;
   });
 
   pi.on("tool_execution_start", async (event) => {
