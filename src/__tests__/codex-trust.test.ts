@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
 import fse from 'fs-extra';
+
+vi.mock('../utils/git.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/git.js')>(),
+  resolveAnchors: vi.fn().mockResolvedValue(null),
+  listWorktrees: vi.fn().mockResolvedValue([]),
+}));
 
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
@@ -10,6 +15,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { readCodexHookTrustForScope, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from '../hooks.js';
 import { trustCodexHooks, trustCodexProject } from '../codex-trust.js';
+import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { log } from '../utils/logger.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
@@ -77,6 +83,8 @@ async function codexEntries(file: string): Promise<Array<{ key: string; command:
 }
 
 beforeEach(async () => {
+  vi.mocked(resolveAnchors).mockReset().mockResolvedValue(null);
+  vi.mocked(listWorktrees).mockReset().mockResolvedValue([]);
   home = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-trust-home-')));
   repo = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-trust-repo-'));
   fakeBin = installFakeCodex();
@@ -391,14 +399,10 @@ describe('Codex trust — project scopes', () => {
   });
 
   it('a self worktree trusts the main checkout\'s hooks, which Codex reads there', async () => {
-    const git = (cwd: string, ...args: string[]) => {
-      const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
-      if (r.status !== 0) throw new Error(r.stderr);
-    };
-    git(project, 'init', '-q');
-    git(project, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
     const worktree = `${project}-wt`;
-    git(project, 'worktree', 'add', '-q', '--detach', worktree);
+    await fse.ensureDir(worktree);
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? project, projectAnchor: project }));
+    vi.mocked(listWorktrees).mockResolvedValue([project, worktree]);
     try {
       for (const root of [project, worktree]) {
         await fse.ensureDir(path.join(root, '.codex'));
@@ -412,29 +416,24 @@ describe('Codex trust — project scopes', () => {
       expect(trustedKeys()).toEqual(expect.arrayContaining(mainEntries.map((e) => e.key)));
       expect(readFakeCodexState(codexHome()).projects[project]).toEqual({ trust_level: 'trusted' });
     } finally {
-      git(project, 'worktree', 'remove', '--force', worktree);
+      await fse.remove(worktree);
     }
   });
 
   it('shares the trusted fingerprint when alternating project checkouts', async () => {
-    const git = (...args: string[]) => {
-      const result = spawnSync('git', args, { cwd: project, encoding: 'utf8' });
-      if (result.status !== 0) throw new Error(result.stderr);
-    };
-    git('init', '-q');
-    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
     const worktree = `${project}-wt`;
-    git('worktree', 'add', '-q', '--detach', worktree);
+    await fse.ensureDir(worktree);
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? project, projectAnchor: project }));
+    vi.mocked(listWorktrees).mockResolvedValue([project, worktree]);
     try {
       await writeYaml(LINT_HOOK);
-      const { resolveProjectDataHome } = await import('../config.js');
-      const dataHome = await resolveProjectDataHome(project);
+      const dataHome = path.join(home, '.teamai', 'shared-project');
       await writeAndTrust(projectConfig({ projectRoot: worktree, dataHome }));
       await writeAndTrust(projectConfig({ dataHome }));
       await writeAndTrust(projectConfig({ projectRoot: worktree, dataHome }));
       expect(calls('initialize')).toBe(1);
     } finally {
-      git('worktree', 'remove', '--force', worktree);
+      await fse.remove(worktree);
     }
   });
 

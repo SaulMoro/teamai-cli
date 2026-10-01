@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -25,6 +24,8 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 vi.mock('../utils/git.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../utils/git.js')>(),
+  resolveAnchors: vi.fn().mockResolvedValue(null),
+  listWorktrees: vi.fn().mockResolvedValue([]),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
 }));
@@ -85,6 +86,7 @@ vi.mock('../mcp-reconcile.js', async (importOriginal) => ({
 }));
 
 import { detectProjectConfig, loadLocalConfigForScope, loadTeamConfig } from '../config.js';
+import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { pull } from '../pull.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
@@ -102,6 +104,8 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
   let teamConfig: TeamaiConfig;
 
   beforeEach(async () => {
+    vi.mocked(resolveAnchors).mockReset().mockResolvedValue(null);
+    vi.mocked(listWorktrees).mockReset().mockResolvedValue([]);
     tempDir = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-pull-codex-trust-')));
     homeDir = path.join(tempDir, 'home');
     project = path.join(tempDir, 'project');
@@ -157,11 +161,10 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
     expect(readFakeCodexState(path.join(homeDir, '.codex')).projects[project]).toEqual({ trust_level: 'trusted' });
   });
   it('pull from a worktree without .codex trusts the main keys before SessionStart', async () => {
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: project });
-    git('init', '-q');
-    git('-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '--allow-empty', '-m', 'init');
     const worktree = path.join(tempDir, 'worktree');
-    git('worktree', 'add', '-q', '--detach', worktree);
+    await fse.ensureDir(worktree);
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? project, projectAnchor: project }));
+    vi.mocked(listWorktrees).mockResolvedValue([project, worktree]);
     localConfig.projectRoot = worktree;
     writeFakeCodexOptions(path.join(homeDir, '.codex'), { projectLayers: { [worktree]: project } });
     vi.mocked(reconcileMcpForConfig).mockResolvedValue({ changes: [], wrote: false } as never);

@@ -4,10 +4,17 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import fse from 'fs-extra';
 
+vi.mock('../utils/git.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/git.js')>(),
+  resolveAnchors: vi.fn().mockResolvedValue(null),
+  listWorktrees: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
+import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { reconcileTeamHooksForConfig } from '../hooks.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -67,6 +74,8 @@ function mainManifest(): Promise<Record<string, Array<{ id: string }>>> {
 }
 
 beforeEach(async () => {
+  vi.mocked(resolveAnchors).mockReset().mockResolvedValue(null);
+  vi.mocked(listWorktrees).mockReset().mockResolvedValue([]);
   project = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-recon-proj-'));
   repo = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-recon-repo-'));
   home = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-recon-home-'));
@@ -473,17 +482,12 @@ builtin:
 describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () => {
   const STOP_LINT = 'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n';
 
-  function git(cwd: string, ...args: string[]): void {
-    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
-  }
-
   async function mainWithWorktree(): Promise<{ main: string; worktree: string }> {
     const main = await fse.realpath(project);
-    git(main, 'init', '-q');
-    git(main, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
     const worktree = path.join(await fse.realpath(os.tmpdir()), `teamai-recon-wt-${path.basename(main)}`);
-    git(main, 'worktree', 'add', '-q', '--detach', worktree);
+    await fse.ensureDir(worktree);
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? main, projectAnchor: main }));
+    vi.mocked(listWorktrees).mockResolvedValue([main, worktree]);
     return { main, worktree };
   }
 
@@ -503,7 +507,7 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
       // The SessionStart a new Codex worktree runs before it has a `.codex/`.
       expect((await codexSettings()).hooks.SessionStart).toHaveLength(1);
     } finally {
-      git(main, 'worktree', 'remove', '--force', worktree);
+      await fse.remove(worktree);
     }
   });
 
@@ -527,7 +531,7 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
       expect(stop.filter((c) => c.startsWith('if [ "$PWD"'))).toEqual([gated(other, 'npm run lint')]);
       expect(((await manifest()).codex as unknown as Array<{ command: string }>).map((r) => r.command)).toEqual([gated(other, 'npm run lint')]);
     } finally {
-      git(main, 'worktree', 'remove', '--force', worktree);
+      await fse.remove(worktree);
       await fse.remove(other);
     }
   });
