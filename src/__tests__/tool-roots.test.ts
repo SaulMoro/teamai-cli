@@ -79,15 +79,17 @@ describe('toolRoots — re-rooting a relocated tool', () => {
       toolRoots: { codex: path.join(home, '.codex-alt') },
     }));
 
+    // Codex reads $CODEX_HOME/AGENTS.md in user scope, so its instruction file moves too (#938).
     expect(paths.codex).toEqual({
       skills: '.codex-alt/skills',
-      rules: '.codex-alt/rules',
       settings: '.codex-alt/hooks.json',
+      claudemd: '.codex-alt/AGENTS.md',
       agents: '.codex-alt/agents',
       mcp: '.codex-alt/config.toml',
+      userScope: { claudemd: '.codex-alt/AGENTS.md' },
     });
     expect(paths.claude).toEqual(teamConfig.toolPaths.claude);
-    expect(paths['codex-internal']).toEqual(teamConfig.toolPaths['codex-internal']);
+    expect(paths['codex-internal']).toEqual(scopedToolPaths(teamConfig, localConfig())['codex-internal']);
   });
 
   it('expands a leading ~/ in the configured root', () => {
