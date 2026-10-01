@@ -923,7 +923,7 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check.fix).toContain(path.join(projectRoot, '.codex', 'config.toml'));
       expect(check.fix).toContain('docs');
       expect(check.fix).toContain(codexConfig);
-      expect(check.fix).toContain(`[projects.${JSON.stringify(real)}] trust_level = "trusted"`);
+      expect(check.fix).toContain(`add a [projects.${JSON.stringify(real)}] table holding trust_level = "trusted"`);
     });
 
     it('passes once Codex trusts the project by its real path', async () => {
@@ -942,18 +942,40 @@ describe('doctor — MCP servers delivered on disk', () => {
       expect(check?.fix).toContain('"untrusted"');
     });
 
-    it('passes in a linked worktree once Codex trusts the main checkout', async () => {
-      const main = projectRoot;
-      const git = (...args: string[]): void => {
-        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: main });
-      };
-      git('commit', '-q', '--allow-empty', '-m', 'init');
-      const worktree = path.join(tempDir, 'codex-wt');
-      git('worktree', 'add', '-q', worktree);
-      await useCheckout(worktree);
-      await writeCodexConfig(trusted(await fse.realpath(main)));
+    describe('in a linked worktree', () => {
+      let main: string;
 
-      expect(await (await trustCheck())?.check()).toBe(true);
+      beforeEach(async () => {
+        main = await fse.realpath(projectRoot);
+        const git = (...args: string[]): void => {
+          execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: main });
+        };
+        git('commit', '-q', '--allow-empty', '-m', 'init');
+        const worktree = path.join(tempDir, 'codex-wt');
+        git('worktree', 'add', '-q', worktree);
+        await useCheckout(worktree);
+      });
+
+      it('passes once Codex trusts the main checkout', async () => {
+        await writeCodexConfig(trusted(main));
+
+        expect(await (await trustCheck())?.check()).toBe(true);
+      });
+
+      it('passes over a worktree entry without a trust_level, which decides nothing', async () => {
+        await writeCodexConfig(`[projects.${JSON.stringify(await fse.realpath(projectRoot))}]\n${trusted(main)}`);
+
+        expect(await (await trustCheck())?.check()).toBe(true);
+      });
+
+      it('fails when the worktree entry is untrusted, whatever the main checkout says', async () => {
+        const worktree = await fse.realpath(projectRoot);
+        await writeCodexConfig(trusted(worktree, 'untrusted') + trusted(main));
+
+        const check = await trustCheck();
+        expect(await check?.check()).toBe(false);
+        expect(check?.fix).toContain(`[projects.${JSON.stringify(worktree)}]`);
+      });
     });
 
     it('reads the Codex config of the recorded CODEX_HOME root', async () => {
