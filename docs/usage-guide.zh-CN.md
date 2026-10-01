@@ -738,7 +738,7 @@ excludedSkills:
 
 ### 推送本地资源
 
-扫描前，`push` 会用团队仓库的新版刷新未修改的旧规则副本。对于 Copilot，会单独比较 Markdown 正文，忽略自动生成的 `applyTo` 头，并以 `.instructions.md` 格式写入更新；本地正文编辑会保留。此行为适用于项目规则和 `COPILOT_HOME` 下的用户规则。它刷新的每份副本都会记录为 teamai 写入的内容，因此下一次 `teamai pull` 仍会更新它，而不会当作你的修改保留。
+扫描前，`push` 会用团队仓库的新版刷新未修改的旧规则副本。对于有自有规则格式的工具（Cursor 与 JoyCode 的 `.mdc`、Copilot 的 `.instructions.md`、Kiro steering、Qoder rules），会单独比较 Markdown 正文，忽略自动生成的头部，并以该工具的格式写入更新；本地正文编辑会保留。对 Copilot，此行为适用于项目规则和 `COPILOT_HOME` 下的用户规则。它刷新的每份副本都会记录为 teamai 写入的内容，因此下一次 `teamai pull` 仍会更新它，而不会当作你的修改保留。
 
 团队仅修改 `paths` 时，只要本地文件仍与某个已记录版本的生成副本一致，`push` 也会刷新 Copilot 的 `applyTo`；此时本地手动修改过的头部会保留。
 
@@ -2139,11 +2139,15 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 
 Qoder 已作为内置目标支持。TeamAI 会将 Skills、Rules 和 Subagents 分别下发到 `.qoder/skills/`、`.qoder/rules/` 和 `.qoder/agents/`。Hooks 与 MCP Server 会合并进对应作用域的 `.qoder/settings.json`，并保留用户已有的其他设置；这些路径与 Qoder 的用户级和项目级配置约定一致。
 
+Rules 按 Qoder Desktop 写入的形式生成，Qoder CLI 也读取这种形式：带 `paths:` 的规则写成 `trigger: glob` 加一行不带引号、以逗号分隔的 `glob:`，由于该行会按每个逗号切分，`{a,b}` 形式的选择会展开为多个 glob；没有 `paths` 的规则写成 `trigger: always_on`。Qoder 未公开这种 frontmatter 的 schema，该形式取自 `alibaba/tron-one-agent` 中 Desktop 生成的规则文件。`push` 时只有 Markdown 正文回流；`.qoder/rules/` 中没有对应团队规则的文件属于你自己：`pull` 不会删除它，`push` 也不会把它当作新的团队规则提交。旧版 teamai 原样写入的副本，若仍是 teamai 写入的内容，下一次 `pull` 会改写为新格式；你修改过的副本会保留并给出提示。
+
 Qoder CN 是独立发行的版本，其**用户级**目录为 `~/.qoder-cn` 而非 `~/.qoder`，因此它作为独立的内置目标 `qoder-cn` 支持，而不是并入 `qoder`。两者仅用户作用域不同：用户级的资源写入 `~/.qoder-cn/{skills,rules,agents}`，Hooks 与 MCP 写入 `~/.qoder-cn/settings.json`；项目作用域则沿用 Qoder 的 `<project>/.qoder/` 布局。两者读取相同的 Claude 兼容资源格式，因此下发内容一致，仅用户级根目录不同。同时安装两个版本时，TeamAI 会分别同步到各自的用户目录，无需再建软链接。
 
 ### Kiro
 
 Kiro 已作为内置目标支持。TeamAI 会将 Skills、Rules 和 Subagents 分别下发到 `.kiro/skills/`、`.kiro/steering/` 和 `.kiro/agents/`，与 Kiro 官方文档定义的[工作区 Skills](https://kiro.dev/docs/skills/)、[Steering](https://kiro.dev/docs/steering/)和自定义 agents 布局一致。Subagents 渲染为 Kiro CLI 2.x 与 3.x 都支持的 JSON；每个文件都会保留 Kiro 私有字段和自定义 Hooks，并加入 TeamAI 管理的 `hooks.agentSpawn` 命令，在交互式 CLI 会话激活该自定义 agent 时派发 `session-start`。这一经验证的 CLI 2.x Hook 内嵌在 `.kiro/agents/*.json`，而不是写入 IDE 1.x / CLI 3.x 引入的独立 `.kiro/hooks/`；Kiro 内存中的内置默认 agent 无法修改，`--no-interactive` 也不会触发 `agentSpawn`。MCP Server 会合并进对应作用域的 `.kiro/settings/mcp.json`（见上文 MCP 章节）。
+
+Rules 以带 Kiro inclusion frontmatter 的 steering 文件写入 `.kiro/steering/` 与 `~/.kiro/steering/`：带 `paths:` 的规则写成 `inclusion: fileMatch`，并把其 glob 列表写入 `fileMatchPattern`；没有 `paths` 的规则写成 `inclusion: always`。`push` 时只有 Markdown 正文回流；没有对应团队规则的 steering 文件（例如 Kiro 自己生成的 `product.md`）属于你自己：`pull` 不会删除它，`push` 也不会把它当作新的团队规则提交。旧版 teamai 原样写入的副本，若仍是 teamai 写入的内容，下一次 `pull` 会改写为新格式；你修改过的副本会保留并给出提示。Kiro CLI 无论 `inclusion` 取值都会加载全部 steering 文件（[kirodotdev/Kiro#7950](https://github.com/kirodotdev/Kiro/issues/7950)），因此在 CLI 中限定路径的规则也会始终生效。
 
 ### ZCode
 
@@ -2215,7 +2219,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 除了托管平台、clone、配置和 hook 检查之外，`doctor` 还会验证落到本机上的内容。`<tool> is installed` 在 `enabledAgents` 列出了不会收到任何内容的工具时失败——这正是 pull 报告成功、而该工具什么都没收到的情况。它使用与同步相同的解析逻辑，因此像 OpenClaw 这样把 skills 放在 workspace 目录而非工具根目录的工具，会在同步真正写入的位置被判断。工具已安装时也会作为通过项报告，因此 `--json` 无论哪种情况都会为每个已启用工具给出一条记录。pull 结束时的检查只覆盖它从当前目录解析出的那个 scope；其他 scope 请在对应目录下运行 `teamai doctor`。`Skills delivered to <tool>` 会把角色命名空间、标签订阅与排除规则解析出的 skill 集合，与每个已安装工具磁盘上的内容比对：从未送达的 skill 与送达但不可读的 skill 会分别报告——后者指 `SKILL.md` 缺失、frontmatter 无法解析，或其 `name` 与目录名不一致，导致 agent 永远发现不了它。`Team docs delivered` 将你应收到的文档（不含未激活的 docs namespace）与 `sharing.docs.localDir` 比对（它只有一个目标目录，而非每个工具一个）；每个应有的文档都必须是可读取的文件，因此占用了该名字的目录或断链接也算缺失。它还会将本地多余的非隐藏文件报告为过期文档，即使团队文档已经删空也会检查；本地隐藏文件会保留，不会使检查失败，未激活 namespace 中团队文档的本地副本也不会：pull 会删除未修改的副本，并点名你修改过的副本。`doctor` 还会输出提示，它们只是信息，不是失败的检查。每条提示指出一个在本机替换了根目录条目的 namespace skill、agent、rule、共享指令文件、env 变量、hook、MCP server 或团队模型配置（`rules: "style" from rules/checkout/style.md replaces rules/style.md`）。当某个 namespace 提供了 env 变量、hook、MCP server 或团队模型配置时，还会有一条提示按来源统计该类型的条目（`env: 3 received here (2 root, 1 checkout)`）。未配置角色或项目时，提示改为列出团队仓库中重复定义的每个文件，以及在根文件中重复出现的每个 env 变量、hook 或 MCP server 名称。
 
-`Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`、`.instructions.md` 带 `applyTo`），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
+`Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`、`.instructions.md` 带 `applyTo`、Kiro 的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
 
 有三个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json` 的 `instructions` 中是否仍列着 teamai 所拥有的那条 glob：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in Codex AGENTS.md` 把该工具 `AGENTS.md` 中的 team-rules 区块与团队 rule 内联后的内容比对，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。Codex 没有 `Rules delivered to <tool>` 检查。
 

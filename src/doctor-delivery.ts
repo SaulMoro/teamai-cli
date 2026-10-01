@@ -20,6 +20,7 @@ import {
   SHELL_PROFILE_CANDIDATE_NAMES,
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
+import { ruleFormatForTool } from './resources/rule-format.js';
 
 /**
  * The checks that verify the payload rather than the plumbing: what each tool
@@ -272,9 +273,10 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   const activation = await buildRulesActivationChecks(ctx, items);
 
   // `pullItem` writes the handler's render byte for byte, so anything else at
-  // that path is a stale or hand-edited copy. Cursor reads `globs` and
-  // `alwaysApply` and Copilot reads `applyTo`; comparing against the render
-  // catches a wrong value there, which checking the keys were present did not.
+  // that path is a stale or hand-edited copy. A tool with its own rules format
+  // scopes the rule by fields of it (Cursor `globs`, Kiro `inclusion`, …);
+  // comparing against the render catches a wrong value there, which checking
+  // the keys were present did not.
   const ruleLabels = ['not delivered', 'delivered from an older copy', CHANGED_BY_YOU] as const;
   const perTool: Check[] = [...(await walkDelivery(
     getHandler('rules'),
@@ -296,13 +298,22 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
     // filename carries a per-tool extension the reader would have to derive.
     fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ruleLabels)}. `
       + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
-      + 'so it cannot restore this. An older copy is one whose bytes are no longer what teamai '
-      + `renders for ${tool}, frontmatter included: a \`.mdc\` or \`.instructions.md\` whose `
-      + '`globs`, `alwaysApply` or `applyTo` drifted from the team `.md` applies to the wrong '
-      + `files while looking perfectly well-formed.${changedByYouFix(delivery)}`,
+      + `so it cannot restore this. ${olderRuleCopyMeaning(tool)}${changedByYouFix(delivery)}`,
   }));
 
   return [...activation, ...perTool];
+}
+
+/** What a rule copy "delivered from an older copy" means for `tool`, in its own format. */
+function olderRuleCopyMeaning(tool: string): string {
+  const fields = ruleFormatForTool(tool)?.scopeFields ?? [];
+  if (fields.length === 0) {
+    return `An older copy is one whose bytes are no longer the team \`.md\`, which ${tool} gets verbatim.`;
+  }
+  const named = fields.map((field) => `\`${field}\``);
+  return `An older copy is one whose bytes are no longer what teamai renders for ${tool}, frontmatter included: `
+    + `one whose ${named.slice(0, -1).join(', ')}${named.length > 1 ? ' or ' : ''}${named[named.length - 1]} drifted `
+    + 'from the team `.md` applies to the wrong files while looking perfectly well-formed.';
 }
 
 /**

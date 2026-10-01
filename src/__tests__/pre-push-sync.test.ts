@@ -30,6 +30,7 @@ vi.mock('../utils/git.js', () => ({
 import { syncTeamUpdatesToLocal } from '../utils/pre-push-sync.js';
 import { fileHash } from '../utils/fs.js';
 import { teamRuleToCopilotInstructions } from '../resources/copilot-instructions.js';
+import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
 describe('syncTeamUpdatesToLocal — rules', () => {
@@ -447,6 +448,21 @@ describe('syncTeamUpdatesToLocal — rules', () => {
 
     expect(await fse.readFile(mdcPath, 'utf-8')).toBe(before);
     expect(mockGetFileContentAtRev).not.toHaveBeenCalled();
+  });
+
+  it('refreshes an unedited Kiro render to the team update, in Kiro\'s format (#946)', async () => {
+    await fse.ensureDir(path.join(homeDir, '.kiro', 'steering'));
+    teamConfig.toolPaths.kiro = { rules: '.kiro/steering' };
+    const oldRule = '---\npaths: ["src/**"]\n---\n\nv1 content\n';
+    const newRule = '---\npaths: ["src/**"]\n---\n\nv2 content\n';
+    await fse.writeFile(path.join(repoPath, 'rules', 'my-rule.md'), newRule);
+    const localFile = path.join(homeDir, '.kiro/steering', 'my-rule.md');
+    await fse.writeFile(localFile, teamRuleToKiroSteering(oldRule));
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from(oldRule));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
+
+    expect(await fse.readFile(localFile, 'utf-8')).toBe(teamRuleToKiroSteering(newRule));
   });
 
   describe.each(['project', 'user'] as const)('Copilot rules in %s scope', (scope) => {

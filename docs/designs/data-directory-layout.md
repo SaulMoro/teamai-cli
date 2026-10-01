@@ -104,9 +104,10 @@ resets nothing, since a checkout recorded at an older revision already misses
 the fast path. `push` needs that entry too: before scanning, it syncs each rule
 and skill the member never edited, and "never edited" means equal to the
 version at a revision *this* checkout synced, not the shared `lastPullRev`
-another checkout may have moved (#812). Cursor and Copilot rules compare bodies
-against those revisions, ignoring derived frontmatter, and render refreshed
-copies in the tool's native format. Rule sync uses the same tool root as the
+another checkout may have moved (#812). Rules of a tool with its own rules
+format (`RULE_FORMATS` in `rule-format.ts`: Cursor, JoyCode, Copilot, Kiro,
+Qoder) compare bodies against those revisions, ignoring derived frontmatter,
+and render refreshed copies in the tool's native format. Rule sync uses the same tool root as the
 scanner, including `COPILOT_HOME` for user-scope Copilot instructions.
 It checks `isAgentExcluded` before installation detection, so retained tool
 directories do not authorize writes to rules excluded by the local configuration.
@@ -174,6 +175,13 @@ its copy still has the bytes `delivered` records but not the current render (an
 older CLI's render, such as Claude extras in a Qoder copy). Without a
 `delivered` entry for the copy nothing tells that render from an edit, so it
 is left alone.
+
+Rules get the same treatment for a render change (#946): when a CLI upgrade
+gives a tool its own rules format (Kiro, Qoder), the fast path rewrites each
+rule copy that still has the bytes `delivered` records but is not the current
+render, records the new bytes, and leaves a copy without an entry alone. A
+copy the member changed is kept and named when teamai would now deliver other
+bytes there.
 
 ### Why the main worktree, not `git-common-dir` (verified)
 

@@ -203,6 +203,28 @@ describe('doctor — rules delivered on disk', () => {
     expect(claude.fix).toContain('delivered from an older copy: reviews');
   });
 
+  it.each([
+    ['kiro', '.kiro/steering', '---\ninclusion: fileMatch\nfileMatchPattern: ["**/*.ts"]\n---\n\n', '`inclusion` or `fileMatchPattern`'],
+    ['qoder', '.qoder/rules', '---\ntrigger: glob\nglob: **/*.ts\n---\n\n', '`trigger` or `glob`'],
+  ])('checks %s against its own render, and names the fields it scopes by (#946)', async (tool, dir, frontmatter, fields) => {
+    await writeTeamRule('reviews', '---\npaths:\n  - "**/*.ts"\n---\n');
+    teamConfig.toolPaths = { [tool]: { rules: dir } };
+    const always = tool === 'kiro' ? '---\ninclusion: always\n---\n\n' : '---\ntrigger: always_on\n---\n\n';
+    await fse.outputFile(path.join(homeDir, dir, 'coding-style.md'), `${always}Body of coding-style\n`);
+    const reviews = path.join(homeDir, dir, 'reviews.md');
+    await fse.outputFile(reviews, `${frontmatter}Body of reviews\n`);
+
+    expect(await (await rulesCheck(tool)).check()).toBe(true);
+
+    // A hand edit to the glob: well-formed, and wrong.
+    await fse.writeFile(reviews, `${frontmatter.replace('**/*.ts', '**/*.py')}Body of reviews\n`);
+    const check = await rulesCheck(tool);
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('delivered from an older copy: reviews');
+    expect(check.fix).toContain(fields);
+    expect(check.fix).not.toContain('.mdc');
+  });
+
   it('passes a copy the member changed since teamai delivered it, which pull keeps (#822)', async () => {
     const edited = path.join(homeDir, CLAUDE_RULES, 'reviews.md');
     await fse.writeFile(edited, 'My own version\n');

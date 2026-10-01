@@ -1385,6 +1385,153 @@ describe('RulesHandler — Cursor-compatible .mdc handling', () => {
   });
 });
 
+describe('RulesHandler — Kiro and Qoder rule formats (#946)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let repoPath: string;
+  let handler: RulesHandler;
+  let teamConfig: TeamaiConfig;
+  let localConfig: LocalConfig;
+
+  const SCOPED = '---\npaths:\n  - "src/{a,b}/**"\n---\n\nUse named exports.\n';
+  const KIRO = '---\ninclusion: fileMatch\nfileMatchPattern: ["src/{a,b}/**"]\n---\n\nUse named exports.\n';
+  const QODER = '---\ntrigger: glob\nglob: src/a/**, src/b/**\n---\n\nUse named exports.\n';
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-rules-formats-'));
+    homeDir = path.join(tmpDir, 'home');
+    repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'scoped.md'), SCOPED);
+    for (const dir of ['.claude/rules', '.kiro/steering', '.qoder/rules', '.qoder-cn/rules']) {
+      await fse.ensureDir(path.join(homeDir, dir));
+    }
+    vi.stubEnv('HOME', homeDir);
+    handler = new RulesHandler();
+    teamConfig = {
+      team: 'test',
+      description: '',
+      repo: 'https://git.woa.com/test/repo.git',
+      provider: 'tgit' as const,
+      reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: {
+        claude: { rules: '.claude/rules' },
+        kiro: { rules: '.kiro/steering' },
+        qoder: { rules: '.qoder/rules' },
+        'qoder-cn': { rules: '.qoder/rules', userScope: { rules: '.qoder-cn/rules' } },
+      },
+    };
+    localConfig = {
+      repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
+      username: 'testuser',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+    };
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes each tool its own render in user scope', async () => {
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(homeDir, '.kiro/steering/scoped.md'), 'utf-8')).toBe(KIRO);
+    expect(await fse.readFile(path.join(homeDir, '.qoder/rules/scoped.md'), 'utf-8')).toBe(QODER);
+    expect(await fse.readFile(path.join(homeDir, '.qoder-cn/rules/scoped.md'), 'utf-8')).toBe(QODER);
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules/scoped.md'), 'utf-8')).toBe(SCOPED);
+  });
+
+  it('writes the same renders in project scope', async () => {
+    const projectRoot = path.join(tmpDir, 'project');
+    for (const dir of ['.kiro/steering', '.qoder/rules']) await fse.ensureDir(path.join(projectRoot, dir));
+    localConfig.scope = 'project';
+    localConfig.projectRoot = projectRoot;
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(projectRoot, '.kiro/steering/scoped.md'), 'utf-8')).toBe(KIRO);
+    expect(await fse.readFile(path.join(projectRoot, '.qoder/rules/scoped.md'), 'utf-8')).toBe(QODER);
+  });
+
+  it('a clean pull leaves nothing to push', async () => {
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await handler.scanLocalForPush(teamConfig, localConfig)).toEqual([]);
+  });
+
+  it.each([
+    ['kiro', '.kiro/steering', KIRO],
+    ['qoder', '.qoder/rules', QODER],
+  ])('pushes an edited %s body into the team rule without the tool frontmatter', async (_tool, dir, render) => {
+    await handler.pullAllRules(teamConfig, localConfig);
+    const copy = path.join(homeDir, dir, 'scoped.md');
+    await fse.writeFile(copy, render.replace('Use named exports.', 'Use default exports.'));
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+    expect(items).toMatchObject([{ name: 'scoped', status: 'modified', sourcePath: copy }]);
+    await handler.pushItem(items[0], teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(repoPath, 'rules', 'scoped.md'), 'utf-8'))
+      .toBe('---\npaths:\n  - "src/{a,b}/**"\n---\n\nUse default exports.\n');
+  });
+
+  it("does not offer a member's own steering file as a new team rule", async () => {
+    await fse.writeFile(path.join(homeDir, '.kiro/steering/product.md'), '---\ninclusion: always\n---\n\nOur product.\n');
+    await fse.writeFile(path.join(homeDir, '.qoder/rules/mine.md'), '---\ntrigger: always_on\n---\n\nMine.\n');
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items.map((item) => item.name)).toEqual([]);
+  });
+
+  it("keeps a member's own steering and Qoder rule files on pull, and still reclaims a team copy on record", async () => {
+    const product = path.join(homeDir, '.kiro/steering/product.md');
+    const mine = path.join(homeDir, '.qoder/rules/mine.md');
+    await fse.writeFile(product, '---\ninclusion: always\n---\n\nOur product.\n');
+    await fse.writeFile(mine, '---\ntrigger: always_on\n---\n\nMine.\n');
+    // A team rule this checkout received before, no longer delivered here.
+    const formerKiro = path.join(homeDir, '.kiro/steering/former.md');
+    const formerQoder = path.join(homeDir, '.qoder/rules/former.md');
+    await fse.writeFile(formerKiro, '---\ninclusion: always\n---\n\nFormer.\n');
+    await fse.writeFile(formerQoder, '---\ntrigger: always_on\n---\n\nFormer.\n');
+    const previous: DeliveredHashes = {};
+    await recordDelivered(previous, formerKiro);
+    await recordDelivered(previous, formerQoder);
+    const ledger = openLedger(previous);
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+
+    expect(await fse.readFile(product, 'utf-8')).toBe('---\ninclusion: always\n---\n\nOur product.\n');
+    expect(await fse.readFile(mine, 'utf-8')).toBe('---\ntrigger: always_on\n---\n\nMine.\n');
+    expect(await fse.pathExists(formerKiro)).toBe(false);
+    expect(await fse.pathExists(formerQoder)).toBe(false);
+    expect(Object.keys(ledger.hashes).filter((file) => file.endsWith('former.md'))).toEqual([]);
+  });
+
+  it('re-renders a verbatim copy an older teamai delivered, and keeps one the member edited (#822)', async () => {
+    const kiroCopy = path.join(homeDir, '.kiro/steering/scoped.md');
+    const qoderCopy = path.join(homeDir, '.qoder/rules/scoped.md');
+    await fse.writeFile(kiroCopy, SCOPED);
+    await fse.writeFile(qoderCopy, SCOPED);
+    const previous: DeliveredHashes = {};
+    await recordDelivered(previous, kiroCopy);
+    await recordDelivered(previous, qoderCopy);
+    const edited = SCOPED.replace('Use named exports.', 'My own wording.');
+    await fse.writeFile(qoderCopy, edited);
+    const ledger = openLedger(previous);
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+
+    expect(await fse.readFile(kiroCopy, 'utf-8')).toBe(KIRO);
+    expect(await fse.readFile(qoderCopy, 'utf-8')).toBe(edited);
+    expect(ledger.kept.map((kept) => kept.dest)).toEqual([qoderCopy]);
+  });
+});
+
 describe('inlinedRulesText — rules inlined into one instructions file (#938)', () => {
   let tmpDir: string;
 

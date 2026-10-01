@@ -1,38 +1,98 @@
 /**
  * Per-tool on-disk format for rule files.
  *
- * The team repo always stores rules as tool-neutral `<name>.md`. Most tools take
- * a verbatim `.md` copy. Cursor and JoyCode use `.mdc` rules, while GitHub
- * Copilot CLI uses `.instructions.md`; those copies carry native frontmatter.
+ * The team repo always stores rules as tool-neutral `<name>.md`. A tool with
+ * a rules format of its own gets a render of it (`RULE_FORMATS`): Cursor and
+ * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering and Qoder rules
+ * `.md` with their own frontmatter. Every other tool takes a verbatim `.md`
+ * copy.
  *
  * This module is the single place that decision lives, mirroring
  * `agentFileExtensionForTool` in `./agent-format.ts`. Every site that writes,
- * scans, or deletes files in a tool's rules directory must go through it, so a
- * new per-tool extension never has to be re-discovered call site by call site.
+ * scans, compares, pushes or deletes files in a tool's rules directory must go
+ * through it, so a new format never has to be re-discovered call site by call
+ * site. Adding one is a render module exporting a `RuleFormat` plus one entry
+ * below.
  */
 
 import type { TeamaiConfig } from '../types.js';
+import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
+import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
+import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
+import { QODER_RULE_FORMAT } from './qoder-rule.js';
 
 type ToolPath = TeamaiConfig['toolPaths'][string];
 
-const CURSOR_MDC_RULE_TOOLS = new Set(['cursor', 'joycode']);
-const COPILOT_INSTRUCTIONS_RULE_TOOLS = new Set(['copilot']);
+/** How one tool's rule file is written from, and read back into, the team `.md`. */
+export interface RuleFormat {
+  /** The extension the rule file is written with. */
+  readonly extension: '.md' | '.mdc' | '.instructions.md';
+  /** The bytes the team rule becomes for the tool. */
+  render(rawTeamRule: string): string;
+  /** Whether a tool copy carries the team rule's body; frontmatter is derived, so not compared. */
+  bodyEquals(rawToolRule: string, rawTeamRule: string): boolean;
+  /** The team `.md` with a tool copy's body pushed into it, the team frontmatter kept; null for a new rule. */
+  mergeBodyIntoTeam(rawToolRule: string, existingTeamMd: string | null): string;
+  /** The frontmatter fields the tool scopes a rule by, named in doctor's fix. */
+  readonly scopeFields: readonly string[];
+}
+
+/**
+ * The tools with a rules format of their own. A copy there is a render, so
+ * push compares and sends back its body only, and a file teamai did not
+ * deliver is the member's own rule in the tool's format, never a new team
+ * rule.
+ */
+const RULE_FORMATS: Readonly<Record<string, RuleFormat>> = {
+  cursor: CURSOR_MDC_FORMAT,
+  joycode: CURSOR_MDC_FORMAT,
+  copilot: COPILOT_INSTRUCTIONS_FORMAT,
+  kiro: KIRO_STEERING_FORMAT,
+  qoder: QODER_RULE_FORMAT,
+  'qoder-cn': QODER_RULE_FORMAT,
+};
+
 const SESSION_HOOK_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
 
+/** The tool's own rules format; undefined when it takes the team `.md` verbatim. */
+export function ruleFormatForTool(tool: string): RuleFormat | undefined {
+  return Object.hasOwn(RULE_FORMATS, tool) ? RULE_FORMATS[tool] : undefined;
+}
+
+/**
+ * The bytes a team rule becomes for one tool: its render, or the team `.md`
+ * verbatim. This is the single spelling of that mapping: `pullItem` writes it
+ * and `doctor` compares the delivered file against it, so a stale render is a
+ * reported failure rather than a file that merely exists.
+ */
+export function renderRuleForTool(tool: string, rawTeamRule: string): string {
+  return ruleFormatForTool(tool)?.render(rawTeamRule) ?? rawTeamRule;
+}
+
+/**
+ * True when the tool's rules directory also holds rules the member wrote in
+ * the tool's own format, so pull removes only a copy it can prove it wrote
+ * there: every tool with a rules format, except Cursor (teamai owns
+ * `.cursor/rules`), plus OMP and Pi.
+ */
+export function sharesRulesDirWithMember(tool: string): boolean {
+  if (tool === 'cursor') return false;
+  return ruleFormatForTool(tool) !== undefined || tool === 'omp' || tool === 'pi';
+}
+
 /** Extension teamai writes rules with for a given tool. */
-export function ruleFileExtensionForTool(tool: string): '.md' | '.mdc' | '.instructions.md' {
-  if (usesCursorMdcRules(tool)) return '.mdc';
-  return usesCopilotInstructions(tool) ? '.instructions.md' : '.md';
+export function ruleFileExtensionForTool(tool: string): RuleFormat['extension'] {
+  return ruleFormatForTool(tool)?.extension ?? '.md';
 }
 
 /** True when the tool stores rules in Cursor-compatible `.mdc` format. */
 export function usesCursorMdcRules(tool: string): boolean {
-  return CURSOR_MDC_RULE_TOOLS.has(tool);
+  return ruleFileExtensionForTool(tool) === '.mdc';
 }
 
 /** True when the tool stores rules as GitHub Copilot instruction files. */
 export function usesCopilotInstructions(tool: string): boolean {
-  return COPILOT_INSTRUCTIONS_RULE_TOOLS.has(tool);
+  return ruleFileExtensionForTool(tool) === '.instructions.md';
 }
 
 /**
@@ -91,18 +151,6 @@ export const LEGACY_RULE_DIRS: Readonly<Record<string, string>> = {
   'codex-internal': '.codex-internal/rules',
   tcodex: '.tcodex/rules',
 };
-
-/** The globs a team rule's `paths:` frontmatter scopes it to; empty when unscoped. */
-export function rulePaths(data: Record<string, unknown>): string[] {
-  const value = data.paths;
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry).trim()).filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value.split(',').map((entry) => entry.trim()).filter(Boolean);
-  }
-  return [];
-}
 
 /**
  * Every extension a rule file may carry on disk, newest layout first.

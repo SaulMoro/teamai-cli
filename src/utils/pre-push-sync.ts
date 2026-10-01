@@ -17,9 +17,7 @@ import {
 } from './fs.js';
 import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { isToolInstalledForConfig, ResourceHandler } from '../resources/base.js';
-import { ruleFileExtensionForTool, usesCopilotInstructions, usesCursorMdcRules } from '../resources/rule-format.js';
-import { teamRuleToCursorMdc, cursorMdcBodyEqualsTeamMd } from '../resources/cursor-mdc.js';
-import { teamRuleToCopilotInstructions, copilotInstructionsBodyEqualsTeamMd } from '../resources/copilot-instructions.js';
+import { ruleFileExtensionForTool, ruleFormatForTool, usesCopilotInstructions } from '../resources/rule-format.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { log } from './logger.js';
 import { placedResourcePath } from '../push-namespaces.js';
@@ -101,12 +99,11 @@ async function syncRulesToLocal(
     const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
     if (!await pathExists(rulesDir)) continue;
 
-    // Cursor and Copilot copies have native extensions and derived frontmatter.
-    // Compare their bodies with the team Markdown so stale copies are refreshed
-    // rather than offered as edits that revert a teammate's update.
+    // A tool with its own rules format holds a render with derived
+    // frontmatter. Compare its body with the team Markdown so stale copies are
+    // refreshed rather than offered as edits that revert a teammate's update.
     const ext = ruleFileExtensionForTool(tool);
-    const isMdcTool = usesCursorMdcRules(tool);
-    const isCopilotTool = usesCopilotInstructions(tool);
+    const format = ruleFormatForTool(tool);
 
     const files = await listFilesRecursive(rulesDir);
     for (const file of files) {
@@ -148,14 +145,15 @@ async function syncRulesToLocal(
 
       // Only process files that exist in both places but differ
       if (!await pathExists(teamFilePath)) continue;
-      if (isMdcTool || isCopilotTool) {
-        const bodyEquals = isCopilotTool ? copilotInstructionsBodyEqualsTeamMd : cursorMdcBodyEqualsTeamMd;
-        const render = isCopilotTool ? teamRuleToCopilotInstructions : teamRuleToCursorMdc;
+      if (format) {
+        const { bodyEquals, render } = format;
         const localRaw = await readFileSafe(localFilePath);
         const teamRaw = await readFileSafe(teamFilePath);
         if (localRaw === null || teamRaw === null) continue;
         const sameBody = bodyEquals(localRaw, teamRaw);
-        if (sameBody && (!isCopilotTool || localRaw === render(teamRaw))) continue;
+        // Only Copilot's header is refreshed on a `paths`-only change; for the
+        // other formats an equal body is left to the next full pull.
+        if (sameBody && (!usesCopilotInstructions(tool) || localRaw === render(teamRaw))) continue;
 
         const oldContents = await baseVersions();
         if (oldContents.length === 0) continue; // Didn't exist at any base — ambiguous, skip

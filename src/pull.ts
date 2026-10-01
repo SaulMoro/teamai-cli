@@ -827,6 +827,46 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
 }
 
 /**
+ * Rules on the "Already synced" fast path (#946): a CLI upgrade can change
+ * what a tool's rule copy should hold while the team repo stays put, as when
+ * Kiro and Qoder got their own format. Only a copy still on record as what
+ * teamai wrote is rewritten (`RulesHandler.rerenderOutdatedCopies`), and the
+ * record follows, so the next pull does not read the new bytes as an edit. A
+ * copy the member changed is kept and named, as a full sync names it.
+ */
+async function rerenderOutdatedRules(
+  freshConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  roleContext: RolePullContext | null,
+  scopeLabel: string,
+): Promise<void> {
+  try {
+    const key = await checkoutRecordKey(localConfig);
+    if (!key) return;
+    const state = await loadStateForScope(localConfig);
+    const ledger = await openCheckoutLedger(localConfig, state);
+    if (ledger.previous === undefined) return;
+    const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
+    const rewritten = await (getHandler('rules') as RulesHandler).rerenderOutdatedCopies(
+      freshConfig, localConfig, items, ledger,
+    );
+    reportKept(ledger, scopeLabel);
+    if (rewritten.length === 0) return;
+    const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];
+    if (record) {
+      record.delivered = ledger.hashes;
+      await saveStateForScope(state, localConfig);
+    }
+    log.success(`[${scopeLabel}] Rewrote ${rewritten.length} rule(s) in their tool's own format: ${rewritten.join(', ')}`);
+  } catch (e) {
+    log.warn(
+      `[${scopeLabel}] Could not check whether delivered rules need their tool's format: ${(e as Error).message}. `
+      + 'Copies may still be in an older format; fix the cause, then run `teamai pull --force`.',
+    );
+  }
+}
+
+/**
  * Agents on the "Already synced" fast path (#830): an agent's model can
  * change while the team repo stays put — a CLI upgrade that resolves an alias
  * an older one wrote literally, and later the member's own alias file or a
@@ -1315,6 +1355,9 @@ async function pullForScope(
             } catch (error) {
               log.warn(`[${scopeLabel}] Codex's team rules were not updated: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
+            // Same reason: a CLI that gives a tool its own rules format must
+            // re-render the copies an older one wrote verbatim (#946).
+            await rerenderOutdatedRules(freshConfig, localConfig, roleContext, scopeLabel);
           }
           // The repo has not moved, but an agent's model may have (#830).
           if (resourceTypes.includes('agents')) {

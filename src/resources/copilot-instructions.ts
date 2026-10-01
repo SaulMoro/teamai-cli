@@ -1,5 +1,6 @@
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
-import { rulePaths } from './rule-format.js';
+import type { RuleFormat } from './rule-format.js';
+import { rulePaths } from './team-rule.js';
 
 const ALL_FILES_GLOB = '**';
 
@@ -43,3 +44,12 @@ export function copilotInstructionsBodyEqualsTeamMd(
   return normalizeBody(splitFrontmatter(rawCopilotInstructions).body)
     === normalizeBody(splitFrontmatter(rawTeamRule).body);
 }
+
+/** GitHub Copilot's instructions format. */
+export const COPILOT_INSTRUCTIONS_FORMAT: RuleFormat = {
+  extension: '.instructions.md',
+  render: teamRuleToCopilotInstructions,
+  bodyEquals: copilotInstructionsBodyEqualsTeamMd,
+  mergeBodyIntoTeam: mergeCopilotBodyIntoTeamMd,
+  scopeFields: ['applyTo'],
+};
