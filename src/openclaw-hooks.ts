@@ -24,7 +24,7 @@
  */
 
 import path from 'node:path';
-import { writeFile, writeIfChanged, ensureDir, pathExists, readFileSafe, writeJsonAtomic, remove } from './utils/fs.js';
+import { writeFile, writeIfChanged, ensureDir, pathExists, readJsonObject, writeJsonAtomic, remove } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { expandHome, getUserHome } from './utils/home.js';
 
@@ -186,24 +186,6 @@ type OpenclawInternalHooks = {
   load?: { extraDirs?: unknown };
 };
 
-type OpenclawConfigRead =
-  | { kind: 'missing' }
-  | { kind: 'invalid'; error: string }
-  | { kind: 'ok'; cfg: Record<string, unknown> };
-
-async function readOpenclawConfig(cfgPath: string): Promise<OpenclawConfigRead> {
-  const raw = await readFileSafe(cfgPath);
-  if (raw === null) return { kind: 'missing' };
-  try {
-    const cfg: unknown = JSON.parse(raw);
-    return cfg && typeof cfg === 'object' && !Array.isArray(cfg)
-      ? { kind: 'ok', cfg: cfg as Record<string, unknown> }
-      : { kind: 'invalid', error: 'not a JSON object' };
-  } catch (e) {
-    return { kind: 'invalid', error: (e as Error).message };
-  }
-}
-
 function internalHooksOf(cfg: Record<string, unknown>): OpenclawInternalHooks {
   const hooks = cfg.hooks as { internal?: unknown } | undefined;
   const internal = hooks && typeof hooks === 'object' ? hooks.internal : undefined;
@@ -222,9 +204,9 @@ function isOpenEndedDiscovery(internal: OpenclawInternalHooks, entries: Record<s
 
 /** True when OpenClaw's config loads teamai's workspace hook: internal hooks on and its entry enabled. */
 export async function isOpenclawHookEnabled(): Promise<boolean> {
-  const read = await readOpenclawConfig(resolveOpenclawConfigPath());
+  const read = await readJsonObject(resolveOpenclawConfigPath());
   if (read.kind !== 'ok') return false;
-  const internal = internalHooksOf(read.cfg);
+  const internal = internalHooksOf(read.value);
   return internal.enabled !== false && internal.entries?.[OPENCLAW_HOOK_KEY]?.enabled === true;
 }
 
@@ -251,13 +233,13 @@ async function enableOpenClawHookEntry(hookKey: string, source: 'workspace' | 'm
     return;
   }
   const enableCmd = `\`openclaw hooks enable ${hookKey}\``;
-  const read = await readOpenclawConfig(cfgPath);
+  const read = await readJsonObject(cfgPath);
   if (read.kind === 'invalid') {
     log.warn(`OpenClaw: teamai cannot read ${cfgPath} as plain JSON (${read.error}), so it cannot enable `
       + `its hook ${hookKey} there; the hook does not run until you run ${enableCmd}.`);
     return;
   }
-  const config = read.kind === 'ok' ? read.cfg : {};
+  const config = read.kind === 'ok' ? read.value : {};
   const internal = internalHooksOf(config);
   const entries = internal.entries && typeof internal.entries === 'object' ? internal.entries : {};
   const entry = entries[hookKey];
@@ -308,14 +290,14 @@ function withoutKey(obj: Record<string, unknown>, key: string): Record<string, u
  */
 export async function removeOpenClawHookEntry(hookKey: string = OPENCLAW_HOOK_KEY): Promise<void> {
   const cfgPath = resolveOpenclawConfigPath();
-  const read = await readOpenclawConfig(cfgPath);
+  const read = await readJsonObject(cfgPath);
   if (read.kind === 'missing') return;
   if (read.kind === 'invalid') {
     log.warn(`OpenClaw: teamai cannot read ${cfgPath} as plain JSON (${read.error}), so it left `
       + `hooks.internal.entries.${hookKey} there; remove it by hand or run \`openclaw hooks disable ${hookKey}\`.`);
     return;
   }
-  const { cfg } = read;
+  const cfg = read.value;
   const internal = internalHooksOf(cfg);
   const entries = internal.entries;
   if (!entries || typeof entries !== 'object' || !Object.hasOwn(entries, hookKey)) return;
@@ -466,9 +448,9 @@ export async function resolveOpenclawWorkspaceDir(workspacePath?: string): Promi
     return workspacePath;
   }
   const cfgPath = resolveOpenclawConfigPath();
-  const read = await readOpenclawConfig(cfgPath);
+  const read = await readJsonObject(cfgPath);
   if (read.kind === 'invalid') log.debug(`openclaw: could not parse ${cfgPath} as JSON: ${read.error}`);
-  const agents = read.kind === 'ok' ? read.cfg.agents as { defaults?: { workspace?: unknown } } | undefined : undefined;
+  const agents = read.kind === 'ok' ? read.value.agents as { defaults?: { workspace?: unknown } } | undefined : undefined;
   const configured = agents?.defaults?.workspace;
   const envDir = process.env.OPENCLAW_WORKSPACE_DIR?.trim();
   const candidate = typeof configured === 'string' && configured.trim()

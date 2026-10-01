@@ -9,12 +9,11 @@ describe('Pi adapter configuration', () => {
       mcp: '.pi/agent/mcp.json',
       mcpProject: '.pi/mcp.json',
       skills: '.pi/skills',
-      rules: '.pi/rules',
       claudemd: 'AGENTS.md',
+      // Pi reads no rules directory: its user rules are a block in
+      // ~/.pi/agent/AGENTS.md, its project rules come from teamai's extension (#946).
       userScope: {
         skills: '.pi/agent/skills',
-        // User rules are a block in ~/.pi/agent/AGENTS.md (#946).
-        rules: null,
         claudemd: '.pi/agent/AGENTS.md',
       },
     });
@@ -25,6 +24,7 @@ describe('Pi adapter configuration', () => {
       claudemd: '.pi/agent/AGENTS.md',
     });
     expect(scopedToolPaths(config, { scope: 'user' }).pi).not.toHaveProperty('rules');
+    expect(scopedToolPaths(config, { scope: 'project' }).pi).not.toHaveProperty('rules');
   });
 
   it('registers Pi for discovery and single-repo selection', () => {

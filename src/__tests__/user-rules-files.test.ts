@@ -181,8 +181,6 @@ describe('a user-scope rules sync puts the team rules in a file only the tool re
   });
 
   it('writes DeepSeek Harness\'s block to $DSH_HOME/AGENTS.md', async () => {
-    // ~/.dsh says dsh is installed, as for its skills and hooks.
-    await fse.ensureDir(home('.dsh'));
     const dshHome = path.join(tmpDir, 'dsh-home');
     await fse.ensureDir(dshHome);
     vi.stubEnv('DSH_HOME', dshHome);
@@ -204,14 +202,24 @@ describe('a user-scope rules sync puts the team rules in a file only the tool re
     expect(warnings.some((m) => m.startsWith(`Could not write the team-rules block to ${home('.zcode/AGENTS.md')}`))).toBe(true);
   });
 
-  it('writes nothing for DeepSeek Harness when only $DSH_HOME exists, as its skills and hooks do', async () => {
+  it('writes DeepSeek Harness\'s block where only $DSH_HOME exists, as its hooks find it', async () => {
     const dshHome = path.join(tmpDir, 'dsh-home');
     await fse.ensureDir(dshHome);
     vi.stubEnv('DSH_HOME', dshHome);
 
     await new RulesHandler().pullAllRules(teamConfig(), config('user', ['dsh']));
 
-    expect(await fse.pathExists(path.join(dshHome, 'AGENTS.md'))).toBe(false);
+    expect(await fse.readFile(path.join(dshHome, 'AGENTS.md'), 'utf8')).toBe(`${BLOCK}\n`);
+  });
+
+  it('writes nothing for DeepSeek Harness when $DSH_HOME does not exist, even with ~/.dsh', async () => {
+    await fse.ensureDir(home('.dsh'));
+    vi.stubEnv('DSH_HOME', path.join(tmpDir, 'missing-dsh-home'));
+
+    await new RulesHandler().pullAllRules(teamConfig(), config('user', ['dsh']));
+
+    expect(await fse.pathExists(home('.dsh/AGENTS.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(tmpDir, 'missing-dsh-home'))).toBe(false);
   });
 
   describe('OpenClaw reads the workspace AGENTS.md its hooks resolve', () => {
@@ -268,6 +276,7 @@ const LEGACY: ReadonlyArray<{ tool: string; scope: 'user' | 'project'; root: str
   { tool: 'openclaw', scope: 'user', root: '.openclaw/workspace', dir: '.openclaw/rules', copy: (raw) => raw, ext: '.md' },
   { tool: 'openclaw', scope: 'project', root: '.openclaw', dir: '.openclaw/rules', copy: (raw) => raw, ext: '.md' },
   { tool: 'pi', scope: 'user', root: '.pi/agent', dir: '.pi/agent/rules', copy: (raw) => raw, ext: '.md' },
+  { tool: 'pi', scope: 'project', root: '.pi', dir: '.pi/rules', copy: (raw) => raw, ext: '.md' },
   { tool: 'joycode', scope: 'user', root: '.joycode', dir: '.joycode/rules', copy: teamRuleToCursorMdc, ext: '.mdc' },
   // A release between JoyCode's own render (#946) and this one rewrote user copies in it.
   { tool: 'joycode', scope: 'user', root: '.joycode', dir: '.joycode/rules', copy: teamRuleToJoycodeRule, ext: '.mdc' },
@@ -336,6 +345,25 @@ describe('a pull at an unchanged team revision after a CLI upgrade (#946)', () =
 
     expect(vi.mocked(log.success).mock.calls.some(([message]) => String(message).includes('Already synced at abc1234'))).toBe(true);
     expect(await fse.pathExists(unedited)).toBe(false);
+  });
+
+  it('reclaims Pi\'s unedited copy in a project\'s .pi/rules', async () => {
+    await fse.ensureDir(path.join(projectRoot, '.pi'));
+    vi.mocked(detectProjectConfig).mockResolvedValue(config('project', ['pi']));
+    try {
+      await pull({});
+      // What an older CLI left at this revision.
+      const unedited = path.join(projectRoot, '.pi', 'rules', 'scoped.md');
+      await fse.outputFile(unedited, SCOPED);
+      vi.mocked(log.success).mockClear();
+
+      await pull({});
+
+      expect(vi.mocked(log.success).mock.calls.some(([message]) => String(message).includes('Already synced at abc1234'))).toBe(true);
+      expect(await fse.pathExists(unedited)).toBe(false);
+    } finally {
+      vi.mocked(detectProjectConfig).mockResolvedValue(null);
+    }
   });
 });
 

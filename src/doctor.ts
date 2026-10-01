@@ -20,7 +20,7 @@ import {
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { getsRulesFromSessionHook } from './resources/rule-format.js';
+import { isCodexTool } from './utils/tool-names.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, readCodexHookTrustForScope } from './hooks.js';
 import {
   buildDeliveryChecks,
@@ -315,7 +315,10 @@ async function buildHookChecks(
       },
       fix: 'Run `teamai hooks inject` to inject/update hooks',
     });
-    if (getsRulesFromSessionHook(tool)) checks.push(sessionHookRulesCheck(tool, settingsPath));
+    // ZCode and DeepSeek Harness get the rules from their session-start hook
+    // too, checked with the rules (`buildProjectRulesHookChecks`); only Codex
+    // has the SubagentStart entry and the context limit this check is about.
+    if (isCodexTool(tool)) checks.push(sessionHookRulesCheck(tool, settingsPath));
   }
   return checks;
 }

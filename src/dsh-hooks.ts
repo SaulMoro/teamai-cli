@@ -29,6 +29,14 @@ export function resolveDshHome(): string {
   return configured ? path.resolve(expandHome(configured)) : path.join(getUserHome(), '.dsh');
 }
 
+/**
+ * Whether DeepSeek Harness is installed: its home (`resolveDshHome`) exists.
+ * The hook bridge, the user-scope rules file, doctor and init all ask here.
+ */
+export async function isDshInstalled(): Promise<boolean> {
+  return pathExists(resolveDshHome());
+}
+
 /** The TeamAI-managed DSH bridge directory under the resolved user home. */
 export function resolveDshHooksDir(): string {
   return path.join(getUserHome(), '.teamai', 'dsh');

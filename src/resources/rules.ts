@@ -4,6 +4,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { getUserHome } from '../utils/home.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
@@ -855,7 +856,8 @@ export class RulesHandler extends ResourceHandler {
    * the team rules go into a file only that tool reads (`userRulesFile`: the
    * Codex family's AGENTS.md, ZCode, DeepSeek Harness, the OpenClaw
    * workspace, Pi, JoyCode's rules.txt). A project pull writes none of them;
-   * there the Codex family's session-start hook adds the rules (#938, #946).
+   * there the session-start hook (the Codex family, ZCode, DeepSeek Harness)
+   * or Pi's extension adds the rules (#938, #946).
    * Public so the "Already synced" pull can run it after a CLI upgrade.
    */
   async syncUserRulesFiles(
@@ -1345,8 +1347,8 @@ async function isDeliveredRender(
 /**
  * The team rules as one text, for a tool with no rules directory: Hermes,
  * whose SOUL.md block pull writes and `doctor` compares, the tools with a
- * user-scope file of their own (`teamRulesBlock`), and the Codex family,
- * whose session-start hook adds it (`teamRulesContext`).
+ * user-scope file of their own (`teamRulesBlock`), and in a project the
+ * tools whose session-start hook or extension adds it (`teamRulesContext`).
  *
  * Frontmatter is dropped. Neither can scope a rule to paths, so a path-scoped
  * rule is always on, led by a line naming its globs.
@@ -1395,7 +1397,8 @@ export async function teamRulesBlock(rules: ResourceItem[]): Promise<string | nu
 
 /**
  * The team rules a tool with no rules format gets from its session-start hook
- * in a project (the Codex family, #938): the rules this member receives there,
+ * or extension in a project (the Codex family, #938; ZCode, DeepSeek Harness
+ * and Pi, #946): the rules this member receives there,
  * as pull resolves them, in the same render as Hermes' SOUL.md. Null when no
  * rule has a body. User-scope rules reach it through its own instructions
  * file instead.
@@ -1408,10 +1411,12 @@ export async function teamRulesContext(teamConfig: TeamaiConfig, localConfig: Lo
 }
 
 /**
- * Why an installed tool gets no rules in this scope, for init and doctor to
- * print as notes rather than failures (#946). Hermes reads its rules from the
- * global SOUL.md and OpenClaw from its workspace AGENTS.md, which only a
- * user-scope pull writes.
+ * Why an installed tool gets no rules in this scope, or what limits the
+ * channel it gets them through, for init and doctor to print as notes rather
+ * than failures (#946). Hermes reads its rules from the global SOUL.md and
+ * OpenClaw from its workspace AGENTS.md, which only a user-scope pull writes;
+ * ZCode and DeepSeek Harness lose their session-start hook's text when they
+ * compact a session.
  */
 export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string[]> {
   const notes: string[] = [];
@@ -1436,6 +1441,22 @@ export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string
         + 'user-scope pull writes (`teamai init --scope user`).',
       );
     }
+  }
+  // Their session-start hook carries a project's rules (#946); doctor checks
+  // that it is registered, but cannot see these limits.
+  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'zcode') && await pathExists(path.join(getUserHome(), '.zcode'))) {
+    notes.push(
+      'ZCode gets the project\'s team rules from teamai\'s SessionStart hook, and drops that text when it compacts '
+      + 'a session: the rules come back in the next session.',
+    );
+  }
+  const { isDshInstalled, resolveDshPatchPath } = await import('../dsh-hooks.js');
+  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'dsh') && await isDshInstalled()) {
+    notes.push(
+      'DeepSeek Harness gets the project\'s team rules from teamai\'s session-start hook only when dsh runs with '
+      + `\`--patch "${resolveDshPatchPath()}"\`. It runs that hook detached, so the first request can miss the rules, `
+      + 'and it drops them when it compacts a session: they come back in the next session.',
+    );
   }
   return notes;
 }

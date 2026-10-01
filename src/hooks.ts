@@ -1933,9 +1933,8 @@ export async function reconcileHooksToAllTools(
     if (tool === 'dsh') {
       if (opts.settingsOnly) continue;
       try {
-        const dshHome = getUserHome();
-        if (opts.removeAll || await pathExists(path.join(dshHome, '.dsh'))) {
-          const { reconcileDshHooks, resolveDshHookConfigPath } = await import('./dsh-hooks.js');
+        const { isDshInstalled, reconcileDshHooks, resolveDshHookConfigPath } = await import('./dsh-hooks.js');
+        if (opts.removeAll || await isDshInstalled()) {
           if (await skipInstalled(resolveDshHookConfigPath(), 'dsh')) continue;
           await reconcileDshHooks(defs, {
             manifestPath: teamManifestPath,

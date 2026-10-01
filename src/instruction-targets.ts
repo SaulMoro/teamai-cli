@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
+import { getsRulesFromExtension } from './resources/rule-format.js';
 import { pathExists, readFileSafe, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
@@ -340,7 +341,9 @@ export async function instructionHookChannel(
     const expected = tool === 'omp' ? buildOmpExtensionSource() : buildPiExtensionSource();
     return {
       ready: await readFileSafe(file) === expected,
-      fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions. ${rerun}`,
+      // Pi's extension also carries a project's team rules (#946); OMP reads its own rules files.
+      fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions`
+        + `${getsRulesFromExtension(tool) ? ' or rules' : ''}. ${rerun}`,
     };
   }
   if (tool === 'hermes') {
@@ -518,6 +521,11 @@ export async function isInstructionToolInstalled(tool: string, paths: ToolPaths,
   // OpenClaw is installed where its workspace resolves, whatever ~/.openclaw
   // holds; its target file is there only then (`openclawWorkspace`).
   if (tool === 'openclaw') return true;
+  // DeepSeek Harness runs from $DSH_HOME (`~/.dsh` by default), whatever ~/.dsh holds.
+  if (tool === 'dsh') {
+    const { isDshInstalled } = await import('./dsh-hooks.js');
+    return isDshInstalled();
+  }
   // teamai installs the Pi extension in ~/.pi/agent/extensions when ~/.pi
   // exists, so a project needs no .pi/ of its own.
   if (tool === 'pi' && await pathExists(path.join(getUserHome(), '.pi'))) return true;

@@ -61,7 +61,19 @@ const RULE_FORMATS: Readonly<Record<string, RuleFormat>> = {
   omp: OMP_RULE_FORMAT,
 };
 
-const SESSION_HOOK_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
+/**
+ * The tools with no rules format whose session-start hook adds a project's
+ * team rules: the Codex family (#938), ZCode, whose CLI runs only user-level
+ * hooks, and DeepSeek Harness through teamai's `--patch` (#946).
+ */
+const SESSION_HOOK_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex', 'zcode', 'dsh']);
+
+/**
+ * The tools whose teamai extension adds a project's team rules to each run's
+ * system prompt, with the instruction blocks it fetches through
+ * `hook-dispatch instructions`: Pi (#946).
+ */
+const EXTENSION_RULE_TOOLS = new Set(['pi']);
 
 /** The tool's own rules format; undefined when it takes the team `.md` verbatim. */
 export function ruleFormatForTool(tool: string): RuleFormat | undefined {
@@ -163,11 +175,17 @@ export function usesCopilotInstructions(tool: string): boolean {
 }
 
 /**
- * True when the tool has no rules format of its own, so its session-start hook
- * adds the team rules (the Codex family, #938). Pull writes no rule file for it.
+ * True when the tool has no rules format of its own, so in a project its
+ * session-start hook adds the team rules (the Codex family, #938; ZCode and
+ * DeepSeek Harness, #946). Pull writes no rule file for it.
  */
 export function getsRulesFromSessionHook(tool: string): boolean {
   return SESSION_HOOK_RULE_TOOLS.has(tool);
+}
+
+/** True when, in a project, teamai's extension for the tool adds the team rules to its prompt (Pi, #946). */
+export function getsRulesFromExtension(tool: string): boolean {
+  return EXTENSION_RULE_TOOLS.has(tool);
 }
 
 /** A managed block pull writes into a tool's instructions file (`claudemd`). */
@@ -257,7 +275,8 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     advice: 'Delete it if you did not edit it; to keep your changes, rename it to a name of your own.',
   },
   // Before #946 OpenClaw, Pi and JoyCode got rule copies in directories they
-  // never read; their user rules are now a block in a file only each reads.
+  // never read; their user rules are now a block in a file only each reads,
+  // and Pi's project rules come from teamai's extension.
   {
     tool: 'openclaw',
     scopes: ['user', 'project'],
@@ -273,6 +292,14 @@ export const LEGACY_RULE_DIRS: readonly LegacyRuleDir[] = [
     ext: '.md',
     why: 'Pi does not read ~/.pi/agent/rules (team rules now reach it through ~/.pi/agent/AGENTS.md)',
     advice: 'Delete what you did not edit; to keep your changes, move them into ~/.pi/agent/AGENTS.md outside the teamai markers, then delete the copy.',
+  },
+  {
+    tool: 'pi',
+    scopes: ['project'],
+    dir: '.pi/rules',
+    ext: '.md',
+    why: 'Pi does not read .pi/rules (a project\'s team rules now reach it through teamai\'s Pi extension)',
+    advice: 'Delete what you did not edit; to keep your changes, move them into the project\'s AGENTS.md, then delete the copy.',
   },
   {
     tool: 'joycode',

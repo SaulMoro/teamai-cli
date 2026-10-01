@@ -203,6 +203,7 @@ vi.mock('../utils/fs.js', () => ({
     return p;
   },
   readFileSafe: vi.fn().mockResolvedValue(null),
+  readJsonObject: vi.fn().mockResolvedValue({ kind: 'missing' }),
   remove: (p: string) => mockRemove(p),
 }));
 

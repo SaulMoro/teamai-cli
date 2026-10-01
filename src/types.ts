@@ -494,17 +494,16 @@ export const TeamaiConfigSchema = z.object({
     // keeps one user extension and forwards the active cwd to hook-dispatch.
     // Profile overrides (PI_CODING_AGENT_DIR / PI_CONFIG_DIR) that relocate
     // the agent dir are not supported for hooks or MCP, same as the OMP adapter;
-    // model profiles do read PI_CODING_AGENT_DIR. Pi reads no user rules
-    // directory: its user team rules are a block in ~/.pi/agent/AGENTS.md (#946).
+    // model profiles do read PI_CODING_AGENT_DIR. Pi reads no rules
+    // directory: its user team rules are a block in ~/.pi/agent/AGENTS.md, and
+    // in a project teamai's extension adds them to the system prompt (#946).
     pi: {
       mcp: '.pi/agent/mcp.json',
       mcpProject: '.pi/mcp.json',
       skills: '.pi/skills',
-      rules: '.pi/rules',
       claudemd: 'AGENTS.md',
       userScope: {
         skills: '.pi/agent/skills',
-        rules: null,
         claudemd: '.pi/agent/AGENTS.md',
       },
     },
