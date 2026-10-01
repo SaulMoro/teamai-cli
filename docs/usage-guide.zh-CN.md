@@ -1532,13 +1532,15 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
 | CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份 |
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份 |
-| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁 | （见下文） |
+| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁 | teamai 的 Hermes 插件提供的系统提示段落 |
 | Oh My Pi | `~/.omp/agent/RULES.md` | 由 teamai 的 OMP 扩展加入每轮的系统提示 |
 | Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
 
 Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysApply: true`）。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
 
 CodeBuddy 和 WorkBuddy 的规则文件在每个会话中应用（`alwaysApply: true`）。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
+
+在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。Hermes 在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
 
 Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。
 

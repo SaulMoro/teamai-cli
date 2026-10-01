@@ -188,8 +188,8 @@ function makeProjectMember(
   return { home, projectRoot };
 }
 
-const pullAs = (member: ProjectMember, args: string[] = []): Promise<RunResult> =>
-  runCLI(['pull', '--force', ...args], { HOME: member.home }, member.projectRoot);
+const pullAs = (member: ProjectMember, args: string[] = [], env: Record<string, string> = {}): Promise<RunResult> =>
+  runCLI(['pull', '--force', ...args], { HOME: member.home, ...env }, member.projectRoot);
 
 describe('instruction block targets on real CLI pull (#945)', () => {
   const sandboxes: string[] = [];
@@ -490,5 +490,46 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(context).toContain('PRODUCT-SENTINEL');
     expect(context).not.toContain('DEVELOPMENT-SENTINEL');
     expect(context).toContain('Acme');
+  });
+
+  it('gives Hermes its project blocks through its plugin and frees the project AGENTS.md', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', []);
+    const hermesHome = path.join(sandbox, 'hermes-home');
+    fs.mkdirSync(hermesHome, { recursive: true });
+    const agentsMd = path.join(member.projectRoot, 'AGENTS.md');
+    fs.writeFileSync(agentsMd, `${PROJECT_AGENTS_MD}\n${CULTURE_START}\nold culture\n${CULTURE_END}\n`);
+
+    const result = await pullAs(member, [], { HERMES_HOME: hermesHome });
+    expect(result.code, result.output).toBe(0);
+
+    expect(fs.readFileSync(agentsMd, 'utf8')).toBe(PROJECT_AGENTS_MD);
+    expect(fs.readFileSync(path.join(hermesHome, 'plugins', 'teamai-instructions', '__init__.py'), 'utf8'))
+      .toContain('register_system_prompt_section');
+    expect(fs.readFileSync(path.join(hermesHome, 'config.yaml'), 'utf8')).toMatch(/plugins:\n\s+enabled:\n\s+- teamai-instructions/);
+    const sub = path.join(member.projectRoot, 'docs');
+    fs.mkdirSync(sub, { recursive: true });
+    const run = await runCLI(['hook-dispatch', 'instructions', '--tool', 'hermes'], { HOME: member.home, HERMES_HOME: hermesHome }, sub, JSON.stringify({ cwd: sub }));
+    const context = JSON.parse(run.stdout).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain('DEVELOPMENT-SENTINEL');
+    expect(context).not.toContain('PRODUCT-SENTINEL');
+    expect(context).not.toContain('teamai-recall');
+  });
+
+  it('says Hermes cannot load project instructions over its 4,000-character section, without cutting them or using AGENTS.md', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', []);
+    const teamRepo = path.join(member.projectRoot, '.teamai', 'team-repo');
+    fs.writeFileSync(path.join(teamRepo, 'claudemd', 'development', 'long.md'), `${'Long developer guidance. '.repeat(200)}\n`);
+    const hermesHome = path.join(sandbox, 'hermes-home');
+    fs.mkdirSync(hermesHome, { recursive: true });
+
+    const result = await pullAs(member, [], { HERMES_HOME: hermesHome });
+    expect(result.code, result.output).toBe(0);
+
+    expect(result.output).toMatch(/hermes cannot load this project's team instructions: they are \d+ characters, over the 4000-character limit/);
+    expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
   });
 });

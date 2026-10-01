@@ -295,3 +295,35 @@ export async function removeHermesAllowlist(event: string, command: string): Pro
 
   await writeJson(filePath, { approvals: filtered });
 }
+
+/**
+ * Add `name` to `plugins.enabled` in the Hermes config.yaml: Hermes loads no
+ * user plugin that is not listed there. A name the member put under
+ * `plugins.disabled` stays off. Returns whether config.yaml was written.
+ */
+export async function enableHermesPlugin(name: string): Promise<boolean> {
+  const doc = await readConfigDoc();
+  const disabled = doc.getIn(['plugins', 'disabled']);
+  if (YAML.isSeq(disabled) && (disabled.toJSON() as unknown[]).includes(name)) return false;
+  const enabled = doc.getIn(['plugins', 'enabled']);
+  const list = YAML.isSeq(enabled) ? (enabled.toJSON() as unknown[]) : [];
+  if (list.includes(name)) return false;
+  doc.setIn(['plugins', 'enabled'], [...list, name]);
+  await writeConfigDoc(doc);
+  return true;
+}
+
+/** Remove `name` from `plugins.enabled` in the Hermes config.yaml, dropping keys left empty. */
+export async function disableHermesPlugin(name: string): Promise<void> {
+  const doc = await readConfigDoc();
+  const enabled = doc.getIn(['plugins', 'enabled']);
+  if (!YAML.isSeq(enabled)) return;
+  const list = enabled.toJSON() as unknown[];
+  if (!list.includes(name)) return;
+  const rest = list.filter((entry) => entry !== name);
+  if (rest.length > 0) doc.setIn(['plugins', 'enabled'], rest);
+  else doc.deleteIn(['plugins', 'enabled']);
+  const plugins = doc.getIn(['plugins']);
+  if (YAML.isMap(plugins) && plugins.items.length === 0) doc.deleteIn(['plugins']);
+  await writeConfigDoc(doc);
+}

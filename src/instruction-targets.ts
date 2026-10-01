@@ -5,6 +5,7 @@ import { gitTracking, gitTracks } from './mcp-git-exclude.js';
 import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { getHermesHome } from './hermes-home.js';
 import { getHermesSoulPath } from './hermes-config.js';
+import { HERMES_SECTION_LIMIT } from './hermes-hooks.js';
 import {
   isAgentExcluded,
   resolveToolBaseDir,
@@ -39,6 +40,8 @@ interface TargetEntry {
   readonly file: (paths: ToolPaths) => string | undefined;
   /** The tool gets this scope's blocks from teamai's session hook or extension instead of a file. */
   readonly hook?: boolean;
+  /** The most characters the hook channel takes; the tool drops a larger text whole. */
+  readonly hookLimit?: number;
   /** Text teamai writes above the blocks when it creates the file, e.g. the frontmatter a rules loader needs. */
   readonly header?: string;
   /** teamai owns the whole file: one it did not write is left alone, and it is deleted once its blocks are gone. */
@@ -99,7 +102,9 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   cursor,
   'claude-internal': { file: configured, retired: [] },
   tclaude: { file: configured, retired: [] },
-  hermes: { file: configured, retired: [] },
+  // Hermes reads the project's AGENTS.md itself; teamai's Hermes plugin adds
+  // the blocks as a system prompt section, which holds 4,000 characters.
+  hermes: { file: () => undefined, hook: true, hookLimit: HERMES_SECTION_LIMIT, retired: ['AGENTS.md'] },
   copilot: { file: configured, retired: [] },
   // OMP reads project rules only from the root and keeps one context file per
   // level, so .omp/AGENTS.md would hide the project's AGENTS.md: teamai's OMP
@@ -139,9 +144,18 @@ export interface InstructionTarget {
   owned?: boolean;
 }
 
+/** An installed, non-excluded tool that gets this scope's blocks from its session hook or extension. */
+export interface InstructionHook {
+  tool: string;
+  recall: boolean;
+  /** The most characters its channel takes, when it has a limit. */
+  limit?: number;
+}
+
 export interface InstructionTargets {
   /** Targets of installed, non-excluded tools, one per file. */
   targets: InstructionTarget[];
+  hooks: InstructionHook[];
   /** Known targets no installed tool reads: a pull strips teamai blocks from them. */
   stale: InstructionTarget[];
 }
@@ -163,6 +177,11 @@ export interface InstructionBlocks {
  */
 export function instructionTargetFile(tool: string, paths: ToolPaths, scope: Scope): string | undefined {
   return (entryFor(tool, scope)?.file ?? configured)(paths);
+}
+
+/** Files, relative to the tool's base dir, an earlier release wrote `tool`'s blocks to in `scope`. */
+export function retiredInstructionFiles(tool: string, scope: Scope): readonly string[] {
+  return entryFor(tool, scope)?.retired ?? [];
 }
 
 /** Whether `tool` gets this scope's blocks from teamai's session hook or extension rather than a file. */
@@ -238,7 +257,15 @@ export async function resolveInstructionTargets(
   // Files an installed tool reads, excluded or not: an excluded tool's file is
   // left alone, not cleaned.
   const inUse = new Set<string>();
+  const hooks: InstructionHook[] = [];
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    const entry = entryFor(tool, localConfig.scope);
+    if (entry?.hook) {
+      if (!isAgentExcluded(localConfig, tool) && await isInstalled(tool, paths, localConfig)) {
+        hooks.push({ tool, recall: Boolean(paths.agents), limit: entry.hookLimit });
+      }
+      continue;
+    }
     const file = instructionTargetPath(tool, paths, localConfig);
     if (!file || !await isInstalled(tool, paths, localConfig)) continue;
     inUse.add(file);
@@ -249,7 +276,7 @@ export async function resolveInstructionTargets(
     targets.set(file, target);
   }
   const stale = [...knownInstructionTargets(teamConfig, localConfig).values()].filter((t) => !inUse.has(t.path));
-  return { targets: [...targets.values()], stale };
+  return { targets: [...targets.values()], hooks, stale };
 }
 
 // ─── Planning file contents ────────────────────────────

@@ -1654,13 +1654,15 @@ Two members of the same project can have different roles, so their shared instru
 | Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
 | CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with WorkBuddy |
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy |
-| Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block | (see below) |
+| Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block | A system prompt section from teamai's Hermes plugin |
 | Oh My Pi | `~/.omp/agent/RULES.md` | Added to each turn's system prompt by teamai's OMP extension |
 | Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension |
 
 Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: true`). Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
 
 The CodeBuddy and WorkBuddy rule files are applied in every session (`alwaysApply: true`). Uninstalling one of the two keeps the shared project copy while the other is still installed.
+
+In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). Hermes builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
 
 Oh My Pi reads `RULES.md` as an always-applied rule beside its single user context file. In project scope teamai's OMP extension asks `teamai` for the blocks when the session starts and adds them to each turn's system prompt, from the project root and any subdirectory. Without that extension (for example with hooks removed), an Oh My Pi project session gets no team blocks.
 

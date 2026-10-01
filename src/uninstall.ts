@@ -54,7 +54,7 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
-import { clearInstructionFile, instructionTargetFile } from './instruction-targets.js';
+import { clearInstructionFile, instructionTargetFile, retiredInstructionFiles } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -152,6 +152,8 @@ interface ToolResources {
   piHookFiles: string[];
   dshHookFile: string | null;
   claudeMdFiles: string[];
+  /** Files an earlier release wrote this tool's instruction blocks to; no tool reads them now (#945). */
+  retiredInstructionFiles: string[];
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
   keptRuleFiles: string[];
@@ -167,6 +169,7 @@ function hasToolResources(r: ToolResources): boolean {
     r.piHookFiles.length > 0 ||
     r.dshHookFile !== null ||
     r.claudeMdFiles.length > 0 ||
+    r.retiredInstructionFiles.length > 0 ||
     r.skillDirs.length > 0 ||
     r.ruleFiles.length > 0 ||
     r.agentFiles.length > 0
@@ -313,7 +316,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], skillDirs: [], ruleFiles: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -440,6 +443,13 @@ async function discoverToolResources(
     const content = await readFileSafe(claudeMdPath);
     if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
       res.claudeMdFiles.push(claudeMdPath);
+    }
+  }
+  for (const retired of retiredInstructionFiles(tool, scope)) {
+    const file = path.resolve(baseDir, retired);
+    const content = await readFileSafe(file);
+    if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
+      res.retiredInstructionFiles.push(file);
     }
   }
 
@@ -705,6 +715,10 @@ async function buildRemovalPlan(
       const blocks = CLAUDEMD_MARKER_PAIRS
         .filter(([start]) => content.includes(start) && !kept?.has(start));
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
+    }
+    // No tool reads a retired file any more, so nothing retains its blocks.
+    for (const file of res.retiredInstructionFiles) {
+      if (!plan.claudeMdFiles.includes(file)) plan.claudeMdFiles.push(file);
     }
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);

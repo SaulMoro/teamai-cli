@@ -14,7 +14,7 @@ import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
-import { applyInstructionPlan, planInstructionFiles, resolveInstructionTargets, type InstructionBlocks } from './instruction-targets.js';
+import { applyInstructionPlan, instructionHookText, planInstructionFiles, resolveInstructionTargets, type InstructionBlocks } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
@@ -1888,7 +1888,7 @@ async function syncManagedInstructions(
   dryRun = false,
 ): Promise<void> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
-  const { targets, stale } = await resolveInstructionTargets(config, localConfig);
+  const { targets, hooks, stale } = await resolveInstructionTargets(config, localConfig);
   const plan = await planInstructionFiles(targets, blocks, stale);
   for (const warning of plan.warnings) log.warn(`[${scopeLabel}] ${warning}`);
   const { report, failures } = await applyInstructionPlan(plan, { dryRun });
@@ -1898,7 +1898,13 @@ async function syncManagedInstructions(
     else log.debug(line);
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
-  if (dryRun || targets.length === 0) return;
+  for (const hook of hooks) {
+    const length = instructionHookText(blocks, hook.recall).length;
+    if (hook.limit !== undefined && length > hook.limit) {
+      log.warn(`[${scopeLabel}] ${hook.tool} cannot load this project's team instructions: they are ${length} characters, over the ${hook.limit}-character limit of its prompt section, so ${hook.tool} skips them. Shorten culture.md or the claudemd/ files for this scope. teamai does not cut them or write them to AGENTS.md.`);
+    }
+  }
+  if (dryRun || targets.length + hooks.length === 0) return;
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
 }
