@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { readFileSafe, remove } from './utils/fs.js';
-import { removeClaudeMdSection } from './utils/claudemd.js';
+import { readFileSafe, remove, writeFile } from './utils/fs.js';
+import { gitTracking, gitTracks } from './mcp-git-exclude.js';
 import {
   isAgentExcluded,
   resolveToolBaseDir,
@@ -20,8 +20,9 @@ import {
 } from './types.js';
 
 /**
- * Where teamai's instruction blocks (culture, claudemd, recall) go: one file
- * per tool and scope, written only for tools that are installed (#945).
+ * Where teamai's instruction blocks (culture, claudemd, recall) go: one target
+ * per tool and scope, written only for tools that are installed, and never a
+ * file the project or another tool shares (#945).
  */
 
 type ToolPaths = TeamaiConfig['toolPaths'][string];
@@ -30,9 +31,13 @@ interface TargetEntry {
   /**
    * The file this tool reads the blocks from, relative to the tool's base dir
    * for the scope (`resolveToolBaseDir`) or absolute. Undefined when the tool
-   * takes no blocks in this scope.
+   * takes no file in this scope.
    */
   readonly file: (paths: ToolPaths) => string | undefined;
+  /** Text teamai writes above the blocks when it creates the file, e.g. the frontmatter a rules loader needs. */
+  readonly header?: string;
+  /** teamai owns the whole file: one it did not write is left alone, and it is deleted once its blocks are gone. */
+  readonly owned?: boolean;
   /**
    * Files an earlier release wrote this tool's blocks to, relative to the same
    * base dir. A pull strips teamai blocks from them once no installed tool
@@ -71,13 +76,16 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   openclaw: { file: configured, retired: [] },
 };
 
-/** Every teamai block a stale target can hold, including the legacy rules block. */
-const TEAMAI_BLOCK_MARKERS: ReadonlyArray<readonly [string, string]> = [
-  [TEAMAI_CULTURE_START, TEAMAI_CULTURE_END],
-  [TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END],
-  [TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END],
-  [TEAMAI_RULES_START, TEAMAI_RULES_END],
-];
+type MarkerPair = readonly [start: string, end: string, name: string];
+
+const CULTURE: MarkerPair = [TEAMAI_CULTURE_START, TEAMAI_CULTURE_END, 'culture'];
+const CLAUDEMD: MarkerPair = [TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, 'claudemd'];
+const RECALL: MarkerPair = [TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END, 'recall'];
+/** The rules block releases before per-file rules wrote into the same files. */
+const LEGACY_RULES: MarkerPair = [TEAMAI_RULES_START, TEAMAI_RULES_END, 'rules'];
+
+/** Every teamai block a stale target can hold. */
+const STALE_BLOCKS: readonly MarkerPair[] = [CULTURE, CLAUDEMD, RECALL, LEGACY_RULES];
 
 function entryFor(tool: string, scope: Scope): TargetEntry | undefined {
   return (scope === 'user' ? USER_TARGETS : PROJECT_TARGETS)[tool];
@@ -88,15 +96,27 @@ export interface InstructionTarget {
   /** Absolute path. */
   path: string;
   tools: string[];
+  /** Whether a tool reading this file has the `teamai-recall` subagent, so the recall block belongs here. */
+  recall: boolean;
+  header?: string;
+  owned?: boolean;
 }
 
 export interface InstructionTargets {
-  /** Culture and claudemd targets of installed, non-excluded tools, one per file. */
+  /** Targets of installed, non-excluded tools, one per file. */
   targets: InstructionTarget[];
-  /** The recall-block subset: tools with an `agents` path, which get the `teamai-recall` subagent. */
-  recallTargets: InstructionTarget[];
   /** Known targets no installed tool reads: a pull strips teamai blocks from them. */
-  stale: string[];
+  stale: InstructionTarget[];
+}
+
+/**
+ * The block texts to deliver, each with its markers. `null` removes the block;
+ * an absent field leaves it as it is.
+ */
+export interface InstructionBlocks {
+  culture?: string | null;
+  claudemd?: string | null;
+  recall?: string | null;
 }
 
 /**
@@ -118,22 +138,30 @@ export function instructionTargetPath(
   return file === undefined ? undefined : path.resolve(resolveToolBaseDir(tool, localConfig), file);
 }
 
+function targetFor(tool: string, file: string, scope: Scope): InstructionTarget {
+  const entry = entryFor(tool, scope);
+  return { path: file, tools: [], recall: false, header: entry?.header, owned: entry?.owned };
+}
+
 /**
  * Every file teamai may have written instruction blocks to in the active
  * scope: each tool's current target plus the targets earlier releases used.
  */
-export function knownInstructionTargets(teamConfig: TeamaiConfig, localConfig: LocalConfig): string[] {
-  const known = new Set<string>();
+function knownInstructionTargets(teamConfig: TeamaiConfig, localConfig: LocalConfig): Map<string, InstructionTarget> {
+  const known = new Map<string, InstructionTarget>();
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    const target = instructionTargetPath(tool, paths, localConfig);
-    if (target) known.add(target);
+    const file = instructionTargetPath(tool, paths, localConfig);
+    if (file && !known.has(file)) known.set(file, targetFor(tool, file, localConfig.scope));
   }
   const table = localConfig.scope === 'user' ? USER_TARGETS : PROJECT_TARGETS;
   for (const [tool, entry] of Object.entries(table)) {
     const baseDir = resolveToolBaseDir(tool, localConfig);
-    for (const file of entry.retired) known.add(path.resolve(baseDir, file));
+    for (const retired of entry.retired) {
+      const file = path.resolve(baseDir, retired);
+      if (!known.has(file)) known.set(file, { path: file, tools: [], recall: false });
+    }
   }
-  return [...known];
+  return known;
 }
 
 /**
@@ -146,46 +174,169 @@ async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalCon
   return probe !== undefined && isToolInstalledForConfig(tool, probe, localConfig);
 }
 
-function addTarget(targets: Map<string, InstructionTarget>, file: string, tool: string): void {
-  const existing = targets.get(file);
-  if (existing) existing.tools.push(tool);
-  else targets.set(file, { path: file, tools: [tool] });
-}
-
 /** Resolve where this scope's instruction blocks go, and which files to clean. */
 export async function resolveInstructionTargets(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
 ): Promise<InstructionTargets> {
   const targets = new Map<string, InstructionTarget>();
-  const recallTargets = new Map<string, InstructionTarget>();
   // Files an installed tool reads, excluded or not: an excluded tool's file is
   // left alone, not cleaned.
-  const owned = new Set<string>();
+  const inUse = new Set<string>();
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     const file = instructionTargetPath(tool, paths, localConfig);
     if (!file || !await isInstalled(tool, paths, localConfig)) continue;
-    owned.add(file);
+    inUse.add(file);
     if (isAgentExcluded(localConfig, tool)) continue;
-    addTarget(targets, file, tool);
-    if (paths.agents) addTarget(recallTargets, file, tool);
+    const target = targets.get(file) ?? targetFor(tool, file, localConfig.scope);
+    target.tools.push(tool);
+    if (paths.agents) target.recall = true;
+    targets.set(file, target);
   }
-  const stale = knownInstructionTargets(teamConfig, localConfig).filter((file) => !owned.has(file));
-  return { targets: [...targets.values()], recallTargets: [...recallTargets.values()], stale };
+  const stale = [...knownInstructionTargets(teamConfig, localConfig).values()].filter((t) => !inUse.has(t.path));
+  return { targets: [...targets.values()], stale };
+}
+
+// ─── Planning file contents ────────────────────────────
+
+/** A file whose content a plan changes; `content: null` deletes it. */
+export interface InstructionFileChange {
+  path: string;
+  content: string | null;
+  /** `write` delivers blocks to a target; `cleanup` removes them from a file no tool loads them from. */
+  kind: 'write' | 'cleanup';
+}
+
+export interface InstructionPlan {
+  changes: InstructionFileChange[];
+  warnings: string[];
+}
+
+type BlockEdit = { content: string } | { malformed: true };
+
+/**
+ * Set (`block` a string) or remove (`block` null) one marker-delimited block.
+ * A block whose markers are not exactly one start followed by one end is
+ * malformed and left alone, so teamai never deletes text it cannot delimit.
+ */
+function editBlock(content: string, [start, end]: MarkerPair, block: string | null): BlockEdit {
+  const starts = content.split(start).length - 1;
+  const ends = content.split(end).length - 1;
+  if (starts === 0 && ends === 0) {
+    if (block === null) return { content };
+    const kept = content.trimEnd();
+    return { content: kept ? `${kept}\n\n${block}\n` : `${block}\n` };
+  }
+  const startIdx = content.indexOf(start);
+  const endIdx = content.indexOf(end);
+  if (starts !== 1 || ends !== 1 || endIdx < startIdx) return { malformed: true };
+  const after = content.substring(endIdx + end.length);
+  if (block !== null) return { content: content.substring(0, startIdx) + block + after };
+  const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
+  const rest = (before + after.replace(/^\n+/, '\n')).trimEnd();
+  return { content: rest ? `${rest}\n` : '' };
+}
+
+function hasTeamaiBlock(content: string): boolean {
+  return STALE_BLOCKS.some(([start, end]) => content.includes(start) || content.includes(end));
+}
+
+function withoutHeader(content: string, header: string | undefined): string {
+  return header && content.startsWith(header) ? content.substring(header.length) : content;
 }
 
 /**
- * Remove every teamai block from `file` and delete the file when nothing else
- * is left. Returns true when the file changed.
+ * Whether a file left with nothing but teamai's blocks may go. A file git
+ * tracks stays, emptied, so the cleanup never deletes a project file; a file
+ * whose state git cannot report stays too.
  */
-export async function stripInstructionBlocks(file: string): Promise<boolean> {
-  const before = await readFileSafe(file);
-  if (before === null) return false;
-  for (const [start, end] of TEAMAI_BLOCK_MARKERS) {
-    await removeClaudeMdSection(file, start, end);
+async function mayDelete(file: string): Promise<boolean> {
+  const tracked = await gitTracks(file);
+  if (tracked.kind !== 'unknown') return tracked.kind === 'untracked';
+  return (await gitTracking(file)).kind === 'outside-repo';
+}
+
+async function planFile(
+  target: InstructionTarget,
+  edits: ReadonlyArray<readonly [MarkerPair, string | null]>,
+  kind: InstructionFileChange['kind'],
+  warnings: string[],
+): Promise<InstructionFileChange | null> {
+  const existing = await readFileSafe(target.path);
+  if (existing !== null && target.owned && !hasTeamaiBlock(existing) && existing !== (target.header ?? '')) {
+    warnings.push(`${target.path} was not written by teamai, so teamai left it unchanged. Move or rename it so teamai can deliver the team instructions there.`);
+    return null;
   }
-  const after = await readFileSafe(file);
-  if (after === null || after === before) return false;
-  if (after.trim() === '') await remove(file);
-  return true;
+  let content = existing ?? target.header ?? '';
+  for (const [pair, block] of edits) {
+    const edited = editBlock(content, pair, block);
+    if ('malformed' in edited) {
+      warnings.push(`${target.path} has an incomplete teamai ${pair[2]} block, so teamai left it unchanged. Fix or remove its ${pair[2]} markers by hand.`);
+      continue;
+    }
+    content = edited.content;
+  }
+  if (content === (existing ?? target.header ?? '')) return null;
+
+  const remainder = withoutHeader(content, target.header).trim();
+  if (remainder === '') {
+    if (existing === null) return null;
+    if (target.owned || await mayDelete(target.path)) return { path: target.path, content: null, kind };
+    return { path: target.path, content: '', kind };
+  }
+  return { path: target.path, content, kind };
+}
+
+/**
+ * Work out every change that delivers `blocks` to `targets` and strips teamai
+ * blocks from `stale` files, without writing anything.
+ */
+export async function planInstructionFiles(
+  targets: readonly InstructionTarget[],
+  blocks: InstructionBlocks,
+  stale: readonly InstructionTarget[] = [],
+): Promise<InstructionPlan> {
+  const warnings: string[] = [];
+  const changes: InstructionFileChange[] = [];
+  for (const target of targets) {
+    const edits: Array<readonly [MarkerPair, string | null]> = [];
+    if (blocks.culture !== undefined) edits.push([CULTURE, blocks.culture]);
+    if (blocks.claudemd !== undefined) edits.push([CLAUDEMD, blocks.claudemd]);
+    if (blocks.recall !== undefined) edits.push([RECALL, target.recall ? blocks.recall : null]);
+    const change = await planFile(target, edits, 'write', warnings);
+    if (change) changes.push(change);
+  }
+  for (const file of stale) {
+    const change = await planFile(file, STALE_BLOCKS.map((pair) => [pair, null] as const), 'cleanup', warnings);
+    if (change) changes.push(change);
+  }
+  return { changes, warnings };
+}
+
+/**
+ * Write a plan, or with `dryRun` only describe it. Returns one line per file
+ * changed (or that would change), and one actionable line per file that could
+ * not be written; a failure leaves that file as it was and the others go on.
+ */
+export async function applyInstructionPlan(
+  plan: InstructionPlan,
+  options: { dryRun: boolean },
+): Promise<{ report: string[]; failures: string[] }> {
+  const report: string[] = [];
+  const failures: string[] = [];
+  for (const { path: file, content, kind } of plan.changes) {
+    if (!options.dryRun) {
+      try {
+        if (content === null) await remove(file);
+        else await writeFile(file, content);
+      } catch (e) {
+        failures.push(`Could not update ${file}: ${(e as Error).message}. Check that it is a writable file, then run teamai pull again.`);
+        continue;
+      }
+    }
+    report.push(kind === 'write'
+      ? `${options.dryRun ? 'Would write' : 'Wrote'} teamai instruction blocks to ${file}`
+      : `${options.dryRun ? 'Would remove' : 'Removed'} teamai instruction blocks from ${file}`);
+  }
+  return { report, failures };
 }

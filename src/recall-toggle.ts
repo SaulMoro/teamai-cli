@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfigForScope } from './config.js';
 import { log } from './utils/logger.js';
-import { readFileSafe, writeFile, remove, pathExists } from './utils/fs.js';
-import { knownInstructionTargets, resolveInstructionTargets } from './instruction-targets.js';
+import { remove, pathExists } from './utils/fs.js';
+import { applyInstructionPlan, planInstructionFiles, resolveInstructionTargets } from './instruction-targets.js';
 import {
   ALL_SUPPORTED_TOOLS,
   agentFileExtensionForTool,
@@ -15,8 +15,6 @@ import {
   isRecallEnabled,
   isAgentExcluded,
   scopedToolPaths,
-  TEAMAI_RECALL_RULES_START,
-  TEAMAI_RECALL_RULES_END,
   type GlobalOptions,
   type TeamaiConfig,
   type LocalConfig,
@@ -67,24 +65,20 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
   }
 
   // Remove the recall block from every file teamai may have written it to.
-  for (const claudeMdPath of knownInstructionTargets(teamConfig, localConfig)) {
-    const content = await readFileSafe(claudeMdPath);
-    if (content && content.includes(TEAMAI_RECALL_RULES_START)) {
-      const startIdx = content.indexOf(TEAMAI_RECALL_RULES_START);
-      const endIdx = content.indexOf(TEAMAI_RECALL_RULES_END);
-      if (startIdx !== -1 && endIdx !== -1) {
-        const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
-        const after = content.substring(endIdx + TEAMAI_RECALL_RULES_END.length).replace(/^\n+/, '\n');
-        const cleaned = (before + after).trim();
-        if (cleaned.length === 0) {
-          await remove(claudeMdPath);
-        } else {
-          await writeFile(claudeMdPath, cleaned + '\n');
-        }
-        log.debug(`Removed recall rules block from ${claudeMdPath}`);
-      }
-    }
-  }
+  await writeRecallBlock(teamConfig, localConfig, null);
+}
+
+/** Set (`block`) or remove (`null`) the recall block wherever teamai delivers instruction blocks. */
+async function writeRecallBlock(teamConfig: TeamaiConfig, localConfig: LocalConfig, block: string | null): Promise<void> {
+  const { targets, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+  // Removal also reaches files no installed tool reads any more, but leaves
+  // their other blocks to the next pull's cleanup.
+  const files = block === null ? [...targets, ...stale] : targets;
+  const plan = await planInstructionFiles(files, { recall: block });
+  for (const warning of plan.warnings) log.warn(warning);
+  const { report, failures } = await applyInstructionPlan(plan, { dryRun: false });
+  for (const line of report) log.debug(line);
+  for (const failure of failures) log.warn(failure);
 }
 
 async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
@@ -96,24 +90,8 @@ async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
   await deployBuiltinAgents(teamConfig, localConfig, { skipRecall: false });
   await deployBuiltinSkills(teamConfig, localConfig);
 
-  // Inject recall rules block into CLAUDE.md for Tier-1 tools
-  const { injectClaudeMdSection } = await import('./utils/claudemd.js');
   const { compileRecallRulesBlock } = await import('./pull.js');
-  const recallBlock = compileRecallRulesBlock();
-
-  const { recallTargets } = await resolveInstructionTargets(teamConfig, localConfig);
-  for (const { path: claudeMdPath } of recallTargets) {
-    try {
-      await injectClaudeMdSection(
-        claudeMdPath,
-        TEAMAI_RECALL_RULES_START,
-        TEAMAI_RECALL_RULES_END,
-        recallBlock,
-      );
-    } catch {
-      // best-effort
-    }
-  }
+  await writeRecallBlock(teamConfig, localConfig, compileRecallRulesBlock());
 }
 
 export async function recallDisable(opts: GlobalOptions): Promise<void> {

@@ -52,7 +52,7 @@ function git(args: string[], cwd: string): void {
 
 /** A user-scope sandbox HOME with the given tool directories installed. */
 function makeUserSandbox(toolDirs: string[]): { sandbox: string; home: string } {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-'));
+  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
   const home = path.join(sandbox, 'home');
   const remote = path.join(sandbox, 'team-remote');
   const localRepo = path.join(home, '.teamai', 'team-repo');
@@ -85,6 +85,98 @@ function makeUserSandbox(toolDirs: string[]): { sandbox: string; home: string } 
   );
   return { sandbox, home };
 }
+
+const PROJECT_AGENTS_MD = '# Project\n\nAuthored project instructions.\n';
+
+/**
+ * A team whose roles select different `claudemd/` namespaces, and a project
+ * repo with an authored, committed AGENTS.md (#945).
+ */
+function makeTeamAndProject(sandbox: string): { remote: string; projectOrigin: string } {
+  const seed = path.join(sandbox, 'team-seed');
+  const remote = path.join(sandbox, 'team.git');
+  const write = (rel: string, text: string): void => {
+    fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
+    fs.writeFileSync(path.join(seed, rel), text);
+  };
+  write('teamai.yaml', ['team: issue-945-project-e2e', `repo: ${remote}`, 'provider: git', 'sharing:', '  recall:', '    enabled: true', ''].join('\n'));
+  write('culture.md', '---\ncompany:\n  name: Acme\n---\n\nBe kind.\n');
+  write('claudemd/common.md', 'COMMON-SENTINEL shared by every role.\n');
+  write('claudemd/development/dev.md', 'DEVELOPMENT-SENTINEL for developers.\n');
+  write('claudemd/product/product.md', 'PRODUCT-SENTINEL for product.\n');
+  write('manifest/roles.yaml', [
+    'version: 1',
+    'roles:',
+    '  - id: developer',
+    '    description: Developer',
+    '    resources:',
+    '      knowledge: [development]',
+    '      skills: []',
+    '  - id: product',
+    '    description: Product',
+    '    resources:',
+    '      knowledge: [product]',
+    '      skills: []',
+    '',
+  ].join('\n'));
+  git(['init', '-q', '-b', 'main'], seed);
+  git(['add', '-A'], seed);
+  git(['commit', '-q', '-m', 'seed'], seed);
+  git(['clone', '-q', '--bare', seed, remote], sandbox);
+
+  const projectSeed = path.join(sandbox, 'project-seed');
+  const projectOrigin = path.join(sandbox, 'project.git');
+  fs.mkdirSync(projectSeed, { recursive: true });
+  fs.writeFileSync(path.join(projectSeed, 'AGENTS.md'), PROJECT_AGENTS_MD);
+  fs.writeFileSync(path.join(projectSeed, 'app.txt'), 'v1\n');
+  git(['init', '-q', '-b', 'main'], projectSeed);
+  git(['add', '-A'], projectSeed);
+  git(['commit', '-q', '-m', 'project'], projectSeed);
+  git(['clone', '-q', '--bare', projectSeed, projectOrigin], sandbox);
+  return { remote, projectOrigin };
+}
+
+interface ProjectMember {
+  home: string;
+  projectRoot: string;
+}
+
+/**
+ * One member's checkout of the project, in project scope, with their role and
+ * the given tool directories installed under the project root.
+ */
+function makeProjectMember(
+  sandbox: string,
+  fixture: { remote: string; projectOrigin: string },
+  name: string,
+  role: string,
+  toolDirs: string[],
+): ProjectMember {
+  const home = path.join(sandbox, `${name}-home`);
+  const projectRoot = path.join(sandbox, `${name}-project`);
+  fs.mkdirSync(home, { recursive: true });
+  git(['clone', '-q', fixture.projectOrigin, projectRoot], sandbox);
+  const teamRepo = path.join(projectRoot, '.teamai', 'team-repo');
+  git(['clone', '-q', fixture.remote, teamRepo], sandbox);
+  for (const dir of toolDirs) fs.mkdirSync(path.join(projectRoot, dir), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, '.teamai', 'config.yaml'), [
+    'repo:',
+    `  localPath: ${teamRepo}`,
+    `  remote: ${fixture.remote}`,
+    `username: ${name}`,
+    'updatePolicy: auto',
+    'scope: project',
+    `projectRoot: ${projectRoot}`,
+    `primaryRole: ${role}`,
+    'additionalRoles: []',
+    'recallEnabled: true',
+    '',
+  ].join('\n'));
+  return { home, projectRoot };
+}
+
+const pullAs = (member: ProjectMember, args: string[] = []): Promise<RunResult> =>
+  runCLI(['pull', '--force', ...args], { HOME: member.home }, member.projectRoot);
 
 describe('instruction block targets on real CLI pull (#945)', () => {
   const sandboxes: string[] = [];
@@ -153,5 +245,55 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(result.code, result.output).toBe(0);
 
     expect(fs.readFileSync(agentsMd, 'utf8')).toBe('# My notes\n');
+  });
+
+  it('leaves the project AGENTS.md alone when Hermes is not installed', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
+  });
+
+  it('reports the cleanup of an old AGENTS.md block in a dry run, then removes it and keeps the authored text', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+    const agentsMd = path.join(member.projectRoot, 'AGENTS.md');
+    const leftover = `${PROJECT_AGENTS_MD}\n${CLAUDEMD_START}\nanother member's selection\n${CLAUDEMD_END}\n`;
+    fs.writeFileSync(agentsMd, leftover);
+
+    const dryRun = await pullAs(member, ['--dry-run']);
+    expect(dryRun.code, dryRun.output).toBe(0);
+    expect(dryRun.output).toContain(`Would remove teamai instruction blocks from ${agentsMd}`);
+    expect(fs.readFileSync(agentsMd, 'utf8')).toBe(leftover);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain(`Removed teamai instruction blocks from ${agentsMd}`);
+    expect(fs.readFileSync(agentsMd, 'utf8')).toBe(PROJECT_AGENTS_MD);
+  });
+
+  it('does not rewrite an instruction file whose blocks are already current', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+
+    const first = await pullAs(member);
+    expect(first.code, first.output).toBe(0);
+    const written = fs.readdirSync(member.projectRoot, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.parentPath.includes(`${path.sep}.git`) && !entry.parentPath.includes('.teamai'))
+      .map((entry) => path.join(entry.parentPath, entry.name))
+      .filter((file) => fs.readFileSync(file, 'utf8').includes(CLAUDEMD_START));
+    expect(written.length).toBeGreaterThan(0);
+    const mtimes = written.map((file) => fs.statSync(file).mtimeMs);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await pullAs(member);
+    expect(second.code, second.output).toBe(0);
+    expect(written.map((file) => fs.statSync(file).mtimeMs)).toEqual(mtimes);
   });
 });

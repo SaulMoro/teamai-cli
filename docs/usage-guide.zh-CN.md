@@ -1520,7 +1520,7 @@ teamai pull
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
-pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如 Hermes 和 WorkBuddy 都已移除后的 `~/AGENTS.md`），下一次 pull 会移除其中的 teamai 块；文件中没有其他内容时一并删除该文件。
+pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如 Hermes 和 WorkBuddy 都已移除后的 `~/AGENTS.md`），下一次 pull 会移除其中的 teamai 块，并在输出中列出该文件。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
 
 ### 查看效果
 
