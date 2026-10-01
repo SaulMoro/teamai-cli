@@ -80,7 +80,7 @@ async function writeRecallBlock(teamConfig: TeamaiConfig, localConfig: LocalConf
   const { report, failures } = await applyInstructionPlan(plan, { dryRun: false });
   for (const line of report) log.debug(line);
   for (const failure of failures) log.warn(failure);
-  if (block !== null) await registerOpencodeContext(teamConfig, localConfig, resolved, false);
+  await registerOpencodeContext(teamConfig, localConfig, resolved, false);
 }
 
 async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {

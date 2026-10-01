@@ -1642,7 +1642,7 @@ teamai pull
 
 The injected content sits between the `<!-- [teamai:culture:start] -->` and `<!-- [teamai:culture:end] -->` markers, is automatically updated on every `pull`, and does not affect any other content in the file.
 
-A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. When no installed tool reads a file that an earlier pull wrote these blocks to (for example the project's `AGENTS.md`, which earlier releases wrote for Pi, Hermes and WorkBuddy), the next pull removes the teamai blocks from it and names the file in its output. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
+A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. Earlier releases wrote these blocks to files that tools now share or that hide other instructions (listed under [Where the blocks go](#where-the-blocks-go)); while no installed tool reads such a file, the next pull removes the teamai blocks from it and names the file in its output. A tool's current file is never cleaned on its own: `teamai uninstall --agent <tool>` removes those blocks. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
 
 #### Where the blocks go
 
@@ -1666,9 +1666,9 @@ Two members of the same project can have different roles, so their shared instru
 
 Claude Code loads `.claude/rules/teamai-context.md` from the project root and any subdirectory, and still reads the project's `AGENTS.md` or authored `CLAUDE.md` the way it chose to. Copilot CLI 1.0.89 and later also reads a project's `.claude/rules`, so with both tools installed Copilot can get the blocks twice.
 
-Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: true`). Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
+Both `teamai-context.mdc` files carry `alwaysApply: true`, which Cursor's rule loader reads as always applied. Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
 
-The CodeBuddy and WorkBuddy rule files are applied in every session (`alwaysApply: true`). Uninstalling one of the two keeps the shared project copy while the other is still installed.
+The CodeBuddy and WorkBuddy rule files carry `alwaysApply: true`, which CodeBuddy's rule parser reads as always applied. Uninstalling one of the two keeps the shared project copy while the other is still installed.
 
 In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). According to Hermes' documentation it builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
 

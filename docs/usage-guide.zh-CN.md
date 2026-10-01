@@ -1520,7 +1520,7 @@ teamai pull
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
-pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如早期版本为 Pi、Hermes 和 WorkBuddy 写过的项目 `AGENTS.md`），下一次 pull 会移除其中的 teamai 块，并在输出中列出该文件。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
+pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。早期版本把这些块写进了如今由多个工具共用或会遮蔽其他指令的文件（见[这些块写到哪里](#这些块写到哪里)）；只要没有已安装的工具读取这类文件，下一次 pull 就会移除其中的 teamai 块，并在输出中列出该文件。工具当前的目标文件不会被单独清理：`teamai uninstall --agent <tool>` 会移除其中的块。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
 
 #### 这些块写到哪里
 
@@ -1544,9 +1544,9 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 
 Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
 
-Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysApply: true`）。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
+这两个 `teamai-context.mdc` 文件都带有 `alwaysApply: true`，Cursor 的规则加载器将其视为始终应用。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
 
-CodeBuddy 和 WorkBuddy 的规则文件在每个会话中应用（`alwaysApply: true`）。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
+CodeBuddy 和 WorkBuddy 的规则文件带有 `alwaysApply: true`，CodeBuddy 的规则解析器将其视为始终应用。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
 
 在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
 

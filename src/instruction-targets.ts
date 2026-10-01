@@ -180,7 +180,7 @@ export interface InstructionTargets {
   /** Targets of installed, non-excluded tools, one per file. */
   targets: InstructionTarget[];
   hooks: InstructionHook[];
-  /** Known targets no installed tool reads: a pull strips teamai blocks from them. */
+  /** Files earlier releases wrote blocks to that no installed tool reads now: a pull strips teamai blocks from them. */
   stale: InstructionTarget[];
   /** Claude's user file when OpenCode reads the blocks from it, so OpenCode gets no file of its own. */
   opencodeFallback?: string | null;
@@ -248,7 +248,7 @@ export function hookLimitProblem(hook: InstructionHook, text: string): string | 
  * installed as this build writes it, and if not, what to do.
  */
 export async function instructionHookChannel(tool: string): Promise<{ ready: boolean; fix: string }> {
-  const rerun = 'Run `teamai pull` to reinstall it; `teamai hooks remove` takes it away.';
+  const rerun = 'Run `teamai hooks inject` to reinstall it; `teamai hooks remove` takes it away.';
   if (tool === 'omp' || tool === 'pi') {
     const { buildOmpExtensionSource, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
     const { buildPiExtensionSource, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
@@ -404,13 +404,14 @@ export async function registerOpencodeContext(
   localConfig: LocalConfig,
   resolved: Pick<InstructionTargets, 'targets' | 'stale'>,
   dryRun: boolean,
+  planned: readonly string[] = [],
 ): Promise<string | null> {
   const paths = scopedToolPaths(teamConfig, localConfig).opencode;
   const contextFile = paths && instructionTargetPath('opencode', paths, localConfig);
   if (!contextFile) return null;
   const wanted = resolved.targets.some((target) => target.path === contextFile);
   if (!wanted && !resolved.stale.some((target) => target.path === contextFile)) return null;
-  const present = wanted && (dryRun || await pathExists(contextFile));
+  const present = wanted && (await pathExists(contextFile) || (dryRun && planned.includes(contextFile)));
   const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
   if (dryRun) {
     const listed = (await readOpencodeInstructionList(config))?.includes(entry) ?? false;

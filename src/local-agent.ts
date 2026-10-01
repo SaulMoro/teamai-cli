@@ -2107,7 +2107,8 @@ async function syncClaudemd(
     const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
     // OpenCode's Claude fallback already carries the blocks, as in pull (#945).
     const claudeUserFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
-    if (tool === 'opencode' && localConfig.scope === 'user' && await pathExists(claudeUserFile)
+    if (tool === 'opencode' && localConfig.scope === 'user'
+      && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START)
       && await opencodeClaudeFallback(getUserHome(), [claudeUserFile])) {
       log.debug(`local-agent: OpenCode reads the team instructions from ${claudeUserFile}; skipped`);
       continue;

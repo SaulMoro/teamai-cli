@@ -587,6 +587,9 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(fs.readFileSync(path.join(fallback.home, '.claude', 'CLAUDE.md'), 'utf8')).toContain(CLAUDEMD_START);
     expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
     expect(viaClaude.output).toContain('OpenCode reads the team instructions from');
+    const recall = await runCLI(['recall', 'enable'], { HOME: fallback.home }, fallback.sandbox);
+    expect(recall.code, recall.output).toBe(0);
+    expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
   });
 
   it('has doctor report what keeps a tool from loading its instructions, not just whether a file was written', async () => {

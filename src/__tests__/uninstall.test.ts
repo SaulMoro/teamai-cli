@@ -616,6 +616,35 @@ describe('uninstall', () => {
     expect(await fse.readFile(sharedInstructions, 'utf8')).toContain(TEAMAI_CULTURE_START);
   });
 
+  it('targeted CodeBuddy uninstall keeps the shared .codebuddy rule for a WorkBuddy entry without claudemd (#945)', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const sharedInstructions = path.join(projectRoot, '.codebuddy', 'rules', 'teamai-context.md');
+    await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
+    await fse.ensureDir(path.join(projectRoot, '.workbuddy', 'skills'));
+    await fse.ensureDir(path.dirname(sharedInstructions));
+    await fse.writeFile(sharedInstructions, `---\nalwaysApply: true\n---\n\n${TEAMAI_CULTURE_START}\nculture\n${TEAMAI_CULTURE_END}\n`);
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        codebuddy: { skills: '.codebuddy/skills', rules: '.codebuddy/rules', claudemd: '.codebuddy/CODEBUDDY.md' },
+        workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules' },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['codebuddy', 'workbuddy'],
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'codebuddy' });
+
+    expect(await fse.readFile(sharedInstructions, 'utf8')).toContain(TEAMAI_CULTURE_START);
+  });
+
   it('targeted Pi uninstall removes shared AGENTS.md when the other tool sharing it was never installed', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');

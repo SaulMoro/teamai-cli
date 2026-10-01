@@ -1903,11 +1903,12 @@ async function syncManagedInstructions(
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
   try {
-    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun);
+    const planned = plan.changes.filter((change) => change.content !== null).map((change) => change.path);
+    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, planned);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
   } catch (e) {
-    log.warn(`[${scopeLabel}] Failed to update OpenCode's instructions: ${(e as Error).message}. Add teamai-context.md to its "instructions" by hand so OpenCode loads the team instructions.`);
+    log.warn(`[${scopeLabel}] Failed to list the team instructions in OpenCode's config: ${(e as Error).message}. Run \`teamai doctor\`, which names the config file and the entry to add by hand.`);
   }
   // Hook targets (Pi, OMP, Hermes, Codex) are reported after the hooks are
   // reconciled, since that is what installs their extensions and plugins.
@@ -2499,10 +2500,15 @@ async function reconcileHooksAllScopes(
         log.debug(`[${localConfig.scope}] ${options.dryRun ? 'Would apply' : 'Reconciled'} ${reconciled.defs.length} team hook(s)`);
       }
       // The hooks install the extensions and plugins that add team
-      // instructions for Pi, OMP and Hermes (#945); say which cannot.
-      if (!options.dryRun) {
-        const { instructionChannelProblems } = await import('./instruction-targets.js');
-        for (const problem of await instructionChannelProblems(teamConfig, localConfig)) log.warn(`[${localConfig.scope}] ${problem}`);
+      // instructions for Pi, OMP and Hermes (#945); say which cannot. The
+      // session-start pull is silent, and doctor reports the same.
+      if (!options.dryRun && !options.silent) {
+        try {
+          const { instructionChannelProblems } = await import('./instruction-targets.js');
+          for (const problem of await instructionChannelProblems(teamConfig, localConfig)) log.warn(`[${localConfig.scope}] ${problem}`);
+        } catch (e) {
+          log.debug(`[${localConfig.scope}] Team instruction check skipped: ${(e as Error).message}`);
+        }
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] Hook reconcile skipped: ${(e as Error).message}`);

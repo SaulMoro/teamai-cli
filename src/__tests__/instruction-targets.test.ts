@@ -6,10 +6,14 @@ import path from 'node:path';
 import {
   applyInstructionPlan,
   clearInstructionFile,
+  instructionChannelProblems,
   planInstructionFiles,
   type InstructionTarget,
 } from '../instruction-targets.js';
+import { injectPiHooks } from '../pi-hooks.js';
 import {
+  TeamaiConfigSchema,
+  type LocalConfig,
   TEAMAI_CLAUDEMD_END,
   TEAMAI_CLAUDEMD_START,
   TEAMAI_CULTURE_END,
@@ -150,5 +154,33 @@ describe('instruction file planning (#945)', () => {
     await clearInstructionFile(file);
 
     expect(fs.readFileSync(file, 'utf8')).toBe('# Mine\n');
+  });
+});
+
+describe('instruction channel problems (#945)', () => {
+  it('names a missing Pi extension in a project, and nothing once it is installed', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-channel-')));
+    const prevHome = process.env.HOME;
+    process.env.HOME = path.join(root, 'home');
+    try {
+      const projectRoot = path.join(root, 'project');
+      const repo = path.join(root, 'repo');
+      fs.mkdirSync(path.join(projectRoot, '.pi', 'skills'), { recursive: true });
+      fs.mkdirSync(path.join(repo, 'claudemd'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'claudemd', 'shared.md'), 'Shared.\n');
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const localConfig = {
+        repo: { localPath: repo, remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, enabledAgents: ['pi'],
+      } as unknown as LocalConfig;
+
+      expect((await instructionChannelProblems(teamConfig, localConfig)).join('\n')).toMatch(/teamai-hooks\.ts is missing or out of date, so pi sessions/);
+
+      await injectPiHooks();
+      expect(await instructionChannelProblems(teamConfig, localConfig)).toEqual([]);
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
