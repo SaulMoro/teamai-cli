@@ -68,7 +68,7 @@ export function teamRuleToCursorMdc(rawTeamRule: string): string {
   return renderCursorMdc(deriveCursorFrontmatter(teamRuleData(rawTeamRule)), teamRuleBody(rawTeamRule));
 }
 
-/** Cursor's rules format, also JoyCode's (`.mdc`). */
+/** Cursor's rules format (`.mdc`). */
 export const CURSOR_MDC_FORMAT: RuleFormat = {
   extension: '.mdc',
   render: teamRuleToCursorMdc,

@@ -13,7 +13,7 @@ import {
 } from '../resources/agent-format.js';
 import { AgentsHandler } from '../resources/agents.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
-import { ruleFileExtensionForTool, usesCursorMdcRules } from '../resources/rule-format.js';
+import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { TeamaiConfigSchema } from '../types.js';
 import type { LocalConfig } from '../types.js';
 import { resolveHookCwd } from '../utils/hook-cwd.js';
@@ -48,7 +48,7 @@ describe('Kiro support', () => {
     expect(ALL_SUPPORTED_TOOLS).toContain('kiro');
     expect(agentFileExtensionForTool('kiro')).toBe('.json');
     expect(ruleFileExtensionForTool('kiro')).toBe('.md');
-    expect(usesCursorMdcRules('kiro')).toBe(false);
+    expect(usesMdcRules('kiro')).toBe(false);
   });
 
   it('renders agentSpawn session-start into Kiro JSON while preserving custom hooks', () => {

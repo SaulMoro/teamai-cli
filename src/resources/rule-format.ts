@@ -19,6 +19,7 @@ import type { Scope, TeamaiConfig } from '../types.js';
 import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
 import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
+import { JOYCODE_RULE_FORMAT } from './joycode-rule.js';
 import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
 import { OMP_RULE_FORMAT } from './omp-rule.js';
 import { QODER_RULE_FORMAT } from './qoder-rule.js';
@@ -49,7 +50,7 @@ export interface RuleFormat {
  */
 const RULE_FORMATS: Readonly<Record<string, RuleFormat>> = {
   cursor: CURSOR_MDC_FORMAT,
-  joycode: CURSOR_MDC_FORMAT,
+  joycode: JOYCODE_RULE_FORMAT,
   copilot: COPILOT_INSTRUCTIONS_FORMAT,
   kiro: KIRO_STEERING_FORMAT,
   qoder: QODER_RULE_FORMAT,
@@ -151,8 +152,8 @@ export function ruleFileExtensionForTool(tool: string): RuleFormat['extension'] 
   return ruleFormatForTool(tool)?.extension ?? '.md';
 }
 
-/** True when the tool stores rules in Cursor-compatible `.mdc` format. */
-export function usesCursorMdcRules(tool: string): boolean {
+/** True when the tool stores rules as `.mdc` files (Cursor, JoyCode), so it reads no `.md` there. */
+export function usesMdcRules(tool: string): boolean {
   return ruleFileExtensionForTool(tool) === '.mdc';
 }
 
@@ -317,5 +318,5 @@ export function ruleStemFromFilename(filename: string): string | null {
  * leftover rather than an active rule.
  */
 export function isLegacyCursorRuleFile(tool: string, filename: string): boolean {
-  return usesCursorMdcRules(tool) && filename.endsWith('.md');
+  return usesMdcRules(tool) && filename.endsWith('.md');
 }

@@ -228,6 +228,88 @@ describe('a pull at an unchanged team revision after OMP rules go flat (#946)', 
 });
 
 /**
+ * JoyCode got Cursor's `.mdc`, whose quoted globs it never matches; a project
+ * whose team revision has not moved must still get JoyCode's own render (#946).
+ */
+describe('a pull at an unchanged team revision after JoyCode gets its own render (#946)', () => {
+  let tmpDir: string;
+  let projectRoot: string;
+  let saved: State;
+
+  const SCOPED = '---\npaths:\n  - "src/**"\n  - "test/**"\n---\n\nUse named exports.\n';
+  const CURSOR = '---\nglobs: "src/**, test/**"\nalwaysApply: false\n---\n\nUse named exports.\n';
+  const JOYCODE = '---\nglobs: src/**, test/**\nalwaysApply: false\n---\n\nUse named exports.\n';
+  const copy = (name: string) => path.join(projectRoot, '.joycode', 'rules', `${name}.mdc`);
+  const delivered = () => Object.values(saved.lastPullByWorkspace ?? {})[0]?.delivered ?? {};
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-joycode-upgrade-'));
+    projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(path.join(projectRoot, '.joycode'));
+    for (const name of ['scoped', 'edited']) await fse.outputFile(path.join(repoPath, 'rules', `${name}.md`), SCOPED);
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['joycode'],
+    } as LocalConfig);
+    await pull({});
+    // What an older CLI left at this revision: Cursor's render, on record as
+    // delivered; the member then edited one copy.
+    const record = Object.values(saved.lastPullByWorkspace ?? {})[0];
+    for (const name of ['scoped', 'edited']) {
+      await fse.writeFile(copy(name), CURSOR);
+      record.delivered = { ...record.delivered, [copy(name)]: sha256(CURSOR) };
+    }
+    await fse.writeFile(copy('edited'), CURSOR.replace('Use named exports.', 'My own wording.'));
+    vi.mocked(log.success).mockClear();
+    vi.mocked(log.warn).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('re-renders the unedited copy for JoyCode, and keeps and names the edited one', async () => {
+    await pull({});
+
+    const successes = vi.mocked(log.success).mock.calls.map(([message]) => String(message));
+    expect(successes.some((message) => message.includes('Already synced at abc1234'))).toBe(true);
+    expect(await fse.readFile(copy('scoped'), 'utf8')).toBe(JOYCODE);
+    expect(delivered()[copy('scoped')]).toBe(sha256(JOYCODE));
+    expect(await fse.readFile(copy('edited'), 'utf8')).toContain('My own wording.');
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings.filter((message) => message.includes(`Kept ${copy('edited')}`))).toHaveLength(1);
+    expect(warnings.filter((message) => message.includes(copy('edited')) && message.includes('JoyCode never matches'))).toHaveLength(1);
+    expect(warnings.some((message) => message.includes(copy('scoped')))).toBe(false);
+  });
+
+  it('says why the kept copy applies to no file on a full sync too', async () => {
+    await pull({ force: true });
+
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(await fse.readFile(copy('edited'), 'utf8')).toContain('My own wording.');
+    expect(warnings.filter((message) => message.includes(copy('edited')) && message.includes('JoyCode never matches'))).toHaveLength(1);
+  });
+});
+
+/**
  * A CLI upgrade that moves OpenCode's rules globs must reach a machine whose
  * team revision has not moved, or OpenCode keeps loading through the old
  * entry until the team next changes (#946).

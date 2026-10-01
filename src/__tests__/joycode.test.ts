@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { KNOWN_AGENTS } from '../known-agents.js';
 import { ALL_SUPPORTED_TOOLS } from '../resources/agent-format.js';
-import { ruleFileExtensionForTool, usesCursorMdcRules } from '../resources/rule-format.js';
+import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { TeamaiConfigSchema } from '../types.js';
 
 describe('JoyCode support', () => {
@@ -23,8 +23,8 @@ describe('JoyCode support', () => {
     expect(ALL_SUPPORTED_TOOLS).toContain('joycode');
   });
 
-  it('uses Cursor-compatible .mdc rule files', () => {
+  it('uses .mdc rule files', () => {
     expect(ruleFileExtensionForTool('joycode')).toBe('.mdc');
-    expect(usesCursorMdcRules('joycode')).toBe(true);
+    expect(usesMdcRules('joycode')).toBe(true);
   });
 });

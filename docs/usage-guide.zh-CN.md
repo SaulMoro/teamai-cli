@@ -738,7 +738,7 @@ excludedSkills:
 
 ### 推送本地资源
 
-扫描前，`push` 会用团队仓库的新版刷新未修改的旧规则副本。对于有自有规则格式的工具（Cursor 与 JoyCode 的 `.mdc`、Copilot 的 `.instructions.md`、Kiro steering、Qoder 与 Oh My Pi rules），会单独比较 Markdown 正文，忽略自动生成的头部，并以该工具的格式写入更新；本地正文编辑会保留。对 Copilot，此行为适用于项目规则和 `COPILOT_HOME` 下的用户规则。它刷新的每份副本都会记录为 teamai 写入的内容，因此下一次 `teamai pull` 仍会更新它，而不会当作你的修改保留。
+扫描前，`push` 会用团队仓库的新版刷新未修改的旧规则副本。对于有自有规则格式的工具（Cursor 的 `.mdc`、JoyCode 自己的 `.mdc`、Copilot 的 `.instructions.md`、Kiro steering、Qoder 与 Oh My Pi rules），会单独比较 Markdown 正文，忽略自动生成的头部，并以该工具的格式写入更新；本地正文编辑会保留。对 Copilot，此行为适用于项目规则和 `COPILOT_HOME` 下的用户规则。它刷新的每份副本都会记录为 teamai 写入的内容，因此下一次 `teamai pull` 仍会更新它，而不会当作你的修改保留。
 
 团队仅修改 `paths` 时，只要本地文件仍与某个已记录版本的生成副本一致，`push` 也会刷新 Copilot 的 `applyTo`；此时本地手动修改过的头部会保留。
 
@@ -2179,7 +2179,9 @@ TeamAI 会打印带绝对路径的 patch。将这个 `--patch` 参数加到启�
 
 ### JoyCode
 
-JoyCode 已作为内置目标支持。Skills、Rules 和 Subagents 分别下发到 `.joycode/skills/`、`.joycode/rules/` 和 `.joycode/agents/`。Rules 使用与 Cursor 兼容的 `.mdc` 格式，包括下文所述的派生 frontmatter 和仅正文往返同步；Subagents 使用带 YAML frontmatter 的 Markdown 文件。
+JoyCode 已作为内置目标支持。Skills、Rules 和 Subagents 分别下发到 `.joycode/skills/`、`.joycode/rules/` 和 `.joycode/agents/`。Subagents 使用带 YAML frontmatter 的 Markdown 文件。
+
+Rules 是采用 JoyCode 自有渲染的 `.mdc` 文件。JoyCode 逐行读取 frontmatter，而不是按 YAML 解析：它会保留 Cursor 渲染给 `globs` 加的引号，并按每个逗号拆分取值，因此 Cursor 形式的带 `paths:` 的 rule 从未生效。带 `paths:` 的 rule 写成不加引号、逗号分隔的 `globs:`，每个 `{a,b}` 选择项都展开为单独的 glob，并加上 `alwaysApply: false`；不带 `paths` 的 rule 写成 `alwaysApply: true`。`push` 时只有 Markdown 正文回流，与 Cursor 相同。旧版 teamai 以 Cursor 形式写入的副本，若仍是 teamai 所下发的内容，会在下一次 `pull` 时重写；你改过的副本会保留并被点名；只要其 `globs` 仍带引号，`pull` 会指出它不作用于任何文件，并说明如何修正。`doctor` 将项目 `.joycode/rules/` 中的每份副本与该渲染比对。
 
 JoyCode 规则清理采用保守策略：不在团队规则列表中的本地 `.mdc` 和 `.md` 文件会被保留，只有团队明确记录了删除标记（tombstone）才会清理。这能保护同一目录中的个人规则；缺少删除记录的旧团队副本也会保留，不会猜测其已过期。
 
@@ -2191,7 +2193,7 @@ JoyCode 规则清理采用保守策略：不在团队规则列表中的本地 `.
 
 Cursor 的子代理部署到 `.cursor/agents/*.md`，YAML frontmatter 携带 `agent_id`（团队代理名）、`description`、`tools`，以及团队代理声明了的 `model`，外加所有 `tool_extras.cursor` 字段；`reverseFromCursor` 按同样字段读回，因此 `pull` → `push` 往返不会丢 model。
 
-Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` 下，且带 YAML frontmatter——放在那里的纯 `.md` 会被 Cursor 直接忽略。因此 teamai 向 Cursor 写规则时用 `<name>.mdc`（其他工具仍写纯 `.md`），并从团队规则派生 frontmatter：
+Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` 下，且带 YAML frontmatter——放在那里的纯 `.md` 会被 Cursor 直接忽略。因此 teamai 向 Cursor 写规则时用 `<name>.mdc`（JoyCode、Copilot、Kiro、Qoder、Qoder CN、CodeBuddy、WorkBuddy 与 Oh My Pi 各有自己的格式，见各自小节；其他工具写纯 `.md`），并从团队规则派生 frontmatter：
 
 - 带 `paths:` 列表的规则会转成 `globs: "<逗号拼接>"` + `alwaysApply: false`（上下文中有匹配文件时 Cursor 自动附加该规则）。值加引号是因为以 `*` 开头的 glob 不加引号时并非合法 YAML。
 - 无 `paths` 的规则（团队强制规则）会转成 `alwaysApply: true`（每个 Cursor 会话都应用）。
@@ -2227,7 +2229,7 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 除了托管平台、clone、配置和 hook 检查之外，`doctor` 还会验证落到本机上的内容。`<tool> is installed` 在 `enabledAgents` 列出了不会收到任何内容的工具时失败——这正是 pull 报告成功、而该工具什么都没收到的情况。它使用与同步相同的解析逻辑，因此像 OpenClaw 这样把 skills 放在 workspace 目录而非工具根目录的工具，会在同步真正写入的位置被判断。工具已安装时也会作为通过项报告，因此 `--json` 无论哪种情况都会为每个已启用工具给出一条记录。pull 结束时的检查只覆盖它从当前目录解析出的那个 scope；其他 scope 请在对应目录下运行 `teamai doctor`。`Skills delivered to <tool>` 会把角色命名空间、标签订阅与排除规则解析出的 skill 集合，与每个已安装工具磁盘上的内容比对：从未送达的 skill 与送达但不可读的 skill 会分别报告——后者指 `SKILL.md` 缺失、frontmatter 无法解析，或其 `name` 与目录名不一致，导致 agent 永远发现不了它。`Team docs delivered` 将你应收到的文档（不含未激活的 docs namespace）与 `sharing.docs.localDir` 比对（它只有一个目标目录，而非每个工具一个）；每个应有的文档都必须是可读取的文件，因此占用了该名字的目录或断链接也算缺失。它还会将本地多余的非隐藏文件报告为过期文档，即使团队文档已经删空也会检查；本地隐藏文件会保留，不会使检查失败，未激活 namespace 中团队文档的本地副本也不会：pull 会删除未修改的副本，并点名你修改过的副本。`doctor` 还会输出提示，它们只是信息，不是失败的检查。每条提示指出一个在本机替换了根目录条目的 namespace skill、agent、rule、共享指令文件、env 变量、hook、MCP server 或团队模型配置（`rules: "style" from rules/checkout/style.md replaces rules/style.md`）。当某个 namespace 提供了 env 变量、hook、MCP server 或团队模型配置时，还会有一条提示按来源统计该类型的条目（`env: 3 received here (2 root, 1 checkout)`）。未配置角色或项目时，提示改为列出团队仓库中重复定义的每个文件，以及在根文件中重复出现的每个 env 变量、hook 或 MCP server 名称。
 
-`Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`、`.instructions.md` 带 `applyTo`、Kiro 的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
+`Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`（JoyCode 的不加引号）、`.instructions.md` 带 `applyTo`、Kiro 的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
 
 有三个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json`（项目中为 `.opencode/opencode.json`）的 `instructions` 中是否列着 teamai 所拥有的每条 glob，且没有过时的条目（如旧版本写入的相对 `rules/*.md`）：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。user scope 下，`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in Codex AGENTS.md` 把该工具 `AGENTS.md` 中的 team-rules 区块与团队 rule 内联后的内容比对，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。Codex 没有 `Rules delivered to <tool>` 检查。
 

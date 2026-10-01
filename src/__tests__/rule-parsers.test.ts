@@ -4,7 +4,10 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { teamRuleToCodebuddyRule } from '../resources/codebuddy-rule.js';
 import { teamRuleToCursorMdc } from '../resources/cursor-mdc.js';
-import { loadCodebuddyRuleParser, loadCursorRuleParser, ruleParserBundle } from './helpers/rule-parsers.js';
+import { teamRuleToJoycodeRule } from '../resources/joycode-rule.js';
+import {
+  loadCodebuddyRuleParser, loadCursorRuleParser, loadJoycodeRuleParser, ruleParserBundle,
+} from './helpers/rule-parsers.js';
 
 /**
  * Each render read back by the tool's own parser, taken from its installed
@@ -66,5 +69,39 @@ describe.skipIf(!codebuddyBundle)('CodeBuddy (and WorkBuddy) read the CodeBuddy 
     fs.writeFileSync(file, `---\npaths: ["src/**/*.ts", "test/**"]\n---\n\n${BODY}`);
 
     expect((await parser!.parse(file)).globs).toEqual(['["src/**/*.ts"', '"test/**"]']);
+  });
+});
+
+const joycodeBundle = ruleParserBundle('joycode');
+
+describe.skipIf(!joycodeBundle)('JoyCode reads its .mdc render as intended', () => {
+  const parser = joycodeBundle ? loadJoycodeRuleParser(joycodeBundle) : undefined;
+  const cwd = '/repo';
+  const applied = (mdc: string, files: string[]): string[] =>
+    files.filter((file) => parser!.applies(mdc, 'rule.mdc', path.join(cwd, file), cwd));
+  const FILES = ['src/a/x.ts', 'src/b/y.tsx', 'src/c/z.ts', 'test/t.js', 'docs/d.md'];
+
+  it.each([
+    ['an unscoped rule', BODY, true, FILES],
+    ['an inline list', `---\npaths: ["src/**/*.ts", "test/**"]\n---\n\n${BODY}`, false, ['src/a/x.ts', 'src/c/z.ts', 'test/t.js']],
+    ['a block list', `---\npaths:\n  - "src/**/*.ts"\n  - test/**\n---\n\n${BODY}`, false, ['src/a/x.ts', 'src/c/z.ts', 'test/t.js']],
+    ['a brace glob', `---\npaths:\n  - "src/{a,b}/**"\n  - "**/*.{md,js}"\n---\n\n${BODY}`, false, ['src/a/x.ts', 'src/b/y.tsx', 'test/t.js', 'docs/d.md']],
+    ['an unquoted alias-like glob', `---\npaths: **/*.ts\n---\n\n${BODY}`, false, ['src/a/x.ts', 'src/c/z.ts']],
+  ])('%s', (_label, source, alwaysApply, files) => {
+    const mdc = teamRuleToJoycodeRule(source);
+    const parsed = parser!.parse(mdc, 'rule.mdc');
+
+    expect(parsed.alwaysApply).toBe(alwaysApply);
+    expect(parsed.body).toBe(BODY);
+    expect(applied(mdc, FILES)).toEqual(files);
+  });
+
+  // Cursor's render, which teamai wrote before: JoyCode keeps the quotes and
+  // splits the brace group, so the rule applies to no file.
+  it.each([
+    ['an inline list', `---\npaths: ["src/**/*.ts", "test/**"]\n---\n\n${BODY}`],
+    ['a brace glob', `---\npaths:\n  - "src/{a,b}/**"\n---\n\n${BODY}`],
+  ])('applies the old Cursor render of %s to no file', (_label, source) => {
+    expect(applied(teamRuleToCursorMdc(source), FILES)).toEqual([]);
   });
 });

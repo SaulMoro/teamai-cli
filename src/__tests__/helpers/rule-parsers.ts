@@ -9,6 +9,9 @@ import path from 'node:path';
  *
  *   TEAMAI_RULE_PARSER_BUNDLES=cursor=$HOME/.local/share/cursor-agent/versions/<v>:codebuddy=<prefix>/node_modules/@tencent-ai/codebuddy-code
  *
+ * and `joycode=<the JoyCoder.joycoder-fe extension directory>` (an unpacked
+ * `.vsix` has it under `extension/`).
+ *
  * A test whose tool has no entry is skipped; CI runs the byte-exact contract
  * tests instead. A loader for another tool goes here beside Cursor's.
  */
@@ -116,4 +119,94 @@ export function loadCodebuddyRuleParser(bundle: string): CodebuddyRuleParser {
     'return { parse: (file) => parser.parse(file, { scope: "project" }) };',
   ].join('\n'));
   return factory(fs.promises.readFile) as CodebuddyRuleParser;
+}
+
+export interface JoycodeRuleParser {
+  /** JoyCode's read of one `.mdc` project rule (`parseMdcRule`). */
+  parse(text: string, filename: string): { globs: string; alwaysApply: boolean; body: string };
+  /** Whether JoyCode applies the rule while `file` is the active editor's file, in workspace `cwd`. */
+  applies(text: string, filename: string, file: string, cwd: string): boolean;
+}
+
+/**
+ * A require for the webpack modules of `source`, each evaluated from its own
+ * source: a module runs from its `ID(e,t,n){` header to the next one.
+ */
+function webpackRequire(source: string): (id: string) => Record<string, unknown> {
+  const next = /\},\d+\((?:e(?:,t(?:,n)?)?)?\)\{/g;
+  const cache = new Map<string, { exports: Record<string, unknown> }>();
+  const require = (id: string): Record<string, unknown> => {
+    const cached = cache.get(id);
+    if (cached) return cached.exports;
+    const head = new RegExp(`[{,]${id}\\(((?:e(?:,t(?:,n)?)?)?)\\)\\{`).exec(source);
+    if (!head) throw new Error(`no webpack module ${id} in the bundle`);
+    const start = head.index + head[0].length;
+    next.lastIndex = start;
+    const end = next.exec(source);
+    if (!end) throw new Error(`no end of webpack module ${id}`);
+    const module = { exports: {} as Record<string, unknown> };
+    cache.set(id, module);
+    const params = head[1] ? head[1].split(',') : [];
+    new Function(...params, source.slice(start, end.index + 1).slice(0, -1)).call(module.exports, module, module.exports, require);
+    return module.exports;
+  };
+  return require;
+}
+
+/**
+ * JoyCode's project-rule reader, out of `dist/extension.js` in the
+ * `JoyCoder.joycoder-fe` extension (checked against 3.8.71). `parseMdcRule`
+ * and its helpers are found by the getters their module exports them under,
+ * and the minimatch JoyCode bundles by its export list. The decision is
+ * JoyCode's `collectProjectRuleEntries`: an `alwaysApply` rule applies;
+ * otherwise `globs` is split on every comma and each part matched against
+ * the file's basename, absolute path and workspace-relative path. The loader
+ * fails if the bundle no longer splits that way.
+ */
+export function loadJoycodeRuleParser(bundle: string): JoycodeRuleParser {
+  const file = fs.statSync(bundle).isDirectory() ? path.join(bundle, 'dist', 'extension.js') : bundle;
+  const source = fs.readFileSync(file, 'utf8');
+
+  const getter = (name: string): { name: string; at: number } => {
+    const match = new RegExp(`get ${name}\\(\\)\\{return ([\\w$]+)\\}`).exec(source);
+    if (!match) throw new Error(`no ${name} in ${file}`);
+    return { name: match[1], at: match.index };
+  };
+  const declaration = ({ name, at }: { name: string; at: number }): string => {
+    const start = source.indexOf(`function ${name}(`, at);
+    if (start < 0) throw new Error(`no function ${name} after its getter in ${file}`);
+    return functionSource(source, start);
+  };
+  const parse = getter('parseMdcRule');
+  const factory = new Function([
+    declaration(getter('truncateByChars')),
+    declaration(getter('extractBodySummary')),
+    declaration(parse),
+    `return ${parse.name};`,
+  ].join('\n'));
+  const parseMdcRule = factory() as (text: string, filename: string) => { globs: string; alwaysApply: boolean; body: string };
+
+  if (!/else if\(([\w$]+)\)\{const ([\w$]+)=\1\.split\(","\)\.map\(([\w$]+)=>\3\.trim\(\)\);/.test(source)) {
+    throw new Error(`JoyCode no longer splits a rule's globs on every comma in ${file}`);
+  }
+  const minimatchAt = source.indexOf('t.Minimatch=t.match=t.makeRe=t.braceExpand=');
+  const minimatchId = minimatchAt < 0 ? undefined
+    : [...source.slice(0, minimatchAt).matchAll(/[{,](\d+)\(e,t,n\)\{"use strict"/g)].pop()?.[1];
+  if (!minimatchId) throw new Error(`no bundled minimatch in ${file}`);
+  const minimatch = webpackRequire(source)(minimatchId).minimatch as (target: string, pattern: string) => boolean;
+
+  return {
+    parse: (text, filename) => {
+      const { globs, alwaysApply, body } = parseMdcRule(text, filename);
+      return { globs, alwaysApply, body };
+    },
+    applies: (text, filename, target, cwd) => {
+      const { globs, alwaysApply } = parseMdcRule(text, filename);
+      if (alwaysApply) return true;
+      if (!globs) return false;
+      const targets = [path.basename(target), target, path.relative(cwd, target)];
+      return globs.split(',').map((glob) => glob.trim())
+        .some((glob) => targets.some((candidate) => minimatch(candidate, glob)));
+    },
+  };
 }

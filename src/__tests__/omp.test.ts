@@ -10,7 +10,7 @@ import {
 } from '../resources/agent-format.js';
 import { AgentsHandler } from '../resources/agents.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
-import { ruleFileExtensionForTool, usesCursorMdcRules } from '../resources/rule-format.js';
+import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { RulesHandler } from '../resources/rules.js';
 import { openLedger, recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
 import { log } from '../utils/logger.js';
@@ -59,7 +59,7 @@ describe('OMP (Oh My Pi) support', () => {
     expect(ALL_SUPPORTED_TOOLS).toContain('omp');
     expect(agentFileExtensionForTool('omp')).toBe('.md');
     expect(ruleFileExtensionForTool('omp')).toBe('.md');
-    expect(usesCursorMdcRules('omp')).toBe(false);
+    expect(usesMdcRules('omp')).toBe(false);
   });
 
   it('uses the mcpServers JSON format in the OMP agent dir', () => {

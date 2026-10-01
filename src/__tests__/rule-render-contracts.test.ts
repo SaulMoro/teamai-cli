@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { teamRuleToCodebuddyRule } from '../resources/codebuddy-rule.js';
+import { teamRuleToJoycodeRule } from '../resources/joycode-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
 import { teamRuleToOmpRule } from '../resources/omp-rule.js';
 import { teamRuleToQoderRule } from '../resources/qoder-rule.js';
@@ -111,6 +112,30 @@ describe('CodeBuddy rule render (CodeBuddy and WorkBuddy)', () => {
   it('keeps a brace glob whole, since a list item is not split on commas', () => {
     expect(teamRuleToCodebuddyRule(BRACE)).toBe(
       '---\nalwaysApply: false\npaths:\n  - "src/{a,b}/**"\n---\n\nUse named exports.\n',
+    );
+  });
+});
+
+describe('JoyCode rule render', () => {
+  it('makes an unscoped rule always applied', () => {
+    expect(teamRuleToJoycodeRule(UNSCOPED)).toBe('---\nalwaysApply: true\n---\n\nUse named exports.\n');
+  });
+
+  // JoyCode reads the globs line as it stands, quotes included, and splits it
+  // on every comma: the globs are written unquoted and `{a,b}` is expanded.
+  it.each([
+    ['an inline list', INLINE],
+    ['a block list', BLOCK],
+  ])('scopes %s with unquoted, comma-joined globs and alwaysApply false', (_label, source) => {
+    expect(teamRuleToJoycodeRule(source)).toBe(
+      '---\nglobs: src/**/*.ts, test/**\nalwaysApply: false\n---\n\nUse named exports.\n',
+    );
+  });
+
+  it('expands a brace glob, since the globs line is split on every comma', () => {
+    const source = '---\npaths: ["src/{a,b}/**", "test/**"]\n---\n\nUse named exports.\n';
+    expect(teamRuleToJoycodeRule(source)).toBe(
+      '---\nglobs: src/a/**, src/b/**, test/**\nalwaysApply: false\n---\n\nUse named exports.\n',
     );
   });
 });

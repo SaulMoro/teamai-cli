@@ -258,6 +258,27 @@ describe('doctor — rules delivered on disk', () => {
     expect(check.fix).toContain('rename one of them in the team repo');
   });
 
+  it('checks a project\'s .joycode/rules against JoyCode\'s render, not Cursor\'s quoted one (#946)', async () => {
+    const projectRoot = path.join(tempDir, 'project');
+    Object.assign(localConfig, { scope: 'project', projectRoot });
+    teamConfig.toolPaths = { joycode: { rules: '.joycode/rules' } };
+    await writeTeamRule('reviews', '---\npaths:\n  - "src/**"\n  - "test/**"\n---\n');
+    const dir = path.join(projectRoot, '.joycode/rules');
+    await fse.outputFile(path.join(dir, 'coding-style.mdc'), '---\nalwaysApply: true\n---\n\nBody of coding-style\n');
+    const reviews = path.join(dir, 'reviews.mdc');
+    await fse.outputFile(reviews, '---\nglobs: src/**, test/**\nalwaysApply: false\n---\n\nBody of reviews\n');
+
+    expect(await (await rulesCheck('joycode')).check()).toBe(true);
+
+    // What teamai wrote before: JoyCode matches the quotes and never applies it.
+    await fse.writeFile(reviews, '---\nglobs: "src/**, test/**"\nalwaysApply: false\n---\n\nBody of reviews\n');
+    const check = await rulesCheck('joycode');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain(dir);
+    expect(check.fix).toContain('delivered from an older copy: reviews');
+    expect(check.fix).toContain('`globs` or `alwaysApply`');
+  });
+
   describe('CodeBuddy and WorkBuddy (#946)', () => {
     const ALWAYS = '---\nalwaysApply: true\n---\n\n';
     const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;

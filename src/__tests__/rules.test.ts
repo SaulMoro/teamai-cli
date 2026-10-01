@@ -1191,7 +1191,7 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
   });
 });
 
-describe('RulesHandler — Cursor-compatible .mdc handling', () => {
+describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
   let tmpDir: string;
   let homeDir: string;
   let repoPath: string;
@@ -1240,7 +1240,7 @@ describe('RulesHandler — Cursor-compatible .mdc handling', () => {
     await fse.remove(tmpDir);
   });
 
-  it('pull writes .mdc (not .md) with derived frontmatter for Cursor and JoyCode', async () => {
+  it('pull writes .mdc (not .md) with derived frontmatter for Cursor, and .mdc for JoyCode', async () => {
     await fse.writeFile(
       path.join(repoPath, 'rules', 'ts-style.md'),
       '---\npaths:\n  - "**/*.ts"\n---\n\nUse named exports.',
@@ -1254,12 +1254,28 @@ describe('RulesHandler — Cursor-compatible .mdc handling', () => {
     const content = await fse.readFile(mdcPath, 'utf-8');
     expect(content).toContain('globs: "**/*.ts"');
     expect(content).toContain('alwaysApply: false');
-    const joycodeMdcPath = path.join(homeDir, '.joycode/rules/ts-style.mdc');
-    expect(await fse.pathExists(joycodeMdcPath)).toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.mdc'))).toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.md'))).toBe(false);
-    expect(await fse.readFile(joycodeMdcPath, 'utf-8')).toBe(content);
     // claude still gets a plain .md copy
     expect(await fse.pathExists(path.join(homeDir, '.claude/rules/ts-style.md'))).toBe(true);
+  });
+
+  // JoyCode keeps the quotes Cursor's render puts around globs and splits on
+  // every comma, so it gets its own render (#946).
+  it('pull writes JoyCode\'s own .mdc render to a project\'s .joycode/rules', async () => {
+    localConfig.scope = 'project';
+    localConfig.projectRoot = homeDir;
+    await fse.writeFile(
+      path.join(repoPath, 'rules', 'ts-style.md'),
+      '---\npaths:\n  - "**/*.{ts,tsx}"\n---\n\nUse named exports.',
+    );
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    const joycodeMdcPath = path.join(homeDir, '.joycode/rules/ts-style.mdc');
+    expect(await fse.pathExists(path.join(homeDir, '.joycode/rules/ts-style.md'))).toBe(false);
+    expect(await fse.readFile(joycodeMdcPath, 'utf-8'))
+      .toBe('---\nglobs: **/*.ts, **/*.tsx\nalwaysApply: false\n---\n\nUse named exports.\n');
   });
 
   it('a clean pull does not make cursor rules look modified on push', async () => {

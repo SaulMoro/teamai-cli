@@ -9,6 +9,8 @@ import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_T
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { splitFrontmatter } from '../utils/frontmatter.js';
 import { rulePaths } from './team-rule.js';
+import { teamRuleToCursorMdc } from './cursor-mdc.js';
+import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
 import type { OpencodeRulesTarget } from './opencode-config.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
@@ -273,8 +275,8 @@ export class RulesHandler extends ResourceHandler {
 
   /**
    * Where `item` lands for each tool that receives rules. The filename and
-   * bytes are tool-dependent (`RULE_FORMATS`) — `.md` verbatim, `.mdc` for
-   * Cursor-compatible tools, `.instructions.md` for Copilot, `.md` with its
+   * bytes are tool-dependent (`RULE_FORMATS`) — `.md` verbatim, Cursor's and
+   * JoyCode's own `.mdc`, `.instructions.md` for Copilot, `.md` with its
    * own frontmatter for Kiro, Qoder and CodeBuddy — so a reader cannot derive
    * them from the rule's name alone. Tools that read the same file in the same
    * render get one target, naming the others in `sharedWith`.
@@ -411,6 +413,8 @@ export class RulesHandler extends ResourceHandler {
         if (!ledger || !await keepsEditedCopy(ledger, item, target)) {
           await writeFile(dest, content);
           if (ledger) await recordDelivered(ledger.hashes, dest);
+        } else {
+          await warnIfKeptCopyIsInert(target);
         }
         // Drop the `.md` copy left by an older layout; a tool that reads a
         // derived extension does not read it, and it would outlive the rule.
@@ -470,7 +474,9 @@ export class RulesHandler extends ResourceHandler {
         } else if (disk !== recorded) {
           // Named by the caller's reportKept; a render unchanged since
           // delivery is the member's plain edit, which needs no word.
-          if (contentHash(content) !== recorded) await keepsEditedCopy(ledger, item, target);
+          if (contentHash(content) !== recorded && await keepsEditedCopy(ledger, item, target)) {
+            await warnIfKeptCopyIsInert(target);
+          }
           continue;
         }
         await writeFile(dest, content);
@@ -785,7 +791,7 @@ export class RulesHandler extends ResourceHandler {
             continue;
           }
           const deployed = path.join(destDir, localFile);
-          if (await isDeliveredRender([toolRender(tool)], deployed, replaced, localConfig.repo.localPath, await deliveredRevs())) {
+          if (await isDeliveredRender(deliveredRenders(tool), deployed, replaced, localConfig.repo.localPath, await deliveredRevs())) {
             await remove(deployed);
             log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
           } else {
@@ -1270,6 +1276,35 @@ async function isMembersOwnFile(file: string, content: string, ledger: DeliveryL
 /** What pull writes for `tool` from a team rule. */
 function toolRender(tool: string): (rawTeamRule: string) => string {
   return (raw) => renderRuleForTool(tool, raw);
+}
+
+const verbatim = (rawTeamRule: string): string => rawTeamRule;
+
+/**
+ * What an older teamai wrote for a tool before it got its own render (#946):
+ * the team `.md` verbatim, or Cursor's `.mdc` for JoyCode.
+ */
+const PREVIOUS_RULE_RENDERS: Readonly<Record<string, ReadonlyArray<(rawTeamRule: string) => string>>> = {
+  kiro: [verbatim],
+  qoder: [verbatim],
+  'qoder-cn': [verbatim],
+  codebuddy: [verbatim],
+  workbuddy: [verbatim],
+  omp: [verbatim],
+  joycode: [teamRuleToCursorMdc],
+};
+
+/** Every render a copy teamai delivered for `tool` may hold: the current one, then older ones. */
+function deliveredRenders(tool: string): Array<(rawTeamRule: string) => string> {
+  return [toolRender(tool), ...(Object.hasOwn(PREVIOUS_RULE_RENDERS, tool) ? PREVIOUS_RULE_RENDERS[tool] : [])];
+}
+
+/** Say so when a copy pull kept as the member edited it is one the tool cannot apply (JoyCode's quoted globs). */
+async function warnIfKeptCopyIsInert(target: DeliveryTarget): Promise<void> {
+  if (target.tool !== 'joycode') return;
+  const copy = await readFileSafe(target.dest);
+  const warning = copy === null ? null : joycodeQuotedGlobsWarning(target.dest, copy);
+  if (warning) log.warn(warning);
 }
 
 /** sha256 of `content`, as `fileHash` and the delivery ledger spell it. */
