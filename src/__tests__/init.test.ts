@@ -134,6 +134,12 @@ vi.mock('../builtin-skills.js', () => ({
   deployBuiltinSkills: (...args: unknown[]) => mockDeployBuiltinSkills(...args),
 }));
 
+const mockLoadProjectsManifest = vi.fn().mockResolvedValue(null);
+vi.mock('../projects.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../projects.js')>()),
+  loadProjectsManifest: (...args: unknown[]) => mockLoadProjectsManifest(...args),
+}));
+
 vi.mock('../roles.js', () => ({
   loadRolesManifest: vi.fn().mockResolvedValue({
     version: 1,
@@ -210,7 +216,8 @@ vi.mock('../types.js', async (importOriginal) => {
 
 // Mock prompt to auto-answer prompts
 let questionAnswers: string[] = [];
-vi.mock('../utils/prompt.js', () => ({
+vi.mock('../utils/prompt.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/prompt.js')>()),
   // Mirror the real predicate's TTY leg so tests that force `isTTY` keep
   // driving the interactive branch, independent of CI=true on the runner.
   isInteractive: () => Boolean(process.stdin.isTTY),
@@ -628,6 +635,85 @@ describe('init', () => {
     });
   });
 
+  describe('interactive project selection', () => {
+    it('accepts multiple project numbers and persists them on init', async () => {
+      let cloneDone = false;
+      pathExistsFn = (p: string) => (p === localPath ? cloneDone : false);
+      mockGfRepoClone.mockImplementation(() => { cloneDone = true; });
+      vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
+        team: 'my-team',
+        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+        provider: 'tgit',
+        reviewers: [],
+        sharing: { rules: { enforced: [] }, docs: {}, env: { injectShellProfile: true } },
+        toolPaths: {},
+      } as never);
+      mockLoadProjectsManifest.mockResolvedValueOnce({
+        version: 1,
+        projects: [
+          { id: 'inference', name: 'Inference', description: '', resources: {} },
+          { id: 'billing', name: 'Billing', description: '', resources: {} },
+        ],
+      });
+      questionAnswers = ['1', '2,1'];
+
+      await init({
+        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+        scope: 'user',
+        force: true,
+        dryRun: true,
+      });
+
+      expect(mockLoadProjectsManifest).toHaveBeenCalledTimes(1);
+      const { askQuestion } = await import('../utils/prompt.js');
+      expect(askQuestion).toHaveBeenCalledWith(
+        'Project(s) for this directory (comma-separated numbers; press Enter for none): ',
+        '',
+      );
+      expect(questionAnswers).toHaveLength(0);
+      expect(saveLocalConfig).toHaveBeenCalledWith(expect.objectContaining({
+        primaryRole: 'hai',
+        projects: ['inference', 'billing'],
+      }));
+    });
+
+    it('keeps an empty project set when the prompt is skipped and prints the follow-up command', async () => {
+      let cloneDone = false;
+      pathExistsFn = (p: string) => (p === localPath ? cloneDone : false);
+      mockGfRepoClone.mockImplementation(() => { cloneDone = true; });
+      vi.mocked(await import('../config.js')).loadTeamConfig.mockResolvedValue({
+        team: 'my-team',
+        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+        provider: 'tgit',
+        reviewers: [],
+        sharing: { rules: { enforced: [] }, docs: {}, env: { injectShellProfile: true } },
+        toolPaths: {},
+      } as never);
+      mockLoadProjectsManifest.mockResolvedValueOnce({
+        version: 1,
+        projects: [
+          { id: 'inference', name: 'Inference', description: '', resources: {} },
+          { id: 'billing', name: 'Billing', description: '', resources: {} },
+        ],
+      });
+      questionAnswers = [];
+
+      await init({
+        repo: 'https://git.woa.com/HyperAI/teamai-test.git',
+        scope: 'user',
+        role: 'hai',
+        force: true,
+        dryRun: true,
+      });
+
+      expect(saveLocalConfig).toHaveBeenCalledWith(expect.objectContaining({ projects: [] }));
+      const { log } = await import('../utils/logger.js');
+      expect(log.info).toHaveBeenCalledWith(
+        'This team repo declares projects: inference, billing. Run `teamai projects set <id>` to activate one.',
+      );
+    });
+  });
+
   /** Init against a clone whose teamai.yaml loads, so the stub deploy runs. */
   async function initWithTeamConfig(): Promise<void> {
     let cloneDone = false;
@@ -925,9 +1011,13 @@ describe('init', () => {
   describe('CLAUDE_CONFIG_DIR', () => {
     const relocated = path.join(HOME, '.claude-work');
     let originalConfigDir: string | undefined;
+    let originalCodexHome: string | undefined;
 
     beforeEach(() => {
       originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      originalCodexHome = process.env.CODEX_HOME;
+      // Records are asserted whole, so a developer's own CODEX_HOME must not add one.
+      delete process.env.CODEX_HOME;
       // vi.clearAllMocks() keeps implementations, so the re-init case below
       // would otherwise hand its saved config to every later test.
       vi.mocked(loadLocalConfigForScope).mockResolvedValue(null);
@@ -942,6 +1032,8 @@ describe('init', () => {
     afterEach(() => {
       if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
     });
 
     async function savedConfig(): Promise<Record<string, unknown>> {
@@ -958,6 +1050,17 @@ describe('init', () => {
       const { log } = await import('../utils/logger.js');
       expect(vi.mocked(log.info).mock.calls.map(([m]) => String(m)).join('\n'))
         .toContain(`Recorded CLAUDE_CONFIG_DIR as the Claude Code root: ${relocated}`);
+    });
+
+    it('records a relocated Codex root from CODEX_HOME beside the Claude one', async () => {
+      const codexHome = path.join(HOME, '.codex-alt');
+      process.env.CLAUDE_CONFIG_DIR = relocated;
+      process.env.CODEX_HOME = codexHome;
+
+      expect(await savedConfig()).toMatchObject({ toolRoots: { claude: relocated, codex: codexHome } });
+      const { log } = await import('../utils/logger.js');
+      expect(vi.mocked(log.info).mock.calls.map(([m]) => String(m)).join('\n'))
+        .toContain(`Recorded CODEX_HOME as the Codex root: ${codexHome}`);
     });
 
     it('records nothing when the variable is unset', async () => {
@@ -1007,7 +1110,7 @@ describe('init', () => {
 
       function settingsExistsAt(settingsPath: string): void {
         const cloneProbe = pathExistsFn;
-        pathExistsFn = (p: string) => p === settingsPath || cloneProbe(p);
+        pathExistsFn = (p: string) => p === settingsPath || p === path.dirname(settingsPath) || cloneProbe(p);
       }
 
       it('removes the hooks left in the previous root, and says what stays', async () => {
@@ -1088,6 +1191,20 @@ describe('init', () => {
           'project',
           process.cwd(),
         );
+      });
+
+      it('says nothing about a Codex root the member never synced to', async () => {
+        // A Claude-only member who happens to export CODEX_HOME: teamai wrote
+        // nothing under ~/.codex, so there is nothing "left in place" to report.
+        vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+          ...(previousConfig() as object),
+          enabledAgents: ['claude'],
+        } as never);
+        process.env.CODEX_HOME = path.join(HOME, '.codex-alt');
+
+        expect(await savedConfig()).toMatchObject({ toolRoots: { codex: path.join(HOME, '.codex-alt') } });
+        const { log } = await import('../utils/logger.js');
+        expect(vi.mocked(log.warn).mock.calls.map(([m]) => String(m)).join('\n')).not.toContain('Codex now syncs');
       });
 
       it('never creates the previous settings file just to clean it', async () => {

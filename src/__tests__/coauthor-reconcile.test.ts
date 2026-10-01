@@ -119,6 +119,34 @@ describe('co-author reconcile', () => {
     expect(Object.values(managed).every((v) => v === false)).toBe(true);
   });
 
+  it('writes the Codex trailer setting into the recorded CODEX_HOME root', async () => {
+    const codexHome = path.join(homeDir, '.codex-alt');
+    await fse.remove(path.join(homeDir, '.codex'));
+    await fse.ensureDir(path.join(codexHome, 'skills'));
+
+    await reconcileCoAuthorForConfig(
+      team({ enabled: false }),
+      { ...baseLocal, toolRoots: { codex: codexHome } },
+      freshState(),
+    );
+
+    expect(await fse.readFile(path.join(codexHome, 'config.toml'), 'utf-8')).toContain('commit_attribution = ""');
+    expect(await fse.pathExists(path.join(homeDir, '.codex'))).toBe(false);
+  });
+
+  it('keeps the Codex trailer setting in the Codex root when skills are mapped elsewhere', async () => {
+    await fse.ensureDir(path.join(homeDir, '.agents', 'skills'));
+
+    await reconcileCoAuthorForConfig(
+      { ...team({ enabled: false }), toolPaths: { codex: { skills: '.agents/skills' } } } as TeamaiConfig,
+      baseLocal,
+      freshState(),
+    );
+
+    expect(await fse.readFile(codexToml(), 'utf-8')).toContain('commit_attribution = ""');
+    expect(await fse.pathExists(path.join(homeDir, '.agents', 'config.toml'))).toBe(false);
+  });
+
   it('is idempotent: a second pass makes no writes', async () => {
     const first = await reconcileCoAuthorForConfig(team({ enabled: false }), baseLocal, freshState());
     const state = { ...freshState(), coAuthorManaged: first.managed };

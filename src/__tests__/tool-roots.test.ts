@@ -8,7 +8,7 @@ import {
   LocalConfigSchema,
   TeamaiConfigSchema,
   applyToolRoots,
-  detectClaudeConfigRoot,
+  detectToolRoot,
   resolveHookScope,
   resolveToolRootDir,
   scopedToolPaths,
@@ -72,6 +72,22 @@ describe('toolRoots — re-rooting a relocated tool', () => {
     expect(paths.codex).toEqual(scopedToolPaths(teamConfig, localConfig()).codex);
     expect(paths.tclaude).toEqual(teamConfig.toolPaths.tclaude);
     expect(paths.copilot).toEqual(scopedToolPaths(teamConfig, localConfig()).copilot);
+  });
+
+  it('moves every Codex path to the CODEX_HOME root, the hook file included', () => {
+    const paths = scopedToolPaths(teamConfig, localConfig({
+      toolRoots: { codex: path.join(home, '.codex-alt') },
+    }));
+
+    expect(paths.codex).toEqual({
+      skills: '.codex-alt/skills',
+      rules: '.codex-alt/rules',
+      settings: '.codex-alt/hooks.json',
+      agents: '.codex-alt/agents',
+      mcp: '.codex-alt/config.toml',
+    });
+    expect(paths.claude).toEqual(teamConfig.toolPaths.claude);
+    expect(paths['codex-internal']).toEqual(teamConfig.toolPaths['codex-internal']);
   });
 
   it('expands a leading ~/ in the configured root', () => {
@@ -234,10 +250,10 @@ describe('toolRoots — re-rooting a relocated tool', () => {
     expect(Object.keys(paths.claude.userScope ?? {})).toEqual(['skills', 'rules']);
   });
 
-  // Every tool except claude still writes somewhere teamai does not resolve
-  // through toolPaths — Codex and Cursor co-author files, OMP's extension dir,
-  // $COPILOT_HOME, OpenCode's plugin dir — so a root would move half a layout.
-  it.each(['codex', 'omp', 'cursor', 'copilot', 'opencode'])(
+  // Every other tool still writes somewhere teamai does not resolve through
+  // toolPaths — Cursor's co-author file, OMP's extension dir, $COPILOT_HOME,
+  // OpenCode's plugin dir — so a root would move half a layout.
+  it.each(['codex-internal', 'omp', 'cursor', 'copilot', 'opencode'])(
     'refuses to relocate %s, which teamai does not address through toolPaths alone',
     (tool) => {
       const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
@@ -252,7 +268,7 @@ describe('toolRoots — re-rooting a relocated tool', () => {
       scopedToolPaths(teamConfig, withRoot);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain(`toolRoots.${tool}`);
-      expect(warn.mock.calls[0][0]).toContain('supports claude only');
+      expect(warn.mock.calls[0][0]).toContain('supports claude and codex only');
       if (tool === 'copilot') expect(warn.mock.calls[0][0]).toContain('COPILOT_HOME');
     },
   );
@@ -358,7 +374,7 @@ describe('toolRoots — local config schema', () => {
   });
 });
 
-describe('detectClaudeConfigRoot', () => {
+describe('detectToolRoot', () => {
   let home: string;
   let originalHome: string | undefined;
 
@@ -375,21 +391,29 @@ describe('detectClaudeConfigRoot', () => {
   });
 
   it('is null only when the variable is unset or blank', () => {
-    expect(detectClaudeConfigRoot({} as NodeJS.ProcessEnv)).toBeNull();
-    expect(detectClaudeConfigRoot({ CLAUDE_CONFIG_DIR: '   ' } as NodeJS.ProcessEnv)).toBeNull();
+    expect(detectToolRoot('claude', {} as NodeJS.ProcessEnv)).toBeNull();
+    expect(detectToolRoot('claude', { CLAUDE_CONFIG_DIR: '   ' } as NodeJS.ProcessEnv)).toBeNull();
   });
 
   it('answers with the default root when the variable names it explicitly', () => {
     // Setting the variable changes where Claude Code reads .claude.json, even
     // when its value is the directory it would have used anyway.
-    expect(detectClaudeConfigRoot({ CLAUDE_CONFIG_DIR: '~/.claude' } as NodeJS.ProcessEnv))
+    expect(detectToolRoot('claude', { CLAUDE_CONFIG_DIR: '~/.claude' } as NodeJS.ProcessEnv))
       .toBe(path.join(home, '.claude'));
   });
 
+  it('reads CODEX_HOME for Codex and nothing for a tool that cannot be relocated', () => {
+    const env = { CODEX_HOME: '~/.codex-alt', CLAUDE_CONFIG_DIR: '~/.claude-work' } as NodeJS.ProcessEnv;
+    expect(detectToolRoot('codex', env)).toBe(path.join(home, '.codex-alt'));
+    expect(detectToolRoot('codex', {} as NodeJS.ProcessEnv)).toBeNull();
+    expect(detectToolRoot('cursor', env)).toBeNull();
+  });
+
   it('resolves a relocated root to an absolute path', () => {
-    expect(detectClaudeConfigRoot({ CLAUDE_CONFIG_DIR: '~/.claude-work' } as NodeJS.ProcessEnv))
+    expect(detectToolRoot('claude', { CLAUDE_CONFIG_DIR: '~/.claude-work' } as NodeJS.ProcessEnv))
       .toBe(path.join(home, '.claude-work'));
-    expect(detectClaudeConfigRoot(
+    expect(detectToolRoot(
+      'claude',
       { CLAUDE_CONFIG_DIR: `${path.join(home, '.claude-work')}/` } as NodeJS.ProcessEnv,
     )).toBe(path.join(home, '.claude-work'));
   });
@@ -422,5 +446,17 @@ describe('hook injection with a relocated root', () => {
     const settings = await fse.readJson(path.join(home, '.claude-work', 'settings.json'));
     expect(JSON.stringify(settings)).toContain('teamai hook-dispatch');
     expect(await fse.pathExists(path.join(home, '.claude'))).toBe(false);
+  });
+
+  it('writes Codex hooks into the CODEX_HOME root and never creates ~/.codex', async () => {
+    await fse.ensureDir(path.join(home, '.codex-alt'));
+    const { injectHooksToAllTools } = await import('../hooks.js');
+    const config = localConfig({ toolRoots: { codex: path.join(home, '.codex-alt') } });
+
+    await injectHooksToAllTools(hookScopedPaths(config), home, ['codex']);
+
+    const hooks = await fse.readJson(path.join(home, '.codex-alt', 'hooks.json'));
+    expect(JSON.stringify(hooks)).toContain('teamai hook-dispatch');
+    expect(await fse.pathExists(path.join(home, '.codex'))).toBe(false);
   });
 });

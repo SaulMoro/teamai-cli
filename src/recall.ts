@@ -6,7 +6,7 @@ import { loadIndex, buildIndex, search, isLegacyIndex } from './utils/search-ind
 import type { BuildIndexOptions, SearchResult } from './utils/search-index.js';
 import { ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import type { GlobalOptions, SearchIndex, LocalConfig } from './types.js';
+import type { GlobalOptions, SearchIndex, LocalConfig, KnowledgeDomain } from './types.js';
 import { getProjectSearchIndexPath, getUserSearchIndexPath, getVotesDir } from './types.js';
 import { queryCodeKnowledge } from './code-knowledge-recall.js';
 import type { SourceAnchor } from './code-knowledge-recall.js';
@@ -94,8 +94,8 @@ export function isRelevantScore(
  * makes `isRelevantScore` degrade to its previous absolute behavior.
  *
  * When a caller needs one aggregate baseline across multiple scopes, use the
- * largest df-bearing index. Recall ranking instead carries each index's own
- * baseline with its results so one scope's corpus size cannot distort another's.
+ * largest domain corpus among the df-bearing indexes. Recall ranking carries
+ * each result's domain baseline so unrelated domains cannot distort its threshold.
  *
  * Legacy indexes (no df map) are excluded from the N computation because their
  * presence would otherwise inflate maxEntries and raise the threshold against
@@ -103,11 +103,24 @@ export function isRelevantScore(
  *
  * @returns IDF of a single-occurrence token (>= 1); 1 for legacy indexes without a df map.
  */
-export function computeIdfBaseline(indexes: SearchIndex[]): number {
+export function computeIdfBaseline(indexes: SearchIndex[], domain?: KnowledgeDomain): number {
   let maxEntries = 0;
   for (const idx of indexes) {
     if (!idx.df) continue;                    // legacy index: its N is not used for IDF anyway
-    if (idx.entries.length > maxEntries) maxEntries = idx.entries.length;
+    if (idx.dfByDomain) {
+      const domainSizes: Partial<Record<KnowledgeDomain, number>> = {};
+      for (const entry of idx.entries) {
+        const entryDomain = entry.domain ?? 'neutral';
+        domainSizes[entryDomain] = (domainSizes[entryDomain] ?? 0) + 1;
+      }
+      const entryCount = domain
+        ? domainSizes[domain] ?? 0
+        : Math.max(0, ...Object.values(domainSizes));
+      if (entryCount > maxEntries) maxEntries = entryCount;
+    } else if (idx.entries.length > maxEntries) {
+      // v6 and older indexes scored every entry against the global corpus.
+      maxEntries = idx.entries.length;
+    }
   }
   if (maxEntries === 0) return 1;
   return Math.log((maxEntries + 1) / 2) + 1;
@@ -652,8 +665,8 @@ export async function recall(
   const idfBaseline = computeIdfBaseline(scopeIndexes.map((s) => s.index));
 
   for (const { index, scope, learningsBase } of scopeIndexes) {
-    const scopeIdfBaseline = computeIdfBaseline([index]);
-    const results = search(query, index);
+    // Keep every candidate until domain-specific scores are normalized below.
+    const results = search(query, index, index.entries.length);
     for (const r of results) {
       // A project entry shadows the same logical user entry even when the
       // project version does not match this particular query. This prevents a
@@ -662,7 +675,12 @@ export async function recall(
       if (scope === 'user' && projectEntryKeys.has(entryKey)) continue;
       if (!seenEntries.has(entryKey)) {
         seenEntries.add(entryKey);
-        allResults.push({ ...r, scope, learningsBase, idfBaseline: scopeIdfBaseline });
+        allResults.push({
+          ...r,
+          scope,
+          learningsBase,
+          idfBaseline: computeIdfBaseline([index], r.entry.domain ?? 'neutral'),
+        });
       }
     }
   }

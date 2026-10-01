@@ -140,12 +140,19 @@ describe('isValidSkillName', () => {
   });
 });
 
-describe('skillExistsOnDisk — relocated Claude Code root', () => {
+describe('skillExistsOnDisk — relocated tool roots', () => {
   it('finds a skill installed only under the root the governing config records', async () => {
     const relocated = path.join(tmpDir, '.claude-work');
     await fse.outputFile(path.join(relocated, 'skills', 'relocated-only', 'SKILL.md'), '# s');
     await expect(skillExistsOnDisk('relocated-only', { claude: relocated })).resolves.toBe(true);
     await expect(skillExistsOnDisk('relocated-only')).resolves.toBe(false);
+  });
+
+  it('finds a skill installed only under the recorded CODEX_HOME root', async () => {
+    const codexHome = path.join(tmpDir, '.codex-alt');
+    await fse.outputFile(path.join(codexHome, 'skills', 'codex-only', 'SKILL.md'), '# s');
+    await expect(skillExistsOnDisk('codex-only', { codex: codexHome })).resolves.toBe(true);
+    await expect(skillExistsOnDisk('codex-only')).resolves.toBe(false);
   });
 });
 

@@ -1,6 +1,12 @@
 import path from 'node:path';
 import type { LocalConfig, TeamaiConfig, State } from './types.js';
-import { resolveBaseDir, resolveCoAuthor, scopedToolPaths } from './types.js';
+import {
+  DEFAULT_CODEX_ROOT,
+  resolveBaseDir,
+  resolveCoAuthor,
+  resolveToolRootDir,
+  scopedToolPaths,
+} from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
   readJson,
@@ -115,14 +121,20 @@ async function resolveTargets(
       if (!paths.settings) continue;
       targets.push({ tool, family, file: path.join(baseDir, paths.settings) });
     } else if (family === 'codex') {
-      // User scope only: Codex reads commit_attribution from ~/.codex/config.toml.
+      // User scope only: Codex reads commit_attribution from $CODEX_HOME/config.toml.
       if (projectScope) {
         log.debug(`[coauthor] Skipping ${tool}: co-author is user-scope only`);
         continue;
       }
-      // tcodex relocates its home to ~/.tcodex; codex-internal to ~/.codex-internal.
-      const home = tool === 'tcodex' ? '.tcodex' : tool === 'codex-internal' ? '.codex-internal' : '.codex';
-      targets.push({ tool, family, file: path.join(userHome, home, 'config.toml') });
+      // Each Codex keeps config.toml in its own root, not wherever a team maps
+      // its skills: tcodex in ~/.tcodex, codex-internal in ~/.codex-internal,
+      // codex in ~/.codex or the root the member recorded from CODEX_HOME.
+      const defaultRoot = tool === 'tcodex' ? '.tcodex' : tool === 'codex-internal' ? '.codex-internal' : DEFAULT_CODEX_ROOT;
+      targets.push({
+        tool,
+        family,
+        file: path.join(resolveToolRootDir(tool, defaultRoot, localConfig.toolRoots), 'config.toml'),
+      });
     } else {
       // Cursor: user scope only, ~/.cursor/cli-config.json.
       if (projectScope) {

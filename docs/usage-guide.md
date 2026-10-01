@@ -209,7 +209,7 @@ Without a terminal `init` never waits on a person: every prompt takes its defaul
 | `--inherit-user-scope` | Project scope only: also sync safe user resources and search user knowledge |
 | `--no-inherit-user-scope` | Disable previously configured user-scope inheritance for this project |
 | `--role <id>` | Directly specify the primary role, skipping the interactive role prompt |
-| `--project <ids>` | Active logical project(s) from `manifest/projects.yaml` (comma-separated). Scopes which project resources and learnings this directory syncs. Pass `all` to activate every project the manifest declares. See [Multi-project](#multi-project-project-as-a-dimension-orthogonal-to-role) below |
+| `--project <ids>` | Active logical project(s) from `manifest/projects.yaml` (comma-separated). Scopes which project resources and learnings this directory syncs. Pass `all` to activate every project the manifest declares. When omitted, an interactive `init` offers an optional project picker. See [Multi-project](#multi-project-project-as-a-dimension-orthogonal-to-role) below |
 | `--force` | Overwrite existing config, skipping confirmation prompts |
 
 #### Multi-project: `project` as a dimension orthogonal to `role`
@@ -230,6 +230,13 @@ cd ~/work/billing       && teamai init <team-repo> --project billing
 
 Each directory then syncs only its own project's skills/rules/CLAUDE.md and
 learnings. Key points:
+
+When `manifest/projects.yaml` declares projects and `--project` is omitted,
+interactive `init` asks which projects belong to this directory after role
+selection. Enter comma-separated numbers to choose several; press Enter to keep
+the directory project-less. Without an interactive terminal, init keeps the
+empty project set and prints `teamai projects set <id>` as the follow-up. An
+explicit `--project` skips the picker.
 
 - **Learnings isolation.** `learnings/` at the repo root is shared with the whole
   team; a project's private learnings live under `learnings/<project-id>/` and
@@ -742,10 +749,12 @@ packages:
 If a skill shared by the team doesn't suit you, you can exclude it locally only — no need to modify the team repo, and it won't affect other members:
 
 ```bash
+teamai skill exclude add using-superpowers --dry-run # Preview without changing config or pull state
 teamai skill exclude add using-superpowers
 teamai pull                    # Remove it from local AI tools
 teamai skill exclude list
 
+teamai skill exclude remove using-superpowers --dry-run # Preview without changing config or pull state
 teamai skill exclude remove using-superpowers
 teamai pull                    # Re-sync
 ```
@@ -1246,6 +1255,7 @@ Where each tool's servers land:
 | kiro | `~/.kiro/settings/mcp.json` | `<project>/.kiro/settings/mcp.json` |
 | opencode | `~/.config/opencode/opencode.json` | `<project>/opencode.json` |
 | omp | `~/.omp/agent/mcp.json` | `<project>/.omp/mcp.json` |
+| pi | `~/.pi/agent/mcp.json` | `<project>/.pi/mcp.json` |
 
 
 CodeBuddy Code's [MCP documentation](https://www.codebuddy.ai/docs/cli/mcp)
@@ -1275,7 +1285,7 @@ Claude Code may show project `.mcp.json` servers as pending approval until you a
 ```bash
 teamai mcp list              # servers, the file each comes from, secret status, and where they are installed
 teamai mcp inject            # apply now; --dry-run to preview, --force to override collisions
-teamai mcp remove            # remove every teamai-managed server
+teamai mcp remove            # remove every teamai-managed server; --dry-run to preview
 ```
 
 
@@ -1412,6 +1422,8 @@ teamai recall enable     # Enable recall, deploy the subagent and rules
 teamai recall disable    # Disable recall, remove the subagent and rules
 teamai recall status     # View the current effective status (team default + user override)
 ```
+
+Append `--dry-run` to `enable` or `disable` to preview the config and managed-artifact changes without writing them.
 
 When disabled, `teamai pull` skips deploying the recall subagent, the recall rules injection block, and the TodoWrite reminder hook. Manually running `teamai recall <query>` to search is not affected by this switch.
 
@@ -1803,6 +1815,8 @@ teamai codebase --reconcile --output /path/to/repo
 teamai codebase --lint --output /path/to/repo
 ```
 
+Changes queued in `.teamai/pending-review.jsonl` can be inspected with `teamai review`. Preview a decision with `teamai review <id> --apply --dry-run`, `teamai review <id> --reject --dry-run`, or `teamai review --all-apply --max-risk medium --dry-run`. Apply previews validate the target and managed section just like a real apply, but leave both documents and pending items unchanged. Batch previews retain the same kind/risk filtering. Decision previews with `--json` include `dryRun: true`; `ok` means the operation passed validation, not that it was written. Remove `--dry-run` to perform the decision.
+
 When extract finds components, it writes `teamwiki/evidence/code/<project>/_manifest.json` even if AI enrichment is skipped or produces nothing, so `--deep-enrich` can start.
 
 Without `--project`, `<project>` is the directory's name. At the root of a checkout, the main one or a linked git worktree, it is the repo's name: the main checkout's real name (also when opened through a symlink), or a bare repo's (`repo/.bare` or `repo.git` → `repo`). Every checkout of a repo writes the same entry. `teamai import --dir` picks its slug the same way.
@@ -2142,7 +2156,8 @@ Team hooks still come from the team's `hooks/hooks.yaml`: edit that source in th
 - **Hooks.** TeamAI generates one user-scoped `teamai-hooks.ts` under `~/.pi/agent/extensions/`. It maps `session_start` → session-start, `before_agent_start` → prompt-submit, and `agent_settled` → stop; `tool_execution_start` caches the tool's input, and `tool_execution_end` dispatches post-tool-use forwarding that cached input as `tool_input`, plus the result's text as `tool_response` and a `tool_status` from its error flag. Every event carries the Pi session id (`ctx.sessionManager.getSessionId()`), the same id Pi's bash tool exports as `PI_SESSION_ID`, so a `teamai recall` run there joins the session its hooks carry and upvote **adoption** runs for Pi. Pi loads both user and project extension roots, so TeamAI never creates a project copy — a second copy would double-dispatch every event, the same single-copy policy as the OMP adapter. An older TeamAI-managed project copy is removed during the next sync, and injection never overwrites a same-named file that lacks the TeamAI marker. Pi has no settings file for self mode to commit, so a fresh clone still needs one `teamai init`/`pull` on that machine before Pi hooks are active there. Any targeted removal — the explicit `teamai hooks remove` command, or a scoped `teamai uninstall --agent pi` — deletes this shared extension outright, the same single-file removal semantics as the OMP adapter: Pi has no way to scope one shared file to a single project, so it doesn't pretend to preserve it for other projects while the extension keeps firing for this one anyway; files without the TeamAI marker are never removed. `teamai hooks list` always reports this global path. Pi profile overrides (`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`), which relocate the agent directory, are not supported for hooks — same as the OMP adapter — and the default `~/.pi/agent/` layout is used. Model profiles are separate and do read `PI_CODING_AGENT_DIR`. Because the extension is one shared file rather than a per-project one, a scoped removal is not durable in a multi-project setup: the next `teamai init`/`pull` in any other scope where Pi is still enabled re-creates it, and hook dispatch has no per-project exclusion check, so hooks can resume firing in the project that was just uninstalled from. This is the same trade-off the OMP adapter already ships with.
 - **Team hooks boundary.** The Pi adapter installs only the built-in lifecycle bridge. Custom team hooks and built-in hook overrides declared in `hooks/hooks.yaml` are skipped with a warning. Full team-hook and per-project ownership semantics require a separate cross-adapter design and are deferred to a follow-up PR.
 - **Server-pushed agent hooks.** HTTP-source hooks are installed as `teamai-agent-<slug>.ts` extensions in the same global extension directory. Unsupported lifecycle events are skipped with a warning.
-- **MCP and subagents.** Pi has no adapter in this phase for MCP or TeamAI custom subagent files.
+- **MCP (Pi 0.99.0+).** Supports stdio and streamable HTTP; SSE is skipped. User configuration goes to `~/.pi/agent/mcp.json`, project configuration to `.pi/mcp.json`; Pi loads project configuration only after trusting the project. The native `codemode` default is retained, without forcing direct exposure; timeout values in `mcp.yaml` are converted from milliseconds to seconds. Local exposure/enabled changes to managed entries survive unchanged team definitions but are replaced when the team definition changes; doctor compares complete entries and reports these local differences. An extension taking over `/mcp` can disable built-in MCP; remove that extension to use the built-in support.
+- **Subagents.** TeamAI custom subagent files are not supported.
 
 ### Qoder
 
@@ -2549,21 +2564,22 @@ coAuthorEnabled: true          # optional; per-machine co-author override
 contributeHintEnabled: false   # optional; per-machine override of sharing.contributeHint.enabled
 toolRoots:                     # optional; per-machine tool roots (see below)
   claude: ~/.claude-work
+  codex: ~/.codex-alt
 ```
 
 #### Relocated tool roots (`toolRoots`)
 
-A tool that can be told to keep its configuration somewhere else — Claude Code, through `CLAUDE_CONFIG_DIR` — reads nothing that teamai writes to the team-wide default. `toolRoots` names the directory that tool actually uses, keyed by the same tool id as `toolPaths`, and every path teamai resolves for it (skills, rules, agents, `CLAUDE.md`, settings, and the user-scope MCP config) moves there with it. Other tools are untouched, and so are project-scope paths: those hang off the project root, where a per-machine root has nothing to say. Hooks are the exception that makes this worth recording — they are injected into your home directory even in project scope, so they follow `toolRoots` in both.
+A tool that can be told to keep its configuration somewhere else — Claude Code through `CLAUDE_CONFIG_DIR`, Codex through `CODEX_HOME` — reads nothing that teamai writes to the team-wide default. `toolRoots` names the directory that tool actually uses, keyed by the same tool id as `toolPaths`, and every path teamai resolves for it (skills, rules, agents, `CLAUDE.md`, settings and hooks, the user-scope MCP config, and Codex's co-author setting in `config.toml`) moves there with it. Other tools are untouched, and so are project-scope paths: those hang off the project root, where a per-machine root has nothing to say. Hooks are the exception that makes this worth recording — they are injected into your home directory even in project scope, so they follow `toolRoots` in both.
 
-`teamai init` fills it in for you: whenever `CLAUDE_CONFIG_DIR` is set, init records the directory it points at and prints it. That includes `CLAUDE_CONFIG_DIR=~/.claude`, which is not the same as leaving the variable unset — Claude Code reads `.claude.json` from inside the configured directory, so teamai writes the MCP config to `~/.claude/.claude.json` rather than `~/.claude.json`. `init` is also the only command that reads the variable, because it lives in one shell profile while teamai also runs from session hooks and other terminals; resolving it per run would make the sync target depend on who started the process. A re-init keeps a root that was recorded earlier, so running `init` from a shell without the variable does not send the sync back to the default. When a re-init does move the root, the hooks teamai injected into the previous root's `settings.json` are removed so that Claude stops syncing into the new one; the skills, rules and `CLAUDE.md` block written there are left in place and named in the output. A project-scope `init` that has no record of its own and no variable to read starts from the user-scope record, since the root is a fact about the machine and project hooks land in your home directory. To end a relocation, run `init` once with the variable set but blank (`CLAUDE_CONFIG_DIR= teamai init …`): the record is cleared and the old root released the same way. Along with the hooks, the old root loses the teamai-managed MCP servers and any gateway credentials the local agent delivered there; they are active configuration, unlike the skills and rules.
+`teamai init` fills it in for you: whenever `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, init records the directory it points at (`toolRoots.claude`, `toolRoots.codex`) and prints it. That includes `CLAUDE_CONFIG_DIR=~/.claude`, which is not the same as leaving the variable unset — Claude Code reads `.claude.json` from inside the configured directory, so teamai writes the MCP config to `~/.claude/.claude.json` rather than `~/.claude.json`. `init` is also the only command that reads these variables, because they live in one shell profile while teamai also runs from session hooks and other terminals; resolving it per run would make the sync target depend on who started the process. A re-init keeps a root that was recorded earlier, so running `init` from a shell without the variable does not send the sync back to the default. When a re-init does move the root, the hooks teamai injected into the previous root's settings file (`settings.json`, Codex's `hooks.json`) are removed so that the tool stops syncing into the new one; the skills, rules and instruction files written there are left in place and named in the output. A project-scope `init` that has no record of its own and no variable to read starts from the user-scope record, since the root is a fact about the machine and project hooks land in your home directory. To end a relocation, run `init` once with the variable set but blank (`CLAUDE_CONFIG_DIR= teamai init …`, `CODEX_HOME= teamai init …`): the record is cleared and the old root released the same way. Along with the hooks, the old root loses the teamai-managed MCP servers and, for Claude Code, any gateway credentials the local agent delivered there; they are active configuration, unlike the skills and rules.
 
 A root has to be somewhere teamai can recognize the tool at: a directory in your home other than `~/.config` itself (`~/.claude-work`), or a `~/.config/<name>` directory (a leading `~/` is expanded). Those are the two shapes the "is this tool installed?" check can look for; anything deeper, or outside your home directory, is refused with a warning rather than silently half-applied.
 
-`import --from-claude` and skill-use tracking read the recorded root as well, so a relocated Claude Code's rules are importable and its skills count as installed.
+Skill-use tracking reads the recorded roots as well, so a relocated tool's skills count as installed, and `import --from-claude` reads a relocated Claude Code's rules.
 
-`toolRoots` currently applies to `claude` only, and any other tool id is refused with a warning. A root is only honest for a tool whose every user-scope write goes through `toolPaths`; the other tools still write somewhere teamai resolves separately — OMP's extension directory, the Codex and Cursor co-author files, OpenCode's plugin directory — so moving their `toolPaths` entries would leave the rest behind. Copilot CLI has its own mechanism: set `COPILOT_HOME`.
+`toolRoots` currently applies to `claude` and `codex` only, and any other tool id is refused with a warning. A root is only honest for a tool whose every user-scope write goes through `toolPaths`; the other tools still write somewhere teamai resolves separately — OMP's extension directory, the Cursor co-author file, OpenCode's plugin directory — so moving their `toolPaths` entries would leave the rest behind. Copilot CLI has its own mechanism: set `COPILOT_HOME`.
 
-If you set or change `CLAUDE_CONFIG_DIR` after initializing, `teamai doctor` reports it: the `Claude Code root matches CLAUDE_CONFIG_DIR` check (built only when this config syncs Claude Code) compares the variable against the root this config actually syncs to and tells you to re-run `teamai init` — or, for a value teamai cannot sync to, says why. With the variable unset, the check stays out of the report.
+If you set or change `CLAUDE_CONFIG_DIR` or `CODEX_HOME` after initializing, `teamai doctor` reports it: the `Claude Code root matches CLAUDE_CONFIG_DIR` and `Codex root matches CODEX_HOME` checks (each built only when this config syncs that tool) compare the variable against the root this config actually syncs to and tell you to re-run `teamai init` — or, for a value teamai cannot sync to, say why. With the variable unset, the check stays out of the report.
 
 ### Webhook notifications (`sharing.webhooks`)
 
@@ -2582,7 +2598,7 @@ Notify external endpoints when team events happen. Each endpoint declares a `url
 
 **Payload.** Only whitelisted, non-sensitive fields are sent: `skillName` for `skill-use`, `sessionId` for session events; `push`/`pull` carry the event and metadata only. Raw tool input and tool output are **never** forwarded, and the whole body is passed through teamai's secret redactor before it leaves the machine.
 
-**Signature.** When `secret` is set, each request carries `X-TeamAI-Signature: sha256=<hmac>`, an HMAC-SHA256 computed over the exact request body — so a receiver can verify authenticity. `teamai webhook list` and `teamai webhook test` inspect and exercise configured endpoints.
+**Signature.** When `secret` is set, each request carries `X-TeamAI-Signature: sha256=<hmac>`, an HMAC-SHA256 computed over the exact request body — so a receiver can verify authenticity. `teamai webhook list` and `teamai webhook test` inspect and exercise configured endpoints; `teamai webhook test --dry-run` previews how many endpoints would receive a request without sending one.
 
 ---
 

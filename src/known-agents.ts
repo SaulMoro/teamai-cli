@@ -10,8 +10,7 @@ import {
   resolveHookScope,
   scopedToolPaths,
   toolInstallRoot,
-  CLAUDE_TOOL_ID,
-  detectClaudeConfigRoot,
+  detectToolRoot,
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import type { LocalConfig, TeamaiConfig, Scope } from './types.js';
@@ -301,10 +300,10 @@ export async function detectHomeInstalledAgents(
     if (!skillsPath) continue;
     const rootSegment = skillsPath.split('/')[0]; // e.g. ".claude"
     if (!rootSegment) continue;
-    // A Claude Code relocated with CLAUDE_CONFIG_DIR may have no ~/.claude at
-    // all; the developer still uses it. This runs before any config exists, so
-    // the variable is the only signal.
-    const relocated = id === CLAUDE_TOOL_ID ? detectClaudeConfigRoot() : null;
+    // A Claude Code relocated with CLAUDE_CONFIG_DIR (or a Codex with
+    // CODEX_HOME) may have no default root at all; the developer still uses
+    // it. This runs before any config exists, so the variable is the only signal.
+    const relocated = detectToolRoot(id);
     if (await pathExists(path.join(home, rootSegment)) || (relocated !== null && await pathExists(relocated))) {
       found.push(id);
     }

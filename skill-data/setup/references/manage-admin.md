@@ -31,6 +31,7 @@ run `teamai pull`).
 ```bash
 teamai mcp list        # team MCP servers + per-tool install status
 teamai mcp inject      # push team MCP servers into every AI tool's config
+teamai mcp remove --dry-run # preview removal without changing tool configs or managed records
 teamai mcp remove      # remove teamai-managed MCP servers
 ```
 
@@ -77,6 +78,10 @@ team the local agent's `install_mcp` lists a project config before writing a
 server with any header, env value, argument or URL (only a bare stdio command is not), fails the install when it cannot, and only
 `teamai uninstall` takes that line out. The next sync or `teamai pull` in the
 workspace also lists a file an older local agent wrote a credential into; `teamai doctor` checks those files too.
+
+### Pi MCP delivery
+
+Pi 0.99.0+ receives stdio and streamable HTTP servers through the existing MCP commands and `teamai pull`; SSE is skipped. User scope writes `~/.pi/agent/mcp.json`, project scope writes `.pi/mcp.json` (Pi requires project trust). TeamAI keeps Pi's default codemode exposure and converts timeout milliseconds to seconds. Relocated Pi agent directories (`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`) are unsupported. Local exposure/enabled edits on managed servers survive until the team definition changes; doctor reports differences from the team entry. Extensions that replace `/mcp` must be removed to use Pi's built-in MCP.
 
 ## Invite a member
 

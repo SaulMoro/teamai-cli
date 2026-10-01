@@ -74,7 +74,7 @@ describe('buildIndex — Phase 1 multi-category', () => {
 
     // Recursive subdirectory paths preserved as filename id (rules/common/...)
     const rulesEntry = index!.entries.find((e) => e.type === 'rules');
-    expect(rulesEntry?.filename).toBe(path.join('common', 'coding-style.md'));
+    expect(rulesEntry?.filename).toBe(path.posix.join('common', 'coding-style.md'));
 
     // Skill entry uses skill name as id
     const skillEntry = index!.entries.find((e) => e.type === 'skills');
@@ -199,7 +199,7 @@ describe('isLegacyIndex', () => {
     expect(isLegacyIndex(v2Index)).toBe(true);
   });
 
-  it('returns false for fully populated v3 index (type + domain present)', () => {
+  it('returns false for a fully populated current index', () => {
     const current = {
       version: SEARCH_INDEX_VERSION,
       builtAt: '2026-01-01T00:00:00Z',
@@ -217,9 +217,39 @@ describe('isLegacyIndex', () => {
           domain: 'technical' as const, // P1.4 domain field present
         },
       ],
-      df: {}, // v4: df map required
+      df: {},
+      dfByDomain: { technical: {} },
     };
     expect(isLegacyIndex(current)).toBe(false);
+  });
+
+  it('rebuilds an index that lacks per-domain IDF statistics', () => {
+    const withoutDomainDf = {
+      version: SEARCH_INDEX_VERSION,
+      builtAt: '2026-01-01T00:00:00Z',
+      elapsedMs: 10,
+      entries: [{
+        filename: 'old.md', title: 'old', author: '', date: '', tags: [], tokens: [], votes: 0,
+        type: 'learnings' as const, domain: 'technical' as const,
+      }],
+      df: {},
+    };
+    expect(isLegacyIndex(withoutDomainDf)).toBe(true);
+  });
+
+  it('rebuilds an index missing a domain bucket used by its entries', () => {
+    const withoutTechnicalBucket = {
+      version: SEARCH_INDEX_VERSION,
+      builtAt: '2026-01-01T00:00:00Z',
+      elapsedMs: 10,
+      entries: [{
+        filename: 'old.md', title: 'old', author: '', date: '', tags: [], tokens: [], votes: 0,
+        type: 'learnings' as const, domain: 'technical' as const,
+      }],
+      df: {},
+      dfByDomain: { ops: {} },
+    };
+    expect(isLegacyIndex(withoutTechnicalBucket)).toBe(true);
   });
 });
 

@@ -157,12 +157,17 @@ export async function listWebhooks(): Promise<WebhookEndpoint[]> {
 /**
  * Test webhook by sending a test event.
  */
-export async function testWebhook(url?: string): Promise<void> {
-  const config = await loadWebhookConfig();
+export async function testWebhook(url?: string, options: { dryRun?: boolean } = {}): Promise<void> {
+  const config = await loadWebhookConfig(undefined, { dryRun: options.dryRun });
 
   const endpoints = url
     ? config.endpoints.filter((ep) => ep.url === url)
     : config.endpoints;
+
+  if (options.dryRun) {
+    log.info(`[dry-run] Would send a test webhook to ${endpoints.length} endpoint(s).`);
+    return;
+  }
 
   if (endpoints.length === 0) {
     log.warn('No webhook endpoints configured.');

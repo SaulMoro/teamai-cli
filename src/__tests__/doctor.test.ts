@@ -101,15 +101,17 @@ function buildFullHooksContent(): string {
 // Suppress console.log output in tests
 const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-// The Claude-root check only appears when CLAUDE_CONFIG_DIR is set, and this
-// suite's fixtures record no root — so a developer whose own shell relocates
-// Claude Code would otherwise see every doctor test fail. The describe that
-// covers the check sets the variable itself.
+// The tool-root checks only appear when CLAUDE_CONFIG_DIR / CODEX_HOME is set,
+// and this suite's fixtures record no root — so a developer whose own shell
+// relocates Claude Code or Codex would otherwise see every doctor test fail.
+// The describes that cover the checks set the variables themselves.
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalCodexHome = process.env.CODEX_HOME;
 
 beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CODEX_HOME;
     mockedLoadLocalConfig.mockResolvedValue(mockLocalConfig);
     mockedLoadTeamConfig.mockResolvedValue(mockTeamConfig);
     mockedPathExists.mockResolvedValue(true);
@@ -879,6 +881,11 @@ describe('doctor — the recorded Claude Code root', () => {
 
     it('runs for an explicit default root, which is not the same as no variable', async () => {
         process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
+        // The difference is the MCP file: ~/.claude.json unset, ~/.claude/.claude.json set.
+        mockedLoadTeamConfig.mockResolvedValue({
+            ...mockTeamConfig,
+            toolPaths: { claude: { ...mockTeamConfig.toolPaths.claude, mcp: '.claude.json' } },
+        });
         const unrecorded = await checkFor();
         expect(await unrecorded!.check()).toBe(false);
         expect(await (await checkFor({ claude: path.join(home, '.claude') }))!.check()).toBe(true);
@@ -900,5 +907,46 @@ describe('doctor — the recorded Claude Code root', () => {
         // Re-running init cannot record this value, so the fix says why instead.
         expect(check!.fix).toContain('outside the home directory');
         expect(check!.fix).not.toContain('to record it');
+    });
+});
+
+describe('doctor — the recorded Codex root', () => {
+    const CHECK_NAME = 'Codex root matches CODEX_HOME';
+    const home = process.env.HOME ?? '';
+    const relocated = path.join(home, '.codex-alt');
+
+    afterEach(() => {
+        if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = originalCodexHome;
+    });
+
+    async function checkFor(toolRoots?: Record<string, string>) {
+        mockedLoadTeamConfig.mockResolvedValue({
+            ...mockTeamConfig,
+            toolPaths: { ...mockTeamConfig.toolPaths, codex: { settings: '.codex/hooks.json', skills: '.codex/skills' } },
+        });
+        mockedLoadLocalConfig.mockResolvedValue({ ...mockLocalConfig, ...(toolRoots ? { toolRoots } : {}) });
+        const ctx = await resolveDoctorContext();
+        if (!ctx) throw new Error('expected a resolved doctor context');
+        return (await buildChecks(ctx)).find((c) => c.name === CHECK_NAME);
+    }
+
+    it('fails while deliveries land in ~/.codex, naming both directories', async () => {
+        process.env.CODEX_HOME = relocated;
+        const check = await checkFor();
+        expect(await check!.check()).toBe(false);
+        expect(check!.fix).toContain(`CODEX_HOME is ${relocated}`);
+        expect(check!.fix).toContain(`syncs Codex to ${path.join(home, '.codex')}`);
+        expect(check!.fix).toContain('Re-run `teamai init`');
+    });
+
+    it('passes when the recorded root is the one CODEX_HOME names', async () => {
+        process.env.CODEX_HOME = relocated;
+        expect(await (await checkFor({ codex: relocated }))!.check()).toBe(true);
+    });
+
+    it('passes for an unrecorded CODEX_HOME=~/.codex, where recording would move nothing', async () => {
+        process.env.CODEX_HOME = path.join(home, '.codex');
+        expect(await (await checkFor())!.check()).toBe(true);
     });
 });

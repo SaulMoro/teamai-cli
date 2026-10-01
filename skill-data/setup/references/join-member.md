@@ -69,6 +69,15 @@ to add them to the repo.
 
 ## Step 4 — Initialize with the URL (you run it)
 
+Before running `init`, ask whether the user wants to activate any logical
+projects this team repo declares. If `init` lists **Available projects**, show
+the names/IDs and ask which belong to this setup; enter the corresponding
+comma-separated numbers. Press Enter for none only when the user explicitly
+chooses no project. If the IDs are already known, pass `--project id1,id2` to
+skip the picker. For a non-interactive run, ask first and pass `--project`:
+without it, init keeps `projects: []` and prints a `teamai projects set <id>`
+follow-up instead of waiting for a choice.
+
 ```bash
 # this project only (run from inside the project)
 teamai init https://<platform>/<org>/<repo>
@@ -93,13 +102,14 @@ teamai init --http https://your-team-host/api --token <api-key>
 This is a read-only consumer mode — `push` / `contribute` are not available, but
 skills and rules still sync.
 
-**Claude Code kept in a different directory (`CLAUDE_CONFIG_DIR`):** `init` records
-that directory (as `toolRoots.claude` in the local config) and syncs every Claude
-path there, so run `init` from a shell that has the variable exported. Re-running
-`init` after changing it moves the install (the old root's hooks, managed MCP
-servers and delivered model credentials are removed; its skills and rules are left
-and named in the output). To end the relocation, run `init` once with the variable
-set but blank: `CLAUDE_CONFIG_DIR= teamai init …`.
+**Claude Code or Codex kept in a different directory (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`):** `init` records that directory (as `toolRoots.claude` /
+`toolRoots.codex` in the local config) and syncs every path of that tool there,
+so run `init` from a shell that has the variable exported. Re-running `init` after
+changing it moves the install (the old root's hooks and managed MCP servers are
+removed, and for Claude Code its delivered model credentials; its skills and rules
+are left and named in the output). To end the relocation, run `init` once with the
+variable set but blank: `CLAUDE_CONFIG_DIR= teamai init …` or `CODEX_HOME= teamai init …`.
 
 ## Step 5 — Verify with doctor
 
