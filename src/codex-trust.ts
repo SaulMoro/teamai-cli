@@ -22,7 +22,7 @@ export type CodexTrust =
   | { kind: 'disabled' }
   /** No `codex` on PATH. */
   | { kind: 'unavailable'; reason: string }
-  /** `codex app-server` failed, timed out or answered with an error. */
+  /** The app-server failed, timed out, or did not load a requested hook. */
   | { kind: 'failed'; reason: string };
 
 export interface CodexHookTrustRequest {
@@ -143,9 +143,14 @@ async function openAppServer(codexHome: string): Promise<AppServer> {
       child.kill();
     },
   };
-  await server.request('initialize', { clientInfo: { name: 'teamai', version: getCurrentVersion() } });
-  send({ method: 'initialized' });
-  return server;
+  try {
+    await server.request('initialize', { clientInfo: { name: 'teamai', version: getCurrentVersion() } });
+    send({ method: 'initialized' });
+    return server;
+  } catch (e) {
+    server.close();
+    throw e;
+  }
 }
 
 type AppServerFailure = { kind: 'unavailable'; reason: string } | { kind: 'failed'; reason: string };

@@ -179,6 +179,21 @@ describe('Codex hook trust — user scope', () => {
     expect(reconciled.codexTrust).toEqual({ kind: 'failed', reason: 'hooks/list: fake failure' });
   });
 
+  it('closes the app-server when initialization fails', async () => {
+    writeFakeCodexOptions(codexHome(), { failMethod: 'initialize' });
+    const result = await writeAndTrust(userConfig());
+    expect(result.codexTrust).toEqual({ kind: 'failed', reason: 'initialize: fake failure' });
+    const pid = readFakeCodexState(codexHome()).pid!;
+    const running = () => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    };
+    try {
+      await expect.poll(running, { timeout: 1000 }).toBe(false);
+    } finally {
+      if (running()) process.kill(pid);
+    }
+  });
+
   it('reports a failure when the app-server exits before answering', async () => {
     writeFakeCodexOptions(codexHome(), { exit: true });
 

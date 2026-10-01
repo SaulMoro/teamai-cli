@@ -63,6 +63,7 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     const m = JSON.parse(line);
     const s = state();
+    s.pid = process.pid;
     s.calls.push({ method: m.method, params: m.params });
     save(s);
     if (m.id === undefined) continue;
@@ -84,6 +85,7 @@ process.stdin.on('data', (chunk) => {
 `;
 
 export interface FakeCodexState {
+  pid?: number;
   projects: Record<string, { trust_level?: string }>;
   hooksState: Record<string, { trusted_hash?: string }>;
   calls: Array<{ method: string; params: unknown }>;
