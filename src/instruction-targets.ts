@@ -2,6 +2,7 @@ import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { readFileSafe, remove, writeFile } from './utils/fs.js';
 import { gitTracking, gitTracks } from './mcp-git-exclude.js';
+import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import {
   isAgentExcluded,
   resolveToolBaseDir,
@@ -49,6 +50,10 @@ interface TargetEntry {
 /** The tool's `claudemd` path from the team's `toolPaths` (honors `toolRoots`). */
 const configured = (paths: ToolPaths): string | undefined => paths.claudemd;
 
+/** teamai's own always-applied file in the tool's rules directory. */
+const contextRule = (extension: string) => (paths: ToolPaths): string | undefined =>
+  paths.rules === undefined ? undefined : path.posix.join(paths.rules, `${TEAMAI_CONTEXT_RULE_NAME}${extension}`);
+
 // One line per tool, so a change to one tool's target edits one line.
 const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   claude: { file: configured, retired: [] },
@@ -64,7 +69,10 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
 };
 
 const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
-  claude: { file: configured, retired: [] },
+  // Claude loads every unscoped .claude/rules file from the root and any
+  // subdirectory, and still reads AGENTS.md and an authored CLAUDE.md as it
+  // chose to. CLAUDE.local.md would stop the native AGENTS.md load (#945).
+  claude: { file: contextRule('.md'), owned: true, retired: ['.claude/CLAUDE.md'] },
   'claude-internal': { file: configured, retired: [] },
   tclaude: { file: configured, retired: [] },
   hermes: { file: configured, retired: [] },

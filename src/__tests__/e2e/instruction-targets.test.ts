@@ -296,4 +296,48 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(second.code, second.output).toBe(0);
     expect(written.map((file) => fs.statSync(file).mtimeMs)).toEqual(mtimes);
   });
+
+  it('gives two members of one project their own role selection without touching the shared AGENTS.md (Claude)', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox);
+    const developer = makeProjectMember(sandbox, fixture, 'dev', 'developer', ['.claude/skills']);
+    const product = makeProjectMember(sandbox, fixture, 'pm', 'product', ['.claude/skills']);
+    const context = (member: ProjectMember): string =>
+      fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8');
+
+    for (const member of [developer, product, developer]) {
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+    }
+
+    expect(context(developer)).toContain('COMMON-SENTINEL');
+    expect(context(developer)).toContain('DEVELOPMENT-SENTINEL');
+    expect(context(developer)).not.toContain('PRODUCT-SENTINEL');
+    expect(context(developer)).toContain(CULTURE_START);
+    expect(context(developer)).toContain(RECALL_START);
+    expect(context(product)).toContain('COMMON-SENTINEL');
+    expect(context(product)).toContain('PRODUCT-SENTINEL');
+    expect(context(product)).not.toContain('DEVELOPMENT-SENTINEL');
+    for (const member of [developer, product]) {
+      expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
+      expect(fs.existsSync(path.join(member.projectRoot, '.claude', 'CLAUDE.md'))).toBe(false);
+      expect(fs.existsSync(path.join(member.projectRoot, 'CLAUDE.local.md'))).toBe(false);
+    }
+  });
+
+  it('moves Claude blocks an earlier release left in .claude/CLAUDE.md, keeping the authored text', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+    const legacy = path.join(member.projectRoot, '.claude', 'CLAUDE.md');
+    fs.writeFileSync(legacy, `# Team notes\n\n${CLAUDEMD_START}\nold selection\n${CLAUDEMD_END}\n`);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(result.output).toContain(`Removed teamai instruction blocks from ${legacy}`);
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('# Team notes\n');
+    expect(fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+  });
 });

@@ -1493,7 +1493,7 @@ team:
 | `team.mission` | string | 团队使命 |
 | `team.goals` | string[] | 团队目标 |
 
-frontmatter 之后的 markdown body 部分会作为团队文化指引的正文内容，整体注入到 CLAUDE.md 中。
+frontmatter 之后的 markdown body 部分会作为团队文化指引的正文内容，整体注入到各 AI 工具的指令目标文件（见[这些块写到哪里](#这些块写到哪里)）。
 
 ### 工作原理
 
@@ -1510,17 +1510,31 @@ teamai pull
     │  ├─ frontmatter → 结构化公司/团队信息
     │  └─ body → 团队文化指引正文
     │
-    ▼  编译为 CLAUDE.md 注入块
+    ▼  编译为注入块
     │
-    ▼  注入到各 AI 工具的 CLAUDE.md
-       ├─ ~/.claude/CLAUDE.md
-       ├─ ~/.cursor/CLAUDE.md
+    ▼  写入每个已安装 AI 工具的指令目标
+       ├─ ~/.claude/CLAUDE.md                       （用户范围）
+       ├─ <project>/.claude/rules/teamai-context.md （项目范围）
        └─ ...
 ```
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
 pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如 Hermes 和 WorkBuddy 都已移除后的 `~/AGENTS.md`），下一次 pull 会移除其中的 teamai 块，并在输出中列出该文件。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
+
+#### 这些块写到哪里
+
+同一项目的两名成员可能角色不同，因此他们的共享指令（`claudemd/`）可能不同。项目根目录的 `AGENTS.md` 存放项目为所有人编写的指令，所以 teamai 不会把这些块写入它，也不会写入 `~/AGENTS.md`、`~/.agents/AGENTS.md` 或其他工具读取的文件。每个工具通过自己的文件或会话钩子获得这些块：
+
+| 工具 | 用户范围 | 项目范围 |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+
+早期版本的 pull 可能把这些块留在下列文件中。下一次 pull 会移除它们，并列出所修改的每个文件：
+
+- Claude Code，项目范围：`.claude/CLAUDE.md`
+
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，pull 会给出警告。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
 
 ### 查看效果
 

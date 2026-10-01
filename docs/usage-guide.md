@@ -1615,7 +1615,7 @@ team:
 | `team.mission` | string | Team mission |
 | `team.goals` | string[] | Team goals |
 
-The markdown body after the frontmatter becomes the body content of the team culture guidance, injected as a whole into `CLAUDE.md`.
+The markdown body after the frontmatter becomes the body content of the team culture guidance, injected as a whole into each AI tool's instruction target (see [Where the blocks go](#where-the-blocks-go)).
 
 ### How it works
 
@@ -1632,17 +1632,31 @@ teamai pull
     │  ├─ frontmatter → structured company/team info
     │  └─ body → team culture guidance body
     │
-    ▼  Compile into a CLAUDE.md injection block
+    ▼  Compile into an injection block
     │
-    ▼  Inject into each AI tool's CLAUDE.md
-       ├─ ~/.claude/CLAUDE.md
-       ├─ ~/.cursor/CLAUDE.md
+    ▼  Write it to each installed AI tool's instruction target
+       ├─ ~/.claude/CLAUDE.md                       (user scope)
+       ├─ <project>/.claude/rules/teamai-context.md (project scope)
        └─ ...
 ```
 
 The injected content sits between the `<!-- [teamai:culture:start] -->` and `<!-- [teamai:culture:end] -->` markers, is automatically updated on every `pull`, and does not affect any other content in the file.
 
 A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. When no installed tool reads a file that an earlier pull wrote these blocks to (for example `~/AGENTS.md` after Hermes and WorkBuddy are gone), the next pull removes the teamai blocks from it and names the file in its output. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
+
+#### Where the blocks go
+
+Two members of the same project can have different roles, so their shared instructions (`claudemd/`) can differ. The project's root `AGENTS.md` holds the instructions the project writes for everyone, so teamai never writes these blocks into it, into `~/AGENTS.md` or `~/.agents/AGENTS.md`, or into a file another tool reads. Each tool gets them in a file of its own or through its session hook:
+
+| Tool | User scope | Project scope |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+
+A pull from an earlier release may have left these blocks in a file listed below. The next pull removes them, and names each file it changes:
+
+- Claude Code, project scope: `.claude/CLAUDE.md`
+
+A file named like a teamai target that teamai did not write is left alone, and the pull warns about it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
 
 ### Viewing the result
 
