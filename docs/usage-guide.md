@@ -1659,10 +1659,10 @@ Two members of the same project can have different roles, so their shared instru
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md` (unverified) | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy (unverified) |
 | OpenCode | `~/.config/opencode/teamai-context.md`, listed by absolute path in `instructions` of `~/.config/opencode/opencode.json` | `.opencode/teamai-context.md`, listed in `instructions` of `.opencode/opencode.json` |
 | Oh My Pi | `~/.omp/agent/RULES.md` | Added to each turn's system prompt by teamai's OMP extension |
-| Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension (unverified) |
+| Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension |
 | Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block (unverified) | A system prompt section from teamai's Hermes plugin (unverified) |
 
-*Unverified*: built from the tool's documented or source-read loader, not yet checked in a live session. Claude Code, Oh My Pi and OpenCode were checked in live sessions, from the project root and a subdirectory. The recall block goes only to tools with the `teamai-recall` subagent, so Pi and Hermes get culture and shared instructions without it.
+*Unverified*: built from the tool's documented or source-read loader, not yet checked in a live session. Claude Code, Oh My Pi, OpenCode and Pi (project scope) were checked in live sessions, from the project root and a subdirectory. A tool with the `teamai-recall` subagent gets a recall block that calls it; a tool without one (Pi, Hermes, OpenClaw) gets a recall block that tells the agent to run `teamai recall` directly.
 
 Claude Code loads `.claude/rules/teamai-context.md` from the project root and any subdirectory, and still reads the project's `AGENTS.md` or authored `CLAUDE.md` the way it chose to. Copilot CLI 1.0.89 and later also reads a project's `.claude/rules`, so with both tools installed Copilot can get the blocks twice.
 

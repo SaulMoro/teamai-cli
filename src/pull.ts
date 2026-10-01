@@ -1844,8 +1844,10 @@ export async function resolveInstructionBlocks(
   roleContext: RolePullContext | null,
 ): Promise<{ blocks: InstructionBlocks; claudemdFiles: number }> {
   const culturePath = path.join(localConfig.repo.localPath, 'culture.md');
+  const recallEnabled = isRecallEnabled(localConfig, config);
   const blocks: InstructionBlocks = {
-    recall: isRecallEnabled(localConfig, config) ? compileRecallRulesBlock() : null,
+    recall: recallEnabled ? compileRecallRulesBlock() : null,
+    directRecall: recallEnabled ? compileDirectRecallRulesBlock() : null,
   };
   try {
     const cultureContent = await readFile(culturePath, 'utf8');
@@ -1876,8 +1878,8 @@ export async function resolveInstructionBlocks(
  * tool's target, and strip them from files no installed tool loads them from
  * (#945). Runs on the "Already synced" fast path too, so a CLI upgrade that
  * moves a target or ships a new recall block takes effect without a repo
- * change. The recall block goes only to targets whose tool has the
- * `teamai-recall` subagent, since it tells the agent to call that subagent.
+ * change. A target whose tool has the `teamai-recall` subagent gets the block
+ * that calls it; any other gets the one that runs `teamai recall` directly.
  * A dry run reports the files it would change.
  */
 async function syncManagedInstructions(
@@ -1915,6 +1917,48 @@ async function syncManagedInstructions(
   if (dryRun || targets.length === 0) return;
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
+}
+
+/**
+ * The recall block for a tool without the `teamai-recall` subagent (#945):
+ * the agent runs `teamai recall` itself. Same markers as
+ * compileRecallRulesBlock, so every reader and remover treats both alike.
+ */
+export function compileDirectRecallRulesBlock(): string {
+    return [
+        TEAMAI_RECALL_RULES_START,
+        '<!-- DO NOT EDIT: This section is auto-managed by teamai -->',
+        '',
+        '## Team Knowledge Recall (teamai)',
+        '',
+        '**Before** starting a task that involves code changes, debugging,',
+        'or design decisions, you **SHOULD** search the team knowledge base',
+        '(learnings, docs, skills, rules and the codebase wiki) by running:',
+        '',
+        '```bash',
+        'teamai recall "<3-6 high-signal keywords from the task>"',
+        '```',
+        '',
+        'unless one of these skip conditions applies:',
+        '',
+        '1. **User already provided context** — the user referenced specific files,',
+        '   gave a solution, or said "the answer is in this directory/file".',
+        '2. **Local files have the answer** — the task info is directly available',
+        '   from the current workspace (e.g. fixing an obvious bug in the current file).',
+        '3. **Trivial/local change** — small modifications to known files (typo fix,',
+        '   parameter tweak, formatting) that need no additional knowledge.',
+        '4. **Task domain is outside team knowledge coverage** — the task is',
+        '   unrelated to this team\'s systems/workflows. `teamai recall --check "<keywords>"`',
+        '   answers `RELEVANT` or `NOT_RELEVANT` without reading anything.',
+        '',
+        'Matching is lexical: give each domain term in every language the team',
+        'writes in, and keep names, identifiers, error codes and paths as they are.',
+        'Read the files recall returns for their full content. If its output contains',
+        '`Nothing was searched:`, show that line to the user instead of concluding the',
+        'team has no knowledge on the topic.',
+        '',
+        TEAMAI_RECALL_RULES_END,
+    ].join('\n');
 }
 
 /**

@@ -162,7 +162,7 @@ export interface InstructionTarget {
   /** Absolute path. */
   path: string;
   tools: string[];
-  /** Whether a tool reading this file has the `teamai-recall` subagent, so the recall block belongs here. */
+  /** Whether a tool reading this file has the `teamai-recall` subagent, which decides the recall block it gets. */
   recall: boolean;
   header?: string;
   owned?: boolean;
@@ -193,7 +193,10 @@ export interface InstructionTargets {
 export interface InstructionBlocks {
   culture?: string | null;
   claudemd?: string | null;
+  /** For a tool with the `teamai-recall` subagent. */
   recall?: string | null;
+  /** For a tool without it: the agent runs `teamai recall` itself. Same markers. */
+  directRecall?: string | null;
 }
 
 /**
@@ -217,10 +220,11 @@ export function deliversInstructionsByHook(tool: string, scope: Scope): boolean 
 
 /**
  * The text a session hook adds to the prompt: the same blocks a file target
- * holds, recall included only for a tool with the `teamai-recall` subagent.
+ * holds, with the recall block that matches whether the tool has the
+ * `teamai-recall` subagent.
  */
 export function instructionHookText(blocks: InstructionBlocks, recall: boolean): string {
-  return [blocks.culture, blocks.claudemd, recall ? blocks.recall : null]
+  return [blocks.culture, blocks.claudemd, recall ? blocks.recall : blocks.directRecall]
     .filter((block): block is string => typeof block === 'string')
     .map(managedBlockBody)
     .filter((body) => body !== '')
@@ -568,7 +572,8 @@ export async function planInstructionFiles(
     const edits: Array<readonly [MarkerPair, string | null]> = [];
     if (blocks.culture !== undefined) edits.push([CULTURE, blocks.culture]);
     if (blocks.claudemd !== undefined) edits.push([CLAUDEMD, blocks.claudemd]);
-    if (blocks.recall !== undefined) edits.push([RECALL, target.recall ? blocks.recall : null]);
+    const recall = target.recall ? blocks.recall : blocks.directRecall;
+    if (recall !== undefined) edits.push([RECALL, recall]);
     const change = await planFile(target, edits, 'write', warnings);
     if (change) changes.push(change);
   }

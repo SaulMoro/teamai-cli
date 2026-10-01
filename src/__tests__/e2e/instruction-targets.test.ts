@@ -500,6 +500,9 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(context).toContain('PRODUCT-SENTINEL');
     expect(context).not.toContain('DEVELOPMENT-SENTINEL');
     expect(context).toContain('Acme');
+    // Pi has no recall subagent: it is told to run the command itself.
+    expect(context).toContain('teamai recall "');
+    expect(context).not.toContain('teamai-recall');
   });
 
   it('gives Hermes its project blocks through its plugin and frees the project AGENTS.md', async () => {
@@ -525,6 +528,7 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(context).toContain('DEVELOPMENT-SENTINEL');
     expect(context).not.toContain('PRODUCT-SENTINEL');
     expect(context).not.toContain('teamai-recall');
+    expect(context).toContain('teamai recall "');
   });
 
   it('says Hermes cannot load project instructions over its 4,000-character section, without cutting them or using AGENTS.md', async () => {

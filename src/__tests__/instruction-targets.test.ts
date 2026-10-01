@@ -41,6 +41,17 @@ describe('instruction file planning (#945)', () => {
     ...extra,
   });
 
+  it('gives the recall block to a target whose tool has the subagent, and the direct variant otherwise', async () => {
+    const recall = '<!-- [teamai:recall-rules:start] -->\nuse the subagent\n<!-- [teamai:recall-rules:end] -->';
+    const direct = '<!-- [teamai:recall-rules:start] -->\nrun teamai recall\n<!-- [teamai:recall-rules:end] -->';
+    const plan = await planInstructionFiles(
+      [target('a.md', { recall: true }), target('b.md', { recall: false })],
+      { recall, directRecall: direct },
+    );
+
+    expect(plan.changes.map((c) => c.content)).toEqual([`${recall}\n`, `${direct}\n`]);
+  });
+
   it('creates a missing target with the blocks only', async () => {
     const plan = await planInstructionFiles([target('CLAUDE.local.md')], { culture: culture('c'), claudemd: claudemd('s') });
     await applyInstructionPlan(plan, { dryRun: false });

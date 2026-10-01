@@ -1537,10 +1537,10 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md`（未验证） | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份（未验证） |
 | OpenCode | `~/.config/opencode/teamai-context.md`，以绝对路径列在 `~/.config/opencode/opencode.json` 的 `instructions` 中 | `.opencode/teamai-context.md`，列在 `.opencode/opencode.json` 的 `instructions` 中 |
 | Oh My Pi | `~/.omp/agent/RULES.md` | 由 teamai 的 OMP 扩展加入每轮的系统提示 |
-| Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示（未验证） |
+| Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
 | Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
 
-*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi 和 OpenCode 已在实际会话中从项目根目录和子目录检查过。recall 块只发给有 `teamai-recall` subagent 的工具，因此 Pi 和 Hermes 获得文化和共享指令，但没有 recall 块。
+*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。
 
 Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
 
