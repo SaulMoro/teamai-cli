@@ -795,8 +795,9 @@ servers:
     expect(byTool.claude).toBe(path.join(projectRoot, '.mcp.json'));
     expect(byTool.cursor).toBe(path.join(projectRoot, '.cursor', 'mcp.json'));
     expect(byTool.codebuddy).toBe(path.join(projectRoot, '.codebuddy', 'mcp.json'));
-    // No project-scope MCP support: codex has no such concept, and tclaude reads
-    // the <root>/.mcp.json that the claude target already writes.
+    // No `mcpProject` in this map means no project target: codex here is
+    // mapped without one, and tclaude reads the <root>/.mcp.json that the
+    // claude target already writes.
     expect(byTool.codex).toBeUndefined();
     expect(byTool.tclaude).toBeUndefined();
 
@@ -848,6 +849,32 @@ servers:
     await reconcileMcpForConfig(defaults, projectConfig, { removeAll: true });
     expect(await fse.readJson(projectFile)).toEqual(personal);
     expect(await fse.readJson(userFile)).toEqual(personal);
+  });
+
+  // #954: Codex reads <project>/.codex/config.toml once the project is trusted.
+  it('writes team servers to the Codex project config by default, and removes only its own block', async () => {
+    const projectRoot = path.join(tmpDir, 'codex-project');
+    await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
+    const projectFile = path.join(projectRoot, '.codex', 'config.toml');
+    const own = '# project settings\nmodel = "gpt-5"\n';
+    await fse.writeFile(projectFile, own);
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'r', provider: 'git' });
+    const projectConfig: LocalConfig = { ...localConfig, scope: 'project', projectRoot };
+    await writeMcpYaml('servers:\n  - name: team-docs\n    transport: stdio\n    command: docs-server\n');
+
+    const targets = await resolveMcpTargets(defaults, projectConfig);
+    expect(targets.find((target) => target.tool === 'codex')?.file).toBe(projectFile);
+
+    await reconcileMcpForConfig(defaults, projectConfig);
+    const written = await fse.readFile(projectFile, 'utf-8');
+    expect(written.startsWith(own)).toBe(true);
+    expect(codexServerNames(written)).toEqual(['team-docs']);
+    expect(await fse.pathExists(path.join(homeDir, '.codex', 'config.toml'))).toBe(false);
+
+    await writeMcpYaml('servers: []\n');
+    await reconcileMcpForConfig(defaults, projectConfig);
+    expect(codexServerNames(await fse.readFile(projectFile, 'utf-8'))).toEqual([]);
+    expect(await fse.readFile(projectFile, 'utf-8')).toContain(own.trimEnd());
   });
 
   it('resolves a project secret to plaintext in every tool, keyed off `type`', async () => {

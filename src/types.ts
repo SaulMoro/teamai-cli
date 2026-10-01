@@ -337,11 +337,13 @@ export const TeamaiConfigSchema = z.object({
     // which only Codex reads. In project scope they come from the session-start
     // hook, since the project AGENTS.md is the owners' file and other tools
     // read it too (#938, #945); so the entry has no project `claudemd`.
+    // Codex reads the project MCP config only in a trusted project (#954).
     codex: {
       skills: '.codex/skills',
       settings: '.codex/hooks.json',
       agents: '.codex/agents',
       mcp: '.codex/config.toml',
+      mcpProject: '.codex/config.toml',
       userScope: { claudemd: '.codex/AGENTS.md' },
     },
     // codex-internal and tcodex run the same Codex from their own home root, so

@@ -86,6 +86,8 @@ describe('toolRoots — re-rooting a relocated tool', () => {
       claudemd: '.codex-alt/AGENTS.md',
       agents: '.codex-alt/agents',
       mcp: '.codex-alt/config.toml',
+      // A project-scope path hangs off the project root, which no member root moves.
+      mcpProject: '.codex/config.toml',
       userScope: { claudemd: '.codex-alt/AGENTS.md' },
     });
     expect(paths.claude).toEqual(teamConfig.toolPaths.claude);
