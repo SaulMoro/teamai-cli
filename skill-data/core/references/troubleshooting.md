@@ -167,6 +167,11 @@ trusts them (`teamai doctor` prints a reminder when it detects this). Guide the
 user to trust the teamai hooks in Codex, then reopen a session. Until then, run
 `teamai pull` manually.
 
+In project scope the team MCP servers land in `<project>/.codex/config.toml`,
+which Codex loads only in a trusted project. When `teamai doctor` fails
+`Codex trusts this project, so it loads its team MCP servers`, have the user trust
+the project when Codex asks, or add the `[projects."<path>"]` entry the fix names.
+
 ### Cursor
 
 Cursor writes hooks to `~/.cursor/hooks.json` and also runs `~/.claude/settings.json`. `hook-dispatch --tool claude` and team hook commands written for `claude` exit only when `CURSOR_VERSION` is set and `~/.cursor/hooks.json` or `$CURSOR_PROJECT_DIR/.cursor/hooks.json` contains `--tool cursor`. A setup with only Claude has no second copy, so those hooks still run inside Cursor. Claude Code does not set `CURSOR_VERSION`. An already installed team hook picks up the guard on the next `teamai pull` or `teamai hooks inject`. If `teamai hooks list` shows Cursor without hooks, run `teamai pull` at the start of the session.

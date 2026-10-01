@@ -885,7 +885,7 @@ teamai push
 
 culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。
 
-> 团队 `teamai.yaml` 中的 `toolPaths` 会整体替换内置默认值。设置了它的团队应为每个 Codex 系条目加上 `userScope.claudemd: .codex/AGENTS.md`（`.codex-internal/…`、`.tcodex/…`），用于 user scope 的 rule 和区块，并去掉其 `rules` 路径，因为 Codex 从不读取该目录。顶层的 `claudemd` 会把区块重新写进项目 `AGENTS.md`，所以不要设置。在项目中，hook 只需要该条目的 `settings` 路径，它安装在那里。
+> 团队 `teamai.yaml` 中的 `toolPaths` 会整体替换内置默认值。设置了它的团队应为每个 Codex 系条目加上 `userScope.claudemd: .codex/AGENTS.md`（`.codex-internal/…`、`.tcodex/…`），用于 user scope 的 rule 和区块，并去掉其 `rules` 路径，因为 Codex 从不读取该目录。顶层的 `claudemd` 会把区块重新写进项目 `AGENTS.md`，所以不要设置。在项目中，hook 只需要该条目的 `settings` 路径，它安装在那里。`codex` 条目还需要 `mcpProject: .codex/config.toml`，项目的团队 MCP server 才会写入。
 
 > 从把 rule 复制到 `.codex/rules/` 的旧版本升级后，下一次 `pull` 会删除 teamai 投递到那里的 `.md` 副本，包括 `teamai-recall.md`。清理使用记录的 `toolRoots` 位置，同时检查发布者本地的无命名空间文件名及命名空间副本。你改过的副本会保留，并在警告中点名；`*.rules` 文件从不改动。团队此后已删除的 rule，其副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。同一次 pull 会为 `hooks.json` 中的 teamai hook 加上 `additionalContextLimit: 0` 和一个 `SubagentStart` 条目，因此公开版 Codex 会请你批准一次改动后的 hook。
 
@@ -1127,13 +1127,15 @@ namespace 文件；只有当根文件未定义、而多个 namespace 文件都�
 | codebuddy | `~/.codebuddy/mcp.json` | `<project>/.mcp.json` |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
-| codex | `~/.codex/config.toml` | 不支持 |
+| codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
 | qoder | `~/.qoder/settings.json` | `<project>/.qoder/settings.json` |
 | qoder-cn | `~/.qoder-cn/settings.json` | `<project>/.qoder/settings.json` |
 | kiro | `~/.kiro/settings/mcp.json` | `<project>/.kiro/settings/mcp.json` |
 | opencode | `~/.config/opencode/opencode.json` | `<project>/opencode.json` |
 | omp | `~/.omp/agent/mcp.json` | `<project>/.omp/mcp.json` |
 | pi | `~/.pi/agent/mcp.json` | `<project>/.pi/mcp.json` |
+
+Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。请在 Codex 询问时信任该项目，或在 `~/.codex/config.toml` 中加入 `[projects."<主 checkout 的真实路径>"]` 表并设置 `trust_level = "trusted"`；信任主 checkout 即覆盖该仓库的所有 worktree。项目未受信任、而其文件含有团队 server 时，`teamai doctor` 会报告。
 
 
 CodeBuddy Code 的 [MCP 文档](https://www.codebuddy.cn/docs/cli/mcp)
@@ -2170,6 +2172,8 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 有三个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json` 的 `instructions` 中是否仍列着 teamai 所拥有的那条 glob：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in Codex AGENTS.md` 把该工具 `AGENTS.md` 中的 team-rules 区块与团队 rule 内联后的内容比对，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。Codex 没有 `Rules delivered to <tool>` 检查。
 
 `MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；过期的旧副本同样等于没送达。两者都报告为 `not the team's definition`，而覆盖非 teamai 写入的条目只有 `teamai pull --force` 能做到。未解析的 `${VAR}` 会在这里连同变量名一起报告——否则它只在 pull 时出现一次，之后再无提示。没有值的已声明密钥不算失败：doctor 把它作为备注打印（`--json` 中的 `notes`），并附上设置它的命令，退出码与没有它时相同；备注还会说明为它保留的条目可能含有旧值，以及某个 key 既声明为密钥、又在 `env.yaml` 中设置的情况。无法解析的 `mcp.yaml` 并不等于团队没有 MCP：它会作为 `Team MCP servers can be read` 连同解析错误一起报告，因为这种文件不会向任何工具注入内容，而且除第一次之外的每次运行都对此保持沉默。无法解析的团队 hooks 与团队模型配置（文件无法解析、同一文件内重复的名字，或两个活动 namespace 中的同名条目）会让 `Team hooks can be resolved` 与 `Team model profiles can be resolved` 失败，并给出 pull 只记录一次的原因；`teamai status` 把它们计为 0 时会指向这里。`Env variables injected in shell profile` 不再只查标记注释：它会检查 `env/env.yaml` 能否解析、以及是否在 `variables:` 键下声明了变量（写成普通的 `KEY: value` 映射等于没有声明；而显式写成 `variables: []` 属于没有内容要下发的配置，不会判为失败）、每个变量是否以 `env.yaml` 声明的值（或你为该团队设置的值；用 `--from-env` 设置的不会写入）写进了 `env.sh`（残留的旧值会一直被导出到每个 shell 和 MCP server，直到下次 pull；比对时会用生成器自身的逆运算读回 `env.sh`，因此跨多行引用的多行值能够正确匹配，而不会被误判为过期），以及本作用域注入的代码块（即 source 本作用域 `env.sh` 的那一块，因为同一个 profile 里还可能有其他作用域的代码块）是否真的能加载它——未加引号的 Windows 路径在 POSIX shell 中会被转义破坏，`source` 从不执行，而且没有任何提示。`No stale env blocks left behind` 是独立的一项检查：pull 优先选用哪个文件会随时间变化（Windows 上 Git Bash 的登录 shell 读取的是 `.bash_profile`/`.bash_login`/`.profile`，从不读取 `.bashrc`），而 pull 只会新增代码块，从不迁移旧的，因此早期安装或平台变化留下的失效代码块可能一直留在另一个候选文件里。它会列出每一个这样的文件（检查 `.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login` 和 `.profile`，新旧写法都算），并指向 `teamai uninstall` 来清除它们——这与投递检查分开进行，因此不会因为还留着一个旧副本，就让一个正常工作的 env 代码块被判成故障。
+
+`Codex trusts this project, so it loads its team MCP servers` 在 project scope 下、项目的 `.codex/config.toml` 含有本 worktree 的 `managed-mcp.json` 为 Codex 记录的 server 时生成：Codex 只在受信任的项目中加载该文件，对未受信任的项目则静默跳过。它按 Codex 的方式读取 Codex 用户配置（`~/.codex/config.toml`，或 `toolRoots.codex` 下的那份）中的 `projects` 表：先取当前 checkout 的 `projects."<dir>"` 条目，再取其主 checkout 的，均按真实路径（`/private/tmp/...` 而非 `/tmp/...`）。在该条目设置 `trust_level = "trusted"` 之前，它会失败，并指出文件及其中的 server。请在 Codex 询问时信任该项目，或自行为主 checkout 加上该条目，这样即覆盖所有 worktree。doctor 只读取该文件。
 
 `Contributed learnings are published` 会在 `teamai contribute` 写下、但尚未推送成功的笔记仍在队列中时失败。当本次 pull 已经说过时，手动 `teamai pull` 结束时不会再重复它：pull 会尝试发布队列并自行报告结果，还会带上导致失败的推送错误——这是该检查本身给不出的信息。如果 pull 因为团队仓库刷新失败而根本没走到那一步，该检查会照常打印。
 
