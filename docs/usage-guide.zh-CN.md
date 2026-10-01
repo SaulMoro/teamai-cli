@@ -1256,6 +1256,7 @@ recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall �
 | Qoder | 支持 | 支持（未验证） |
 | Copilot CLI | 支持 | 不支持：subagent 有自己的会话，且没有 hook 将其关联到父会话 |
 | Cursor | 支持 | 不支持：同 Copilot CLI |
+| Codex、codex-internal、tcodex | `$CODEX_HOME/AGENTS.md`（以及各变体的主目录），位于团队规则旁 | 由 session-start 和 subagent-start hook 加入，位于项目团队规则旁；恢复会话时不重复加入 |
 | OpenCode | 支持 | 支持：`task` 调用将 subagent 的会话关联到父会话 |
 | OMP | 支持，仅通过其 `bash` 调用的认领确定归属 | 支持：subagent 的会话文件位于父会话文件之下，父会话文件的会话头把两个会话关联起来（对照 OMP 18.4.8 验证） |
 | Pi | 支持 | 不适用：TeamAI 不向 Pi 部署 subagent |
@@ -1557,6 +1558,7 @@ Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用�
 - Hermes：`~/AGENTS.md`
 - Oh My Pi：`~/.omp/agent/AGENTS.md` 和 `.omp/AGENTS.md`。Oh My Pi 每一层只读取一个上下文文件，因此它们会遮蔽 `~/.agents/AGENTS.md` 和项目的 `AGENTS.md`。
 - Pi：项目 `AGENTS.md`
+- Codex 系列：项目 `AGENTS.md`（当团队的 `toolPaths` 或早期构建把 Codex 指向那里时）
 
 `teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件，Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
 
@@ -2088,7 +2090,7 @@ ZCode 已作为内置目标支持。Skills 下发到 `.zcode/skills/`（ZCode �
 
 ### Oh My Pi
 
-Oh My Pi（OMP）已作为内置目标支持。TeamAI 将 Skills、Rules 和 Subagents 下发到 OMP 的原生目录——项目级为 `.omp/skills/`、`.omp/rules/` 和 `.omp/agents/`，用户级为 `~/.omp/agent/skills/`、`~/.omp/agent/rules/` 和 `~/.omp/agent/agents/`（用户级资源位于 agent 目录 `~/.omp/agent/` 下，与项目级前缀不同，TeamAI 会随作用域自动切换）。团队指令在用户范围写入 `~/.omp/agent/RULES.md`，在项目范围由下文的 extension 加入每轮的系统提示（见[这些块写到哪里](#这些块写到哪里)）；MCP Server 合并进 `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json`（Claude `mcpServers` 结构，见上文 MCP 章节）。Skills 采用一层 `<name>/SKILL.md` 目录结构，TeamAI 在同步时补全 `description`——OMP 原生 skill 发现要求该字段。以上路径遵循 OMP 官方文档的发现布局（对照 OMP 18.2.5 验证）。Hooks 走 OMP 的 extension runner：`teamai pull` 会生成唯一的 extension 写入 `~/.omp/agent/extensions/teamai-hooks.ts`（绝不写项目副本——OMP 会同时加载两个根并导致每个事件双派发），它把 OMP 的 `session_start` / `session_stop` / `before_agent_start` / `tool_result` 事件转发给所有 agent 共用的 `teamai hook-dispatch` 入口，并按会话 `cwd` 做项目门控。在项目会话中，它还会在 `session_start` 时获取成员的团队指令，并在 `before_agent_start` 中追加到系统提示。每个事件都携带 OMP 会话 id（`ctx.sessionManager.getSessionId()`；subagent 有自己的会话），`tool_result` 还带上工具的文本输出和根据 `isError` 得出的状态，因此 upvote **采纳（adoption）**在 OMP 主 agent 上生效：OMP 不在其 shell 中设置会话变量，所以 recall 归入运行它的那次 `bash` 调用所在的会话；带行选择器的 `read`（`x.md:50-200`、`x.md:raw`）计为对该文件的读取。从 OMP 18.3.2 起，subagent 的事件还会携带其 `ctx.agent` 的 id 和名称，因此 `teamai-recall` subagent 自身的读取从不计入。主 agent 在 subagent recall 之后打开的文档暂不会被 upvote：subagent 的会话尚未关联到父会话。`session_stop` 处理器不返回任何值，分发绝不会强制会话继续；由于 OMP 的工具名是小写（`bash`、`read` 等）且没有 `Skill` / `TodoWrite` 工具，post-tool-use 不做 matcher 定向分发。`teamai uninstall` 会移除该 extension。OMP 的 profile（`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）暂不支持，使用默认的 `~/.omp/agent/` 布局。
+Oh My Pi（OMP）已作为内置目标支持。TeamAI 将 Skills、Rules 和 Subagents 下发到 OMP 的原生目录——项目级为 `.omp/skills/`、`.omp/rules/` 和 `.omp/agents/`，用户级为 `~/.omp/agent/skills/`、`~/.omp/agent/rules/` 和 `~/.omp/agent/agents/`（用户级资源位于 agent 目录 `~/.omp/agent/` 下，与项目级前缀不同，TeamAI 会随作用域自动切换）。团队指令在用户范围写入 `~/.omp/agent/RULES.md`，在项目范围由下文的 extension 加入每轮的系统提示（见[这些块写到哪里](#这些块写到哪里)）；MCP Server 合并进 `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json`（Claude `mcpServers` 结构，见上文 MCP 章节）。Skills 采用一层 `<name>/SKILL.md` 目录结构，TeamAI 在同步时补全 `description`——OMP 原生 skill 发现要求该字段。以上路径遵循 OMP 官方文档的发现布局（对照 OMP 18.2.5 验证）。Hooks 走 OMP 的 extension runner：`teamai pull` 会生成唯一的 extension 写入 `~/.omp/agent/extensions/teamai-hooks.ts`（绝不写项目副本——OMP 会同时加载两个根并导致每个事件双派发），它把 OMP 的 `session_start` / `session_stop` / `before_agent_start` / `tool_result` 事件转发给所有 agent 共用的 `teamai hook-dispatch` 入口，并按会话 `cwd` 做项目门控。在项目会话中，它还会在 `session_start` 时获取成员的团队指令，并在 `before_agent_start` 中追加到系统提示。每个事件都携带 OMP 会话 id（`ctx.sessionManager.getSessionId()`；subagent 有自己的会话），`tool_result` 还带上工具的文本输出和根据 `isError` 得出的状态，因此 upvote **采纳（adoption）**在 OMP 主 agent 上生效：OMP 不在其 shell 中设置会话变量，所以 recall 归入运行它的那次 `bash` 调用所在的会话；带行选择器的 `read`（`x.md:50-200`、`x.md:raw`）计为对该文件的读取。从 OMP 18.3.2 起，subagent 的事件还会携带其 `ctx.agent` 的 id 和名称，因此 `teamai-recall` subagent 自身的读取从不计入。subagent 的会话文件位于父会话文件之下，父会话文件的头部写明父会话 id，因此 extension 会在 subagent 的工具调用中关联这两个会话，主 agent 在 subagent recall 之后打开的文档会被 upvote（对照 OMP 18.4.8 验证）。`session_stop` 处理器不返回任何值，分发绝不会强制会话继续；由于 OMP 的工具名是小写（`bash`、`read` 等）且没有 `Skill` / `TodoWrite` 工具，post-tool-use 不做 matcher 定向分发。`teamai uninstall` 会移除该 extension。OMP 的 profile（`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）暂不支持，使用默认的 `~/.omp/agent/` 布局。
 
 ### DeepSeek Harness
 
@@ -2647,7 +2649,7 @@ teamai uninstall --agent claude
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
 - AI 工具 settings 中的 teamai hooks
-- 各工具指令文件中的 teamai 文化、共享指令和 recall 块，以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除）
+- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）

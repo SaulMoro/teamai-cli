@@ -749,7 +749,7 @@ describe('uninstall', () => {
       expect(await fse.readFile(agentsMd, 'utf8')).toBe('# My notes\n');
     });
 
-    it('a project-scope uninstall leaves the project AGENTS.md to its owners with the default Codex entry', async () => {
+    it('a project-scope uninstall keeps the owners\' text of the project AGENTS.md and removes the teamai blocks left there (#945)', async () => {
       const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
       const { projectRoot, agentsMd } = await projectFixture({ codex: defaults.codex }, ['codex']);
       await fse.ensureDir(path.join(projectRoot, '.codex'));
@@ -758,7 +758,7 @@ describe('uninstall', () => {
 
       await uninstall({ force: true });
 
-      expect(await fse.readFile(agentsMd, 'utf8')).toBe(owners);
+      expect(await fse.readFile(agentsMd, 'utf8')).toBe('# Project notes\n');
     });
 
     async function codexLegacyFixture() {
@@ -862,7 +862,7 @@ describe('uninstall', () => {
       expect(await fse.pathExists(legacy('retired.md'))).toBe(false);
     });
 
-    it('--agent codex with Pi still active removes the recall block and keeps Pi\'s', async () => {
+    it('--agent codex removes every teamai block from the project AGENTS.md, which Pi no longer reads (#945)', async () => {
       const { projectRoot, agentsMd } = await projectFixture({ codex: codexPaths, pi: piPaths }, ['codex', 'pi']);
       await fse.ensureDir(path.join(projectRoot, '.codex'));
       await fse.writeJson(path.join(projectRoot, '.codex', 'hooks.json'), {});
@@ -871,15 +871,11 @@ describe('uninstall', () => {
 
       await uninstall({ force: true, agent: 'codex' });
 
-      const content = await fse.readFile(agentsMd, 'utf8');
-      expect(content).toContain('# Project notes');
-      expect(content).toContain(culture);
-      expect(content).toContain(shared);
-      // Pi has no `agents`, so it never receives the recall block.
-      expect(content).not.toContain(TEAMAI_RECALL_RULES_START);
+      // Pi gets its project blocks from its extension now, so nothing retains these.
+      expect(await fse.readFile(agentsMd, 'utf8')).toBe('# Project notes\n');
     });
 
-    it('--agent codex keeps the culture block while another Codex-family tool maps the same file', async () => {
+    it('--agent codex removes the culture block another Codex-family tool no longer reads from the project AGENTS.md (#945)', async () => {
       const { projectRoot, agentsMd } = await projectFixture(
         { codex: codexPaths, tcodex: { settings: '.tcodex/hooks.json', claudemd: 'AGENTS.md' } },
         ['codex', 'tcodex'],
@@ -892,10 +888,10 @@ describe('uninstall', () => {
 
       await uninstall({ force: true, agent: 'codex' });
 
-      expect(await fse.readFile(agentsMd, 'utf8')).toContain(culture);
+      expect(await fse.pathExists(agentsMd)).toBe(false);
     });
 
-    it('--agent workbuddy with Pi remaining removes WorkBuddy\'s recall block, which Pi never writes', async () => {
+    it('--agent workbuddy removes every teamai block from the project AGENTS.md, which Pi no longer reads (#945)', async () => {
       const { projectRoot, agentsMd } = await projectFixture({ pi: piPaths, workbuddy: workbuddyPaths }, ['pi', 'workbuddy']);
       await fse.ensureDir(path.join(projectRoot, '.pi', 'skills'));
       await fse.ensureDir(path.join(projectRoot, '.workbuddy', 'skills'));
@@ -903,9 +899,7 @@ describe('uninstall', () => {
 
       await uninstall({ force: true, agent: 'workbuddy' });
 
-      const content = await fse.readFile(agentsMd, 'utf8');
-      expect(content).toContain(culture);
-      expect(content).not.toContain(TEAMAI_RECALL_RULES_START);
+      expect(await fse.pathExists(agentsMd)).toBe(false);
     });
   });
 

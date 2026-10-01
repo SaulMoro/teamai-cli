@@ -41,7 +41,6 @@ import { listTeamAgentDirs } from './resources/agents.js';
 import { RulesHandler } from './resources/rules.js';
 import { deliveredHashes } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { removeClaudeMdSection } from './utils/claudemd.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import {
   BUILTIN_SKILL_NAMES,
@@ -322,7 +321,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], retiredInstructionFiles: [], skillDirs: [], ruleFiles: [], agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -724,7 +723,10 @@ async function buildRemovalPlan(
     }
     // No tool reads a retired file any more, so nothing retains its blocks.
     for (const file of res.retiredInstructionFiles) {
-      if (!plan.claudeMdFiles.includes(file)) plan.claudeMdFiles.push(file);
+      if (plan.claudeMdFiles.some((entry) => entry.path === file)) continue;
+      const content = await readFileSafe(file) ?? '';
+      const blocks = CLAUDEMD_MARKER_PAIRS.filter(([start]) => content.includes(start));
+      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
     }
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
@@ -1063,9 +1065,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // (b) Clean CLAUDE.md teamai section blocks
   for (const { path: claudeMdPath, blocks } of plan.claudeMdFiles) {
     try {
-      const { changed, warnings } = await clearInstructionFile(claudeMdPath);
+      // A file teamai created goes with its last block; a member's file,
+      // even an empty one, stays.
+      const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start));
       for (const warning of warnings) log.warn(warning);
-      if (changed) log.success(`Cleaned CLAUDE.md: ${claudeMdPath}`);
+      if (changed) log.success(`Cleaned ${claudeMdPath}`);
       // OpenCode loads its file through an `instructions` entry; drop it with the file.
       if (OPENCODE_CONTEXT_FILES.some((suffix) => claudeMdPath.endsWith(suffix)) && !await pathExists(claudeMdPath)) {
         const { opencodeContextReference, reconcileOpencodeInstructions } = await import('./resources/opencode-config.js');

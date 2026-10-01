@@ -127,18 +127,20 @@ projects:
     expect(text).not.toContain('Billing instructions.');
   });
 
-  it('skips a block another tool already wrote into the project AGENTS.md, which Codex reads', async () => {
+  it('adds the member\'s own blocks even where an earlier release left another member\'s in the project AGENTS.md (#945)', async () => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
     await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
     await fse.outputFile(
       path.join(tmpDir, 'project', 'AGENTS.md'),
-      '# Notes\n\n<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n',
+      '# Notes\n\n<!-- [teamai:claudemd:start] -->\nAnother member\'s selection.\n<!-- [teamai:claudemd:end] -->\n',
     );
 
     const text = (await context({ hook_event_name: 'SessionStart', source: 'startup' }))!;
 
-    expect(text).not.toContain('Be kind to teammates.');
+    expect(text).toContain('Be kind to teammates.');
     expect(text).toContain('Shared team instructions.');
+    expect(text).not.toContain('Another member');
+    expect(text).not.toContain('[teamai:');
   });
 
   it.each(['# Owners\n', ''])('adds blocks from a shadowed AGENTS.md when AGENTS.override.md contains %j', async (override) => {

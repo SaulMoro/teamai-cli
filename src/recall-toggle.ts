@@ -8,7 +8,7 @@ import {
   agentFileExtensionForTool,
   type ToolName,
 } from './resources/agent-format.js';
-import { ruleFileExtensionForTool, writesInstructionBlock } from './resources/rule-format.js';
+import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
   resolveToolBaseDir,

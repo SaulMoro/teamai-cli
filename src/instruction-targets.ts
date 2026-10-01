@@ -18,6 +18,8 @@ import {
   TEAMAI_RECALL_RULES_START,
   TEAMAI_RULES_END,
   TEAMAI_RULES_START,
+  TEAMAI_TEAM_RULES_END,
+  TEAMAI_TEAM_RULES_START,
   type LocalConfig,
   type Scope,
   type TeamaiConfig,
@@ -72,6 +74,9 @@ const cursor: TargetEntry = { file: contextRule('.mdc'), header: ALWAYS_APPLY, o
  * CodeBuddy and WorkBuddy both read the project's .codebuddy/rules, so they
  * share one copy there; uninstalling one keeps it while the other remains.
  */
+// A team override or an earlier build could have pointed Codex at the project AGENTS.md.
+const codexHook: TargetEntry = { file: () => undefined, hook: true, retired: ['AGENTS.md'] };
+
 const codebuddyProjectRule = (): string => `.codebuddy/rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
 
 // One line per tool, so a change to one tool's target edits one line.
@@ -118,6 +123,11 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   workbuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['.codebuddy/CODEBUDDY.md'] },
   openclaw: { file: configured, retired: [] },
+  // Codex reads no project file only it reads; its session-start and
+  // subagent-start hooks add the blocks (#938, #940).
+  codex: codexHook,
+  'codex-internal': codexHook,
+  tcodex: codexHook,
   // Registered in .opencode/opencode.json `instructions`; the root opencode.json stays the project's.
   opencode: { file: () => '.opencode/teamai-context.md', owned: true, retired: [] },
 };
@@ -129,9 +139,11 @@ const CLAUDEMD: MarkerPair = [TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, 'claud
 const RECALL: MarkerPair = [TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END, 'recall'];
 /** The rules block releases before per-file rules wrote into the same files. */
 const LEGACY_RULES: MarkerPair = [TEAMAI_RULES_START, TEAMAI_RULES_END, 'rules'];
+/** The team rules a Codex-family tool reads from its own AGENTS.md in user scope. */
+const TEAM_RULES: MarkerPair = [TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, 'team-rules'];
 
 /** Every teamai block a stale target can hold. */
-const STALE_BLOCKS: readonly MarkerPair[] = [CULTURE, CLAUDEMD, RECALL, LEGACY_RULES];
+const STALE_BLOCKS: readonly MarkerPair[] = [CULTURE, CLAUDEMD, RECALL, LEGACY_RULES, TEAM_RULES];
 
 function entryFor(tool: string, scope: Scope): TargetEntry | undefined {
   return (scope === 'user' ? USER_TARGETS : PROJECT_TARGETS)[tool];
@@ -199,8 +211,19 @@ export function deliversInstructionsByHook(tool: string, scope: Scope): boolean 
  */
 export function instructionHookText(blocks: InstructionBlocks, recall: boolean): string {
   return [blocks.culture, blocks.claudemd, recall ? blocks.recall : null]
-    .filter((block): block is string => typeof block === 'string' && block !== '')
+    .filter((block): block is string => typeof block === 'string')
+    .map(managedBlockBody)
+    .filter((body) => body !== '')
     .join('\n\n');
+}
+
+/** A block's text without its markers and DO NOT EDIT line, which only a file needs. */
+function managedBlockBody(block: string): string {
+  return block
+    .split('\n')
+    .filter((line) => !/^<!-- (\[teamai:[a-z-]+:(start|end)\]|DO NOT EDIT\b).*-->$/.test(line.trim()))
+    .join('\n')
+    .trim();
 }
 
 /** Absolute instruction file of `tool` in the active scope, or undefined when it takes none. */
@@ -332,6 +355,15 @@ function withoutHeader(content: string, header: string | undefined): string {
 }
 
 /**
+ * Whether teamai created the file: it writes a new file starting with a block
+ * (an older release with blank lines first), while a member's file starts
+ * with their own text.
+ */
+function createdByTeamai(content: string): boolean {
+  return content.trimStart().startsWith('<!-- [teamai:');
+}
+
+/**
  * Whether a file left with nothing but teamai's blocks may go. A file git
  * tracks stays, emptied, so the cleanup never deletes a project file; a file
  * whose state git cannot report stays too.
@@ -367,7 +399,7 @@ async function planFile(
   const remainder = withoutHeader(content, target.header).trim();
   if (remainder === '') {
     if (existing === null) return null;
-    if (target.owned || await mayDelete(target.path)) return { path: target.path, content: null, kind };
+    if (target.owned || (createdByTeamai(existing) && await mayDelete(target.path))) return { path: target.path, content: null, kind };
     return { path: target.path, content: '', kind };
   }
   return { path: target.path, content, kind };
@@ -377,12 +409,16 @@ async function planFile(
 const KNOWN_HEADERS = [ALWAYS_APPLY];
 
 /**
- * Remove every teamai instruction block from `file`, as uninstall does. A
+ * Remove teamai instruction blocks from `file` (those whose start marker is in
+ * `starts`, or all of them), as uninstall does. A
  * `teamai-context` file is teamai's own and goes once its blocks are gone;
  * another file goes only if nothing else was in it and git does not track it.
  * Returns warnings about blocks it could not delimit.
  */
-export async function clearInstructionFile(file: string): Promise<{ changed: boolean; warnings: string[] }> {
+export async function clearInstructionFile(
+  file: string,
+  starts?: readonly string[],
+): Promise<{ changed: boolean; warnings: string[] }> {
   const existing = await readFileSafe(file);
   if (existing === null) return { changed: false, warnings: [] };
   const target: InstructionTarget = {
@@ -392,7 +428,10 @@ export async function clearInstructionFile(file: string): Promise<{ changed: boo
     header: KNOWN_HEADERS.find((header) => existing.startsWith(header)),
     owned: path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`),
   };
-  const plan = await planInstructionFiles([], {}, [target]);
+  const blocks = starts === undefined ? STALE_BLOCKS : STALE_BLOCKS.filter(([start]) => starts.includes(start));
+  const warnings: string[] = [];
+  const change = await planFile(target, blocks.map((pair) => [pair, null] as const), 'cleanup', warnings);
+  const plan: InstructionPlan = { changes: change ? [change] : [], warnings };
   const { failures } = await applyInstructionPlan(plan, { dryRun: false });
   if (failures.length > 0) throw new Error(failures.join(' '));
   return { changed: plan.changes.length > 0, warnings: plan.warnings };

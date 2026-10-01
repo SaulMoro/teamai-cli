@@ -20,7 +20,7 @@ import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { instructionFileInstallProbe, ruleFileExtensionForTool, writesInstructionBlock } from './resources/rule-format.js';
+import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
   forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
@@ -2009,47 +2009,6 @@ export function compileRecallRulesBlock(): string {
         TEAMAI_RECALL_RULES_END,
     ];
     return lines.join('\n');
-}
-
-/** The text of a managed block, without its markers and DO NOT EDIT line. */
-function managedBlockBody(block: string): string {
-    return block
-        .split('\n')
-        .filter((line) => !/^<!-- (\[teamai:[a-z-]+:(start|end)\]|DO NOT EDIT\b).*-->$/.test(line.trim()))
-        .join('\n')
-        .trim();
-}
-
-/**
- * The culture, shared-instruction and recall blocks a tool whose project
- * instructions come from its session-start hook (the Codex family) gets in a
- * project, resolved as pull resolves them. In user scope they are in the
- * tool's own instructions file instead (#945). A block another tool already
- * wrote into the active project instructions file is skipped, since the tool
- * reads it too. AGENTS.override.md takes precedence over AGENTS.md.
- */
-export async function sessionInstructionBlocks(
-    teamConfig: TeamaiConfig,
-    localConfig: LocalConfig,
-    tool: string,
-): Promise<string[]> {
-    const projectAgents = localConfig.projectRoot
-        ? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.override.md'))
-            ?? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.md')) ?? ''
-        : '';
-    const blocks: Array<[string, string | null]> = [];
-    const culture = await readFileSafe(path.join(localConfig.repo.localPath, 'culture.md'));
-    blocks.push([TEAMAI_CULTURE_START, culture === null ? null : compileCulture(culture)]);
-    const { contents } = await collectClaudemdFiles(localConfig.repo.localPath, await buildRolePullContext(localConfig));
-    blocks.push([TEAMAI_CLAUDEMD_START, compileClaudemd(contents)]);
-    const toolPath = scopedToolPaths(teamConfig, localConfig)[tool];
-    if (toolPath?.agents && isRecallEnabled(localConfig, teamConfig)) {
-        blocks.push([TEAMAI_RECALL_RULES_START, compileRecallRulesBlock()]);
-    }
-    return blocks
-        .filter((entry): entry is [string, string] => entry[1] !== null && !projectAgents.includes(entry[0]))
-        .map(([, block]) => managedBlockBody(block))
-        .filter((body) => body !== '');
 }
 
 /**
