@@ -2115,6 +2115,8 @@ async function syncClaudemd(
 
     const toolInstalled = resolvedAbsPath
       ? await pathExists(resolvedAbsPath)
+      : path.isAbsolute(targetFile)
+        ? await pathExists(path.dirname(targetFile))
       : tool === COPILOT_TOOL_ID && localConfig.scope === 'user'
         ? await isToolInstalledForConfig(tool, targetFile, localConfig)
       : targetFile.includes('/')

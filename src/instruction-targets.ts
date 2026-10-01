@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { readFileSafe, remove, writeFile } from './utils/fs.js';
+import { pathExists, readFileSafe, remove, writeFile } from './utils/fs.js';
 import { gitTracking, gitTracks } from './mcp-git-exclude.js';
 import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
+import { getHermesHome } from './hermes-home.js';
+import { getHermesSoulPath } from './hermes-config.js';
 import {
   isAgentExcluded,
   resolveToolBaseDir,
@@ -74,7 +76,8 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   cursor,
   'claude-internal': { file: configured, retired: [] },
   tclaude: { file: configured, retired: [] },
-  hermes: { file: configured, retired: [] },
+  // Hermes loads SOUL.md in every session; teamai's rules block is already there.
+  hermes: { file: () => getHermesSoulPath(), retired: ['AGENTS.md'] },
   copilot: { file: configured, retired: [] },
   omp: { file: configured, retired: [] },
   pi: { file: configured, retired: [] },
@@ -196,6 +199,8 @@ function knownInstructionTargets(teamConfig: TeamaiConfig, localConfig: LocalCon
  * tools and says nothing about any one of them.
  */
 async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalConfig): Promise<boolean> {
+  // Hermes lives in $HERMES_HOME, which ~/.hermes need not be.
+  if (tool === 'hermes') return pathExists(getHermesHome());
   const probe = paths.skills ?? paths.rules ?? paths.agents ?? paths.settings;
   return probe !== undefined && isToolInstalledForConfig(tool, probe, localConfig);
 }

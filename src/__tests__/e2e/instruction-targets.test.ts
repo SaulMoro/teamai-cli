@@ -51,7 +51,7 @@ function git(args: string[], cwd: string): void {
 }
 
 /** A user-scope sandbox HOME with the given tool directories installed. */
-function makeUserSandbox(toolDirs: string[]): { sandbox: string; home: string } {
+function makeUserSandbox(toolDirs: string[], options: { rule?: boolean } = {}): { sandbox: string; home: string } {
   const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
   const home = path.join(sandbox, 'home');
   const remote = path.join(sandbox, 'team-remote');
@@ -64,6 +64,10 @@ function makeUserSandbox(toolDirs: string[]): { sandbox: string; home: string } 
   );
   fs.writeFileSync(path.join(remote, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind.\n');
   fs.writeFileSync(path.join(remote, 'claudemd', 'common', 'note.md'), 'Shared team instructions.\n');
+  if (options.rule) {
+    fs.mkdirSync(path.join(remote, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(remote, 'rules', 'style.md'), 'RULE-SENTINEL: keep functions small.\n');
+  }
   git(['init', '-q'], remote);
   git(['add', '-A'], remote);
   git(['commit', '-q', '-m', 'fixture'], remote);
@@ -205,23 +209,37 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(fs.existsSync(path.join(home, 'AGENTS.md'))).toBe(false);
   });
 
-  it('writes ~/AGENTS.md while Hermes is installed and deletes it once no installed tool reads it', async () => {
-    const { sandbox, home } = makeUserSandbox(['.claude', '.hermes']);
+  it('gives Hermes its user blocks in $HERMES_HOME/SOUL.md beside the rules block, and moves them out of ~/AGENTS.md', async () => {
+    const { sandbox, home } = makeUserSandbox(['.claude'], { rule: true });
     sandboxes.push(sandbox);
+    const hermesHome = path.join(sandbox, 'hermes-home');
+    fs.mkdirSync(hermesHome, { recursive: true });
+    const soul = path.join(hermesHome, 'SOUL.md');
+    fs.writeFileSync(soul, '# Persona\n');
     const agentsMd = path.join(home, 'AGENTS.md');
+    fs.writeFileSync(agentsMd, `${CULTURE_START}\nold culture\n${CULTURE_END}\n`);
 
-    const withHermes = await runCLI(['pull'], { HOME: home }, sandbox);
-    expect(withHermes.code, withHermes.output).toBe(0);
-    const written = fs.readFileSync(agentsMd, 'utf8');
-    expect(written).toContain(CULTURE_START);
-    expect(written).toContain(CLAUDEMD_START);
+    const result = await runCLI(['pull'], { HOME: home, HERMES_HOME: hermesHome }, sandbox);
+    expect(result.code, result.output).toBe(0);
 
-    fs.rmSync(path.join(home, '.hermes'), { recursive: true, force: true });
-    const withoutHermes = await runCLI(['pull'], { HOME: home }, sandbox);
-    expect(withoutHermes.code, withoutHermes.output).toBe(0);
-
+    const content = fs.readFileSync(soul, 'utf8');
+    expect(content).toContain('# Persona');
+    expect(content).toContain('<!-- [teamai:rules:start] -->');
+    expect(content).toContain('RULE-SENTINEL');
+    expect(content).toContain(CULTURE_START);
+    expect(content).toContain(CLAUDEMD_START);
     expect(fs.existsSync(agentsMd)).toBe(false);
-    expect(fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8')).toContain(CLAUDEMD_START);
+
+    // A second pull keeps both blocks, and a project pull leaves the user blocks alone.
+    const again = await runCLI(['pull', '--force'], { HOME: home, HERMES_HOME: hermesHome }, sandbox);
+    expect(again.code, again.output).toBe(0);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+    const projectPull = await runCLI(['pull', '--force'], { HOME: member.home, HERMES_HOME: hermesHome }, member.projectRoot);
+    expect(projectPull.code, projectPull.output).toBe(0);
+    const after = fs.readFileSync(soul, 'utf8');
+    expect(after).toContain(CULTURE_START);
+    expect(after).toContain('Shared team instructions.');
+    expect(after).not.toContain('DEVELOPMENT-SENTINEL');
   });
 
   it('keeps only the hand-written text of a ~/AGENTS.md no installed tool reads', async () => {

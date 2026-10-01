@@ -1532,6 +1532,7 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
 | CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份 |
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份 |
+| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁 | （见下文） |
 
 Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysApply: true`）。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
 
@@ -1542,6 +1543,7 @@ CodeBuddy 和 WorkBuddy 的规则文件在每个会话中应用（`alwaysApply: 
 - Claude Code，项目范围：`.claude/CLAUDE.md`
 - CodeBuddy，项目范围：`.codebuddy/CODEBUDDY.md`
 - WorkBuddy：`~/AGENTS.md` 和项目 `AGENTS.md`
+- Hermes：`~/AGENTS.md`
 
 与 teamai 目标同名但并非 teamai 写入的文件保持不变，pull 会给出警告。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
 
