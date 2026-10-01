@@ -7,6 +7,7 @@ import { teamRuleToCursorMdc } from './resources/cursor-mdc.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import { getUserHome } from './utils/home.js';
 
 // ─── Built-in rules deployment ──────────────────────────
@@ -127,12 +128,33 @@ export async function deployBuiltinRules(
 const TEAMAI_RECALL_RULE_HEADING = '# Team Knowledge Recall (teamai)';
 
 /**
- * True when `content` is the `teamai-recall` rule as some teamai version
- * deployed it. Every version opens with the same heading, and each pull
- * rewrote the file whole, so a member's edit never survived one.
+ * SHA-256 of every `teamai-recall` rule body a teamai version deployed under
+ * TEAMAI_RECALL_RULE_HEADING, newest first (from `git log origin/main --
+ * src/builtin-rules.ts`). The built-ins are not in the delivery ledger, so
+ * these hashes are what proves a copy in a Codex legacy rules dir unedited.
+ * Add the new hash when TEAMAI_RECALL_RULE_CONTENT changes: a team `toolPaths`
+ * that still names such a dir keeps receiving the current body.
+ */
+const DEPLOYED_RECALL_RULE_HASHES = new Set<string>([
+    '9fbe3cc0b5bd39b9418ab2672a38cac831f2d4a3ab31ad539ce4de51d0bcab7f',
+    '564b9e8369fbc0009580f0174af119144da6b07ee4e1030f75bc5a03e9c60015',
+    '11698b506859049b7dc7ceb7ea149c371ae42dfc0db9a512763d9295f4af480e',
+    '37af125211b657cb81d5d3b11ef1c3a1daaa38d3f3323255258033c18ebd03d8',
+    '6ef190b7ac41d95357dc3de82791c4cea97203409972a53f6cbae21fe23b4f33',
+    'c15adbb1b6d9a96ebe71eed179edbe150ea840505169068af8ae3b79429a83f6',
+    '0c9fc1c9c026f5625f42062e8116bc6f8985a6177ecc5ed7328a74159b2ba525',
+    '168278feb1a0b5d936497bc8e29cc5652dc472b69ddaba3ee9737fff90bb2c91',
+    '1929d8f639410e94315450548ab4a063cce0ace9415e48f0444666d8bc33c680',
+    'ed52f7cd1c2baa891e83b285bd5dd1347a2e7b31b613b1b2843fdaea6ff0d140',
+]);
+
+/**
+ * True when `content` is the `teamai-recall` rule exactly as some teamai
+ * version deployed it. A member's edit since the last pull that wrote the
+ * file makes it false, so the copy is kept.
  */
 export function isDeployedRecallRule(content: string): boolean {
-    return content.startsWith(`${TEAMAI_RECALL_RULE_HEADING}\n`);
+    return DEPLOYED_RECALL_RULE_HASHES.has(crypto.createHash('sha256').update(content).digest('hex'));
 }
 
 const TEAMAI_RECALL_RULE_CONTENT = `${TEAMAI_RECALL_RULE_HEADING}

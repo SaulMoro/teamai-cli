@@ -24,6 +24,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { RulesHandler } from '../resources/rules.js';
+import { deployBuiltinRules } from '../builtin-rules.js';
 import { openLedger } from '../resources/delivered-copies.js';
 import { loadStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
@@ -86,15 +87,37 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     expect(await fse.pathExists(dir)).toBe(false);
   });
 
-  it('removes the built-in teamai-recall.md, as this or an earlier teamai version deployed it', async () => {
+  /** The recall rule as a pull before #938 deployed it to `.codex/rules`. */
+  async function deployLegacyRecallRule(): Promise<string> {
     await fse.ensureDir(legacyDir());
-    // An earlier version's recall rule: same heading, older body.
-    await fse.writeFile(legacy('teamai-recall.md'), '# Team Knowledge Recall (teamai)\n\nRun `teamai recall` first.\n');
+    const legacyConfig = {
+      ...teamConfig,
+      toolPaths: { ...teamConfig.toolPaths, codex: { ...teamConfig.toolPaths.codex, rules: '.codex/rules' } },
+    };
+    await deployBuiltinRules(legacyConfig, localConfig);
+    return fse.readFile(legacy('teamai-recall.md'), 'utf8');
+  }
+
+  it('removes the built-in teamai-recall.md as teamai deployed it', async () => {
+    await deployLegacyRecallRule();
 
     await handler.pullAllRules(teamConfig, localConfig);
 
     expect(await fse.pathExists(legacy('teamai-recall.md'))).toBe(false);
     expect(await fse.pathExists(legacyDir())).toBe(false);
+  });
+
+  it('keeps a teamai-recall.md the member edited after the last pull that wrote it', async () => {
+    const deployed = await deployLegacyRecallRule();
+    const edited = `${deployed}\nAlso read docs/onboarding.md first.\n`;
+    await fse.writeFile(legacy('teamai-recall.md'), edited);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(legacy('teamai-recall.md'), 'utf8')).toBe(edited);
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(legacy('teamai-recall.md'));
   });
 
   it.each(CODEX_FAMILY)('keeps an edited %s copy and names it once in an English warning with how to remove it', async (tool) => {
