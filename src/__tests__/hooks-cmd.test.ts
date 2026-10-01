@@ -194,9 +194,24 @@ describe('hooksInject', () => {
         expect(mockedLog.warn).not.toHaveBeenCalled();
     });
 
+    it.each([false, true])('trusts fallback built-ins while preserving inject failure, silent=%s', async (silent) => {
+        mockedReconcileForConfig.mockResolvedValue({ ok: false, builtins: 'defaults-where-none' });
+        mockedTrustCodex.mockResolvedValue({ kind: 'trusted', hooks: 8 });
+        try {
+            await hooksInject({ silent });
+            expect(mockedTrustCodex).toHaveBeenCalledWith(mockTeamConfig, mockLocalConfig, { force: true });
+            expect(process.exitCode).toBe(1);
+            expect(mockedLog.success).not.toHaveBeenCalledWith(expect.stringContaining('Hooks injected'));
+            if (silent) expect(mockedLog.success).not.toHaveBeenCalled();
+            else expect(mockedLog.success).toHaveBeenCalledWith('Trusted 8 teamai hook(s) in Codex');
+        } finally {
+            process.exitCode = undefined;
+        }
+    });
+
     it('fails, without the success line, when the team hooks cannot be resolved', async () => {
         // The reconcile reported why (a broken hooks file, a hook id twice) and
-        // left every installed hook as it was.
+        // preserved the team hooks and reconciled the built-ins.
         mockedReconcileForConfig.mockResolvedValue({ ok: false });
         try {
             await hooksInject({});

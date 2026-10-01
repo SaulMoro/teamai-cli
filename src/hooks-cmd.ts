@@ -105,7 +105,6 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
     // The reason is already reported; the installed team hooks were left as they were.
     if (!reconciled.ok) {
         process.exitCode = 1;
-        return;
     }
     // The public Codex skips a hook it does not trust, so trust what was just
     // written (#955). An explicit inject always asks Codex, whatever the last
@@ -113,7 +112,7 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
     const codexTrust = await trustCodexForScope(teamConfig, localConfig, { force: true });
 
     if (!options.silent) {
-        log.success('Hooks injected into all AI tool settings');
+        if (reconciled.ok) log.success('Hooks injected into all AI tool settings');
         reportCodexTrust(codexTrust, 'all');
     }
 }
