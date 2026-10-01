@@ -874,7 +874,7 @@ teamai push
 
 > 管理员可在 `teamai.yaml` 中设置强制规则（`sharing.rules.enforced`），成员不可删除。
 
-大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 会把团队 rule 内联到 Codex 所读的 `AGENTS.md` 中的 `<!-- [teamai:team-rules:start] -->` 区块：project scope 下是 `<project>/AGENTS.md`，user scope 下是 `~/.codex/AGENTS.md`（`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`）。Hermes 的 `SOUL.md` 区块得到同样的内容。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。同一个 `AGENTS.md` 也会收到 culture、共享指令和 recall 区块，标记之外你自己的内容保持不变。Pi、Hermes 或 WorkBuddy 也在使用的项目 `AGENTS.md` 中只有一个 team-rules 区块：只要有已启用且已安装的 Codex 系工具映射到该文件，就会写入该区块；否则下一次 pull 会移除它，文件中若再无其他内容也一并删除。
+大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 会把团队 rule 内联到 Codex 所读的 `AGENTS.md` 中的 `<!-- [teamai:team-rules:start] -->` 区块：project scope 下是 `<project>/AGENTS.md`，user scope 下是 `~/.codex/AGENTS.md`（`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`）。Hermes 的 `SOUL.md` 区块得到同样的内容。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。同一个 `AGENTS.md` 也会收到 culture、共享指令和 recall 区块，标记之外你自己的内容保持不变。Pi、Hermes 或 WorkBuddy 也在使用的项目 `AGENTS.md` 中只有一个 team-rules 区块：只要有已启用且已安装的 Codex 系工具映射到该文件，就会写入该区块；否则下一次 pull 会移除它。teamai 为该区块创建的文件随之删除；你原有的 `AGENTS.md`（即使是空文件）保持原样。
 
 > 团队 `teamai.yaml` 中的 `toolPaths` 会整体替换内置默认值。设置了它的团队需要自行为每个 Codex 系条目加上 `claudemd: AGENTS.md` 和 `userScope.claudemd: .codex/AGENTS.md`（`.codex-internal/…`、`.tcodex/…`），并去掉其 `rules` 路径；仍列有 `rules` 却没有 `claudemd` 的条目会让 `teamai doctor` 报告失败。两者都没有的条目不向该工具下发团队 rule，与其他没有 rules 路径的工具一样。
 

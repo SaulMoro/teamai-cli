@@ -7,7 +7,8 @@ import { readFileSafe, remove, writeFile } from './fs.js';
  *   - Both markers present → replace content between them (inclusive).
  *   - Neither marker present → append the block to the end of the file.
  *   - Only one marker present (corrupted) → append the block (safe fallback).
- *   - File does not exist → create it with just the block.
+ *   - File does not exist → create it with just the block, which is how
+ *     `removeClaudeMdSection` tells a file teamai created from a member's.
  *
  * @param filePath  Absolute path to the CLAUDE.md file.
  * @param startMarker  Opening marker comment, e.g. `<!-- [teamai:culture:start] -->`.
@@ -20,7 +21,11 @@ export async function injectClaudeMdSection(
     endMarker: string,
     block: string,
 ): Promise<void> {
-    const existing = await readFileSafe(filePath) ?? '';
+    const existing = await readFileSafe(filePath);
+    if (existing === null) {
+        await writeFile(filePath, block + '\n');
+        return;
+    }
 
     const startIdx = existing.indexOf(startMarker);
     const endIdx = existing.indexOf(endMarker);
@@ -40,8 +45,10 @@ export async function injectClaudeMdSection(
 /**
  * Remove a marker-delimited managed section while preserving user content.
  * Returns whether a section was removed. With `deleteIfEmpty`, a file left
- * holding only whitespace is deleted, since it held nothing but the section;
- * a file without the section is never touched.
+ * holding only whitespace is deleted when it opens with the section, as the
+ * file `injectClaudeMdSection` created does; a member's file that was empty
+ * before the section was appended is left empty instead. A file without the
+ * section is never touched.
  */
 export async function removeClaudeMdSection(
     filePath: string,
@@ -60,7 +67,8 @@ export async function removeClaudeMdSection(
     const after = existing.substring(endIdx + endMarker.length).replace(/^\n+/, '\n');
     const rest = (before + after).trimEnd();
     if (options.deleteIfEmpty && rest.trim() === '') {
-        await remove(filePath);
+        if (startIdx === 0) await remove(filePath);
+        else await writeFile(filePath, '');
     } else {
         await writeFile(filePath, rest + '\n');
     }

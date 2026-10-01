@@ -14,7 +14,10 @@ machine** (all tools)?"*
 
 - **Just this tool** → `--agent <tool>` (use the tool this conversation runs in,
   e.g. `claude`). Shared resources are removed only if it is the last tool using
-  them.
+  them. An instructions file several tools read (the project `AGENTS.md` of Codex,
+  Pi, Hermes and WorkBuddy) is cleaned block by block: a teamai block stays while
+  a remaining tool on that file still writes it, so `--agent codex` with Pi still
+  enabled removes the team-rules and recall blocks and keeps the rest.
 - **Whole machine** → no `--agent` flag.
 
 Reassure them (in their language): *"This only removes things from your computer.

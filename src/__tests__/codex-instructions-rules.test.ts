@@ -159,6 +159,28 @@ describe('Codex reads team rules from AGENTS.md in project scope (#938)', () => 
     expect(await fse.pathExists(agentsMd())).toBe(false);
   });
 
+  it('gives back a member\'s empty AGENTS.md as it was when the team has no rules left', async () => {
+    await fse.writeFile(agentsMd(), '');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.readFile(agentsMd(), 'utf8')).toContain(TEAMAI_TEAM_RULES_START);
+    await fse.remove(path.join(repoPath, 'rules', 'codeword.md'));
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('');
+  });
+
+  it.each(CODEX_FAMILY)('gives back a member\'s empty AGENTS.md as it was once %s is no longer enabled', async (tool) => {
+    await fse.ensureDir(path.join(projectRoot, `.${tool}`));
+    localConfig = { ...localConfig, enabledAgents: [tool] } as LocalConfig;
+    await fse.writeFile(agentsMd(), '');
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    await handler.pullAllRules(teamConfig, { ...localConfig, enabledAgents: ['claude'] } as LocalConfig);
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('');
+  });
+
   it('keeps exactly one block in the AGENTS.md Codex shares with Pi, and the legacy [teamai:rules] strip leaves it alone', async () => {
     await fse.ensureDir(path.join(projectRoot, '.pi'));
     const shared = { ...localConfig, enabledAgents: ['codex', 'pi'] } as LocalConfig;
