@@ -702,4 +702,21 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(omp).not.toContain('DEVELOPMENT-SENTINEL');
     expect(omp).toContain('PRODUCT-SENTINEL');
   });
+
+  it('leaves a tracked Copilot file alone for a member without Copilot', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+    const copilot = path.join(member.projectRoot, '.github', 'copilot-instructions.md');
+    fs.mkdirSync(path.dirname(copilot), { recursive: true });
+    // A teammate with Copilot committed their selection; this member has no Copilot.
+    fs.writeFileSync(copilot, `# Copilot notes\n\n${CLAUDEMD_START}\nthe teammate's selection\n${CLAUDEMD_END}\n`);
+    git(['add', '.github/copilot-instructions.md'], member.projectRoot);
+    git(['commit', '-q', '-m', 'copilot instructions'], member.projectRoot);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(execFileSync('git', ['status', '--porcelain', '--', '.github', 'AGENTS.md'], { cwd: member.projectRoot, encoding: 'utf8' })).toBe('');
+  });
 });

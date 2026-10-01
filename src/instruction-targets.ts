@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { pathExists, readFileSafe, remove, writeFile } from './utils/fs.js';
+import { getUserHome } from './utils/home.js';
+import {
+  opencodeClaudeFallback, opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructions,
+} from './resources/opencode-config.js';
 import { gitTracking, gitTracks } from './mcp-git-exclude.js';
 import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { getHermesHome } from './hermes-home.js';
@@ -70,13 +74,13 @@ const contextRule = (extension: string) => (paths: ToolPaths): string | undefine
 const ALWAYS_APPLY = '---\nalwaysApply: true\n---\n';
 const cursor: TargetEntry = { file: contextRule('.mdc'), header: ALWAYS_APPLY, owned: true, retired: [] };
 
+// A team override or an earlier build could have pointed Codex at the project AGENTS.md.
+const codexHook: TargetEntry = { file: () => undefined, hook: true, retired: ['AGENTS.md'] };
+
 /**
  * CodeBuddy and WorkBuddy both read the project's .codebuddy/rules, so they
  * share one copy there; uninstalling one keeps it while the other remains.
  */
-// A team override or an earlier build could have pointed Codex at the project AGENTS.md.
-const codexHook: TargetEntry = { file: () => undefined, hook: true, retired: ['AGENTS.md'] };
-
 const codebuddyProjectRule = (): string => `.codebuddy/rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
 
 // One line per tool, so a change to one tool's target edits one line.
@@ -137,7 +141,11 @@ type MarkerPair = readonly [start: string, end: string, name: string];
 const CULTURE: MarkerPair = [TEAMAI_CULTURE_START, TEAMAI_CULTURE_END, 'culture'];
 const CLAUDEMD: MarkerPair = [TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, 'claudemd'];
 const RECALL: MarkerPair = [TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END, 'recall'];
-/** The rules block releases before per-file rules wrote into the same files. */
+/**
+ * The rules block releases before per-file rules wrote into instruction files.
+ * Hermes still writes it live in SOUL.md, which is only ever a target here,
+ * never a retired file, so cleanup never reaches that copy.
+ */
 const LEGACY_RULES: MarkerPair = [TEAMAI_RULES_START, TEAMAI_RULES_END, 'rules'];
 /** The team rules a Codex-family tool reads from its own AGENTS.md in user scope. */
 const TEAM_RULES: MarkerPair = [TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, 'team-rules'];
@@ -174,6 +182,8 @@ export interface InstructionTargets {
   hooks: InstructionHook[];
   /** Known targets no installed tool reads: a pull strips teamai blocks from them. */
   stale: InstructionTarget[];
+  /** Claude's user file when OpenCode reads the blocks from it, so OpenCode gets no file of its own. */
+  opencodeFallback?: string | null;
 }
 
 /**
@@ -217,6 +227,77 @@ export function instructionHookText(blocks: InstructionBlocks, recall: boolean):
     .join('\n\n');
 }
 
+/** The text a session hook adds for `tool`, resolved for the member, project and scope in `localConfig`. */
+export async function instructionHookTextFor(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<string> {
+  const { buildRolePullContext } = await import('./resources/desired.js');
+  const { resolveInstructionBlocks } = await import('./pull.js');
+  const { blocks } = await resolveInstructionBlocks(teamConfig, localConfig, await buildRolePullContext(localConfig));
+  return instructionHookText(blocks, Boolean(scopedToolPaths(teamConfig, localConfig)[tool]?.agents));
+}
+
+/** The message for hook text over its channel's limit, or null when it fits. */
+export function hookLimitProblem(hook: InstructionHook, text: string): string | null {
+  if (hook.limit === undefined || text.length <= hook.limit) return null;
+  return `${hook.tool} cannot load this project's team instructions: they are ${text.length} characters, over the `
+    + `${hook.limit}-character limit of its prompt section, so ${hook.tool} skips them. Shorten culture.md or the `
+    + 'claudemd/ files for this scope. teamai does not cut them or write them to AGENTS.md.';
+}
+
+/**
+ * Whether the extension or plugin that adds a hook tool's team instructions is
+ * installed as this build writes it, and if not, what to do.
+ */
+export async function instructionHookChannel(tool: string): Promise<{ ready: boolean; fix: string }> {
+  const rerun = 'Run `teamai pull` to reinstall it; `teamai hooks remove` takes it away.';
+  if (tool === 'omp' || tool === 'pi') {
+    const { buildOmpExtensionSource, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
+    const { buildPiExtensionSource, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
+    const file = tool === 'omp' ? path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE) : path.join(resolvePiExtensionsDir(), PI_HOOK_FILE);
+    const expected = tool === 'omp' ? buildOmpExtensionSource() : buildPiExtensionSource();
+    return {
+      ready: await readFileSafe(file) === expected,
+      fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions. ${rerun}`,
+    };
+  }
+  if (tool === 'hermes') {
+    const { buildInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN } = await import('./hermes-hooks.js');
+    const { getHermesConfigPath, isHermesPluginEnabled } = await import('./hermes-config.js');
+    const dir = getInstructionsPluginDir();
+    const plugin = buildInstructionsPlugin();
+    const installed = await readFileSafe(path.join(dir, '__init__.py')) === plugin.init
+      && await readFileSafe(path.join(dir, 'plugin.yaml')) === plugin.manifest;
+    if (!installed) {
+      return { ready: false, fix: `The Hermes plugin ${dir} is missing or out of date, so Hermes sessions in this project get no team instructions. ${rerun}` };
+    }
+    return {
+      ready: await isHermesPluginEnabled(HERMES_INSTRUCTIONS_PLUGIN),
+      fix: `${HERMES_INSTRUCTIONS_PLUGIN} is not in plugins.enabled of ${getHermesConfigPath()}, and Hermes loads no user plugin that is not listed there. `
+        + 'Add it there (or remove it from plugins.disabled), then start a new Hermes session.',
+    };
+  }
+  return { ready: true, fix: '' };
+}
+
+/**
+ * What keeps an installed hook tool from getting this member's team
+ * instructions in the scope: its extension or plugin, or the size of the text.
+ * pull and init print these after installing the hooks; doctor checks them.
+ */
+export async function instructionChannelProblems(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const { hooks } = await resolveInstructionTargets(teamConfig, localConfig);
+  const problems: string[] = [];
+  for (const hook of hooks) {
+    const channel = await instructionHookChannel(hook.tool);
+    if (!channel.ready) {
+      problems.push(channel.fix);
+      continue;
+    }
+    const overLimit = hookLimitProblem(hook, await instructionHookTextFor(teamConfig, localConfig, hook.tool));
+    if (overLimit) problems.push(overLimit);
+  }
+  return problems;
+}
+
 /** A block's text without its markers and DO NOT EDIT line, which only a file needs. */
 function managedBlockBody(block: string): string {
   return block
@@ -243,15 +324,12 @@ export function instructionTargetAt(tool: string, file: string, scope: Scope): I
 }
 
 /**
- * Every file teamai may have written instruction blocks to in the active
- * scope: each tool's current target plus the targets earlier releases used.
+ * The files earlier releases wrote instruction blocks to in the active scope.
+ * A tool's current target is not among them: a tool that is not installed
+ * here may still be installed by a teammate who shares the file (#945).
  */
-function knownInstructionTargets(teamConfig: TeamaiConfig, localConfig: LocalConfig): Map<string, InstructionTarget> {
+function retiredTargets(localConfig: LocalConfig): Map<string, InstructionTarget> {
   const known = new Map<string, InstructionTarget>();
-  for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    const file = instructionTargetPath(tool, paths, localConfig);
-    if (file && !known.has(file)) known.set(file, instructionTargetAt(tool, file, localConfig.scope));
-  }
   const table = localConfig.scope === 'user' ? USER_TARGETS : PROJECT_TARGETS;
   for (const [tool, entry] of Object.entries(table)) {
     const baseDir = resolveToolBaseDir(tool, localConfig);
@@ -302,8 +380,45 @@ export async function resolveInstructionTargets(
     if (paths.agents) target.recall = true;
     targets.set(file, target);
   }
-  const stale = [...knownInstructionTargets(teamConfig, localConfig).values()].filter((t) => !inUse.has(t.path));
-  return { targets: [...targets.values()], hooks, stale };
+  const stale = [...retiredTargets(localConfig).values()].filter((t) => !inUse.has(t.path));
+  // OpenCode reads ~/.claude/CLAUDE.md while its own user AGENTS.md does not
+  // exist; when Claude's blocks are there, a second copy would duplicate them.
+  const opencode = [...targets.values()].find((target) => target.tools.includes('opencode'));
+  const opencodeFallback = localConfig.scope === 'user' && opencode !== undefined
+    ? await opencodeClaudeFallback(getUserHome(), [...targets.keys()])
+    : null;
+  if (opencode && opencodeFallback) {
+    targets.delete(opencode.path);
+    stale.push(opencode);
+  }
+  return { targets: [...targets.values()], hooks, stale, opencodeFallback };
+}
+
+/**
+ * List teamai's OpenCode instruction file in OpenCode's `instructions` while
+ * it exists, and drop the entry once it is gone: OpenCode reads no file it is
+ * not told about. Returns what it did or, with `dryRun`, would do.
+ */
+export async function registerOpencodeContext(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  resolved: Pick<InstructionTargets, 'targets' | 'stale'>,
+  dryRun: boolean,
+): Promise<string | null> {
+  const paths = scopedToolPaths(teamConfig, localConfig).opencode;
+  const contextFile = paths && instructionTargetPath('opencode', paths, localConfig);
+  if (!contextFile) return null;
+  const wanted = resolved.targets.some((target) => target.path === contextFile);
+  if (!wanted && !resolved.stale.some((target) => target.path === contextFile)) return null;
+  const present = wanted && (dryRun || await pathExists(contextFile));
+  const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
+  if (dryRun) {
+    const listed = (await readOpencodeInstructionList(config))?.includes(entry) ?? false;
+    if (listed === present) return null;
+    return `Would ${present ? 'add' : 'remove'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}`;
+  }
+  const changed = await reconcileOpencodeInstructions(config, entry, present, 'team instructions');
+  return changed ? `${present ? 'Added' : 'Removed'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}` : null;
 }
 
 // ─── Planning file contents ────────────────────────────

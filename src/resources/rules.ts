@@ -623,6 +623,10 @@ export class RulesHandler extends ResourceHandler {
     const block = await teamRulesBlock(rules);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!writesInstructionBlock(tool, toolPath, 'team-rules')) continue;
+      // Its session hook carries the rules in this scope, and a project file
+      // such as AGENTS.md belongs to the project (#945).
+      const { deliversInstructionsByHook } = await import('../instruction-targets.js');
+      if (deliversInstructionsByHook(tool, localConfig.scope)) continue;
       const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
       const probe = instructionFileInstallProbe(tool, toolPath);
       const active = !isAgentExcluded(localConfig, tool)

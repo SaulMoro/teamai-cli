@@ -735,13 +735,9 @@ const teamRulesHandler: HookHandler = {
     const { loadTeamConfig } = await import('./config.js');
     const teamConfig = await loadTeamConfig(config.repo.localPath);
     if (!teamConfig) return null;
-    const { instructionHookText } = await import('./instruction-targets.js');
-    const { scopedToolPaths } = await import('./types.js');
-    const { buildRolePullContext } = await import('./resources/desired.js');
-    const { resolveInstructionBlocks } = await import('./pull.js');
+    const { instructionHookTextFor } = await import('./instruction-targets.js');
     const { teamRulesContext } = await import('./resources/rules.js');
-    const { blocks } = await resolveInstructionBlocks(teamConfig, config, await buildRolePullContext(config));
-    const text = instructionHookText(blocks, Boolean(scopedToolPaths(teamConfig, config)[tool]?.agents));
+    const text = await instructionHookTextFor(teamConfig, config, tool);
     const parts = text ? [text] : [];
     const rules = await teamRulesContext(teamConfig, config);
     if (rules !== null) parts.push(rules);
@@ -762,16 +758,13 @@ const instructionsHandler: HookHandler = {
   name: 'instructions',
   async execute(_stdin, tool, config) {
     if (!config) return null;
-    const { deliversInstructionsByHook, instructionHookText } = await import('./instruction-targets.js');
-    const { isAgentExcluded, scopedToolPaths } = await import('./types.js');
+    const { deliversInstructionsByHook, instructionHookTextFor } = await import('./instruction-targets.js');
+    const { isAgentExcluded } = await import('./types.js');
     if (!deliversInstructionsByHook(tool, config.scope) || isAgentExcluded(config, tool)) return null;
     const { loadTeamConfig } = await import('./config.js');
     const teamConfig = await loadTeamConfig(config.repo.localPath);
     if (!teamConfig) return null;
-    const { buildRolePullContext } = await import('./resources/desired.js');
-    const { resolveInstructionBlocks } = await import('./pull.js');
-    const { blocks } = await resolveInstructionBlocks(teamConfig, config, await buildRolePullContext(config));
-    const text = instructionHookText(blocks, Boolean(scopedToolPaths(teamConfig, config)[tool]?.agents));
+    const text = await instructionHookTextFor(teamConfig, config, tool);
     if (!text) return null;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
   },
@@ -893,7 +886,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-start', matcher: '*', handler: packageHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: secretsHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: localAgentHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
-    // Asked for by the Pi and OMP extensions, which add the result to the prompt.
+    // Asked for by the Pi and OMP extensions and the Hermes plugin, which add the result to the prompt.
     { event: 'instructions', matcher: '*', handler: instructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
 

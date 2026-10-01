@@ -52,7 +52,8 @@ import {
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
-import { applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles } from './instruction-targets.js';
+import { applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles, registerOpencodeContext } from './instruction-targets.js';
+import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
   resolveBaseDir,
@@ -2057,24 +2058,6 @@ async function uninstallResource(input: {
   await saveManifest(manifest);
 }
 
-async function resolveHermesUserBaseDir(): Promise<string | undefined> {
-  try {
-    const envWs = process.env.TEAMAI_HERMES_WORKSPACE;
-    if (envWs && path.isAbsolute(envWs)) return envWs;
-    const cfg = await readJson<LocalAgentConfig>(getConfigPath());
-    const bindings = cfg?.workspaceBindings;
-    if (bindings && typeof bindings === 'object') {
-      const entries = Object.entries(bindings)
-        .filter(([p, v]) => path.isAbsolute(p) && v?.ideType === 'hermes')
-        .sort((a, b) => (b[1].boundAt ?? '').localeCompare(a[1].boundAt ?? ''));
-      for (const [p] of entries) {
-        if (await pathExists(path.join(p, '.hermes'))) return p;
-      }
-    }
-  } catch { /* fall through */ }
-  return undefined;
-}
-
 async function syncClaudemd(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
@@ -2105,12 +2088,6 @@ async function syncClaudemd(
       if (openclawWs) {
         resolvedAbsPath = path.join(openclawWs, path.basename(targetFile));
       }
-    } else if (tool === 'hermes' && localConfig.scope !== 'project') {
-      const hermesBase = workspacePath ?? await resolveHermesUserBaseDir();
-      if (hermesBase) {
-        baseDir = hermesBase;
-        log.debug(`local-agent: hermes user-scope baseDir resolved to ${baseDir}`);
-      }
     }
 
     const toolInstalled = resolvedAbsPath
@@ -2128,13 +2105,22 @@ async function syncClaudemd(
     }
 
     const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
-    const plan = await planInstructionFiles([instructionTargetAt(tool, claudeMdPath, localConfig.scope)], { claudemd: block });
+    // OpenCode's Claude fallback already carries the blocks, as in pull (#945).
+    const claudeUserFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
+    if (tool === 'opencode' && localConfig.scope === 'user' && await pathExists(claudeUserFile)
+      && await opencodeClaudeFallback(getUserHome(), [claudeUserFile])) {
+      log.debug(`local-agent: OpenCode reads the team instructions from ${claudeUserFile}; skipped`);
+      continue;
+    }
+    const target = instructionTargetAt(tool, claudeMdPath, localConfig.scope);
+    const plan = await planInstructionFiles([target], { claudemd: block });
     for (const warning of plan.warnings) log.warn(warning);
     const { failures } = await applyInstructionPlan(plan, { dryRun: false });
     if (failures.length > 0) {
       log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${failures.join(' ')}`);
       continue;
     }
+    if (tool === 'opencode') await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
     log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
     syncedAny = true;
   }

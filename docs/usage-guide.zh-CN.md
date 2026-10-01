@@ -883,7 +883,7 @@ teamai push
 
 大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 不为它们写任何 rule 文件。user scope 下，团队 rule 写入该工具自己的 `AGENTS.md`（`~/.codex/AGENTS.md`、`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`；`toolRoots` 条目可改变其位置）中的 `<!-- [teamai:team-rules:start] -->` 区块，只有该工具读取这个文件。在项目中，改由它们的 session-start hook 把项目的团队 rule 加入每个会话：项目 `AGENTS.md` 属于项目维护者，其他拥有自己 rules 格式的工具也会读取它。Hermes 的 `SOUL.md` 区块得到同样的内容。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。Codex 在压缩上下文或 clear 之后会再次运行该 hook；恢复会话时不添加任何内容，因为会话中已包含这些 rule。Codex 启动的子 agent 通过 `SubagentStart` hook 获得它们。公开版 Codex 只在你于 `/hooks` 中批准新增或改动的 hook 后才运行它，在此之前不会得到项目的 rule。
 
-culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。hook 会省略项目当前生效的指令文件中已有的区块。Codex 在 `AGENTS.override.md` 存在时读取它，否则读取 `AGENTS.md`，因此被遮蔽的 `AGENTS.md` 中的区块仍会通过 hook 送达。
+culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。
 
 > 团队 `teamai.yaml` 中的 `toolPaths` 会整体替换内置默认值。设置了它的团队应为每个 Codex 系条目加上 `userScope.claudemd: .codex/AGENTS.md`（`.codex-internal/…`、`.tcodex/…`），用于 user scope 的 rule 和区块，并去掉其 `rules` 路径，因为 Codex 从不读取该目录。顶层的 `claudemd` 会把区块重新写进项目 `AGENTS.md`，所以不要设置。在项目中，hook 只需要该条目的 `settings` 路径，它安装在那里。
 
@@ -1256,11 +1256,9 @@ recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall �
 | Qoder | 支持 | 支持（未验证） |
 | Copilot CLI | 支持 | 不支持：subagent 有自己的会话，且没有 hook 将其关联到父会话 |
 | Cursor | 支持 | 不支持：同 Copilot CLI |
-| Codex、codex-internal、tcodex | `$CODEX_HOME/AGENTS.md`（以及各变体的主目录），位于团队规则旁 | 由 session-start 和 subagent-start hook 加入，位于项目团队规则旁；恢复会话时不重复加入 |
 | OpenCode | 支持 | 支持：`task` 调用将 subagent 的会话关联到父会话 |
 | OMP | 支持，仅通过其 `bash` 调用的认领确定归属 | 支持：subagent 的会话文件位于父会话文件之下，父会话文件的会话头把两个会话关联起来（对照 OMP 18.4.8 验证） |
 | Pi | 支持 | 不适用：TeamAI 不向 Pi 部署 subagent |
-| OpenCode | `~/.config/opencode/teamai-context.md`，以绝对路径列在 `~/.config/opencode/opencode.json` 的 `instructions` 中 | `.opencode/teamai-context.md`，列在 `.opencode/opencode.json` 的 `instructions` 中 |
 | ZCode | 支持 | 不支持：ZCode 在 subagent 内不运行 hook |
 | OpenClaw、Hermes、Kiro、JoyCode | 不支持：没有 PostToolUse hook | 不支持 |
 
@@ -1531,12 +1529,18 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | 工具 | 用户范围 | 项目范围 |
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
-| Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
-| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份 |
-| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份 |
-| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁 | teamai 的 Hermes 插件提供的系统提示段落 |
+| claude-internal、tclaude | 各自主目录下的 `.claude-internal/CLAUDE.md`、`.tclaude/CLAUDE.md`（未改变） | 项目下的相同路径（未改变，未验证） |
+| Codex、codex-internal、tcodex | `$CODEX_HOME/AGENTS.md`（以及各变体的主目录），位于团队规则旁 | 由 session-start 和 subagent-start hook 加入，位于项目团队规则旁；恢复会话时不重复加入 |
+| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md`（未改变） | `.github/copilot-instructions.md`（未改变） |
+| Cursor | `~/.cursor/rules/teamai-context.mdc`（未验证） | `.cursor/rules/teamai-context.mdc`（未验证） |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份（未验证） |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md`（未验证） | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份（未验证） |
+| OpenCode | `~/.config/opencode/teamai-context.md`，以绝对路径列在 `~/.config/opencode/opencode.json` 的 `instructions` 中 | `.opencode/teamai-context.md`，列在 `.opencode/opencode.json` 的 `instructions` 中 |
 | Oh My Pi | `~/.omp/agent/RULES.md` | 由 teamai 的 OMP 扩展加入每轮的系统提示 |
-| Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
+| Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示（未验证） |
+| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
+
+*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi 和 OpenCode 已在实际会话中从项目根目录和子目录检查过。recall 块只发给有 `teamai-recall` subagent 的工具，因此 Pi 和 Hermes 获得文化和共享指令，但没有 recall 块。
 
 Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
 
@@ -1544,7 +1548,7 @@ Cursor 在每个会话中应用这两个 `teamai-context.mdc` 文件（`alwaysAp
 
 CodeBuddy 和 WorkBuddy 的规则文件在每个会话中应用（`alwaysApply: true`）。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
 
-在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。Hermes 在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
+在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
 
 OpenCode 只加载配置中 `instructions` 列出的文件，因此 teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode 已经获得它们，因此 teamai 不会为 OpenCode 再写一份用户副本，并在 pull 输出中说明。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
 
@@ -2660,7 +2664,7 @@ teamai uninstall --agent claude
 
 `--agent <tool>` 只移除该工具的 teamai 资源（hooks、团队指令块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
-多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是项目 `AGENTS.md`：Pi 仍启用时，`--agent workbuddy` 会移除 recall 区块，保留 Pi 写入的 culture 和共享指令区块。Codex 系工具不会在那里写入任何内容。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。
+多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。
 
 跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。（因此，定向卸载一个自身没有任何 teamai 资源的工具是 no-op，即便它恰好是唯一的工具，也不会删除共享资源。）
 

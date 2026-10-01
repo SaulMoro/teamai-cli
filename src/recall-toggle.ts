@@ -2,7 +2,7 @@ import path from 'node:path';
 import { autoDetectInit, saveLocalConfigForScope } from './config.js';
 import { log } from './utils/logger.js';
 import { remove, pathExists } from './utils/fs.js';
-import { applyInstructionPlan, planInstructionFiles, resolveInstructionTargets } from './instruction-targets.js';
+import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets } from './instruction-targets.js';
 import {
   ALL_SUPPORTED_TOOLS,
   agentFileExtensionForTool,
@@ -70,7 +70,8 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
 
 /** Set (`block`) or remove (`null`) the recall block wherever teamai delivers instruction blocks. */
 async function writeRecallBlock(teamConfig: TeamaiConfig, localConfig: LocalConfig, block: string | null): Promise<void> {
-  const { targets, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+  const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+  const { targets, stale } = resolved;
   // Removal also reaches files no installed tool reads any more, but leaves
   // their other blocks to the next pull's cleanup.
   const files = block === null ? [...targets, ...stale] : targets;
@@ -79,6 +80,7 @@ async function writeRecallBlock(teamConfig: TeamaiConfig, localConfig: LocalConf
   const { report, failures } = await applyInstructionPlan(plan, { dryRun: false });
   for (const line of report) log.debug(line);
   for (const failure of failures) log.warn(failure);
+  if (block !== null) await registerOpencodeContext(teamConfig, localConfig, resolved, false);
 }
 
 async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {

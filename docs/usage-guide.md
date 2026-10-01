@@ -962,7 +962,7 @@ teamai push
 
 Most tools get one file per rule in their rules directory. Codex, `codex-internal` and `tcodex` read no rules directory (`.codex/rules/` holds Codex's own `*.rules` command policies), so `pull` writes no rule file for them. In user scope the team rules go into a `<!-- [teamai:team-rules:start] -->` block of the tool's own `AGENTS.md` (`~/.codex/AGENTS.md`, `~/.codex-internal/AGENTS.md`, `~/.tcodex/AGENTS.md`; a `toolRoots` entry moves it), which only that tool reads. In a project their session-start hook adds the project's team rules to each session instead: the project `AGENTS.md` is the owners' file, and other tools with a rules format of their own read it too. Hermes gets the same text in its `SOUL.md` block. Frontmatter is dropped, so a rule with `paths:` applies everywhere there, led by an `Applies to files matching: <globs>` line. Codex runs the hook again after a compaction or a clear, and adds nothing when it resumes a session, which already holds the rules. A subagent Codex spawns gets them through the `SubagentStart` hook. The public Codex runs a new or changed hook only after you approve it in `/hooks`, and until then it gets no project rules.
 
-The culture, shared-instructions and recall blocks follow the same split. In user scope they go to that same `AGENTS.md`, and your own content outside the markers is kept. In a project the session-start hook adds them with the rules, and `pull` leaves the project `AGENTS.md` unchanged. The hook leaves out a block already present in the active project instructions file. Codex reads `AGENTS.override.md` when it exists, otherwise `AGENTS.md`, so a block in a shadowed `AGENTS.md` still reaches Codex through the hook.
+The culture, shared-instructions and recall blocks follow the same split. In user scope they go to that same `AGENTS.md`, and your own content outside the markers is kept. In a project the session-start hook adds them with the rules, and `pull` leaves the project `AGENTS.md` unchanged.
 
 > A `toolPaths` in the team `teamai.yaml` replaces the built-in defaults whole. A team that sets it should give each Codex-family entry `userScope.claudemd: .codex/AGENTS.md` (`.codex-internal/…`, `.tcodex/…`) for the user-scope rules and blocks, and drop its `rules` path, since Codex never reads that directory. A top-level `claudemd` would put the blocks back in the project `AGENTS.md`, so leave it out. In a project the hook needs only the entry's `settings` path, where it is installed.
 
@@ -1378,11 +1378,9 @@ Recall counts every doc it returns (`recalled_count`). A returned doc is **adopt
 | Qoder | Yes | Yes (unverified) |
 | Copilot CLI | Yes | No: the subagent has a session of its own, and no hook links it to its parent |
 | Cursor | Yes | No: as for Copilot CLI |
-| Codex, codex-internal, tcodex | `$CODEX_HOME/AGENTS.md` (and the variants' homes), beside the team rules | Added by the session-start and subagent-start hooks, beside the project's team rules; nothing on resume |
 | OpenCode | Yes | Yes: the `task` call links the subagent's session to its parent |
 | OMP | Yes, settled only by the claim of its `bash` call | Yes: the subagent's session file sits under its parent's, whose session header links the two sessions (verified against OMP 18.4.8) |
 | Pi | Yes | None: TeamAI deploys no subagent to Pi |
-| OpenCode | `~/.config/opencode/teamai-context.md`, listed by absolute path in `instructions` of `~/.config/opencode/opencode.json` | `.opencode/teamai-context.md`, listed in `instructions` of `.opencode/opencode.json` |
 | ZCode | Yes | No: ZCode runs no hooks inside a subagent |
 | OpenClaw, Hermes, Kiro, JoyCode | No: no PostToolUse hook | No |
 
@@ -1653,12 +1651,18 @@ Two members of the same project can have different roles, so their shared instru
 | Tool | User scope | Project scope |
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
-| Cursor | `~/.cursor/rules/teamai-context.mdc` | `.cursor/rules/teamai-context.mdc` |
-| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with WorkBuddy |
-| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy |
-| Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block | A system prompt section from teamai's Hermes plugin |
+| claude-internal, tclaude | `.claude-internal/CLAUDE.md`, `.tclaude/CLAUDE.md` in their homes (unchanged) | The same paths under the project (unchanged, unverified) |
+| Codex, codex-internal, tcodex | `$CODEX_HOME/AGENTS.md` (and the variants' homes), beside the team rules | Added by the session-start and subagent-start hooks, beside the project's team rules; nothing on resume |
+| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md` (unchanged) | `.github/copilot-instructions.md` (unchanged) |
+| Cursor | `~/.cursor/rules/teamai-context.mdc` (unverified) | `.cursor/rules/teamai-context.mdc` (unverified) |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with WorkBuddy (unverified) |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` (unverified) | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy (unverified) |
+| OpenCode | `~/.config/opencode/teamai-context.md`, listed by absolute path in `instructions` of `~/.config/opencode/opencode.json` | `.opencode/teamai-context.md`, listed in `instructions` of `.opencode/opencode.json` |
 | Oh My Pi | `~/.omp/agent/RULES.md` | Added to each turn's system prompt by teamai's OMP extension |
-| Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension |
+| Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension (unverified) |
+| Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block (unverified) | A system prompt section from teamai's Hermes plugin (unverified) |
+
+*Unverified*: built from the tool's documented or source-read loader, not yet checked in a live session. Claude Code, Oh My Pi and OpenCode were checked in live sessions, from the project root and a subdirectory. The recall block goes only to tools with the `teamai-recall` subagent, so Pi and Hermes get culture and shared instructions without it.
 
 Claude Code loads `.claude/rules/teamai-context.md` from the project root and any subdirectory, and still reads the project's `AGENTS.md` or authored `CLAUDE.md` the way it chose to. Copilot CLI 1.0.89 and later also reads a project's `.claude/rules`, so with both tools installed Copilot can get the blocks twice.
 
@@ -1666,7 +1670,7 @@ Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: t
 
 The CodeBuddy and WorkBuddy rule files are applied in every session (`alwaysApply: true`). Uninstalling one of the two keeps the shared project copy while the other is still installed.
 
-In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). Hermes builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
+In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). According to Hermes' documentation it builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
 
 OpenCode loads a file only when its config lists it in `instructions`, so teamai adds that one entry and keeps your other entries and keys; the root `opencode.json` and OpenCode's own `AGENTS.md` files are left alone. While `~/.config/opencode/AGENTS.md` does not exist, OpenCode reads `~/.claude/CLAUDE.md` instead; when Claude Code gets the user blocks there, OpenCode already has them, so teamai writes no second user copy for OpenCode and says so in the pull output. A config file teamai cannot parse as JSON (for example one with comments) is left unchanged with a warning; add the entry by hand.
 
@@ -2849,7 +2853,7 @@ What gets removed:
 
 `--agent <tool>` removes only that tool's teamai resources (hooks, team instruction blocks, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
 
-An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The project `AGENTS.md` is the common case: with Pi still enabled, `--agent workbuddy` removes the recall block and keeps the culture and shared-instructions blocks Pi writes. The Codex family writes nothing there. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
+An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The common case is `.codebuddy/rules/teamai-context.md`, which CodeBuddy and WorkBuddy share: `--agent workbuddy` keeps it while CodeBuddy is installed. A file an earlier release wrote the blocks to, such as the project `AGENTS.md`, is read by no tool now, so its teamai blocks go and your own text stays. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. (So targeting a tool that has no teamai resources of its own is a no-op and leaves shared resources in place, even if it happens to be the only tool.)
 

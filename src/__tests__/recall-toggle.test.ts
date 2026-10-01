@@ -197,8 +197,8 @@ describe('recall toggle native agent cleanup', () => {
 // `enabledAgents` (from `teamai init --agent`) is documented as gating the CLI
 // built-in skills/rules/agents and CLAUDE.md-class injects. recallEnable deploys
 // all four, but only the first three went through the whitelist — the CLAUDE.md
-// recall block was still injected into excluded tools. Same loop and guard as
-// injectRecallBlockIntoTools (src/pull.ts).
+// recall block was still injected into excluded tools. Same targets as pull
+// (resolveInstructionTargets, src/instruction-targets.ts).
 describe('recall toggle honors the enabledAgents whitelist', () => {
   let tmpDir: string;
   let homeDir: string;

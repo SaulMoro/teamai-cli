@@ -126,6 +126,21 @@ describe('a project-scope rules sync writes no team rules for Codex (#938)', () 
     expect(await fse.pathExists(path.join(projectRoot, `.${tool}`, 'rules'))).toBe(false);
   });
 
+  it.each(CODEX_FAMILY)('writes no team rules for %s into <project>/AGENTS.md even when the team points its claudemd there (#945)', async (tool) => {
+    await fse.ensureDir(path.join(projectRoot, `.${tool}`));
+    teamConfig = TeamaiConfigSchema.parse({
+      team: 'test',
+      repo: 'https://example.invalid/x/team.git',
+      toolPaths: { [tool]: { skills: `.${tool}/skills`, settings: `.${tool}/hooks.json`, claudemd: 'AGENTS.md' } },
+    });
+    localConfig = { ...localConfig, enabledAgents: [tool] } as LocalConfig;
+    await fse.writeFile(agentsMd(), '# Project notes\n');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('# Project notes\n');
+  });
+
   it('keeps the rule files to the member\'s projects after `remove rules`', async () => {
     await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), `
 version: 1

@@ -104,11 +104,29 @@ export async function reconcileOpencodeInstructions(
   }
 
   await writeJsonAtomic(configFileAbs, data);
-  log.debug(`${present ? 'Added' : 'Removed'} teamai rules glob in ${configFileAbs}`);
+  log.debug(`${present ? 'Added' : 'Removed'} teamai ${purpose} entry in ${configFileAbs}`);
   return true;
 }
 
 // ─── OpenCode team instructions (#945) ───────────────────────
+
+/**
+ * The `instructions` entries of an opencode.json, or null when the file is
+ * missing or is not a JSON object, the two cases in which pull leaves it alone.
+ */
+export async function readOpencodeInstructionList(configFile: string): Promise<unknown[] | null> {
+  const raw = await readFileSafe(configFile);
+  if (raw === null) return null;
+  if (raw.trim() === '') return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const { instructions } = parsed as { instructions?: unknown };
+    return Array.isArray(instructions) ? instructions : [];
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Where OpenCode is told to load teamai's instruction file: the config file

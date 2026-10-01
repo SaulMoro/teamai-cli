@@ -327,3 +327,9 @@ export async function disableHermesPlugin(name: string): Promise<void> {
   if (YAML.isMap(plugins) && plugins.items.length === 0) doc.deleteIn(['plugins']);
   await writeConfigDoc(doc);
 }
+
+/** Whether `name` is in `plugins.enabled` of the Hermes config.yaml. */
+export async function isHermesPluginEnabled(name: string): Promise<boolean> {
+  const enabled = (await readConfigDoc()).getIn(['plugins', 'enabled']);
+  return YAML.isSeq(enabled) && (enabled.toJSON() as unknown[]).includes(name);
+}

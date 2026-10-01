@@ -14,7 +14,7 @@ import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
-import { applyInstructionPlan, instructionHookText, instructionTargetPath, planInstructionFiles, resolveInstructionTargets, type InstructionBlocks, type InstructionTarget } from './instruction-targets.js';
+import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets, type InstructionBlocks } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
@@ -57,7 +57,6 @@ import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
 import { describeEnvAdvisory, envAdvisories } from './env-advisories.js';
 import { getUserHome } from './utils/home.js';
-import { opencodeClaudeFallback, opencodeContextReference, reconcileOpencodeInstructions } from './resources/opencode-config.js';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
@@ -1877,9 +1876,9 @@ export async function resolveInstructionBlocks(
  * tool's target, and strip them from files no installed tool loads them from
  * (#945). Runs on the "Already synced" fast path too, so a CLI upgrade that
  * moves a target or ships a new recall block takes effect without a repo
- * change. The recall block goes to targets whose tool has the `teamai-recall`
- * subagent; the block itself tells an agent without one to run
- * `teamai recall` directly. A dry run reports the files it would change.
+ * change. The recall block goes only to targets whose tool has the
+ * `teamai-recall` subagent, since it tells the agent to call that subagent.
+ * A dry run reports the files it would change.
  */
 async function syncManagedInstructions(
   config: TeamaiConfig,
@@ -1890,16 +1889,9 @@ async function syncManagedInstructions(
 ): Promise<void> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
   const resolved = await resolveInstructionTargets(config, localConfig);
-  const { hooks, stale } = resolved;
-  let { targets } = resolved;
-  const opencodeTarget = targets.find((target) => target.tools.includes('opencode'));
-  if (opencodeTarget && localConfig.scope === 'user') {
-    const claudeFile = await opencodeClaudeFallback(getUserHome(), targets.map((target) => target.path));
-    if (claudeFile) {
-      log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${claudeFile}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to ${opencodeTarget.path} instead.`);
-      targets = targets.filter((target) => target !== opencodeTarget);
-      stale.push(opencodeTarget);
-    }
+  const { targets, stale, opencodeFallback } = resolved;
+  if (opencodeFallback) {
+    log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to OpenCode's own file instead.`);
   }
   const plan = await planInstructionFiles(targets, blocks, stale);
   for (const warning of plan.warnings) log.warn(`[${scopeLabel}] ${warning}`);
@@ -1910,41 +1902,18 @@ async function syncManagedInstructions(
     else log.debug(line);
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
-  if (!dryRun) await registerOpencodeContext(config, localConfig, targets, stale);
-  for (const hook of hooks) {
-    const length = instructionHookText(blocks, hook.recall).length;
-    if (hook.limit !== undefined && length > hook.limit) {
-      log.warn(`[${scopeLabel}] ${hook.tool} cannot load this project's team instructions: they are ${length} characters, over the ${hook.limit}-character limit of its prompt section, so ${hook.tool} skips them. Shorten culture.md or the claudemd/ files for this scope. teamai does not cut them or write them to AGENTS.md.`);
-    }
+  try {
+    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun);
+    if (registered && dryRun) log.info(`[dry-run] ${registered}`);
+    else if (registered) log.debug(registered);
+  } catch (e) {
+    log.warn(`[${scopeLabel}] Failed to update OpenCode's instructions: ${(e as Error).message}. Add teamai-context.md to its "instructions" by hand so OpenCode loads the team instructions.`);
   }
-  if (dryRun || targets.length + hooks.length === 0) return;
+  // Hook targets (Pi, OMP, Hermes, Codex) are reported after the hooks are
+  // reconciled, since that is what installs their extensions and plugins.
+  if (dryRun || targets.length === 0) return;
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
-}
-
-/**
- * Point OpenCode's `instructions` at teamai's instruction file while it
- * exists, and drop the entry once it is gone: OpenCode reads no file it is
- * not told about (#945).
- */
-async function registerOpencodeContext(
-  config: TeamaiConfig,
-  localConfig: LocalConfig,
-  targets: readonly InstructionTarget[],
-  stale: readonly InstructionTarget[],
-): Promise<void> {
-  const paths = scopedToolPaths(config, localConfig).opencode;
-  const contextFile = paths && instructionTargetPath('opencode', paths, localConfig);
-  if (!contextFile) return;
-  const present = targets.some((target) => target.path === contextFile) && await pathExists(contextFile);
-  if (!present && !stale.some((target) => target.path === contextFile)) return;
-  const projectRoot = resolveToolBaseDir('opencode', localConfig);
-  const { config: configFile, entry } = opencodeContextReference(contextFile, localConfig.scope, projectRoot);
-  try {
-    await reconcileOpencodeInstructions(configFile, entry, present, 'team instructions');
-  } catch (e) {
-    log.warn(`Failed to update ${configFile}: ${(e as Error).message}. Add "${entry}" to its "instructions" by hand so OpenCode loads the team instructions.`);
-  }
 }
 
 /**
@@ -1953,8 +1922,8 @@ async function registerOpencodeContext(
  *      involves code changes / troubleshooting / design.
  *   2. Declare which doc_ids were actually consulted at task completion.
  *
- * Only injected for Tier-1 tools (those with both `agents` and `claudemd`
- * paths configured) — see pull.ts Step 3.8.
+ * Delivered to the instruction targets of tools with the subagent (an
+ * `agents` path) — see syncManagedInstructions.
  */
 export function compileRecallRulesBlock(): string {
     const lines = [
@@ -2528,6 +2497,12 @@ async function reconcileHooksAllScopes(
         // reported the entries but wrote nothing, so the debug trail must not
         // claim a reconcile that did not happen.
         log.debug(`[${localConfig.scope}] ${options.dryRun ? 'Would apply' : 'Reconciled'} ${reconciled.defs.length} team hook(s)`);
+      }
+      // The hooks install the extensions and plugins that add team
+      // instructions for Pi, OMP and Hermes (#945); say which cannot.
+      if (!options.dryRun) {
+        const { instructionChannelProblems } = await import('./instruction-targets.js');
+        for (const problem of await instructionChannelProblems(teamConfig, localConfig)) log.warn(`[${localConfig.scope}] ${problem}`);
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] Hook reconcile skipped: ${(e as Error).message}`);

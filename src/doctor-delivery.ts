@@ -325,7 +325,8 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
 
   const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig);
   if (opencode !== null) {
-    const instructions = await readOpencodeInstructions(opencode.configFile);
+    const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+    const instructions = await readOpencodeInstructionList(opencode.configFile);
     const active = instructions !== null && instructions.includes(opencode.glob);
     checks.push({
       name: 'Team rules are active in opencode',
@@ -435,24 +436,6 @@ async function buildCodexUserRulesChecks(ctx: DoctorContext, items: ResourceItem
   return checks;
 }
 
-/**
- * The `instructions` entries of an opencode.json, or null when the file is
- * missing or is not a JSON object — the two cases in which the pull leaves it
- * strictly alone and the glob never lands.
- */
-async function readOpencodeInstructions(configFile: string): Promise<unknown[] | null> {
-  const raw = await readFileSafe(configFile);
-  if (raw === null) return null;
-  if (raw.trim() === '') return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-    const { instructions } = parsed as { instructions?: unknown };
-    return Array.isArray(instructions) ? instructions : [];
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Build one delivery check per tool that receives agents.
@@ -1174,21 +1157,18 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    instructionHookText, instructionTargetPath, planInstructionFiles, resolveInstructionTargets,
+    hookLimitProblem, instructionHookChannel, instructionHookTextFor, instructionTargetPath,
+    planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
   const { buildRolePullContext } = await import('./resources/desired.js');
+  const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
   const { blocks } = await resolveInstructionBlocks(teamConfig, localConfig, await buildRolePullContext(localConfig));
   const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
-  const pullForce = 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed.';
+  const pullNow = 'Run `teamai pull`.';
   const checks: Check[] = [];
 
-  const { opencodeClaudeFallback, opencodeContextReference } = await import('./resources/opencode-config.js');
-  const claudeFallback = localConfig.scope === 'user'
-    ? await opencodeClaudeFallback(getUserHome(), targets.map((t) => t.path))
-    : null;
   for (const target of targets) {
-    if (claudeFallback && target.tools.includes('opencode')) continue;
     const plan = await planInstructionFiles([target], blocks);
     checks.push({
       name: `Team instructions are current for ${target.tools.join(', ')}`,
@@ -1196,38 +1176,35 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
       check: async () => plan.changes.length === 0 && plan.warnings.length === 0,
       fix: plan.warnings.length > 0
         ? plan.warnings.join(' ')
-        : `${target.path} does not hold this member's current team instructions. ${pullForce}`,
+        : `${target.path} does not hold this member's current team instructions. ${pullNow}`,
     });
   }
 
   const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
   const opencodeFile = opencodePaths && instructionTargetPath('opencode', opencodePaths, localConfig);
   // Only a file that exists needs listing; pull registers it once it writes one.
-  if (opencodeFile && !claudeFallback && targets.some((t) => t.path === opencodeFile) && await pathExists(opencodeFile)) {
+  if (opencodeFile && targets.some((t) => t.path === opencodeFile) && await pathExists(opencodeFile)) {
     const { config, entry } = opencodeContextReference(opencodeFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
-    const instructions = await readOpencodeInstructions(config);
+    const instructions = await readOpencodeInstructionList(config);
     checks.push({
       name: 'Team instructions are listed in opencode instructions',
       source: 'local',
       check: async () => instructions !== null && instructions.includes(entry),
       fix: instructions === null
         ? `${config} could not be read as a JSON object, so the pull left it alone and OpenCode never loads ${opencodeFile}. `
-          + `Fix the file or add "${entry}" to its "instructions" by hand, then run \`teamai pull --force\`.`
-        : `${config} does not list "${entry}" under "instructions", and OpenCode reads no file it is not told about. ${pullForce}`,
+          + `Fix the file or add "${entry}" to its "instructions" by hand, then run \`teamai pull\`.`
+        : `${config} does not list "${entry}" under "instructions", and OpenCode reads no file it is not told about. ${pullNow}`,
     });
   }
 
   for (const hook of hooks) {
-    const length = instructionHookText(blocks, hook.recall).length;
     const channel = await instructionHookChannel(hook.tool);
+    const overLimit = hookLimitProblem(hook, await instructionHookTextFor(teamConfig, localConfig, hook.tool));
     checks.push({
       name: `${hook.tool} adds the team instructions to its prompt`,
       source: 'local',
-      check: async () => channel.ready && (hook.limit === undefined || length <= hook.limit),
-      fix: !channel.ready
-        ? channel.fix
-        : `This member's team instructions for the project are ${length} characters, over the ${hook.limit}-character `
-          + `limit of a ${hook.tool} prompt section, so ${hook.tool} skips them. Shorten culture.md or the claudemd/ files for this scope.`,
+      check: async () => channel.ready && overLimit === null,
+      fix: channel.ready ? overLimit ?? '' : channel.fix,
     });
   }
 
@@ -1239,46 +1216,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     name: 'No team instruction blocks are left in files no tool loads them from',
     source: 'local',
     check: async () => leftovers.length === 0,
-    fix: `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullForce}`,
+    fix: `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`,
   });
   return checks;
-}
-
-/** Whether the extension or plugin that adds a hook tool's team instructions is installed as this build writes it. */
-async function instructionHookChannel(tool: string): Promise<{ ready: boolean; fix: string }> {
-  const rerun = 'Run `teamai pull --force` to reinstall it; it also comes back after `teamai hooks` restores the built-in hooks.';
-  if (tool === 'omp' || tool === 'pi') {
-    const { buildOmpExtensionSource, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
-    const { buildPiExtensionSource, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
-    const file = tool === 'omp' ? path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE) : path.join(resolvePiExtensionsDir(), PI_HOOK_FILE);
-    const expected = tool === 'omp' ? buildOmpExtensionSource() : buildPiExtensionSource();
-    const ready = await readFileSafe(file) === expected;
-    return { ready, fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions. ${rerun}` };
-  }
-  if (tool === 'hermes') {
-    const { buildInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN } = await import('./hermes-hooks.js');
-    const { getHermesConfigPath } = await import('./hermes-config.js');
-    const dir = getInstructionsPluginDir();
-    const plugin = buildInstructionsPlugin();
-    const installed = await readFileSafe(path.join(dir, '__init__.py')) === plugin.init
-      && await readFileSafe(path.join(dir, 'plugin.yaml')) === plugin.manifest;
-    const config = await readFileSafe(getHermesConfigPath()) ?? '';
-    const YAML = (await import('yaml')).default;
-    const enabled = (() => {
-      try {
-        const list = (YAML.parse(config) as { plugins?: { enabled?: unknown } } | null)?.plugins?.enabled;
-        return Array.isArray(list) && list.includes(HERMES_INSTRUCTIONS_PLUGIN);
-      } catch {
-        return false;
-      }
-    })();
-    return {
-      ready: installed && enabled,
-      fix: !installed
-        ? `The Hermes plugin ${dir} is missing or out of date, so Hermes sessions in this project get no team instructions. ${rerun}`
-        : `${HERMES_INSTRUCTIONS_PLUGIN} is not in plugins.enabled of ${getHermesConfigPath()}, and Hermes loads no user plugin that is not listed there. `
-          + 'Add it there (or remove it from plugins.disabled), then start a new Hermes session.',
-    };
-  }
-  return { ready: true, fix: '' };
 }

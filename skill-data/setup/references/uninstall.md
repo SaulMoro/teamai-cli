@@ -14,11 +14,13 @@ machine** (all tools)?"*
 
 - **Just this tool** → `--agent <tool>` (use the tool this conversation runs in,
   e.g. `claude`). Shared resources are removed only if it is the last tool using
-  them. An instructions file several tools read (the project `AGENTS.md` of Pi,
-  Hermes and WorkBuddy) is cleaned block by block: a teamai block stays while
-  a remaining tool on that file still writes it, so `--agent workbuddy` with Pi
-  still enabled removes the recall block and keeps the rest. A file teamai
-  created goes with its last block; one the user had before stays, even if empty.
+  them. An instructions file several tools read (CodeBuddy and WorkBuddy share
+  `.codebuddy/rules/teamai-context.md`) is cleaned block by block: a teamai
+  block stays while a remaining tool on that file still writes it, so
+  `--agent workbuddy` keeps that file while CodeBuddy is installed. A file an
+  earlier release wrote the blocks to, such as the project `AGENTS.md`, loses
+  its teamai blocks, since no tool reads them there now. A file teamai created
+  goes with its last block; one the user had before stays, even if empty.
 - **Whole machine** → no `--agent` flag.
 
 Reassure them (in their language): *"This only removes things from your computer.

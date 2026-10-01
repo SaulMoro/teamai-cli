@@ -2081,6 +2081,13 @@ export async function init(options: GlobalOptions & {
     }
 
     await reconcileHooksForInit(reloadedTeamConfig, localConfig, filterAgents);
+    // Name what keeps a tool from getting the team instructions (#945).
+    try {
+      const { instructionChannelProblems } = await import('./instruction-targets.js');
+      for (const problem of await instructionChannelProblems(reloadedTeamConfig, localConfig)) log.warn(problem);
+    } catch (e) {
+      log.debug(`Team instruction check skipped: ${(e as Error).message}`);
+    }
 
     // Step 7.5: Deploy the built-in discovery stub immediately so the teamai
     // skill is available in the IDE right after init, without waiting for the
