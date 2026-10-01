@@ -1426,7 +1426,7 @@ teamai recall status     # View the current effective status (team default + use
 
 Append `--dry-run` to `enable` or `disable` to preview the config and managed-artifact changes without writing them.
 
-When disabled, `teamai pull` skips deploying the recall subagent, the recall rules injection block, and the TodoWrite reminder hook. Manually running `teamai recall <query>` to search is not affected by this switch.
+When disabled, `teamai pull` skips deploying the recall subagent and the TodoWrite reminder hook, and removes the recall block from the team instructions. Manually running `teamai recall <query>` to search is not affected by this switch.
 
 ### Knowledge Base Maintenance
 
@@ -1643,7 +1643,7 @@ teamai pull
 
 The injected content sits between the `<!-- [teamai:culture:start] -->` and `<!-- [teamai:culture:end] -->` markers, is automatically updated on every `pull`, and does not affect any other content in the file.
 
-A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. When no installed tool reads a file that an earlier pull wrote these blocks to (for example `~/AGENTS.md` after Hermes and WorkBuddy are gone), the next pull removes the teamai blocks from it and names the file in its output. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
+A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. When no installed tool reads a file that an earlier pull wrote these blocks to (for example the project's `AGENTS.md`, which earlier releases wrote for Pi, Hermes and WorkBuddy), the next pull removes the teamai blocks from it and names the file in its output. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
 
 #### Where the blocks go
 
@@ -1684,7 +1684,7 @@ A file named like a teamai target that teamai did not write is left alone, and t
 
 ### Viewing the result
 
-After pulling, you can view the AI tool's CLAUDE.md directly:
+After pulling, you can view an AI tool's instruction file directly, for example Claude Code's user file:
 
 ```bash
 teamai pull
@@ -2834,7 +2834,7 @@ teamai uninstall --agent claude
 What gets removed:
 - TeamAI-managed model settings are restored first when ownership is still intact
 - teamai hooks in AI tool settings
-- The teamai blocks in CLAUDE.md and AGENTS.md (your own content is preserved)
+- The teamai culture, shared-instructions and recall blocks in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
@@ -2843,15 +2843,15 @@ What gets removed:
 
 ### Uninstall a single tool (`--agent <tool>`)
 
-`--agent <tool>` removes only that tool's teamai resources (hooks, CLAUDE.md block, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
+`--agent <tool>` removes only that tool's teamai resources (hooks, team instruction blocks, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
 
 An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The project `AGENTS.md` is the common case: with Pi still enabled, `--agent workbuddy` removes the recall block and keeps the culture and shared-instructions blocks Pi writes. The Codex family writes nothing there. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. (So targeting a tool that has no teamai resources of its own is a no-op and leaves shared resources in place, even if it happens to be the only tool.)
 
-The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, CLAUDE.md block, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
+The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
 
-The same `enabledAgents` whitelist (from `init --agent`) also gates CLI built-in skills/rules/agents and CLAUDE.md-class injects: an already-installed tool outside the list is neither written to nor deleted from, even if its root directory already exists. `teamai remove` respects the same whitelist for agents, rules, and skills, `teamai push` reads no rules or agents from a tool outside it, and `teamai pull` / `teamai mcp inject` respect it for MCP servers. Editing `enabledAgents` without `init` still invalidates the last-pull skip cache for newly added tools.
+The same `enabledAgents` whitelist (from `init --agent`) also gates CLI built-in skills/rules/agents and team instruction blocks: an already-installed tool outside the list is neither written to nor deleted from, even if its root directory already exists. `teamai remove` respects the same whitelist for agents, rules, and skills, `teamai push` reads no rules or agents from a tool outside it, and `teamai pull` / `teamai mcp inject` respect it for MCP servers. Editing `enabledAgents` without `init` still invalidates the last-pull skip cache for newly added tools.
 
 To rejoin after uninstalling:
 

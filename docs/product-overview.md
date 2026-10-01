@@ -59,7 +59,7 @@ Each resource is delivered to every agent:
 | **Rules** | `rules/*.md` | |
 | **Docs** | `docs/`, `docs/<namespace>/` | Foundational project docs; not all loaded by default (progressive disclosure). A `docs/<dir>/` that no role or project declares stays shared |
 | **Agents** | `agents/<name>.yaml`, `agents/<namespace>/<name>.yaml` | |
-| **Culture** | `culture.md` | Team mission, values, and working principles — injected into each agent's CLAUDE.md / AGENTS.md so every session inherits them |
+| **Culture** | `culture.md` | Team mission, values, and working principles — delivered to each agent's own instruction file or session hook, never the project's shared AGENTS.md, so every session inherits them |
 | **CLAUDE.md** | `claudemd/*.md` | |
 | **Env** | `env/env.yaml`, `env/<namespace>/env.yaml` | Shared team-level environment variables and switches; do not put secret values here: declare a secret without its value in `env/secrets.yaml` |
 | **Hooks** | `hooks/hooks.yaml`, `hooks/<namespace>/hooks.yaml` | |

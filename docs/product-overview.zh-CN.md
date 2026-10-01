@@ -59,7 +59,7 @@ teamai push → 创建分支 + MR → reviewer 审批合并
 | **Rules** | `rules/*.md` | |
 | **Docs** | `docs/`、`docs/<namespace>/` | 项目基础文档，默认不全量加载（渐进式披露）。没有任何角色或项目声明的 `docs/<dir>/` 对所有人共享 |
 | **Agents** | `agents/<name>.yaml`、`agents/<namespace>/<name>.yaml` | |
-| **Culture** | `culture.md` | 团队使命、价值观与协作准则——注入各 Agent 的 CLAUDE.md / AGENTS.md，成为每次会话的行事底色 |
+| **Culture** | `culture.md` | 团队使命、价值观与协作准则——写入各 Agent 自己的指令文件或会话钩子（不写入项目共享的 AGENTS.md），成为每次会话的行事底色 |
 | **CLAUDE.md** | `claudemd/*.md` | |
 | **Env** | `env/env.yaml`、`env/<namespace>/env.yaml` | 通用环境变量、团队级开关；不要直接放密钥的值：密钥在 `env/secrets.yaml` 中只声明、不写值 |
 | **Hooks** | `hooks/hooks.yaml`、`hooks/<namespace>/hooks.yaml` | |

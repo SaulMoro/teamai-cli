@@ -1304,7 +1304,7 @@ teamai recall status     # 查看当前生效状态（团队默认 + 用户覆�
 
 在 `enable` 或 `disable` 后添加 `--dry-run`，可预览配置和托管文件的变化，不会写入磁盘。
 
-关闭后，`teamai pull` 将跳过部署 recall subagent、recall rules 注入块和 TodoWrite 提醒 hook。手动执行 `teamai recall <query>` 搜索不受此开关影响。
+关闭后，`teamai pull` 将跳过部署 recall subagent 和 TodoWrite 提醒 hook，并从团队指令中移除 recall 块。手动执行 `teamai recall <query>` 搜索不受此开关影响。
 
 ### 知识库维护
 
@@ -1521,7 +1521,7 @@ teamai pull
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
-pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如 Hermes 和 WorkBuddy 都已移除后的 `~/AGENTS.md`），下一次 pull 会移除其中的 teamai 块，并在输出中列出该文件。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
+pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。若之前某次 pull 写过这些块的文件已没有任何已安装工具读取（例如早期版本为 Pi、Hermes 和 WorkBuddy 写过的项目 `AGENTS.md`），下一次 pull 会移除其中的 teamai 块，并在输出中列出该文件。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
 
 #### 这些块写到哪里
 
@@ -1562,7 +1562,7 @@ Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用�
 
 ### 查看效果
 
-pull 后可以直接查看 AI 工具的 CLAUDE.md：
+pull 后可以直接查看 AI 工具的指令文件，例如 Claude Code 的用户文件：
 
 ```bash
 teamai pull
@@ -2645,7 +2645,7 @@ teamai uninstall --agent claude
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
 - AI 工具 settings 中的 teamai hooks
-- CLAUDE.md 和 AGENTS.md 中的 teamai 块（保留用户自写内容）
+- 各工具指令文件中的 teamai 文化、共享指令和 recall 块，以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
@@ -2654,15 +2654,15 @@ teamai uninstall --agent claude
 
 ### 只卸载单个工具（`--agent <tool>`）
 
-`--agent <tool>` 只移除该工具的 teamai 资源（hooks、CLAUDE.md 块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
+`--agent <tool>` 只移除该工具的 teamai 资源（hooks、团队指令块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
 多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是项目 `AGENTS.md`：Pi 仍启用时，`--agent workbuddy` 会移除 recall 区块，保留 Pi 写入的 culture 和共享指令区块。Codex 系工具不会在那里写入任何内容。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。
 
 跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。（因此，定向卸载一个自身没有任何 teamai 资源的工具是 no-op，即便它恰好是唯一的工具，也不会删除共享资源。）
 
-该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、CLAUDE.md 块或 hooks 重新装回。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
 
-同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及 CLAUDE.md 类注入：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
+同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及团队指令块：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
 
 卸载后如需重新加入：
 

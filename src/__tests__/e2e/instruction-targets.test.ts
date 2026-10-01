@@ -188,6 +188,16 @@ function makeProjectMember(
   return { home, projectRoot };
 }
 
+/**
+ * Where a member's project config and team clone live once the first pull has
+ * moved them out of the project's `.teamai/` into the per-project data home.
+ */
+function memberData(member: ProjectMember): { config: string; teamRepo: string } {
+  const projects = path.join(member.home, '.teamai', 'projects');
+  const [dir] = fs.readdirSync(projects);
+  return { config: path.join(projects, dir, 'config.yaml'), teamRepo: path.join(projects, dir, 'team-repo') };
+}
+
 const pullAs = (member: ProjectMember, args: string[] = [], env: Record<string, string> = {}): Promise<RunResult> =>
   runCLI(['pull', '--force', ...args], { HOME: member.home, ...env }, member.projectRoot);
 
@@ -603,5 +613,93 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(broken.get('Team instructions are listed in opencode instructions')?.fix).toContain('.opencode/teamai-context.md');
     expect(broken.get('No team instruction blocks are left in files no tool loads them from')).toMatchObject({ ok: false });
     expect(broken.get('No team instruction blocks are left in files no tool loads them from')?.fix).toContain('AGENTS.md');
+  });
+
+  const ALL_FILE_TOOLS = ['.claude/skills', '.cursor/skills', '.codebuddy/skills', '.workbuddy/skills', '.opencode/skills', '.omp/skills', '.pi/skills'];
+
+  it('keeps the shared AGENTS.md byte-identical for two roles with every tool installed, across role and content changes', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox);
+    const developer = makeProjectMember(sandbox, fixture, 'dev', 'developer', ALL_FILE_TOOLS);
+    const product = makeProjectMember(sandbox, fixture, 'pm', 'product', ALL_FILE_TOOLS);
+    const agentsMd = (m: ProjectMember) => fs.readFileSync(path.join(m.projectRoot, 'AGENTS.md'), 'utf8');
+    const generated = (m: ProjectMember) => fs.readFileSync(path.join(m.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8');
+
+    for (const member of [developer, product]) {
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+      expect(agentsMd(member)).toBe(PROJECT_AGENTS_MD);
+    }
+    expect(generated(developer)).not.toBe(generated(product));
+
+    // The developer changes role, and the team edits a claudemd file.
+    const { config, teamRepo } = memberData(developer);
+    fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace('primaryRole: developer', 'primaryRole: product'));
+    fs.writeFileSync(path.join(teamRepo, 'claudemd', 'common.md'), 'COMMON-SENTINEL, revised.\n');
+    const again = await pullAs(developer);
+    expect(again.code, again.output).toBe(0);
+    expect(agentsMd(developer)).toBe(PROJECT_AGENTS_MD);
+    expect(generated(developer)).toContain('PRODUCT-SENTINEL');
+    expect(generated(developer)).not.toContain('DEVELOPMENT-SENTINEL');
+    expect(generated(developer)).toContain('revised');
+  });
+
+  it('leaves an existing task diff and the staged diff unchanged when generated targets are excluded', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ALL_FILE_TOOLS);
+    const root = member.projectRoot;
+    // The team's own choice, made by the test, never by teamai.
+    const exclude = path.join(root, '.git', 'info', 'exclude');
+    fs.appendFileSync(exclude, ['.teamai/', '.teamai.bak/', '.claude/', '.cursor/', '.codebuddy/', '.workbuddy/', '.opencode/', '.omp/', '.pi/', ''].join('\n'));
+    const first = await pullAs(member);
+    expect(first.code, first.output).toBe(0);
+
+    fs.writeFileSync(path.join(root, 'app.txt'), 'v2 staged\n');
+    git(['add', 'app.txt'], root);
+    fs.writeFileSync(path.join(root, 'app.txt'), 'v3 unstaged\n');
+    const snapshot = () => ({
+      diff: execFileSync('git', ['diff'], { cwd: root, encoding: 'utf8' }),
+      staged: execFileSync('git', ['diff', '--cached'], { cwd: root, encoding: 'utf8' }),
+      status: execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }),
+      index: fs.readFileSync(path.join(root, '.git', 'index')).toString('base64'),
+      exclude: fs.readFileSync(exclude, 'utf8'),
+    });
+    const before = snapshot();
+
+    fs.writeFileSync(path.join(memberData(member).teamRepo, 'claudemd', 'common.md'), 'COMMON-SENTINEL, updated instructions.\n');
+    const update = await pullAs(member);
+    expect(update.code, update.output).toBe(0);
+
+    expect(fs.readFileSync(path.join(root, '.claude', 'rules', 'teamai-context.md'), 'utf8')).toContain('updated instructions');
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('removes the generated content when recall is disabled, a source is deleted, or a namespace is left', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills', '.omp/skills']);
+    fs.mkdirSync(path.join(member.home, '.omp'), { recursive: true });
+    const context = () => fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8');
+    expect((await pullAs(member)).code).toBe(0);
+    expect(context()).toContain(RECALL_START);
+    expect(await sessionInstructions('omp', member.home, member.projectRoot)).toContain('teamai-recall');
+
+    const disable = await runCLI(['recall', 'disable'], { HOME: member.home }, member.projectRoot);
+    expect(disable.code, disable.output).toBe(0);
+    expect(context()).not.toContain(RECALL_START);
+    expect(await sessionInstructions('omp', member.home, member.projectRoot)).not.toContain('teamai-recall');
+
+    const { config, teamRepo } = memberData(member);
+    fs.rmSync(path.join(teamRepo, 'claudemd', 'common.md'));
+    fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace('primaryRole: developer', 'primaryRole: product'));
+    expect((await pullAs(member)).code).toBe(0);
+    expect(context()).not.toContain('COMMON-SENTINEL');
+    expect(context()).not.toContain('DEVELOPMENT-SENTINEL');
+    const omp = await sessionInstructions('omp', member.home, member.projectRoot);
+    expect(omp).not.toContain('COMMON-SENTINEL');
+    expect(omp).not.toContain('DEVELOPMENT-SENTINEL');
+    expect(omp).toContain('PRODUCT-SENTINEL');
   });
 });
