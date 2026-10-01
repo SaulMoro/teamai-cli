@@ -2,7 +2,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
-import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, resolveToolBaseDir, scopedToolPaths } from './types.js';
+import {
+  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, resolveToolBaseDir,
+  resolveToolRootDir, scopedToolPaths,
+} from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
@@ -643,6 +646,102 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     });
   }
 
+  return checks;
+}
+
+/** Codex's verdict on a project, from the `projects` table of its user config. */
+type CodexProjectTrust =
+  | { kind: 'trusted' }
+  /** `entry`: the entry Codex reads for the checkout, when one exists. */
+  | { kind: 'untrusted'; entry?: { dir: string; level: string } }
+  | { kind: 'unreadable'; reason: string };
+
+/**
+ * Codex takes the first `projects."<dir>"` entry it finds for the checkout,
+ * then for the main checkout of its repository, each keyed by real path.
+ * `dirs` lists them in that order.
+ */
+async function codexProjectTrust(configFile: string, dirs: string[]): Promise<CodexProjectTrust> {
+  if (!await pathExists(configFile)) return { kind: 'untrusted' };
+  const raw = await readFileSafe(configFile);
+  if (raw === null) return { kind: 'unreadable', reason: 'it could not be read' };
+  let projects: unknown;
+  try {
+    const { parse } = await import('smol-toml');
+    projects = parse(raw).projects;
+  } catch (error) {
+    return { kind: 'unreadable', reason: error instanceof Error ? error.message.split('\n')[0] : String(error) };
+  }
+  if (typeof projects !== 'object' || projects === null) return { kind: 'untrusted' };
+  for (const dir of dirs) {
+    const entry = (projects as Record<string, unknown>)[dir];
+    if (typeof entry !== 'object' || entry === null) continue;
+    const level = String((entry as { trust_level?: unknown }).trust_level);
+    return level === 'trusted' ? { kind: 'trusted' } : { kind: 'untrusted', entry: { dir, level } };
+  }
+  return { kind: 'untrusted' };
+}
+
+/**
+ * Codex loads a project's `.codex/config.toml` only in a trusted project, and
+ * skips an untrusted one silently (#954), so team servers a pull or
+ * `teamai mcp inject` wrote there are on disk and inert. Built while that file
+ * holds a server this worktree's `managed-mcp.json` records for Codex.
+ * Read-only: teamai never writes Codex's trust.
+ */
+export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  const { projectRoot } = localConfig;
+  if (!teamConfig || localConfig.scope !== 'project' || !projectRoot) return [];
+
+  const { resolveMcpTargets, mcpTargetExcluded, installedMcpEntries } = await import('./mcp-reconcile.js');
+  const { isCodexTrustGatedTool } = await import('./hooks.js');
+  const targets = (await resolveMcpTargets(teamConfig, localConfig))
+    .filter((target) => isCodexTrustGatedTool(target.tool) && !mcpTargetExcluded(localConfig, target));
+  if (targets.length === 0) return [];
+
+  const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
+  const { resolveAnchors } = await import('./utils/git.js');
+  const { realFilePath } = await import('./mcp-git-exclude.js');
+  const { manifest } = await loadProjectMcpManifest(getDataHome(localConfig), projectRoot, { dryRun: true });
+  const anchors = await resolveAnchors(projectRoot);
+  const checkout = anchors?.workspaceRoot ?? await realFilePath(projectRoot);
+  const main = anchors?.projectAnchor ?? checkout;
+  const dirs = [...new Set([await realFilePath(projectRoot), checkout, main])];
+  const configFile = path.join(resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots), 'config.toml');
+
+  const checks: Check[] = [];
+  for (const target of targets) {
+    const installed = await installedMcpEntries(target);
+    const names = (manifest[managedMcpManifestKey(target.tool, true)] ?? [])
+      .map((record) => record.name)
+      .filter((name) => installed?.has(name));
+    if (names.length === 0) continue;
+
+    const trust = await codexProjectTrust(configFile, dirs);
+    const held = `${target.file} holds team MCP servers (${nameList(names)}), but Codex loads a project's `
+      + '.codex/config.toml only in a trusted project';
+    const table = (dir: string): string => `[projects.${JSON.stringify(dir)}]`;
+    let fix = '';
+    if (trust.kind === 'unreadable') {
+      fix = `${held}, and ${configFile} could not be parsed (${trust.reason}), so whether Codex trusts ${main} `
+        + `is unknown. Fix ${configFile}, then run \`teamai doctor\` again.`;
+    } else if (trust.kind === 'untrusted' && trust.entry) {
+      fix = `${held}, and ${configFile} sets trust_level = ${JSON.stringify(trust.entry.level)} in `
+        + `${table(trust.entry.dir)}, the entry Codex reads for this checkout. Set it to "trusted", `
+        + 'or trust the project when Codex asks.';
+    } else if (trust.kind === 'untrusted') {
+      fix = `${held}, and ${configFile} does not trust ${main}. Open Codex in ${main} and trust the project `
+        + `when it asks, or add these two lines to ${configFile}: ${table(main)} trust_level = "trusted". `
+        + 'Trusting the main checkout covers every worktree of it.';
+    }
+    checks.push({
+      name: 'Codex trusts this project, so it loads its team MCP servers',
+      source: 'local',
+      check: async () => trust.kind === 'trusted',
+      fix,
+    });
+  }
   return checks;
 }
 
