@@ -30,6 +30,7 @@ vi.mock('../utils/git.js', () => ({
 import { syncTeamUpdatesToLocal } from '../utils/pre-push-sync.js';
 import { fileHash } from '../utils/fs.js';
 import { teamRuleToCopilotInstructions } from '../resources/copilot-instructions.js';
+import { teamRuleToOmpRule } from '../resources/omp-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
@@ -464,6 +465,19 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
 
     expect(await fse.readFile(localFile, 'utf-8')).toBe(teamRuleToKiroSteering(newRule));
+  });
+
+  it('refreshes an unedited flat OMP copy of a namespaced rule from rules/<ns>/<name>.md (#946)', async () => {
+    await fse.ensureDir(path.join(homeDir, '.omp', 'agent', 'rules'));
+    teamConfig.toolPaths.omp = { rules: '.omp/rules', userScope: { rules: '.omp/agent/rules' } };
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), 'v2 content\n');
+    const localFile = path.join(homeDir, '.omp/agent/rules', 'fe.style.md');
+    await fse.writeFile(localFile, teamRuleToOmpRule('v1 content\n'));
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 content\n'));
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
+
+    expect(await fse.readFile(localFile, 'utf-8')).toBe(teamRuleToOmpRule('v2 content\n'));
   });
 
   describe.each(['project', 'user'] as const)('Copilot rules in %s scope', (scope) => {

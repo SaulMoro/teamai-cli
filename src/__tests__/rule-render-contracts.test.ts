@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { teamRuleToCodebuddyRule } from '../resources/codebuddy-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
+import { teamRuleToOmpRule } from '../resources/omp-rule.js';
 import { teamRuleToQoderRule } from '../resources/qoder-rule.js';
 
 /**
@@ -57,6 +58,35 @@ describe('Qoder rule render', () => {
     const source = '---\npaths: "src/{a,b}/**, test/**"\n---\n\nUse named exports.\n';
     expect(teamRuleToQoderRule(source)).toBe(
       '---\ntrigger: glob\nglob: src/a/**, src/b/**, test/**\n---\n\nUse named exports.\n',
+    );
+  });
+});
+
+describe('Oh My Pi rule render', () => {
+  it('makes an unscoped rule always applied', () => {
+    expect(teamRuleToOmpRule(UNSCOPED)).toBe('---\nalwaysApply: true\n---\n\nUse named exports.\n');
+  });
+
+  it.each([
+    ['an inline list', INLINE],
+    ['a block list', BLOCK],
+  ])('scopes %s with globs and a description, as OMP drops a rule with neither', (_label, source) => {
+    expect(teamRuleToOmpRule(source)).toBe(
+      '---\ndescription: "Team rule for files matching src/**/*.ts, test/**"\nglobs: ["src/**/*.ts", "test/**"]\n---\n\n'
+      + 'Use named exports.\n',
+    );
+  });
+
+  it('keeps a brace glob whole', () => {
+    expect(teamRuleToOmpRule(BRACE)).toBe(
+      '---\ndescription: "Team rule for files matching src/{a,b}/**"\nglobs: ["src/{a,b}/**"]\n---\n\nUse named exports.\n',
+    );
+  });
+
+  it('describes a scoped rule by its first heading, wherever it is', () => {
+    const source = '---\npaths: ["src/**"]\n---\n\nIntro line.\n\n## API "client" rules\n\nUse the shared client.\n';
+    expect(teamRuleToOmpRule(source)).toBe(
+      '---\ndescription: "API \\"client\\" rules"\nglobs: ["src/**"]\n---\n\nIntro line.\n\n## API "client" rules\n\nUse the shared client.\n',
     );
   });
 });

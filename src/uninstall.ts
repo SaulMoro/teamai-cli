@@ -746,6 +746,15 @@ async function buildRemovalPlan(
     if (edited.length > 0) res.keptRuleFiles.push({ files: edited, entry });
   }
 
+  // (d) continued: OMP's flat copies of namespaced rules (`fe.style.md`),
+  // which a member's own file can share a name with: only those on record or
+  // holding the render go (#946).
+  const rulesHandler = new RulesHandler();
+  const teamRules = await rulesHandler.scanTeamForPull(teamConfig, localConfig);
+  for (const { tool, file } of await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig))) {
+    perTool.get(tool)?.ruleFiles.push(file);
+  }
+
   // (d) continued: OpenCode loads its rules through globs in opencode.json,
   // which would point at nothing once the copies go (#946).
   const opencodeTarget = opencodeRes

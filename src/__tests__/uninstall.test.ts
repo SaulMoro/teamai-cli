@@ -1198,6 +1198,31 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(cursorRules, 'my-own-rule.mdc'))).toBe(true);
   });
 
+  it("removes the flat OMP copy of a namespaced team rule on uninstall, not a member's file of that name (#946)", async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), 'Frontend rule.\n');
+    const ompRules = path.join(homeDir, '.omp', 'agent', 'rules');
+    await fse.outputFile(path.join(ompRules, 'fe.style.md'), '---\nalwaysApply: true\n---\n\nFrontend rule.\n');
+    await fse.outputFile(path.join(ompRules, 'my-own.rule.md'), 'Mine.\n');
+    // The flat name of a team rule, but the member's own file: no record, not the render.
+    await fse.outputFile(path.join(repoPath, 'rules', 'be', 'api.md'), 'Backend rule.\n');
+    await fse.outputFile(path.join(ompRules, 'be.api.md'), 'My own backend notes.\n');
+
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { enabledAgents: ['omp'] }),
+      teamConfig: makeTeamConfig({ toolPaths: { omp: defaults.omp } }),
+    });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(ompRules, 'fe.style.md'))).toBe(false);
+    expect(await fse.readFile(path.join(ompRules, 'my-own.rule.md'), 'utf8')).toBe('Mine.\n');
+    expect(await fse.readFile(path.join(ompRules, 'be.api.md'), 'utf8')).toBe('My own backend notes.\n');
+  });
+
   // Regression: MCP cleanup used to run after ~/.teamai/ was deleted, so the
   // ownership manifest was already gone and removeAll became a no-op.
   it('卸载时移除 teamai 管理的 MCP server，并保留用户自建的', async () => {

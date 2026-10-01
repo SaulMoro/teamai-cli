@@ -17,7 +17,7 @@ import {
 } from './fs.js';
 import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { isToolInstalledForConfig, ResourceHandler } from '../resources/base.js';
-import { ruleFileExtensionForTool, ruleFormatForTool, usesCopilotInstructions } from '../resources/rule-format.js';
+import { ruleFileExtensionForTool, ruleFormatForTool, teamRuleNameForFile, usesCopilotInstructions } from '../resources/rule-format.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { log } from './logger.js';
 import { placedResourcePath } from '../push-namespaces.js';
@@ -90,6 +90,8 @@ async function syncRulesToLocal(
 ): Promise<void> {
   const teamRulesDir = path.join(repoPath, 'rules');
   if (!await pathExists(teamRulesDir)) return;
+  const { RulesHandler } = await import('../resources/rules.js');
+  const rulesHandler = new RulesHandler();
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     if (!toolPath.rules) continue;
@@ -106,10 +108,13 @@ async function syncRulesToLocal(
     const format = ruleFormatForTool(tool);
 
     const files = await listFilesRecursive(rulesDir);
+    const stems = await rulesHandler.receivedRuleStems(tool, teamConfig, localConfig);
     for (const file of files) {
       if (!file.endsWith(ext)) continue;
-      const name = file.slice(0, -ext.length);
-      if (EXCLUDED_RULE_NAMES.has(name)) continue;
+      // The same mapping as RulesHandler.scanLocalForPush: OMP's `fe.style`
+      // is the copy of `fe/style` (#946).
+      const name = teamRuleNameForFile(tool, file.slice(0, -ext.length), stems);
+      if (name === undefined || EXCLUDED_RULE_NAMES.has(name)) continue;
 
       const localFilePath = path.join(rulesDir, file);
       // The team repo always stores the tool-neutral `.md`.

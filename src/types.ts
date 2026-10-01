@@ -921,6 +921,14 @@ export interface DeliveryTarget {
    */
   sharedWith?: string[];
   /**
+   * Where an older teamai delivered this copy for the same tool, before the
+   * tool's file name changed: OMP's `<ns>/<name>.md`, now `<ns>.<name>.md`.
+   * `dest` has no record yet, so the "Already synced" pull writes it while
+   * the old copy is there, and reclaims that copy while it is unedited: on
+   * record, or the team rule verbatim (a full sync's stale sweep does too).
+   */
+  movedFrom?: string;
+  /**
    * The exact bytes `pullItem` writes at `dest`, for a handler that renders
    * its destination rather than copying a tree there. It is what tells a copy
    * rendered from an older spec from the current one; absent means the handler

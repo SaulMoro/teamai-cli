@@ -3,9 +3,9 @@
  *
  * The team repo always stores rules as tool-neutral `<name>.md`. A tool with
  * a rules format of its own gets a render of it (`RULE_FORMATS`): Cursor and
- * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering, Qoder and
- * CodeBuddy (which WorkBuddy shares) rules `.md` with their own frontmatter.
- * Every other tool takes a verbatim `.md` copy.
+ * JoyCode `.mdc`, Copilot `.instructions.md`, Kiro steering, Qoder, CodeBuddy
+ * (which WorkBuddy shares) and Oh My Pi rules `.md` with their own
+ * frontmatter. Every other tool takes a verbatim `.md` copy.
  *
  * This module is the single place that decision lives, mirroring
  * `agentFileExtensionForTool` in `./agent-format.ts`. Every site that writes,
@@ -20,6 +20,7 @@ import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from './copilot-instructions.js';
 import { CURSOR_MDC_FORMAT } from './cursor-mdc.js';
 import { KIRO_STEERING_FORMAT } from './kiro-steering.js';
+import { OMP_RULE_FORMAT } from './omp-rule.js';
 import { QODER_RULE_FORMAT } from './qoder-rule.js';
 
 type ToolPath = TeamaiConfig['toolPaths'][string];
@@ -36,6 +37,8 @@ export interface RuleFormat {
   mergeBodyIntoTeam(rawToolRule: string, existingTeamMd: string | null): string;
   /** The frontmatter fields the tool scopes a rule by, named in doctor's fix. */
   readonly scopeFields: readonly string[];
+  /** The tool reads only the top level of its rules directory, so a namespaced rule is written flat (`ruleStemsForTool`). */
+  readonly flat?: true;
 }
 
 /**
@@ -54,6 +57,7 @@ const RULE_FORMATS: Readonly<Record<string, RuleFormat>> = {
   codebuddy: CODEBUDDY_RULE_FORMAT,
   // Same engine as CodeBuddy; in a project it reads .codebuddy/rules too.
   workbuddy: CODEBUDDY_RULE_FORMAT,
+  omp: OMP_RULE_FORMAT,
 };
 
 const SESSION_HOOK_RULE_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
@@ -73,15 +77,73 @@ export function renderRuleForTool(tool: string, rawTeamRule: string): string {
   return ruleFormatForTool(tool)?.render(rawTeamRule) ?? rawTeamRule;
 }
 
+/** `fe/style` as a tool that reads only the top of its rules directory gets it: `fe.style`. */
+export function flatStem(name: string): string {
+  return name.replaceAll('/', '.');
+}
+
+/**
+ * The file stem each of `teamNames` has in the tool's rules directory: the
+ * team name, or for a tool that reads only the top level (`RuleFormat.flat`)
+ * the name with its `/` turned into `.`, so `fe/style` is `fe.style`. A
+ * namespaced rule whose flat stem another of `teamNames` also has is left out
+ * (`flatStemSharers` names the others), so no two rules share a file and push
+ * maps each copy back to one rule; a root rule keeps its own name.
+ */
+export function ruleStemsForTool(tool: string, teamNames: Iterable<string>): Map<string, string> {
+  const names = [...new Set(teamNames)];
+  if (!ruleFormatForTool(tool)?.flat) return new Map(names.map((name) => [name, name]));
+  const stems = new Map<string, string>();
+  for (const name of names) {
+    if (!name.includes('/') || flatStemSharers(tool, name, names).length === 0) stems.set(name, flatStem(name));
+  }
+  return stems;
+}
+
+/** The other names among `teamNames` that `name` shares its flat stem with in the tool's rules directory. */
+export function flatStemSharers(tool: string, name: string, teamNames: Iterable<string>): string[] {
+  if (!ruleFormatForTool(tool)?.flat) return [];
+  const stem = flatStem(name);
+  return [...new Set(teamNames)].filter((other) => other !== name && flatStem(other) === stem);
+}
+
+/**
+ * The team rule a file in the tool's rules directory (`stem`, its path less
+ * the extension) is the copy of, given the tool's `stems`
+ * (`ruleStemsForTool`): `fe.style` is `fe/style` for OMP. Undefined for a
+ * file below the top of a directory the tool reads only the top of, which is
+ * no rule of the tool's; `stem` itself when no team rule is delivered there.
+ */
+export function teamRuleNameForFile(tool: string, stem: string, stems: ReadonlyMap<string, string>): string | undefined {
+  if (!ruleFormatForTool(tool)?.flat) return stem;
+  if (stem.includes('/')) return undefined;
+  for (const [name, delivered] of stems) {
+    if (delivered === stem) return name;
+  }
+  return stem;
+}
+
+/**
+ * The flat stems the copies of `removed` rules have in the tool's rules
+ * directory, beyond their own names: none unless the tool reads only the top
+ * level, and none that a rule still in `teamNames` is delivered at. A file
+ * there may be the member's own, so only a delivery record makes it teamai's.
+ */
+export function flatStemsOfRemoved(tool: string, removed: Iterable<string>, teamNames: Iterable<string>): Set<string> {
+  if (!ruleFormatForTool(tool)?.flat) return new Set();
+  const live = new Set(ruleStemsForTool(tool, teamNames).values());
+  return new Set([...removed].filter((name) => name.includes('/')).map(flatStem).filter((stem) => !live.has(stem)));
+}
+
 /**
  * True when the tool's rules directory also holds rules the member wrote in
  * the tool's own format, so pull removes only a copy it can prove it wrote
  * there: every tool with a rules format, except Cursor (teamai owns
- * `.cursor/rules`), plus OMP and Pi.
+ * `.cursor/rules`), plus Pi.
  */
 export function sharesRulesDirWithMember(tool: string): boolean {
   if (tool === 'cursor') return false;
-  return ruleFormatForTool(tool) !== undefined || tool === 'omp' || tool === 'pi';
+  return ruleFormatForTool(tool) !== undefined || tool === 'pi';
 }
 
 /** Extension teamai writes rules with for a given tool. */

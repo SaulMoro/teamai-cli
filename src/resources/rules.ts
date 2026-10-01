@@ -4,6 +4,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { warnOnce } from '../utils/warn-once.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { splitFrontmatter } from '../utils/frontmatter.js';
@@ -20,6 +21,10 @@ import {
   ruleFormatForTool,
   renderRuleForTool,
   ruleStemFromFilename,
+  ruleStemsForTool,
+  flatStem,
+  flatStemSharers,
+  teamRuleNameForFile,
   sharesRulesDirWithMember,
   isLegacyCursorRuleFile,
   LEGACY_RULE_DIRS,
@@ -108,10 +113,14 @@ export class RulesHandler extends ResourceHandler {
       const format = ruleFormatForTool(tool);
 
       const files = await listFilesRecursive(rulesDir);
+      const stems = await this.receivedRuleStems(tool, teamConfig, localConfig);
       for (const file of files) {
         if (!file.endsWith(ext)) continue;
-        // name includes subdirectory path, e.g. "common/coding-standards"
-        const name = file.slice(0, -ext.length);
+        // name includes subdirectory path, e.g. "common/coding-standards";
+        // OMP's flat `fe.style` is the copy of `fe/style`, and it reads no
+        // file below the top, so none there is a rule to push.
+        const name = teamRuleNameForFile(tool, file.slice(0, -ext.length), stems);
+        if (name === undefined) continue;
         if (tombstones.has(name)) continue;
         if (EXCLUDED_RULE_NAMES.has(name)) continue; // Skip CLI built-in and legacy rules
 
@@ -164,8 +173,8 @@ export class RulesHandler extends ResourceHandler {
           // File does not exist in team repo — candidate for "new".
           // Native rule directories can contain personal rules created by the
           // target tool, in its own format. Keep unknown files in a tool with a
-          // rules format, and in the OMP and Pi rule directories, local.
-          if (format || tool === 'omp' || tool === 'pi') continue;
+          // rules format, and in Pi's rule directory, local.
+          if (format || tool === 'pi') continue;
           const existing = candidates.get(name);
           if (!existing) {
             const mtime = await getFileMtime(localFilePath);
@@ -282,6 +291,8 @@ export class RulesHandler extends ResourceHandler {
     // the render belongs here rather than in a second copy inside `doctor`.
     const source = await readFileSafe(item.sourcePath);
     const localName = await this.localNameFor(item.name, localConfig);
+    // For a tool that writes namespaced rules flat, resolved once on first need.
+    let received: string[] | undefined;
     const targets: DeliveryTarget[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (isAgentExcluded(localConfig, tool)) continue;
@@ -295,7 +306,23 @@ export class RulesHandler extends ResourceHandler {
 
       const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
       const ext = ruleFileExtensionForTool(tool);
-      const dest = path.join(destDir, `${localName}${ext}`);
+      let stem = localName;
+      let supersededStem: string | undefined = localName !== item.name ? item.name : undefined;
+      if (ruleFormatForTool(tool)?.flat && (localName.includes('/') || supersededStem !== undefined)) {
+        received ??= await this.receivedRuleNames(teamConfig, localConfig);
+        const names = [...received, item.name];
+        const stems = ruleStemsForTool(tool, names);
+        supersededStem = supersededStem === undefined ? undefined : stems.get(supersededStem);
+        if (localName.includes('/')) {
+          const flat = stems.get(localName);
+          if (flat === undefined) {
+            warnOnce(flatNameClash(tool, localName, flatStemSharers(tool, localName, names), ext));
+            continue;
+          }
+          stem = flat;
+        }
+      }
+      const dest = path.join(destDir, `${stem}${ext}`);
       const content = source === null ? undefined : renderRuleForTool(tool, source);
       // Tools that read one directory in one format share the copy (#946).
       const shared = targets.find((target) => target.dest === dest && target.content === content);
@@ -307,12 +334,31 @@ export class RulesHandler extends ResourceHandler {
         tool,
         dest,
         content,
-        ...(localName !== item.name
-          ? { supersedes: path.join(destDir, `${item.name}${ext}`) }
-          : {}),
+        ...(supersededStem !== undefined ? { supersedes: path.join(destDir, `${supersededStem}${ext}`) } : {}),
+        ...(stem !== localName ? { movedFrom: path.join(destDir, `${localName}${ext}`) } : {}),
       });
     }
     return targets;
+  }
+
+  /**
+   * The team rules this member receives in this scope, as pull resolves them:
+   * a tool that writes namespaced rules flat judges a clash of flat names
+   * among these alone, so a rule the member does not get costs them nothing.
+   */
+  private async receivedRuleNames(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+    const { buildRolePullContext, resolveDesiredRules } = await import('./desired.js');
+    const { items } = await resolveDesiredRules(teamConfig, localConfig, await buildRolePullContext(localConfig));
+    return items.map((rule) => rule.name);
+  }
+
+  /**
+   * The stems of the rules this member receives in `tool`'s rules directory
+   * (`ruleStemsForTool`), for reading a copy there back to its team rule.
+   */
+  async receivedRuleStems(tool: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<Map<string, string>> {
+    if (!ruleFormatForTool(tool)?.flat) return new Map();
+    return ruleStemsForTool(tool, await this.receivedRuleNames(teamConfig, localConfig));
   }
 
   /**
@@ -356,6 +402,12 @@ export class RulesHandler extends ResourceHandler {
           throw new Error(`Cannot read rule source ${item.sourcePath}`);
         }
         await ensureDir(destDir);
+        if (target.movedFrom !== undefined && await isMembersOwnFile(dest, content, ledger)) {
+          // The flat name of a namespaced rule may be a file the member wrote.
+          warnOnce(`Kept ${dest}: teamai did not write it, and it is where ${tool} would read team rule ${item.name}. `
+            + 'Rename your file, then run `teamai pull --force`.');
+          continue;
+        }
         if (!ledger || !await keepsEditedCopy(ledger, item, target)) {
           await writeFile(dest, content);
           if (ledger) await recordDelivered(ledger.hashes, dest);
@@ -377,11 +429,13 @@ export class RulesHandler extends ResourceHandler {
   /**
    * Rewrite each delivered copy of `rules` that still holds what teamai
    * recorded writing there but is no longer the render: what an older CLI
-   * wrote before the tool got a rules format of its own (#946). For the
-   * "Already synced" pull, which does not run `pullItem`. A copy the member
-   * changed is kept, and queued on `ledger.kept` to be named when teamai
-   * would now deliver other bytes there; one with no record is left to the
-   * next full sync. Returns the names of the rules rewritten.
+   * wrote before the tool got a rules format of its own (#946). With no
+   * record, only a copy that is the team rule verbatim is rewritten. A copy
+   * whose path changed (`movedFrom`, OMP's flat names) is written at the new
+   * path while the old one is there. For the "Already synced" pull, which
+   * does not run `pullItem`. A copy the member changed is kept, and queued on
+   * `ledger.kept` to be named when teamai would now deliver other bytes there.
+   * Returns the names of the rules rewritten.
    */
   async rerenderOutdatedCopies(
     teamConfig: TeamaiConfig,
@@ -392,11 +446,28 @@ export class RulesHandler extends ResourceHandler {
     const rewritten = new Set<string>();
     for (const item of rules) {
       for (const target of await this.deliveryTargets(teamConfig, localConfig, item)) {
-        const { dest, content } = target;
+        const { dest, content, movedFrom } = target;
         const recorded = ledger.previous?.[dest];
         const disk = await fileHash(dest);
-        if (content === undefined || recorded === undefined || disk === null || disk === contentHash(content)) continue;
-        if (disk !== recorded) {
+        // A copy whose file name changed (OMP's flat names): the copy at the
+        // old path says the rule was delivered here, so the new path is
+        // written, and the old copy goes unless the member changed it.
+        if (content !== undefined && disk === null && movedFrom !== undefined && await pathExists(movedFrom)) {
+          await ensureDir(path.dirname(dest));
+          await writeFile(dest, content);
+          await recordDelivered(ledger.hashes, dest);
+          await reclaimMovedCopy({ ...target, movedFrom }, item, ledger, localConfig.repo.localPath);
+          rewritten.add(item.name);
+          continue;
+        }
+        if (content === undefined || disk === null || disk === contentHash(content)) continue;
+        if (recorded === undefined) {
+          // No record (a CLI from before #822 wrote none): a copy that is the
+          // team rule verbatim is what an older CLI wrote before the tool got
+          // a format of its own, and nobody edited it. Anything else is left.
+          const source = await readFileSafe(item.sourcePath);
+          if (source === null || disk !== contentHash(source)) continue;
+        } else if (disk !== recorded) {
           // Named by the caller's reportKept; a render unchanged since
           // delivery is the member's plain edit, which needs no word.
           if (contentHash(content) !== recorded) await keepsEditedCopy(ledger, item, target);
@@ -436,11 +507,22 @@ export class RulesHandler extends ResourceHandler {
   async removeItem(name: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
     const removed: string[] = [];
 
-    // Remove from team repo (always `.md`)
+    // OMP's flat copies, judged against the team rule before it goes.
     const teamFile = path.join(localConfig.repo.localPath, 'rules', `${name}.md`);
+    const { deliveredHashes } = await import('../pull.js');
+    const flatCopies = await this.ownedFlatCopies(
+      teamConfig, localConfig, [{ name, type: 'rules', sourcePath: teamFile, relativePath: `rules/${name}.md` }],
+      await deliveredHashes(localConfig),
+    );
+
+    // Remove from team repo (always `.md`)
     if (await pathExists(teamFile)) {
       await remove(teamFile);
       removed.push(teamFile);
+    }
+    for (const { file } of flatCopies) {
+      await remove(file);
+      removed.push(file);
     }
 
     // The author's own copy is at the rules root under the bare name, whatever
@@ -523,12 +605,36 @@ export class RulesHandler extends ResourceHandler {
         await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
       ).revs;
       const delivered = (recorded !== undefined && recorded === await fileHash(file))
-        || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+        || await isDeliveredRender([toolRender(tool)], file, rule, localConfig.repo.localPath, deliveredRevs);
       if (!delivered) continue;
       await remove(file);
       if (ledger) forgetDelivered(ledger.hashes, file);
       log.info(`Removed ${file}, the copy of the team rule ${TEAMAI_CONTEXT_RULE_NAME} an earlier release delivered: the team instructions go there now`);
     }
+  }
+
+  /**
+   * The flat copies of `rules` (OMP's `fe.style.md` for `fe/style`) that are
+   * teamai's: on record in `previous`, or holding the render. A file there
+   * with neither is the member's own, whose name only happens to match.
+   * Read-only and public so `uninstall` removes what `remove` would.
+   */
+  async ownedFlatCopies(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    rules: readonly ResourceItem[],
+    previous: DeliveredHashes | undefined,
+  ): Promise<Array<{ tool: string; file: string }>> {
+    const owned: Array<{ tool: string; file: string }> = [];
+    for (const rule of rules) {
+      for (const { tool, dest, content, movedFrom } of await this.deliveryTargets(teamConfig, localConfig, rule)) {
+        if (movedFrom === undefined || !await pathExists(dest)) continue;
+        if (previous?.[dest] !== undefined || (content !== undefined && await fileHash(dest) === contentHash(content))) {
+          owned.push({ tool, file: dest });
+        }
+      }
+    }
+    return owned;
   }
 
   /**
@@ -627,9 +733,10 @@ export class RulesHandler extends ResourceHandler {
     const replacedByName = new Map(replacedRoots.map((rule) => [rule.name, rule]));
     // The revisions this checkout's copies can be at: the shared lastPullRev
     // may be another checkout's, and HOME's copy an inherited pull's (#823).
-    const deliveredRevs = replacedRoots.length > 0
-      ? (await (await import('../pull.js')).resolveCheckoutBases(localConfig, state)).revs
-      : [];
+    let checkoutRevs: readonly string[] | undefined;
+    const deliveredRevs = async (): Promise<readonly string[]> => checkoutRevs
+      ??= (await (await import('../pull.js')).resolveCheckoutBases(localConfig, state)).revs;
+    const rulesByName = new Map(rules.map((rule) => [rule.name, rule]));
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.rules) continue;
       // `pullItem` above skips excluded tools, so this pass must skip them too.
@@ -642,6 +749,9 @@ export class RulesHandler extends ResourceHandler {
       if (!await pathExists(destDir)) continue;
 
       const ext = ruleFileExtensionForTool(tool);
+      // The stems this tool's copies of those rules have (flat for OMP).
+      const stems = ruleStemsForTool(tool, teamRuleNames);
+      const deliveredStems = new Set(stems.values());
       const localFiles = await listFilesRecursive(destDir);
       for (const localFile of localFiles) {
         const ruleName = ruleStemFromFilename(localFile);
@@ -655,20 +765,27 @@ export class RulesHandler extends ResourceHandler {
         // root rule's copy that is still exactly what pull wrote. Cursor is
         // deliberately absent — teamai owns .cursor/rules and sweeps it.
         if (sharesRulesDirWithMember(tool) && !tombstones.has(ruleName)) {
-          if (teamRuleNames.has(ruleName) || localFile !== `${ruleName}${ext}` || EXCLUDED_RULE_NAMES.has(ruleName)) continue;
+          if (deliveredStems.has(ruleName) || localFile !== `${ruleName}${ext}` || EXCLUDED_RULE_NAMES.has(ruleName)) continue;
           const replaced = replacedByName.get(ruleName);
           if (replaced === undefined) {
             const fullPath = path.join(destDir, localFile);
             const recorded = ledger?.previous?.[fullPath];
-            if (recorded !== undefined && recorded === await fileHash(fullPath)) {
+            // The nested copy an older teamai wrote of a rule OMP now gets
+            // flat: verbatim then, so the team rule proves it with no record.
+            const nestedOf = ruleFormatForTool(tool)?.flat ? rulesByName.get(ruleName) : undefined;
+            const flatCopy = nestedOf && stems.has(ruleName) ? path.join(destDir, `${stems.get(ruleName)}${ext}`) : undefined;
+            if ((recorded !== undefined && recorded === await fileHash(fullPath))
+              || (nestedOf && await isUneditedNestedCopy(fullPath, nestedOf, ledger?.previous, localConfig.repo.localPath, await deliveredRevs()))) {
               await remove(fullPath);
               if (ledger) forgetDelivered(ledger.hashes, fullPath);
               log.debug(`Removed stale rule ${localFile} from ${tool}`);
+            } else if (nestedOf && flatCopy) {
+              log.warn(keptNestedCopyMessage(tool, fullPath, ruleName, flatCopy));
             }
             continue;
           }
           const deployed = path.join(destDir, localFile);
-          if (await isDeliveredRender([toolRender(tool)], deployed, replaced, localConfig.repo.localPath, deliveredRevs)) {
+          if (await isDeliveredRender([toolRender(tool)], deployed, replaced, localConfig.repo.localPath, await deliveredRevs())) {
             await remove(deployed);
             log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
           } else {
@@ -694,7 +811,7 @@ export class RulesHandler extends ResourceHandler {
         if (!localFile.endsWith(ext)) continue;
         // Skip built-in and legacy rules (managed by CLI, not team repo)
         if (EXCLUDED_RULE_NAMES.has(ruleName)) continue;
-        if (!teamRuleNames.has(ruleName)) {
+        if (!deliveredStems.has(ruleName)) {
           const fullPath = path.join(destDir, localFile);
           // A copy the member changed since teamai delivered it stays (#822);
           // the tombstone cleanup names one of a rule the team removed.
@@ -1074,6 +1191,80 @@ export class RulesHandler extends ResourceHandler {
       }
     }
   }
+}
+
+/**
+ * Why a namespaced rule was not written for a tool that reads only the top
+ * of its rules directory: `sharers` have its flat file name. A root rule
+ * keeps the name; two namespaced rules both lose it.
+ */
+function flatNameClash(tool: string, name: string, sharers: readonly string[], ext: string): string {
+  const file = `${flatStem(name)}${ext}`;
+  const root = sharers.find((other) => !other.includes('/'));
+  const where = `${tool} reads only the top level of its rules directory, where`;
+  if (root !== undefined) {
+    return `Skipped rule ${name} for ${tool}: ${where} its file would be ${file}, which is the root rule ${root}. `
+      + 'Rename one of them in the team repo.';
+  }
+  const names = [name, ...sharers].sort();
+  return `Skipped rules ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} for ${tool}: ${where} `
+    + `${names.length === 2 ? 'both' : 'all'} would be ${file}, so neither is written. Rename one of them in the team repo.`;
+}
+
+/**
+ * Remove the nested copy `target.movedFrom` names, now that `dest` holds the
+ * rule, while it is unedited (`isUneditedNestedCopy`); name one the member
+ * changed, which the tool does not read.
+ */
+async function reclaimMovedCopy(
+  target: DeliveryTarget & { movedFrom: string },
+  rule: ResourceItem,
+  ledger: DeliveryLedger,
+  repoPath: string,
+): Promise<void> {
+  const { movedFrom } = target;
+  if (!await isUneditedNestedCopy(movedFrom, rule, ledger.previous, repoPath, [])) {
+    log.warn(keptNestedCopyMessage(target.tool, movedFrom, rule.name, target.dest));
+    return;
+  }
+  await remove(movedFrom);
+  forgetDelivered(ledger.hashes, movedFrom);
+  await pruneEmptyDirs(path.dirname(movedFrom));
+  log.debug(`Removed ${movedFrom}: ${target.tool} now reads it at ${target.dest}`);
+}
+
+/**
+ * Whether `file`, the nested copy an older teamai wrote of `rule` before the
+ * tool's copies went flat (#946), is still what it delivered: what `previous`
+ * records, or the team rule verbatim (which is how it was written), as it is
+ * now or at one of `revs`. Without a record the bytes are the only proof.
+ */
+async function isUneditedNestedCopy(
+  file: string,
+  rule: ResourceItem,
+  previous: DeliveredHashes | undefined,
+  repoPath: string,
+  revs: readonly string[],
+): Promise<boolean> {
+  const recorded = previous?.[file];
+  if (recorded !== undefined && recorded === await fileHash(file)) return true;
+  return isDeliveredRender([(raw) => raw], file, rule, repoPath, revs);
+}
+
+/** A nested copy kept because the member changed it, which the tool never reads. */
+function keptNestedCopyMessage(tool: string, file: string, name: string, flatCopy: string): string {
+  return `Kept ${file}: ${tool} reads only the top level of its rules directory, so it does not read this copy of ${name}, `
+    + `which teamai now delivers as ${flatCopy}. To keep your edit, copy it into that file and share it with \`teamai push\`; `
+    + 'then delete this one.';
+}
+
+/**
+ * Whether `file` is there with other bytes than `content` and no record of
+ * teamai writing it: a file of the member's own at a path teamai now writes.
+ */
+async function isMembersOwnFile(file: string, content: string, ledger: DeliveryLedger | undefined): Promise<boolean> {
+  const disk = await fileHash(file);
+  return disk !== null && disk !== contentHash(content) && ledger?.previous?.[file] === undefined;
 }
 
 /** What pull writes for `tool` from a team rule. */

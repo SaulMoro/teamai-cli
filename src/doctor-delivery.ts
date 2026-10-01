@@ -20,7 +20,7 @@ import {
   SHELL_PROFILE_CANDIDATE_NAMES,
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
-import { ruleFormatForTool } from './resources/rule-format.js';
+import { ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 
 /**
  * The checks that verify the payload rather than the plumbing: what each tool
@@ -281,8 +281,8 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   // scopes the rule by fields of it (Cursor `globs`, Kiro `inclusion`, …);
   // comparing against the render catches a wrong value there, which checking
   // the keys were present did not.
-  const ruleLabels = ['not delivered', 'delivered from an older copy', CHANGED_BY_YOU] as const;
-  const perTool: Check[] = [...(await walkDelivery(
+  const ruleLabels = ['not delivered', 'delivered from an older copy', FLAT_NAME_TAKEN, CHANGED_BY_YOU] as const;
+  const { byTool } = await walkDelivery(
     getHandler('rules'),
     ctx,
     items,
@@ -294,19 +294,34 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
       if (target.content === undefined || delivered === target.content) return null;
       return differingCopyLabel(item, target, ruleLabels[1], localConfig);
     },
-  )).byTool].map(([tool, delivery]) => ({
+  );
+  // A tool that reads only the top of its rules directory gets no file for a
+  // namespaced rule whose flat name another rule has (`deliveryTargets`).
+  for (const [tool, delivery] of byTool) {
+    if (!ruleFormatForTool(tool)?.flat) continue;
+    const stems = ruleStemsForTool(tool, items.map((item) => item.name));
+    for (const item of items) if (!stems.has(item.name)) appendTo(delivery.problems, FLAT_NAME_TAKEN, item.name);
+  }
+  const perTool: Check[] = [...byTool].map(([tool, delivery]) => ({
     name: `Rules delivered to ${tool}`,
     source: 'local',
     check: async () => !hasDeliveryProblem(delivery),
     // The fix names the directory rather than the tool: a rule's delivered
     // filename carries a per-tool extension the reader would have to derive.
     fix: `In ${delivery.dir}, ${describeProblems(delivery.problems, ruleLabels)}. `
+      + (delivery.problems.has(FLAT_NAME_TAKEN)
+        ? `${tool} reads only the top level of that directory, so a rule not written there never reaches it: `
+          + 'rename one of them in the team repo; `teamai pull` names the rules that share the file. '
+        : '')
       + 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
       + `so it cannot restore this. ${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}`,
   }));
 
   return [...activation, ...perTool];
 }
+
+/** A namespaced rule a tool reading only the top of its rules directory gets no file for. */
+const FLAT_NAME_TAKEN = 'not written, as another team rule has its flat name';
 
 /** What a rule copy "delivered from an older copy" means for `tool`, in its own format. */
 function olderRuleCopyMeaning(tool: string): string {

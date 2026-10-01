@@ -132,6 +132,102 @@ describe('a pull at an unchanged team revision after the rule formats change (#9
 });
 
 /**
+ * OMP reads only the top of its rules directory, so a namespaced rule moved
+ * from `fe/style.md` to `fe.style.md`. The new path has no record, so the
+ * re-render above cannot reach it; the old copy is what moves it.
+ */
+describe('a pull at an unchanged team revision after OMP rules go flat (#946)', () => {
+  let tmpDir: string;
+  let homeDir: string;
+  let saved: State;
+
+  const NS = 'Namespaced rule.\n';
+  const OMP_NS = '---\nalwaysApply: true\n---\n\nNamespaced rule.\n';
+  const rulesDir = () => path.join(homeDir, '.omp', 'agent', 'rules');
+  const record = () => Object.values(saved.lastPullByWorkspace ?? {})[0];
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-omp-flat-upgrade-'));
+    homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    await fse.ensureDir(rulesDir());
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), NS);
+    await fse.outputFile(path.join(repoPath, 'rules', 'be', 'api.md'), 'Backend rule.\n');
+    vi.stubEnv('HOME', homeDir);
+    saved = {} as State;
+    vi.mocked(saveStateForScope).mockImplementation(async (state) => {
+      saved = structuredClone(state);
+    });
+    vi.mocked(loadStateForScope).mockImplementation(async () => structuredClone(saved) as never);
+    vi.mocked(loadTeamConfig).mockResolvedValue(
+      TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' }),
+    );
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue({
+      repo: { localPath: repoPath, remote: 'https://example.invalid/x/team.git' },
+      username: 'u',
+      updatePolicy: 'auto',
+      additionalRoles: [],
+      scope: 'user',
+      enabledAgents: ['omp'],
+    } as LocalConfig);
+    await pull({});
+    // What an older CLI left at this revision: each rule verbatim and nested,
+    // on record; the member then edited the backend copy.
+    const delivered: Record<string, string> = {};
+    for (const name of ['fe.style.md', 'be.api.md']) await fse.remove(path.join(rulesDir(), name));
+    for (const [rel, text] of [['fe/style.md', NS], ['be/api.md', 'Backend rule.\n']]) {
+      await fse.outputFile(path.join(rulesDir(), rel), text);
+      delivered[path.join(rulesDir(), rel)] = sha256(text);
+    }
+    record().delivered = delivered;
+    await fse.writeFile(path.join(rulesDir(), 'be', 'api.md'), 'My own backend wording.\n');
+    vi.mocked(log.success).mockClear();
+    vi.mocked(log.warn).mockClear();
+  });
+
+  afterEach(async () => {
+    vi.mocked(saveStateForScope).mockReset();
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({}) as never);
+    vi.unstubAllEnvs();
+    await fse.remove(tmpDir);
+  });
+
+  it('writes the flat copy OMP reads, and reclaims the nested one unless the member edited it', async () => {
+    await pull({});
+
+    const successes = vi.mocked(log.success).mock.calls.map(([message]) => String(message));
+    expect(successes.some((message) => message.includes('Already synced at abc1234'))).toBe(true);
+    const flat = path.join(rulesDir(), 'fe.style.md');
+    expect(await fse.readFile(flat, 'utf8')).toBe(OMP_NS);
+    expect(await fse.pathExists(path.join(rulesDir(), 'fe'))).toBe(false);
+    // The member's edit stays where it is; the flat copy still gets the team rule.
+    expect(await fse.readFile(path.join(rulesDir(), 'be', 'api.md'), 'utf8')).toBe('My own backend wording.\n');
+    expect(await fse.readFile(path.join(rulesDir(), 'be.api.md'), 'utf8')).toBe('---\nalwaysApply: true\n---\n\nBackend rule.\n');
+    expect(record().delivered?.[flat]).toBe(sha256(OMP_NS));
+    expect(record().delivered?.[path.join(rulesDir(), 'fe', 'style.md')]).toBeUndefined();
+    // The edited nested copy is named: OMP does not read it.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings.filter((message) => message.includes(`Kept ${path.join(rulesDir(), 'be', 'api.md')}`))).toHaveLength(1);
+  });
+
+  it('does the same on a machine an older CLI left with no delivery record', async () => {
+    delete record().delivered;
+    // A root rule's verbatim copy too: the team rule's own bytes, so unedited.
+    await fse.outputFile(path.join(tmpDir, 'team-repo', 'rules', 'root.md'), 'Root rule.\n');
+    await fse.outputFile(path.join(rulesDir(), 'root.md'), 'Root rule.\n');
+    await fse.outputFile(path.join(rulesDir(), 'mine.md'), 'Not a team rule.\n');
+
+    await pull({});
+
+    expect(await fse.readFile(path.join(rulesDir(), 'root.md'), 'utf8')).toBe('---\nalwaysApply: true\n---\n\nRoot rule.\n');
+    expect(await fse.readFile(path.join(rulesDir(), 'mine.md'), 'utf8')).toBe('Not a team rule.\n');
+    expect(await fse.readFile(path.join(rulesDir(), 'fe.style.md'), 'utf8')).toBe(OMP_NS);
+    expect(await fse.pathExists(path.join(rulesDir(), 'fe'))).toBe(false);
+    expect(await fse.readFile(path.join(rulesDir(), 'be', 'api.md'), 'utf8')).toBe('My own backend wording.\n');
+  });
+});
+
+/**
  * A CLI upgrade that moves OpenCode's rules globs must reach a machine whose
  * team revision has not moved, or OpenCode keeps loading through the old
  * entry until the team next changes (#946).

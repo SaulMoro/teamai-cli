@@ -23,7 +23,7 @@ import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { ruleFileExtensionForTool } from './resources/rule-format.js';
+import { flatStemsOfRemoved, ruleFileExtensionForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
   forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
@@ -510,6 +510,22 @@ async function cleanupTombstonedResources(
       if (!await isToolInstalledForConfig(tool, dir, localConfig)) continue;
       if (isAgentExcluded(localConfig, tool)) continue;
       const baseDir = resolveToolBaseDir(tool, localConfig);
+      // OMP's copy of a namespaced rule is flat (#946). A file of that name
+      // may be the member's own, so only its record makes it teamai's.
+      const flatStems = type === 'rules'
+        ? flatStemsOfRemoved(tool, tombstones, (await handler.scanTeamForPull(freshConfig, localConfig)).map((rule) => rule.name))
+        : new Set<string>();
+      for (const stem of flatStems) {
+        const localPath = path.join(baseDir, dir, `${stem}${ruleFileExtensionForTool(tool)}`);
+        if (ledger.previous?.[localPath] === undefined || !await pathExists(localPath)) continue;
+        if (await removedCopyChanged(ledger.previous, localPath)) {
+          log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed the rule it is a copy of, but you changed this copy. Delete it when you no longer need it.`);
+          continue;
+        }
+        await remove(localPath);
+        forgetDelivered(ledger.hashes, localPath);
+        log.debug(`[${scopeLabel}] Cleaned up tombstoned rules copy ${stem} from ${dir}`);
+      }
 
       for (const name of tombstones) {
         for (const extension of tombstoneExtensions(type, tool)) {
@@ -832,7 +848,10 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
  * Kiro and Qoder got their own format. Only a copy still on record as what
  * teamai wrote is rewritten (`RulesHandler.rerenderOutdatedCopies`), and the
  * record follows, so the next pull does not read the new bytes as an edit. A
- * copy the member changed is kept and named, as a full sync names it.
+ * copy the member changed is kept and named, as a full sync names it. A copy
+ * with no record is rewritten only while it is the team rule verbatim, and a
+ * copy whose path moved within a tool's directory (OMP's flat names) is
+ * written at the new path, the old copy being the proof of delivery.
  *
  * The copies an older CLI left where the tool does not read them are
  * reclaimed first (`reclaimLegacyRuleCopies`, #938). That is also what writes
@@ -852,9 +871,8 @@ async function rerenderOutdatedRules(
     const { items } = await resolveDesiredRules(freshConfig, localConfig, roleContext);
     const handler = getHandler('rules') as RulesHandler;
     const reclaimed = await handler.reclaimLegacyRuleCopies(freshConfig, localConfig, items, ledger);
-    const rewritten = key && ledger.previous !== undefined
-      ? await handler.rerenderOutdatedCopies(freshConfig, localConfig, items, ledger)
-      : [];
+    // With no record yet, it still rewrites a copy its bytes prove teamai's.
+    const rewritten = key ? await handler.rerenderOutdatedCopies(freshConfig, localConfig, items, ledger) : [];
     reportKept(ledger, scopeLabel);
     if (!key || (reclaimed === 0 && rewritten.length === 0)) return;
     const record = localConfig.scope === 'user' ? await userScopeRecord(state) : state.lastPullByWorkspace?.[key];

@@ -225,6 +225,39 @@ describe('doctor — rules delivered on disk', () => {
     expect(check.fix).not.toContain('.mdc');
   });
 
+  it('checks the flat file OMP reads for a namespaced rule, not the nested path (#946)', async () => {
+    await writeTeamRule('fe/style');
+    teamConfig.toolPaths = { omp: { rules: '.omp/agent/rules' } };
+    const dir = path.join(homeDir, '.omp/agent/rules');
+    for (const name of ['coding-style', 'reviews']) {
+      await fse.outputFile(path.join(dir, `${name}.md`), `---\nalwaysApply: true\n---\n\nBody of ${name}\n`);
+    }
+    // Where an older teamai left it: OMP does not read below the top level.
+    await fse.outputFile(path.join(dir, 'fe', 'style.md'), 'Body of fe/style\n');
+
+    const missing = await rulesCheck('omp');
+    expect(await missing.check()).toBe(false);
+    expect(missing.fix).toContain('not delivered: fe/style');
+
+    await fse.outputFile(path.join(dir, 'fe.style.md'), '---\nalwaysApply: true\n---\n\nBody of fe/style\n');
+    expect(await (await rulesCheck('omp')).check()).toBe(true);
+  });
+
+  it('fails for a namespaced rule OMP gets no file for, as a root rule has its flat name (#946)', async () => {
+    await writeTeamRule('fe/style');
+    await writeTeamRule('fe.style');
+    teamConfig.toolPaths = { omp: { rules: '.omp/agent/rules' } };
+    const dir = path.join(homeDir, '.omp/agent/rules');
+    for (const name of ['coding-style', 'reviews', 'fe.style']) {
+      await fse.outputFile(path.join(dir, `${name}.md`), `---\nalwaysApply: true\n---\n\nBody of ${name}\n`);
+    }
+
+    const check = await rulesCheck('omp');
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('not written, as another team rule has its flat name: fe/style');
+    expect(check.fix).toContain('rename one of them in the team repo');
+  });
+
   describe('CodeBuddy and WorkBuddy (#946)', () => {
     const ALWAYS = '---\nalwaysApply: true\n---\n\n';
     const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
