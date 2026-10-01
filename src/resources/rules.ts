@@ -17,7 +17,7 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf } from '../utils/git.js';
-import { forgetDelivered, keepsEditedCopy, recordDelivered, removedCopyChanged, type DeliveryLedger } from './delivered-copies.js';
+import { forgetDelivered, keepsEditedCopy, recordDelivered, removedCopyChanged, type DeliveredHashes, type DeliveryLedger } from './delivered-copies.js';
 import {
   ruleFileExtensionForTool,
   ruleStemFromFilename,
@@ -658,78 +658,25 @@ export class RulesHandler extends ResourceHandler {
 
   /**
    * Remove the `<rule>.md` copies earlier pulls wrote to a rules directory the
-   * tool never read (`LEGACY_RULE_DIRS`). A copy goes only while it holds what
-   * teamai delivered there: the team rule verbatim, now or at a revision this
-   * checkout pulled, or as the ledger recorded it; the built-in
-   * `teamai-recall.md` as any teamai version deployed it. Every team rule
-   * counts, not just the ones delivered here, since a copy outlives the role
-   * or tag that selected it. A copy of a rule the team removed goes unless the
-   * member changed it since delivery. The copies kept are named in one warning per
-   * rules sync, until the member deletes them.
+   * tool never read (`LEGACY_RULE_DIRS`) that are still teamai's
+   * (`legacyRuleCopies`). The copies kept are named in one warning per rules
+   * sync, until the member deletes them.
    */
   private async reclaimLegacyRuleCopies(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     ledger: DeliveryLedger | undefined,
   ): Promise<void> {
-    const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
-    const tombstoned = [...await this.readTombstones(localConfig)]
-      .filter((name) => !teamRules.some((rule) => rule.name === name));
-    let deliveredRevs: readonly string[] | undefined;
     const kept: string[] = [];
-    // A team `toolPaths` that still names one of these dirs delivers there.
-    const deliveredDirs = new Set(
-      Object.entries(scopedToolPaths(teamConfig, localConfig))
-        .filter(([, toolPath]) => toolPath.rules)
-        .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
-    );
-    for (const [tool, rel] of Object.entries(LEGACY_RULE_DIRS)) {
-      const dir = path.join(resolveToolBaseDir(tool, localConfig), rel);
-      if (deliveredDirs.has(dir) || !await pathExists(dir)) continue;
-      let removedAny = false;
-      for (const rule of teamRules) {
-        const file = path.join(dir, `${rule.name}.md`);
-        if (!await pathExists(file)) continue;
-        deliveredRevs ??= (
-          await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
-        ).revs;
-        const recorded = ledger?.previous?.[file];
-        const delivered = (recorded !== undefined && recorded === await fileHash(file))
-          || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
-        if (!delivered) {
-          kept.push(file);
-          continue;
-        }
+    for (const { tool, dir, owned, edited } of await this.legacyRuleCopies(teamConfig, localConfig, ledger?.previous)) {
+      for (const file of owned) {
         await remove(file);
         if (ledger) forgetDelivered(ledger.hashes, file);
-        removedAny = true;
         log.debug(`Removed ${file}: ${tool} reads team rules from its instructions file`);
       }
-      // The tombstone cleanup walks `toolPath.rules` only, so a rule the team
-      // removed since the last pull that wrote here is reclaimed on its terms (#822).
-      for (const name of tombstoned) {
-        const file = path.join(dir, `${name}.md`);
-        if (!await pathExists(file)) continue;
-        if (await removedCopyChanged(ledger?.previous, file)) {
-          kept.push(file);
-          continue;
-        }
-        await remove(file);
-        if (ledger) forgetDelivered(ledger.hashes, file);
-        removedAny = true;
-      }
-      const recall = path.join(dir, 'teamai-recall.md');
-      const recallContent = await readFileSafe(recall);
-      if (recallContent !== null) {
-        if (isDeployedRecallRule(recallContent)) {
-          await remove(recall);
-          removedAny = true;
-        } else {
-          kept.push(recall);
-        }
-      }
+      kept.push(...edited);
       // Codex's own `*.rules` keep the directory; only an emptied one goes.
-      if (removedAny) await pruneEmptyDirs(dir);
+      if (owned.length > 0) await pruneEmptyDirs(dir);
     }
     if (kept.length > 0) {
       log.warn(
@@ -739,6 +686,67 @@ export class RulesHandler extends ResourceHandler {
         + 'then delete the copy.',
       );
     }
+  }
+
+  /**
+   * The `<rule>.md` copies earlier pulls wrote to each rules directory a tool
+   * never read (`LEGACY_RULE_DIRS`), split into the ones still teamai's and the
+   * ones the member edited. A copy is teamai's while it holds what teamai
+   * delivered there: the team rule verbatim, now or at a revision this
+   * checkout pulled, or as `previous` (the delivery ledger) recorded it; the
+   * built-in `teamai-recall.md` as any teamai version deployed it. Every team
+   * rule counts, not just the ones delivered here, since a copy outlives the
+   * role or tag that selected it. A copy of a rule the team removed is teamai's
+   * unless the member changed it since delivery. A directory a team
+   * `toolPaths` still delivers rules to is not listed.
+   *
+   * Read-only and public so `uninstall` removes exactly what a pull reclaims.
+   */
+  async legacyRuleCopies(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    previous: DeliveredHashes | undefined,
+  ): Promise<Array<{ tool: string; dir: string; owned: string[]; edited: string[] }>> {
+    const teamRules = await this.scanTeamForPull(teamConfig, localConfig);
+    const tombstoned = [...await this.readTombstones(localConfig)]
+      .filter((name) => !teamRules.some((rule) => rule.name === name));
+    let deliveredRevs: readonly string[] | undefined;
+    const out: Array<{ tool: string; dir: string; owned: string[]; edited: string[] }> = [];
+    // A team `toolPaths` that still names one of these dirs delivers there.
+    const deliveredDirs = new Set(
+      Object.entries(scopedToolPaths(teamConfig, localConfig))
+        .filter(([, toolPath]) => toolPath.rules)
+        .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
+    );
+    for (const [tool, rel] of Object.entries(LEGACY_RULE_DIRS)) {
+      const dir = path.join(resolveToolBaseDir(tool, localConfig), rel);
+      if (deliveredDirs.has(dir) || !await pathExists(dir)) continue;
+      const owned: string[] = [];
+      const edited: string[] = [];
+      for (const rule of teamRules) {
+        const file = path.join(dir, `${rule.name}.md`);
+        if (!await pathExists(file)) continue;
+        deliveredRevs ??= (
+          await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
+        ).revs;
+        const recorded = previous?.[file];
+        const delivered = (recorded !== undefined && recorded === await fileHash(file))
+          || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+        (delivered ? owned : edited).push(file);
+      }
+      // The tombstone cleanup walks `toolPath.rules` only, so a rule the team
+      // removed since the last pull that wrote here is reclaimed on its terms (#822).
+      for (const name of tombstoned) {
+        const file = path.join(dir, `${name}.md`);
+        if (!await pathExists(file)) continue;
+        (await removedCopyChanged(previous, file) ? edited : owned).push(file);
+      }
+      const recall = path.join(dir, 'teamai-recall.md');
+      const recallContent = await readFileSafe(recall);
+      if (recallContent !== null) (isDeployedRecallRule(recallContent) ? owned : edited).push(recall);
+      out.push({ tool, dir, owned, edited });
+    }
+    return out;
   }
 
   /**
