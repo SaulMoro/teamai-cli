@@ -17,7 +17,7 @@ machine** (all tools)?"*
   them. An instructions file several tools read (the project `AGENTS.md` of Codex,
   Pi, Hermes and WorkBuddy) is cleaned block by block: a teamai block stays while
   a remaining tool on that file still writes it, so `--agent codex` with Pi still
-  enabled removes the team-rules and recall blocks and keeps the rest. A file teamai
+  enabled removes the recall block and keeps the rest. A file teamai
   created goes with its last block; one the user had before stays, even if empty.
 - **Whole machine** → no `--agent` flag.
 

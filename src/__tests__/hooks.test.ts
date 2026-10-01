@@ -105,10 +105,18 @@ describe('hooks', () => {
 
       const result = mockFiles['/test/codex-hooks.json'] as { hooks: Record<string, Array<{ matcher?: string; description?: string; hooks: Array<{ command: string }> }>> };
       expect(result.hooks).toBeDefined();
-      expect(Object.keys(result.hooks)).toEqual(['SessionStart', 'Stop', 'PostToolUse', 'UserPromptSubmit', 'SubagentStop']);
+      expect(Object.keys(result.hooks)).toEqual(['SessionStart', 'Stop', 'PostToolUse', 'UserPromptSubmit', 'SubagentStop', 'SubagentStart']);
       expect(result.hooks.PostToolUse).toHaveLength(3);
       expect(result.hooks.SessionStart[0].hooks[0].command).toContain('--tool codex');
       expect(result.hooks.SessionStart[0].description).toBeUndefined();
+    });
+
+    it('Codex format: writes additionalContextLimit 0 on the session-start entry only (#938)', async () => {
+      await injectHooks('/test/codex-hooks.json', 'codex');
+
+      const result = mockFiles['/test/codex-hooks.json'] as { hooks: Record<string, Array<{ hooks: Array<{ additionalContextLimit?: number }> }>> };
+      expect(result.hooks.SessionStart[0].hooks[0].additionalContextLimit).toBe(0);
+      expect(result.hooks.Stop[0].hooks[0]).not.toHaveProperty('additionalContextLimit');
     });
 
     it('Claude uses PascalCase event names', async () => {

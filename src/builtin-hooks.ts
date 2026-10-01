@@ -371,6 +371,19 @@ const SUBAGENT_STOP_SPEC: BuiltinHookSpec = {
 };
 
 /**
+ * A subagent Codex spawns fires SubagentStart, not SessionStart (codex-rs
+ * core/src/hook_runtime.rs), so a fresh one gets the team rules only through
+ * this entry (#938). Codex alone: the team rules reach no other tool this way.
+ */
+const SUBAGENT_START_SPEC: BuiltinHookSpec = {
+  key: 'Hook dispatch subagent-start',
+  event: 'SubagentStart',
+  dispatchEvent: 'subagent-start',
+  matcher: '*',
+  timeoutSec: 15,
+};
+
+/**
  * Tools that fire SubagentStop with the parent's session id, so the recall
  * reducer can credit a read a subagent made after the session's last Stop
  * (#884): Claude Code, Codex, CodeBuddy and Qoder document it, and their
@@ -401,6 +414,10 @@ const SUBAGENT_STOP_TOOLS = new Set([
  */
 const WRAPPER_TOOLS = SHELL_DEPENDENT_TOOLS;
 
+function isCodexTool(tool: string): boolean {
+  return (CODEX_TOOL_IDS as readonly string[]).includes(tool);
+}
+
 export function builtinHookDefs(tool: string): HookDef[] {
   // ZCode renders per-event timeouts from the ZCODE_TIMEOUT_MS table in its own
   // writer (toZcodeEntry), so def.timeout stays unset for it.
@@ -414,6 +431,7 @@ export function builtinHookDefs(tool: string): HookDef[] {
     ...BUILTIN_HOOK_SPECS,
     ...(tool === 'copilot' ? [COPILOT_SESSION_END_SPEC] : []),
     ...(SUBAGENT_STOP_TOOLS.has(tool) ? [SUBAGENT_STOP_SPEC] : []),
+    ...(isCodexTool(tool) ? [SUBAGENT_START_SPEC] : []),
   ];
   return specs.map((spec) => ({
     source: 'builtin' as const,
@@ -422,6 +440,9 @@ export function builtinHookDefs(tool: string): HookDef[] {
     matcher: spec.matcher,
     command: buildCommand(spec.dispatchEvent, tool, spec.matcher),
     timeout: withTimeout ? spec.timeoutSec : undefined,
+    // The team rules reach the Codex family through its start hooks (#938);
+    // Codex would otherwise keep only the start and end of a large rule set.
+    ...(isCodexTool(tool) && (spec.event === 'SessionStart' || spec.event === 'SubagentStart') ? { additionalContextLimit: 0 } : {}),
     description: `${TEAMAI_HOOK_DESCRIPTION_PREFIX} ${spec.key}`,
   }));
 }

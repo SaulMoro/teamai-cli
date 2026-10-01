@@ -98,6 +98,7 @@ interface CodexHookEntry {
   type: string;
   command: string;
   timeout?: number;
+  additionalContextLimit?: number;
 }
 
 interface CodexHookMatcher {
@@ -407,6 +408,7 @@ function toCodexEntry(def: HookDef): CodexHookMatcher {
         type: 'command',
         command: def.command,
         ...(def.timeout !== undefined ? { timeout: def.timeout } : {}),
+        ...(def.additionalContextLimit !== undefined ? { additionalContextLimit: def.additionalContextLimit } : {}),
       },
     ],
   };

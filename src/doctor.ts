@@ -19,6 +19,7 @@ import {
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
+import { getsRulesFromSessionHook } from './resources/rule-format.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder } from './hooks.js';
 import {
   buildDeliveryChecks,
@@ -287,8 +288,45 @@ async function buildHookChecks(
       },
       fix: 'Run `teamai hooks inject` to inject/update hooks',
     });
+    if (getsRulesFromSessionHook(tool)) checks.push(sessionHookRulesCheck(tool, settingsPath));
   }
   return checks;
+}
+
+/**
+ * The Codex family gets the team rules from its session-start hook (#938).
+ * Past 2,500 tokens Codex keeps only the start and end of a hook's context
+ * unless the entry sets `additionalContextLimit: 0`. A missing entry is the
+ * hooks check's to report.
+ */
+function sessionHookRulesCheck(tool: string, settingsPath: string): Check {
+  return {
+    name: `Team rules reach ${tool} whole through its session-start hook`,
+    source: 'local',
+    check: async () => {
+      const entries = await teamaiSessionStartEntries(settingsPath);
+      return entries.length === 0 || entries.some((entry) => entry.additionalContextLimit === 0);
+    },
+    fix: `The teamai session-start entry in ${settingsPath} does not set \`additionalContextLimit: 0\`, `
+      + `so ${tool} keeps only the start and end of a large set of team rules. Run \`teamai pull\` to rewrite it`
+      + (isCodexTrustGatedTool(tool) ? ', then approve the changed hook in Codex (/hooks).' : '.'),
+  };
+}
+
+/** The teamai `session-start` handlers in a Codex hooks.json; none when it does not parse. */
+async function teamaiSessionStartEntries(settingsPath: string): Promise<Array<{ additionalContextLimit?: unknown }>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFileSafe(settingsPath) ?? '');
+  } catch {
+    return [];
+  }
+  const groups = (parsed as { hooks?: { SessionStart?: unknown } } | null)?.hooks?.SessionStart;
+  if (!Array.isArray(groups)) return [];
+  return groups
+    .flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : []))
+    .filter((entry): entry is { command: string; additionalContextLimit?: unknown } =>
+      typeof entry?.command === 'string' && entry.command.includes('teamai hook-dispatch session-start'));
 }
 
 

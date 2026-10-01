@@ -905,6 +905,11 @@ export interface HookDef {
   command: string;
   /** Per-hook timeout in seconds (tool-specific; omitted = tool default). */
   timeout?: number;
+  /**
+   * Codex only: the token count past which Codex keeps just the start and end
+   * of the hook's additionalContext. 0 turns that off. Omitted = Codex's 2,500.
+   */
+  additionalContextLimit?: number;
   /** settings.json description. builtin: "[teamai] <key>"; team: "[teamai:hook:<id>] ...". */
   description: string;
   /** Team hooks only: restrict to these tools (default = all hook-capable tools). */
@@ -1094,11 +1099,6 @@ export const RESOURCE_TYPES: ResourceType[] = ['skills', 'rules', 'docs', 'env',
 
 export const TEAMAI_RULES_START = '<!-- [teamai:rules:start] -->';
 export const TEAMAI_RULES_END = '<!-- [teamai:rules:end] -->';
-
-// Team rules inlined into an instructions file (Codex AGENTS.md). Not
-// [teamai:rules]: pull strips that legacy block from every claudemd file.
-export const TEAMAI_TEAM_RULES_START = '<!-- [teamai:team-rules:start] -->';
-export const TEAMAI_TEAM_RULES_END = '<!-- [teamai:team-rules:end] -->';
 
 export const TEAMAI_HOOK_DESCRIPTION_PREFIX = '[teamai]';
 

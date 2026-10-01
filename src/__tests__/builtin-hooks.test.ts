@@ -27,6 +27,26 @@ describe('builtinHookDefs — unified built-in hook model', () => {
     for (const tool of ['cursor', 'copilot', 'zcode', 'workbuddy']) expect(subagentStop(tool)).toEqual([]);
   });
 
+  it('lets the Codex family\'s session-start hook pass the team rules whole (#938)', () => {
+    // Codex keeps only the start and end of additionalContext past 2,500 tokens; 0 turns that off.
+    const sessionStart = (tool: string) => builtinHookDefs(tool).find((d) => d.event === 'SessionStart');
+    for (const tool of ['codex', 'codex-internal', 'tcodex']) expect(sessionStart(tool)?.additionalContextLimit).toBe(0);
+    for (const tool of ['claude', 'cursor', 'copilot', 'codebuddy']) expect(sessionStart(tool)?.additionalContextLimit).toBeUndefined();
+  });
+
+  it('adds SubagentStart, with the same limit, only for the Codex family, whose fresh subagents fire no SessionStart (#938)', () => {
+    const subagentStart = (tool: string) => builtinHookDefs(tool).filter((d) => d.event === 'SubagentStart');
+    for (const tool of ['codex', 'codex-internal', 'tcodex']) {
+      expect(subagentStart(tool)).toEqual([expect.objectContaining({
+        key: 'Hook dispatch subagent-start',
+        matcher: '*',
+        command: expect.stringContaining(`hook-dispatch subagent-start --tool ${tool}`),
+        additionalContextLimit: 0,
+      })]);
+    }
+    for (const tool of ['claude', 'cursor', 'copilot', 'codebuddy', 'qoder', 'zcode']) expect(subagentStart(tool)).toEqual([]);
+  });
+
   it('adds a lifecycle-complete SessionEnd hook only for Copilot', () => {
     const defs = builtinHookDefs('copilot');
     expect(defs).toHaveLength(7);
