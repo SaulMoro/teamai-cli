@@ -2744,7 +2744,7 @@ What gets removed:
 - teamai hooks in AI tool settings
 - The teamai blocks in CLAUDE.md and AGENTS.md, including Codex's team-rules block (your own content is preserved)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
-- Team-synced rules, including the copies older releases left in `.codex/rules/` (Codex's `*.rules` files are kept)
+- Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. A copy there you edited is kept and named in a warning, and Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
 - The `~/.teamai/` directory

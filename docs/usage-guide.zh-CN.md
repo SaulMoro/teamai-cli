@@ -2557,7 +2557,7 @@ teamai uninstall --agent claude
 - AI 工具 settings 中的 teamai hooks
 - CLAUDE.md 和 AGENTS.md 中的 teamai 块，包括 Codex 的 team-rules 块（保留用户自写内容）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
-- 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本（保留 Codex 的 `*.rules` 文件）
+- 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。其中你改过的副本会保留，并在警告中点名；Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - `~/.teamai/` 目录

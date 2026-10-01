@@ -34,10 +34,12 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES } from './builtin-rules.js';
-import { LEGACY_RULE_DIRS, ruleStemFromFilename, writesInstructionBlock, type InstructionBlock } from './resources/rule-format.js';
+import { ruleStemFromFilename, writesInstructionBlock, type InstructionBlock } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
+import { RulesHandler } from './resources/rules.js';
+import { deliveredHashes } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { removeClaudeMdSection } from './utils/claudemd.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
@@ -105,6 +107,8 @@ interface RemovalPlan {
   skillDirs: SkillDirEntry[];
   /** Rule .md files synced from team repo (plus CLI built-in rules). */
   ruleFiles: string[];
+  /** Copies in a tool's legacy rules directory the member edited: never removed, only named. */
+  keptRuleFiles: string[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
   agentFiles: string[];
   /** teamai-managed MCP servers from managed-mcp.json (`tool/server` or `tool:project/server`). */
@@ -149,6 +153,7 @@ interface ToolResources {
   claudeMdFiles: string[];
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
+  keptRuleFiles: string[];
   agentFiles: string[];
 }
 
@@ -307,7 +312,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], skillDirs: [], ruleFiles: [], agentFiles: [],
+    claudeMdFiles: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -476,12 +481,9 @@ async function discoverToolResources(
 
   // (d) Rules — team-synced rules plus CLI built-in rules (teamRuleNames
   // now includes BUILTIN_RULE_NAMES). User-authored rules are left alone.
-  // The legacy directory holds copies a release made before the tool's rules
-  // moved into its instructions file, which a pull may not have reclaimed yet.
-  const rulesDirs = new Set<string>();
-  if (toolPath.rules) rulesDirs.add(path.join(baseDir, toolPath.rules));
-  if (LEGACY_RULE_DIRS[tool]) rulesDirs.add(path.join(baseDir, LEGACY_RULE_DIRS[tool]));
-  for (const rulesDir of rulesDirs) {
+  // A legacy rules directory is buildRemovalPlan's: its copies go on ownership.
+  if (toolPath.rules) {
+    const rulesDir = path.join(baseDir, toolPath.rules);
     if (await pathExists(rulesDir)) {
       const files = await listFilesRecursive(rulesDir);
       for (const file of files) {
@@ -595,6 +597,19 @@ async function buildRemovalPlan(
     );
   }
 
+  // (d) continued: the copies a release made in a tool's legacy rules
+  // directory, before its rules moved into its instructions file, which a pull
+  // may not have reclaimed yet. A name is no proof there: only the copies a
+  // pull would reclaim go, and the ones the member edited stay, named.
+  const legacyCopies = await new RulesHandler()
+    .legacyRuleCopies(teamConfig, localConfig, await deliveredHashes(localConfig));
+  for (const { tool, owned, edited } of legacyCopies) {
+    const res = perTool.get(tool);
+    if (!res) continue;
+    res.ruleFiles.push(...owned);
+    res.keptRuleFiles.push(...edited);
+  }
+
   // A tool only still "uses" a shared resource (AGENTS.md, .teamai/) if it is
   // actually enabled and installed. Several tools default to the same shared
   // path — e.g. Hermes/WorkBuddy default to the same project AGENTS.md as Pi —
@@ -641,6 +656,7 @@ async function buildRemovalPlan(
     claudeMdFiles: [],
     skillDirs: [],
     ruleFiles: [],
+    keptRuleFiles: [],
     agentFiles: [],
     mcpServers: [],
     shellProfiles: [],
@@ -690,6 +706,7 @@ async function buildRemovalPlan(
     }
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
+    plan.keptRuleFiles.push(...res.keptRuleFiles);
     plan.agentFiles.push(...res.agentFiles);
   }
 
@@ -1195,6 +1212,15 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       agentKey = matched; // normalize to canonical toolPaths key
     }
     const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
+    // Uninstall never removes these, so they are named whatever happens next.
+    if (plan.keptRuleFiles.length > 0) {
+      const one = plan.keptRuleFiles.length === 1;
+      log.warn(
+        `Kept ${plan.keptRuleFiles.join(', ')}: ${one ? 'it differs' : 'they differ'} from what teamai delivered there, `
+        + `so ${one ? 'it holds' : 'they hold'} your edits. Codex does not read .md files in its rules directory; `
+        + `delete ${one ? 'it' : 'them'} once you have saved what you need.`,
+      );
+    }
 
     if (isPlanEmpty(plan)) {
       log.info('Nothing to uninstall');

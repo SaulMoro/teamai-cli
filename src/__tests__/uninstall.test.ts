@@ -50,6 +50,7 @@ vi.mock('../utils/logger.js', () => ({
 import { uninstall } from '../uninstall.js';
 import { log } from '../utils/logger.js';
 import { EnvHandler } from '../resources/env.js';
+import { deployBuiltinRules } from '../builtin-rules.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
@@ -710,7 +711,7 @@ describe('uninstall', () => {
         repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
       });
       mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
-      return { projectRoot, teamaiHome, agentsMd: path.join(projectRoot, 'AGENTS.md') };
+      return { projectRoot, teamaiHome, localConfig, agentsMd: path.join(projectRoot, 'AGENTS.md') };
     }
 
     it.each(['codex', 'codex-internal', 'tcodex'])('a full uninstall removes the team-rules block and the old .%s/rules copies, keeping its own files', async (tool) => {
@@ -721,7 +722,7 @@ describe('uninstall', () => {
         claudemd: 'AGENTS.md',
         userScope: { claudemd: `.${tool}/AGENTS.md` },
       };
-      const { projectRoot, agentsMd } = await projectFixture({ [tool]: toolPaths }, [tool]);
+      const { projectRoot, localConfig, agentsMd } = await projectFixture({ [tool]: toolPaths }, [tool]);
       await fse.ensureDir(path.join(projectRoot, `.${tool}`));
       await fse.writeJson(path.join(projectRoot, `.${tool}`, 'hooks.json'), {});
       // The file as teamai creates it for the block: nothing left worth a file.
@@ -729,7 +730,8 @@ describe('uninstall', () => {
       const legacyRules = path.join(projectRoot, `.${tool}`, 'rules');
       await fse.ensureDir(legacyRules);
       await fse.writeFile(path.join(legacyRules, 'team-rule.md'), '# Team Rule');
-      await fse.writeFile(path.join(legacyRules, 'teamai-recall.md'), '# Recall Rule');
+      // The recall rule as a pull before #938 deployed it there.
+      await deployBuiltinRules(makeTeamConfig({ toolPaths: { [tool]: { ...toolPaths, rules: `.${tool}/rules` } } }), localConfig);
       await fse.writeFile(path.join(legacyRules, 'default.rules'), 'prefix_rule(pattern=["ls"])');
       await fse.writeFile(path.join(legacyRules, 'my-own-rule.md'), 'mine');
       const printed = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -747,6 +749,41 @@ describe('uninstall', () => {
       expect(await fse.pathExists(path.join(legacyRules, 'teamai-recall.md'))).toBe(false);
       expect(await fse.pathExists(path.join(legacyRules, 'default.rules'))).toBe(true);
       expect(await fse.pathExists(path.join(legacyRules, 'my-own-rule.md'))).toBe(true);
+    });
+
+    async function codexLegacyFixture() {
+      const fixture = await projectFixture({ codex: codexPaths }, ['codex']);
+      await fse.ensureDir(path.join(fixture.projectRoot, '.codex', 'rules'));
+      await fse.writeJson(path.join(fixture.projectRoot, '.codex', 'hooks.json'), {});
+      return { ...fixture, legacy: (file: string) => path.join(fixture.projectRoot, '.codex', 'rules', file) };
+    }
+
+    it('keeps a .codex/rules copy the member edited and names it in an English warning', async () => {
+      const { legacy } = await codexLegacyFixture();
+      await fse.writeFile(legacy('team-rule.md'), '# Team Rule\nMy own note.\n');
+      await fse.writeFile(legacy('teamai-recall.md'), '# Recall Rule, as I rewrote it');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readFile(legacy('team-rule.md'), 'utf8')).toBe('# Team Rule\nMy own note.\n');
+      expect(await fse.readFile(legacy('teamai-recall.md'), 'utf8')).toBe('# Recall Rule, as I rewrote it');
+      const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+      const kept = warnings.filter((message) => message.includes(legacy('team-rule.md')));
+      expect(kept).toHaveLength(1);
+      expect(kept[0]).toContain(legacy('teamai-recall.md'));
+      expect(kept[0]).toContain('Codex does not read');
+      expect(kept[0]).toMatch(/[Dd]elete/);
+    });
+
+    it('removes the .codex/rules copy of a rule the team removed before this checkout pulled again', async () => {
+      const { legacy } = await codexLegacyFixture();
+      const repoPath = path.join(tmpDir, 'team-repo');
+      await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
+      await fse.writeFile(legacy('retired.md'), 'A rule the team retired.\n');
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(legacy('retired.md'))).toBe(false);
     });
 
     it('--agent codex with Pi still active removes the team-rules and recall blocks and keeps Pi\'s', async () => {
