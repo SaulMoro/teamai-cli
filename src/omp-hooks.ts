@@ -73,10 +73,11 @@ export function resolveOmpExtensionsDir(): string {
  *     `ctx.agent`, which only OMP >= 18.3.2 has: it is read only when present.
  *     `tool_result` also carries the tool's text output and a status from
  *     `isError`. A subagent's session file is `<parent>/<agent id>.jsonl`
- *     beside its parent's `<parent>.jsonl`, whose header names the parent
- *     session, so a subagent's `tool_result` links its session to the
- *     parent's, once the parent's file is on disk; OMP has no API for it. A
- *     main session without a session file (`--no-session`) gives no link.
+ *     beside its parent's `<parent>.jsonl`, whose session header (after the
+ *     title slot line) names the parent session, so a subagent's
+ *     `tool_result` links its session to the parent's, once the parent's file
+ *     is on disk; OMP has no API for it. A main session without a session
+ *     file (`--no-session`) gives no link.
  *   - Tool naming: OMP passes lowercase tool ids (`bash`, `read`, …) and has
  *     no `Skill` / `TodoWrite` tool to map onto Claude's PascalCase matcher
  *     names, so there is no matcher-scoped pass — only the wildcard
@@ -121,14 +122,14 @@ const sessionOf = (ctx) => {
   return fields;
 };
 
-/** How much of a session file is read for its header line. */
+/** How much of a session file is read for its header lines. */
 const HEADER_READ_BYTES = 65536;
 
 /**
  * The session a subagent's session was started from: its file is
- * <parent>/<agent id>.jsonl, and the first line of <parent>.jsonl is the
- * parent's session header. Undefined for any other session, and while the
- * parent's file is not on disk.
+ * <parent>/<agent id>.jsonl, and <parent>.jsonl opens with OMP's title slot
+ * line, then the parent's session header. Undefined for any other session,
+ * and while the parent's file is not on disk.
  */
 const parentSessionOf = (ctx) => {
   try {
@@ -138,7 +139,9 @@ const parentSessionOf = (ctx) => {
     try {
       const head = Buffer.alloc(HEADER_READ_BYTES);
       const size = fs.readSync(fd, head, 0, head.length, 0);
-      const header = JSON.parse(head.toString("utf8", 0, size).split("\\n", 1)[0]);
+      const [first, second] = head.toString("utf8", 0, size).split("\\n", 2);
+      let header = JSON.parse(first);
+      if (header && header.type === "title") header = JSON.parse(second);
       return header && header.type === "session" && typeof header.id === "string" && header.id ? header.id : undefined;
     } finally {
       fs.closeSync(fd);

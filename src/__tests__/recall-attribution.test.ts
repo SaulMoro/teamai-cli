@@ -536,16 +536,18 @@ class Harness {
 
   /**
    * Write OMP's session files as OMP lays them out: `parent` at
-   * `<ts>_<id>.jsonl`, headed by its session header, and the subagent `agent`
-   * ran in session `child` at `<ts>_<id>/<agent id>.jsonl`. With
-   * `parentHeader: false` the parent's file is not on disk yet; the returned
-   * function writes it.
+   * `<ts>_<id>.jsonl`, headed by its padded title slot and then its session
+   * header, and the subagent `agent` ran in session `child` at
+   * `<ts>_<id>/<agent id>.jsonl`. With `parentHeader: false` the parent's file
+   * is not on disk yet; the returned function writes it.
    */
   ompSessions(parent: string, child: string, agent: OmpAgent, options: { parentHeader?: boolean } = {}): () => void {
     const parentFile = path.join(this.tmp, 'omp-sessions', `2026-09-01T09-00-00-000Z_${parent}.jsonl`);
     const artifactsDir = parentFile.slice(0, -'.jsonl'.length);
     fs.mkdirSync(artifactsDir, { recursive: true });
-    const header = (id: string) => JSON.stringify({ type: 'session', version: 3, id, timestamp: new Date(T0).toISOString(), cwd: this.root }) + '\n';
+    const timestamp = new Date(T0).toISOString();
+    const header = (id: string) => JSON.stringify({ type: 'title', v: 1, title: '', updatedAt: timestamp, pad: ' '.repeat(128) }) + '\n'
+      + JSON.stringify({ type: 'session', version: 3, id, timestamp, cwd: this.root }) + '\n';
     const writeParent = () => fs.writeFileSync(parentFile, header(parent));
     if (options.parentHeader !== false) writeParent();
     const childFile = path.join(artifactsDir, `${agent.id}.jsonl`);
