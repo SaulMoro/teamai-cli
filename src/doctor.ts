@@ -685,12 +685,14 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
   // Info, not checks: which namespace item or entry replaces which root one
   // (#707), a model alias an agent uses from a namespace not active here, and
   // how each alias agent's model resolved in each tool (#830).
+  const { ruleChannelNotes } = await import('./resources/rules.js');
   const notes = [
     ...await buildNamespaceNotes(ctx),
     ...await entryNamespaceNotes(ctx),
     ...await aliasNamespaceNotes(ctx),
     ...await agentModelNotes(ctx),
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
+    ...await ruleChannelNotes(localConfig),
     ...codexTrust.notes,
   ];
 

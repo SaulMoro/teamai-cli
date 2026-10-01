@@ -8,6 +8,7 @@ import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_T
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { splitFrontmatter } from '../utils/frontmatter.js';
 import { rulePaths } from './team-rule.js';
+import type { OpencodeRuleGlobs } from './opencode-config.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
@@ -532,8 +533,10 @@ export class RulesHandler extends ResourceHandler {
 
     // Hermes: inline all team rules into a teamai-managed block in SOUL.md
     // (user-level standing instructions). Only when Hermes is actually
-    // installed — never create ~/.hermes for users who don't use it.
-    if (!isAgentExcluded(localConfig, 'hermes')) {
+    // installed — never create ~/.hermes for users who don't use it. SOUL.md
+    // is global, so only a user-scope pull writes it; Hermes gets no project
+    // rules (see `ruleChannelNotes`, #946).
+    if (localConfig.scope === 'user' && !isAgentExcluded(localConfig, 'hermes')) {
       const { getHermesHome } = await import('../hermes-home.js');
       if (await pathExists(getHermesHome())) {
         const { upsertSoulRules } = await import('../hermes-config.js');
@@ -547,7 +550,7 @@ export class RulesHandler extends ResourceHandler {
     // until referenced from `instructions` in opencode.json. Activate (or, when
     // there are no team rules, deactivate) that glob. Runs before the empty-set
     // early return so removing the last rule also removes the glob.
-    await this.activateOpencodeInstructions(teamConfig, localConfig, rules.length > 0);
+    await this.activateOpencodeInstructions(teamConfig, localConfig, rules);
 
     // Empty set = no team rule reaches this directory right now. We deliberately do
     // NOT run the aggressive stale-file cleanup below in that case, because it would
@@ -842,41 +845,44 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
-   * Add or remove the teamai rules glob in OpenCode's opencode.json `instructions`
-   * array, so copied rule files are actually loaded. No-op for any tool other than
-   * opencode, when opencode is disabled, or when opencode is not installed (we
-   * never create an opencode.json for a user who doesn't use OpenCode).
+   * Make the teamai rules globs in OpenCode's opencode.json `instructions`
+   * match the rules delivered, so copied rule files are actually loaded, and
+   * remove them all when no rule is. No-op when opencode is disabled or not
+   * installed (we never create an opencode.json for a user who doesn't use
+   * OpenCode).
    */
   private async activateOpencodeInstructions(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
-    present: boolean,
+    rules: readonly ResourceItem[],
   ): Promise<void> {
-    const target = await this.opencodeInstructionsTarget(teamConfig, localConfig);
+    const target = await this.opencodeInstructionsTarget(teamConfig, localConfig, rules);
     if (target === null) return;
 
-    const { reconcileOpencodeInstructions } = await import('./opencode-config.js');
+    const { reconcileOpencodeInstructionSet } = await import('./opencode-config.js');
     try {
-      await reconcileOpencodeInstructions(target.configFile, target.glob, present);
+      await reconcileOpencodeInstructionSet(target.configFile, rules.length > 0 ? target.globs : [], target.owns);
     } catch (e) {
       log.warn(`Failed to update OpenCode instructions in ${target.configFile}: ${(e as Error).message}`);
     }
   }
 
   /**
-   * The opencode.json this scope activates rules through, and the one glob
-   * teamai owns inside it. Null when OpenCode receives no rules here:
-   * excluded, not installed, or configured without a rules or config path.
+   * The opencode.json this scope activates rules through, the globs that load
+   * `rules` from it, and which `instructions` entries teamai owns there. Null
+   * when OpenCode receives no rules here: excluded, not installed, or
+   * configured without a rules or config path.
    *
    * Read-only, and public for the same reason `deliveryTargets` is: OpenCode
    * does not auto-scan its rules directory, so a `.md` sitting there is inert
-   * until this glob references it. A check that derived the path a second time
+   * until a glob references it. A check that derived the path a second time
    * could look at a different file than the pull writes (#624).
    */
   async opencodeInstructionsTarget(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
-  ): Promise<{ configFile: string; glob: string } | null> {
+    rules: readonly ResourceItem[],
+  ): Promise<({ configFile: string } & OpencodeRuleGlobs) | null> {
     if (isAgentExcluded(localConfig, 'opencode')) return null;
     const paths = scopedToolPaths(teamConfig, localConfig)['opencode'];
     if (!paths?.rules) return null;
@@ -891,8 +897,20 @@ export class RulesHandler extends ResourceHandler {
     if (!configRel) return null;
 
     const configFile = path.join(baseDir, configRel);
-    const { opencodeRulesGlob } = await import('./opencode-config.js');
-    return { configFile, glob: opencodeRulesGlob(configFile, path.join(baseDir, paths.rules)) };
+    const rulesDir = path.join(baseDir, paths.rules);
+    // The directories pull writes the rules to, from the same seam it uses.
+    const ruleDirs: string[] = [];
+    for (const rule of rules) {
+      for (const { tool, dest } of await this.deliveryTargets(teamConfig, localConfig, rule)) {
+        if (tool === 'opencode') ruleDirs.push(path.dirname(dest));
+      }
+    }
+    // Every directory a team rule can land in, so a namespace this member no
+    // longer receives still has its glob reclaimed.
+    const teamDirs = (await this.scanTeamForPull(teamConfig, localConfig))
+      .map((rule) => path.dirname(path.join(rulesDir, `${rule.name}.md`)));
+    const { opencodeRuleGlobs } = await import('./opencode-config.js');
+    return { configFile, ...opencodeRuleGlobs(localConfig.scope, configFile, rulesDir, ruleDirs, teamDirs) };
   }
 
   /**
@@ -1040,4 +1058,26 @@ export async function teamRulesContext(teamConfig: TeamaiConfig, localConfig: Lo
   const { items } = await resolveDesiredRules(teamConfig, localConfig, await buildRolePullContext(localConfig));
   const text = await inlinedRulesText(items);
   return text === '' ? null : `Team rules (from teamai):\n\n${text}`;
+}
+
+/**
+ * Why an installed tool gets no rules in this scope, for init and doctor to
+ * print as notes rather than failures (#946). Hermes reads its rules from the
+ * global SOUL.md, which only a user-scope pull writes.
+ */
+export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string[]> {
+  const notes: string[] = [];
+  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'hermes')) {
+    const { getHermesHome } = await import('../hermes-home.js');
+    if (await pathExists(getHermesHome())) {
+      notes.push(
+        'Hermes gets no project rules: it reads team rules only from the global SOUL.md, which a '
+        + 'user-scope pull writes (`teamai init --scope user`). A project channel would cost more than '
+        + 'it gives: .hermes.md would hide the project AGENTS.md, a pre_llm_call hook repeats the rules '
+        + 'on every turn, and the plugin prompt section (at most 4,000 characters) already carries '
+        + 'the team instructions.',
+      );
+    }
+  }
+  return notes;
 }

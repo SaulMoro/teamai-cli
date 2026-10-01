@@ -59,6 +59,9 @@ and give it your team repo URL."*
 
 ## Notes
 
+- For OpenCode, uninstall also removes the rules globs teamai added to
+  `instructions` in `opencode.json`, including the relative `rules/*.md` an
+  earlier release wrote in user scope. The user's own entries stay.
 - Uninstall cleans legacy Codex rule copies at the recorded `toolRoots`
   location, including publishers' bare local filenames. It keeps edited copies.
   For a rule the team has

@@ -337,29 +337,51 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const handler = new RulesHandler();
   const checks: Check[] = [];
 
-  const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig);
+  const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig, items);
   if (opencode !== null) {
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
     const instructions = await readOpencodeInstructionList(opencode.configFile);
-    const active = instructions !== null && instructions.includes(opencode.glob);
+    const missing = opencode.globs.filter((glob) => !instructions?.includes(glob));
+    const stale = (instructions ?? []).filter((entry): entry is string =>
+      typeof entry === 'string' && opencode.owns(entry) && !opencode.globs.includes(entry));
+    const relativeStale = stale.filter((entry) => !path.isAbsolute(entry));
+    const namespaceStale = stale.filter((entry) => path.isAbsolute(entry));
+    const quoted = (entries: string[]): string => entries.map((entry) => `\`${entry}\``).join(', ');
+    const rerun = 'Run `teamai pull --force`: a plain pull skips a scope whose team repo has not changed, '
+      + 'so it cannot restore this.';
     checks.push({
       name: 'Team rules are active in opencode',
       source: 'local',
-      check: async () => active,
+      check: async () => instructions !== null && missing.length === 0 && stale.length === 0,
       fix: instructions === null
         ? `${opencode.configFile} could not be read as a JSON object, so the pull left it alone `
-          + `and never added \`${opencode.glob}\` to \`instructions\`. Fix the file, then run `
+          + `and never added ${quoted(opencode.globs)} to \`instructions\`. Fix the file, then run `
           + '`teamai pull --force`.'
-        : `${opencode.configFile} does not list \`${opencode.glob}\` under \`instructions\`. `
-          + 'OpenCode does not scan a rules directory, so every team rule delivered there is '
-          + 'inert until this glob references it. Run `teamai pull --force`: a plain pull skips '
-          + 'a scope whose team repo has not changed, so it cannot restore this.',
+        : [
+          ...(missing.length > 0
+            ? [`${opencode.configFile} does not list ${quoted(missing)} under \`instructions\`. `
+              + 'OpenCode does not scan a rules directory, so every team rule delivered there is '
+              + 'inert until a glob references it.']
+            : []),
+          ...(relativeStale.length > 0
+            ? [`${opencode.configFile} still lists ${quoted(relativeStale)}, which teamai no longer writes. `
+              + 'OpenCode resolves a relative entry from the session\'s working directory, so it loads '
+              + 'that directory\'s rules instead of the team rules.']
+            : []),
+          ...(namespaceStale.length > 0
+            ? [`${opencode.configFile} still lists ${quoted(namespaceStale)}, for a namespace whose rules `
+              + 'no longer reach this scope, so OpenCode loads whatever copy is left there.']
+            : []),
+          rerun,
+        ].join(' '),
     });
   }
 
   const { getHermesHome } = await import('./hermes-home.js');
   const hermesHome = getHermesHome();
-  if (!isAgentExcluded(localConfig, 'hermes') && await pathExists(hermesHome)) {
+  // SOUL.md is global and only a user-scope pull writes it; in a project,
+  // `ruleChannelNotes` says why Hermes gets no project rules (#946).
+  if (localConfig.scope === 'user' && !isAgentExcluded(localConfig, 'hermes') && await pathExists(hermesHome)) {
     const { getHermesSoulPath, readSoulRules } = await import('./hermes-config.js');
     const expected = await inlinedRulesText(items);
     const delivered = await readSoulRules();

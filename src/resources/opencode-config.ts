@@ -7,23 +7,24 @@ import { log } from '../utils/logger.js';
 //  Unlike every other tool teamai targets, OpenCode does not auto-scan a rules
 //  directory. Rule .md files copied into `.opencode/rules/` are inert until they
 //  are referenced from the `instructions` array in `opencode.json`. This module
-//  maintains exactly one teamai-managed glob in that array by key-level surgery:
-//  it reads the JSON, adds or removes only our glob, and writes every other
-//  top-level key (including `mcp`, which the MCP reconcile engine owns) back
-//  untouched. It never rewrites the user's own `instructions` entries.
+//  maintains the teamai-managed globs in that array by key-level surgery: it
+//  reads the JSON, adds or removes only entries teamai owns, and writes every
+//  other top-level key (including `mcp`, which the MCP reconcile engine owns)
+//  back untouched. It never rewrites the user's own `instructions` entries.
 //
 //  The same opencode.json is shared with the MCP `mcp` key, so both writers must
 //  be surgical — a regenerate-from-scratch here would clobber injected servers.
 
 /**
- * The glob OpenCode should use to load teamai-managed rules, expressed relative
- * to the directory that holds opencode.json.
+ * The rules glob relative to the directory that holds opencode.json.
  *
- * OpenCode resolves relative `instructions` paths against the config file's own
- * directory. In project scope, opencode.json sits at the repo root and rules at
- * `<root>/.opencode/rules`, giving `.opencode/rules/*.md` (the same shape as the
- * documented `.cursor/rules/*.md` example). In user scope, both live under
- * `~/.config/opencode/`, giving a clean `rules/*.md`.
+ * OpenCode resolves a relative `instructions` entry from the session's working
+ * directory, not from the config file. In project scope opencode.json sits at
+ * the repo root and rules at `<root>/.opencode/rules`, giving
+ * `.opencode/rules/*.md`, which resolves the same from the root. In user scope
+ * this gives `rules/*.md`, the entry earlier releases wrote and which loaded the
+ * project's `rules/` instead; `opencodeRuleGlobs` uses it only to reclaim that
+ * entry (#946).
  */
 export function opencodeRulesGlob(configFileAbs: string, rulesDirAbs: string): string {
   const rel = path.relative(path.dirname(configFileAbs), rulesDirAbs);
@@ -32,32 +33,74 @@ export function opencodeRulesGlob(configFileAbs: string, rulesDirAbs: string): s
   return `${relPosix}/*.md`;
 }
 
+/** The `instructions` globs that load teamai's rules, and which entries teamai owns. */
+export interface OpencodeRuleGlobs {
+  /** The globs that should be listed while the team has rules here. */
+  globs: string[];
+  /** Whether an `instructions` entry is one teamai wrote for rules, now or in an earlier release. */
+  owns: (entry: string) => boolean;
+}
+
 /**
- * Ensure `opencode.json` references (or stops referencing) the teamai rules glob.
+ * The rules globs for one scope's opencode.json.
  *
- * @param configFileAbs Absolute path to the opencode.json to edit.
- * @param glob          The instructions glob to add/remove (see opencodeRulesGlob).
- * @param present       true = the glob should be in `instructions`; false = removed.
+ * Project scope keeps the one relative glob from the root opencode.json.
+ *
+ * In user scope a relative entry resolves from the session cwd, not from the
+ * config file, so the old `rules/*.md` loaded the project's `rules/` instead
+ * of the user rules (#946). The globs are absolute, and since OpenCode globs
+ * only the basename of an absolute entry (`**` never matches), each directory
+ * a rule lands in gets its own: the rules root plus one per namespace.
+ * teamai owns the root glob, the glob of each directory a team rule can land
+ * in, and the old relative one. A glob for any other directory is the
+ * member's own.
+ *
+ * @param ruleDirsAbs The directories the delivered rules land in.
+ * @param teamDirsAbs The directories any team rule can land in, delivered here or not.
+ */
+export function opencodeRuleGlobs(
+  scope: 'user' | 'project',
+  configFileAbs: string,
+  rulesDirAbs: string,
+  ruleDirsAbs: readonly string[],
+  teamDirsAbs: readonly string[],
+): OpencodeRuleGlobs {
+  const relative = opencodeRulesGlob(configFileAbs, rulesDirAbs);
+  if (scope === 'project') return { globs: [relative], owns: (entry) => entry === relative };
+
+  const posix = (p: string): string => p.split(path.sep).join('/');
+  const root = posix(rulesDirAbs);
+  const under = (dirs: readonly string[]): string[] =>
+    [...new Set(dirs.map(posix))].filter((dir) => dir.startsWith(`${root}/`)).sort();
+  const globs = [root, ...under(ruleDirsAbs)].map((dir) => `${dir}/*.md`);
+  const owned = new Set([relative, ...globs, ...under(teamDirsAbs).map((dir) => `${dir}/*.md`)]);
+  return { globs, owns: (entry) => owned.has(entry) };
+}
+
+/**
+ * Make the entries teamai owns in `instructions` exactly `desired`: add the
+ * missing ones at the end, remove the owned ones not desired, and leave every
+ * other entry where it is.
+ *
  * @returns true if the file was written.
  *
- * When `present` is true and the file does not exist, it is created with just the
- * `instructions` array — teamai owns nothing else in it. When `present` is false
- * and the file does not exist, nothing happens. A file that exists but cannot be
- * parsed as a JSON object is left strictly alone (it may hold config we do not
- * understand), and the function returns false.
+ * A missing file is created with just `desired`, or left missing when nothing
+ * is desired. A file that exists but cannot be parsed as a JSON object is left
+ * strictly alone (it may hold config we do not understand), and the function
+ * returns false.
  */
-export async function reconcileOpencodeInstructions(
+export async function reconcileOpencodeInstructionSet(
   configFileAbs: string,
-  glob: string,
-  present: boolean,
+  desired: readonly string[],
+  owns: (entry: string) => boolean,
   purpose = 'rules activation',
 ): Promise<boolean> {
   const exists = await pathExists(configFileAbs);
 
   if (!exists) {
-    if (!present) return false;
-    await writeJsonAtomic(configFileAbs, { instructions: [glob] });
-    log.debug(`Created ${configFileAbs} with teamai rules instructions glob`);
+    if (desired.length === 0) return false;
+    await writeJsonAtomic(configFileAbs, { instructions: [...desired] });
+    log.debug(`Created ${configFileAbs} with teamai ${purpose} entries`);
     return true;
   }
 
@@ -86,14 +129,9 @@ export async function reconcileOpencodeInstructions(
   // (OpenCode may treat instruction order as precedence, so reordering the
   // user's entries on every pull would silently change their config.)
   const original = Array.isArray(data.instructions) ? [...(data.instructions as unknown[])] : [];
-  const has = original.includes(glob);
-
-  if (present && has) return false;
-  if (!present && !has) return false;
-
-  const next = present
-    ? [...original, glob]           // append our glob without touching existing order
-    : original.filter((g) => g !== glob); // remove only our glob, everything else stays put
+  const kept = original.filter((entry) => typeof entry !== 'string' || !owns(entry) || desired.includes(entry));
+  const next = [...kept, ...desired.filter((entry) => !kept.includes(entry))];
+  if (next.length === original.length && next.every((entry, i) => entry === original[i])) return false;
 
   // Key-level surgery: drop `instructions` entirely when it would be empty,
   // otherwise write the reconciled array back.
@@ -104,8 +142,31 @@ export async function reconcileOpencodeInstructions(
   }
 
   await writeJsonAtomic(configFileAbs, data);
-  log.debug(`${present ? 'Added' : 'Removed'} teamai ${purpose} entry in ${configFileAbs}`);
+  log.debug(`Reconciled teamai ${purpose} entries in ${configFileAbs}`);
   return true;
+}
+
+/**
+ * Ensure `opencode.json` references (or stops referencing) one teamai entry.
+ *
+ * @param configFileAbs Absolute path to the opencode.json to edit.
+ * @param glob          The instructions glob to add/remove (see opencodeRulesGlob).
+ * @param present       true = the glob should be in `instructions`; false = removed.
+ * @returns true if the file was written.
+ *
+ * When `present` is true and the file does not exist, it is created with just the
+ * `instructions` array — teamai owns nothing else in it. When `present` is false
+ * and the file does not exist, nothing happens. A file that exists but cannot be
+ * parsed as a JSON object is left strictly alone (it may hold config we do not
+ * understand), and the function returns false.
+ */
+export async function reconcileOpencodeInstructions(
+  configFileAbs: string,
+  glob: string,
+  present: boolean,
+  purpose = 'rules activation',
+): Promise<boolean> {
+  return reconcileOpencodeInstructionSet(configFileAbs, present ? [glob] : [], (entry) => entry === glob, purpose);
 }
 
 // ─── OpenCode team instructions (#945) ───────────────────────

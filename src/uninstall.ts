@@ -115,6 +115,8 @@ interface RemovalPlan {
   ruleFiles: string[];
   /** Copies in a tool's legacy rules directory the member edited: never removed, only named. */
   keptRuleFiles: string[];
+  /** The rules globs teamai owns in OpenCode's opencode.json `instructions` (#946). */
+  opencodeOwnedGlobs: OpencodeRuleGlobEntries | null;
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
   agentFiles: string[];
   /** teamai-managed MCP servers from managed-mcp.json (`tool/server` or `tool:project/server`). */
@@ -178,7 +180,14 @@ interface ToolResources {
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
   keptRuleFiles: string[];
+  opencodeOwnedGlobs: OpencodeRuleGlobEntries | null;
   agentFiles: string[];
+}
+
+/** The `instructions` entries teamai owns in one opencode.json. */
+interface OpencodeRuleGlobEntries {
+  configFile: string;
+  entries: string[];
 }
 
 function hasToolResources(r: ToolResources): boolean {
@@ -194,6 +203,7 @@ function hasToolResources(r: ToolResources): boolean {
     r.opencodeInstructions.length > 0 ||
     r.skillDirs.length > 0 ||
     r.ruleFiles.length > 0 ||
+    r.opencodeOwnedGlobs !== null ||
     r.agentFiles.length > 0
   );
 }
@@ -359,7 +369,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: null, agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -732,6 +742,18 @@ async function buildRemovalPlan(
     res.keptRuleFiles.push(...edited);
   }
 
+  // (d) continued: OpenCode loads its rules through globs in opencode.json,
+  // which would point at nothing once the copies go (#946).
+  const opencodeTarget = opencodeRes
+    ? await new RulesHandler().opencodeInstructionsTarget(teamConfig, localConfig, [])
+    : null;
+  if (opencodeRes && opencodeTarget) {
+    const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+    const entries = ((await readOpencodeInstructionList(opencodeTarget.configFile)) ?? [])
+      .filter((entry): entry is string => typeof entry === 'string' && opencodeTarget.owns(entry));
+    if (entries.length > 0) opencodeRes.opencodeOwnedGlobs = { configFile: opencodeTarget.configFile, entries };
+  }
+
   // A tool only still "uses" a shared resource (AGENTS.md, .teamai/) if it is
   // actually enabled and installed. Several tools default to the same shared
   // path — e.g. Hermes/WorkBuddy default to the same project AGENTS.md as Pi —
@@ -784,6 +806,7 @@ async function buildRemovalPlan(
     skillDirs: [],
     ruleFiles: [],
     keptRuleFiles: [],
+    opencodeOwnedGlobs: null,
     agentFiles: [],
     mcpServers: [],
     shellProfiles: [],
@@ -851,6 +874,7 @@ async function buildRemovalPlan(
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
     plan.keptRuleFiles.push(...res.keptRuleFiles);
+    if (res.opencodeOwnedGlobs) plan.opencodeOwnedGlobs = res.opencodeOwnedGlobs;
     plan.agentFiles.push(...res.agentFiles);
   }
 
@@ -956,6 +980,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.opencodeInstructions.length === 0 &&
     plan.skillDirs.length === 0 &&
     plan.ruleFiles.length === 0 &&
+    plan.opencodeOwnedGlobs === null &&
     plan.agentFiles.length === 0 &&
     plan.mcpServers.length === 0 &&
     plan.shellProfiles.length === 0 &&
@@ -1049,6 +1074,11 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
 
   if (plan.ruleFiles.length > 0) {
     console.log(`   Rules (${plan.ruleFiles.length} files)`);
+    console.log('');
+  }
+
+  if (plan.opencodeOwnedGlobs) {
+    console.log(`   OpenCode rules globs (${plan.opencodeOwnedGlobs.entries.length}) in ${plan.opencodeOwnedGlobs.configFile}`);
     console.log('');
   }
 
@@ -1323,6 +1353,17 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   if (plan.ruleFiles.length > 0) {
     log.success(`Removed ${plan.ruleFiles.length} rule files`);
   }
+  if (plan.opencodeOwnedGlobs) {
+    const { configFile, entries } = plan.opencodeOwnedGlobs;
+    try {
+      const { reconcileOpencodeInstructionSet } = await import('./resources/opencode-config.js');
+      if (await reconcileOpencodeInstructionSet(configFile, [], (entry) => entries.includes(entry))) {
+        log.success(`Removed ${entries.length} OpenCode rules globs from ${configFile}`);
+      }
+    } catch (e) {
+      log.warn(`Failed to remove the OpenCode rules globs from ${configFile}: ${(e as Error).message}`);
+    }
+  }
 
   // (d2) Remove built-in agent files (e.g. teamai-recall)
   for (const agentFile of plan.agentFiles) {
@@ -1379,7 +1420,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     }
   }
 
-  // (h) Hermes: clear teamai-managed entries — the SOUL.md rules block, the
+  // (h) Hermes: clear teamai-managed entries — the SOUL.md rules block (user scope), the
   // status-report hook (config.yaml + allowlist + script). Gated on hermesCleanup
   // so a targeted `--agent <other>` uninstall never touches ~/.hermes. No-op safe.
   if (plan.hermesCleanup) {
@@ -1387,7 +1428,8 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
       const { removeHermesHooks } = await import('./hermes-hooks.js');
       const { removeSoulRules } = await import('./hermes-config.js');
       await removeHermesHooks();
-      await removeSoulRules();
+      // SOUL.md is global and only a user-scope pull writes its rules block (#946).
+      if (plan.scope === 'user') await removeSoulRules();
     } catch (e) {
       log.debug(`Hermes uninstall cleanup skipped: ${(e as Error).message}`);
     }

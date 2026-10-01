@@ -21,7 +21,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import crypto from 'node:crypto';
 import { loadLocalConfig, loadStateForScope, loadTeamConfig } from '../config.js';
-import { buildChecks, resolveDoctorContext, type Check } from '../doctor.js';
+import { buildChecks, doctor, resolveDoctorContext, type Check, type DoctorReport } from '../doctor.js';
 import { checkoutKey } from '../pull.js';
 import { StateSchema, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
@@ -277,8 +277,40 @@ describe('doctor — rules delivered on disk', () => {
 
   it('passes when opencode.json lists the rules glob beside the user\'s own', async () => {
     await installOpencode();
-    await writeOpencodeConfig({ instructions: ['CONVENTIONS.md', 'rules/*.md'] });
+    await writeOpencodeConfig({ instructions: ['CONVENTIONS.md', `${path.join(homeDir, OPENCODE_RULES)}/*.md`] });
 
+    expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
+  });
+
+  it('fails on the relative rules/*.md an earlier release wrote, which loads the project\'s rules (#946)', async () => {
+    await installOpencode();
+    await writeOpencodeConfig({ instructions: ['rules/*.md', `${path.join(homeDir, OPENCODE_RULES)}/*.md`] });
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(await active!.check()).toBe(false);
+    expect(active!.fix).toContain('`rules/*.md`');
+    expect(active!.fix).toContain('session');
+  });
+
+  it('does not flag a glob the member added for a directory that is no team namespace (#946)', async () => {
+    await installOpencode();
+    const root = path.join(homeDir, OPENCODE_RULES);
+    await writeOpencodeConfig({ instructions: [`${root}/*.md`, `${root}/mine/*.md`] });
+
+    expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
+  });
+
+  it('fails until the directory of a namespaced rule has its own glob (#946)', async () => {
+    await installOpencode();
+    await writeTeamRule('fe/style');
+    const root = path.join(homeDir, OPENCODE_RULES);
+    await writeOpencodeConfig({ instructions: [`${root}/*.md`] });
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(await active!.check()).toBe(false);
+    expect(active!.fix).toContain(`\`${root}/fe/*.md\``);
+
+    await writeOpencodeConfig({ instructions: [`${root}/*.md`, `${root}/fe/*.md`] });
     expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
   });
 
@@ -353,6 +385,37 @@ describe('doctor — rules delivered on disk', () => {
     vi.stubEnv('HERMES_HOME', path.join(tempDir, 'no-hermes'));
 
     expect(await namedCheck('Team rules are inlined in Hermes SOUL.md')).toBeUndefined();
+  });
+
+  describe('Hermes in project scope (#946)', () => {
+    beforeEach(async () => {
+      const hermesHome = path.join(tempDir, 'hermes');
+      await fse.ensureDir(hermesHome);
+      vi.stubEnv('HERMES_HOME', hermesHome);
+      // The block a user-scope pull wrote, which holds the user rules, not this project's.
+      await fse.writeFile(path.join(hermesHome, 'SOUL.md'), '<!-- [teamai:rules:start] -->\nUser rule\n<!-- [teamai:rules:end] -->\n');
+      Object.assign(localConfig, { scope: 'project', projectRoot: path.join(tempDir, 'project') });
+    });
+
+    it('does not compare SOUL.md with the project rules, which only a user-scope pull writes there', async () => {
+      expect(await namedCheck('Team rules are inlined in Hermes SOUL.md')).toBeUndefined();
+    });
+
+    it('notes that Hermes gets no project rules, and why', async () => {
+      const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      let report: DoctorReport;
+      try {
+        await doctor({ json: true });
+        report = JSON.parse(String(spy.mock.calls.at(-1)?.[0])) as DoctorReport;
+      } finally {
+        spy.mockRestore();
+      }
+      const note = (report.notes ?? []).find((line) => line.startsWith('Hermes gets no project rules'));
+      expect(note).toBeDefined();
+      expect(note).toContain('.hermes.md');
+      expect(note).toContain('pre_llm_call');
+      expect(note).toContain('4,000');
+    });
   });
 
   describe('Codex AGENTS.md, user scope (#938)', () => {

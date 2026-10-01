@@ -1943,6 +1943,41 @@ describe('uninstall', () => {
     if (scenario === 'other tool') expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
   });
 
+  it('removes the OpenCode rules globs teamai owns from the user opencode.json, keeping the member\'s entries (#946)', async () => {
+    const homeDir = path.join(tmpDir, 'oc-home');
+    const repoPath = path.join(tmpDir, 'oc-team-repo');
+    await fse.ensureDir(path.join(repoPath, 'rules', 'fe'));
+    await fse.writeFile(path.join(repoPath, 'rules', 'team-rule.md'), '# Team Rule');
+    await fse.writeFile(path.join(repoPath, 'rules', 'fe', 'style.md'), '# FE');
+    const rulesDir = path.join(homeDir, '.config', 'opencode', 'rules');
+    await fse.ensureDir(path.join(rulesDir, 'fe'));
+    await fse.writeFile(path.join(rulesDir, 'team-rule.md'), '# Team Rule');
+    await fse.writeFile(path.join(rulesDir, 'fe', 'style.md'), '# FE');
+    const configFile = path.join(homeDir, '.config', 'opencode', 'opencode.json');
+    // `mine/` is no team namespace: its glob is the member's own entry.
+    await fse.writeJson(configFile, {
+      model: 'mine',
+      instructions: ['CONVENTIONS.md', `${rulesDir}/*.md`, `${rulesDir}/fe/*.md`, `${rulesDir}/mine/*.md`, 'rules/*.md'],
+    });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        opencode: {
+          skills: '.opencode/skills', rules: '.opencode/rules',
+          mcp: '.config/opencode/opencode.json', mcpProject: 'opencode.json',
+          userScope: { skills: '.config/opencode/skills', rules: '.config/opencode/rules' },
+        },
+      },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig });
+
+    await uninstall({ force: true });
+
+    expect(await fse.readJson(configFile)).toEqual({ model: 'mine', instructions: ['CONVENTIONS.md', `${rulesDir}/mine/*.md`] });
+  });
+
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the
   // legacy <projectRoot> copy was written by a CLI that knew nothing about it —
   // so the two targets must be looked for at different paths.
@@ -2720,6 +2755,27 @@ describe('uninstall', () => {
     await uninstall({ force: true });
 
     expect(await fse.pathExists(stub)).toBe(false);
+  });
+
+  it('a project-scope uninstall leaves the SOUL.md rules block, which only a user-scope pull writes (#946)', async () => {
+    const projectRoot = path.join(tmpDir, 'hermes-project');
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(path.join(repoPath, 'rules'));
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const hermesHome = path.join(tmpDir, 'hermes');
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    const soul = path.join(hermesHome, 'SOUL.md');
+    const userBlock = `my own soul\n\n${TEAMAI_RULES_START}\nUser rule\n${TEAMAI_RULES_END}\n`;
+    await fse.outputFile(soul, userBlock);
+
+    const teamConfig = makeTeamConfig();
+    teamConfig.toolPaths.hermes = { skills: '.hermes/skills' };
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot }), teamConfig });
+    await uninstall({ force: true });
+
+    expect(await fse.readFile(soul, 'utf-8')).toBe(userBlock);
   });
 
   it('removes the stub Codex kept in the shared .agents/skills root, and nothing else there', async () => {

@@ -1060,22 +1060,72 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
 
     // File landed under the user-scope OpenCode rules dir.
     expect(await fse.pathExists(path.join(ocRules(), 'team-rule.md'))).toBe(true);
-    // opencode.json now references the teamai glob (user scope → 'rules/*.md').
+    // An absolute glob: OpenCode resolves a relative entry from the session
+    // cwd, so `rules/*.md` would load the project's rules instead (#946).
     const doc = await fse.readJson(ocConfig());
-    expect(doc.instructions).toContain('rules/*.md');
+    expect(doc.instructions).toEqual([`${ocRules()}/*.md`]);
+  });
+
+  // OpenCode globs only the basename of an absolute entry, so `**` never
+  // matches: each directory a namespaced rule lands in gets its own glob.
+  it('adds one glob per namespace directory a rule lands in (#946)', async () => {
+    const teamRules = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRules, 'root-rule.md'), 'root');
+    await fse.ensureDir(path.join(teamRules, 'fe'));
+    await fse.writeFile(path.join(teamRules, 'fe', 'style.md'), 'fe style');
+    await fse.writeFile(path.join(teamRules, 'fe', 'tests.md'), 'fe tests');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(ocRules(), 'fe', 'style.md'))).toBe(true);
+    expect((await fse.readJson(ocConfig())).instructions).toEqual([`${ocRules()}/*.md`, `${ocRules()}/fe/*.md`]);
+  });
+
+  it('replaces the relative rules/*.md an earlier release wrote, keeping the member\'s own entries (#946)', async () => {
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'team-rule.md'), 'team content');
+    await fse.ensureDir(path.dirname(ocConfig()));
+    await fse.writeJson(ocConfig(), { model: 'mine', instructions: ['CONVENTIONS.md', 'rules/*.md'] });
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readJson(ocConfig())).toEqual({ model: 'mine', instructions: ['CONVENTIONS.md', `${ocRules()}/*.md`] });
+  });
+
+  it('keeps a glob the member added for a directory of their own under the rules root (#946)', async () => {
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'team-rule.md'), 'team content');
+    await fse.ensureDir(path.dirname(ocConfig()));
+    await fse.writeJson(ocConfig(), { instructions: [`${ocRules()}/mine/*.md`] });
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect((await fse.readJson(ocConfig())).instructions).toEqual([`${ocRules()}/mine/*.md`, `${ocRules()}/*.md`]);
+  });
+
+  it('drops the glob of a namespace this member no longer receives (#946)', async () => {
+    const teamRules = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRules, 'root-rule.md'), 'root');
+    await fse.ensureDir(path.join(teamRules, 'fe'));
+    await fse.writeFile(path.join(teamRules, 'fe', 'style.md'), 'fe style');
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    // `fe/` stays in the team repo; this member's selection leaves it out.
+    const selected = (await handler.scanTeamForPull(teamConfig, localConfig)).filter((rule) => rule.name === 'root-rule');
+    await handler.pullAllRules(teamConfig, localConfig, selected);
+
+    expect((await fse.readJson(ocConfig())).instructions).toEqual([`${ocRules()}/*.md`]);
   });
 
   it('removes the instructions glob when the team has no rules left', async () => {
     // First: one rule → glob present.
     await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'r.md'), 'x');
     await handler.pullAllRules(teamConfig, localConfig);
-    expect((await fse.readJson(ocConfig())).instructions).toContain('rules/*.md');
+    expect((await fse.readJson(ocConfig())).instructions).toContain(`${ocRules()}/*.md`);
 
     // Then: remove the team rule and re-pull → glob gone.
     await fse.remove(path.join(localConfig.repo.localPath, 'rules', 'r.md'));
     await handler.pullAllRules(teamConfig, localConfig);
     const doc = await fse.readJson(ocConfig());
-    expect(doc.instructions ?? []).not.toContain('rules/*.md');
+    expect(doc.instructions ?? []).not.toContain(`${ocRules()}/*.md`);
   });
 
   it('does not create opencode.json when OpenCode is not installed', async () => {
@@ -1616,5 +1666,30 @@ describe('RulesHandler.pullAllRules — Hermes SOUL.md (#938)', () => {
     const soul = await fse.readFile(path.join(hermesHome, 'SOUL.md'), 'utf-8');
     expect(soul).toContain('Applies to files matching: src/**/*.ts\nUse strict types.');
     expect(soul).not.toContain('paths:');
+  });
+
+  // Hermes has no project rules channel: SOUL.md is global, so only a
+  // user-scope pull may write its block (#946).
+  it('leaves the SOUL.md block as the user-scope pull wrote it after a project pull, with or without project rules', async () => {
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'user-rule.md'), 'USER RULE\n');
+    await new RulesHandler().pullAllRules(teamConfig, localConfig);
+    const soulPath = path.join(hermesHome, 'SOUL.md');
+    const afterUserPull = await fse.readFile(soulPath, 'utf-8');
+    expect(afterUserPull).toContain('USER RULE');
+
+    const projectRoot = path.join(tmpDir, 'project');
+    const projectRepo = path.join(tmpDir, 'project-team-repo');
+    await fse.ensureDir(path.join(projectRepo, 'rules'));
+    await fse.writeFile(path.join(projectRepo, 'rules', 'project-rule.md'), 'PROJECT RULE\n');
+    const projectConfig = {
+      ...localConfig, scope: 'project', projectRoot, repo: { localPath: projectRepo, remote: 'r' },
+    } as unknown as LocalConfig;
+
+    await new RulesHandler().pullAllRules(teamConfig, projectConfig);
+    expect(await fse.readFile(soulPath, 'utf-8')).toBe(afterUserPull);
+
+    await fse.remove(path.join(projectRepo, 'rules', 'project-rule.md'));
+    await new RulesHandler().pullAllRules(teamConfig, projectConfig);
+    expect(await fse.readFile(soulPath, 'utf-8')).toBe(afterUserPull);
   });
 });
