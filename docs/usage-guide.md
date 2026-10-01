@@ -966,7 +966,7 @@ The culture, shared-instructions and recall blocks follow the same split. In use
 
 > A `toolPaths` in the team `teamai.yaml` replaces the built-in defaults whole. A team that sets it should give each Codex-family entry `userScope.claudemd: .codex/AGENTS.md` (`.codex-internal/…`, `.tcodex/…`) for the user-scope rules and blocks, and drop its `rules` path, since Codex never reads that directory. A top-level `claudemd` would put the blocks back in the project `AGENTS.md`, so leave it out. In a project the hook needs only the entry's `settings` path, where it is installed.
 
-> Upgrading from a release that copied rules to `.codex/rules/`: the next `pull` removes the `.md` copies teamai delivered there, including `teamai-recall.md`. A copy you edited is kept and named in a warning, and the `*.rules` files are never touched. The same pull adds `additionalContextLimit: 0` and a `SubagentStart` entry to the teamai hooks in `hooks.json`, so the public Codex asks you once to approve the changed hooks.
+> Upgrading from a release that copied rules to `.codex/rules/`: the next `pull` removes the `.md` copies teamai delivered there, including `teamai-recall.md`. A copy you edited is kept and named in a warning, and the `*.rules` files are never touched. A copy of a rule the team has since removed is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. The same pull adds `additionalContextLimit: 0` and a `SubagentStart` entry to the teamai hooks in `hooks.json`, so the public Codex asks you once to approve the changed hooks.
 
 ### Env, hooks and MCP servers by namespace
 
@@ -2762,7 +2762,7 @@ What gets removed:
 - teamai hooks in AI tool settings
 - The teamai blocks in CLAUDE.md and AGENTS.md (your own content is preserved)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
-- Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. A copy there you edited is kept and named in a warning, and Codex's `*.rules` files are kept
+- Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
 - The `~/.teamai/` directory

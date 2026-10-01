@@ -666,7 +666,7 @@ export class RulesHandler extends ResourceHandler {
     }
     if (kept.length > 0) {
       log.warn(
-        `Kept ${kept.join(', ')}: ${kept.length === 1 ? 'it differs' : 'they differ'} from what teamai delivered there, `
+        `Kept ${kept.join(', ')}: teamai could not verify that ${kept.length === 1 ? 'it matches' : 'they match'} what it delivered there, `
         + 'and Codex does not read .md files in its rules directory (team rules now reach it through its session-start hook). '
         + 'Delete what you did not edit; to keep your changes, move them into AGENTS.md outside the teamai markers, '
         + 'then delete the copy.',
@@ -683,7 +683,8 @@ export class RulesHandler extends ResourceHandler {
    * built-in `teamai-recall.md` as any teamai version deployed it. Every team
    * rule counts, not just the ones delivered here, since a copy outlives the
    * role or tag that selected it. A copy of a rule the team removed is teamai's
-   * unless the member changed it since delivery. A directory a team
+   * only while it matches its recorded delivery hash. Without that record,
+   * the copy stays because it may contain the member's edits. A directory a team
    * `toolPaths` still delivers rules to is not listed.
    *
    * Read-only and public so `uninstall` removes exactly what a pull reclaims.
@@ -720,12 +721,12 @@ export class RulesHandler extends ResourceHandler {
           || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
         (delivered ? owned : edited).push(file);
       }
-      // The tombstone cleanup walks `toolPath.rules` only, so a rule the team
-      // removed since the last pull that wrote here is reclaimed on its terms (#822).
+      // The source is gone, so only a recorded hash proves a copy is unchanged.
       for (const name of tombstoned) {
         const file = path.join(dir, `${name}.md`);
         if (!await pathExists(file)) continue;
-        (await removedCopyChanged(previous, file) ? edited : owned).push(file);
+        const recorded = previous?.[file];
+        (recorded !== undefined && recorded === await fileHash(file) ? owned : edited).push(file);
       }
       const recall = path.join(dir, 'teamai-recall.md');
       const recallContent = await readFileSafe(recall);

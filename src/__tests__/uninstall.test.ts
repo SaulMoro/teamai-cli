@@ -51,6 +51,9 @@ import { uninstall } from '../uninstall.js';
 import { log } from '../utils/logger.js';
 import { EnvHandler } from '../resources/env.js';
 import { deployBuiltinRules } from '../builtin-rules.js';
+import { loadStateForScope, saveStateForScope } from '../config.js';
+import { checkoutKey } from '../pull.js';
+import { fileHash } from '../utils/fs.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
@@ -801,11 +804,35 @@ describe('uninstall', () => {
       expect(kept[0]).toMatch(/[Dd]elete/);
     });
 
-    it('removes the .codex/rules copy of a rule the team removed before this checkout pulled again', async () => {
+    it.each([false, true])('keeps a removed legacy rule without a delivery record, selective uninstall: %s', async (selective) => {
       const { legacy } = await codexLegacyFixture();
+      await fse.writeFile(path.join(tmpDir, 'team-repo', 'rules', '.removed'), 'retired\n');
+      const edited = 'A rule the team retired.\nMy own note.\n';
+      await fse.writeFile(legacy('retired.md'), edited);
+      vi.mocked(log.warn).mockClear();
+
+      await uninstall({ force: true, ...(selective ? { agent: 'codex' } : {}) });
+
+      expect(await fse.readFile(legacy('retired.md'), 'utf8')).toBe(edited);
+      const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+      const kept = warnings.filter((message) => message.includes(legacy('retired.md')));
+      expect(kept).toHaveLength(1);
+      expect(kept[0]).toContain('could not verify');
+      expect(kept[0]).toMatch(/[Dd]elete/);
+    });
+
+    it('removes a recorded, unchanged .codex/rules copy of a rule the team removed before this checkout pulled again', async () => {
+      const { legacy, localConfig, projectRoot } = await codexLegacyFixture();
       const repoPath = path.join(tmpDir, 'team-repo');
       await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
       await fse.writeFile(legacy('retired.md'), 'A rule the team retired.\n');
+      const state = await loadStateForScope(localConfig);
+      state.lastPullByWorkspace = {
+        [await checkoutKey(projectRoot)]: {
+          rev: 'old', targets: ['codex'], delivered: { [legacy('retired.md')]: (await fileHash(legacy('retired.md')))! },
+        },
+      };
+      await saveStateForScope(state, localConfig);
 
       await uninstall({ force: true });
 

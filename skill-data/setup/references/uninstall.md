@@ -55,6 +55,10 @@ and give it your team repo URL."*
 
 ## Notes
 
+- Uninstall keeps edited legacy Codex rule copies. For a rule the team has
+  removed, it deletes the copy only if its hash matches the recorded delivery.
+  Without that record, it keeps the copy and names it in a warning. Save any
+  changes you need, then delete the copy manually.
 - Do **not** delete the team repo on the Git platform — uninstall never touches it,
   and neither should you.
 - If the user only wants to stop auto-sync for one tool but keep TeamAI otherwise,

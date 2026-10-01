@@ -1216,8 +1216,8 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     if (plan.keptRuleFiles.length > 0) {
       const one = plan.keptRuleFiles.length === 1;
       log.warn(
-        `Kept ${plan.keptRuleFiles.join(', ')}: ${one ? 'it differs' : 'they differ'} from what teamai delivered there, `
-        + `so ${one ? 'it holds' : 'they hold'} your edits. Codex does not read .md files in its rules directory; `
+        `Kept ${plan.keptRuleFiles.join(', ')}: teamai could not verify that ${one ? 'it matches' : 'they match'} what it delivered there. `
+        + 'Codex does not read .md files in its rules directory; '
         + `delete ${one ? 'it' : 'them'} once you have saved what you need.`,
       );
     }

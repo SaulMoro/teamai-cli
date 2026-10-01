@@ -25,7 +25,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { RulesHandler } from '../resources/rules.js';
 import { deployBuiltinRules } from '../builtin-rules.js';
-import { openLedger } from '../resources/delivered-copies.js';
+import { openLedger, type DeliveredHashes } from '../resources/delivered-copies.js';
 import { loadStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
 import { TeamaiConfigSchema } from '../types.js';
@@ -189,14 +189,31 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     expect(ledger.hashes[file]).toBeUndefined();
   });
 
-  // The team removed the rule after this machine's last pre-#938 pull.
-  it('removes the copy of a rule the team has since removed', async () => {
+  it.each<DeliveredHashes | undefined>([undefined, {}, { unrelated: 'recorded-hash' }])('keeps a removed rule copy without a recorded delivery hash (%j)', async (previous) => {
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
+    await fse.ensureDir(legacyDir());
+    const file = legacy('retired.md');
+    const edited = 'A rule the team retired.\nMy own note.\n';
+    await fse.writeFile(file, edited);
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], openLedger(previous));
+
+    expect(await fse.readFile(file, 'utf8')).toBe(edited);
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(file);
+    expect(warnings[0]).toContain('could not verify');
+  });
+
+  it('removes the recorded, unchanged copy of a rule the team has since removed', async () => {
     await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'retired\n');
     await fse.ensureDir(legacyDir());
     await fse.writeFile(legacy('retired.md'), 'A rule the team retired.\n');
     await fse.writeFile(legacy('codeword.md'), 'The team codeword is PELICAN-42.\n');
+    const hash = crypto.createHash('sha256').update('A rule the team retired.\n').digest('hex');
+    const ledger = openLedger({ [legacy('retired.md')]: hash });
 
-    await handler.pullAllRules(teamConfig, localConfig);
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
 
     expect(await fse.pathExists(legacy('retired.md'))).toBe(false);
     expect(await fse.pathExists(legacyDir())).toBe(false);
