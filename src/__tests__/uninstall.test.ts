@@ -787,6 +787,48 @@ describe('uninstall', () => {
       return { ...fixture, legacy: (file: string) => path.join(fixture.projectRoot, '.codex', 'rules', file) };
     }
 
+    it('reclaims legacy rules under a recorded user-scope Codex root', async () => {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const root = path.join(homeDir, '.codex-work');
+      const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['codex'], toolRoots: { codex: root } });
+      const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { codex: defaults.codex } }) });
+      await fse.outputFile(path.join(root, 'rules', 'team-rule.md'), '# Team Rule');
+      await fse.writeFile(path.join(root, 'rules', 'default.rules'), 'prefix_rule(pattern=["ls"])');
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(path.join(root, 'rules', 'team-rule.md'))).toBe(false);
+      expect(await fse.pathExists(path.join(root, 'rules', 'default.rules'))).toBe(true);
+    });
+
+    it.each([false, true])('reclaims a publisher\'s bare and namespaced legacy copies on uninstall, tombstoned: %s', async (tombstoned) => {
+      const { legacy, localConfig, projectRoot } = await codexLegacyFixture();
+      const rulesDir = path.join(tmpDir, 'team-repo', 'rules');
+      if (tombstoned) await fse.writeFile(path.join(rulesDir, '.removed'), 'frontend/style\n');
+      else await fse.outputFile(path.join(rulesDir, 'frontend', 'style.md'), 'Frontend rule.\n');
+      await fse.outputFile(legacy('style.md'), 'Frontend rule.\n');
+      await fse.outputFile(legacy('frontend/style.md'), 'Frontend rule.\n');
+      const state = await loadStateForScope(localConfig);
+      state.placedRules = { style: 'rules/frontend/style.md' };
+      state.lastPullByWorkspace = {
+        [await checkoutKey(projectRoot)]: {
+          rev: 'old', targets: ['codex'], delivered: {
+            [legacy('style.md')]: (await fileHash(legacy('style.md')))!,
+            [legacy('frontend/style.md')]: (await fileHash(legacy('frontend/style.md')))!,
+          },
+        },
+      };
+      await saveStateForScope(state, localConfig);
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(legacy('style.md'))).toBe(false);
+      expect(await fse.pathExists(legacy('frontend/style.md'))).toBe(false);
+    });
+
     it('keeps a .codex/rules copy the member edited and names it in an English warning', async () => {
       const { legacy } = await codexLegacyFixture();
       await fse.writeFile(legacy('team-rule.md'), '# Team Rule\nMy own note.\n');

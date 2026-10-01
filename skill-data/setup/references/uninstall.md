@@ -55,7 +55,9 @@ and give it your team repo URL."*
 
 ## Notes
 
-- Uninstall keeps edited legacy Codex rule copies. For a rule the team has
+- Uninstall cleans legacy Codex rule copies at the recorded `toolRoots`
+  location, including publishers' bare local filenames. It keeps edited copies.
+  For a rule the team has
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any
   changes you need, then delete the copy manually.

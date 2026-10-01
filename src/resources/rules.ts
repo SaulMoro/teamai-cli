@@ -3,7 +3,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
@@ -706,32 +706,40 @@ export class RulesHandler extends ResourceHandler {
         .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
     );
     for (const [tool, rel] of Object.entries(LEGACY_RULE_DIRS)) {
-      const dir = path.join(resolveToolBaseDir(tool, localConfig), rel);
+      const dir = localConfig.scope === 'user'
+        ? path.join(resolveToolRootDir(tool, path.dirname(rel), localConfig.toolRoots), path.basename(rel))
+        : path.join(resolveToolBaseDir(tool, localConfig), rel);
       if (deliveredDirs.has(dir) || !await pathExists(dir)) continue;
       const owned: string[] = [];
       const edited: string[] = [];
       for (const rule of teamRules) {
-        const file = path.join(dir, `${rule.name}.md`);
-        if (!await pathExists(file)) continue;
-        deliveredRevs ??= (
-          await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
-        ).revs;
-        const recorded = previous?.[file];
-        const delivered = (recorded !== undefined && recorded === await fileHash(file))
-          || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
-        (delivered ? owned : edited).push(file);
+        // A publisher's copy uses its bare local name; older namespaced copies
+        // can remain beside it, so check both against the same delivery proof.
+        for (const name of new Set([rule.name, await this.localNameFor(rule.name, localConfig)])) {
+          const file = path.join(dir, `${name}.md`);
+          if (!await pathExists(file)) continue;
+          deliveredRevs ??= (
+            await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
+          ).revs;
+          const recorded = previous?.[file];
+          const delivered = (recorded !== undefined && recorded === await fileHash(file))
+            || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+          (delivered ? owned : edited).push(file);
+        }
       }
       // The source is gone, so only a recorded hash proves a copy is unchanged.
       for (const name of tombstoned) {
-        const file = path.join(dir, `${name}.md`);
-        if (!await pathExists(file)) continue;
-        const recorded = previous?.[file];
-        (recorded !== undefined && recorded === await fileHash(file) ? owned : edited).push(file);
+        for (const localName of new Set([name, await this.localNameFor(name, localConfig)])) {
+          const file = path.join(dir, `${localName}.md`);
+          if (!await pathExists(file)) continue;
+          const recorded = previous?.[file];
+          (recorded !== undefined && recorded === await fileHash(file) ? owned : edited).push(file);
+        }
       }
       const recall = path.join(dir, 'teamai-recall.md');
       const recallContent = await readFileSafe(recall);
       if (recallContent !== null) (isDeployedRecallRule(recallContent) ? owned : edited).push(recall);
-      out.push({ tool, dir, owned, edited });
+      out.push({ tool, dir, owned: [...new Set(owned)], edited: [...new Set(edited)].filter((file) => !owned.includes(file)) });
     }
     return out;
   }

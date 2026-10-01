@@ -141,6 +141,35 @@ projects:
     expect(text).toContain('Shared team instructions.');
   });
 
+  it.each(['# Owners\n', ''])('adds blocks from a shadowed AGENTS.md when AGENTS.override.md contains %j', async (override) => {
+    await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
+    localConfig = { ...localConfig, recallEnabled: true } as LocalConfig;
+    const agents = [
+      '<!-- [teamai:culture:start] -->', 'Be kind to teammates.', '<!-- [teamai:culture:end] -->',
+      '<!-- [teamai:claudemd:start] -->', 'Shared team instructions.', '<!-- [teamai:claudemd:end] -->',
+      '<!-- [teamai:recall-rules:start] -->', 'Team Knowledge Recall (teamai)', '<!-- [teamai:recall-rules:end] -->',
+    ].join('\n');
+    await fse.outputFile(path.join(tmpDir, 'project', 'AGENTS.md'), agents);
+    await fse.writeFile(path.join(tmpDir, 'project', 'AGENTS.override.md'), override);
+
+    const text = await context({ hook_event_name: 'SessionStart', source: 'startup' });
+
+    expect(text).toContain('Be kind to teammates.');
+    expect(text).toContain('Shared team instructions.');
+    expect(text).toContain('Team Knowledge Recall (teamai)');
+    expect(await fse.readFile(path.join(tmpDir, 'project', 'AGENTS.md'), 'utf8')).toBe(agents);
+    expect(await fse.readFile(path.join(tmpDir, 'project', 'AGENTS.override.md'), 'utf8')).toBe(override);
+  });
+
+  it('skips a block already present in the active AGENTS.override.md', async () => {
+    await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
+    await fse.outputFile(path.join(tmpDir, 'project', 'AGENTS.override.md'),
+      '<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n');
+
+    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).not.toContain('Be kind to teammates.');
+  });
+
   it('adds no rules from a scope that does not enable the tool', async () => {
     await userScope({ 'personal.md': 'The personal codeword is WREN-5.\n' }, 'enabledAgents: [claude]\n');
     localConfig = { ...localConfig, enabledAgents: ['claude'] } as LocalConfig;

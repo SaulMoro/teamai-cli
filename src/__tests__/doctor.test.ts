@@ -719,10 +719,19 @@ describe('buildChecks — the Codex team rules hook (#938)', () => {
         expect(check!.fix).toContain('/hooks');
     });
 
-    it('leaves a missing entry to the hooks check', async () => {
+    it('fails when the teamai SessionStart entry is missing', async () => {
         const check = await codexCheck(sessionStart({ command: 'my-own-hook' }));
 
-        expect(await check!.check()).toBe(true);
+        expect(await check!.check()).toBe(false);
+    });
+
+    it('fails when only a Stop hook is installed', async () => {
+        const check = await codexCheck(JSON.stringify({
+            hooks: { Stop: [{ hooks: [{ type: 'command', command: 'teamai hook-dispatch stop --tool codex' }] }] },
+        }));
+
+        expect(await check!.check()).toBe(false);
+        expect(check!.fix).toContain('SessionStart');
     });
 
     it.each([

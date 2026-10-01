@@ -155,6 +155,61 @@ describe('pull reclaims the .codex/rules copies earlier pulls wrote (#938)', () 
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it('reclaims the user-scope legacy copies under the recorded Codex root', async () => {
+    const root = path.join(homeDir, '.config', 'codex-work');
+    localConfig = { ...localConfig, scope: 'user', projectRoot: undefined, toolRoots: { codex: root } } as LocalConfig;
+    await fse.outputFile(path.join(root, 'rules', 'codeword.md'), 'The team codeword is PELICAN-42.\n');
+    await fse.writeFile(path.join(root, 'rules', 'default.rules'), 'prefix_rule(pattern = ["ls"], decision = "allow")\n');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(root, 'rules', 'codeword.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(root, 'rules', 'default.rules'))).toBe(true);
+  });
+
+  it.each([false, true])('reclaims a publisher\'s bare and namespaced legacy copies only while unchanged, edited: %s', async (edited) => {
+    await fse.outputFile(path.join(repoPath, 'rules', 'frontend', 'style.md'), 'Frontend rule.\n');
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({ placedRules: { style: 'rules/frontend/style.md' } }) as never);
+    const content = edited ? 'Frontend rule.\nMy own note.\n' : 'Frontend rule.\n';
+    await fse.outputFile(legacy('style.md'), content);
+    await fse.outputFile(legacy('frontend/style.md'), content);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    for (const file of [legacy('style.md'), legacy('frontend/style.md')]) {
+      if (edited) expect(await fse.readFile(file, 'utf8')).toBe(content);
+      else expect(await fse.pathExists(file)).toBe(false);
+    }
+  });
+
+  it('keeps a bare same-name copy without a publisher placement record', async () => {
+    await fse.outputFile(path.join(repoPath, 'rules', 'frontend', 'style.md'), 'Frontend rule.\n');
+    await fse.outputFile(legacy('style.md'), 'Frontend rule.\n');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(legacy('style.md'), 'utf8')).toBe('Frontend rule.\n');
+  });
+
+  it.each([false, true])('reclaims a publisher\'s tombstoned bare copy only while its recorded hash matches, edited: %s', async (edited) => {
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'frontend/style\n');
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({ placedRules: { style: 'rules/frontend/style.md' } }) as never);
+    const file = legacy('style.md');
+    const content = edited ? 'Frontend rule.\nMy own note.\n' : 'Frontend rule.\n';
+    await fse.outputFile(file, content);
+    const ledger = openLedger({ [file]: crypto.createHash('sha256').update('Frontend rule.\n').digest('hex') });
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+
+    if (edited) {
+      expect(await fse.readFile(file, 'utf8')).toBe(content);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(file));
+    } else {
+      expect(await fse.pathExists(file)).toBe(false);
+      expect(ledger.hashes[file]).toBeUndefined();
+    }
+  });
+
   it('removes a copy of the rule as it was at the revision this checkout last pulled', async () => {
     const run = (args: string[]) => execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', env: {
       ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t',

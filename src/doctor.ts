@@ -306,8 +306,8 @@ async function buildHookChecks(
  * from its session hooks (#938, #945): SessionStart, and SubagentStart for a
  * fresh subagent, which fires no SessionStart. Past 2,500 tokens Codex keeps
  * only the start and end of a hook's context unless the entry sets
- * `additionalContextLimit: 0`. A missing session-start entry is the hooks
- * check's to report.
+ * `additionalContextLimit: 0`. Both start entries must be present: the generic
+ * hooks check only proves some hook-dispatch command is installed.
  */
 function sessionHookRulesCheck(tool: string, settingsPath: string): Check {
   return {
@@ -315,7 +315,6 @@ function sessionHookRulesCheck(tool: string, settingsPath: string): Check {
     source: 'local',
     check: async () => {
       const sessionStart = await teamaiHookEntries(settingsPath, 'SessionStart', 'session-start');
-      if (sessionStart.length === 0) return true;
       const subagentStart = await teamaiHookEntries(settingsPath, 'SubagentStart', 'subagent-start');
       return [sessionStart, subagentStart].every((entries) => entries.some((entry) => entry.additionalContextLimit === 0));
     },

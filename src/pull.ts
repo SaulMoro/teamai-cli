@@ -2058,8 +2058,8 @@ function managedBlockBody(block: string): string {
  * instructions come from its session-start hook (the Codex family) gets in a
  * project, resolved as pull resolves them. In user scope they are in the
  * tool's own instructions file instead (#945). A block another tool already
- * wrote into the project AGENTS.md is skipped, since the tool reads that file
- * too.
+ * wrote into the active project instructions file is skipped, since the tool
+ * reads it too. AGENTS.override.md takes precedence over AGENTS.md.
  */
 export async function sessionInstructionBlocks(
     teamConfig: TeamaiConfig,
@@ -2067,7 +2067,8 @@ export async function sessionInstructionBlocks(
     tool: string,
 ): Promise<string[]> {
     const projectAgents = localConfig.projectRoot
-        ? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.md')) ?? ''
+        ? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.override.md'))
+            ?? await readFileSafe(path.join(localConfig.projectRoot, 'AGENTS.md')) ?? ''
         : '';
     const blocks: Array<[string, string | null]> = [];
     const culture = await readFileSafe(path.join(localConfig.repo.localPath, 'culture.md'));
