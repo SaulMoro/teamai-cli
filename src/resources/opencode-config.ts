@@ -50,6 +50,7 @@ export async function reconcileOpencodeInstructions(
   configFileAbs: string,
   glob: string,
   present: boolean,
+  purpose = 'rules activation',
 ): Promise<boolean> {
   const exists = await pathExists(configFileAbs);
 
@@ -70,12 +71,12 @@ export async function reconcileOpencodeInstructions(
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        log.warn(`Could not parse ${configFileAbs} as a JSON object — skipping OpenCode rules activation`);
+        log.warn(`Could not parse ${configFileAbs} as a JSON object — skipping OpenCode ${purpose}`);
         return false;
       }
       data = parsed as Record<string, unknown>;
     } catch {
-      log.warn(`Could not parse ${configFileAbs} — skipping OpenCode rules activation`);
+      log.warn(`Could not parse ${configFileAbs} — skipping OpenCode ${purpose}`);
       return false;
     }
   }
@@ -105,4 +106,36 @@ export async function reconcileOpencodeInstructions(
   await writeJsonAtomic(configFileAbs, data);
   log.debug(`${present ? 'Added' : 'Removed'} teamai rules glob in ${configFileAbs}`);
   return true;
+}
+
+// ─── OpenCode team instructions (#945) ───────────────────────
+
+/**
+ * Where OpenCode is told to load teamai's instruction file: the config file
+ * and its `instructions` entry. In user scope the user config holds the
+ * file's absolute path. In a project `.opencode/opencode.json` holds the path
+ * from the project root, which OpenCode resolves the same way from any
+ * subdirectory; the root `opencode.json` is left alone.
+ */
+export function opencodeContextReference(contextFile: string, scope: 'user' | 'project', projectRoot: string): { config: string; entry: string } {
+  if (scope === 'user') {
+    return { config: path.join(path.dirname(contextFile), 'opencode.json'), entry: contextFile };
+  }
+  return {
+    config: path.join(projectRoot, '.opencode', 'opencode.json'),
+    entry: path.relative(projectRoot, contextFile).split(path.sep).join('/'),
+  };
+}
+
+/**
+ * OpenCode loads `~/.claude/CLAUDE.md` while its own user `AGENTS.md` does not
+ * exist. When teamai delivers the user blocks there for Claude, OpenCode
+ * already gets them, and a second file would add a duplicate. Returns the
+ * Claude file in that case, null otherwise.
+ */
+export async function opencodeClaudeFallback(home: string, targetPaths: readonly string[]): Promise<string | null> {
+  const claudeFile = path.join(home, '.claude', 'CLAUDE.md');
+  if (!targetPaths.includes(claudeFile)) return null;
+  if (await pathExists(path.join(home, '.config', 'opencode', 'AGENTS.md'))) return null;
+  return claudeFile;
 }

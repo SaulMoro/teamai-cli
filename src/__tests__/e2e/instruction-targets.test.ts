@@ -532,4 +532,50 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(result.output).toMatch(/hermes cannot load this project's team instructions: they are \d+ characters, over the 4000-character limit/);
     expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
   });
+
+  it('gives OpenCode its project blocks in .opencode/teamai-context.md, registered in .opencode/opencode.json', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.opencode/skills']);
+    const config = path.join(member.projectRoot, '.opencode', 'opencode.json');
+    fs.writeFileSync(config, JSON.stringify({ instructions: ['docs/style.md'], theme: 'dark' }, null, 2));
+
+    for (let i = 0; i < 2; i++) {
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+    }
+
+    expect(fs.readFileSync(path.join(member.projectRoot, '.opencode', 'teamai-context.md'), 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+    expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md', '.opencode/teamai-context.md'], theme: 'dark' });
+    expect(fs.existsSync(path.join(member.projectRoot, 'opencode.json'))).toBe(false);
+    expect(fs.readFileSync(path.join(member.projectRoot, 'AGENTS.md'), 'utf8')).toBe(PROJECT_AGENTS_MD);
+
+    const uninstall = await runCLI(['uninstall', '--agent', 'opencode', '--force'], { HOME: member.home }, member.projectRoot);
+    expect(uninstall.code, uninstall.output).toBe(0);
+    expect(fs.existsSync(path.join(member.projectRoot, '.opencode', 'teamai-context.md'))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md'], theme: 'dark' });
+  });
+
+  it('gives OpenCode its user blocks in its config dir, registered with an absolute path, and adds no copy beside its Claude fallback', async () => {
+    const own = makeUserSandbox(['.config/opencode']);
+    sandboxes.push(own.sandbox);
+    const ocDir = path.join(own.home, '.config', 'opencode');
+    fs.writeFileSync(path.join(ocDir, 'AGENTS.md'), '# My OpenCode notes\n');
+    fs.writeFileSync(path.join(ocDir, 'opencode.json'), JSON.stringify({ instructions: ['~/notes.md'] }));
+    const result = await runCLI(['pull'], { HOME: own.home }, own.sandbox);
+    expect(result.code, result.output).toBe(0);
+    const contextFile = path.join(ocDir, 'teamai-context.md');
+    expect(fs.readFileSync(contextFile, 'utf8')).toContain(CLAUDEMD_START);
+    expect(JSON.parse(fs.readFileSync(path.join(ocDir, 'opencode.json'), 'utf8')).instructions).toEqual(['~/notes.md', contextFile]);
+    expect(fs.readFileSync(path.join(ocDir, 'AGENTS.md'), 'utf8')).toBe('# My OpenCode notes\n');
+
+    // No native user AGENTS.md: OpenCode falls back to ~/.claude/CLAUDE.md, which already holds the blocks.
+    const fallback = makeUserSandbox(['.config/opencode', '.claude']);
+    sandboxes.push(fallback.sandbox);
+    const viaClaude = await runCLI(['pull'], { HOME: fallback.home }, fallback.sandbox);
+    expect(viaClaude.code, viaClaude.output).toBe(0);
+    expect(fs.readFileSync(path.join(fallback.home, '.claude', 'CLAUDE.md'), 'utf8')).toContain(CLAUDEMD_START);
+    expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
+    expect(viaClaude.output).toContain('OpenCode reads the team instructions from');
+  });
 });

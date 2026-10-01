@@ -178,6 +178,12 @@ function hasToolResources(r: ToolResources): boolean {
 
 // ─── Helpers ───────────────────────────────────────────
 
+/** OpenCode's teamai instruction files in each scope (#945). */
+const OPENCODE_CONTEXT_FILES = [
+  path.join('.config', 'opencode', 'teamai-context.md'),
+  path.join('.opencode', 'teamai-context.md'),
+];
+
 const CLAUDEMD_MARKER_PAIRS: Array<[string, string]> = [
   [TEAMAI_RULES_START, TEAMAI_RULES_END],
   [TEAMAI_CULTURE_START, TEAMAI_CULTURE_END],
@@ -1060,6 +1066,12 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
       const { changed, warnings } = await clearInstructionFile(claudeMdPath);
       for (const warning of warnings) log.warn(warning);
       if (changed) log.success(`Cleaned CLAUDE.md: ${claudeMdPath}`);
+      // OpenCode loads its file through an `instructions` entry; drop it with the file.
+      if (OPENCODE_CONTEXT_FILES.some((suffix) => claudeMdPath.endsWith(suffix)) && !await pathExists(claudeMdPath)) {
+        const { opencodeContextReference, reconcileOpencodeInstructions } = await import('./resources/opencode-config.js');
+        const { config, entry } = opencodeContextReference(claudeMdPath, plan.scope, path.dirname(path.dirname(claudeMdPath)));
+        await reconcileOpencodeInstructions(config, entry, false, 'team instructions');
+      }
     } catch (e) {
       log.warn(`Failed to clean ${claudeMdPath}: ${(e as Error).message}`);
     }

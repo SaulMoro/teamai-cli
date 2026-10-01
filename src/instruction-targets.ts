@@ -92,6 +92,8 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   workbuddy: { file: contextRule('.md'), header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: configured, retired: [] },
   openclaw: { file: configured, retired: [] },
+  // Registered in the user opencode.json `instructions`; AGENTS.md beside it stays the member's.
+  opencode: { file: () => '.config/opencode/teamai-context.md', owned: true, retired: [] },
 };
 
 const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
@@ -116,6 +118,8 @@ const PROJECT_TARGETS: Readonly<Record<string, TargetEntry>> = {
   workbuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: codebuddyProjectRule, header: ALWAYS_APPLY, owned: true, retired: ['.codebuddy/CODEBUDDY.md'] },
   openclaw: { file: configured, retired: [] },
+  // Registered in .opencode/opencode.json `instructions`; the root opencode.json stays the project's.
+  opencode: { file: () => '.opencode/teamai-context.md', owned: true, retired: [] },
 };
 
 type MarkerPair = readonly [start: string, end: string, name: string];

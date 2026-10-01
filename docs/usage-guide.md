@@ -1381,6 +1381,7 @@ Recall counts every doc it returns (`recalled_count`). A returned doc is **adopt
 | OpenCode | Yes | Yes: the `task` call links the subagent's session to its parent |
 | OMP | Yes, settled only by the claim of its `bash` call | Yes: the subagent's session file sits under its parent's, whose session header links the two sessions (verified against OMP 18.4.8) |
 | Pi | Yes | None: TeamAI deploys no subagent to Pi |
+| OpenCode | `~/.config/opencode/teamai-context.md`, listed by absolute path in `instructions` of `~/.config/opencode/opencode.json` | `.opencode/teamai-context.md`, listed in `instructions` of `.opencode/opencode.json` |
 | ZCode | Yes | No: ZCode runs no hooks inside a subagent |
 | OpenClaw, Hermes, Kiro, JoyCode | No: no PostToolUse hook | No |
 
@@ -1663,6 +1664,8 @@ Cursor applies both `teamai-context.mdc` files in every session (`alwaysApply: t
 The CodeBuddy and WorkBuddy rule files are applied in every session (`alwaysApply: true`). Uninstalling one of the two keeps the shared project copy while the other is still installed.
 
 In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). Hermes builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
+
+OpenCode loads a file only when its config lists it in `instructions`, so teamai adds that one entry and keeps your other entries and keys; the root `opencode.json` and OpenCode's own `AGENTS.md` files are left alone. While `~/.config/opencode/AGENTS.md` does not exist, OpenCode reads `~/.claude/CLAUDE.md` instead; when Claude Code gets the user blocks there, OpenCode already has them, so teamai writes no second user copy for OpenCode and says so in the pull output. A config file teamai cannot parse as JSON (for example one with comments) is left unchanged with a warning; add the entry by hand.
 
 Oh My Pi reads `RULES.md` as an always-applied rule beside its single user context file. In project scope teamai's OMP extension asks `teamai` for the blocks when the session starts and adds them to each turn's system prompt, from the project root and any subdirectory. Without that extension (for example with hooks removed), an Oh My Pi project session gets no team blocks.
 

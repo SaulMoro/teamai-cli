@@ -14,7 +14,7 @@ import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
-import { applyInstructionPlan, instructionHookText, planInstructionFiles, resolveInstructionTargets, type InstructionBlocks } from './instruction-targets.js';
+import { applyInstructionPlan, instructionHookText, instructionTargetPath, planInstructionFiles, resolveInstructionTargets, type InstructionBlocks, type InstructionTarget } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
@@ -57,6 +57,7 @@ import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
 import { describeEnvAdvisory, envAdvisories } from './env-advisories.js';
 import { getUserHome } from './utils/home.js';
+import { opencodeClaudeFallback, opencodeContextReference, reconcileOpencodeInstructions } from './resources/opencode-config.js';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
@@ -1888,7 +1889,18 @@ async function syncManagedInstructions(
   dryRun = false,
 ): Promise<void> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
-  const { targets, hooks, stale } = await resolveInstructionTargets(config, localConfig);
+  const resolved = await resolveInstructionTargets(config, localConfig);
+  const { hooks, stale } = resolved;
+  let { targets } = resolved;
+  const opencodeTarget = targets.find((target) => target.tools.includes('opencode'));
+  if (opencodeTarget && localConfig.scope === 'user') {
+    const claudeFile = await opencodeClaudeFallback(getUserHome(), targets.map((target) => target.path));
+    if (claudeFile) {
+      log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${claudeFile}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to ${opencodeTarget.path} instead.`);
+      targets = targets.filter((target) => target !== opencodeTarget);
+      stale.push(opencodeTarget);
+    }
+  }
   const plan = await planInstructionFiles(targets, blocks, stale);
   for (const warning of plan.warnings) log.warn(`[${scopeLabel}] ${warning}`);
   const { report, failures } = await applyInstructionPlan(plan, { dryRun });
@@ -1898,6 +1910,7 @@ async function syncManagedInstructions(
     else log.debug(line);
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
+  if (!dryRun) await registerOpencodeContext(config, localConfig, targets, stale);
   for (const hook of hooks) {
     const length = instructionHookText(blocks, hook.recall).length;
     if (hook.limit !== undefined && length > hook.limit) {
@@ -1907,6 +1920,31 @@ async function syncManagedInstructions(
   if (dryRun || targets.length + hooks.length === 0) return;
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
+}
+
+/**
+ * Point OpenCode's `instructions` at teamai's instruction file while it
+ * exists, and drop the entry once it is gone: OpenCode reads no file it is
+ * not told about (#945).
+ */
+async function registerOpencodeContext(
+  config: TeamaiConfig,
+  localConfig: LocalConfig,
+  targets: readonly InstructionTarget[],
+  stale: readonly InstructionTarget[],
+): Promise<void> {
+  const paths = scopedToolPaths(config, localConfig).opencode;
+  const contextFile = paths && instructionTargetPath('opencode', paths, localConfig);
+  if (!contextFile) return;
+  const present = targets.some((target) => target.path === contextFile) && await pathExists(contextFile);
+  if (!present && !stale.some((target) => target.path === contextFile)) return;
+  const projectRoot = resolveToolBaseDir('opencode', localConfig);
+  const { config: configFile, entry } = opencodeContextReference(contextFile, localConfig.scope, projectRoot);
+  try {
+    await reconcileOpencodeInstructions(configFile, entry, present, 'team instructions');
+  } catch (e) {
+    log.warn(`Failed to update ${configFile}: ${(e as Error).message}. Add "${entry}" to its "instructions" by hand so OpenCode loads the team instructions.`);
+  }
 }
 
 /**
