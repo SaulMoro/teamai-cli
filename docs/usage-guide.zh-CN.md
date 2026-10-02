@@ -1785,6 +1785,8 @@ teamai hooks remove    # 移除
 
 inject 和 remove 只会操作你实际已安装的工具（即 `~/.<tool>/` 根目录已存在的工具）。对于 `toolPaths` 中已配置但未安装的工具，命令不会为其凭空创建根目录。
 
+非-self 的 project scope 中，`hooks remove` 会移除 HOME 中当前 checkout 的门控团队 hooks，以及主 checkout 中 Claude/Codex 的团队 hooks。其他项目的门控团队 hooks 保留在 HOME；共享的内置 hooks 会被移除。
+
 在 Windows 上，经由 bash 执行的内置 hook 派发命令（如 Claude、Codex、Cursor、Copilot CLI）会以绝对路径引用 Git Bash——先查标准安装位置，再回退到 `HKLM\SOFTWARE\GitForWindows` 注册表——从而避免解析到 WSL 的 `bash.exe`；若找不到 Git Bash，则退回裸 `bash`。
 
 Cursor 也会加载 `~/.claude/settings.json`。Copilot CLI 会加载受信任项目里的 `.claude/settings.json`（self mode 把 hook 写在项目里；Copilot 不加载 `~/.claude/settings.json`）。只有另一边的 teamai hook 已经在磁盘上时，`hook-dispatch --tool claude` 才会退出：`~/.cursor/hooks.json` 或 `$CURSOR_PROJECT_DIR/.cursor/hooks.json` 含有 `--tool cursor`，或 `$COPILOT_PROJECT_DIR/.github/hooks/teamai.json` 含有 `--tool copilot`。写给 `claude` 的团队 hook 命令用同一判断。只启用了 Claude 时，Cursor 里这份 hook 照常运行，因为没有第二份可以接替。`COPILOT_CLI` 不能当信号：Copilot 会给每个子进程设置它，包括从它的 shell 里启动的 Claude。Claude Code 不会设置 `CURSOR_VERSION` 或 `COPILOT_PROJECT_DIR`。已经装好的团队 hook 需要再跑一次 `teamai pull` 或 `teamai hooks inject`，才会带上这个判断。

@@ -1920,6 +1920,8 @@ teamai hooks remove    # Remove
 
 The inject and remove commands only touch tools you actually have installed (i.e. whose `~/.<tool>/` root directory already exists). They never create root directories for tools listed in `toolPaths` but not installed.
 
+In non-self project scope, `hooks remove` removes this checkout's gated team hooks from HOME and Claude/Codex team hooks from the main checkout. Other projects' gated team hooks stay in HOME; shared built-in hooks are removed.
+
 On Windows, the built-in hook dispatch commands that shell out through bash (e.g. Claude, Codex, Cursor, Copilot CLI) reference Git Bash by absolute path — standard install locations first, then the `HKLM\SOFTWARE\GitForWindows` registry as fallback — so they never resolve to the WSL `bash.exe` launcher; if Git Bash cannot be found they degrade to bare `bash`.
 
 Cursor also loads `~/.claude/settings.json`, and Copilot CLI loads a trusted project's `.claude/settings.json` (self mode writes hooks there; Copilot does not load `~/.claude/settings.json`). `hook-dispatch --tool claude` exits only when that other host's own teamai hooks are on disk: `~/.cursor/hooks.json` or `$CURSOR_PROJECT_DIR/.cursor/hooks.json` contains `--tool cursor`, or `$COPILOT_PROJECT_DIR/.github/hooks/teamai.json` contains `--tool copilot`. Team hook commands written for `claude` use the same check. A setup with only Claude keeps running inside Cursor, because there is no second copy. `COPILOT_CLI` is not a signal: Copilot sets it on every subprocess, including a Claude session started from its shell. Claude Code sets neither `CURSOR_VERSION` nor `COPILOT_PROJECT_DIR`. Run `teamai pull` or `teamai hooks inject` again so an already installed team hook picks up the guard.

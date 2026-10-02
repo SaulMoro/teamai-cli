@@ -72,7 +72,13 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
   // In project scope Claude's MCP lands in <projectRoot>/.mcp.json (toolPaths
   // `mcpProject`), not the user-scope ~/.claude.json.
   const readClaudeMcp = (): string => fs.readFileSync(path.join(projectRoot, '.mcp.json'), 'utf8');
-  const claudeSettingsPath = (): string => path.join(home, '.claude', 'settings.json');
+  const claudeSettingsPath = (): string => path.join(projectRoot, '.claude', 'settings.local.json');
+  const codebuddySettings = (): string => {
+    const settings = fs.readFileSync(path.join(home, '.codebuddy', 'settings.json'), 'utf8');
+    expect(settings).toContain('$PWD');
+    expect(fs.existsSync(path.join(projectRoot, '.codebuddy', 'settings.json'))).toBe(false);
+    return settings;
+  };
 
   beforeAll(() => {
     if (!fs.existsSync(CLI)) {
@@ -87,6 +93,7 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     const teamRepo = path.join(projectRoot, '.teamai', 'team-repo');
 
     fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(path.join(home, '.codebuddy'), { recursive: true });
     // The MCP reconcile only targets a tool it considers installed, probed via
     // its skills dir — so the sandbox has to look like a Claude checkout.
     fs.mkdirSync(path.join(projectRoot, '.claude', 'skills'), { recursive: true });
@@ -242,7 +249,7 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
       `projectRoot: ${projectRoot}`,
       'primaryRole: frontend',
       'additionalRoles: []',
-      'enabledAgents: [claude, codex]',
+      'enabledAgents: [claude, codex, codebuddy]',
       '',
     ].join('\n'));
   });
@@ -281,6 +288,10 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     expect(claudeSettings).toContain('echo checkout');
     expect(claudeSettings).toContain('echo shared');
     expect(claudeSettings).not.toContain('echo billing');
+    expect(claudeSettings).not.toContain('$PWD');
+    expect(codebuddySettings()).toContain('echo checkout');
+    expect(codebuddySettings()).toContain('echo shared');
+    expect(codebuddySettings()).not.toContain('echo billing');
 
     // ── Upgrade path: repo unchanged, CLI newer ────────────────────────────
     // A CLI that honoured `roles:` on env left DEVOPS_ONLY in env.sh, and the
@@ -326,6 +337,10 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
     const settingsBilling = fs.readFileSync(claudeSettingsPath(), 'utf8');
     expect(settingsBilling).toContain('echo billing');
     expect(settingsBilling).not.toContain('echo checkout');
+    expect(settingsBilling).not.toContain('$PWD');
+    expect(codebuddySettings()).toContain('echo billing');
+    expect(codebuddySettings()).toContain('echo shared');
+    expect(codebuddySettings()).not.toContain('echo checkout');
   }, 120_000);
 
   it('reports where each entry comes from in mcp list, hooks list and env list', async () => {

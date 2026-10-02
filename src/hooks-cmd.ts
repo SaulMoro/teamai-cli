@@ -10,6 +10,7 @@ import {
     COPILOT_TOOL_ID,
     getManagedHooksPath,
     isAgentExcluded,
+    isSelfMode,
     resolveHookScope,
     resolveToolBaseDir,
     scopedToolPaths,
@@ -277,6 +278,9 @@ export async function hooksRemove(_options: GlobalOptions): Promise<void> {
         removeAll: true,
         scope: localConfig.scope,
         installedBaseDir: localConfig.scope === 'project' ? localConfig.projectRoot : undefined,
+        teamHookProjectRoot: localConfig.scope === 'project' && !isSelfMode(localConfig)
+            ? localConfig.projectRoot
+            : undefined,
         // The project's Claude and Codex team hooks live in the main checkout.
         mainCheckout: await resolveMainCheckoutHooks(localConfig),
     });

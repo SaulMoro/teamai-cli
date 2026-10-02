@@ -32,6 +32,8 @@ This is the #1 onboarding issue. In order:
    settings (e.g. `~/.claude/settings.json`), not the project folder; the team's own
    hooks for Claude Code and Codex go to the main checkout
    (`.claude/settings.local.json`, `.codex/hooks.json`). That is intentional.
+   In project scope, `teamai hooks remove` preserves other projects' gated team
+   hooks in HOME, while removing the shared built-in hooks.
    If you initialized project scope but expected machine-wide resources, re-run
    with `--scope user`.
 5. **Tool has no hook surface** (e.g. Gemini CLI, JoyCode): there is no auto-sync;

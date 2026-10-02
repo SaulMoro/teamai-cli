@@ -66,7 +66,17 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
   const mcpServers = (): Record<string, { url?: string }> => (
     JSON.parse(fs.readFileSync(path.join(projectRoot, '.mcp.json'), 'utf8')).mcpServers ?? {}
   );
-  const hookCommands = (): string => fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8');
+  const hookCommands = (): string => {
+    const settings = fs.readFileSync(path.join(projectRoot, '.claude', 'settings.local.json'), 'utf8');
+    expect(settings).not.toContain('$PWD');
+    return settings;
+  };
+  const codebuddyCommands = (): string => {
+    const settings = fs.readFileSync(path.join(home, '.codebuddy', 'settings.json'), 'utf8');
+    expect(settings).toContain('$PWD');
+    expect(fs.existsSync(path.join(projectRoot, '.codebuddy', 'settings.json'))).toBe(false);
+    return settings;
+  };
 
   /** Commit a change in the seed checkout and publish it to the team remote. */
   function publish(message: string, change: () => void): void {
@@ -89,6 +99,7 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
     const teamRepo = path.join(projectRoot, '.teamai', 'team-repo');
 
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.codebuddy'), { recursive: true });
     fs.mkdirSync(path.join(projectRoot, '.claude', 'skills'), { recursive: true });
 
     write(seed, 'teamai.yaml', [
@@ -102,6 +113,8 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
       '    settings: .claude/settings.json',
       '    mcp: .claude.json',
       '    mcpProject: .mcp.json',
+      '  codebuddy:',
+      '    settings: .codebuddy/settings.json',
       '',
     ].join('\n'));
     write(seed, 'manifest/projects.yaml', [
@@ -206,6 +219,8 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
 
     expect(hookCommands()).toContain('echo checkout-lint');
     expect(hookCommands()).not.toContain('echo root-lint');
+    expect(codebuddyCommands()).toContain('echo checkout-lint');
+    expect(codebuddyCommands()).not.toContain('echo root-lint');
 
     const envList = await runCLI(['env', 'list'], projectRoot, home);
     expect(envList.output).toContain('API_BASE=ht****  env.yaml  (checkout, overrides root)');
@@ -243,6 +258,8 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
 
     expect(hookCommands()).toContain('echo root-lint');
     expect(hookCommands()).not.toContain('echo checkout-lint');
+    expect(codebuddyCommands()).toContain('echo root-lint');
+    expect(codebuddyCommands()).not.toContain('echo checkout-lint');
   }, 120_000);
 
   it('keeps what is installed when two active namespaces define one server, naming both files', async () => {
@@ -287,5 +304,6 @@ describe('env, hooks and MCP by namespace via the real CLI (#707)', () => {
     // Only env stopped: the hooks reconcile, which runs after it, still applied
     // the change from the same commit.
     expect(hookCommands()).toContain('echo checkout-lint-v2');
+    expect(codebuddyCommands()).toContain('echo checkout-lint-v2');
   }, 120_000);
 });

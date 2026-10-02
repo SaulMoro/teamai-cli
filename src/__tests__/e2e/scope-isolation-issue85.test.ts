@@ -11,9 +11,9 @@ import { fileURLToPath } from 'node:url';
 // upvote scope (see scope-isolation-e2e.test.ts). This file drives the real
 // CLI binary against offline git fixtures to cover the four gaps that were
 // still open after those landed:
-//   1. `hooks inject`/`hooks remove` must write only to the user's HOME
-//      directory (#264 simplified this: project scope no longer writes a
-//      redundant copy into projectRoot).
+//   1. Claude/Codex team hooks live in the main checkout, ungated (#955);
+//      built-ins and other tools stay in HOME (#264), with team hooks gated
+//      by project cwd. Inject/remove must respect both ownership boundaries.
 //   2. `tags subscribe`/`unsubscribe` must write to the active scope's
 //      config.yaml, not always ~/.teamai/config.yaml.
 //   3. `contribute` must make a new learning immediately recallable, without
@@ -66,6 +66,10 @@ const TEAM_YAML = [
   '    skills: .claude/skills',
   '    rules: .claude/rules',
   '    settings: .claude/settings.json',
+  '  codex:',
+  '    settings: .codex/hooks.json',
+  '  codebuddy:',
+  '    settings: .codebuddy/settings.json',
 ].join('\n');
 
 const HOOKS_YAML = [
@@ -108,6 +112,8 @@ describe('issue #85 remaining scope-isolation gaps (e2e)', () => {
     fs.mkdirSync(homeDir, { recursive: true });
     fs.mkdirSync(projectRoot, { recursive: true });
     fs.mkdirSync(path.join(homeDir, '.claude', 'skills'), { recursive: true });
+    fs.mkdirSync(path.join(homeDir, '.codex'), { recursive: true });
+    fs.mkdirSync(path.join(homeDir, '.codebuddy'), { recursive: true });
     fs.mkdirSync(path.join(projectRoot, '.claude', 'skills'), { recursive: true });
 
     // ── User-scope fixture (present only so we can prove project-scope
@@ -147,6 +153,7 @@ describe('issue #85 remaining scope-isolation gaps (e2e)', () => {
         'username: ci-proj',
         'updatePolicy: auto',
         'scope: project',
+        'codexTrustEnabled: false',
       ].join('\n'),
     );
   }, 60_000);
@@ -163,44 +170,66 @@ describe('issue #85 remaining scope-isolation gaps (e2e)', () => {
     });
   });
 
-  describe('hooks inject/remove manifest scoping (item 1, updated by #264)', () => {
-    it('inject writes only to the user HOME, not to projectRoot (#264)', async () => {
+  describe('hooks inject/remove manifest scoping (#264, #955)', () => {
+    const mainFiles = (): string[] => [
+      path.join(projectRoot, '.claude', 'settings.local.json'),
+      path.join(projectRoot, '.codex', 'hooks.json'),
+    ];
+    const homeFiles = (): string[] => [
+      path.join(homeDir, '.claude', 'settings.json'),
+      path.join(homeDir, '.codex', 'hooks.json'),
+      path.join(homeDir, '.codebuddy', 'settings.json'),
+    ];
+
+    it('keeps Claude/Codex team hooks in the main checkout and gated CodeBuddy hooks only in HOME', async () => {
       const res = await runCLI(['hooks', 'inject'], { HOME: homeDir }, projectRoot);
       expect(res.code, res.output).toBe(0);
 
-      // #264: project scope no longer writes a redundant copy into projectRoot.
-      const projectManifestPath = path.join(projectRoot, '.teamai', 'managed-hooks.json');
-      const userManifestPath = path.join(homeDir, '.teamai', 'managed-hooks.json');
-      expect(fs.existsSync(projectManifestPath)).toBe(false);
-      expect(fs.existsSync(userManifestPath)).toBe(true);
+      expect(fs.existsSync(path.join(projectRoot, '.teamai', 'managed-hooks.json'))).toBe(false);
+      const userManifest = JSON.parse(fs.readFileSync(path.join(homeDir, '.teamai', 'managed-hooks.json'), 'utf-8'));
+      expect(userManifest.claude).toBeUndefined();
+      expect(userManifest.codex).toBeUndefined();
+      expect(userManifest.codebuddy).toHaveLength(1);
+      expect(userManifest.codebuddy[0].command).toContain('teamai-e2e-hook-marker');
 
-      const userManifest = JSON.parse(fs.readFileSync(userManifestPath, 'utf-8'));
-      expect(userManifest.claude?.[0]?.command).toContain('teamai-e2e-hook-marker');
-
-      // Only HOME settings receives the hook; projectRoot is untouched.
+      for (const file of mainFiles()) {
+        const settings = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        expect(settings.hooks.Stop.map((entry: { hooks: Array<{ command: string }> }) => entry.hooks[0].command))
+          .toEqual(['echo teamai-e2e-hook-marker']);
+        expect(settings.hooks.SessionStart).toBeUndefined();
+      }
+      for (const file of homeFiles()) {
+        const settings = fs.readFileSync(file, 'utf-8');
+        expect(settings).toContain('hook-dispatch session-start');
+        if (file.includes('.codebuddy')) {
+          expect(settings).toContain('teamai-e2e-hook-marker');
+          expect(settings).toContain('$PWD');
+        } else {
+          expect(settings).not.toContain('teamai-e2e-hook-marker');
+        }
+      }
       expect(fs.existsSync(path.join(projectRoot, '.claude', 'settings.json'))).toBe(false);
-      const userSettings = fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf-8');
-      expect(userSettings).toContain('teamai-e2e-hook-marker');
+      expect(fs.existsSync(path.join(projectRoot, '.codebuddy', 'settings.json'))).toBe(false);
     });
 
-    it('re-running inject is idempotent — no duplicate hook entries in the user settings file', async () => {
-      const before = fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf-8');
-      const beforeCount = before.split('teamai-e2e-hook-marker').length - 1;
+    it('re-running inject is idempotent in both main-checkout and HOME team-hook files', async () => {
+      const files = [...mainFiles(), path.join(homeDir, '.codebuddy', 'settings.json')];
+      const before = files.map((file) => fs.readFileSync(file, 'utf-8'));
+      for (const settings of before) expect(settings.split('teamai-e2e-hook-marker')).toHaveLength(2);
 
       const res = await runCLI(['hooks', 'inject'], { HOME: homeDir }, projectRoot);
       expect(res.code, res.output).toBe(0);
-
-      const after = fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf-8');
-      const afterCount = after.split('teamai-e2e-hook-marker').length - 1;
-      expect(afterCount).toBe(beforeCount);
+      expect(files.map((file) => fs.readFileSync(file, 'utf-8'))).toEqual(before);
     });
 
-    it('remove cleans up the user HOME copy', async () => {
+    it('remove cleans up the main-checkout and HOME copies', async () => {
       const res = await runCLI(['hooks', 'remove'], { HOME: homeDir }, projectRoot);
       expect(res.code, res.output).toBe(0);
 
-      const userSettings = fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf-8');
-      expect(userSettings).not.toContain('teamai-e2e-hook-marker');
+      for (const file of [...mainFiles(), ...homeFiles()]) {
+        expect(fs.readFileSync(file, 'utf-8')).not.toContain('teamai-e2e-hook-marker');
+      }
+      expect(fs.readFileSync(userConfigPath, 'utf-8')).toBe(userConfigBefore);
     });
   });
 

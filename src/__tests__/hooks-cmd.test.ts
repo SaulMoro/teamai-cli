@@ -714,7 +714,7 @@ describe('hooksRemove', () => {
             expect.any(String),
             [],
             expect.stringContaining('managed-hooks.json'),
-            { removeAll: true, scope: 'user', installedBaseDir: undefined, mainCheckout: null },
+            { removeAll: true, scope: 'user', installedBaseDir: undefined, teamHookProjectRoot: undefined, mainCheckout: null },
         );
         expect(mockedLog.success).toHaveBeenCalledWith(expect.stringContaining('Hooks removed'));
     });
@@ -738,7 +738,7 @@ describe('hooksRemove', () => {
             '/home/testuser',
             [],
             expect.any(String),
-            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', mainCheckout: null },
+            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', teamHookProjectRoot: '/path/to/project', mainCheckout: null },
         );
         const userManifest = mockedReconcile.mock.calls[0][3] as string;
         expect(userManifest).toContain('/home/testuser');
@@ -775,7 +775,7 @@ describe('hooksRemove', () => {
             '/path/to/project',
             [],
             expect.any(String),
-            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', mainCheckout: null },
+            { removeAll: true, scope: 'project', installedBaseDir: '/path/to/project', teamHookProjectRoot: undefined, mainCheckout: null },
         );
     });
 
