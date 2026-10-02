@@ -67,9 +67,9 @@ and give it your team repo URL."*
   and retry the same uninstall command. Uninstall reports failure and keeps
   its ownership record and shared data directory, even for the last tool.
 - Project uninstall keeps the global Pi and Oh My Pi extensions, Hermes
-  plugin and config, and the Codex family's user-level hooks while the user
-  scope or another project on this machine uses them; the last install
-  removes them.
+  plugin and config, and the Codex family's user-level hooks, which the user
+  scope, the HTTP agent or another project may use, and names them. If none
+  does, run `teamai hooks remove` in the project first: it removes them.
   Targeted project Codex uninstall keeps project config and records its
   exclusion, even without local resources. Legacy project hook copies go.
   User-scope uninstall removes these global channels.

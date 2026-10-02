@@ -318,6 +318,27 @@ export async function instructionHookChannel(
 }
 
 /**
+ * Whether reconciling the hooks leaves `tool`'s channel ready. A dry run
+ * writes nothing, so it previews the cleanup a real pull does once it has
+ * installed the extension or plugin. A same-named file or plugin of the
+ * member's, or a plugin the member disabled, keeps the channel closed.
+ */
+export async function instructionHookChannelInstallable(tool: string): Promise<boolean> {
+  if (tool === 'omp' || tool === 'pi') {
+    const { hasOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
+    const { hasPiHooks, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
+    const file = tool === 'omp' ? path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE) : path.join(resolvePiExtensionsDir(), PI_HOOK_FILE);
+    return !await pathExists(file) || (tool === 'omp' ? await hasOmpHooks() : await hasPiHooks());
+  }
+  if (tool === 'hermes') {
+    const { HERMES_INSTRUCTIONS_PLUGIN, ownsInstructionsPlugin } = await import('./hermes-hooks.js');
+    const { isHermesPluginDisabled } = await import('./hermes-config.js');
+    return await ownsInstructionsPlugin() && !await isHermesPluginDisabled(HERMES_INSTRUCTIONS_PLUGIN);
+  }
+  return true;
+}
+
+/**
  * What keeps an installed hook tool from getting this member's team
  * instructions in the scope: its extension or plugin, or the size of the text.
  * pull and init print these after installing the hooks; doctor checks them.

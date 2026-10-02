@@ -15,7 +15,7 @@ import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import {
-  applyInstructionPlan, hookLimitProblem, instructionHookChannel, instructionHookText, planInstructionFiles,
+  applyInstructionPlan, hookLimitProblem, instructionHookChannel, instructionHookChannelInstallable, instructionHookText, planInstructionFiles,
   registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks,
 } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
@@ -2593,7 +2593,10 @@ async function reconcileHooksAllScopes(
         const { hooks } = await resolveInstructionTargets(teamConfig, localConfig);
         for (const hook of hooks) {
           const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
-          if (channel.ready && !hookLimitProblem(hook, instructionHookText(delivery.blocks, hook.recall))) {
+          // A dry run installed nothing: preview what the real pull's install leaves ready.
+          const ready = channel.ready
+            || (Boolean(options.dryRun) && reconciled.ok && await instructionHookChannelInstallable(hook.tool));
+          if (ready && !hookLimitProblem(hook, instructionHookText(delivery.blocks, hook.recall))) {
             delivery.reached.push(hook.tool);
           }
         }

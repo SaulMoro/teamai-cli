@@ -328,6 +328,12 @@ export async function disableHermesPlugin(name: string): Promise<void> {
   await writeConfigDoc(doc);
 }
 
+/** Whether the member put `name` in `plugins.disabled`, which enabling leaves alone. */
+export async function isHermesPluginDisabled(name: string): Promise<boolean> {
+  const disabled = (await readConfigDoc()).getIn(['plugins', 'disabled']);
+  return YAML.isSeq(disabled) && (disabled.toJSON() as unknown[]).includes(name);
+}
+
 /** Whether `name` is in `plugins.enabled` of the Hermes config.yaml. */
 export async function isHermesPluginEnabled(name: string): Promise<boolean> {
   const enabled = (await readConfigDoc()).getIn(['plugins', 'enabled']);

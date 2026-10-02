@@ -587,6 +587,28 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     console.log('WorkBuddy project uninstall: project state preserved; global-only Pi still receives member instructions');
   });
 
+  it('previews the cleanup a real pull does once it installs the Pi extension, and none behind a foreign one', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-dryrun-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'pm', 'product', ['.pi/skills']);
+    fs.mkdirSync(path.join(member.home, '.pi'), { recursive: true });
+    const legacy = path.join(member.projectRoot, 'AGENTS.md');
+    fs.writeFileSync(legacy, `${PROJECT_AGENTS_MD}${CLAUDEMD_START}\nworking old prompt\n${CLAUDEMD_END}\n`);
+    const extension = path.join(member.home, '.pi', 'agent', 'extensions', 'teamai-hooks.ts');
+    const removal = `Would remove teamai instruction blocks from ${legacy}`;
+
+    const preview = await pullAs(member, ['--dry-run']);
+    expect(preview.code, preview.output).toBe(0);
+    expect(preview.output).toContain(removal);
+    expect(fs.existsSync(extension)).toBe(false);
+
+    fs.mkdirSync(path.dirname(extension), { recursive: true });
+    fs.writeFileSync(extension, '// Foreign extension\n');
+    const blocked = await pullAs(member, ['--dry-run']);
+    expect(blocked.code, blocked.output).toBe(0);
+    expect(blocked.output).not.toContain(removal);
+  });
+
   it('retains Pi legacy instructions until its extension is ready, and protects exclusions', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-migration-')));
     sandboxes.push(sandbox);
