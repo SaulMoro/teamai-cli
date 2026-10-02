@@ -86,11 +86,15 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
 
   const delivered = (dir: string) => ({
     skill: fs.existsSync(path.join(dir, '.claude', 'skills', 'team-skill', 'SKILL.md')),
+    agent: fs.existsSync(path.join(dir, '.claude', 'agents', 'team-agent.md')),
+    hook: fs.existsSync(path.join(home, '.claude', 'settings.json'))
+      && fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').includes(`echo team-hook-v1`)
+      && fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').includes(dir),
     rule: fs.existsSync(path.join(dir, '.claude', 'rules', 'team-rule.md')),
     mcp: fs.existsSync(path.join(dir, '.mcp.json')) && fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8').includes('team-api'),
   });
-  const ALL = { skill: true, rule: true, mcp: true };
-  const NOTHING = { skill: false, rule: false, mcp: false };
+  const ALL = { skill: true, agent: true, hook: true, rule: true, mcp: true };
+  const NOTHING = { skill: false, agent: false, hook: false, rule: false, mcp: false };
 
   /** The project partition (data home) `init` created for the repo at `root`. */
   const partitionOf = (root: string): string => {
@@ -119,9 +123,11 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
       fs.writeFileSync(path.join(seed, rel), content);
     };
-    write('teamai.yaml', `team: git-hook-e2e\nrepo: ${FAKE_URL}\nprovider: git\nreviewers: []\nsharing:\n  mcp:\n    autoApply: true\n`);
+    write('teamai.yaml', `team: git-hook-e2e\nrepo: ${FAKE_URL}\nprovider: git\nreviewers: []\nsharing:\n  mcp:\n    autoApply: true\n  hooks:\n    autoApply: true\n    requireTeamScripts: false\n`);
     write('skills/team-skill/SKILL.md', '---\nname: team-skill\ndescription: Team skill fixture\n---\n\n# Team skill\n');
     write('rules/team-rule.md', '# Team rule\n');
+    write('agents/team-agent.yaml', 'name: team-agent\ndescription: Startup agent fixture\ninstructions: Team agent v1\n');
+    write('hooks/hooks.yaml', 'hooks:\n  - id: startup-guard\n    description: Startup hook fixture\n    event: SessionStart\n    command: echo team-hook-v1\n');
     write('mcp/mcp.yaml', 'servers:\n  - name: team-api\n    transport: http\n    url: https://team.example.com/mcp\n');
     gitOk(['init', '-q', '-b', 'main'], seed);
     gitOk(['add', '-A'], seed);
@@ -142,7 +148,7 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     expect(gitOk(['hook', 'list', 'post-merge'], claudeProject)).toBe('teamai-post-merge');
   });
 
-  it('delivers skills, rules and MCP for enabledAgents before git worktree add returns, silently', () => {
+  it('delivers skills, agents, rules, MCP and team hooks for enabledAgents before git worktree add returns, silently', () => {
     const wt = worktreeAdd(claudeProject, 'wt-claude');
 
     expect(wt.code).toBe(0);
@@ -406,11 +412,19 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       };
     };
 
-    it('separate team repo: a skill the team published is delivered before git pull returns', async () => {
+    it('separate team repo: published resources are delivered before git pull returns', async () => {
       const repo = project('merge-project', ['--agent', 'claude']);
       const businessChange = withOrigin(repo);
       await settle(repo);
       pushSkill('merged-skill');
+      const teamChange = path.join(sandbox, 'push-merged-skill');
+      fs.writeFileSync(path.join(teamChange, 'agents', 'team-agent.yaml'), 'name: team-agent\ndescription: Startup agent fixture\ninstructions: Team agent v2\n');
+      fs.writeFileSync(path.join(teamChange, 'rules', 'team-rule.md'), '# Team rule v2\n');
+      fs.writeFileSync(path.join(teamChange, 'mcp', 'mcp.yaml'), 'servers:\n  - name: team-api\n    transport: http\n    url: https://team-v2.example.com/mcp\n');
+      fs.writeFileSync(path.join(teamChange, 'hooks', 'hooks.yaml'), 'hooks:\n  - id: startup-guard\n    description: Startup hook fixture\n    event: SessionStart\n    command: echo team-hook-v2\n');
+      gitOk(['add', '-A'], teamChange);
+      gitOk(['commit', '-q', '-m', 'update all startup resources'], teamChange);
+      gitOk(['push', '-q', 'origin', 'HEAD:main'], teamChange);
       businessChange();
 
       const r = git(['pull', '-q'], repo);
@@ -419,6 +433,10 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       expect(r.output).toBe('');
       expect(fs.existsSync(path.join(repo, 'change-1.txt'))).toBe(true);
       expect(hasSkill(repo, 'merged-skill')).toBe(true);
+      expect(fs.readFileSync(path.join(repo, '.claude', 'agents', 'team-agent.md'), 'utf8')).toContain('Team agent v2');
+      expect(fs.readFileSync(path.join(repo, '.claude', 'rules', 'team-rule.md'), 'utf8')).toContain('Team rule v2');
+      expect(fs.readFileSync(path.join(repo, '.mcp.json'), 'utf8')).toContain('https://team-v2.example.com/mcp');
+      expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v2');
       await settle(repo);
     });
 

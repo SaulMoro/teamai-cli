@@ -134,11 +134,16 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
       'sharing:',
       '  mcp:',
       '    autoApply: true',
+      '  hooks:',
+      '    autoApply: true',
+      '    requireTeamScripts: false',
       '',
     ].join('\n'));
     writeSeed(seed, 'skills/team-skill/SKILL.md',
       '---\nname: team-skill\ndescription: Team skill fixture\n---\n\n# Team skill\n');
     writeSeed(seed, 'rules/team-rule.md', '# Team rule\n');
+    writeSeed(seed, 'agents/team-agent.yaml', 'name: team-agent\ndescription: Startup agent fixture\ninstructions: Team agent v1\n');
+    writeSeed(seed, 'hooks/hooks.yaml', 'hooks:\n  - id: startup-guard\n    description: Startup hook fixture\n    event: SessionStart\n    command: echo team-hook-v1\n');
     writeSeed(seed, 'mcp/mcp.yaml', [
       'servers:',
       '  - name: team-api',
@@ -166,7 +171,7 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
     if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('user scope: the team skill, rule and MCP server are delivered when init exits', async () => {
+  it('user scope: skills, agents, rules, MCP and team hooks are delivered when init exits', async () => {
     const cwd = path.join(sandbox, 'elsewhere');
     fs.mkdirSync(cwd, { recursive: true });
     const result = await runCLI(['init', FAKE_URL, '--scope', 'user', '--agent', 'claude', '--force'], cwd);
@@ -179,6 +184,8 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
       mcpServers?: Record<string, unknown>;
     };
     expect(Object.keys(claudeJson.mcpServers ?? {})).toContain('team-api');
+    expect(fs.readFileSync(path.join(home, '.claude', 'agents', 'team-agent.md'), 'utf8')).toContain('Team agent v1');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v1');
   }, 90_000);
 
   it('project scope with --agent claude: .claude/ is created and filled, .mcp.json holds the team server', async () => {
@@ -193,6 +200,8 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
       mcpServers?: Record<string, unknown>;
     };
     expect(Object.keys(mcp.mcpServers ?? {})).toContain('team-api');
+    expect(fs.readFileSync(path.join(project, '.claude', 'agents', 'team-agent.md'), 'utf8')).toContain('Team agent v1');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v1');
     // Only the chosen tool's root, although Codex is installed too.
     expect(fs.existsSync(path.join(project, '.codex'))).toBe(false);
   }, 90_000);
