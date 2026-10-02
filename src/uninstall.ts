@@ -99,7 +99,8 @@ interface RemovalPlan {
   /** Manifest used by the primary hook injection scope. */
   hookManifestPath: string;
   /** Instruction files (CLAUDE.md, AGENTS.md, …), each with the teamai blocks to strip from it. */
-  claudeMdFiles: Array<{ path: string; blocks: Array<[string, string]> }>;
+  /** `owned`: teamai's generated file, which goes with its last block; else a member's file. */
+  claudeMdFiles: Array<{ path: string; blocks: Array<[string, string]>; owned: boolean }>;
   opencodeInstructions: OpencodeInstruction[];
   /**
    * Skill directories synced from team repo, each with the base directory its
@@ -456,15 +457,8 @@ async function discoverToolResources(
       res.claudeMdFiles.push(claudeMdPath);
     }
   }
-  // A teamai-context.md without teamai's blocks is the member's and keeps its
-  // entry, as on pull; an entry to a file that is gone is dropped.
-  const contextFile = instructionFile ? path.resolve(baseDir, instructionFile) : undefined;
-  if (tool === 'opencode' && contextFile
-    && (res.claudeMdFiles.includes(contextFile) || !await pathExists(contextFile))) {
-    const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const reference = opencodeContextReference(contextFile, scope, baseDir);
-    if ((await readOpencodeInstructionList(reference.config))?.includes(reference.entry)) res.opencodeInstructions.push(reference);
-  }
+  // OpenCode's instructions entry goes only when teamai recorded adding it
+  // (buildRemovalPlan): an entry the member listed is theirs, whatever the file holds.
   for (const retired of retiredInstructionFiles(tool, toolPath, scope)) {
     const file = path.resolve(baseDir, retired);
     const content = await readFileSafe(file);
@@ -635,13 +629,13 @@ async function buildRemovalPlan(
     );
   }
 
-  // The OpenCode entries teamai added stay teamai's even after the member
-  // stripped the markers from the context file.
+  // OpenCode's instructions entry is teamai's only when pull recorded adding
+  // it, whatever the context file holds now. No release before #945 added
+  // this entry, so there are no unrecorded teamai entries to migrate.
   const opencodeRes = perTool.get('opencode');
   if (opencodeRes) {
     const { loadStateForScope } = await import('./config.js');
-    const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const { opencodeContextReference } = await import('./resources/opencode-config.js');
+    const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
     const contextFile = toolPaths.opencode && instructionTargetFile('opencode', toolPaths.opencode, localConfig.scope);
     // Worktrees share state.json: only this checkout's own record counts.
     const own = contextFile
@@ -649,7 +643,6 @@ async function buildRemovalPlan(
       : undefined;
     const recorded = (await loadStateForScope(localConfig)).opencodeContextEntries ?? [];
     if (own && recorded.some((ref) => ref.config === own.config && ref.entry === own.entry)
-      && !opencodeRes.opencodeInstructions.some((e) => e.config === own.config && e.entry === own.entry)
       && (await readOpencodeInstructionList(own.config))?.includes(own.entry)) {
       opencodeRes.opencodeInstructions.push(own);
     }
@@ -762,7 +755,9 @@ async function buildRemovalPlan(
       const kept = retainedBlocks.get(file);
       const blocks = CLAUDEMD_MARKER_PAIRS
         .filter(([start]) => content.includes(start) && !kept?.has(start));
-      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
+      // The configured `claudemd` (no `rules`) is the member's, whatever its name.
+      const owned = instructionTargetFile(tool, toolPaths[tool], localConfig.scope) !== toolPaths[tool].claudemd;
+      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned });
     }
     // A retired file keeps only the blocks a remaining tool still writes
     // there, which a team's toolPaths can make it.
@@ -771,7 +766,8 @@ async function buildRemovalPlan(
       const content = await readFileSafe(file) ?? '';
       const kept = retainedBlocks.get(file);
       const blocks = CLAUDEMD_MARKER_PAIRS.filter(([start]) => content.includes(start) && !kept?.has(start));
-      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
+      const owned = path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`);
+      if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned });
     }
     plan.skillDirs.push(...res.skillDirs);
     plan.ruleFiles.push(...res.ruleFiles);
@@ -1115,11 +1111,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   }
 
   // (b) Clean CLAUDE.md teamai section blocks
-  for (const { path: claudeMdPath, blocks } of plan.claudeMdFiles) {
+  for (const { path: claudeMdPath, blocks, owned } of plan.claudeMdFiles) {
     try {
       // A file teamai created goes with its last block; a member's file,
       // even an empty one, stays.
-      const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start));
+      const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start), owned);
       for (const warning of warnings) log.warn(warning);
       if (changed) log.success(`Cleaned ${claudeMdPath}`);
     } catch (e) {

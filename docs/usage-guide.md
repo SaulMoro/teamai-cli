@@ -2845,7 +2845,7 @@ teamai uninstall --agent claude
 What gets removed:
 - TeamAI-managed model settings are restored first when ownership is still intact
 - teamai hooks in AI tool settings
-- The teamai blocks (culture, shared instructions, recall, and Codex's team rules) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too, even when your own text keeps the file or the file is gone; an entry teamai did not add, for a `teamai-context` file without teamai's blocks, is yours and stays)
+- The teamai blocks (culture, shared instructions, recall, and Codex's team rules) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too when teamai added it, even when your own text keeps the file or the file is gone; an entry you listed yourself stays)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)

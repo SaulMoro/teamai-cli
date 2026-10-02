@@ -2165,7 +2165,7 @@ async function syncClaudemd(
       log.debug(`local-agent: OpenCode reads the team instructions from ${claudeUserFile}; skipped`);
       continue;
     }
-    const target = instructionTargetAt(tool, claudeMdPath, localConfig.scope);
+    const target = instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath);
     const plan = await planInstructionFiles([target], { claudemd: block });
     // A warning means the file was left as it was: nothing reached the tool.
     if (plan.warnings.length > 0) {

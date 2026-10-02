@@ -316,6 +316,21 @@ describe('pull role-aware sync and cleanup', () => {
     expect(await fse.pathExists(context)).toBe(false);
   });
 
+  it('reports no synced culture when every instruction target was left alone (#945)', async () => {
+    const { log } = await import('../utils/logger.js');
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } });
+    await fse.ensureDir(path.join(homeDir, '.cursor', 'skills'));
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    // A member's own file holds teamai's target path.
+    await fse.outputFile(path.join(homeDir, '.cursor', 'rules', 'teamai-context.mdc'), '# Mine\n');
+    vi.mocked(log.success).mockClear();
+
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.flat()).not.toContain('Synced team culture');
+  });
+
   it('should not delete files that are NOT tombstoned', async () => {
     // No tombstone files
     await fse.writeFile(path.join(homeDir, '.claude/rules', 'keep-rule.md'), '# Keep');

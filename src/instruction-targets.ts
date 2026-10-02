@@ -346,9 +346,12 @@ export function instructionTargetPath(
  * ownership its entry declares. Only teamai's `teamai-context` file takes
  * them; a configured file is the member's.
  */
-export function instructionTargetAt(tool: string, file: string, scope: Scope): InstructionTarget {
+export function instructionTargetAt(tool: string, file: string, scope: Scope, paths: ToolPaths): InstructionTarget {
   const entry = entryFor(tool, scope);
-  const own = path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`);
+  // teamai's file is the one its entry generates; the team's configured
+  // `claudemd` (the fallback without `rules`) is the member's, whatever its name.
+  const own = path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`)
+    && instructionTargetFile(tool, paths, scope) !== paths.claudemd;
   return { path: file, tools: [], recall: false, header: own ? entry?.header : undefined, owned: own ? entry?.owned : undefined };
 }
 
@@ -429,7 +432,7 @@ export async function resolveInstructionTargets(
     if (!file || !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
     inUse.add(file);
     if (isAgentExcluded(localConfig, tool)) continue;
-    const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope);
+    const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope, paths);
     // The subagent block only where every tool reading the file has the subagent.
     target.recall = Boolean(paths.agents) && (target.tools.length === 0 || target.recall);
     target.tools.push(tool);
@@ -455,9 +458,9 @@ export async function resolveInstructionTargets(
 
 /**
  * List teamai's OpenCode instruction file in OpenCode's `instructions` while
- * it holds teamai's blocks, and drop the entry once the file is gone: OpenCode
- * reads no file it is not told about. A file without teamai's blocks is the
- * member's, so its entry is left as it is. Returns what it did or, with
+ * it holds teamai's blocks, and drop the entry teamai recorded adding once the
+ * file is gone: OpenCode reads no file it is not told about. A file without
+ * teamai's blocks is the member's, and an entry teamai did not add stays. Returns what it did or, with
  * `dryRun`, would do.
  */
 export async function registerOpencodeContext(
@@ -477,6 +480,13 @@ export async function registerOpencodeContext(
   if (!delivered && await pathExists(contextFile)) return null;
   const present = wanted && delivered;
   const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
+  // An entry goes only if teamai recorded adding it: one the member listed
+  // before teamai wrote the file is theirs.
+  if (!present) {
+    const { loadStateForScope } = await import('./config.js');
+    const recorded = (await loadStateForScope(localConfig)).opencodeContextEntries ?? [];
+    if (!recorded.some((ref) => ref.config === config && ref.entry === entry)) return null;
+  }
   if (dryRun) {
     const listed = (await readOpencodeInstructionList(config))?.includes(entry) ?? false;
     if (listed === present) return null;
@@ -594,6 +604,11 @@ async function planFile(
     }
     content = edited.content;
   }
+  // teamai's own rule file needs its header to be loaded at all: put it back
+  // if it was lost or edited, replacing any other frontmatter.
+  if (target.owned && target.header && hasTeamaiBlock(content) && !content.startsWith(target.header)) {
+    content = target.header + content.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^\n*/, '\n');
+  }
   if (content === (existing ?? target.header ?? '')) return null;
 
   const remainder = withoutHeader(content, target.header).trim();
@@ -618,6 +633,8 @@ const KNOWN_HEADERS = [ALWAYS_APPLY];
 export async function clearInstructionFile(
   file: string,
   starts?: readonly string[],
+  /** Whether the file is teamai's generated one; by default, judged by its name. */
+  owned = path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`),
 ): Promise<{ changed: boolean; warnings: string[] }> {
   const existing = await readFileSafe(file);
   if (existing === null) return { changed: false, warnings: [] };
@@ -626,7 +643,7 @@ export async function clearInstructionFile(
     tools: [],
     recall: false,
     header: KNOWN_HEADERS.find((header) => existing.startsWith(header)),
-    owned: path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`),
+    owned,
   };
   const blocks = starts === undefined ? STALE_BLOCKS : STALE_BLOCKS.filter(([start]) => starts.includes(start));
   const warnings: string[] = [];

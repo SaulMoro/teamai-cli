@@ -1932,7 +1932,10 @@ async function syncManagedInstructions(
   }
   // Hook targets (Pi, OMP, Hermes, Codex) are reported after the hooks are
   // reconciled, since that is what installs their extensions and plugins.
-  if (dryRun || targets.length === 0) return;
+  // A target named in a warning or failure was left as it was.
+  const problems = [...plan.warnings, ...failures];
+  const reached = targets.filter((target) => !problems.some((problem) => problem.includes(target.path)));
+  if (dryRun || reached.length === 0) return;
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
 }

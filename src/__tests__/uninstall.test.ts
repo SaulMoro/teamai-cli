@@ -1624,11 +1624,13 @@ describe('uninstall', () => {
   });
 
   it.each([
-    ['deleted', null, ['docs/style.md']],
-    ['teamai\'s', '<!-- [teamai:culture:start] -->\nx\n<!-- [teamai:culture:end] -->\n', ['docs/style.md']],
-    ['the member\'s own', '# My own notes\n', ['docs/style.md', '.opencode/teamai-context.md']],
-    ['teamai\'s with its markers stripped', 'Generated text.\n', ['docs/style.md'], true],
-  ])('handles OpenCode\'s instructions entry when its context file is %s (#945)', async (_state, content, expected, recorded = false) => {
+    ['deleted, entry recorded', null, ['docs/style.md'], true],
+    ['teamai\'s, entry recorded', '<!-- [teamai:culture:start] -->\nx\n<!-- [teamai:culture:end] -->\n', ['docs/style.md'], true],
+    ['teamai\'s with its markers stripped, entry recorded', 'Generated text.\n', ['docs/style.md'], true],
+    // The member listed the entry before pull filled the file: theirs.
+    ['teamai\'s, entry not recorded', '<!-- [teamai:culture:start] -->\nx\n<!-- [teamai:culture:end] -->\n', ['docs/style.md', '.opencode/teamai-context.md'], false],
+    ['the member\'s own', '# My own notes\n', ['docs/style.md', '.opencode/teamai-context.md'], false],
+  ])('handles OpenCode\'s instructions entry when its context file is %s (#945)', async (_state, content, expected, recorded) => {
     const projectRoot = path.join(tmpDir, 'oc-entry-project');
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');

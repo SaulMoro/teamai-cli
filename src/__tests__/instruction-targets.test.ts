@@ -57,6 +57,18 @@ describe('instruction file planning (#945)', () => {
     expect(plan.changes.map((c) => c.content)).toEqual([`${recall}\n`, `${direct}\n`]);
   });
 
+  it('restores the header of teamai\'s own rule file when it was lost or changed', async () => {
+    const header = '---\nalwaysApply: true\n---\n';
+    const own = target('teamai-context.mdc', { header, owned: true });
+    const fresh = await planInstructionFiles([own], { culture: culture('c') });
+    const expected = fresh.changes[0].content;
+    for (const lost of [`${culture('c')}\n`, `---\nalwaysApply: false\n---\n\n${culture('c')}\n`]) {
+      fs.writeFileSync(own.path, lost);
+      const plan = await planInstructionFiles([own], { culture: culture('c') });
+      expect(plan.changes.map((c) => c.content)).toEqual([expected]);
+    }
+  });
+
   it('creates a missing target with the blocks only', async () => {
     const plan = await planInstructionFiles([target('CLAUDE.local.md')], { culture: culture('c'), claudemd: claudemd('s') });
     await applyInstructionPlan(plan, { dryRun: false });
@@ -386,6 +398,34 @@ describe('Codex project instructions (#945)', () => {
   });
 });
 
+describe('a configured claudemd named like teamai\'s file (#945)', () => {
+  it('is the member\'s file: an existing one gets the blocks beside its text', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-fallback-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const notes = path.join(projectRoot, '.claude', 'teamai-context.md');
+      fs.mkdirSync(path.join(projectRoot, '.claude', 'skills'), { recursive: true });
+      fs.writeFileSync(notes, '# My notes\n');
+      const teamConfig = TeamaiConfigSchema.parse({
+        team: 't', repo: 'https://example.invalid/t.git',
+        toolPaths: { claude: { skills: '.claude/skills', claudemd: '.claude/teamai-context.md' } },
+      });
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, enabledAgents: ['claude'],
+      } as unknown as LocalConfig;
+
+      const { targets } = await resolveInstructionTargets(teamConfig, localConfig);
+      const plan = await planInstructionFiles(targets.filter((t) => t.path === notes), { culture: culture('c') });
+
+      expect(plan.warnings).toEqual([]);
+      expect(plan.changes.map((c) => c.content)).toEqual([`# My notes\n\n${culture('c')}\n`]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('OpenCode instructions ownership (#945)', () => {
   it('records the entry teamai adds, for uninstall, and forgets it once removed', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocown-')));
@@ -411,6 +451,11 @@ describe('OpenCode instructions ownership (#945)', () => {
       const resolved = await resolveInstructionTargets(teamConfig, localConfig);
       await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false);
       expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
+
+      // An entry the member listed, which teamai did not record, stays.
+      fs.writeFileSync(config, JSON.stringify({ instructions: ['.opencode/teamai-context.md'] }));
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false);
+      expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['.opencode/teamai-context.md']);
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(root, { recursive: true, force: true });
