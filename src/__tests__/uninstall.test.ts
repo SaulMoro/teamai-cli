@@ -1598,7 +1598,8 @@ describe('uninstall', () => {
     ['deleted', null, ['docs/style.md']],
     ['teamai\'s', '<!-- [teamai:culture:start] -->\nx\n<!-- [teamai:culture:end] -->\n', ['docs/style.md']],
     ['the member\'s own', '# My own notes\n', ['docs/style.md', '.opencode/teamai-context.md']],
-  ])('handles OpenCode\'s instructions entry when its context file is %s (#945)', async (_state, content, expected) => {
+    ['teamai\'s with its markers stripped', 'Generated text.\n', ['docs/style.md'], true],
+  ])('handles OpenCode\'s instructions entry when its context file is %s (#945)', async (_state, content, expected, recorded = false) => {
     const projectRoot = path.join(tmpDir, 'oc-entry-project');
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
@@ -1613,6 +1614,11 @@ describe('uninstall', () => {
     const teamConfig = makeTeamConfig({ toolPaths: { opencode: { skills: '.opencode/skills', rules: '.opencode/rules' } } });
     const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    if (recorded) {
+      const { loadStateForScope, saveStateForScope } = await import('../config.js');
+      const state = await loadStateForScope(localConfig);
+      await saveStateForScope({ ...state, opencodeContextEntries: [{ config, entry: '.opencode/teamai-context.md' }] }, localConfig);
+    }
 
     await uninstall({ force: true, agent: 'opencode' });
 

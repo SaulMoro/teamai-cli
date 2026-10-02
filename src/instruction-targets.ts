@@ -384,6 +384,9 @@ export async function isInstructionToolInstalled(tool: string, paths: ToolPaths,
   // teamai installs the OMP extension only where ~/.omp exists; a project's
   // own .omp/ says nothing about this member using OMP.
   if (tool === 'omp') return pathExists(path.join(getUserHome(), '.omp'));
+  // teamai installs the Pi extension in ~/.pi/agent/extensions when ~/.pi
+  // exists, so a project needs no .pi/ of its own.
+  if (tool === 'pi' && await pathExists(path.join(getUserHome(), '.pi'))) return true;
   const nestedClaudemd = paths.claudemd !== undefined && paths.claudemd.includes('/') ? paths.claudemd : undefined;
   const probe = paths.skills ?? paths.rules ?? paths.agents ?? paths.settings ?? nestedClaudemd;
   if (probe === undefined) return paths.claudemd !== undefined;
@@ -470,7 +473,17 @@ export async function registerOpencodeContext(
     return `Would ${present ? 'add' : 'remove'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}`;
   }
   const changed = await reconcileOpencodeInstructions(config, entry, present, 'team instructions');
+  if (changed) await recordOpencodeContextEntry(localConfig, { config, entry }, present);
   return changed ? `${present ? 'Added' : 'Removed'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}` : null;
+}
+
+/** Remember (`added`) or forget the OpenCode entry teamai wrote, for uninstall. */
+async function recordOpencodeContextEntry(localConfig: LocalConfig, ref: { config: string; entry: string }, added: boolean): Promise<void> {
+  const { loadStateForScope, saveStateForScope } = await import('./config.js');
+  const state = await loadStateForScope(localConfig);
+  const others = (state.opencodeContextEntries ?? []).filter((e) => e.config !== ref.config || e.entry !== ref.entry);
+  state.opencodeContextEntries = added ? [...others, ref] : others;
+  await saveStateForScope(state, localConfig);
 }
 
 // ─── Planning file contents ────────────────────────────

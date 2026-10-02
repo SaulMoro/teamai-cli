@@ -181,7 +181,9 @@ describe('instruction channel problems (#945)', () => {
     try {
       const projectRoot = path.join(root, 'project');
       const repo = path.join(root, 'repo');
-      fs.mkdirSync(path.join(projectRoot, '.pi', 'skills'), { recursive: true });
+      // Pi is installed for the member (~/.pi); the project has no .pi/.
+      fs.mkdirSync(path.join(root, 'home', '.pi'), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
       fs.mkdirSync(path.join(repo, 'claudemd'), { recursive: true });
       fs.writeFileSync(path.join(repo, 'claudemd', 'shared.md'), 'Shared.\n');
       const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
@@ -355,6 +357,38 @@ describe('OpenCode instructions registration (#945)', () => {
       expect(await registerOpencodeContext(teamConfig, localConfig, resolved, false)).toBeNull();
       expect(fs.readFileSync(config, 'utf8')).toBe(listed);
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('OpenCode instructions ownership (#945)', () => {
+  it('records the entry teamai adds, for uninstall, and forgets it once removed', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocown-')));
+    const prevHome = process.env.HOME;
+    process.env.HOME = path.join(root, 'home');
+    try {
+      const projectRoot = path.join(root, 'project');
+      const context = path.join(projectRoot, '.opencode', 'teamai-context.md');
+      fs.mkdirSync(path.join(projectRoot, '.opencode', 'skills'), { recursive: true });
+      fs.writeFileSync(context, `${claudemd('team')}\n`);
+      const config = path.join(projectRoot, '.opencode', 'opencode.json');
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, dataHome: path.join(root, 'data'),
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const { loadStateForScope } = await import('../config.js');
+
+      await registerOpencodeContext(teamConfig, localConfig, await resolveInstructionTargets(teamConfig, localConfig), false);
+      expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config, entry: '.opencode/teamai-context.md' }]);
+
+      fs.rmSync(context);
+      const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false);
+      expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
+    } finally {
+      process.env.HOME = prevHome;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

@@ -629,6 +629,18 @@ async function buildRemovalPlan(
     );
   }
 
+  // The OpenCode entries teamai added stay teamai's even after the member
+  // stripped the markers from the context file.
+  const opencodeRes = perTool.get('opencode');
+  if (opencodeRes) {
+    const { loadStateForScope } = await import('./config.js');
+    const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+    for (const ref of (await loadStateForScope(localConfig)).opencodeContextEntries ?? []) {
+      if (opencodeRes.opencodeInstructions.some((e) => e.config === ref.config && e.entry === ref.entry)) continue;
+      if ((await readOpencodeInstructionList(ref.config))?.includes(ref.entry)) opencodeRes.opencodeInstructions.push(ref);
+    }
+  }
+
   // (d) continued: the copies a release made in a tool's legacy rules
   // directory, before its rules moved into its instructions file, which a pull
   // may not have reclaimed yet. A name is no proof there: only the copies a
