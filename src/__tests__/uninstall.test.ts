@@ -1595,9 +1595,10 @@ describe('uninstall', () => {
   });
 
   it.each([
-    ['deleted', null],
-    ['stripped of its markers', '# My own notes\n'],
-  ])('removes OpenCode\'s instructions entry when its context file was %s (#945)', async (_state, content) => {
+    ['deleted', null, ['docs/style.md']],
+    ['teamai\'s', '<!-- [teamai:culture:start] -->\nx\n<!-- [teamai:culture:end] -->\n', ['docs/style.md']],
+    ['the member\'s own', '# My own notes\n', ['docs/style.md', '.opencode/teamai-context.md']],
+  ])('handles OpenCode\'s instructions entry when its context file is %s (#945)', async (_state, content, expected) => {
     const projectRoot = path.join(tmpDir, 'oc-entry-project');
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
@@ -1615,7 +1616,7 @@ describe('uninstall', () => {
 
     await uninstall({ force: true, agent: 'opencode' });
 
-    expect((await fse.readJson(config)).instructions).toEqual(['docs/style.md']);
+    expect((await fse.readJson(config)).instructions).toEqual(expected);
   });
 
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the

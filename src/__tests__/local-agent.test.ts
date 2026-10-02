@@ -2137,7 +2137,10 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
   });
 
   it('gives Codex a project prompt through its SessionStart and SubagentStart hooks', async () => {
-    const { repo, ack } = await installProjectPrompt('codex', ['.codex/skills']);
+    // Codex is installed for the member (~/.codex), not in the project.
+    await fse.ensureDir(path.join(tmpDir, '.codex', 'skills'));
+    const { repo, ack } = await installProjectPrompt('codex', []);
+    expect(await fse.pathExists(path.join(repo, '.codex'))).toBe(false);
 
     expect(ack?.status).toBe('success');
     const { buildHandlerRegistry, filterHandlersForConfig } = await import('../hook-handlers.js');

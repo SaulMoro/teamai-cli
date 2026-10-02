@@ -456,9 +456,13 @@ async function discoverToolResources(
       res.claudeMdFiles.push(claudeMdPath);
     }
   }
-  if (tool === 'opencode' && instructionFile) {
+  // A teamai-context.md without teamai's blocks is the member's and keeps its
+  // entry, as on pull; an entry to a file that is gone is dropped.
+  const contextFile = instructionFile ? path.resolve(baseDir, instructionFile) : undefined;
+  if (tool === 'opencode' && contextFile
+    && (res.claudeMdFiles.includes(contextFile) || !await pathExists(contextFile))) {
     const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const reference = opencodeContextReference(path.resolve(baseDir, instructionFile), scope, baseDir);
+    const reference = opencodeContextReference(contextFile, scope, baseDir);
     if ((await readOpencodeInstructionList(reference.config))?.includes(reference.entry)) res.opencodeInstructions.push(reference);
   }
   for (const retired of retiredInstructionFiles(tool, toolPath, scope)) {

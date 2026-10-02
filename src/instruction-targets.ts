@@ -404,7 +404,10 @@ export async function resolveInstructionTargets(
   for (const [tool, paths] of Object.entries(toolPaths)) {
     const entry = entryFor(tool, localConfig.scope);
     if (entry?.hook) {
-      if (!isAgentExcluded(localConfig, tool) && await isInstructionToolInstalled(tool, paths, localConfig)) {
+      // Codex's hooks are user-level, so a project without its own `.codex/`
+      // still reaches an installed Codex.
+      const probeConfig: LocalConfig = entry === codexHook ? { ...localConfig, scope: 'user' } : localConfig;
+      if (!isAgentExcluded(localConfig, tool) && await isInstructionToolInstalled(tool, paths, probeConfig)) {
         hooks.push({ tool, recall: Boolean(paths.agents), limit: entry.hookLimit });
       }
       continue;
