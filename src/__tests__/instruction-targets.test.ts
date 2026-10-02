@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -349,6 +350,38 @@ describe('OpenCode\'s Claude fallback (#945)', () => {
 });
 
 describe('OpenCode instructions registration (#945)', () => {
+  it.each(['malformed', 'write failure', 'current', 'written'])('registers only delivered instructions when the target is %s', async (state) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocreg-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const file = path.join(projectRoot, '.opencode', 'teamai-context.md');
+      fs.mkdirSync(path.join(projectRoot, '.opencode', 'skills'), { recursive: true });
+      fs.writeFileSync(file, state === 'malformed' ? `${TEAMAI_CLAUDEMD_START}\nold selection\n` : `${claudemd(state === 'current' ? 'desired' : 'old selection')}\n`);
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+      const plan = await planInstructionFiles(resolved.targets, { claudemd: claudemd('desired') });
+      if (state === 'write failure') vi.spyOn(fse, 'writeFile').mockRejectedValueOnce(new Error('EACCES'));
+      const { failures } = await applyInstructionPlan(plan, { dryRun: false });
+      await registerOpencodeContext(teamConfig, localConfig, resolved, false, [], [...plan.warnings, ...failures]);
+
+      const config = path.join(projectRoot, '.opencode', 'opencode.json');
+      if (state === 'current' || state === 'written') {
+        expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['.opencode/teamai-context.md']);
+        expect(fs.readFileSync(file, 'utf8')).toContain('desired');
+      } else {
+        expect(fs.existsSync(config)).toBe(false);
+        expect(fs.readFileSync(file, 'utf8')).toContain('old selection');
+      }
+    } finally {
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('leaves the member\'s own listed teamai-context.md entry alone, in a dry run and a real pull', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocreg-')));
     try {
@@ -511,4 +544,3 @@ describe('every tool and toolPaths shape keeps its instructions (#945)', () => {
     }
   });
 });
-

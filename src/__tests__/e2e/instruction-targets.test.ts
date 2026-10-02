@@ -803,6 +803,31 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md'] });
   });
 
+  it('activates OpenCode instructions only after repairing a malformed target', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.opencode/skills']);
+    const contextFile = path.join(member.projectRoot, '.opencode', 'teamai-context.md');
+    const config = path.join(member.projectRoot, '.opencode', 'opencode.json');
+    fs.writeFileSync(contextFile, `${CLAUDEMD_START}\nPRODUCT-STALE\n`);
+    fs.writeFileSync(config, JSON.stringify({ instructions: ['docs/style.md'] }));
+    for (const args of [['--dry-run'], []]) {
+      const pull = await pullAs(member, args);
+      expect(pull.code, pull.output).toBe(0);
+      expect(pull.output).toContain('incomplete teamai claudemd block');
+      expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['docs/style.md']);
+      console.log(`pull ${args.join(' ')}: malformed target warned; OpenCode instructions=${JSON.stringify(JSON.parse(fs.readFileSync(config, 'utf8')).instructions)}`);
+    }
+    fs.writeFileSync(contextFile, `${CLAUDEMD_START}\nPRODUCT-STALE\n${CLAUDEMD_END}\n`);
+    const retry = await pullAs(member);
+    expect(retry.code, retry.output).toBe(0);
+    const content = fs.readFileSync(contextFile, 'utf8');
+    expect(content).toContain('DEVELOPMENT-SENTINEL');
+    expect(content).not.toContain('PRODUCT-STALE');
+    expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['docs/style.md', '.opencode/teamai-context.md']);
+    console.log('pull after repair: DEVELOPMENT=1 PRODUCT-STALE=0; OpenCode instructions=["docs/style.md",".opencode/teamai-context.md"]');
+  });
+
   it('drops OpenCode\'s instructions entry on uninstall even when the member\'s text keeps the file', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
     sandboxes.push(sandbox);
@@ -821,4 +846,3 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions ?? []).toEqual([]);
   });
 });
-

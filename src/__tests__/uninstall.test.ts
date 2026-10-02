@@ -1694,6 +1694,48 @@ describe('uninstall', () => {
     expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config: siblingConfig, entry }]);
   });
 
+  it.each(['write failure', 'unreadable'])('keeps the OpenCode ownership record for a retry after %s (#945)', async (failure) => {
+    const projectRoot = path.join(tmpDir, 'oc-retry-project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'skills'));
+    await fse.outputFile(path.join(repoPath, 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    await fse.outputFile(path.join(projectRoot, '.claude', 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    const config = path.join(projectRoot, '.opencode', 'opencode.json');
+    const entry = '.opencode/teamai-context.md';
+    await fse.outputJson(config, { instructions: [entry] });
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const teamConfig = makeTeamConfig({ toolPaths: {
+      opencode: { skills: '.opencode/skills', rules: '.opencode/rules' },
+      claude: { skills: '.claude/skills', rules: '.claude/rules' },
+    } });
+    const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    const ref = { config, entry };
+    await saveStateForScope({ ...await loadStateForScope(localConfig), opencodeContextEntries: [ref] }, localConfig);
+    const originalRename = fse.rename.bind(fse);
+    const originalRead = fse.readFile.bind(fse);
+    if (failure === 'write failure') {
+      vi.spyOn(fse, 'rename').mockImplementation((...args: Parameters<typeof fse.rename>) => {
+        if (args[1] === config) return Promise.reject(new Error('EACCES'));
+        return originalRename(...args);
+      });
+    } else {
+      vi.spyOn(fse, 'readFile').mockImplementation((...args: Parameters<typeof fse.readFile>) => {
+        if (args[0] === config) return Promise.reject(new Error('EACCES'));
+        return originalRead(...args);
+      });
+    }
+    await uninstall({ force: true, agent: 'opencode' });
+    expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([ref]);
+    vi.restoreAllMocks();
+    expect((await fse.readJson(config)).instructions).toEqual([entry]);
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true, agent: 'opencode' });
+    expect((await fse.readJson(config)).instructions).toBeUndefined();
+    expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
+  });
+
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the
   // legacy <projectRoot> copy was written by a CLI that knew nothing about it —
   // so the two targets must be looked for at different paths.

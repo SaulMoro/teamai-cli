@@ -1409,13 +1409,20 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 
     await executeRemoval(plan);
 
-    // The OpenCode entries uninstall removed are no longer teamai's to track.
+    // The OpenCode entries uninstall removed are no longer teamai's to track;
+    // one still listed (the write failed) stays recorded for the next try.
     if (plan.opencodeInstructions.length > 0 && !plan.includeShared) {
       const { loadStateForScope, saveStateForScope } = await import('./config.js');
+      const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
       const state = await loadStateForScope(localConfig!);
       if (state.opencodeContextEntries) {
+        const removed: typeof plan.opencodeInstructions = [];
+        for (const ref of plan.opencodeInstructions) {
+          const listed = await readOpencodeInstructionList(ref.config);
+          if (listed !== null && !listed.includes(ref.entry)) removed.push(ref);
+        }
         state.opencodeContextEntries = state.opencodeContextEntries.filter(
-          (ref) => !plan.opencodeInstructions.some((e) => e.config === ref.config && e.entry === ref.entry),
+          (ref) => !removed.some((e) => e.config === ref.config && e.entry === ref.entry),
         );
         await saveStateForScope(state, localConfig!);
       }

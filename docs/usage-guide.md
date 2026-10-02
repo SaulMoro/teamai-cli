@@ -1674,7 +1674,7 @@ The CodeBuddy and WorkBuddy rule files carry `alwaysApply: true`, which CodeBudd
 
 In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). A plugin of that name teamai did not write is left alone, also on uninstall, and `teamai pull` and `teamai doctor` say so. According to Hermes' documentation it builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
 
-OpenCode loads a file only when its config lists it in `instructions`, so teamai adds that one entry and keeps your other entries and keys; the root `opencode.json` and OpenCode's own `AGENTS.md` files are left alone. While `~/.config/opencode/AGENTS.md` does not exist, OpenCode reads `~/.claude/CLAUDE.md` instead; when Claude Code gets the user blocks there, OpenCode already has them, so teamai writes no second user copy for OpenCode and says so in the pull output. Blocks left there by a Claude Code you excluded count too, since OpenCode reads them all the same; the pull then warns that nothing keeps them current. A config file teamai cannot parse as JSON (for example one with comments) is left unchanged with a warning; add the entry by hand.
+OpenCode loads a file only when its config lists it in `instructions`. teamai adds that entry only when the target already matches the desired blocks or its update succeeds. A malformed target or a failed write does not activate stale blocks. It keeps your other entries and keys; the root `opencode.json` and OpenCode's own `AGENTS.md` files are left alone. While `~/.config/opencode/AGENTS.md` does not exist, OpenCode reads `~/.claude/CLAUDE.md` instead; when Claude Code gets the user blocks there, OpenCode already has them, so teamai writes no second user copy for OpenCode and says so in the pull output. Blocks left there by a Claude Code you excluded count too, since OpenCode reads them all the same; the pull then warns that nothing keeps them current. A config file teamai cannot parse as JSON (for example one with comments) is left unchanged with a warning; add the entry by hand.
 
 Oh My Pi reads `RULES.md` as an always-applied rule beside its single user context file. In project scope teamai's OMP extension asks `teamai` for the blocks when the session starts and adds them to each turn's system prompt, from the project root and any subdirectory. Without that extension (for example with hooks removed), an Oh My Pi project session gets no team blocks. Prompts the HTTP local agent delivers for a project reach Pi, Oh My Pi and Hermes the same way, through their extension or plugin, and the Codex family through its session-start and subagent-start hooks.
 
@@ -1749,6 +1749,8 @@ When using `teamai init --http <baseUrl>`, the endpoint must implement the follo
   "commands": [{ "id": 1, "type": "install_skill", "skill_slug": "x", "skill_version": "1.0.0", "download_url": "https://signed-url/..." }]
 }
 ```
+
+Removing the final HTTP prompt is acknowledged as `failed` when its target cannot be updated. The cached prompt and manifest record remain available for a retry after repairing the markers or file permissions.
 
 The backend may push an **`apply_model_config`** task whose `cmd` is JSON. Both
 the documented candidate-set shape and the legacy single-model shape are accepted.
@@ -2859,6 +2861,8 @@ What gets removed:
 An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The common case is `.codebuddy/rules/teamai-context.md`, which CodeBuddy and WorkBuddy share: `--agent workbuddy` keeps it while CodeBuddy is installed. A file an earlier release wrote the blocks to, such as the project `AGENTS.md`, is read by no tool now, so its teamai blocks go and your own text stays. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. (So targeting a tool that has no teamai resources of its own is a no-op and leaves shared resources in place, even if it happens to be the only tool.)
+
+If removing an OpenCode entry added by teamai fails, its ownership record stays while the shared data directory survives. Repair the config or its permissions, then retry `teamai uninstall --agent opencode`.
 
 The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
 

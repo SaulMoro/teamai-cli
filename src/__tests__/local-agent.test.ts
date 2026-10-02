@@ -1700,6 +1700,38 @@ describe('local-agent: cmds[] migration', () => {
     expect(await fse.readFile(legacy, 'utf8')).toBe('# mine\n');
   });
 
+  it.each(['malformed', 'write failure'])('keeps the final HTTP prompt retryable when removal encounters %s (#945)', async (failure) => {
+    await runResponse({ cmds: [{
+      id: 61, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-a',
+      version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-a.md', scope: 'user',
+    }] });
+    const target = path.join(tmpDir, '.codebuddy', 'CODEBUDDY.md');
+    // Keep member text so removal writes a file rather than deleting it.
+    const installed = '# My notes\n' + await fse.readFile(target, 'utf8');
+    const retained = failure === 'malformed' ? installed.replace('<!-- [teamai:claudemd:end] -->', '') : installed;
+    await fse.writeFile(target, retained);
+    const originalWrite = fse.writeFile.bind(fse);
+    if (failure === 'write failure') {
+      vi.spyOn(fse, 'writeFile').mockImplementation((...args: Parameters<typeof fse.writeFile>) => {
+        if (args[0] === target) return Promise.reject(new Error('EACCES'));
+        return originalWrite(...args);
+      });
+    }
+    const command = { id: 62, type: 'uninstall_prompt_rule', handle_type: 'prompt', slug: 'doc-a', scope: 'user' };
+    const acks = await runResponse({ cmds: [command] });
+    expect(acks.find((ack) => ack.id === 62)?.status).toBe('failed');
+    expect(await fse.readFile(target, 'utf8')).toBe(retained);
+    const manifestFile = path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json');
+    expect((await fse.readJson(manifestFile)).scopes.user.claudemd['doc-a']).toBeDefined();
+    expect(await fse.readFile(path.join(tmpDir, '.teamai', 'local-agent', 'resources', 'user', 'claudemd', 'doc-a.md'), 'utf8')).toContain('# content');
+    vi.restoreAllMocks();
+    await fse.writeFile(target, installed);
+    const retry = await runResponse({ cmds: [{ ...command, id: 63 }] });
+    expect(retry.find((ack) => ack.id === 63)?.status).toBe('success');
+    expect(await fse.readFile(target, 'utf8')).not.toContain(TEAMAI_CLAUDEMD_START);
+    expect((await fse.readJson(manifestFile)).scopes.user.claudemd['doc-a']).toBeUndefined();
+  });
+
   // Codex's default `claudemd` (#938) makes a Codex report a target of this sync.
   it('handle_type=prompt from Codex writes the prompt into ~/.codex/AGENTS.md when ~/.codex exists', async () => {
     await fse.ensureDir(path.join(tmpDir, '.codex'));

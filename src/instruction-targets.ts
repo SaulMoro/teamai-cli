@@ -469,6 +469,8 @@ export async function registerOpencodeContext(
   resolved: Pick<InstructionTargets, 'targets' | 'stale'>,
   dryRun: boolean,
   planned: readonly string[] = [],
+  /** The plan's warnings and write failures: a file they name was left as it was. */
+  problems: readonly string[] = [],
 ): Promise<string | null> {
   const paths = scopedToolPaths(teamConfig, localConfig).opencode;
   const contextFile = paths && instructionTargetPath('opencode', paths, localConfig);
@@ -478,7 +480,8 @@ export async function registerOpencodeContext(
   const delivered = await holdsInstructionBlocks(contextFile) || (dryRun && planned.includes(contextFile));
   // A same-named file of the member's: its entry, if any, is theirs too.
   if (!delivered && await pathExists(contextFile)) return null;
-  const present = wanted && delivered;
+  // Old or malformed blocks the plan could not replace are not this sync's.
+  const present = wanted && delivered && !problems.some((problem) => problem.includes(contextFile));
   const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
   // An entry goes only if teamai recorded adding it: one the member listed
   // before teamai wrote the file is theirs.

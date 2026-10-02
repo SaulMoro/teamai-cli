@@ -1924,7 +1924,7 @@ async function syncManagedInstructions(
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
   try {
     const planned = plan.changes.filter((change) => change.content !== null).map((change) => change.path);
-    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, planned);
+    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, planned, [...plan.warnings, ...failures]);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
   } catch (e) {

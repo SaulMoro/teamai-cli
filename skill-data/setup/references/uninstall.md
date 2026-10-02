@@ -63,6 +63,9 @@ and give it your team repo URL."*
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any
   changes you need, then delete the copy manually.
+- If an OpenCode config entry cannot be removed, repair its config or permissions
+  and retry `teamai uninstall --agent opencode`. Its ownership record stays
+  while the shared data directory survives.
 - Do **not** delete the team repo on the Git platform — uninstall never touches it,
   and neither should you.
 - If the user only wants to stop auto-sync for one tool but keep TeamAI otherwise,

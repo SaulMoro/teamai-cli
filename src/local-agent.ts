@@ -2066,8 +2066,15 @@ async function uninstallResource(input: {
   } else if (input.kind === 'rule') {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
-    await remove(path.join(repoPath, 'claudemd', `${input.slug}.md`));
-    await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+    const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
+    const previous = await readFileSafe(dest);
+    await remove(dest);
+    try {
+      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+    } catch (error) {
+      if (previous !== null) await fse.writeFile(dest, previous);
+      throw error;
+    }
   }
 
   delete scopeManifest[manifestKind(input.kind)][input.slug];
@@ -2205,7 +2212,8 @@ async function syncClaudemd(
   for (const line of report) log.info(`${line}: no installed tool loads them from this file`);
   for (const failure of failures) log.warn(failure);
 
-  if (files.length > 0 && !syncedAny) {
+  // Removing the last prompt fails too when a target kept it.
+  if (!syncedAny && (files.length > 0 || skipped.length > 0)) {
     throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
   }
 }
