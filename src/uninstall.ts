@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
 import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
@@ -86,7 +87,7 @@ interface UninstallOptions extends GlobalOptions {
 interface RemovalPlan {
   /** Tool settings files that contain teamai hooks (each with the manifest that
    *  recorded its team hooks — HOME/user or a legacy <projectRoot>/project one). */
-  hookFiles: Array<{ path: string; tool: string; manifestPath: string }>;
+  hookFiles: Array<{ path: string; tool: string; manifestPath: string; teamOnly?: boolean; legacyManifestPath?: string }>;
   /** OpenClaw-style hook dirs (<base>/.<tool>/hooks) holding teamai HOOK.md+handler.ts. */
   openclawHookDirs: Array<{ hooksDir: string; tool: string }>;
   /** OpenCode teamai plugin files (.opencode/plugin/teamai-*.ts) to delete. */
@@ -145,7 +146,7 @@ interface SkillDirEntry {
 }
 
 interface ToolResources {
-  hookFiles: Array<{ path: string; tool: string; manifestPath: string }>;
+  hookFiles: Array<{ path: string; tool: string; manifestPath: string; teamOnly?: boolean; legacyManifestPath?: string }>;
   openclawHookDirs: Array<{ hooksDir: string; tool: string }>;
   opencodeHookScopes: Array<{ baseDir: string; scope: Scope }>;
   ompHookFile: string | null;
@@ -298,6 +299,8 @@ interface HookTarget {
   baseDir: string;
   manifestPath: string;
   fileFor?: (tool: string) => string | null;
+  teamOnly?: boolean;
+  legacyManifestPath?: string;
 }
 
 async function discoverToolResources(
@@ -413,15 +416,26 @@ async function discoverToolResources(
     // from the same scope decision (`hookSettingsPath`), not from `toolPath` —
     // except for the legacy copy, written into <projectRoot> by a CLI that knew
     // nothing about a member's relocated root, so it sits at the team path.
-    for (const { baseDir: hookBaseDir, manifestPath, fileFor } of hookTargets) {
+    // Main-checkout files are canonical; a legacy target may name one through a symlink.
+    const canonical = (file: string) => realpath(file).catch(() => path.resolve(file));
+    const mainFiles = new Set(await Promise.all(hookTargets.flatMap((target) => {
+      const file = target.teamOnly ? target.fileFor?.(tool) : null;
+      return file ? [canonical(file)] : [];
+    })));
+    for (const { baseDir: hookBaseDir, manifestPath, fileFor, teamOnly, legacyManifestPath } of hookTargets) {
       const settingsRel = path.resolve(hookBaseDir) === path.resolve(getUserHome())
         ? (hookSettingsPath ?? toolPath.settings)
         : toolPath.settings;
       const settingsPath = fileFor ? fileFor(tool) : path.join(hookBaseDir, settingsRel);
+      // Prefer main-file ownership when a legacy target names the same file.
+      if (!teamOnly && settingsPath && mainFiles.has(await canonical(settingsPath))) continue;
       if (settingsPath && await pathExists(settingsPath)
         && (await hasTeamaiHooks(settingsPath, tool, manifestPath)
+          || (legacyManifestPath && await hasTeamaiHooks(settingsPath, tool, legacyManifestPath))
           || isEmptyHooksResidue(await readJson<Record<string, unknown>>(settingsPath)))) {
-        res.hookFiles.push({ path: settingsPath, tool, manifestPath });
+        res.hookFiles.push({ path: settingsPath, tool, manifestPath,
+          ...(teamOnly ? { teamOnly, legacyManifestPath } : {}),
+        });
       }
     }
   } else {
@@ -597,6 +611,8 @@ async function buildRemovalPlan(
     hookTargets.push({
       baseDir: target.root,
       manifestPath: target.manifestPath,
+      teamOnly: true,
+      legacyManifestPath: getManagedHooksPath('project', target.root),
       fileFor: (tool) => mainCheckoutHookFile(target, tool),
     });
   }
@@ -993,9 +1009,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
   // or a legacy <projectRoot>/project copy), so team hooks are stripped at the
   // location that owns them. File-based adapters apply their own scope rules
   // below; in particular, project uninstall never owns Pi's global extension.
-  for (const { path: settingsPath, tool, manifestPath } of plan.hookFiles) {
+  for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath } of plan.hookFiles) {
     try {
-      await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath });
+      await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath,
+        ...(teamOnly ? { teamOnly, legacyManifestPath } : {}),
+      });
     } catch (e) {
       log.warn(`Failed to remove hooks from ${settingsPath}: ${(e as Error).message}`);
     }

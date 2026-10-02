@@ -725,6 +725,8 @@ describe('hooksRemove', () => {
             localConfig: { ...mockLocalConfig, scope: 'project', projectRoot: '/path/to/project' },
             teamConfig: mockTeamConfig,
         });
+        const reconciledMainTools = new Set(['codex']);
+        mockedReconcile.mockResolvedValueOnce(reconciledMainTools);
         try {
             await hooksRemove({});
         } finally {
@@ -745,6 +747,7 @@ describe('hooksRemove', () => {
         expect(mockedSweep).toHaveBeenCalledWith(
             mockTeamConfig.toolPaths,
             expect.objectContaining({ scope: 'project', projectRoot: '/path/to/project' }),
+            reconciledMainTools,
         );
     });
 

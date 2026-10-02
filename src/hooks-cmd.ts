@@ -274,7 +274,7 @@ export async function hooksRemove(_options: GlobalOptions): Promise<void> {
     // Removal must target the same paths injection used. A non-self project
     // scope injects into HOME, so resolving the project-scope paths here would
     // miss (and leave behind) every tool whose user-scope prefix differs.
-    await reconcileHooksToAllTools(scopedToolPaths(teamConfig, { ...localConfig, scope: hookScope }), baseDir, [], manifestPath, {
+    const reconciledMainTools = await reconcileHooksToAllTools(scopedToolPaths(teamConfig, { ...localConfig, scope: hookScope }), baseDir, [], manifestPath, {
         removeAll: true,
         scope: localConfig.scope,
         installedBaseDir: localConfig.scope === 'project' ? localConfig.projectRoot : undefined,
@@ -303,7 +303,7 @@ export async function hooksRemove(_options: GlobalOptions): Promise<void> {
     // differs from the primary target — never HOME (shared with user scope, and
     // the primary target itself when projectRoot IS the home dir), and never
     // re-running on the primary target in self mode.
-    await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig);
+    await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
 
     // Pi has one shared user extension. `hooks remove` is an explicit global
     // hook-disable action even when invoked from a project; project uninstall

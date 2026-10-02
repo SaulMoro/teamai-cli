@@ -2021,6 +2021,46 @@ describe('uninstall', () => {
     );
   });
 
+  it('uninstalls a coincident Codex main file once using current and legacy ownership', async () => {
+    const projectRoot = path.join(tmpDir, 'proj-codex-ownership');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    const homeDir = path.join(tmpDir, 'home');
+    const file = path.join(projectRoot, '.codex', 'hooks.json');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(projectRoot, '.teamai', 'config.yaml'), 'scope: project');
+    await fse.outputJson(file, { hooks: { Stop: [
+      { hooks: [{ type: 'command', command: 'npm run lint' }] },
+      { hooks: [{ type: 'command', command: 'teamai pull --silent && ./notify' }] },
+    ] } });
+    await fse.outputJson(path.join(projectRoot, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+    vi.stubEnv('HOME', homeDir);
+    const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({
+      toolPaths: { codex: { settings: '.codex/hooks.json' } },
+    }) });
+    // Exercise the real reconciler after discovery, rather than just its wiring.
+    const { reconcileHooks } = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(reconcileHooks);
+
+    await uninstall({ force: true });
+
+    const realFile = await fse.realpath(file);
+    const calls = await Promise.all(mockReconcileHooks.mock.calls.map((c) => fse.realpath(c[0]).catch(() => c[0])));
+    expect(calls.filter((c) => c === realFile)).toHaveLength(1);
+    expect((await fse.readJson(file)).hooks.Stop).toEqual([
+      { hooks: [{ type: 'command', command: 'teamai pull --silent && ./notify' }] },
+    ]);
+    expect(mockReconcileHooks).toHaveBeenCalledWith(
+      realFile, 'codex', [],
+      expect.objectContaining({ removeAll: true, teamOnly: true,
+        manifestPath: expect.stringContaining('managed-main-checkout-hooks.json'),
+        legacyManifestPath: expect.stringContaining('managed-hooks.json'),
+      }),
+    );
+  });
+
   it('removes the separate team-hook files of live bare worktrees (#955)', async () => {
     const bare = path.join(tmpDir, 'bare.git');
     const first = path.join(tmpDir, 'first');

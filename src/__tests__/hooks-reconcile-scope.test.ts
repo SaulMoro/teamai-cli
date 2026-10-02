@@ -482,6 +482,42 @@ builtin:
 describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () => {
   const STOP_LINT = 'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n';
 
+  it.each(['claude', 'codex'])('preserves unowned marker commands in %s main hooks from a worktree', async (tool) => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const file = path.join(main, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+    const matcher = tool === 'claude' ? { matcher: '*' } : {};
+    const raw = `teamai hook-dispatch session-start --tool ${tool}`;
+    const member = { ...matcher, hooks: [{ type: 'command', command: 'teamai pull --silent && ./notify' }] };
+    const memberStart = [
+      { ...matcher, hooks: [{ type: 'command', command: raw + ' && ./notify' }] },
+      { ...matcher, hooks: [{ type: 'command', command: raw }, { type: 'command', command: './notify' }] },
+    ];
+    await fse.outputJson(file, { hooks: {
+      Stop: [member],
+      SessionStart: [{ ...matcher, hooks: [{ type: 'command', command: raw }] }, ...memberStart],
+    } });
+    const cfg = { ...localConfig(), projectRoot: worktree };
+    try {
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+
+      expect((await fse.readJson(file)).hooks.Stop[0]).toEqual(member);
+      expect((await fse.readJson(file)).hooks.SessionStart).toEqual(memberStart);
+      const before = await fse.readFile(file, 'utf8');
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      expect(await fse.readFile(file, 'utf8')).toBe(before);
+      await writeYaml(STOP_LINT.replace('npm run lint', 'npm run lint:fix'));
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      expect((await fse.readJson(file)).hooks.Stop).toHaveLength(2);
+      expect((await fse.readJson(file)).hooks.Stop[0]).toEqual(member);
+      await reconcileTeamHooksForConfig(teamConfig, cfg, { removeAll: true });
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([member]);
+      expect((await fse.readJson(file)).hooks.SessionStart).toEqual(memberStart);
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
   it('uses project toolPaths for main hooks and userScope paths for HOME built-ins', async () => {
     await writeYaml(STOP_LINT);
     const custom = { toolPaths: {
@@ -755,6 +791,34 @@ describe('reconcileTeamHooksForConfig — legacy projectRoot sweep', () => {
 
     const stale = await fse.readJson(path.join(project, '.cursor', 'hooks.json'));
     expect(stale.hooks.stop ?? []).toHaveLength(0);
+  });
+
+  it.each(['enabled', 'disabled', 'selected'])('sweeps only legacy Codex ownership when excluded through %s agents', async (selection) => {
+    const legacyCommand = `[ "$PWD" = "${project}" ] && npm run lint`;
+    const legacy = { hooks: [{ type: 'command', command: legacyCommand }] };
+    const builtin = { hooks: [{ type: 'command', command: 'teamai hook-dispatch session-start --tool codex' }] };
+    const member = { hooks: [{ type: 'command', command: 'teamai pull --silent && ./notify' }] };
+    const current = { hooks: [{ type: 'command', command: 'echo current' }] };
+    await fse.outputJson(path.join(project, '.codex', 'hooks.json'), {
+      hooks: { SessionStart: [builtin], Stop: [legacy, member, current] },
+    });
+    await fse.outputJson(path.join(project, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'Stop', command: legacyCommand }],
+    });
+    const currentManifest = { codex: [{ id: 'current', event: 'Stop', command: 'echo current' }] };
+    await fse.outputJson(path.join(project, '.teamai', 'managed-main-checkout-hooks.json'), currentManifest);
+    const cfg = { ...localConfig(),
+      ...(selection === 'enabled' ? { enabledAgents: ['claude'] } : {}),
+      ...(selection === 'disabled' ? { disabledAgents: ['codex'] } : {}),
+    };
+    await reconcileTeamHooksForConfig(teamConfig, cfg, selection === 'selected' ? { filterAgents: ['claude'] } : {});
+
+    const after = await codexProject();
+    expect(after.hooks.SessionStart).toEqual([]);
+    expect(after.hooks.Stop).toEqual([member, current]);
+    expect(await fse.readJson(path.join(project, '.teamai', 'managed-hooks.json'))).toEqual({});
+    expect(await mainManifest()).toEqual(currentManifest);
+    expect(await fse.pathExists(path.join(home, '.codex', 'hooks.json'))).toBe(false);
   });
 
   it('does not wipe the live hooks when projectRoot IS the home dir', async () => {

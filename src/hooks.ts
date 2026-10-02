@@ -30,7 +30,7 @@ import {
   managedMcpWorkspaceId,
   resolveToolRootDir,
 } from './types.js';
-import { builtinHookDefs, applyBuiltinOverride, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
+import { builtinHookDefs, applyBuiltinOverride, getRawDispatchCommand, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
 import { resolveTeamHooks } from './resources/hooks.js';
 import { getUserHome } from './utils/home.js';
@@ -303,6 +303,8 @@ export interface ReconcileHooksOptions {
    * builtin-only public API.
    */
   manifestPath?: string;
+  /** Legacy ownership of the same project file, transferred after reconciliation. */
+  legacyManifestPath?: string;
   /** §4.8 team override of built-in hooks (disabled / timeout). */
   builtinOverride?: BuiltinHookOverride;
   /** Project root used to gate non-self project-scope team hooks. */
@@ -736,6 +738,18 @@ function isBuiltinClaudeEntry(entry: HookMatcher): boolean {
   return TEAMAI_COMMAND_MARKERS.some((marker) => cmd.includes(marker));
 }
 
+/** Match standard built-ins exactly when cleaning a project team-only file. */
+function isExactBuiltinEntry(event: string, tool: string, entry: HookMatcher | CodexHookMatcher): boolean {
+  if (entry.hooks?.length !== 1 || entry.hooks[0].type !== 'command') return false;
+  const command = entry.hooks[0].command;
+  return builtinHookDefs(tool).some((def) => {
+    if (def.event !== event || (entry.matcher ?? '*') !== (def.matcher ?? '*')) return false;
+    const dispatch = /\bhook-dispatch ([a-z-]+)/.exec(def.command)?.[1];
+    return command === def.command
+      || (dispatch !== undefined && command === getRawDispatchCommand(dispatch, tool, def.matcher));
+  });
+}
+
 /** True if a settings entry is a teamai team (B) hook. */
 function isTeamClaudeEntry(entry: HookMatcher): boolean {
   return (entry.description ?? '').startsWith(TEAMAI_CUSTOM_HOOK_PREFIX);
@@ -759,6 +773,7 @@ async function reconcileClaudeFormat(
   teamActive: boolean,
   desiredTeamCommands: Set<string>,
   priorTeamCommands: Set<string>,
+  priorRecords: ManagedHookRecord[],
 ): Promise<void> {
   // Built-in management never removes team hooks; team hooks are reconciled only
   // when a team pass is active (manifest present). This keeps the builtin-only
@@ -768,7 +783,11 @@ async function reconcileClaudeFormat(
   const desiredTeamIds = new Set(
     teamDefs.filter((d) => !d.tools || d.tools.includes(tool)).map((d) => d.key),
   );
-  const isManaged = (e: HookMatcher): boolean => {
+  const isManaged = (event: string, e: HookMatcher): boolean => {
+    if (opts.teamOnly) {
+      return isExactBuiltinEntry(event, tool, e) || (e.hooks?.length === 1 && priorRecords.some((r) =>
+        r.event === event && (r.matcher ?? '*') === (e.matcher ?? '*') && r.command === e.hooks[0].command));
+    }
     if (isBuiltinClaudeEntry(e) || (!!opts.removeAll && isAgentClaudeEntry(e))) return true;
     if (!teamActive || !isTeamClaudeEntry(e)) return false;
     // Project-scope hooks share HOME with other projects. Only remove entries
@@ -810,7 +829,7 @@ async function reconcileClaudeFormat(
 
   for (const event of events) {
     const existing = settings.hooks[event] ?? [];
-    const untouched = existing.filter((e) => !isManaged(e));
+    const untouched = existing.filter((e) => !isManaged(event, e));
     const desiredEntries = defs.filter((d) => d.event === event).map(toClaudeEntry);
     const newArr = [...untouched, ...desiredEntries];
     if (JSON.stringify(existing) !== JSON.stringify(newArr)) {
@@ -980,7 +999,9 @@ async function reconcileCodexFormat(
   const isManaged = (event: string, index: number, entries: CodexHookMatcher[]): boolean => {
     const entry = entries[index];
     const cmd = entry.hooks?.[0]?.command ?? '';
-    return TEAMAI_COMMAND_MARKERS.some((marker) => cmd.includes(marker))
+    return (opts.teamOnly
+      ? isExactBuiltinEntry(event, tool, entry)
+      : TEAMAI_COMMAND_MARKERS.some((marker) => cmd.includes(marker)))
       || priorRecords.some((record) => tool === CODEX_TOOL_ID
         ? ownsCodexEntry(record, event, index, entries)
         : record.command === cmd);
@@ -1322,6 +1343,14 @@ export async function reconcileHooks(
 ): Promise<void> {
   const teamActive = !!opts.manifestPath;
   const manifest = opts.manifestPath ? await readManifest(opts.manifestPath) : null;
+  // Pre-#370 Codex hooks used this same file. Persist their authority in the
+  // new manifest before touching the file; retire the old records only on success.
+  const legacy = opts.teamOnly && tool === CODEX_TOOL_ID && opts.legacyManifestPath && manifest
+    ? await readManifest(opts.legacyManifestPath) : null;
+  if (legacy?.[tool]?.length && manifest && opts.manifestPath) {
+    manifest[tool] = [...(manifest[tool] ?? []), ...legacy[tool]];
+    await writeJson(expandHome(opts.manifestPath), manifest);
+  }
   const allPriorRecords = manifest?.[tool] ?? [];
   const priorRecords = opts.teamHookProjectRoot
     ? allPriorRecords.filter((r) => isGatedForProject(r.command, opts.teamHookProjectRoot!))
@@ -1346,7 +1375,7 @@ export async function reconcileHooks(
       // In a shared HOME settings file, only remove team entries belonging to
       // this project. User-scope installs retain the historical marker sweep.
       teamHookProjectRoot: opts.teamHookProjectRoot,
-    }, teamActive, desiredTeamCommands, priorTeamCommands);
+    }, teamActive, desiredTeamCommands, priorTeamCommands, priorRecords);
   }
 
   // Update the manifest's team-hook index for this tool (when manifest is active).
@@ -1370,6 +1399,10 @@ export async function reconcileHooks(
       manifest[tool] = nextRecords;
       await writeJson(expandHome(opts.manifestPath), manifest);
     }
+  }
+  if (legacy?.[tool]?.length && opts.legacyManifestPath) {
+    delete legacy[tool];
+    await writeJson(expandHome(opts.legacyManifestPath), legacy);
   }
 }
 
@@ -1777,7 +1810,7 @@ export async function reconcileHooksToAllTools(
   teamDefs: HookDef[],
   manifestPath: string,
   opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null } = {},
-): Promise<void> {
+): Promise<Set<string>> {
   // Without the manifest, reconcileHooks manages the built-in entries only.
   const teamManifestPath = opts.builtinsOnly ? undefined : manifestPath;
   const defs = opts.builtinsOnly ? [] : teamDefs;
@@ -1810,6 +1843,7 @@ export async function reconcileHooksToAllTools(
   // One physical file can carry only one dispatch identity; this is the documented
   // limit of sharing a project scope, not a bug this pass can fix.
   const claimedSettingsFiles = new Set<string>();
+  const reconciledMainTools = new Set<string>();
   for (const [tool, paths] of Object.entries(toolPaths)) {
     if (opts.filterAgents && !opts.filterAgents.includes(tool)) continue;
     if (skipped.has(tool)) continue;
@@ -1960,11 +1994,13 @@ export async function reconcileHooksToAllTools(
           legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
           removeAll: opts.removeAll,
         });
+        reconciledMainTools.add(tool);
       }
     } catch (e) {
       log.warn(`Failed to reconcile hooks for ${tool}: ${(e as Error).message}`);
     }
   }
+  return reconciledMainTools;
 }
 
 /**
@@ -1981,20 +2017,7 @@ async function reconcileMainCheckoutTeamHooks(
 ): Promise<void> {
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
-  // Pre-#370 Codex hooks used this same file but recorded ownership beside the
-  // checkout. Keep that authority until reconciliation succeeds under the new
-  // manifest, including when the first upgraded command is `hooks remove`.
-  const legacy = tool === CODEX_TOOL_ID ? await readManifest(opts.legacyManifestPath) : null;
-  if (legacy?.[tool]?.length) {
-    const current = await readManifest(opts.manifestPath);
-    current[tool] = [...(current[tool] ?? []), ...legacy[tool]];
-    await writeJson(expandHome(opts.manifestPath), current);
-  }
-  await reconcileHooks(file, tool, teamDefs, { manifestPath: opts.manifestPath, removeAll: opts.removeAll, teamOnly: true });
-  if (legacy?.[tool]?.length) {
-    delete legacy[tool];
-    await writeJson(expandHome(opts.legacyManifestPath), legacy);
-  }
+  await reconcileHooks(file, tool, teamDefs, { ...opts, teamOnly: true });
 }
 
 /** What a Codex trust pass for one scope works on. */
@@ -2177,17 +2200,25 @@ export async function readCodexHookTrustForScope(
 export async function sweepLegacyProjectHooks(
   toolPaths: Record<string, { settings?: string }>,
   localConfig: LocalConfig,
+  reconciledMainTools: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   const legacy = resolveLegacyProjectHookScope(localConfig);
   if (!legacy) return;
-  // In the main checkout, Codex's legacy file is the one its team hooks now
-  // live in (MAIN_CHECKOUT_TEAM_HOOK_TOOLS); that pass imports the legacy
-  // ownership and removes its built-ins, so the sweep must not empty it.
+  // A coincident main file is handled by the main pass only when that tool
+  // actually ran. Excluded tools still need legacy cleanup, without claiming
+  // current-generation or member entries in the same file.
   const mainCheckout = await resolveMainCheckoutHooks(localConfig, toolPaths);
-  const legacyToolPaths = Object.fromEntries(Object.entries(toolPaths).filter(([tool, paths]) => {
+  const legacyToolPaths: typeof toolPaths = {};
+  for (const [tool, paths] of Object.entries(toolPaths)) {
     const mainFile = mainCheckoutHookFile(mainCheckout, tool);
-    return !(mainFile && paths.settings && path.join(canonicalProjectRoot(legacy.baseDir), paths.settings) === mainFile);
-  }));
+    if (mainFile && paths.settings && path.join(canonicalProjectRoot(legacy.baseDir), paths.settings) === mainFile) {
+      if (!reconciledMainTools.has(tool) && await pathExists(mainFile)) {
+        await reconcileHooks(mainFile, tool, [], { removeAll: true, teamOnly: true, manifestPath: legacy.manifestPath });
+      }
+    } else {
+      legacyToolPaths[tool] = paths;
+    }
+  }
   await reconcileHooksToAllTools(legacyToolPaths, legacy.baseDir, [], legacy.manifestPath, {
     removeAll: true,
     settingsOnly: true,
@@ -2292,7 +2323,7 @@ export async function reconcileTeamHooksForConfig(
     }
     return resolved.ok ? { ok: true, defs: teamDefs } : { ok: false, builtins: builtinsOnly ?? 'with-overrides' };
   }
-  await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
+  const reconciledMainTools = await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
     filterAgents,
@@ -2333,7 +2364,7 @@ export async function reconcileTeamHooksForConfig(
     }
   }
   if (builtinsOnly) return { ok: false, builtins: builtinsOnly };
-  await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig);
+  await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
   return { ok: true, defs: teamDefs };
 }
 
