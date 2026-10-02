@@ -66,12 +66,17 @@ function scriptBlock(event: GitHookEvent): string {
   return `${BLOCK_START}\nPATH="$HOME/${TEAMAI_BIN_DIR}:$PATH" teamai hook-dispatch ${event} --tool ${GIT_HOOK_TOOL} "$@" >/dev/null 2>&1 || :\n${BLOCK_END}\n`;
 }
 
+/** `text` without teamai's block. */
+function withoutScriptBlock(text: string): string {
+  const start = text.indexOf(`${BLOCK_START}\n`);
+  const end = text.indexOf(`${BLOCK_END}\n`, start);
+  return start >= 0 && end > start ? text.slice(0, start) + text.slice(end + BLOCK_END.length + 1) : text;
+}
+
 /** `text` with the current block for `event`, or null when it is not a shell script. */
 function withScriptBlock(text: string | null, event: GitHookEvent): string | null {
   if (text === null) return `#!/bin/sh\n${scriptBlock(event)}`;
-  const start = text.indexOf(`${BLOCK_START}\n`);
-  const end = text.indexOf(`${BLOCK_END}\n`, start);
-  const rest = start >= 0 && end > start ? text.slice(0, start) + text.slice(end + BLOCK_END.length + 1) : text;
+  const rest = withoutScriptBlock(text);
   const shebang = /^#![^\n]*(\n|$)/.exec(rest)?.[0] ?? '';
   if (shebang && !/\b(ba|da|k|z)?sh\b/.test(shebang)) return null;
   return `${shebang}${shebang && !shebang.endsWith('\n') ? '\n' : ''}${scriptBlock(event)}${rest.slice(shebang.length)}`;
@@ -141,17 +146,21 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
  * Write (or refresh) the hook into the local config of the repository holding
  * `repoDir`. Idempotent: an up-to-date hook is left untouched.
  */
-export async function installGitHook(repoDir: string): Promise<GitHookInstall> {
+export async function installGitHook(repoDir: string, opts: { dryRun?: boolean } = {}): Promise<GitHookInstall> {
   const git = gitIn(repoDir);
   const configHooks = supportsConfigHooks((await git(['--version'])).stdout);
   if ((await git(['rev-parse', '--git-dir'])).code !== 0) return { installed: false, reason: 'not-a-repository' };
-  if (!configHooks) return installHookScripts(git, repoDir);
+  if (!configHooks) return installHookScripts(git, repoDir, opts);
+
+  const stale = await eventsToWrite(git);
+  if (opts.dryRun) return { installed: true, changed: stale.length > 0 };
+  // A block an older Git needed would dispatch a second time beside the config hook.
+  await removeHookScriptBlocks(git, repoDir);
 
   // The wrapper is what the hook command finds `teamai` through when the app
   // that runs git has no login PATH.
   ensureTeamaiWrapper();
 
-  const stale = await eventsToWrite(git);
   for (const event of stale) {
     const key = `hook.${hookName(event)}`;
     await ok(git(['config', '--local', `${key}.command`, gitHookCommand(event)]), key);
@@ -178,9 +187,10 @@ async function scriptsToWrite(git: Git, repoDir: string): Promise<ScriptPlan> {
   return { blocked: null, stale };
 }
 
-async function installHookScripts(git: Git, repoDir: string): Promise<GitHookInstall> {
+async function installHookScripts(git: Git, repoDir: string, opts: { dryRun?: boolean }): Promise<GitHookInstall> {
   const plan = await scriptsToWrite(git, repoDir);
   if (plan.blocked) return { installed: false, reason: plan.blocked };
+  if (opts.dryRun) return { installed: true, changed: plan.stale.length > 0 };
   ensureTeamaiWrapper();
   for (const { file, text } of plan.stale) {
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -189,6 +199,58 @@ async function installHookScripts(git: Git, repoDir: string): Promise<GitHookIns
   }
   if (plan.stale.length > 0) log.debug(`git hook: installed teamai hook scripts in ${repoDir}`);
   return { installed: true, changed: plan.stale.length > 0 };
+}
+
+/**
+ * Take teamai's block out of the post-checkout and post-merge scripts in the
+ * repository's own hooks directory (and in core.hooksPath's, should a block
+ * predate it). A script left with only the shebang is the one teamai created
+ * when there was none, so it goes too. Returns the files changed.
+ */
+async function removeHookScriptBlocks(git: Git, repoDir: string, opts: { dryRun?: boolean } = {}): Promise<string[]> {
+  const dirs = new Set<string>();
+  for (const args of [['rev-parse', '--git-common-dir'], ['rev-parse', '--git-path', 'hooks']]) {
+    const { code, stdout } = await git(args);
+    if (code !== 0) continue;
+    const out = path.resolve(repoDir, stdout.trim());
+    dirs.add(args.length === 2 ? path.join(out, 'hooks') : out);
+  }
+  const changed: string[] = [];
+  for (const dir of dirs) {
+    for (const event of GIT_HOOK_EVENTS) {
+      const file = path.join(dir, event);
+      const current = await fs.readFile(file, 'utf8').catch(() => null);
+      if (current === null) continue;
+      const text = withoutScriptBlock(current);
+      if (text === current) continue;
+      changed.push(file);
+      if (opts.dryRun) continue;
+      if (/^(#![^\n]*\n?)?$/.test(text)) await fs.rm(file);
+      else await fs.writeFile(file, text);
+    }
+  }
+  return changed;
+}
+
+/**
+ * Remove everything installGitHook wrote in the repository holding `repoDir`:
+ * the `hook.teamai-<event>` config sections and the blocks in hook scripts.
+ * Other hooks and lines stay. Returns what was (or, on a dry run, would be)
+ * removed: config section names, then script paths.
+ */
+export async function removeGitHook(repoDir: string, opts: { dryRun?: boolean } = {}): Promise<string[]> {
+  const git = gitIn(repoDir);
+  if ((await git(['rev-parse', '--git-dir'])).code !== 0) return [];
+  const removed: string[] = [];
+  for (const event of GIT_HOOK_EVENTS) {
+    const section = `hook.${hookName(event)}`;
+    const present = (await git(['config', '--local', '--get-regexp', `^${section.replace(/\./g, '\\.')}\\.`])).stdout.trim();
+    if (!present) continue;
+    removed.push(section);
+    if (!opts.dryRun) await ok(git(['config', '--local', '--remove-section', section]), section);
+  }
+  removed.push(...await removeHookScriptBlocks(git, repoDir, opts));
+  return removed;
 }
 
 async function ok(result: ReturnType<typeof execCommand>, key: string): Promise<void> {

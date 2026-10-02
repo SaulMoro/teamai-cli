@@ -587,6 +587,24 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     });
   });
 
+  it('pull --dry-run names a missing hook without writing it; uninstall removes only teamai\'s hooks', async () => {
+    const repo = project('uninstall-project', ['--agent', 'claude']);
+    await settle(repo);
+    gitOk(['config', '--local', 'hook.mine.command', 'echo mine'], repo);
+    gitOk(['config', '--local', 'hook.mine.event', 'post-checkout'], repo);
+    gitOk(['config', '--local', '--remove-section', 'hook.teamai-post-checkout'], repo);
+    const before = gitOk(['config', '--local', '--list'], repo);
+
+    const dry = teamai(['pull', '--dry-run'], repo);
+    expect(dry.output).toContain('Would install or update the teamai git hook');
+    expect(gitOk(['config', '--local', '--list'], repo)).toBe(before);
+
+    const r = teamai(['uninstall', '--force'], repo);
+    expect(r.code, r.output).toBe(0);
+    expect(gitOk(['config', '--get-regexp', '^hook\\.'], repo).split('\n'))
+      .toEqual(['hook.mine.command echo mine', 'hook.mine.event post-checkout']);
+  });
+
   it('with no enabledAgents, creates the tool roots the main checkout has, and only those', () => {
     const codexProject = project('codex-project', []);
     fs.mkdirSync(path.join(codexProject, '.codex'));

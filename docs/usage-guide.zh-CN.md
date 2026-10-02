@@ -191,6 +191,11 @@ post-checkout 与 post-merge hook 中运行
 （`<event>` 分别为 `post-checkout` 与 `post-merge`），管理器的配置不是 shell 脚本时用 `sh -c '...'` 包裹。
 在没有 teamai 的机器上，这一行什么也不做。
 
+Git 升级到 2.54 或更高版本后，下一次 `teamai pull` 会安装配置 hook 并移除该代码块，避免 hook 运行两次。
+`teamai pull --dry-run` 会说明是否将安装或更新该 hook，但不写入任何内容。在项目中运行 `teamai uninstall`
+会移除 `hook.teamai-post-checkout` 与 `hook.teamai-post-merge` 条目以及带标记的代码块；其他 hook 和脚本行保持不变。
+移除后只剩 shebang 的脚本是 teamai 创建的，会被删除。
+
 > **从旧版 teamai 升级？** 升级后首次执行 `teamai init` / `pull` / `push` / `contribute`
 > （或 `import --from-mr`）会自动把已有的
 > `<repo>/.teamai/` 迁移进分区（复制 → 校验 → 原子切换），并把旧目录保留为
@@ -2640,6 +2645,7 @@ teamai uninstall --agent claude
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
+- 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout` 与 `hook.teamai-post-merge` 条目，以及 `.git/hooks/post-checkout` 与 `post-merge` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
 - `~/.teamai/` 目录
 
 ### 只卸载单个工具（`--agent <tool>`）

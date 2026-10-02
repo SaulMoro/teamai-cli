@@ -140,6 +140,8 @@ delivers; in single-repo mode it delivers what `git pull` brought, offline. It p
 exits 0; a failure inside it is recorded, and `teamai doctor` names it (`Last git
 hook run failed: ...`) with its fix, as does the next interactive `teamai pull`, once.
 `teamai doctor` also reports whether the hook is installed, and why not.
+`pull --dry-run` says when it would install or update the hook, writing nothing;
+`teamai uninstall` removes only teamai's hook entries and blocks.
 
 A team agent (`agents/<name>.yaml`) can set `model: strong`, `model: fast`, or an
 alias the team defines, instead of one tool's model. The team maps each alias per
