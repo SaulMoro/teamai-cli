@@ -278,6 +278,26 @@ describe('pull role-aware sync and cleanup', () => {
     await expectAgentRendersGone();
   });
 
+  it('keeps teamai\'s instruction file when the team tombstoned a rule named teamai-context (#945)', async () => {
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } });
+    await fse.ensureDir(path.join(homeDir, '.cursor', 'skills'));
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'teamai-context\n');
+    const context = path.join(homeDir, '.cursor', 'rules', 'teamai-context.mdc');
+
+    await pull({});
+    expect(await fse.readFile(context, 'utf8')).toContain('Be kind.');
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({
+      lastPull: null,
+      lastPullRev: HEAD_REV,
+      lastPullTargets: ['cursor'],
+    }) as Awaited<ReturnType<typeof loadStateForScope>>);
+    await pull({});
+
+    expect(await fse.readFile(context, 'utf8')).toContain('Be kind.');
+  });
+
   it('should not delete files that are NOT tombstoned', async () => {
     // No tombstone files
     await fse.writeFile(path.join(homeDir, '.claude/rules', 'keep-rule.md'), '# Keep');

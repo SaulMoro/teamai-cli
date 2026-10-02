@@ -774,6 +774,22 @@ scope: 'user',
     expect(await fse.pathExists(path.join(localRulesDir, 'fe-know/my-rule.md'))).toBe(false);
   });
 
+  it('keeps a placed rule named teamai-context at its namespaced path, off teamai\'s instruction file (#945)', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.outputFile(path.join(teamRulesDir, 'fe-know/teamai-context.md'), 'the author\'s namespaced rule');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    vi.mocked(loadStateForScope).mockResolvedValue({
+      lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], pendingPushes: [], lastUpdateCheck: null, availableUpdate: null,
+      placedRules: { 'teamai-context': 'rules/fe-know/teamai-context.md' },
+    } as State);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(localRulesDir, 'teamai-context.md'))).toBe(false);
+    expect(await fse.readFile(path.join(localRulesDir, 'fe-know/teamai-context.md'), 'utf-8')).toBe('the author\'s namespaced rule');
+  });
+
   it('does not redirect a placed rule onto a root path a shared-root rule of the same name owns', async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
     await fse.outputFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'the author\'s namespaced rule');

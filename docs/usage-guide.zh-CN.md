@@ -1554,7 +1554,7 @@ CodeBuddy 和 WorkBuddy 的规则文件带有 `alwaysApply: true`，CodeBuddy �
 
 OpenCode 只加载配置中 `instructions` 列出的文件，因此 teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode 已经获得它们，因此 teamai 不会为 OpenCode 再写一份用户副本，并在 pull 输出中说明。被排除的 Claude Code 留在那里的块同样算数，因为 OpenCode 照样读取它们；此时 pull 会警告没有任何工具再更新它们。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
 
-Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。HTTP local agent 为项目下发的 prompt 也以同样方式，通过扩展或插件到达 Pi、Oh My Pi 和 Hermes。
+Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。HTTP local agent 为项目下发的 prompt 也以同样方式，通过扩展或插件到达 Pi、Oh My Pi 和 Hermes，并通过 session-start 和 subagent-start hook 到达 Codex 系列。
 
 早期版本的 pull 可能把这些块留在下列文件中。下一次 pull 会移除它们，并列出所修改的每个文件：
 

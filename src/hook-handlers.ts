@@ -771,19 +771,26 @@ const instructionsHandler: HookHandler = {
 };
 
 /**
- * `instructions` from the HTTP local agent's resource cache for the session's
- * project (#945): Pi, OMP and Hermes have no project file it could write to.
- * Runs without a teamai config, since an HTTP-only machine has none.
+ * The HTTP local agent's prompts from its resource cache for the session's
+ * project (#945), for a tool with no project file the agent could write to.
+ * Pi, OMP and Hermes ask through `instructions`; the Codex family gets them
+ * at SessionStart and SubagentStart, beside the team rules. Runs without a
+ * teamai config, since an HTTP-only machine has none.
  */
 const localAgentInstructionsHandler: HookHandler = {
-  name: 'local-agent-instructions',
+  name: 'http-prompt-instructions',
   async execute(stdin, tool) {
     const { deliversInstructionsByHook } = await import('./instruction-targets.js');
+    const { getsRulesFromSessionHook } = await import('./resources/rule-format.js');
     if (!deliversInstructionsByHook(tool, 'project')) return null;
+    const sessionEvent = stdin.hook_event_name === 'SessionStart' || stdin.hook_event_name === 'SubagentStart';
+    // Each tool through its own channel only; a resumed Codex session holds them already.
+    if (getsRulesFromSessionHook(tool) !== sessionEvent || stdin.source === 'resume') return null;
     const { localAgentInstructionText } = await import('./local-agent.js');
     const text = await localAgentInstructionText(resolveHookCwd(stdin) ?? process.cwd());
     if (!text) return null;
-    return JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
+    const hookEventName = stdin.hook_event_name === 'SubagentStart' ? 'SubagentStart' : 'SessionStart';
+    return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: text } });
   },
 };
 
@@ -899,6 +906,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-start', matcher: '*', handler: pullHandler, timeoutMs: PULL_TIMEOUT_MS, background: true },
     { event: 'session-start', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: teamRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    { event: 'session-start', matcher: '*', handler: localAgentInstructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
     { event: 'session-start', matcher: '*', handler: mrHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: packageHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: secretsHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
@@ -938,6 +946,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // ─── SubagentStart ────────────────────────────────
     // Codex only (SUBAGENT_START_SPEC): a fresh subagent fires no SessionStart (#938).
     { event: 'subagent-start', matcher: '*', handler: teamRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    { event: 'subagent-start', matcher: '*', handler: localAgentInstructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
 
     // ─── SubagentStop ─────────────────────────────────
     // A subagent can finish after the session's last Stop (a background

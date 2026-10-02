@@ -2125,6 +2125,31 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     expect(outputs.filter(Boolean).join('\n')).toContain('PROJECT-PROMPT');
   });
 
+  it('leaves the blocks an earlier release left for another installed tool that this prompt did not reach', async () => {
+    const legacy = '# Team notes\n\n<!-- [teamai:claudemd:start] -->\nClaude\'s earlier selection\n<!-- [teamai:claudemd:end] -->\n';
+    const { repo, ack } = await installProjectPrompt('codebuddy', ['.codebuddy/skills', '.claude/skills'], {
+      files: { '.claude/CLAUDE.md': legacy },
+    });
+
+    expect(ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(repo, '.codebuddy', 'rules', 'teamai-context.md'), 'utf8')).toContain('PROJECT-PROMPT');
+    expect(await fse.readFile(path.join(repo, '.claude', 'CLAUDE.md'), 'utf8')).toBe(legacy);
+  });
+
+  it('gives Codex a project prompt through its SessionStart and SubagentStart hooks', async () => {
+    const { repo, ack } = await installProjectPrompt('codex', ['.codex/skills']);
+
+    expect(ack?.status).toBe('success');
+    const { buildHandlerRegistry, filterHandlersForConfig } = await import('../hook-handlers.js');
+    const registry = filterHandlersForConfig(buildHandlerRegistry(), null);
+    for (const [event, hookEventName] of [['session-start', 'SessionStart'], ['subagent-start', 'SubagentStart']] as const) {
+      const outputs = (await Promise.all(registry.filter((reg) => reg.event === event)
+        .map((reg) => reg.handler.execute({ cwd: repo, hook_event_name: hookEventName, source: 'startup' } as never, 'codex', null as never))))
+        .filter((output): output is string => typeof output === 'string' && output.includes('PROJECT-PROMPT'));
+      expect(outputs.map((output) => JSON.parse(output).hookSpecificOutput.hookEventName)).toEqual([hookEventName]);
+    }
+  });
+
   it('fails a Pi project prompt while its extension is missing', async () => {
     const { ack } = await installProjectPrompt('pi', ['.pi/skills']);
 

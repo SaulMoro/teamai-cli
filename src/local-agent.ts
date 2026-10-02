@@ -54,6 +54,7 @@ import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
   applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
   instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  retiredInstructionFiles, type InstructionTarget,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
@@ -2101,6 +2102,7 @@ async function syncClaudemd(
   let syncedAny = false;
   // Why each tool got nothing, for the ACK when none did.
   const skipped: string[] = [];
+  const reached: string[] = [];
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     // Pi, OMP and Hermes in a project take the cache from their extension or
@@ -2114,6 +2116,7 @@ async function syncClaudemd(
       }
       log.debug(`local-agent: ${tool} adds the CLAUDE.md instructions through its extension`);
       syncedAny = true;
+      reached.push(tool);
       continue;
     }
     const targetFile = instructionTargetFile(tool, toolPath, localConfig.scope);
@@ -2165,10 +2168,10 @@ async function syncClaudemd(
     if (tool === 'opencode') await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
     log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
     syncedAny = true;
+    reached.push(tool);
   }
 
-  const { stale } = await resolveInstructionTargets(fullTeamConfig, localConfig);
-  const cleanup = await planInstructionFiles([], {}, stale);
+  const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(fullTeamConfig, localConfig, reached));
   for (const warning of cleanup.warnings) log.warn(warning);
   const { report, failures } = await applyInstructionPlan(cleanup, { dryRun: false });
   for (const line of report) log.info(`${line}: no installed tool loads them from this file`);
@@ -2177,6 +2180,29 @@ async function syncClaudemd(
   if (files.length > 0 && !syncedAny) {
     throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
   }
+}
+
+/**
+ * The files earlier releases wrote blocks to that this sync may strip: no
+ * installed tool reads them now, and every installed tool that wrote them, if
+ * any, got this sync's instructions in their place. Another tool's old blocks stay
+ * until a sync reaches it, since the HTTP agent delivers to one tool at a time.
+ */
+async function retiredFilesOfReached(
+  fullTeamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  reached: readonly string[],
+): Promise<InstructionTarget[]> {
+  const { stale } = await resolveInstructionTargets(fullTeamConfig, localConfig);
+  const writers = new Map<string, string[]>();
+  for (const [tool, paths] of Object.entries(scopedToolPaths(fullTeamConfig, localConfig))) {
+    if (!await isInstructionToolInstalled(tool, paths, localConfig)) continue;
+    for (const file of retiredInstructionFiles(tool, paths, localConfig.scope)) {
+      const absolute = path.resolve(resolveToolBaseDir(tool, localConfig), file);
+      writers.set(absolute, [...writers.get(absolute) ?? [], tool]);
+    }
+  }
+  return stale.filter((target) => (writers.get(target.path) ?? []).every((tool) => reached.includes(tool)));
 }
 
 /**

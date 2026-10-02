@@ -443,6 +443,7 @@ async function cleanupTombstonedResources(
     { type: 'agents', toolPathField: 'agents' },
   ];
 
+  const { TEAMAI_CONTEXT_RULE_NAME } = await import('./builtin-rules.js');
   for (const { type, toolPathField } of tombstoneTypes) {
     const handler = getHandler(type);
     // Agents deploy flattened, so a namespaced agent tombstone has to be read
@@ -463,6 +464,10 @@ async function cleanupTombstonedResources(
         for (const extension of tombstoneExtensions(type, tool)) {
           const localPath = path.join(baseDir, dir, `${name}${extension}`);
           if (!await pathExists(localPath)) continue;
+          // teamai-context in a rules directory is teamai's instruction file
+          // now (#945): a tombstone of a team rule by that name, from before,
+          // does not reach it. A copy without the blocks is reclaimed by rules sync.
+          if (type === 'rules' && name === TEAMAI_CONTEXT_RULE_NAME) continue;
           // Even an upstream (tombstone) removal must not blow away a local
           // repo's stash/unpushed history inside a skill directory. Keep
           // + warn; the user can delete it manually once backed up.

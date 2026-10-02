@@ -299,7 +299,9 @@ export class RulesHandler extends ResourceHandler {
    */
   private async localNameFor(teamName: string, localConfig: LocalConfig): Promise<string> {
     const bareName = path.basename(teamName);
-    if (bareName === teamName) return teamName;
+    // teamai-context at the root is teamai's instruction file (#945), so a
+    // placed rule of that name keeps its namespaced path.
+    if (bareName === teamName || bareName === TEAMAI_CONTEXT_RULE_NAME) return teamName;
     const placed = placedResourcePath(
       (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
     );
