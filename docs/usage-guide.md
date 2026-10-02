@@ -212,6 +212,13 @@ from the post-checkout and post-merge hooks your manager defines (with `post-che
 `post-merge` as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
 That line does nothing on a machine without teamai.
 
+Once Git is 2.54 or later, the next `teamai pull` installs the config hook and takes the
+block out, so the hook does not run twice. `teamai pull --dry-run` says when it would
+install or update the hook and writes nothing. `teamai uninstall` in the project removes
+the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries and the marked
+blocks; other hooks and script lines stay. A script left with only its shebang is the
+one teamai created, and is deleted.
+
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
 > `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
 > (copy → verify → atomic switch), then leaves the old directory as `<repo>/.teamai.bak/`
@@ -2844,6 +2851,7 @@ What gets removed:
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
+- In a project, teamai's git hook: the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout` and `post-merge` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
 - The `~/.teamai/` directory
 
 ### Uninstall a single tool (`--agent <tool>`)

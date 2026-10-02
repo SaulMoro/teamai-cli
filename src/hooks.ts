@@ -1868,6 +1868,7 @@ export async function reconcileTeamHooksForConfig(
   // pass would actually reach, which is what hookToolPaths decides below too.
   const hookToolPaths = scopedToolPaths(teamConfig, { ...localConfig, scope: hookScope });
   if (opts.dryRun) {
+    if (!opts.removeAll) await installProjectGitHook(localConfig, { dryRun: true });
     if (!opts.removeAll && 'pi' in hookToolPaths && (!filterAgents || filterAgents.includes('pi'))) {
       await reportPiSkippedTeamHooks(teamDefs, baseDir, localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined, builtin);
     }
@@ -1924,11 +1925,14 @@ export async function reconcileTeamHooksForConfig(
  * User scope installs none: its resources live in HOME, which a new worktree
  * does not change. A failure is reported and does not stop the caller.
  */
-async function installProjectGitHook(localConfig: LocalConfig): Promise<void> {
+async function installProjectGitHook(localConfig: LocalConfig, opts: { dryRun?: boolean } = {}): Promise<void> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return;
   const { installGitHook } = await import('./git-hook.js');
   try {
-    const result = await installGitHook(localConfig.projectRoot);
+    const result = await installGitHook(localConfig.projectRoot, opts);
+    if (opts.dryRun && result.installed && result.changed) {
+      log.info(`Would install or update the teamai git hook (post-checkout, post-merge) in ${localConfig.projectRoot}`);
+    }
     if (!result.installed) log.debug(`git hook: not installed in ${localConfig.projectRoot} (${result.reason})`);
   } catch (e) {
     log.warn(`Could not install the teamai git hook in ${localConfig.projectRoot}: ${(e as Error).message}. `

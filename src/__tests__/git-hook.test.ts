@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describeMissingGitHook, gitHookStatus, guardedGitHookLine, installGitHook } from '../git-hook.js';
+import { describeMissingGitHook, gitHookStatus, guardedGitHookLine, installGitHook, removeGitHook } from '../git-hook.js';
 
 const gitVersion = (): [number, number] => {
   const m = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], { encoding: 'utf8' }));
@@ -65,6 +65,22 @@ describe.skipIf(!configHooks)('teamai git hook in the repository config', () => 
     // Written to the common config: a linked worktree sees the same hooks.
     git(['worktree', 'add', '-q', path.join(sandbox, 'wt')]);
     expect(git(['hook', 'list', 'post-checkout'], path.join(sandbox, 'wt')).stdout.trim()).toBe('teamai-post-checkout');
+  });
+
+  it('removal drops only teamai\'s hook entries; a dry run reports them and writes nothing', async () => {
+    git(['config', '--local', 'hook.mine.command', 'echo mine']);
+    git(['config', '--local', 'hook.mine.event', 'post-checkout']);
+    expect(await installGitHook(repo, { dryRun: true })).toEqual({ installed: true, changed: true });
+    expect(git(['config', '--get-regexp', '^hook\\.teamai']).stdout).toBe('');
+    await installGitHook(repo);
+
+    const planned = await removeGitHook(repo, { dryRun: true });
+    expect(planned).toEqual(['hook.teamai-post-checkout', 'hook.teamai-post-merge']);
+    expect(git(['config', '--get-regexp', '^hook\\.teamai']).stdout).not.toBe('');
+
+    expect(await removeGitHook(repo)).toEqual(planned);
+    expect(git(['config', '--get-regexp', '^hook\\.']).stdout.trim().split('\n'))
+      .toEqual(['hook.mine.command echo mine', 'hook.mine.event post-checkout']);
   });
 
   it('is idempotent', async () => {
@@ -213,6 +229,39 @@ describe('teamai hook script on a Git without config hooks', () => {
     expect(guarded).toBeGreaterThan(upgrade);
     expect(advice).toContain('teamai hook-dispatch post-merge --tool git "$@"');
     expect(advice).toContain('sh -c');
+  });
+
+  it('a dry run reports the change without writing the hook', async () => {
+    expect(await installGitHook(repo, { dryRun: true })).toEqual({ installed: true, changed: true });
+    expect(fs.existsSync(hookFile('post-checkout'))).toBe(false);
+    expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+  });
+
+  it('removal takes out only the block, and the script teamai created', async () => {
+    const original = '#!/bin/sh\necho mine >> "$0.log"\n';
+    fs.writeFileSync(hookFile('post-checkout'), original, { mode: 0o755 });
+    await installGitHook(repo);
+
+    const planned = await removeGitHook(repo, { dryRun: true });
+    expect(planned).toHaveLength(2);
+    expect(fs.readFileSync(hookFile('post-checkout'), 'utf8')).not.toBe(original);
+
+    expect(await removeGitHook(repo)).toEqual(planned);
+    expect(fs.readFileSync(hookFile('post-checkout'), 'utf8')).toBe(original);
+    expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+    expect(await removeGitHook(repo)).toEqual([]);
+  });
+
+  it.skipIf(!configHooks)('after a Git upgrade, the config hook replaces the block (no double dispatch)', async () => {
+    const original = '#!/bin/sh\necho mine >> "$0.log"\n';
+    fs.writeFileSync(hookFile('post-checkout'), original, { mode: 0o755 });
+    await installGitHook(repo);
+    process.env.PATH = saved.PATH;
+
+    expect(await installGitHook(repo)).toEqual({ installed: true, changed: true });
+    expect(fs.readFileSync(hookFile('post-checkout'), 'utf8')).toBe(original);
+    expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+    expect(run(['hook', 'list', 'post-checkout']).stdout).toContain('teamai-post-checkout');
   });
 
   it('the guarded line does nothing and exits 0 without teamai', () => {
