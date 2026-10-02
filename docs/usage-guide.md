@@ -180,8 +180,11 @@ the worktree before the command returns, so the first session there already has 
 team's skills, rules and MCP servers. That pull reads the team clone as it is when it
 was fetched in the last 24 hours (and fetches it first otherwise), and subscribed
 sources from their cached clones; a full `teamai pull --silent` then runs in the
-background to fetch the team repo, sources, learnings and reports. A branch switch does nothing, and `post-merge`
-does nothing yet. The hook prints nothing and always exits 0, so a failed pull never
+background to fetch the team repo, sources, learnings and reports. A branch switch does nothing.
+After `git pull` (`post-merge`), the hook fetches the team repo, waiting at most 5 seconds,
+and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
+learnings and reports, the same background pull takes over. In single-repo mode it
+delivers the knowledge `git pull` just brought, with no network. The hook prints nothing and always exits 0, so a failed pull never
 fails the git command. It follows the scope rules below: no project config, or one
 that cannot be read, means no sync. The command is one `sh` line that runs
 `teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`

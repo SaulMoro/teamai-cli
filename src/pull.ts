@@ -105,7 +105,7 @@ async function teamFetchedWithinTtl(localConfig: LocalConfig): Promise<boolean> 
 
 async function refreshTeamRepo(
   localConfig: LocalConfig,
-  options: Pick<GlobalOptions, 'inline'> = {},
+  options: Pick<GlobalOptions, 'inline' | 'fetchTimeoutMs'> = {},
 ): Promise<{ label: string; version: string | null; submodulesFailed: boolean; submodulesChanged: boolean }> {
   if (localConfig.repo.kind === 'http') {
     const { resolveApiKey } = await import('./api-key.js');
@@ -150,11 +150,16 @@ async function refreshTeamRepo(
   // another writer could reset/checkout the tree. We must NOT lock here: the lock
   // is non-reentrant, so re-acquiring it in the same process would fail.
   // The new-worktree hook reads a recently fetched clone as it is.
-  if (options.inline && await teamFetchedWithinTtl(localConfig)) {
+  if (options.inline && options.fetchTimeoutMs === undefined && await teamFetchedWithinTtl(localConfig)) {
     const version = await getHeadRev(localConfig.repo.localPath).catch(() => null);
     return { label: 'fetched within the TTL, not refetched', version, submodulesFailed: false, submodulesChanged: false };
   }
-  const result = await pullRepo(localConfig.repo.localPath);
+  // The post-merge hook caps the fetch: git pull is waiting on it.
+  const cap = options.fetchTimeoutMs === undefined ? undefined : AbortSignal.timeout(options.fetchTimeoutMs);
+  const result = await pullRepo(localConfig.repo.localPath, cap).catch((e: unknown) => {
+    if (cap?.aborted) throw new Error(`team repo fetch exceeded ${options.fetchTimeoutMs} ms, left to the detached pull`);
+    throw e;
+  });
   await writeJson(teamFetchStamp(localConfig), { lastFetch: new Date().toISOString() })
     .catch((e) => log.debug(`Could not record the team repo fetch: ${(e as Error).message}`));
 
@@ -188,7 +193,7 @@ async function refreshTeamRepo(
       // The leading status char is `-` while uninitialized and ` ` (or `+` when
       // the checkout is behind its pin) afterwards, so a changed status string
       // means the on-disk tree the deploy step reads is not what was cached.
-      const git = createGit(localConfig.repo.localPath);
+      const git = createGit(localConfig.repo.localPath, cap);
       // Only the status read is guarded here: an unavailable/unsupported status
       // must degrade to "changed" (see below), NOT be reported as an update
       // failure — the update itself is still allowed to fail into the outer

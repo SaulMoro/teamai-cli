@@ -170,7 +170,9 @@ worktree 的应用，新建一个检出时，该 hook 会创建 `enabledAgents` 
 并在命令返回前向该 worktree 执行 pull，因此其中的第一次会话就已具备团队的 skill、rule 与 MCP 服务器。
 团队仓库克隆若在 24 小时内 fetch 过，这次 pull 直接读取它（否则先 fetch），订阅的 source 读取其缓存克隆；
 随后在后台运行一次完整的 `teamai pull --silent`，fetch 团队仓库、source、learnings 与 reports。
-切换分支不会触发任何操作，`post-merge` 目前也不做任何事。该 hook 不输出任何内容且始终以 0 退出，
+切换分支不会触发任何操作。`git pull` 之后（`post-merge`），该 hook 会 fetch 团队仓库（最多等待 5 秒），
+并在 `git pull` 返回前交付其变更；超过 5 秒时，以及 source、learnings 与 reports，交给同样的后台 pull。
+单仓库模式下，它交付 `git pull` 刚带来的知识，不访问网络。该 hook 不输出任何内容且始终以 0 退出，
 因此 pull 失败也不会让 git 命令失败。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
 都不会同步。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
 与 Agent hook 一样通过 `~/.teamai/bin` 找到 `teamai`。

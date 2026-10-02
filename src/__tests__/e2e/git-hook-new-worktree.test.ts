@@ -3,7 +3,7 @@
  * returns. `teamai init` (project scope) installs a named hook in the
  * repository's git config; real git runs it on `post-checkout`, and it calls
  * the real CLI's dispatcher, which creates the tool roots and pulls into the
- * new worktree.
+ * new worktree. `git pull` (`post-merge`) brings the team's change the same way.
  *
  * The team remote is a local bare repo reached through a synthetic HTTPS URL
  * (`url.<path>.insteadOf` in the sandbox HOME), as in init-project-all.test.ts.
@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -285,40 +286,40 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     expect(delivered(dir)).toEqual(ALL);
   });
 
-  describe('inline pass reads the team clone, the detached pull fetches the rest', () => {
-    const stampOf = (root: string) => path.join(partitionOf(root), 'last-fetch.json');
-    /** Commit a new skill to the team remote; returns its name. */
-    const pushSkill = (name: string): void => {
-      const work = path.join(sandbox, `push-${name}`);
-      gitOk(['clone', '-q', remote, work], sandbox);
-      fs.mkdirSync(path.join(work, 'skills', name), { recursive: true });
-      fs.writeFileSync(path.join(work, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\n`);
-      gitOk(['add', '-A'], work);
-      gitOk(['commit', '-q', '-m', name], work);
-      gitOk(['push', '-q', 'origin', 'HEAD:main'], work);
-    };
-    const hasSkill = (dir: string, name: string) => fs.existsSync(path.join(dir, '.claude', 'skills', name, 'SKILL.md'));
-    const waitFor = async (check: () => boolean, ms = 30_000) => {
-      const end = Date.now() + ms;
-      while (Date.now() < end) {
-        if (check()) return true;
-        await new Promise((r) => setTimeout(r, 200));
-      }
-      return check();
-    };
-    /**
-     * Wait for the detached pulls of the project to finish: no partition lock
-     * for a full second (one may not have taken it yet).
-     */
-    const settle = async (root: string) => {
-      const lock = path.join(partitionOf(root), '.sync-lock');
-      let freeSince = Date.now();
-      await waitFor(() => {
-        if (fs.existsSync(lock)) freeSince = Date.now();
-        return Date.now() - freeSince >= 1000;
-      });
-    };
+  const stampOf = (root: string) => path.join(partitionOf(root), 'last-fetch.json');
+  /** Commit a new skill to the team remote; returns its name. */
+  const pushSkill = (name: string): void => {
+    const work = path.join(sandbox, `push-${name}`);
+    gitOk(['clone', '-q', remote, work], sandbox);
+    fs.mkdirSync(path.join(work, 'skills', name), { recursive: true });
+    fs.writeFileSync(path.join(work, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\n`);
+    gitOk(['add', '-A'], work);
+    gitOk(['commit', '-q', '-m', name], work);
+    gitOk(['push', '-q', 'origin', 'HEAD:main'], work);
+  };
+  const hasSkill = (dir: string, name: string) => fs.existsSync(path.join(dir, '.claude', 'skills', name, 'SKILL.md'));
+  const waitFor = async (check: () => boolean, ms = 30_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (check()) return true;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return check();
+  };
+  /**
+   * Wait for the detached pulls of the project to finish: no partition lock
+   * for a full second (one may not have taken it yet).
+   */
+  const settle = async (root: string) => {
+    const lock = path.join(partitionOf(root), '.sync-lock');
+    let freeSince = Date.now();
+    await waitFor(() => {
+      if (fs.existsSync(lock)) freeSince = Date.now();
+      return Date.now() - freeSince >= 1000;
+    });
+  };
 
+  describe('inline pass reads the team clone, the detached pull fetches the rest', () => {
     it('a clone fetched within the TTL: no fetch while the hook runs; the detached pull fetches afterwards', async () => {
       const repo = project('fresh-project', ['--agent', 'claude']);
       await settle(repo);
@@ -383,6 +384,106 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
 
       expect(snapshot.length).toBeGreaterThan(0);
       expect(snapshot).toEqual(tree(manual));
+    });
+  });
+
+  describe('git pull (post-merge) brings the team\'s change before the next session', () => {
+    /** Give `root` an origin a teammate pushes to; returns a function that pushes one commit. */
+    const withOrigin = (root: string): (() => void) => {
+      const bare = `${root}.git`;
+      gitOk(['clone', '-q', '--bare', root, bare], sandbox);
+      gitOk(['remote', 'add', 'origin', bare], root);
+      gitOk(['fetch', '-q', 'origin'], root);
+      gitOk(['branch', '-q', '-u', 'origin/main'], root);
+      const mate = `${root}-mate`;
+      gitOk(['clone', '-q', bare, mate], sandbox);
+      let n = 0;
+      return () => {
+        fs.writeFileSync(path.join(mate, `change-${++n}.txt`), `${n}\n`);
+        gitOk(['add', '-A'], mate);
+        gitOk(['commit', '-q', '-m', `change ${n}`], mate);
+        gitOk(['push', '-q', 'origin', 'HEAD:main'], mate);
+      };
+    };
+
+    it('separate team repo: a skill the team published is delivered before git pull returns', async () => {
+      const repo = project('merge-project', ['--agent', 'claude']);
+      const businessChange = withOrigin(repo);
+      await settle(repo);
+      pushSkill('merged-skill');
+      businessChange();
+
+      const r = git(['pull', '-q'], repo);
+
+      expect(r.code, r.output).toBe(0);
+      expect(r.output).toBe('');
+      expect(fs.existsSync(path.join(repo, 'change-1.txt'))).toBe(true);
+      expect(hasSkill(repo, 'merged-skill')).toBe(true);
+      await settle(repo);
+    });
+
+    it('separate team repo unreachable: git pull returns within the cap and exits as git would', async () => {
+      const repo = project('hang-project', ['--agent', 'claude']);
+      const businessChange = withOrigin(repo);
+      await settle(repo);
+      businessChange();
+      // A team remote that accepts the connection and never answers.
+      const sockets: net.Socket[] = [];
+      const server = net.createServer((socket) => { sockets.push(socket); });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as net.AddressInfo).port;
+      const rewrite = `url.${remote}.insteadOf`;
+      gitOk(['config', '--global', '--unset', rewrite], sandbox);
+      gitOk(['config', '--global', `url.http://127.0.0.1:${port}/team.git.insteadOf`, FAKE_URL], sandbox);
+      try {
+        const started = Date.now();
+        const r = git(['pull', '-q'], repo);
+        const elapsed = Date.now() - started;
+
+        expect(r.code, r.output).toBe(0);
+        expect(r.output).toBe('');
+        expect(fs.existsSync(path.join(repo, 'change-1.txt'))).toBe(true);
+        expect(elapsed).toBeGreaterThanOrEqual(4_000); // the fetch really hung until the cap
+        expect(elapsed).toBeLessThan(10_000);
+      } finally {
+        gitOk(['config', '--global', '--unset', `url.http://127.0.0.1:${port}/team.git.insteadOf`], sandbox);
+        gitOk(['config', '--global', rewrite, FAKE_URL], sandbox);
+        server.close();
+        for (const socket of sockets) socket.destroy();
+      }
+      await settle(repo);
+    });
+
+    it('self mode: git pull brings a changed rule into the checkout with no network from the hook', async () => {
+      const repo = path.join(sandbox, 'self-project');
+      fs.mkdirSync(repo);
+      fs.writeFileSync(path.join(repo, 'README'), 'x\n');
+      gitOk(['init', '-q', '-b', 'main'], repo);
+      gitOk(['add', '-A'], repo);
+      gitOk(['commit', '-q', '-m', 'project'], repo);
+      // init parses the origin as a provider URL; the pull itself uses a local remote.
+      gitOk(['remote', 'add', 'origin', 'http://127.0.0.1:9/team/self.git'], repo);
+      const init = teamai(['init', '--self', '--agent', 'claude', '--force'], repo);
+      expect(init.code, init.output).toBe(0);
+      gitOk(['remote', 'remove', 'origin'], repo);
+      withOrigin(repo);
+      const mate = `${repo}-mate`;
+      fs.mkdirSync(path.join(mate, '.teamai', 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(mate, '.teamai', 'rules', 'self-rule.md'), '# Self rule\n');
+      gitOk(['add', '-A'], mate);
+      gitOk(['commit', '-q', '-m', 'rule'], mate);
+      gitOk(['push', '-q', 'origin', 'HEAD:main'], mate);
+      const trace = path.join(sandbox, 'self-trace.log');
+
+      const r = git(['pull', '-q'], repo, { GIT_TRACE: trace });
+
+      expect(r.code, r.output).toBe(0);
+      expect(r.output).toBe('');
+      expect(fs.readFileSync(path.join(repo, '.claude', 'rules', 'self-rule.md'), 'utf8')).toContain('# Self rule');
+      const traced = fs.readFileSync(trace, 'utf8');
+      const fromHook = traced.slice(traced.indexOf('hook-dispatch post-merge'));
+      expect(fromHook).toMatch(/hook-dispatch post-merge/);
+      expect(fromHook).not.toMatch(/\b(fetch|upload-pack|ls-remote|push|pull)\b/);
     });
   });
 

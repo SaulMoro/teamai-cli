@@ -1073,6 +1073,12 @@ export interface GlobalOptions {
    * reports, usage reporting and post-pull scripts are left to a full pull.
    */
   inline?: boolean;
+  /**
+   * Internal (the post-merge git hook, with `inline`): fetch the team repo
+   * whatever its fetch stamp says, and give up after this many ms; the scope
+   * is then not delivered and the detached pull after the hook does it.
+   */
+  fetchTimeoutMs?: number;
   /** Push a specific skill by path. */
   skill?: string;
   /** Target role namespace (overrides detected namespace). */

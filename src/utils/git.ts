@@ -88,11 +88,11 @@ function spawnsByPath(candidate: string): boolean {
  * Authentication is handled by the provider's remote URL or by normal Git
  * facilities such as credential helpers, SSH config, and SSH agents.
  */
-export function createGit(basePath?: string): SimpleGit {
+export function createGit(basePath?: string, abort?: AbortSignal): SimpleGit {
   if (basePath) {
-    return simpleGit({ baseDir: basePath, binary: gitBinary() });
+    return simpleGit({ baseDir: basePath, binary: gitBinary(), abort });
   }
-  return simpleGit({ binary: gitBinary() });
+  return simpleGit({ binary: gitBinary(), abort });
 }
 
 /**
@@ -346,8 +346,8 @@ export async function commitPaths(
  * uncommitted changes, so the loss is never silent. A failed fetch is re-thrown
  * so the caller surfaces the real network/auth cause.
  */
-export async function pullRepo(localPath: string): Promise<string> {
-  const git = createGit(localPath);
+export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<string> {
+  const git = createGit(localPath, abort);
   const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
 
   try {

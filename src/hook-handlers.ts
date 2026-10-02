@@ -162,15 +162,52 @@ const newWorktreeHandler: HookHandler = {
     const { pull } = await import('./pull.js');
     await pull({ silent: true, inline: true });
     // Learnings, reports, sources and the team repo itself refresh after
-    // `git worktree add` returns, in a pull this process does not wait for.
-    const { resolveCliEntry } = await import('./builtin-hooks.js');
-    const { spawn } = await import('node:child_process');
-    spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
-      cwd, detached: true, stdio: 'ignore', windowsHide: true,
-    }).on('error', (e) => log.debug(`new-worktree: detached pull failed to start: ${e.message}`)).unref();
+    // `git worktree add` returns.
+    await spawnDetachedPull(cwd);
     return null;
   },
 };
+
+/** How long `git pull` waits for the post-merge hook's team repo fetch. */
+const POST_MERGE_FETCH_CAP_MS = 5_000;
+
+/**
+ * `post-merge` from the git hook (`git pull`): the next session gets what
+ * changed. With a separate team repo, the team repo is fetched inline within
+ * POST_MERGE_FETCH_CAP_MS and delivered when its revision moved (the rev fast
+ * path skips it otherwise); past the cap, and for learnings, reports and
+ * sources, a detached pull takes over. In single-repo (self) mode the team
+ * repo is the working tree `git pull` just updated: delivered with no network.
+ */
+const gitPullHandler: HookHandler = {
+  name: 'git-pull',
+  async execute(stdin, _tool, config) {
+    if (!config || config.scope !== 'project') return null;
+    const cwd = resolveHookCwd(stdin) ?? process.cwd();
+    const { getDataHome, isSelfMode } = await import('./types.js');
+    const self = isSelfMode(config);
+    // teamai's own checkouts; in self mode the team repo is the member's.
+    if (await isWithin(cwd, self ? [getDataHome(config)] : [getDataHome(config), config.repo.localPath])) return null;
+
+    const { pull } = await import('./pull.js');
+    if (self) {
+      await pull({ silent: true, inline: true });
+      return null;
+    }
+    await pull({ silent: true, inline: true, fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS });
+    await spawnDetachedPull(cwd);
+    return null;
+  },
+};
+
+/** Start a full `teamai pull --silent` in `cwd` that this process does not wait for. */
+async function spawnDetachedPull(cwd: string): Promise<void> {
+  const { resolveCliEntry } = await import('./builtin-hooks.js');
+  const { spawn } = await import('node:child_process');
+  spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
+    cwd, detached: true, stdio: 'ignore', windowsHide: true,
+  }).on('error', (e) => log.debug(`git hook: detached pull failed to start: ${e.message}`)).unref();
+}
 
 /** Whether `dir` is one of `parents` or inside one (real paths). */
 async function isWithin(dir: string, parents: string[]): Promise<boolean> {
@@ -964,9 +1001,10 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
 
     // ─── Git (`--tool git`, see git-hook.ts) ──────────
     // Inline: the delivery has to land before `git worktree add` returns. Git
-    // has no hook timeout, so the budget is the detached pull's. `post-merge`
-    // is installed but has no handler yet.
+    // has no hook timeout, so the budget is the detached pull's; post-merge
+    // caps its own fetch.
     { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
+    { event: 'post-merge', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
   ];
 }
 
