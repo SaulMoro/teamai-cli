@@ -164,12 +164,15 @@ projects:
     expect(await fse.readFile(path.join(tmpDir, 'project', 'AGENTS.override.md'), 'utf8')).toBe(override);
   });
 
-  it('skips a block already present in the active AGENTS.override.md', async () => {
+  it('adds the member\'s own blocks even where AGENTS.override.md holds a teamai block (#945)', async () => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
     await fse.outputFile(path.join(tmpDir, 'project', 'AGENTS.override.md'),
-      '<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n');
+      '<!-- [teamai:culture:start] -->\nAnother member\'s culture.\n<!-- [teamai:culture:end] -->\n');
 
-    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).not.toContain('Be kind to teammates.');
+    const text = await context({ hook_event_name: 'SessionStart', source: 'startup' });
+
+    expect(text).toContain('Be kind to teammates.');
+    expect(text).not.toContain('Another member');
   });
 
   it('adds no rules from a scope that does not enable the tool', async () => {
