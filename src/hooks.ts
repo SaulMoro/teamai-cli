@@ -1,6 +1,7 @@
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
 import { readJson, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
@@ -308,9 +309,8 @@ export interface ReconcileHooksOptions {
   teamHookProjectRoot?: string;
   /**
    * Write the team hooks alone: the built-ins are not desired here, and any
-   * built-in entry found in the file is removed. An existing entry running a
-   * desired team command counts as teamai's, so a copy an older layout left in
-   * the same file is replaced instead of duplicated.
+   * built-in entry found in the file is removed. Team entries are owned only
+   * when the manifest records them; a matching command alone is not ownership.
    */
   teamOnly?: boolean;
 }
@@ -321,6 +321,9 @@ export interface ManagedHookRecord {
   event: string;
   matcher?: string;
   command: string;
+  /** Codex matcher-group position and complete definition written by reconciliation. */
+  codexEntryIndex?: number;
+  codexEntry?: CodexHookMatcher;
 }
 
 /** ~/.teamai/managed-hooks.json — team hooks injected per tool. */
@@ -950,16 +953,20 @@ async function reconcileCodexFormat(
   tool: string,
   teamDefs: HookDef[],
   opts: ReconcileHooksOptions,
-  priorTeamCommands: Set<string>,
-): Promise<void> {
+  priorRecords: ManagedHookRecord[],
+): Promise<ManagedHookRecord[]> {
   const expanded = expandHome(hooksPath);
   await ensureDir(path.dirname(expanded));
   const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
   if (!hooksJson.hooks) hooksJson.hooks = {};
 
-  const isManaged = (entry: CodexHookMatcher): boolean => {
+  const isManaged = (event: string, index: number, entries: CodexHookMatcher[]): boolean => {
+    const entry = entries[index];
     const cmd = entry.hooks?.[0]?.command ?? '';
-    return TEAMAI_COMMAND_MARKERS.some((marker) => cmd.includes(marker)) || priorTeamCommands.has(cmd);
+    return TEAMAI_COMMAND_MARKERS.some((marker) => cmd.includes(marker))
+      || priorRecords.some((record) => tool === CODEX_TOOL_ID
+        ? ownsCodexEntry(record, event, index, entries)
+        : record.command === cmd);
   };
 
   const defs = opts.removeAll ? [] : desiredDefs(tool, teamDefs, opts);
@@ -967,11 +974,24 @@ async function reconcileCodexFormat(
   const events = [...eventOrder, ...Object.keys(hooksJson.hooks).filter((e) => !eventOrder.includes(e))];
 
   let changed = false;
+  const records: ManagedHookRecord[] = [];
   for (const event of events) {
     const existing = hooksJson.hooks[event] ?? [];
-    const untouched = existing.filter((e) => !isManaged(e));
-    const desiredEntries = defs.filter((d) => d.event === event).map(toCodexEntry);
+    const untouched = existing.filter((_, index) => !isManaged(event, index, existing));
+    const eventDefs = defs.filter((d) => d.event === event);
+    const desiredEntries = eventDefs.map(toCodexEntry);
     const newArr = [...untouched, ...desiredEntries];
+    eventDefs.forEach((def, index) => {
+      if (def.source !== 'team') return;
+      records.push({
+        id: def.key, event, command: def.command,
+        ...(def.matcher && def.matcher !== '*' ? { matcher: def.matcher } : {}),
+        ...(tool === CODEX_TOOL_ID ? {
+          codexEntryIndex: untouched.length + index,
+          codexEntry: desiredEntries[index],
+        } : {}),
+      });
+    });
     if (JSON.stringify(existing) !== JSON.stringify(newArr)) {
       hooksJson.hooks[event] = newArr;
       changed = true;
@@ -984,6 +1004,21 @@ async function reconcileCodexFormat(
   } else {
     log.debug(`teamai hooks already up-to-date in ${hooksPath}`);
   }
+  return records;
+}
+
+/** Legacy records identify only an unambiguous, exact default entry under their event. */
+function ownsCodexEntry(record: ManagedHookRecord, event: string, index: number, entries: CodexHookMatcher[]): boolean {
+  if (record.event !== event) return false;
+  const entry = entries[index];
+  if (record.codexEntry) {
+    return record.codexEntryIndex === index && isDeepStrictEqual(entry, record.codexEntry);
+  }
+  const legacy = {
+    ...(record.matcher ? { matcher: record.matcher } : {}),
+    hooks: [{ type: 'command', command: record.command }],
+  };
+  return isDeepStrictEqual(entry, legacy) && entries.filter((candidate) => isDeepStrictEqual(candidate, legacy)).length === 1;
 }
 
 // ─── ZCode (~/.zcode/cli/config.json) reconcile ─────────────
@@ -1274,18 +1309,16 @@ export async function reconcileHooks(
     : allPriorRecords;
   const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
   const desiredTeamCommands = new Set(scopedDefs.filter((d) => !d.tools || d.tools.includes(tool)).map((d) => d.command));
-  const priorTeamCommands = new Set([
-    ...priorRecords.map((r) => r.command),
-    ...(opts.teamOnly ? desiredTeamCommands : []),
-  ]);
+  const priorTeamCommands = new Set(priorRecords.map((r) => r.command));
 
   const format = detectFormat(tool);
+  let codexRecords: ManagedHookRecord[] | undefined;
   if (format === 'cursor') {
     await reconcileCursorFormat(settingsPath, tool, scopedDefs, opts, priorTeamCommands);
   } else if (format === 'copilot') {
     await reconcileCopilotFormat(settingsPath, tool, scopedDefs, opts, priorTeamCommands);
   } else if (format === 'codex') {
-    await reconcileCodexFormat(settingsPath, tool, scopedDefs, opts, priorTeamCommands);
+    codexRecords = await reconcileCodexFormat(settingsPath, tool, scopedDefs, opts, priorRecords);
   } else if (format === 'zcode') {
     await reconcileZcodeFormat(settingsPath, tool, scopedDefs, opts, priorTeamCommands);
   } else {
@@ -1299,7 +1332,7 @@ export async function reconcileHooks(
 
   // Update the manifest's team-hook index for this tool (when manifest is active).
   if (opts.manifestPath && manifest) {
-    const records = manifestRecordsForTool(teamDefs, tool, !!opts.removeAll, opts.teamHookProjectRoot);
+    const records = codexRecords ?? manifestRecordsForTool(teamDefs, tool, !!opts.removeAll, opts.teamHookProjectRoot);
     const prev = manifest[tool] ?? [];
     const retained = opts.teamHookProjectRoot
       ? prev.filter((r) => !isGatedForProject(r.command, opts.teamHookProjectRoot!))
@@ -1930,8 +1963,8 @@ interface CodexTrustTargets {
   codexHome: string;
   /** The checkout whose hook layers are listed (HOME in user scope). */
   cwd: string;
-  /** Every teamai hook in the Codex hook files of this scope, by file and command. */
-  hooks: Array<{ file: string; command: string }>;
+  /** Exact generated Codex entries, including Codex's file/event/position key. */
+  hooks: Array<{ file: string; command: string; key: string }>;
   /** The main checkout, when Codex has to read its `.codex/` layer. */
   project?: string;
   /** The files whose bytes a trust pass depends on. */
@@ -1940,19 +1973,20 @@ interface CodexTrustTargets {
   mcpRecords: unknown[];
 }
 
-/** The teamai entries of one Codex hooks file: built-ins by exact rendered command, team hooks by manifest. */
-async function teamaiCodexHooks(file: string, manifestPath: string): Promise<Array<{ file: string; command: string }>> {
+/** Select recorded team entries, not every occurrence of a managed command. */
+async function teamaiCodexHooks(file: string, manifestPath: string): Promise<CodexTrustTargets['hooks']> {
   const json = await readJson<CodexHooksJson>(file);
   if (!json?.hooks) return [];
-  const teamCommands = new Set(((await readManifest(manifestPath))[CODEX_TOOL_ID] ?? []).map((r) => r.command));
-  const builtinCommands = new Set(builtinHookDefs(CODEX_TOOL_ID).flatMap((def) =>
-    toCodexEntry(def).hooks.map((hook) => hook.command)));
-  return Object.values(json.hooks)
-    .flatMap((groups) => (groups ?? []).flatMap((group) => group.hooks ?? []))
-    .map((hook) => hook.command)
-    .filter((command) => typeof command === 'string'
-      && (builtinCommands.has(command) || teamCommands.has(command)))
-    .map((command) => ({ file, command }));
+  const records = (await readManifest(manifestPath))[CODEX_TOOL_ID] ?? [];
+  const builtins = builtinHookDefs(CODEX_TOOL_ID);
+  return Object.entries(json.hooks).flatMap(([event, groups]) => (groups ?? []).flatMap((group, index) => {
+    const command = group.hooks?.[0]?.command;
+    const builtin = group.hooks?.length === 1 && builtins.some((def) =>
+      def.event === event && def.command === command && toCodexEntry(def).matcher === group.matcher);
+    if (typeof command !== 'string' || !(builtin || records.some((r) => ownsCodexEntry(r, event, index, groups)))) return [];
+    const snake = event.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+    return [{ file, command, key: `${canonicalProjectRoot(file)}:${snake}:${index}:0` }];
+  }));
 }
 
 /**

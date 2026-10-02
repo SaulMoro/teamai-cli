@@ -172,7 +172,10 @@ from the next Codex session. `teamai doctor` names any teamai hook Codex will no
 run. Then: run `teamai pull`; if `codex` is not on PATH or `codexTrustEnabled: false`
 is set in `config.yaml`, guide the user to trust the teamai hooks in Codex `/hooks`,
 then reopen a session. A new linked worktree gets the team hooks from its second
-Codex session (the first creates its `.codex/`).
+Codex session (the first creates its `.codex/`). Member hooks with the same command
+are preserved and remain untouched by automatic trust. Codex ownership uses the
+recorded event, position and complete entry; unrecorded or ambiguous legacy team-hook copies
+are preserved rather than claimed by command.
 
 ### Cursor
 

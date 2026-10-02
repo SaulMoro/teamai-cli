@@ -102,6 +102,76 @@ afterEach(async () => {
   await fse.remove(fakeBin);
 });
 
+describe('Codex hook ownership', () => {
+  it('preserves member hooks on the first project reconcile and through team updates/removal', async () => {
+    await writeYaml(LINT_HOOK);
+    const project = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-owner-project-')));
+    const config = userConfig({ scope: 'project', projectRoot: project });
+    const file = path.join(project, '.codex', 'hooks.json');
+    const memberGroups = [
+      { hooks: [{ type: 'command', command: 'npm run lint' }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', timeout: 17 }] },
+    ];
+    try {
+      await fse.outputJson(file, { hooks: { PreToolUse: memberGroups, Stop: [memberGroups[0]] } });
+      const memberKeys = (await codexEntries(file)).map((e) => e.key);
+
+      await writeAndTrust(config);
+
+      expect((await fse.readJson(file)).hooks.PreToolUse.slice(0, 2)).toEqual(memberGroups);
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([memberGroups[0]]);
+      expect(trustedKeys().some((key) => memberKeys.includes(key))).toBe(false);
+      await writeYaml(LINT_HOOK.replace('npm run lint', 'npm run lint:fix'));
+      await writeAndTrust(config);
+      expect((await fse.readJson(file)).hooks.PreToolUse.slice(0, 2)).toEqual(memberGroups);
+      await writeAndTrust(config, { removeAll: true });
+      expect((await fse.readJson(file)).hooks.PreToolUse).toEqual(memberGroups);
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([memberGroups[0]]);
+    } finally {
+      await fse.remove(project);
+    }
+  });
+
+  it.each(['Stop', 'PreToolUse'])('preserves and never trusts member hooks sharing a team command under %s', async (event) => {
+    await writeYaml(LINT_HOOK);
+    const file = path.join(codexHome(), 'hooks.json');
+    const memberGroups = [
+      { hooks: [{ type: 'command', command: 'npm run lint' }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', timeout: 17, additionalContextLimit: 0 }] },
+    ];
+    await fse.writeJson(file, { hooks: { [event]: memberGroups } });
+    const memberKeys = (await codexEntries(file)).map((e) => e.key);
+
+    await writeAndTrust(userConfig());
+
+    const teamKeys = (await codexEntries(file)).filter((e) => !memberKeys.includes(e.key)).map((e) => e.key);
+    expect(trustedKeys().sort()).toEqual(teamKeys.sort());
+    expect((await fse.readJson(file)).hooks[event].slice(0, 2)).toEqual(memberGroups);
+    await writeAndTrust(userConfig());
+    expect((await fse.readJson(file)).hooks[event].slice(0, 2)).toEqual(memberGroups);
+    expect(trustedKeys().some((key) => memberKeys.includes(key))).toBe(false);
+    await writeAndTrust(userConfig(), { removeAll: true });
+    expect((await fse.readJson(file)).hooks[event]).toEqual(memberGroups);
+  });
+
+  it('keeps ambiguous legacy entries instead of claiming every identical command', async () => {
+    await writeYaml(LINT_HOOK);
+    const file = path.join(codexHome(), 'hooks.json');
+    const member = { hooks: [{ type: 'command', command: 'npm run lint' }] };
+    await fse.writeJson(file, { hooks: { PreToolUse: [member, member] } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'PreToolUse', command: 'npm run lint' }],
+    });
+
+    await writeAndTrust(userConfig());
+
+    expect((await fse.readJson(file)).hooks.PreToolUse.slice(0, 2)).toEqual([member, member]);
+    expect(trustedKeys()).not.toContain(`${file}:pre_tool_use:0:0`);
+    expect(trustedKeys()).not.toContain(`${file}:pre_tool_use:1:0`);
+  });
+
+});
+
 describe('Codex hook trust — user scope', () => {
   it('trusts every hook teamai wrote and leaves the member\'s own hook alone', async () => {
     await writeYaml(LINT_HOOK);
@@ -133,7 +203,7 @@ describe('Codex hook trust — user scope', () => {
 
   it('fails actionably when Codex does not list a requested hook', async () => {
     const file = path.join(codexHome(), 'hooks.json');
-    const result = await trustCodexHooks({ codexHome: codexHome(), cwd: home, hooks: [{ file, command: 'missing' }] });
+    const result = await trustCodexHooks({ codexHome: codexHome(), cwd: home, hooks: [{ file, command: 'missing', key: `${file}:stop:0:0` }] });
     expect(result).toEqual({ kind: 'failed', reason: expect.stringMatching(/hooks\/list.*missing.*not loaded.*teamai pull/) });
   });
 

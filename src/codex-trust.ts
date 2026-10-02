@@ -30,8 +30,8 @@ export interface CodexHookTrustRequest {
   codexHome: string;
   /** Directory whose hook layers are listed. */
   cwd: string;
-  /** The hooks teamai wrote, by file and command. A member's own hook is left alone. */
-  hooks: Array<{ file: string; command: string }>;
+  /** Exact generated entries, with Codex's file/event/position key. */
+  hooks: Array<{ file: string; command: string; key: string }>;
   /** Project to trust first, so Codex reads its `.codex/` layer (realpath). */
   project?: string;
 }
@@ -211,8 +211,8 @@ export async function trustCodexProject(req: { codexHome: string; project: strin
   });
 }
 
-function hookId(file: string, command: string): string {
-  return `${canonical(file)}\0${command}`;
+function hookId(file: string, command: string, key: string): string {
+  return `${canonical(file)}\0${key}\0${command}`;
 }
 
 async function listHooks(server: AppServer, cwd: string): Promise<HookInfo[]> {
@@ -222,18 +222,18 @@ async function listHooks(server: AppServer, cwd: string): Promise<HookInfo[]> {
 }
 
 /**
- * Trust exactly the hooks teamai wrote: those Codex lists for `cwd` whose file
- * and command are in `hooks`. Trusts the project first when one is given,
+ * Trust exactly the hooks teamai wrote: those Codex lists for `cwd` whose key,
+ * file and command are in `hooks`. Trusts the project first when one is given,
  * since an untrusted project's hook layer is not read.
  */
 export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<CodexTrust> {
-  const wanted = new Set(req.hooks.map((h) => hookId(h.file, h.command)));
+  const wanted = new Set(req.hooks.map((h) => hookId(h.file, h.command, h.key)));
   const project = req.project ? canonical(req.project) : undefined;
   return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
     const level = project ? await ensureProjectTrusted(server, project) : undefined;
     const listed = await listHooks(server, req.cwd);
-    const loaded = new Set(listed.map((h) => hookId(h.sourcePath, h.command)));
-    const missing = req.hooks.filter((h) => !loaded.has(hookId(h.file, h.command)));
+    const loaded = new Set(listed.map((h) => hookId(h.sourcePath, h.command, h.key)));
+    const missing = req.hooks.filter((h) => !loaded.has(hookId(h.file, h.command, h.key)));
     if (missing.length > 0 && level !== 'untrusted') {
       return {
         kind: 'failed',
@@ -241,7 +241,7 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
       };
     }
     const toTrust = listed.filter((h) =>
-      h.trustStatus !== 'trusted' && wanted.has(hookId(h.sourcePath, h.command)));
+      h.trustStatus !== 'trusted' && wanted.has(hookId(h.sourcePath, h.command, h.key)));
     if (toTrust.length > 0) {
       await batchWrite(
         server,
@@ -261,11 +261,11 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
  */
 export async function readCodexHookTrust(req: Omit<CodexHookTrustRequest, 'project'>): Promise<CodexHookTrustReport> {
   return withAppServer(req.codexHome, async (server): Promise<CodexHookTrustReport> => {
-    const listed = new Map((await listHooks(server, req.cwd)).map((h) => [hookId(h.sourcePath, h.command), h.trustStatus]));
+    const listed = new Map((await listHooks(server, req.cwd)).map((h) => [hookId(h.sourcePath, h.command, h.key), h.trustStatus]));
     return {
       kind: 'listed',
       notTrusted: req.hooks
-        .map((h) => ({ ...h, status: listed.get(hookId(h.file, h.command)) ?? 'not loaded' }))
+        .map((h) => ({ file: h.file, command: h.command, status: listed.get(hookId(h.file, h.command, h.key)) ?? 'not loaded' }))
         .filter((h) => h.status !== 'trusted'),
     };
   });

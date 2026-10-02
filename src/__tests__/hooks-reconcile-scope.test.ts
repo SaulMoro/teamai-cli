@@ -482,6 +482,27 @@ builtin:
 describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () => {
   const STOP_LINT = 'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n';
 
+  it('keeps one HOME-gated internal Codex hook per project when their pulls alternate', async () => {
+    await writeYaml(STOP_LINT);
+    const other = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-internal-other-'));
+    const file = path.join(home, '.codex-internal', 'hooks.json');
+    await fse.ensureDir(path.dirname(file));
+    const internal = { toolPaths: { 'codex-internal': { settings: '.codex-internal/hooks.json' } } } as unknown as TeamaiConfig;
+    try {
+      for (const root of [project, other, project, other]) {
+        await reconcileTeamHooksForConfig(internal, { ...localConfig(), projectRoot: root });
+      }
+      const commands = (await fse.readJson(file)).hooks.Stop
+        .map((entry: { hooks: Array<{ command: string }> }) => entry.hooks[0].command)
+        .filter((command: string) => command.includes('$PWD'));
+      expect(commands).toHaveLength(2);
+      expect(commands.filter((command: string) => command.includes(project))).toHaveLength(1);
+      expect(commands.filter((command: string) => command.includes(other))).toHaveLength(1);
+    } finally {
+      await fse.remove(other);
+    }
+  });
+
   async function mainWithWorktree(): Promise<{ main: string; worktree: string }> {
     const main = await fse.realpath(project);
     const worktree = path.join(await fse.realpath(os.tmpdir()), `teamai-recon-wt-${path.basename(main)}`);
@@ -543,13 +564,16 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     expect(await fse.pathExists(path.join(project, '.claude', 'settings.local.json'))).toBe(false);
   });
 
-  it('replaces a copy a pre-#370 CLI left in the main checkout\'s Codex file instead of duplicating it', async () => {
+  it('replaces a recorded legacy copy in the main checkout\'s Codex file instead of duplicating it', async () => {
     await writeYaml(STOP_LINT);
     await fse.outputJson(path.join(project, '.codex', 'hooks.json'), {
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: 'teamai hook-dispatch session-start --tool codex' }] }],
         Stop: [{ hooks: [{ type: 'command', command: 'npm run lint' }] }],
       },
+    });
+    await fse.outputJson(path.join(project, '.teamai', 'managed-main-checkout-hooks.json'), {
+      codex: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
     });
 
     await reconcileTeamHooksForConfig(teamConfig, localConfig());
