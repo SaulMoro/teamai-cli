@@ -1157,7 +1157,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    hookLimitProblem, instructionHookChannel, instructionHookTextFor, instructionTargetPath,
+    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookTextFor, instructionTargetPath,
     planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
@@ -1182,8 +1182,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
 
   const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
   const opencodeFile = opencodePaths && instructionTargetPath('opencode', opencodePaths, localConfig);
-  // Only a file that exists needs listing; pull registers it once it writes one.
-  if (opencodeFile && targets.some((t) => t.path === opencodeFile) && await pathExists(opencodeFile)) {
+  // Only a file holding the blocks needs listing; pull registers it once it writes them.
+  if (opencodeFile && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile)) {
     const { config, entry } = opencodeContextReference(opencodeFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
     const instructions = await readOpencodeInstructionList(config);
     checks.push({

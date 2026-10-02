@@ -4,7 +4,7 @@ import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, Lo
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
-import { EXCLUDED_RULE_NAMES, isDeployedRecallRule } from '../builtin-rules.js';
+import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
   copilotInstructionsBodyEqualsTeamMd,
@@ -201,7 +201,9 @@ export class RulesHandler extends ResourceHandler {
 
     const files = await listFilesRecursive(rulesDir);
     return files
-      .filter((f) => f.endsWith('.md'))
+      // teamai-context is the file pull writes the team instructions to; a team
+      // rule of that name would land on it (#945). pullAllRules names it.
+      .filter((f) => f.endsWith('.md') && f !== `${TEAMAI_CONTEXT_RULE_NAME}.md`)
       .map((f) => ({
         name: f.replace(/\.md$/, ''),
         type: 'rules' as const,
@@ -447,6 +449,10 @@ export class RulesHandler extends ResourceHandler {
     ledger?: DeliveryLedger,
   ): Promise<void> {
     const rules = filteredRules ?? await this.scanTeamForPull(teamConfig, localConfig);
+    if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${TEAMAI_CONTEXT_RULE_NAME}.md`))) {
+      log.warn(`rules/${TEAMAI_CONTEXT_RULE_NAME}.md is not delivered: ${TEAMAI_CONTEXT_RULE_NAME} is the name of teamai's own instruction file `
+        + 'in each rules directory. Rename the rule in the team repo, for example with `git mv`, and push the change.');
+    }
 
     // Hermes: inline all team rules into a teamai-managed block in SOUL.md
     // (user-level standing instructions). Only when Hermes is actually

@@ -53,9 +53,10 @@ interface TargetEntry {
   /** teamai owns the whole file: one it did not write is left alone, and it is deleted once its blocks are gone. */
   readonly owned?: boolean;
   /**
-   * Files an earlier release wrote this tool's blocks to, relative to the same
-   * base dir. A pull strips teamai blocks from them once no installed tool
-   * targets them.
+   * Files an earlier release wrote this tool's blocks to by default, relative
+   * to the same base dir. A pull strips teamai blocks from them once no
+   * installed tool targets them. A tool whose target is not its `claudemd`
+   * retires the team's configured `claudemd` too (`retiredInstructionFiles`).
    */
   readonly retired: readonly string[];
 }
@@ -208,9 +209,16 @@ export function instructionTargetFile(tool: string, paths: ToolPaths, scope: Sco
   return (entryFor(tool, scope)?.file ?? configured)(paths);
 }
 
-/** Files, relative to the tool's base dir, an earlier release wrote `tool`'s blocks to in `scope`. */
-export function retiredInstructionFiles(tool: string, scope: Scope): readonly string[] {
-  return entryFor(tool, scope)?.retired ?? [];
+/**
+ * Files, relative to the tool's base dir or absolute, an earlier release wrote
+ * `tool`'s blocks to in `scope`: the defaults, and the `claudemd` the team's
+ * `toolPaths` gives a tool whose target moved off it.
+ */
+export function retiredInstructionFiles(tool: string, paths: ToolPaths, scope: Scope): readonly string[] {
+  const entry = entryFor(tool, scope);
+  if (!entry) return [];
+  const previous = entry.file === configured ? undefined : paths.claudemd;
+  return previous === undefined || entry.retired.includes(previous) ? entry.retired : [...entry.retired, previous];
 }
 
 /** Whether `tool` gets this scope's blocks from teamai's session hook or extension rather than a file. */
@@ -333,14 +341,15 @@ export function instructionTargetAt(tool: string, file: string, scope: Scope): I
  * A tool's current target is not among them: a tool that is not installed
  * here may still be installed by a teammate who shares the file (#945).
  */
-function retiredTargets(localConfig: LocalConfig): Map<string, InstructionTarget> {
+function retiredTargets(toolPaths: Record<string, ToolPaths>, localConfig: LocalConfig): Map<string, InstructionTarget> {
+  const current = new Set(Object.entries(toolPaths).map(([tool, paths]) => instructionTargetPath(tool, paths, localConfig)));
   const known = new Map<string, InstructionTarget>();
   const table = localConfig.scope === 'user' ? USER_TARGETS : PROJECT_TARGETS;
-  for (const [tool, entry] of Object.entries(table)) {
+  for (const tool of Object.keys(table)) {
     const baseDir = resolveToolBaseDir(tool, localConfig);
-    for (const retired of entry.retired) {
+    for (const retired of retiredInstructionFiles(tool, toolPaths[tool] ?? {}, localConfig.scope)) {
       const file = path.resolve(baseDir, retired);
-      if (!known.has(file)) known.set(file, { path: file, tools: [], recall: false });
+      if (!current.has(file) && !known.has(file)) known.set(file, { path: file, tools: [], recall: false });
     }
   }
   return known;
@@ -371,7 +380,8 @@ export async function resolveInstructionTargets(
   // left alone, not cleaned.
   const inUse = new Set<string>();
   const hooks: InstructionHook[] = [];
-  for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+  const toolPaths = scopedToolPaths(teamConfig, localConfig);
+  for (const [tool, paths] of Object.entries(toolPaths)) {
     const entry = entryFor(tool, localConfig.scope);
     if (entry?.hook) {
       if (!isAgentExcluded(localConfig, tool) && await isInstalled(tool, paths, localConfig)) {
@@ -388,7 +398,7 @@ export async function resolveInstructionTargets(
     if (paths.agents) target.recall = true;
     targets.set(file, target);
   }
-  const stale = [...retiredTargets(localConfig).values()].filter((t) => !inUse.has(t.path));
+  const stale = [...retiredTargets(toolPaths, localConfig).values()].filter((t) => !inUse.has(t.path));
   // OpenCode reads ~/.claude/CLAUDE.md while its own user AGENTS.md does not
   // exist; when Claude's blocks are there, a second copy would duplicate them.
   const opencode = [...targets.values()].find((target) => target.tools.includes('opencode'));
@@ -404,8 +414,9 @@ export async function resolveInstructionTargets(
 
 /**
  * List teamai's OpenCode instruction file in OpenCode's `instructions` while
- * it exists, and drop the entry once it is gone: OpenCode reads no file it is
- * not told about. Returns what it did or, with `dryRun`, would do.
+ * it holds teamai's blocks, and drop the entry once they are gone: OpenCode
+ * reads no file it is not told about. Returns what it did or, with `dryRun`,
+ * would do.
  */
 export async function registerOpencodeContext(
   teamConfig: TeamaiConfig,
@@ -419,7 +430,7 @@ export async function registerOpencodeContext(
   if (!contextFile) return null;
   const wanted = resolved.targets.some((target) => target.path === contextFile);
   if (!wanted && !resolved.stale.some((target) => target.path === contextFile)) return null;
-  const present = wanted && (await pathExists(contextFile) || (dryRun && planned.includes(contextFile)));
+  const present = wanted && (await holdsInstructionBlocks(contextFile) || (dryRun && planned.includes(contextFile)));
   const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
   if (dryRun) {
     const listed = (await readOpencodeInstructionList(config))?.includes(entry) ?? false;
@@ -472,6 +483,15 @@ function editBlock(content: string, [start, end]: MarkerPair, block: string | nu
 
 function hasTeamaiBlock(content: string): boolean {
   return STALE_BLOCKS.some(([start, end]) => content.includes(start) || content.includes(end));
+}
+
+/**
+ * Whether `file` holds teamai's blocks. A same-named file teamai did not write
+ * is left as it is, so no tool should be told to load it.
+ */
+export async function holdsInstructionBlocks(file: string): Promise<boolean> {
+  const content = await readFileSafe(file);
+  return content !== null && hasTeamaiBlock(content);
 }
 
 function withoutHeader(content: string, header: string | undefined): string {

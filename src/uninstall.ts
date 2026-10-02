@@ -452,7 +452,7 @@ async function discoverToolResources(
       res.claudeMdFiles.push(claudeMdPath);
     }
   }
-  for (const retired of retiredInstructionFiles(tool, scope)) {
+  for (const retired of retiredInstructionFiles(tool, toolPath, scope)) {
     const file = path.resolve(baseDir, retired);
     const content = await readFileSafe(file);
     if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
@@ -723,11 +723,13 @@ async function buildRemovalPlan(
         .filter(([start]) => content.includes(start) && !kept?.has(start));
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
     }
-    // No tool reads a retired file any more, so nothing retains its blocks.
+    // A retired file keeps only the blocks a remaining tool still writes
+    // there, which a team's toolPaths can make it.
     for (const file of res.retiredInstructionFiles) {
       if (plan.claudeMdFiles.some((entry) => entry.path === file)) continue;
       const content = await readFileSafe(file) ?? '';
-      const blocks = CLAUDEMD_MARKER_PAIRS.filter(([start]) => content.includes(start));
+      const kept = retainedBlocks.get(file);
+      const blocks = CLAUDEMD_MARKER_PAIRS.filter(([start]) => content.includes(start) && !kept?.has(start));
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks });
     }
     plan.skillDirs.push(...res.skillDirs);

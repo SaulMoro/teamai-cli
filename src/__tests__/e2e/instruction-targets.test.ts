@@ -105,14 +105,21 @@ const PROJECT_AGENTS_MD = '# Project\n\nAuthored project instructions.\n';
  * A team whose roles select different `claudemd/` namespaces, and a project
  * repo with an authored, committed AGENTS.md (#945).
  */
-function makeTeamAndProject(sandbox: string): { remote: string; projectOrigin: string } {
+function makeTeamAndProject(
+  sandbox: string,
+  options: { teamYaml?: string[]; files?: Record<string, string> } = {},
+): { remote: string; projectOrigin: string } {
   const seed = path.join(sandbox, 'team-seed');
   const remote = path.join(sandbox, 'team.git');
   const write = (rel: string, text: string): void => {
     fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
     fs.writeFileSync(path.join(seed, rel), text);
   };
-  write('teamai.yaml', ['team: issue-945-project-e2e', `repo: ${remote}`, 'provider: git', 'sharing:', '  recall:', '    enabled: true', ''].join('\n'));
+  write('teamai.yaml', [
+    'team: issue-945-project-e2e', `repo: ${remote}`, 'provider: git', 'sharing:', '  recall:', '    enabled: true',
+    ...options.teamYaml ?? [], '',
+  ].join('\n'));
+  for (const [rel, text] of Object.entries(options.files ?? {})) write(rel, text);
   write('culture.md', '---\ncompany:\n  name: Acme\n---\n\nBe kind.\n');
   write('claudemd/common.md', 'COMMON-SENTINEL shared by every role.\n');
   write('claudemd/development/dev.md', 'DEVELOPMENT-SENTINEL for developers.\n');
@@ -738,5 +745,61 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(result.code, result.output).toBe(0);
 
     expect(execFileSync('git', ['status', '--porcelain', '--', '.github', 'AGENTS.md'], { cwd: member.projectRoot, encoding: 'utf8' })).toBe('');
+  });
+
+  it('strips the blocks an earlier release left in a claudemd path the team configured', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox, {
+      teamYaml: ['toolPaths:', '  claude:', '    skills: .claude/skills', '    rules: .claude/rules', '    claudemd: CLAUDE.md'],
+    });
+    const member = makeProjectMember(sandbox, fixture, 'dev', 'developer', ['.claude/skills']);
+    // An earlier release wrote another member's selection to the configured path.
+    const configured = path.join(member.projectRoot, 'CLAUDE.md');
+    fs.writeFileSync(configured, `# Project notes\n\n${CLAUDEMD_START}\nPRODUCT-SENTINEL from the last pull\n${CLAUDEMD_END}\n`);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(result.output).toContain(`Removed teamai instruction blocks from ${configured}`);
+    expect(fs.readFileSync(configured, 'utf8')).toBe('# Project notes\n');
+    expect(fs.readFileSync(path.join(member.projectRoot, '.claude', 'rules', 'teamai-context.md'), 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+  });
+
+  it('delivers the team instructions, not a team rule named teamai-context, to the context rule file', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox, { files: { 'rules/teamai-context.md': 'RESERVED-RULE-SENTINEL\n' } });
+    const member = makeProjectMember(sandbox, fixture, 'dev', 'developer', ['.claude/skills', '.cursor/skills']);
+
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+
+    expect(result.output).toMatch(/rules\/teamai-context\.md is not delivered: teamai-context is the name of teamai's own instruction file/);
+    for (const file of [path.join('.claude', 'rules', 'teamai-context.md'), path.join('.cursor', 'rules', 'teamai-context.mdc')]) {
+      const content = fs.readFileSync(path.join(member.projectRoot, file), 'utf8');
+      expect(content).toContain('DEVELOPMENT-SENTINEL');
+      expect(content).not.toContain('RESERVED-RULE-SENTINEL');
+    }
+  });
+
+  it('does not list a teamai-context.md teamai did not write in OpenCode\'s instructions', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.opencode/skills']);
+    const contextFile = path.join(member.projectRoot, '.opencode', 'teamai-context.md');
+    fs.writeFileSync(contextFile, '# My own notes\n');
+    const config = path.join(member.projectRoot, '.opencode', 'opencode.json');
+    fs.writeFileSync(config, JSON.stringify({ instructions: ['docs/style.md'] }, null, 2));
+
+    for (const args of [['--dry-run'], []]) {
+      const result = await pullAs(member, args);
+      expect(result.code, result.output).toBe(0);
+      expect(result.output).toContain(`${contextFile} was not written by teamai`);
+      expect(result.output).not.toContain('.opencode/teamai-context.md" to the instructions');
+    }
+
+    expect(fs.readFileSync(contextFile, 'utf8')).toBe('# My own notes\n');
+    expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md'] });
   });
 });
