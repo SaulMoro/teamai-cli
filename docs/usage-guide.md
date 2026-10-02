@@ -177,14 +177,18 @@ A new worktree does not wait for that first session. In project scope, `teamai i
 and `teamai pull` install a git hook in the repository's local git config, shared by
 every worktree: `hook.teamai-post-checkout` and `hook.teamai-post-merge` (Git 2.54 or
 later). Git runs it beside any `core.hooksPath` hook
-manager and any `.git/hooks` script. When `git worktree add`, or an app that creates
-worktrees, makes a new checkout, the hook creates the project roots of
+manager and any `.git/hooks` script. When `git worktree add`, or an app that runs
+the same checkout hooks, makes a new checkout, the hook creates the project roots of
 `enabledAgents` (when that is empty, the roots the main checkout has) and pulls into
 the worktree before the command returns, so the first session there already has the
 team's skills, rules and MCP servers. That pull reads the team clone as it is when it
 was fetched in the last 24 hours (and fetches it first otherwise), and subscribed
 sources from their cached clones; a full `teamai pull --silent` then runs in the
 background to fetch the team repo, sources, learnings and reports. A branch switch does nothing.
+Hosts that skip checkout hooks need a setup step that finishes `teamai pull` before
+the AI tool starts. For Codex CLI 0.160.0, create the checkout with `git worktree add`, run
+`teamai pull` there, then launch `codex exec -C <worktree>`; its native
+`codex exec --worktree` path skips `post-checkout`.
 After `git pull` (`post-merge`), the hook fetches the team repo, waiting at most 5 seconds,
 and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
 learnings and reports, the same background pull takes over. In single-repo mode it

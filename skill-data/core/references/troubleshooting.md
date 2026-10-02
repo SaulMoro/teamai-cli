@@ -85,6 +85,12 @@ hook there is not a shell script), in which case doctor's fix says to upgrade Gi
 or, if the team agrees, to commit its guarded `command -v teamai ... || true`
 line into the manager's post-checkout and post-merge hooks.
 
+Hosts that skip checkout hooks need `teamai pull` in the new checkout before the AI
+tool starts. For Codex CLI 0.160.0, use `git worktree add`, run `teamai pull` there, then
+launch `codex exec -C <worktree>`. Its native `codex exec --worktree` path creates
+the checkout without `post-checkout`, so SessionStart sync arrives after startup
+discovery.
+
 ## "KEY is not set. Run `teamai env set KEY`"
 
 `pull`, `teamai mcp list`, `teamai env list`, `teamai doctor` and
