@@ -244,9 +244,8 @@ export function reportCodexTrust(trust: CodexTrust | undefined, mode: 'all' | 'p
       else log.debug(`Codex: trusted ${trust.hooks} teamai hook(s)`);
       return;
     case 'project-untrusted':
-      log.warn(`Codex marks ${trust.project} as untrusted, so it does not run the teamai hooks in `
-        + `${path.join(trust.project, '.codex', 'hooks.json')}. teamai leaves that choice to you: `
-        + 'trust the project in Codex to run them.');
+      log.warn(`Codex marks ${trust.project} as untrusted, so it does not load teamai's project hooks or MCP configuration. `
+        + 'teamai leaves that choice to you: trust the project in Codex to load its configuration.');
       return;
     case 'disabled':
     case 'unavailable':
@@ -1354,9 +1353,11 @@ export async function reconcileHooks(
   if (opts.manifestPath && manifest) {
     const records = codexRecords ?? manifestRecordsForTool(teamDefs, tool, !!opts.removeAll, opts.teamHookProjectRoot);
     const prev = manifest[tool] ?? [];
+    // Main-checkout team-only files belong to one project; their old gated
+    // records are consumed on migration. HOME retains the other projects.
     const retained = opts.teamHookProjectRoot
       ? prev.filter((r) => !isGatedForProject(r.command, opts.teamHookProjectRoot!))
-      : prev.filter((r) => isProjectGatedCommand(r.command));
+      : prev.filter((r) => !opts.teamOnly && isProjectGatedCommand(r.command));
     const nextRecords = [...retained, ...records];
     const sameAsPrev = JSON.stringify(prev) === JSON.stringify(nextRecords);
     const hadEntry = Object.prototype.hasOwnProperty.call(manifest, tool);
@@ -1956,6 +1957,7 @@ export async function reconcileHooksToAllTools(
       if (mainFile && opts.mainCheckout && !opts.builtinsOnly) {
         await reconcileMainCheckoutTeamHooks(mainFile, tool, defs, {
           manifestPath: opts.mainCheckout.manifestPath,
+          legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
           removeAll: opts.removeAll,
         });
       }
@@ -1975,11 +1977,24 @@ async function reconcileMainCheckoutTeamHooks(
   file: string,
   tool: string,
   teamDefs: HookDef[],
-  opts: { manifestPath: string; removeAll?: boolean },
+  opts: { manifestPath: string; legacyManifestPath: string; removeAll?: boolean },
 ): Promise<void> {
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
+  // Pre-#370 Codex hooks used this same file but recorded ownership beside the
+  // checkout. Keep that authority until reconciliation succeeds under the new
+  // manifest, including when the first upgraded command is `hooks remove`.
+  const legacy = tool === CODEX_TOOL_ID ? await readManifest(opts.legacyManifestPath) : null;
+  if (legacy?.[tool]?.length) {
+    const current = await readManifest(opts.manifestPath);
+    current[tool] = [...(current[tool] ?? []), ...legacy[tool]];
+    await writeJson(expandHome(opts.manifestPath), current);
+  }
   await reconcileHooks(file, tool, teamDefs, { manifestPath: opts.manifestPath, removeAll: opts.removeAll, teamOnly: true });
+  if (legacy?.[tool]?.length) {
+    delete legacy[tool];
+    await writeJson(expandHome(opts.legacyManifestPath), legacy);
+  }
 }
 
 /** What a Codex trust pass for one scope works on. */
@@ -2166,8 +2181,8 @@ export async function sweepLegacyProjectHooks(
   const legacy = resolveLegacyProjectHookScope(localConfig);
   if (!legacy) return;
   // In the main checkout, Codex's legacy file is the one its team hooks now
-  // live in (MAIN_CHECKOUT_TEAM_HOOK_TOOLS); that pass removes the legacy
-  // built-ins from it, so the sweep must not empty it.
+  // live in (MAIN_CHECKOUT_TEAM_HOOK_TOOLS); that pass imports the legacy
+  // ownership and removes its built-ins, so the sweep must not empty it.
   const mainCheckout = await resolveMainCheckoutHooks(localConfig, toolPaths);
   const legacyToolPaths = Object.fromEntries(Object.entries(toolPaths).filter(([tool, paths]) => {
     const mainFile = mainCheckoutHookFile(mainCheckout, tool);

@@ -179,6 +179,8 @@ are preserved and remain untouched by automatic trust. Codex ownership uses the
 recorded event, position and complete entry. A moved entry is recovered only by a
 unique full-definition match. Legacy records recover only a unique event, matcher
 and command match; `timeout` and `additionalContextLimit` were not recorded.
+Pre-#370 project Codex ownership is imported from the main checkout's
+`.teamai/managed-hooks.json` before reconciliation or direct removal.
 Unrecorded or ambiguous legacy team-hook copies are preserved. Project hook paths follow `toolPaths`;
 Claude uses `settings.local.json` beside its configured settings file. A custom
 Codex path that Codex does not load is reported as `not loaded` by doctor.

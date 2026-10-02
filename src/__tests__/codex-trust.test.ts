@@ -434,6 +434,14 @@ describe('reportCodexTrust', () => {
     expect(vi.mocked(log.warn).mock.calls[0]?.[0]).toMatch(/^Could not trust the teamai hooks in Codex \(hooks\/list: boom\)\./);
   });
 
+  it.each([0, 3])('reports untrusted project configuration without assuming a hook path (%i hooks)', (hooks) => {
+    reportCodexTrust({ kind: 'project-untrusted', hooks, project: '/p' }, 'problems');
+    expect(vi.mocked(log.warn).mock.calls[0]?.[0]).toBe(
+      "Codex marks /p as untrusted, so it does not load teamai's project hooks or MCP configuration. "
+      + 'teamai leaves that choice to you: trust the project in Codex to load its configuration.',
+    );
+  });
+
   it('says a project the member marked untrusted was left so', () => {
     reportCodexTrust({ kind: 'project-untrusted', hooks: 0, project: '/p' }, 'problems');
     expect(vi.mocked(log.warn).mock.calls[0]?.[0]).toMatch(/Codex marks \/p as untrusted/);

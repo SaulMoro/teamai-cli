@@ -590,6 +590,49 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     expect(await fse.pathExists(path.join(project, '.claude', 'settings.local.json'))).toBe(false);
   });
 
+  it.each([
+    { target: 'main', removeAll: false },
+    { target: 'worktree', removeAll: false },
+    { target: 'main', removeAll: true },
+    { target: 'worktree', removeAll: true },
+  ])('uses pre-#370 ownership before reconciling main hooks %j', async ({ target, removeAll }) => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const file = path.join(main, '.codex', 'hooks.json');
+    const legacyManifest = path.join(main, '.teamai', 'managed-hooks.json');
+    const oldCommand = gated(main, 'npm run lint');
+    const oldEntry = { hooks: [{ type: 'command', command: oldCommand, timeout: 30 }] };
+    const member = { hooks: [{ type: 'command', command: 'npm run lint' }] };
+    const cursorRecords = [{ id: 'other', event: 'Stop', command: 'echo cursor' }];
+    await fse.outputJson(file, { hooks: { Stop: [member, oldEntry], PreToolUse: [oldEntry] } });
+    await fse.outputJson(legacyManifest, {
+      codex: [{ id: 'lint', event: 'Stop', command: oldCommand }], cursor: cursorRecords,
+    });
+    const root = target === 'main' ? main : worktree;
+    const cfg = { ...localConfig(), projectRoot: root };
+    try {
+      await reconcileTeamHooksForConfig(teamConfig, cfg, { removeAll });
+
+      expect((await fse.readJson(file)).hooks.Stop).toEqual(removeAll ? [member] : [
+        member, { hooks: [{ type: 'command', command: 'npm run lint' }] },
+      ]);
+      expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([oldEntry]);
+      expect(await fse.readJson(legacyManifest)).toEqual({ cursor: cursorRecords });
+      const ownership = await fse.readJson(path.join(root, '.teamai', 'managed-main-checkout-hooks.json'));
+      expect((ownership.codex ?? []).map((record: { command: string }) => record.command))
+        .toEqual(removeAll ? [] : ['npm run lint']);
+      if (!removeAll) {
+        const before = await fse.readFile(file, 'utf8');
+        await reconcileTeamHooksForConfig(teamConfig, cfg);
+        expect(await fse.readFile(file, 'utf8')).toBe(before);
+        await reconcileTeamHooksForConfig(teamConfig, cfg, { removeAll: true });
+        expect((await fse.readJson(file)).hooks.Stop).toEqual([member]);
+      }
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
   it('replaces a recorded legacy copy in the main checkout\'s Codex file instead of duplicating it', async () => {
     await writeYaml(STOP_LINT);
     await fse.outputJson(path.join(project, '.codex', 'hooks.json'), {
