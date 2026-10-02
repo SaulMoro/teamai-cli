@@ -226,3 +226,15 @@ SessionEnd, or at the next `teamai pull`.
 - `teamai status` shows exactly how local differs from the team repo.
 - Report unexpected behavior at https://github.com/Tencent/teamai-cli/issues
   with the agent name, platform, and the step that failed.
+
+## "Pull left an instruction file unchanged"
+
+If pull reports incomplete TeamAI markers, it keeps the entire file unchanged.
+Fix the named block so it has exactly one start marker followed by one end
+marker, then run `teamai pull` again. Other files can still sync successfully.
+
+Pull keeps retired instruction blocks until every installed tool that wrote the
+file has a working replacement. Repair the named target, extension or plugin
+and run `teamai pull` again. Excluded tools' retired files stay unchanged.
+An HTTP prompt sync that cannot clean retired blocks reports a failed ACK and
+keeps its previous cache and manifest for the server's retry.

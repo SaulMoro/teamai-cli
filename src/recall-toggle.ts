@@ -81,10 +81,10 @@ async function writeRecallBlock(
   const files = blocks === null ? [...targets, ...stale] : targets;
   const plan = await planInstructionFiles(files, blocks ?? { recall: null, directRecall: null });
   for (const warning of plan.warnings) log.warn(warning);
-  const { report, failures } = await applyInstructionPlan(plan, { dryRun: false });
+  const { report, failures, files: results } = await applyInstructionPlan(plan, { dryRun: false });
   for (const line of report) log.debug(line);
   for (const failure of failures) log.warn(failure);
-  await registerOpencodeContext(teamConfig, localConfig, resolved, false, [], [...plan.warnings, ...failures]);
+  await registerOpencodeContext(teamConfig, localConfig, resolved, false, results);
 }
 
 async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {

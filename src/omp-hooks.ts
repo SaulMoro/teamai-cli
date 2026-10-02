@@ -197,8 +197,8 @@ export default function teamaiHooks(pi) {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    instructions = loadInstructions(ctx);
     await dispatch("session-start", ctx);
+    instructions = loadInstructions(ctx);
   });
 
   pi.on("session_stop", async (_event, ctx) => {

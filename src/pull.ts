@@ -14,7 +14,10 @@ import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
-import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets, type InstructionBlocks } from './instruction-targets.js';
+import {
+  applyInstructionPlan, hookLimitProblem, instructionHookChannel, instructionHookText, planInstructionFiles,
+  registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks,
+} from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
@@ -895,6 +898,7 @@ async function pullForScope(
   result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean },
   /** Collects this scope's env resolution for the stages after it (see resolvePullEnv). */
   teamEnvs?: Map<LocalConfig, TeamEnv>,
+  instructions?: Map<LocalConfig, InstructionDelivery>,
 ): Promise<void> {
   const scopeLabel = localConfig.scope;
   const revisionField = policy.revisionField ?? 'lastPullRev';
@@ -1232,7 +1236,8 @@ async function pullForScope(
               log.warn(`[${scopeLabel}] The earlier copy of the team rule teamai-context was not reclaimed: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
           }
-          await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel);
+          const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel);
+          instructions?.set(localConfig, delivery);
           // Same reason: a machine that already pulled a tombstone with an older
           // CLI keeps the copies that CLI failed to delete, and its stored rev
           // never moves again. Re-run the cleanup so the upgrade reaches it (#576).
@@ -1587,7 +1592,8 @@ async function pullForScope(
   await syncLearningsAndRebuildIndex();
 
   // Steps 3.6-3.8: Deliver team culture, shared instructions and the recall block.
-  await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel, options.dryRun);
+  const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel, options.dryRun);
+  instructions?.set(localConfig, delivery);
 
   // Step 4: Deploy CLI built-in skills
   if (!options.dryRun) {
@@ -1898,46 +1904,62 @@ export async function resolveInstructionBlocks(
  * that calls it; any other gets the one that runs `teamai recall` directly.
  * A dry run reports the files it would change.
  */
+interface InstructionDelivery {
+  blocks: InstructionBlocks;
+  reached: string[];
+}
+
 async function syncManagedInstructions(
   config: TeamaiConfig,
   localConfig: LocalConfig,
   roleContext: RolePullContext | null,
   scopeLabel: string,
   dryRun = false,
-): Promise<void> {
+): Promise<InstructionDelivery> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
   const resolved = await resolveInstructionTargets(config, localConfig);
-  const { targets, stale, opencodeFallback, opencodeFallbackStale } = resolved;
+  const { targets, opencodeFallback, opencodeFallbackStale } = resolved;
   if (opencodeFallback && opencodeFallbackStale) {
     log.warn(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, but teamai no longer updates them there: Claude Code is excluded or not installed. Create that AGENTS.md to have teamai deliver them to OpenCode's own file, or remove the teamai blocks from ${opencodeFallback}.`);
   } else if (opencodeFallback) {
     log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to OpenCode's own file instead.`);
   }
-  const plan = await planInstructionFiles(targets, blocks, stale);
+  // Retired files are cleaned after hook reconciliation, using the delivery
+  // results from this pass. A failed replacement must keep its working copy.
+  const plan = await planInstructionFiles(targets, blocks);
   for (const warning of plan.warnings) log.warn(`[${scopeLabel}] ${warning}`);
-  const { report, failures } = await applyInstructionPlan(plan, { dryRun });
+  const { report, failures, files } = await applyInstructionPlan(plan, { dryRun });
   for (const line of report) {
     if (dryRun) log.info(`[dry-run] ${line}`);
     else if (line.startsWith('Removed')) log.info(`[${scopeLabel}] ${line}: no installed tool loads them from this file`);
     else log.debug(line);
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
+  let opencodeReady = true;
   try {
-    const planned = plan.changes.filter((change) => change.content !== null).map((change) => change.path);
-    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, planned, [...plan.warnings, ...failures]);
+    const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, files);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
+    if (!dryRun && targets.some((target) => target.tools.includes('opencode'))
+      && Object.values(blocks).some(Boolean)) {
+      const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+      const target = targets.find((target) => target.tools.includes('opencode'))!;
+      const { config: file, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
+      opencodeReady = (await readOpencodeInstructionList(file))?.includes(entry) ?? false;
+    }
   } catch (e) {
+    opencodeReady = false;
     log.warn(`[${scopeLabel}] Failed to list the team instructions in OpenCode's config: ${(e as Error).message}. Run \`teamai doctor\`, which names the config file and the entry to add by hand.`);
   }
   // Hook targets (Pi, OMP, Hermes, Codex) are reported after the hooks are
   // reconciled, since that is what installs their extensions and plugins.
-  // A target named in a warning or failure was left as it was.
-  const problems = [...plan.warnings, ...failures];
-  const reached = targets.filter((target) => !problems.some((problem) => problem.includes(target.path)));
-  if (dryRun || reached.length === 0) return;
+  const reached = targets.filter((target) => files.some((file) => file.path === target.path
+    && ['current', 'written', 'removed', ...(dryRun ? ['would-write', 'would-remove'] : [])].includes(file.status)))
+    .flatMap((target) => target.tools).filter((tool) => tool !== 'opencode' || opencodeReady);
+  if (dryRun || reached.length === 0) return { blocks, reached };
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
+  return { blocks, reached };
 }
 
 /**
@@ -2126,6 +2148,7 @@ export async function pull(
   const syncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false };
   // Each scope's env, resolved once by its env stage (resolvePullEnv).
   const teamEnvs = new Map<LocalConfig, TeamEnv>();
+  const instructions = new Map<LocalConfig, InstructionDelivery>();
 
   // Whether HOME's settings.json still has the pre-dispatch hook format. Read now
   // (HOME-only, no shared clone), but the actual reinject runs later under the
@@ -2227,7 +2250,7 @@ export async function pull(
         } else {
           activeUserConfig = loadedUserConfig;
           if (await lockScope(activeUserConfig)) {
-            await pullForScope(activeUserConfig, options, reported, {}, syncResult, teamEnvs);
+            await pullForScope(activeUserConfig, options, reported, {}, syncResult, teamEnvs, instructions);
           }
         }
       } else if (inheritUserScope) {
@@ -2244,7 +2267,7 @@ export async function pull(
   if (projectConfig) {
     try {
       if (await lockScope(projectConfig)) {
-        await pullForScope(projectConfig, options, reported, {}, syncResult, teamEnvs);
+        await pullForScope(projectConfig, options, reported, {}, syncResult, teamEnvs, instructions);
       }
     } catch (e) {
       log.warn(`Project-scope pull error: ${(e as Error).message}`);
@@ -2287,7 +2310,7 @@ export async function pull(
   // what self-heals new built-in hooks and applies hooks.yaml changes on every
   // session start. In project mode user is null, even when safe resources are
   // inherited, so executable hook configuration is never composed implicitly.
-  await reconcileHooksAllScopes(reconcileUser, reconcileProject, options);
+  await reconcileHooksAllScopes(reconcileUser, reconcileProject, options, instructions);
 
   // 3.6. Reconcile team MCP servers. Outside pullForScope for the same reason as
   // hooks. User-scope MCP remains isolated in project mode.
@@ -2541,6 +2564,7 @@ async function reconcileHooksAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,
   options: GlobalOptions,
+  instructions: Map<LocalConfig, InstructionDelivery>,
 ): Promise<void> {
   // A dry run still resolves the entries, so the warnings a maintainer runs
   // `--dry-run` to see — an unknown id, a deprecated per-entry `roles:`, a
@@ -2563,6 +2587,21 @@ async function reconcileHooksAllScopes(
         // reported the entries but wrote nothing, so the debug trail must not
         // claim a reconcile that did not happen.
         log.debug(`[${localConfig.scope}] ${options.dryRun ? 'Would apply' : 'Reconciled'} ${reconciled.defs.length} team hook(s)`);
+      }
+      const delivery = instructions.get(localConfig);
+      if (delivery) {
+        const { hooks } = await resolveInstructionTargets(teamConfig, localConfig);
+        for (const hook of hooks) {
+          const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+          if (channel.ready && !hookLimitProblem(hook, instructionHookText(delivery.blocks, hook.recall))) {
+            delivery.reached.push(hook.tool);
+          }
+        }
+        const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(teamConfig, localConfig, delivery.reached));
+        for (const warning of cleanup.warnings) log.warn(`[${localConfig.scope}] ${warning}`);
+        const applied = await applyInstructionPlan(cleanup, { dryRun: Boolean(options.dryRun) });
+        for (const line of applied.report) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${line}: replacement instructions are ready`);
+        for (const failure of applied.failures) log.warn(`[${localConfig.scope}] ${failure}`);
       }
       // The hooks install the extensions and plugins that add team
       // instructions for Pi, OMP and Hermes (#945); say which cannot. The

@@ -54,7 +54,7 @@ import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
   applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
   instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
-  retiredInstructionFiles, type InstructionTarget,
+  retiredFilesOfReached,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
@@ -2180,14 +2180,14 @@ async function syncClaudemd(
       skipped.push(...plan.warnings);
       continue;
     }
-    const { failures } = await applyInstructionPlan(plan, { dryRun: false });
+    const { failures, files } = await applyInstructionPlan(plan, { dryRun: false });
     if (failures.length > 0) {
       log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${failures.join(' ')}`);
       skipped.push(...failures);
       continue;
     }
     if (tool === 'opencode') {
-      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false, files);
       // OpenCode reads the file only through its `instructions` entry.
       if (block) {
         const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
@@ -2212,33 +2212,15 @@ async function syncClaudemd(
   for (const line of report) log.info(`${line}: no installed tool loads them from this file`);
   for (const failure of failures) log.warn(failure);
 
+  if (cleanup.warnings.length > 0 || failures.length > 0) {
+    throw new Error(['CLAUDE.md sync could not remove the retired instructions. Repair the files and retry.',
+      ...cleanup.warnings, ...failures].join(' '));
+  }
+
   // Removing the last prompt fails too when a target kept it.
   if (!syncedAny && (files.length > 0 || skipped.length > 0)) {
     throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
   }
-}
-
-/**
- * The files earlier releases wrote blocks to that this sync may strip: no
- * installed tool reads them now, and every installed tool that wrote them, if
- * any, got this sync's instructions in their place. Another tool's old blocks stay
- * until a sync reaches it, since the HTTP agent delivers to one tool at a time.
- */
-async function retiredFilesOfReached(
-  fullTeamConfig: TeamaiConfig,
-  localConfig: LocalConfig,
-  reached: readonly string[],
-): Promise<InstructionTarget[]> {
-  const { stale } = await resolveInstructionTargets(fullTeamConfig, localConfig);
-  const writers = new Map<string, string[]>();
-  for (const [tool, paths] of Object.entries(scopedToolPaths(fullTeamConfig, localConfig))) {
-    if (!await isInstructionToolInstalled(tool, paths, localConfig)) continue;
-    for (const file of retiredInstructionFiles(tool, paths, localConfig.scope)) {
-      const absolute = path.resolve(resolveToolBaseDir(tool, localConfig), file);
-      writers.set(absolute, [...writers.get(absolute) ?? [], tool]);
-    }
-  }
-  return stale.filter((target) => (writers.get(target.path) ?? []).every((tool) => reached.includes(tool)));
 }
 
 /**
@@ -2255,7 +2237,7 @@ async function hookDeliveryProblem(
 ): Promise<string | null> {
   const hook = (await resolveInstructionTargets(teamConfig, localConfig)).hooks.find((entry) => entry.tool === tool);
   if (!hook) return `${tool} is not installed here.`;
-  const channel = await instructionHookChannel(tool);
+  const channel = await instructionHookChannel(tool, { teamConfig, localConfig });
   if (!channel.ready) return channel.fix;
   if (hook.limit === undefined) return null;
   const parts = [block ? instructionHookText({ claudemd: block }, false) : ''];

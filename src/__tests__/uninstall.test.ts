@@ -472,11 +472,7 @@ describe('uninstall', () => {
     expect(bashrcAfter).not.toContain(TEAMAI_ENV_START);
   });
 
-  it('project-scope Pi uninstall also removes the global extension', async () => {
-    // Mirrors OMP: Pi has no way to scope its single shared extension to one
-    // project — the generated extension fires for every Pi session
-    // machine-wide — so a scoped uninstall removes it outright rather than
-    // preserving a file that would keep firing for this project anyway.
+  it('project-scope Pi uninstall preserves the global extension and removes a legacy project copy', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');
     vi.stubEnv('HOME', homeDir);
@@ -513,7 +509,67 @@ describe('uninstall', () => {
     await uninstall({ force: true, agent: 'pi' });
 
     expect(await fse.pathExists(projectPiHook)).toBe(false);
-    expect(await fse.pathExists(globalPiHook)).toBe(false);
+    expect(await fse.readFile(globalPiHook, 'utf8')).toBe(TEAMAI_PI_HOOK);
+  });
+
+  it('keeps a tracked retired configured claudemd named teamai-context.md as a member file', async () => {
+    const projectRoot = path.join(tmpDir, 'member-file-project');
+    const file = path.join(projectRoot, '.claude', 'teamai-context.md');
+    await fse.outputFile(file, `${TEAMAI_CULTURE_START}\nold culture\n${TEAMAI_CULTURE_END}\n`);
+    execFileSync('git', ['init', '-q'], { cwd: projectRoot });
+    execFileSync('git', ['add', '.claude/teamai-context.md'], { cwd: projectRoot });
+    const localConfig = makeLocalConfig(projectRoot, path.join(projectRoot, '.teamai', 'team-repo'), { scope: 'project', projectRoot });
+    const teamConfig = makeTeamConfig({ toolPaths: { claude: {
+      skills: '.claude/skills', rules: '.claude/rules', claudemd: '.claude/teamai-context.md',
+    } } });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true, agent: 'claude' });
+    expect(await fse.readFile(file, 'utf8')).toBe('');
+  });
+
+  it.each([['omp', true], ['omp', false], ['hermes', true], ['hermes', false]])(
+    'project uninstall keeps %s global delivery, targeted: %s', async (tool, targeted) => {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      const projectRoot = path.join(tmpDir, 'business-repo');
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+      await fse.ensureDir(projectRoot);
+      let globalFile: string;
+      let configBefore: string | undefined;
+      if (tool === 'omp') {
+        const { injectOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('../omp-hooks.js');
+        await injectOmpHooks();
+        globalFile = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
+      } else {
+        const { injectHermesHooks, getInstructionsPluginDir } = await import('../hermes-hooks.js');
+        await injectHermesHooks();
+        globalFile = path.join(getInstructionsPluginDir(), '__init__.py');
+        configBefore = await fse.readFile(path.join(homeDir, '.hermes', 'config.yaml'), 'utf8');
+      }
+      const before = await fse.readFile(globalFile, 'utf8');
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot });
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+      await fse.writeFile(path.join(projectRoot, 'AGENTS.md'), `${TEAMAI_CULTURE_START}\nold\n${TEAMAI_CULTURE_END}\n`);
+      await uninstall({ force: true, ...(targeted ? { agent: tool as string } : {}) });
+      expect(await fse.readFile(globalFile, 'utf8')).toBe(before);
+      if (configBefore) expect(await fse.readFile(path.join(homeDir, '.hermes', 'config.yaml'), 'utf8')).toBe(configBefore);
+    },
+  );
+
+  it.each(['pi', 'omp', 'hermes'])('excludes %s from a project with no local files to delete', async (tool) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true, agent: tool });
+    expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ disabledAgents: [tool] }), 'project', projectRoot);
+    expect(await fse.pathExists(repoPath)).toBe(true);
   });
 
   it('user-scope Pi uninstall removes a server-pushed agent hook even without the main extension', async () => {
@@ -1694,12 +1750,15 @@ describe('uninstall', () => {
     expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config: siblingConfig, entry }]);
   });
 
-  it.each(['write failure', 'unreadable'])('keeps the OpenCode ownership record for a retry after %s (#945)', async (failure) => {
+  it.each([
+    ['write failure', 'other tool'], ['unreadable', 'other tool'],
+    ['write failure', 'last tool'], ['write failure', 'full uninstall'], ['unreadable', 'last tool'],
+  ])('keeps the OpenCode ownership record for a retry after %s during %s (#945)', async (failure, scenario) => {
     const projectRoot = path.join(tmpDir, 'oc-retry-project');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
     await fse.ensureDir(path.join(projectRoot, '.opencode', 'skills'));
     await fse.outputFile(path.join(repoPath, 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
-    await fse.outputFile(path.join(projectRoot, '.claude', 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    if (scenario === 'other tool') await fse.outputFile(path.join(projectRoot, '.claude', 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
     const config = path.join(projectRoot, '.opencode', 'opencode.json');
     const entry = '.opencode/teamai-context.md';
     await fse.outputJson(config, { instructions: [entry] });
@@ -1726,14 +1785,17 @@ describe('uninstall', () => {
         return originalRead(...args);
       });
     }
-    await uninstall({ force: true, agent: 'opencode' });
+    const previousExitCode = process.exitCode;
+    await uninstall({ force: true, ...(scenario !== 'full uninstall' ? { agent: 'opencode' } : {}) });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
     expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([ref]);
     vi.restoreAllMocks();
     expect((await fse.readJson(config)).instructions).toEqual([entry]);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
-    await uninstall({ force: true, agent: 'opencode' });
+    await uninstall({ force: true, ...(scenario !== 'full uninstall' ? { agent: 'opencode' } : {}) });
     expect((await fse.readJson(config)).instructions).toBeUndefined();
-    expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
+    if (scenario === 'other tool') expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
   });
 
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the

@@ -221,6 +221,17 @@ describe('OMP extension: team instructions in the system prompt (#945)', () => {
     expect(dispatches.find((d) => d.args[1] === 'instructions')?.payload).toEqual({ cwd: '/work/proj/src', session_id: 'omp-main' });
   });
 
+  it('waits for session-start HTTP sync before reading the first prompt cache', async () => {
+    let synced = false;
+    const { on } = loadOmpExtension((args) => {
+      if (args[1] === 'session-start') synced = true;
+      return args[1] === 'instructions' ? context(synced ? 'FRESH-HTTP-PROMPT' : '')(args) : '';
+    });
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx))
+      .toEqual({ systemPrompt: ['BASE', 'FRESH-HTTP-PROMPT'] });
+  });
+
   it('leaves the system prompt alone when there are no blocks (user scope, or teamai unavailable)', async () => {
     const { on } = loadOmpExtension();
     await on.session_start({}, ctx);

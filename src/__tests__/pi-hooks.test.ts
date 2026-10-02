@@ -393,6 +393,17 @@ describe('Pi extension: team instructions in the system prompt (#945)', () => {
     await on.session_start({}, ctx);
     expect(await on.before_agent_start({ prompt: 'one', systemPrompt: 'BASE' }, ctx)).toBeUndefined();
   });
+
+  it('waits for session-start HTTP sync before reading the first prompt cache', async () => {
+    let synced = false;
+    const { on } = loadPiExtension((args) => {
+      if (args[1] === 'session-start') synced = true;
+      return args[1] === 'instructions' ? context(synced ? 'FRESH-HTTP-PROMPT' : '')(args) : '';
+    });
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: 'BASE' }, ctx))
+      .toEqual({ systemPrompt: 'BASE\n\nFRESH-HTTP-PROMPT' });
+  });
 });
 
 describe('Pi extension: bridge payloads (#884)', () => {

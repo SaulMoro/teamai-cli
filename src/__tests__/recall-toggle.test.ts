@@ -28,6 +28,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { recallDisable, recallEnable } from '../recall-toggle.js';
+import { loadStateForScope, saveStateForScope } from '../config.js';
 import { TeamaiConfigSchema, TEAMAI_RECALL_RULES_START } from '../types.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -119,6 +120,26 @@ describe('recall toggle native agent cleanup', () => {
     await recallDisable({});
 
     expect(await fse.readFile(backup, 'utf8')).toBe('user backup');
+  });
+
+  it('keeps OpenCode registered when malformed recall markers block an edit of a file with other instructions', async () => {
+    const projectRoot = path.join(tmpDir, 'project');
+    const configFile = path.join(projectRoot, '.opencode', 'opencode.json');
+    const entry = '.opencode/teamai-context.md';
+    const contextFile = path.join(projectRoot, entry);
+    const original = `<!-- [teamai:culture:start] -->\nCulture\n<!-- [teamai:culture:end] -->\n${TEAMAI_RECALL_RULES_START}\nIncomplete recall\n`;
+    await fse.outputFile(contextFile, original);
+    await fse.outputJson(configFile, { instructions: [entry] });
+    const localConfig = { repo: { localPath: path.join(tmpDir, 'team-repo'), remote: 'https://example.invalid/t.git' },
+      username: 'u', scope: 'project', projectRoot, enabledAgents: ['opencode'], additionalRoles: [],
+    } as LocalConfig;
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await saveStateForScope({ ...await loadStateForScope(localConfig), opencodeContextEntries: [{ config: configFile, entry }] }, localConfig);
+    await recallDisable({});
+    expect(await fse.readFile(contextFile, 'utf8')).toBe(original);
+    expect((await fse.readJson(configFile)).instructions).toEqual([entry]);
+    expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config: configFile, entry }]);
   });
 
   it('uses custom COPILOT_HOME for recall injection and cleanup', async () => {

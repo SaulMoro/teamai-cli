@@ -1732,6 +1732,42 @@ describe('local-agent: cmds[] migration', () => {
     expect((await fse.readJson(manifestFile)).scopes.user.claudemd['doc-a']).toBeUndefined();
   });
 
+  it.each([
+    ['install', 'malformed'], ['remove', 'malformed'], ['install', 'write failure'], ['remove', 'write failure'],
+  ])('fails the HTTP %s ACK and retains its manifest when retired cleanup encounters %s (#945)', async (operation, failure) => {
+    const command = {
+      id: 64, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-a',
+      version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-a.md', scope: 'user',
+    };
+    if (operation === 'remove') await runResponse({ cmds: [command] });
+    const legacy = path.join(tmpDir, 'AGENTS.md');
+    const retained = `# My notes\n${TEAMAI_CLAUDEMD_START}\nold instructions\n${failure === 'malformed' ? '' : '<!-- [teamai:claudemd:end] -->\n'}`;
+    await fse.writeFile(legacy, retained);
+    if (failure === 'write failure') {
+      const originalWrite = fse.writeFile.bind(fse);
+      vi.spyOn(fse, 'writeFile').mockImplementation((...args: Parameters<typeof fse.writeFile>) => {
+        if (args[0] === legacy) return Promise.reject(new Error('EACCES'));
+        return originalWrite(...args);
+      });
+    }
+    const acks = await runResponse({ cmds: [{ ...command, id: 65,
+      ...(operation === 'remove' ? { type: 'uninstall_prompt_rule' } : {}),
+    }] });
+    expect(acks.find((ack) => ack.id === 65)?.status).toBe('failed');
+    expect(await fse.readFile(legacy, 'utf8')).toBe(retained);
+    const manifestFile = path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json');
+    const manifest = await fse.pathExists(manifestFile) ? await fse.readJson(manifestFile) : null;
+    expect(Boolean(manifest?.scopes.user?.claudemd?.['doc-a'])).toBe(operation === 'remove');
+    const cache = path.join(tmpDir, '.teamai', 'local-agent', 'resources', 'user', 'claudemd', 'doc-a.md');
+    expect(await fse.pathExists(cache)).toBe(operation === 'remove');
+    vi.restoreAllMocks();
+    await fse.writeFile(legacy, '# My notes\n');
+    const retry = await runResponse({ cmds: [{ ...command, id: 66,
+      ...(operation === 'remove' ? { type: 'uninstall_prompt_rule' } : {}),
+    }] });
+    expect(retry.find((ack) => ack.id === 66)?.status).toBe('success');
+  });
+
   // Codex's default `claudemd` (#938) makes a Codex report a target of this sync.
   it('handle_type=prompt from Codex writes the prompt into ~/.codex/AGENTS.md when ~/.codex exists', async () => {
     await fse.ensureDir(path.join(tmpDir, '.codex'));
@@ -2103,7 +2139,7 @@ describe('local-agent: per-worktree claudemd isolation (issue #374 P1-2C)', () =
 });
 
 describe('local-agent: project prompts reach every installed tool (#945)', () => {
-  async function installProjectPrompt(tool: string, toolDirs: string[], options: { prompt?: string; files?: Record<string, string> } = {}) {
+  async function installProjectPrompt(tool: string, toolDirs: string[], options: { prompt?: string; files?: Record<string, string>; sessionStart?: boolean } = {}) {
     const { execFileSync } = await import('node:child_process');
     const repo = path.join(tmpDir, 'project');
     await fse.ensureDir(repo);
@@ -2131,9 +2167,18 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
       if (url.includes('/commands/ack')) acks.push(JSON.parse(init?.body ?? '{}'));
       return new Response(JSON.stringify({ ok: true }));
     }));
-    const { reportAndSyncLocalAgent } = await import('../local-agent.js');
-    await reportAndSyncLocalAgent({ cwd: repo, tool, status: 'running' });
-    return { repo, ack: acks.find((a) => a.id === 201) };
+    let output: string | null = null;
+    if (options.sessionStart) {
+      const { createDispatcher } = await import('../hook-dispatch.js');
+      const { buildHandlerRegistry, filterHandlersForConfig } = await import('../hook-handlers.js');
+      const dispatcher = createDispatcher({ localConfig: null, handlers: filterHandlersForConfig(buildHandlerRegistry(), null) });
+      const result = await dispatcher.dispatch('session-start', '*', { cwd: repo, hook_event_name: 'SessionStart', source: 'startup' }, tool, 'foreground');
+      output = result.output;
+    } else {
+      const { reportAndSyncLocalAgent } = await import('../local-agent.js');
+      await reportAndSyncLocalAgent({ cwd: repo, tool, status: 'running' });
+    }
+    return { repo, ack: acks.find((a) => a.id === 201), output };
   }
 
   it('installs a WorkBuddy project prompt where .codebuddy/ does not exist', async () => {
@@ -2171,6 +2216,8 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
   it('gives Codex a project prompt through its SessionStart and SubagentStart hooks', async () => {
     // Codex is installed for the member (~/.codex), not in the project.
     await fse.ensureDir(path.join(tmpDir, '.codex', 'skills'));
+    const { reconcileHooks } = await import('../hooks.js');
+    await reconcileHooks(path.join(tmpDir, '.codex', 'hooks.json'), 'codex', []);
     const { repo, ack } = await installProjectPrompt('codex', []);
     expect(await fse.pathExists(path.join(repo, '.codex'))).toBe(false);
 
@@ -2183,6 +2230,15 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
         .filter((output): output is string => typeof output === 'string' && output.includes('PROJECT-PROMPT'));
       expect(outputs.map((output) => JSON.parse(output).hookSpecificOutput.hookEventName)).toEqual([hookEventName]);
     }
+  });
+
+  it('includes a newly downloaded HTTP prompt in Codex\'s first SessionStart output', async () => {
+    await fse.ensureDir(path.join(tmpDir, '.codex', 'skills'));
+    const { reconcileHooks } = await import('../hooks.js');
+    await reconcileHooks(path.join(tmpDir, '.codex', 'hooks.json'), 'codex', []);
+    const { ack, output } = await installProjectPrompt('codex', [], { sessionStart: true });
+    expect(ack?.status).toBe('success');
+    expect(output).toContain('PROJECT-PROMPT');
   });
 
   it('records the OpenCode entry it adds in the project\'s data home, where uninstall reads it', async () => {

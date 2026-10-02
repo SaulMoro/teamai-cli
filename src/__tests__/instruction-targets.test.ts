@@ -10,6 +10,7 @@ import {
   instructionChannelProblems,
   planInstructionFiles,
   registerOpencodeContext,
+  retiredFilesOfReached,
   resolveInstructionTargets,
   type InstructionTarget,
 } from '../instruction-targets.js';
@@ -86,6 +87,43 @@ describe('instruction file planning (#945)', () => {
     expect(plan.changes).toEqual([]);
   });
 
+  it('reports each file outcome independently of paths mentioned in warnings', async () => {
+    const ready = target('ready.md');
+    const blocked = target('ready.md.blocked');
+    const failed = target('failed.md');
+    const removed = target('removed.md');
+    fs.writeFileSync(ready.path, `${culture('current')}\n`);
+    fs.writeFileSync(blocked.path, `${TEAMAI_CULTURE_START}\n${ready.path}\n`);
+    fs.writeFileSync(failed.path, `${culture('old')}\n`);
+    fs.writeFileSync(removed.path, `${culture('old')}\n`);
+    const plan = await planInstructionFiles([ready, blocked, failed], { culture: culture('current') }, [removed]);
+    const write = vi.spyOn(fse, 'writeFile').mockRejectedValueOnce(new Error('EACCES'));
+    try {
+      const { files } = await applyInstructionPlan(plan, { dryRun: false });
+      expect(files).toEqual([
+        { path: ready.path, status: 'current' },
+        { path: blocked.path, status: 'blocked' },
+        { path: failed.path, status: 'failed' },
+        { path: removed.path, status: 'removed' },
+      ]);
+      expect(fs.readFileSync(ready.path, 'utf8')).toBe(`${culture('current')}\n`);
+      expect(fs.readFileSync(failed.path, 'utf8')).toBe(`${culture('old')}\n`);
+      expect(fs.existsSync(removed.path)).toBe(false);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('keeps the whole file unchanged when one requested block is malformed', async () => {
+    const file = target('mixed.md');
+    const original = `${culture('old')}\n\n${TEAMAI_CLAUDEMD_START}\nold selection\n`;
+    fs.writeFileSync(file.path, original);
+    const plan = await planInstructionFiles([file], { culture: culture('current'), claudemd: claudemd('current') });
+    const { files } = await applyInstructionPlan(plan, { dryRun: false });
+    expect(files).toEqual([{ path: file.path, status: 'blocked' }]);
+    expect(fs.readFileSync(file.path, 'utf8')).toBe(original);
+  });
+
   it('leaves a block with a missing end marker intact and warns', async () => {
     const file = path.join(dir, 'AGENTS.md');
     const original = `# Project\n\n${TEAMAI_CLAUDEMD_START}\nold selection\n`;
@@ -136,13 +174,17 @@ describe('instruction file planning (#945)', () => {
     fs.writeFileSync(file, original);
 
     const plan = await planInstructionFiles([target('CLAUDE.local.md')], { culture: culture('c') }, [target('AGENTS.md', { tools: [] })]);
-    const { report } = await applyInstructionPlan(plan, { dryRun: true });
+    const { report, files } = await applyInstructionPlan(plan, { dryRun: true });
 
     expect(fs.readFileSync(file, 'utf8')).toBe(original);
     expect(fs.existsSync(path.join(dir, 'CLAUDE.local.md'))).toBe(false);
     expect(report).toEqual([
       `Would write teamai instruction blocks to ${path.join(dir, 'CLAUDE.local.md')}`,
       `Would remove teamai instruction blocks from ${file}`,
+    ]);
+    expect(files).toEqual([
+      { path: path.join(dir, 'CLAUDE.local.md'), status: 'would-write' },
+      { path: file, status: 'would-write' },
     ]);
   });
 
@@ -217,6 +259,54 @@ describe('instruction channel problems (#945)', () => {
 });
 
 describe('instruction targets shared by several tools (#945)', () => {
+  it('retires a shared file only when all its installed former writers reached their replacements', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-writers-')));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(path.join(root, 'home', '.pi'), { recursive: true });
+      fs.mkdirSync(path.join(projectRoot, '.claude'), { recursive: true });
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git', toolPaths: {
+        claude: { rules: '.claude/rules', claudemd: 'AGENTS.md' }, pi: { claudemd: 'AGENTS.md' },
+      } });
+      const legacy = path.join(projectRoot, 'AGENTS.md');
+      expect((await retiredFilesOfReached(teamConfig, localConfig, ['claude'])).map((target) => target.path)).not.toContain(legacy);
+      expect((await retiredFilesOfReached(teamConfig, localConfig, ['pi'])).map((target) => target.path)).not.toContain(legacy);
+      expect((await retiredFilesOfReached(teamConfig, localConfig, ['claude', 'pi'])).map((target) => target.path)).toContain(legacy);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['pi', 'omp', 'hermes', 'codex'])('protects retired files of excluded project hook tool %s', async (tool) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-excluded-')));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    vi.stubEnv('HERMES_HOME', path.join(root, 'home', '.hermes'));
+    try {
+      fs.mkdirSync(path.join(root, 'home', `.${tool}`), { recursive: true });
+      const projectRoot = path.join(root, 'project');
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, disabledAgents: [tool],
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git',
+        toolPaths: { [tool]: { settings: `.${tool}/hooks.json`, claudemd: 'AGENTS.md' } },
+      });
+      const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+      expect(targets).toEqual([]);
+      expect(hooks).toEqual([]);
+      expect(stale.map((target) => target.path)).not.toContain(path.join(projectRoot, 'AGENTS.md'));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('gives a shared file the subagent recall block only when every tool reading it has the subagent', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-shared-')));
     try {
@@ -365,8 +455,8 @@ describe('OpenCode instructions registration (#945)', () => {
       const resolved = await resolveInstructionTargets(teamConfig, localConfig);
       const plan = await planInstructionFiles(resolved.targets, { claudemd: claudemd('desired') });
       if (state === 'write failure') vi.spyOn(fse, 'writeFile').mockRejectedValueOnce(new Error('EACCES'));
-      const { failures } = await applyInstructionPlan(plan, { dryRun: false });
-      await registerOpencodeContext(teamConfig, localConfig, resolved, false, [], [...plan.warnings, ...failures]);
+      const { files } = await applyInstructionPlan(plan, { dryRun: false });
+      await registerOpencodeContext(teamConfig, localConfig, resolved, false, files);
 
       const config = path.join(projectRoot, '.opencode', 'opencode.json');
       if (state === 'current' || state === 'written') {
@@ -398,8 +488,11 @@ describe('OpenCode instructions registration (#945)', () => {
       const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
       const resolved = await resolveInstructionTargets(teamConfig, localConfig);
 
-      expect(await registerOpencodeContext(teamConfig, localConfig, resolved, true)).toBeNull();
-      expect(await registerOpencodeContext(teamConfig, localConfig, resolved, false)).toBeNull();
+      const plan = await planInstructionFiles(resolved.targets, { claudemd: claudemd('desired') });
+      for (const dryRun of [true, false]) {
+        const { files } = await applyInstructionPlan(plan, { dryRun });
+        expect(await registerOpencodeContext(teamConfig, localConfig, resolved, dryRun, files)).toBeNull();
+      }
       expect(fs.readFileSync(config, 'utf8')).toBe(listed);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -477,17 +570,19 @@ describe('OpenCode instructions ownership (#945)', () => {
       const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
       const { loadStateForScope } = await import('../config.js');
 
-      await registerOpencodeContext(teamConfig, localConfig, await resolveInstructionTargets(teamConfig, localConfig), false);
+      const initial = await resolveInstructionTargets(teamConfig, localConfig);
+      const { files } = await applyInstructionPlan(await planInstructionFiles(initial.targets, { claudemd: claudemd('team') }), { dryRun: false });
+      await registerOpencodeContext(teamConfig, localConfig, initial, false, files);
       expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config, entry: '.opencode/teamai-context.md' }]);
 
       fs.rmSync(context);
       const resolved = await resolveInstructionTargets(teamConfig, localConfig);
-      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false);
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false, []);
       expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
 
       // An entry the member listed, which teamai did not record, stays.
       fs.writeFileSync(config, JSON.stringify({ instructions: ['.opencode/teamai-context.md'] }));
-      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false);
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false, []);
       expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['.opencode/teamai-context.md']);
     } finally {
       process.env.HOME = prevHome;

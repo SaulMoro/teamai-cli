@@ -69,8 +69,9 @@ export function loadOmpExtension(stdoutFor: (args: string[]) => string = () => '
   const $ = (_strings: TemplateStringsArray, args: string[], stdin: Response) => {
     const run = (async () => {
       dispatches.push({ args, payload: JSON.parse(await stdin.text()) as Record<string, unknown> });
+      return stdoutFor(args);
     })();
-    const output = Object.assign(run, { text: async () => { await run; return stdoutFor(args); } });
+    const output = Object.assign(run, { text: async () => run });
     return { quiet: () => ({ nothrow: () => output }) };
   };
   const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer });

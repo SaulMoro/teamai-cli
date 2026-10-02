@@ -799,7 +799,13 @@ const localAgentHandler: HookHandler = {
   name: 'local-agent-sync',
   async execute(stdin, tool) {
     const { reportAndSyncFromHook } = await import('./local-agent.js');
-    return reportAndSyncFromHook(stdin, tool);
+    const output = await reportAndSyncFromHook(stdin, tool);
+    // Codex's first prompt must read the cache after this sync, rather than
+    // racing it in another handler. SubagentStart reads the parent's cache.
+    if (stdin.hook_event_name === 'SessionStart') {
+      return await localAgentInstructionsHandler.execute(stdin, tool, null) ?? output;
+    }
+    return output;
   },
 };
 
@@ -906,7 +912,6 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-start', matcher: '*', handler: pullHandler, timeoutMs: PULL_TIMEOUT_MS, background: true },
     { event: 'session-start', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: teamRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
-    { event: 'session-start', matcher: '*', handler: localAgentInstructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
     { event: 'session-start', matcher: '*', handler: mrHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: packageHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: secretsHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },

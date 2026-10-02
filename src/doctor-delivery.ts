@@ -1157,7 +1157,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookTextFor, instructionTargetPath,
+    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookText, instructionTargetPath,
     planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
@@ -1198,8 +1198,10 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   }
 
   for (const hook of hooks) {
-    const channel = await instructionHookChannel(hook.tool);
-    const overLimit = hookLimitProblem(hook, await instructionHookTextFor(teamConfig, localConfig, hook.tool));
+    const text = instructionHookText(blocks, hook.recall);
+    if (!text) continue;
+    const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+    const overLimit = hookLimitProblem(hook, text);
     checks.push({
       name: `${hook.tool} adds the team instructions to its prompt`,
       source: 'local',
