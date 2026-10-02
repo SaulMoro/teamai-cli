@@ -9,6 +9,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { reconcileTeamHooksForConfig } from '../hooks.js';
+import * as gitHook from '../git-hook.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 let project: string;
@@ -74,6 +75,24 @@ afterEach(async () => {
 });
 
 describe('reconcileTeamHooksForConfig — pull/init core path', () => {
+  it('propagates Git-hook installation failure instead of reporting a successful reconcile', async () => {
+    const spy = vi.spyOn(gitHook, 'installGitHook').mockRejectedValueOnce(new Error('EACCES: hooks directory'));
+    try {
+      await expect(reconcileTeamHooksForConfig(teamConfig, localConfig())).rejects.toThrow('EACCES: hooks directory');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it('still installs the agent hooks when the Git hook cannot be installed', async () => {
+    const spy = vi.spyOn(gitHook, 'installGitHook').mockRejectedValueOnce(new Error('EACCES: hooks directory'));
+    try {
+      await expect(reconcileTeamHooksForConfig(teamConfig, localConfig())).rejects.toThrow(/teamai git hook/);
+      expect((await claudeSettings()).hooks.SessionStart).toHaveLength(1);
+      expect((await codexSettings()).hooks.SessionStart).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it('injects built-in + team hooks into each tool, records the manifest', async () => {
     await writeYaml(`
 hooks:

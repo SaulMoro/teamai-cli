@@ -454,6 +454,14 @@ export async function hookDispatchCli(
         log.debug(`hook-dispatch: chdir to ${cwd} failed: ${(e as Error).message}`);
       }
     }
+    if (fromGit) {
+      const { findUnreadableProjectConfig, describeUnreadableConfig } = await import('./config.js');
+      const problem = await findUnreadableProjectConfig(cwd);
+      if (problem !== null) {
+        log.persist(`git hook: Nothing was synced: ${describeUnreadableConfig(problem)}`);
+        return;
+      }
+    }
     const localConfig = await resolveHookConfig(stdin, tool);
     const handlers = filterHandlersForConfig(buildHandlerRegistry(), localConfig);
     const dispatcher = createDispatcher({ handlers, localConfig });

@@ -23,6 +23,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
+  listWorktrees: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -32,6 +33,7 @@ vi.mock('../utils/logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
+    persist: vi.fn(),
     dim: vi.fn(),
   },
   spinner: vi.fn(() => ({
@@ -67,6 +69,9 @@ import { checkoutKey, pull } from '../pull.js';
 import { detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
+import { recordGitHookFailure, readGitHookFailure } from '../git-hook.js';
+import { reconcileTeamHooksForConfig } from '../hooks.js';
+import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 
 describe('pull reports what reached the tool directory (#585)', () => {
   let tmpDir: string;
@@ -137,6 +142,33 @@ describe('pull reports what reached the tool directory (#585)', () => {
     vi.resetModules();
     await fse.remove(tmpDir);
   });
+
+  it.each(['docs', 'hooks', 'hook resolution', 'MCP', 'MCP resolution', 'none'])(
+    'records partial Git-hook delivery failure in %s and clears it only after a complete retry', async (failure) => {
+      const projectRoot = path.join(tmpDir, 'project');
+      await fse.ensureDir(projectRoot);
+      const config: LocalConfig = { ...localConfig, scope: 'project', projectRoot };
+      vi.mocked(detectProjectConfig).mockResolvedValue(config);
+      await recordGitHookFailure(config, {
+        kind: 'hook-error', event: 'post-checkout', at: new Date().toISOString(), error: 'previous failure',
+      });
+      if (failure === 'docs') await fse.outputFile(path.join(projectRoot, 'docs'), 'blocks docs directory');
+      if (failure === 'hooks') vi.mocked(reconcileTeamHooksForConfig).mockRejectedValueOnce(new Error('hook write failed'));
+      if (failure === 'hook resolution') vi.mocked(reconcileTeamHooksForConfig).mockResolvedValueOnce({ ok: false, builtins: 'with-overrides' });
+      if (failure === 'MCP') vi.mocked(reconcileMcpForConfig).mockRejectedValueOnce(new Error('MCP write failed'));
+      if (failure === 'MCP resolution') vi.mocked(reconcileMcpForConfig).mockResolvedValueOnce({ changes: [], wrote: false, unresolved: true });
+      await pull({ silent: true, inline: true, gitHook: 'post-checkout', force: true });
+      const recorded = await readGitHookFailure(config);
+      if (failure === 'none') expect(recorded).toBeNull();
+      else {
+        expect(recorded).toMatchObject({ kind: 'hook-error', event: 'post-checkout' });
+        expect(recorded && 'error' in recorded && recorded.error).not.toBe('previous failure');
+        if (failure === 'docs') await fse.remove(path.join(projectRoot, 'docs'));
+        await pull({ silent: true, inline: true, gitHook: 'post-checkout' });
+        expect(await readGitHookFailure(config)).toBeNull();
+      }
+    },
+  );
 
   /** Every success line this run printed. Read fresh so a prior case cannot leak in. */
   function successLines(): string[] {

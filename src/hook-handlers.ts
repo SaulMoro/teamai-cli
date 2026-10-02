@@ -192,9 +192,9 @@ const gitPullHandler: HookHandler = {
     if (await isWithin(cwd, self ? [getDataHome(config)] : [getDataHome(config), config.repo.localPath])) return null;
 
     const { pull } = await import('./pull.js');
-    await recordingFailure(config, 'post-merge', () => pull(self
-      ? { silent: true, inline: true, gitHook: 'post-merge' }
-      : { silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS }));
+    await recordingFailure(config, 'post-merge', () => pull({
+      silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS,
+    }));
     if (!self) await spawnDetachedPull(cwd, 'post-merge');
     return null;
   },

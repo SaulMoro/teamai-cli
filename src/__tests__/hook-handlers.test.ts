@@ -232,6 +232,15 @@ describe('hook-handlers registry', () => {
     expect(sessionStartHandlers).toContain('dashboard-report');
   });
 
+  it('caps the self-mode post-merge lock wait at five seconds', async () => {
+    const handler = buildHandlerRegistry().find(r => r.event === 'post-merge')!.handler;
+    await handler.execute({ cwd: '/tmp/self-project' }, 'git', {
+      scope: 'project', projectRoot: '/tmp/self-project', username: 'test', additionalRoles: [],
+      repo: { kind: 'self', localPath: '/tmp/self-project', remote: '' },
+    });
+    expect(mockPull).toHaveBeenCalledWith({ silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: 5000 });
+  });
+
   it('session-start pull seeds the hook tool root before pulling', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(

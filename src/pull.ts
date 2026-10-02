@@ -926,7 +926,7 @@ async function pullForScope(
     revisionField?: 'lastPullRev' | 'lastInheritedPullRev';
   } = {},
   /** Set to `{ completed: true }` on a real (non-dry-run) sync. See pull(). */
-  result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean; teamRepoFailed?: boolean },
+  result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean; teamRepoFailed?: boolean; resourceSyncFailed?: boolean },
   /** Collects this scope's env resolution for the stages after it (see resolvePullEnv). */
   teamEnvs?: Map<LocalConfig, TeamEnv>,
 ): Promise<void> {
@@ -955,6 +955,7 @@ async function pullForScope(
     const refresh = await refreshTeamRepo(localConfig, options);
     currentRev = refresh.version;
     submodulesFailed = refresh.submodulesFailed;
+    if (result && submodulesFailed) result.resourceSyncFailed = true;
     submodulesChanged = refresh.submodulesChanged;
     const outcome = `[${scopeLabel}] Team repo: ${refresh.label}`;
     pullSpin.succeed(outcome);
@@ -1028,6 +1029,7 @@ async function pullForScope(
   // be able to fetch it from the remote instead of skipping forever.
   const freshConfig = await loadTeamConfig(localConfig.repo.localPath);
   if (!freshConfig) {
+    if (result) result.resourceSyncFailed = true;
     log.warn(`[${scopeLabel}] Team config (teamai.yaml) not found. Skipping.`);
     return;
   }
@@ -1039,6 +1041,7 @@ async function pullForScope(
     roleContext = await buildRolePullContext(localConfig);
   } catch (e) {
     log.error(`[${scopeLabel}] ${(e as Error).message}`);
+    if (result) result.resourceSyncFailed = true;
     return;
   }
 
@@ -1378,7 +1381,10 @@ async function pullForScope(
       // resolved set is what removes a deactivated namespace's variables. A
       // file that cannot be used, or a name defined twice, keeps env.sh as is.
       const variables = deliverableEnvVariables(await resolvePullEnv(localConfig, roleContext, teamEnvs));
-      if (!variables) continue;
+      if (!variables) {
+        if (result) result.resourceSyncFailed = true;
+        continue;
+      }
       const countLabel = `${variables.length} env variable(s)`;
 
       if (options.dryRun) {
@@ -1430,6 +1436,7 @@ async function pullForScope(
         // Only skills stop: nothing is installed or swept for them this run.
         log.warn(`[${scopeLabel}] ${describeDeliveryConflict(desired)}. Skills were not updated this run; the installed ones are kept.`);
         skillsHeld = true;
+        if (result) result.resourceSyncFailed = true;
         continue;
       }
       items = desired.items;
@@ -1445,6 +1452,7 @@ async function pullForScope(
         // and leaves them alone too.
         log.warn(`[${scopeLabel}] ${describeDeliveryConflict(desired)}. Agents were not updated this run; the installed ones are kept.`);
         agentsHeld = true;
+        if (result) result.resourceSyncFailed = true;
         continue;
       }
       items = desired.items;
@@ -2229,7 +2237,8 @@ export async function pull(
   // into another call.
   const reported = new Set<string>();
   // A later successful scope must not hide an earlier docs failure (or vice versa).
-  const syncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false, teamRepoFailed: false };
+  const syncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false, teamRepoFailed: false, resourceSyncFailed: false };
+  const startupErrors: string[] = [];
   // Each scope's env, resolved once by its env stage (resolvePullEnv).
   const teamEnvs = new Map<LocalConfig, TeamEnv>();
 
@@ -2288,6 +2297,7 @@ export async function pull(
     // once the other process finishes syncs it normally.
     log.info(`[${config.scope}] sync in progress elsewhere — skipped (another pull/push holds the lock)`);
     contended.add(config);
+    startupErrors.push(`[${config.scope}] sync lock is held by another teamai process`);
     // A detached hook pull skipping is fine: the holder syncs. An inline one
     // leaves the checkout without what the next session reads.
     if (options.inline && options.gitHook && config.scope === 'project') {
@@ -2363,6 +2373,7 @@ export async function pull(
       }
     } catch (e) {
       log.warn(`User-scope pull error: ${(e as Error).message}`);
+      startupErrors.push(`User-scope pull: ${(e as Error).message}`);
     }
   }
 
@@ -2373,13 +2384,10 @@ export async function pull(
     try {
       if (await lockScope(projectConfig)) {
         await pullForScope(projectConfig, options, reported, {}, syncResult, teamEnvs);
-        if (options.gitHook && !syncResult.teamRepoFailed) {
-          const { clearGitHookFailure } = await import('./git-hook.js');
-          await clearGitHookFailure(projectConfig);
-        }
       }
     } catch (e) {
       log.warn(`Project-scope pull error: ${(e as Error).message}`);
+      startupErrors.push(`Project-scope pull: ${(e as Error).message}`);
     }
   }
 
@@ -2408,8 +2416,9 @@ export async function pull(
     if (migrateScope) {
       try {
         await reinjectLegacyHooks(migrateScope);
-      } catch {
+      } catch (e) {
         // Non-fatal — pull continues even if hook migration fails.
+        startupErrors.push(`Hook migration: ${(e as Error).message}`);
       }
     }
   }
@@ -2419,11 +2428,11 @@ export async function pull(
   // what self-heals new built-in hooks and applies hooks.yaml changes on every
   // session start. In project mode user is null, even when safe resources are
   // inherited, so executable hook configuration is never composed implicitly.
-  await reconcileHooksAllScopes(reconcileUser, reconcileProject, options);
+  startupErrors.push(...await reconcileHooksAllScopes(reconcileUser, reconcileProject, options));
 
   // 3.6. Reconcile team MCP servers. Outside pullForScope for the same reason as
   // hooks. User-scope MCP remains isolated in project mode.
-  await reconcileMcpAllScopes(reconcileUser, reconcileProject, options, teamEnvs);
+  startupErrors.push(...await reconcileMcpAllScopes(reconcileUser, reconcileProject, options, teamEnvs));
 
   // 3.6b. What the member should run for a team secret with no value (#875).
   // Not on the silent session-start pull: its output is discarded, and it runs
@@ -2534,6 +2543,24 @@ export async function pull(
       await pullSources(sourceConfig, options);
     } catch (e) {
       log.debug(`Source pull skipped: ${(e as Error).message}`);
+      startupErrors.push(`Source skills: ${(e as Error).message}`);
+    }
+  }
+
+  // Fetching alone is not success: every startup delivery stage must finish
+  // before a hook retry may erase the previous failure. Preserve the more
+  // specific fetch/lock records those stages already wrote.
+  if (options.gitHook && !options.dryRun && reconcileProject && !syncResult.teamRepoFailed) {
+    if (syncResult.docsSyncFailed) startupErrors.push('Docs delivery failed');
+    if (syncResult.agentModelsHeld) startupErrors.push('Agent models could not be resolved');
+    if (syncResult.resourceSyncFailed) startupErrors.push('Resource delivery did not complete');
+    const { clearGitHookFailure, recordGitHookFailure } = await import('./git-hook.js');
+    if (startupErrors.length > 0) {
+      await recordGitHookFailure(reconcileProject, {
+        kind: 'hook-error', event: options.gitHook, at: new Date().toISOString(), error: startupErrors.join('; '),
+      });
+    } else {
+      await clearGitHookFailure(reconcileProject);
     }
   }
 
@@ -2673,7 +2700,8 @@ async function reconcileHooksAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,
   options: GlobalOptions,
-): Promise<void> {
+): Promise<string[]> {
+  const errors: string[] = [];
   // A dry run still resolves the entries, so the warnings a maintainer runs
   // `--dry-run` to see — an unknown id, a deprecated per-entry `roles:`, a
   // hooks.yaml that does not parse — are reported; only the writes are skipped,
@@ -2682,7 +2710,10 @@ async function reconcileHooksAllScopes(
   for (const localConfig of scopes) {
     try {
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-      if (!teamConfig) continue;
+      if (!teamConfig) {
+        errors.push(`[${localConfig.scope}] Hooks: team config could not be loaded`);
+        continue;
+      }
       const { reconcileTeamHooksForConfig } = await import('./hooks.js');
       const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
         auto: true,
@@ -2690,6 +2721,7 @@ async function reconcileHooksAllScopes(
         filterAgents: localConfig.enabledAgents,
         dryRun: options.dryRun,
       });
+      if (!reconciled.ok) errors.push(`[${localConfig.scope}] Team hooks could not be resolved`);
       if (reconciled.ok && reconciled.defs.length > 0) {
         // Same preview rule as the user-facing line: a dry run resolved and
         // reported the entries but wrote nothing, so the debug trail must not
@@ -2698,8 +2730,10 @@ async function reconcileHooksAllScopes(
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] Hook reconcile skipped: ${(e as Error).message}`);
+      errors.push(`[${localConfig.scope}] Hooks: ${(e as Error).message}`);
     }
   }
+  return errors;
 }
 
 /**
@@ -2712,7 +2746,8 @@ async function reconcileMcpAllScopes(
   projectConfig: LocalConfig | null,
   options: GlobalOptions,
   teamEnvs: Map<LocalConfig, TeamEnv>,
-): Promise<void> {
+): Promise<string[]> {
+  const errors: string[] = [];
   // Same contract as the hooks stage: resolve and report the entry warnings on
   // a dry run, skip the writes. `reconcileMcpForConfig` already gates every
   // write on `dryRun` (the `mcp inject --dry-run` path uses it), so this only
@@ -2721,11 +2756,15 @@ async function reconcileMcpAllScopes(
   for (const localConfig of scopes) {
     try {
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-      if (!teamConfig) continue;
+      if (!teamConfig) {
+        errors.push(`[${localConfig.scope}] MCP: team config could not be loaded`);
+        continue;
+      }
       const { reconcileMcpForConfig } = await import('./mcp-reconcile.js');
-      const { changes } = await reconcileMcpForConfig(teamConfig, localConfig, {
+      const { changes, unresolved } = await reconcileMcpForConfig(teamConfig, localConfig, {
         force: options.force, dryRun: options.dryRun, teamEnv: await scopeEnv(localConfig, teamEnvs),
       });
+      if (unresolved) errors.push(`[${localConfig.scope}] Team MCP configuration could not be resolved`);
 
       const applied = changes.filter((c) => c.action !== 'skipped');
       for (const c of changes) {
@@ -2744,8 +2783,10 @@ async function reconcileMcpAllScopes(
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] MCP reconcile skipped: ${(e as Error).message}`);
+      errors.push(`[${localConfig.scope}] MCP: ${(e as Error).message}`);
     }
   }
+  return errors;
 }
 
 /**

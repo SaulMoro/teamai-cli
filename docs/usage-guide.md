@@ -195,12 +195,15 @@ learnings and reports, the same background pull takes over. In single-repo mode 
 delivers the knowledge `git pull` just brought, with no network. The hook prints nothing and always exits 0, so a failed pull never
 fails the git command. A failure inside it (the team repo fetch failed, or stopped at the
 5-second cap and the background pull did not finish it; another teamai process held the
-project's sync lock longer than the hook waits, 5 seconds after `git pull` and 60 seconds
-for a new worktree) is written to `~/.teamai/debug.log` and recorded: `teamai doctor`
+project's sync lock longer than the hook waits, 5 seconds after `git pull` (including
+single-repo mode) and 60 seconds for a new worktree; incomplete resource, hook or MCP
+delivery) is written to `~/.teamai/debug.log` and recorded: `teamai doctor`
 names it with its fix, and the next interactive `teamai pull` mentions it once. The
-background pull retries, and a hook pull that succeeds clears the record. `teamai doctor`
+background pull retries, and a hook pull clears the record only after all startup delivery
+stages succeed. `teamai doctor`
 also reports whether the hook is installed and, when it is not, why. It follows the scope rules below: no project config, or one
-that cannot be read, means no sync. The command is one `sh` line that runs
+that cannot be read, means no sync; an unreadable config's reason is kept in
+`~/.teamai/debug.log`. The command is one `sh` line that runs
 `teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
 through `~/.teamai/bin` as the agent hooks do.
 
@@ -209,12 +212,15 @@ With Git older than 2.54 and no `core.hooksPath`, teamai instead adds a block be
 and `.git/hooks/post-merge`, right after the shebang, creating the script when there is
 none; the script's other lines are kept. The block runs the same command, silently, and
 does not change the script's exit status. With `core.hooksPath` set (a hook manager), or
-a hook script that is not a shell script, teamai writes nothing, and `teamai doctor`
+a hook script that is not an executable shell script, teamai writes nothing, and `teamai doctor`
 advises: upgrade Git to 2.54 or later; or, if the team agrees to commit it, run
 `command -v teamai >/dev/null 2>&1 && teamai hook-dispatch <event> --tool git "$@" >/dev/null 2>&1 || true`
 from the post-checkout and post-merge hooks your manager defines (with `post-checkout` or
 `post-merge` as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
 That line does nothing on a machine without teamai.
+Existing hook contents and permissions are preserved. Reading or writing a hook can
+fail: `init` and `hooks inject` propagate that error; a Git-started pull records it
+and the next `teamai pull` retries.
 
 Once Git is 2.54 or later, the next `teamai pull` installs the config hook and takes the
 block out, so the hook does not run twice. `teamai pull --dry-run` says when it would

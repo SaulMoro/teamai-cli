@@ -788,7 +788,15 @@ async function reconcileHooksForInit(
   localConfig: LocalConfig,
   filterAgents: string[] | undefined,
 ): Promise<void> {
-  const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
+  try {
+    reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  } catch (e) {
+    // The agent hooks are in place; the rest of init (its pull) still runs.
+    log.error((e as Error).message);
+    process.exitCode = 1;
+    return;
+  }
   if (!reconciled.ok) log.warn(describeUnappliedTeamHooks(reconciled));
 }
 

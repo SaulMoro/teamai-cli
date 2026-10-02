@@ -179,22 +179,24 @@ Codex CLI 0.160.0 请先用 `git worktree add` 创建检出，在其中执行 `t
 并在 `git pull` 返回前交付其变更；超过 5 秒时，以及 source、learnings 与 reports，交给同样的后台 pull。
 单仓库模式下，它交付 `git pull` 刚带来的知识，不访问网络。该 hook 不输出任何内容且始终以 0 退出，
 因此 pull 失败也不会让 git 命令失败。hook 内的失败（团队仓库 fetch 失败，或在 5 秒上限处被中止而后台 pull
-也未完成；另一个 teamai 进程持有项目的同步锁，超过 hook 的等待时间：`git pull` 之后 5 秒，新 worktree 60 秒）
+也未完成；另一个 teamai 进程持有项目的同步锁，超过 hook 的等待时间：`git pull` 之后 5 秒（包括单仓库模式），新 worktree 60 秒；资源、hook 或 MCP 未完整交付）
 会写入 `~/.teamai/debug.log` 并被记录：`teamai doctor` 会指出它及其修复方法，下一次交互式 `teamai pull`
-会提示一次。后台 pull 会重试，任何一次成功的 hook pull 都会清除该记录。`teamai doctor` 还会报告 hook
+会提示一次。后台 pull 会重试，只有所有启动交付阶段都成功后，hook pull 才会清除该记录。`teamai doctor` 还会报告 hook
 是否已安装，未安装时说明原因。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
-都不会同步。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
+都不会同步；无法读取配置的原因保留在 `~/.teamai/debug.log` 中。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
 与 Agent hook 一样通过 `~/.teamai/bin` 找到 `teamai`。
 
 Git 低于 2.54 且未设置 `core.hooksPath` 时，teamai 改为在 `.git/hooks/post-checkout` 与
 `.git/hooks/post-merge` 的 shebang 之后插入一段位于 `# >>> teamai git hook` 与 `# <<< teamai git hook <<<`
 标记之间的代码块（脚本不存在时会创建），脚本的其他行保持不变。该代码块运行同一条命令，不输出任何内容，
-也不改变脚本的退出码。设置了 `core.hooksPath`（hook 管理器），或 hook 脚本不是 shell 脚本时，teamai
+也不改变脚本的退出码。设置了 `core.hooksPath`（hook 管理器），或 hook 脚本不是可执行的 shell 脚本时，teamai
 不写入任何内容，`teamai doctor` 会建议：将 Git 升级到 2.54 或更高版本；或者，如果团队同意提交它，在管理器定义的
 post-checkout 与 post-merge hook 中运行
 `command -v teamai >/dev/null 2>&1 && teamai hook-dispatch <event> --tool git "$@" >/dev/null 2>&1 || true`
 （`<event>` 分别为 `post-checkout` 与 `post-merge`），管理器的配置不是 shell 脚本时用 `sh -c '...'` 包裹。
 在没有 teamai 的机器上，这一行什么也不做。
+已有 hook 的内容和权限保持不变。读取或写入 hook 失败时，`init` 与 `hooks inject` 会传播该错误；
+由 Git 启动的 pull 会记录错误，下一次 `teamai pull` 会重试。
 
 Git 升级到 2.54 或更高版本后，下一次 `teamai pull` 会安装配置 hook 并移除该代码块，避免 hook 运行两次。
 `teamai pull --dry-run` 会说明是否将安装或更新该 hook，但不写入任何内容。在项目中运行 `teamai uninstall`

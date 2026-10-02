@@ -26,7 +26,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDataHome, type LocalConfig } from './types.js';
 import { execCommand } from './utils/exec.js';
-import { readJson, remove, writeJson } from './utils/fs.js';
+import { readFileIfExists, readJson, remove, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
 export const GIT_HOOK_EVENTS = ['post-checkout', 'post-merge'] as const;
@@ -125,7 +125,7 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
     case 'other-hook': {
       const where = status.reason === 'hooks-path'
         ? 'core.hooksPath is set, so teamai leaves the hook manager\'s files alone'
-        : 'a post-checkout or post-merge hook in .git/hooks is not a shell script, so teamai leaves it alone';
+        : 'a post-checkout or post-merge hook in .git/hooks is not an executable shell script, so teamai leaves it alone';
       const owner = status.reason === 'hooks-path' ? 'your hook manager defines' : 'in .git/hooks';
       return `${status.gitVersion || 'This git'} has no config-based hooks (Git 2.54 or later) and ${where}: new `
         + 'worktrees and `git pull` get the team\'s resources only at the next session. Either: '
@@ -179,7 +179,10 @@ async function scriptsToWrite(git: Git, repoDir: string): Promise<ScriptPlan> {
   const stale: { file: string; text: string }[] = [];
   for (const event of GIT_HOOK_EVENTS) {
     const file = path.join(dir, event);
-    const current = await fs.readFile(file, 'utf8').catch(() => null);
+    const current = await readFileIfExists(file);
+    if (current !== null && process.platform !== 'win32' && ((await fs.stat(file)).mode & 0o111) === 0) {
+      return { blocked: 'other-hook', stale: [] };
+    }
     const text = withScriptBlock(current, event);
     if (text === null) return { blocked: 'other-hook', stale: [] };
     if (text !== current) stale.push({ file, text });
@@ -194,8 +197,8 @@ async function installHookScripts(git: Git, repoDir: string, opts: { dryRun?: bo
   ensureTeamaiWrapper();
   for (const { file, text } of plan.stale) {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, text);
-    await fs.chmod(file, (await fs.stat(file)).mode | 0o111);
+    // The creation mode applies only to a new file. Existing owner modes stay.
+    await fs.writeFile(file, text, { mode: 0o755 });
   }
   if (plan.stale.length > 0) log.debug(`git hook: installed teamai hook scripts in ${repoDir}`);
   return { installed: true, changed: plan.stale.length > 0 };
@@ -219,7 +222,7 @@ async function removeHookScriptBlocks(git: Git, repoDir: string, opts: { dryRun?
   for (const dir of dirs) {
     for (const event of GIT_HOOK_EVENTS) {
       const file = path.join(dir, event);
-      const current = await fs.readFile(file, 'utf8').catch(() => null);
+      const current = await readFileIfExists(file);
       if (current === null) continue;
       const text = withoutScriptBlock(current);
       if (text === current) continue;

@@ -75,15 +75,20 @@ silently and always exits 0, so its failures surface only here: `teamai doctor`
 names the last one with its fix, and the next interactive `teamai pull` says it
 once. The causes are a team repo fetch that failed or hit the 5 s post-merge
 cap without the background pull finishing it, and another teamai process
-holding the project's sync lock longer than the hook waits. Run `teamai pull`
+holding the project's sync lock longer than the hook waits, or incomplete resource,
+hook or MCP delivery. Only a complete startup sync clears the recorded failure.
+Run `teamai pull`
 in the checkout (after a stuck pull ends, or once the team repo is reachable);
 `~/.teamai/debug.log` has the details. If doctor reports `Git hook syncs new
 worktrees and git pull` as failing, follow its fix: `teamai pull` installs it.
 Git older than 2.54 has no config hooks: teamai then adds a marked block to
 `.git/hooks/post-checkout` and `post-merge`, unless `core.hooksPath` is set (or a
-hook there is not a shell script), in which case doctor's fix says to upgrade Git
+hook there is not an executable shell script), in which case doctor's fix says to upgrade Git
 or, if the team agrees, to commit its guarded `command -v teamai ... || true`
 line into the manager's post-checkout and post-merge hooks.
+Existing hook contents and permissions stay unchanged; read/write errors propagate
+from `init` and `hooks inject`, and Git-started pulls record them. An unreadable
+project config prevents sync and keeps its reason in `~/.teamai/debug.log`.
 
 Hosts that skip checkout hooks need `teamai pull` in the new checkout before the AI
 tool starts. For Codex CLI 0.160.0, use `git worktree add`, run `teamai pull` there, then

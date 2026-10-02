@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -207,6 +208,41 @@ describe('teamai hook script on a Git without config hooks', () => {
     expect(calls()).toHaveLength(1);
     expect(calls()[0]).toMatch(/^hook-dispatch post-checkout --tool git 0+ [0-9a-f]{40} 1$/);
     expect(fs.readFileSync(`${hookFile('post-checkout')}.log`, 'utf8')).toBe('mine\n');
+  });
+
+  it('does not replace an existing hook when reading it fails', async () => {
+    const file = hookFile('post-checkout');
+    const original = '#!/bin/sh\necho owner-hook-content\n';
+    fs.writeFileSync(file, original, { mode: 0o755 });
+    const read = fse.readFile.bind(fse);
+    const spy = vi.spyOn(fse, 'readFile').mockImplementation(((...args: Parameters<typeof read>) => {
+      if (args[0] === file) return Promise.reject(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+      return read(...args);
+    }) as typeof read);
+    try {
+      await expect(installGitHook(repo)).rejects.toThrow('permission denied');
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+      expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('leaves a disabled owner hook and its mode untouched', async () => {
+    const file = hookFile('post-checkout');
+    const original = '#!/bin/sh\nexit 42\n';
+    fs.writeFileSync(file, original, { mode: 0o644 });
+    expect(await installGitHook(repo)).toEqual({ installed: false, reason: 'other-hook' });
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o644);
+    expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+    expect(run(['worktree', 'add', '-q', path.join(sandbox, 'disabled-wt')]).status).toBe(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves the permissions of an executable owner hook', async () => {
+    fs.writeFileSync(hookFile('post-checkout'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    await installGitHook(repo);
+    expect(fs.statSync(hookFile('post-checkout')).mode & 0o777).toBe(0o700);
   });
 
   it('leaves a core.hooksPath manager\'s files alone, and doctor advises upgrading or a guarded line', async () => {
