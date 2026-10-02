@@ -640,6 +640,35 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     console.log('pull with Pi enabled: extension installed before old prompt removed');
   });
 
+  it('previews and cancels empty-plan Pi exclusion without changing project config on the real CLI', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-empty-uninstall-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', []);
+    fs.mkdirSync(path.join(member.home, '.pi'), { recursive: true });
+    fs.appendFileSync(path.join(member.projectRoot, '.teamai/config.yaml'), '\nenabledAgents: [pi]\n');
+    const prepared = await pullAs(member);
+    expect(prepared.code, prepared.output).toBe(0);
+    const config = memberData(member).config;
+    const before = fs.readFileSync(config, 'utf8');
+    const hooks = path.join(member.home, '.pi/agent/extensions/teamai-hooks.ts');
+    const adapter = fs.readFileSync(hooks, 'utf8');
+    const preview = await runCLI(['uninstall', '--agent', 'pi', '--dry-run'], { HOME: member.home }, member.projectRoot);
+    expect(preview.code, preview.output).toBe(0);
+    expect(preview.output).toContain('Exclude pi from this project');
+    expect(preview.output).toContain('Dry run');
+    expect(fs.readFileSync(config, 'utf8')).toBe(before);
+    const cancelled = await runCLI(['uninstall', '--agent', 'pi'], { HOME: member.home }, member.projectRoot);
+    expect(cancelled.code, cancelled.output).toBe(0);
+    expect(cancelled.output).toContain('Cancelled');
+    expect(fs.readFileSync(config, 'utf8')).toBe(before);
+    const confirmed = await runCLI(['uninstall', '--agent', 'pi', '--force'], { HOME: member.home }, member.projectRoot);
+    expect(confirmed.code, confirmed.output).toBe(0);
+    expect(confirmed.output).toContain('Excluded pi from this project');
+    expect(fs.readFileSync(config, 'utf8')).toContain('disabledAgents:');
+    expect(fs.readFileSync(hooks, 'utf8')).toBe(adapter);
+    console.log('real Pi uninstall: dry-run and cancellation keep config unchanged; --force records exclusion and keeps global adapter');
+  });
+
   it('uninstalls Pi from one project while keeping delivery to another project on the same machine', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-uninstall-')));
     sandboxes.push(sandbox);
@@ -1030,6 +1059,25 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     fs.mkdirSync(path.join(member.home, '.codex', 'skills'), { recursive: true });
     const prepared = await pullAs(member);
     expect(prepared.code, prepared.output).toBe(0);
+    const workers = path.join(sandbox, 'workers');
+    fs.mkdirSync(workers);
+    const preload = path.join(sandbox, 'capture-workers.cjs');
+    fs.writeFileSync(preload, [
+      "const fs = require('node:fs');",
+      "const cp = require('node:child_process');",
+      `const workers = ${JSON.stringify(workers)};`,
+      'const spawn = cp.spawn;',
+      'cp.spawn = (command, args, options) => {',
+      // Keep the fixture's output pipes open until detached workers exit, so
+      // runCLI's close event joins them before server/filesystem teardown.
+      "  if (options?.detached) options = { ...options, stdio: [Array.isArray(options.stdio) ? options.stdio[0] : 'ignore', 'inherit', 'inherit'] };",
+      '  const child = spawn(command, args, options);',
+      "  if (options?.detached && child.pid) fs.writeFileSync(workers + '/' + child.pid + '.started', '');",
+      '  return child;',
+      '};',
+      "require('node:module').syncBuiltinESMExports();",
+      "process.on('exit', () => fs.writeFileSync(workers + '/' + process.pid + '.done', ''));",
+    ].join('\n'));
     let endpoint = '';
     const acks: Array<{ status: string }> = [];
     const server = createServer((request, response) => {
@@ -1057,11 +1105,16 @@ describe('instruction block targets on real CLI pull (#945)', () => {
       fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, token: 'fixture-token',
         localAgentId: 'fixture', createdAt: '2026-01-01T00:00:00.000Z', workspaceBindings: {},
       }));
-      const first = await runCLI(['hook-dispatch', 'session-start', '--tool', 'codex'], { HOME: member.home }, member.projectRoot,
+      const first = await runCLI(['hook-dispatch', 'session-start', '--tool', 'codex'], { HOME: member.home, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` }, member.projectRoot,
         JSON.stringify({ cwd: member.projectRoot, session_id: 'first-http', hook_event_name: 'SessionStart', source: 'startup' }));
       expect(first.code, first.output).toBe(0);
       expect(first.stdout).toContain('FIRST-HTTP-PROMPT-SENTINEL');
       expect(acks).toEqual([expect.objectContaining({ status: 'success' })]);
+      const started = fs.readdirSync(workers).filter((file) => file.endsWith('.started'));
+      expect(started.length).toBeGreaterThan(0);
+      for (const file of started) {
+        expect(fs.existsSync(path.join(workers, file.replace('.started', '.done'))), `Worker ${file} must exit before fixture cleanup`).toBe(true);
+      }
       console.log('real Codex SessionStart: empty HTTP cache → download ACK success → FIRST-HTTP-PROMPT-SENTINEL in first output');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

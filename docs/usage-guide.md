@@ -2836,6 +2836,8 @@ A full user-scope `teamai uninstall` restores managed model settings first and s
 
 `teamai uninstall` intelligently cleans up all teamai-managed resources, **preserving anything you created yourself**.
 
+A targeted project exclusion also requires confirmation or `--force`, even when there are no local files to remove. `--dry-run` and a declined confirmation leave the project config unchanged.
+
 ```bash
 # Preview every managed path that will be removed (no actual changes)
 teamai uninstall --dry-run

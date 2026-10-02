@@ -2647,6 +2647,8 @@ teamai models remove local:my-gateway  # Agent 保留当前配置，restore 仍�
 
 `teamai uninstall` 会智能清理所有 teamai 管理的资源，**保留用户自建内容**。
 
+即使没有本地文件需要删除，排除项目中的指定工具也需要确认或 `--force`。`--dry-run` 或拒绝确认不会修改项目配置。
+
 ```bash
 # 预览将要移除的每个受管路径（不做实际变更）
 teamai uninstall --dry-run

@@ -1357,19 +1357,15 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       );
     }
 
-    if (isPlanEmpty(plan)) {
-      if (agentKey && localConfig.scope === 'project' && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey)) {
-        // The global channel belongs to other projects too; exclusion is this
-        // project's removal even when there are no local files to delete.
-        await excludeUninstalledAgent(localConfig, agentKey);
-        log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
-        return;
-      }
+    const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
+      && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);
+    if (isPlanEmpty(plan) && !exclusionOnly) {
       log.info('Nothing to uninstall');
       return;
     }
 
     printSummary(plan, agentKey);
+    if (exclusionOnly) log.info(`Exclude ${agentKey} from this project; keep its global delivery channel.`);
 
     if (opts.dryRun) {
       log.info('Dry run — no changes made');
@@ -1382,6 +1378,13 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
         log.info('Cancelled');
         return;
       }
+    }
+
+    if (exclusionOnly) {
+      // Exclusion is a config write even when there are no local files to delete.
+      await excludeUninstalledAgent(localConfig, agentKey!);
+      log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
+      return;
     }
 
     // Model profiles are machine-global, independent of a project's resources.

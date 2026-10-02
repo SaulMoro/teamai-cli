@@ -472,6 +472,37 @@ describe('uninstall', () => {
     expect(bashrcAfter).not.toContain(TEAMAI_ENV_START);
   });
 
+  it.each(['pi', 'omp', 'hermes', 'codex', 'codex-internal', 'tcodex'])('gates empty-plan %s project exclusion on dry-run and confirmation', async (tool) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'empty-project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, enabledAgents: [tool] });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    const prompts = await import('../utils/prompt.js');
+    const confirm = vi.spyOn(prompts, 'askConfirmation').mockResolvedValue(false);
+    try {
+      await uninstall({ agent: tool, dryRun: true });
+      expect(mockSaveLocalConfigForScope).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(localConfig.disabledAgents).toBeUndefined();
+
+      await uninstall({ agent: tool });
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(mockSaveLocalConfigForScope).not.toHaveBeenCalled();
+      expect(localConfig.enabledAgents).toEqual([tool]);
+
+      confirm.mockResolvedValue(true);
+      await uninstall({ agent: tool });
+      expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ disabledAgents: [tool], enabledAgents: [] }), 'project', projectRoot);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
   it('project-scope Pi uninstall preserves the global extension and removes a legacy project copy', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');
