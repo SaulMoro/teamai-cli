@@ -1891,8 +1891,10 @@ async function syncManagedInstructions(
 ): Promise<void> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
   const resolved = await resolveInstructionTargets(config, localConfig);
-  const { targets, stale, opencodeFallback } = resolved;
-  if (opencodeFallback) {
+  const { targets, stale, opencodeFallback, opencodeFallbackStale } = resolved;
+  if (opencodeFallback && opencodeFallbackStale) {
+    log.warn(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, but teamai no longer updates them there: Claude Code is excluded or not installed. Create that AGENTS.md to have teamai deliver them to OpenCode's own file, or remove the teamai blocks from ${opencodeFallback}.`);
+  } else if (opencodeFallback) {
     log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to OpenCode's own file instead.`);
   }
   const plan = await planInstructionFiles(targets, blocks, stale);

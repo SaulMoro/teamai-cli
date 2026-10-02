@@ -2070,6 +2070,67 @@ describe('local-agent: per-worktree claudemd isolation (issue #374 P1-2C)', () =
   });
 });
 
+describe('local-agent: project prompts reach every installed tool (#945)', () => {
+  async function installProjectPrompt(tool: string, toolDirs: string[]) {
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.join(tmpDir, 'project');
+    await fse.ensureDir(repo);
+    execFileSync('git', ['init', '-q'], { cwd: repo, stdio: 'pipe' });
+    for (const dir of toolDirs) await fse.ensureDir(path.join(repo, dir));
+    await fse.ensureDir(path.join(tmpDir, '.teamai', 'local-agent'));
+    await fse.writeJson(path.join(tmpDir, '.teamai', 'local-agent', 'config.json'), {
+      endpoint: 'https://test.example.com/api', token: 't', localAgentId: 'id',
+      createdAt: '2026-01-01T00:00:00.000Z', workspaceBindings: {},
+    });
+    const acks: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: { body?: string }) => {
+      const url = String(input);
+      if (url.endsWith('doc.md')) return new Response('PROJECT-PROMPT');
+      if (url.includes('/local-agent/sync')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          cmds: [{
+            id: 201, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc',
+            version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc.md', scope: 'workspace', workspace_path: repo,
+          }],
+        }));
+      }
+      if (url.includes('/commands/ack')) acks.push(JSON.parse(init?.body ?? '{}'));
+      return new Response(JSON.stringify({ ok: true }));
+    }));
+    const { reportAndSyncLocalAgent } = await import('../local-agent.js');
+    await reportAndSyncLocalAgent({ cwd: repo, tool, status: 'running' });
+    return { repo, ack: acks.find((a) => a.id === 201) };
+  }
+
+  it('installs a WorkBuddy project prompt where .codebuddy/ does not exist', async () => {
+    const { repo, ack } = await installProjectPrompt('workbuddy', ['.workbuddy/skills']);
+
+    expect(ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(repo, '.codebuddy', 'rules', 'teamai-context.md'), 'utf8')).toContain('PROJECT-PROMPT');
+  });
+
+  it('gives Pi a project prompt through its extension, not the project AGENTS.md', async () => {
+    const { injectPiHooks } = await import('../pi-hooks.js');
+    await injectPiHooks();
+    const { repo, ack } = await installProjectPrompt('pi', ['.pi/skills']);
+
+    expect(ack?.status).toBe('success');
+    expect(await fse.pathExists(path.join(repo, 'AGENTS.md'))).toBe(false);
+    const { buildHandlerRegistry, filterHandlersForConfig } = await import('../hook-handlers.js');
+    const outputs = await Promise.all(filterHandlersForConfig(buildHandlerRegistry(), null)
+      .filter((reg) => reg.event === 'instructions')
+      .map((reg) => reg.handler.execute({ cwd: repo } as never, 'pi', null as never)));
+    expect(outputs.filter(Boolean).join('\n')).toContain('PROJECT-PROMPT');
+  });
+
+  it('fails a Pi project prompt while its extension is missing', async () => {
+    const { ack } = await installProjectPrompt('pi', ['.pi/skills']);
+
+    expect(ack?.status).toBe('failed');
+  });
+});
+
 describe('local-agent: loadLocalAgentConfig({ dryRun: true }) writes nothing (#893)', () => {
   const configPath = () => path.join(tmpDir, '.teamai', 'local-agent', 'config.json');
 

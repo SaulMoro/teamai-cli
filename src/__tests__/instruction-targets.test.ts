@@ -13,8 +13,11 @@ import {
 } from '../instruction-targets.js';
 import { injectPiHooks } from '../pi-hooks.js';
 import {
+  scopedToolPaths,
+  toolInstallRoot,
   TeamaiConfigSchema,
   type LocalConfig,
+  type TeamaiConfig,
   TEAMAI_CLAUDEMD_END,
   TEAMAI_CLAUDEMD_START,
   TEAMAI_CULTURE_END,
@@ -298,6 +301,82 @@ describe('a tool configured without a rules directory (#945)', () => {
       expect((await resolveInstructionTargets(teamConfig, localConfig)).targets.map((t) => t.path))
         .toEqual([path.join(projectRoot, '.claude', 'CLAUDE.md')]);
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('OpenCode\'s Claude fallback (#945)', () => {
+  it('counts ~/.claude/CLAUDE.md as OpenCode\'s fallback while it holds blocks, even with Claude excluded', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocfallback-')));
+    const prevHome = process.env.HOME;
+    process.env.HOME = path.join(root, 'home');
+    try {
+      const home = process.env.HOME;
+      fs.mkdirSync(path.join(home, '.config', 'opencode', 'skills'), { recursive: true });
+      fs.mkdirSync(path.join(home, '.claude', 'skills'), { recursive: true });
+      const claudeFile = path.join(home, '.claude', 'CLAUDE.md');
+      fs.writeFileSync(claudeFile, `${claudemd('an earlier selection')}\n`);
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'user', enabledAgents: ['opencode'],
+      } as unknown as LocalConfig;
+
+      const resolved = await resolveInstructionTargets(TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' }), localConfig);
+
+      expect(resolved.opencodeFallback).toBe(claudeFile);
+      expect(resolved.targets.map((t) => t.path)).not.toContain(path.join(home, '.config', 'opencode', 'teamai-context.md'));
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('every tool and toolPaths shape keeps its instructions (#945)', () => {
+  type Paths = TeamaiConfig['toolPaths'][string];
+  const DEFAULTS = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+  const SHAPES: Record<string, (paths: Paths) => Paths> = {
+    full: (paths) => paths,
+    'without rules': ({ rules: _rules, ...rest }) => rest,
+    'only claudemd': (paths) => (paths.claudemd === undefined ? {} : { claudemd: paths.claudemd }),
+    'only settings': (paths) => (paths.settings === undefined ? {} : { settings: paths.settings }),
+  };
+  const cases = (['user', 'project'] as const).flatMap((scope) =>
+    Object.keys(DEFAULTS.toolPaths).flatMap((tool) => Object.keys(SHAPES).map((shape) => [scope, tool, shape] as const)));
+
+  it.each(cases)('%s scope, %s, %s: an installed tool with a claudemd still gets the blocks, and no target is retired', async (scope, tool, shape) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-shapes-')));
+    const saved = { HOME: process.env.HOME, HERMES_HOME: process.env.HERMES_HOME, COPILOT_HOME: process.env.COPILOT_HOME };
+    process.env.HOME = path.join(root, 'home');
+    process.env.HERMES_HOME = path.join(root, 'hermes');
+    process.env.COPILOT_HOME = path.join(root, 'copilot');
+    try {
+      const projectRoot = path.join(root, 'project');
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope, ...(scope === 'project' ? { projectRoot } : {}),
+      } as unknown as LocalConfig;
+      const paths = SHAPES[shape](scopedToolPaths(DEFAULTS, localConfig)[tool]);
+      const base = scope === 'project' ? projectRoot : process.env.HOME;
+      for (const dir of [process.env.HERMES_HOME, process.env.COPILOT_HOME, path.join(process.env.HOME, '.omp')]) fs.mkdirSync(dir, { recursive: true });
+      for (const value of Object.values(paths)) {
+        if (typeof value === 'string') fs.mkdirSync(path.join(base, toolInstallRoot(value)), { recursive: true });
+      }
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git', toolPaths: { [tool]: paths } });
+
+      const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+
+      const targetPaths = new Set(targets.map((t) => t.path));
+      expect(stale.filter((t) => targetPaths.has(t.path))).toEqual([]);
+      if (paths.claudemd !== undefined) {
+        expect([...targets.flatMap((t) => t.tools), ...hooks.map((h) => h.tool)]).toContain(tool);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

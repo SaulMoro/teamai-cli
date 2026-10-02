@@ -20,7 +20,6 @@ import {
   writeJson,
   writeJsonAtomic,
 } from './utils/fs.js';
-import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { RulesHandler, SkillsHandler } from './resources/index.js';
 import { injectHooksToAllTools, applyAgentHook, removeAgentHook, isAgentHookSupportedTool, isAgentHookEvent, OPENCLAW_TOOLS } from './hooks.js';
 import { parseHookEvent } from './dashboard-collector.js';
@@ -53,7 +52,8 @@ import {
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
-  applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionTargetAt, instructionTargetFile,
+  isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
@@ -65,7 +65,6 @@ import {
   resolveToolRootDir,
   CLAUDE_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
-  COPILOT_TOOL_ID,
   getTokenPath,
   TEAMAI_CLAUDEMD_START,
   TEAMAI_CLAUDEMD_END,
@@ -2060,6 +2059,32 @@ async function uninstallResource(input: {
   await saveManifest(manifest);
 }
 
+/** The claudemd fragments in an HTTP resource cache, compiled into one block. */
+async function cachedClaudemdBlock(repoPath: string): Promise<{ files: string[]; block: string | null }> {
+  const claudemdDir = path.join(repoPath, 'claudemd');
+  const files = (await pathExists(claudemdDir))
+    ? (await fse.readdir(claudemdDir)).filter((file) => file.endsWith('.md')).sort()
+    : [];
+  const contents: string[] = [];
+  for (const file of files) {
+    const content = await readFileSafe(path.join(claudemdDir, file));
+    if (content) contents.push(content);
+  }
+  return { files, block: compileClaudemdBlock(contents) };
+}
+
+/**
+ * The HTTP agent's claudemd instructions for the project at `cwd`, as text a
+ * session hook adds (#945): Pi, OMP and Hermes have no project file of their
+ * own. Empty outside a project the agent delivered to.
+ */
+export async function localAgentInstructionText(cwd: string): Promise<string> {
+  const workspacePath = await resolveWorkspacePath(cwd);
+  if (!workspacePath) return '';
+  const { block } = await cachedClaudemdBlock(await getResourceRepoPath('project', workspacePath));
+  return block ? instructionHookText({ claudemd: block }, false) : '';
+}
+
 /**
  * Deliver the HTTP agent's claudemd block to `teamConfig`'s one tool, and
  * strip the blocks earlier releases left in files no installed tool of
@@ -2072,19 +2097,18 @@ async function syncClaudemd(
   workspacePath: string | undefined,
   fullTeamConfig: TeamaiConfig,
 ): Promise<void> {
-  const claudemdDir = path.join(repoPath, 'claudemd');
-  const files = (await pathExists(claudemdDir))
-    ? (await fse.readdir(claudemdDir)).filter((file) => file.endsWith('.md')).sort()
-    : [];
-  const contents: string[] = [];
-  for (const file of files) {
-    const content = await readFileSafe(path.join(claudemdDir, file));
-    if (content) contents.push(content);
-  }
-  const block = compileClaudemdBlock(contents);
+  const { files, block } = await cachedClaudemdBlock(repoPath);
   let syncedAny = false;
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    // Pi, OMP and Hermes in a project take the cache from their extension or
+    // plugin through `hook-dispatch instructions` (localAgentInstructionText).
+    if (deliversInstructionsByHook(tool, localConfig.scope)) {
+      const ready = await isInstructionToolInstalled(tool, toolPath, localConfig) && (await instructionHookChannel(tool)).ready;
+      log.debug(`local-agent: ${ready ? `${tool} adds the CLAUDE.md instructions through its extension` : `skipped CLAUDE.md sync for ${tool}: its extension is not installed`}`);
+      syncedAny ||= ready;
+      continue;
+    }
     const targetFile = instructionTargetFile(tool, toolPath, localConfig.scope);
     if (!targetFile) continue;
 
@@ -2098,15 +2122,11 @@ async function syncClaudemd(
       }
     }
 
+    // Probed through the tool's own paths, as pull does: WorkBuddy's project
+    // target sits under .codebuddy, which says nothing about WorkBuddy.
     const toolInstalled = resolvedAbsPath
       ? await pathExists(resolvedAbsPath)
-      : path.isAbsolute(targetFile)
-        ? await pathExists(path.dirname(targetFile))
-      : tool === COPILOT_TOOL_ID && localConfig.scope === 'user'
-        ? await isToolInstalledForConfig(tool, targetFile, localConfig)
-      : targetFile.includes('/')
-        ? await ResourceHandler.isToolInstalled(targetFile, baseDir)
-        : await pathExists(path.join(baseDir, `.${tool}`));
+      : await isInstructionToolInstalled(tool, toolPath, localConfig);
     if (!toolInstalled) {
       log.debug(`Skipped CLAUDE.md sync for ${tool}: target not found`);
       continue;

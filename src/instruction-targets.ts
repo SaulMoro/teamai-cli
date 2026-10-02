@@ -191,6 +191,8 @@ export interface InstructionTargets {
   stale: InstructionTarget[];
   /** Claude's user file when OpenCode reads the blocks from it, so OpenCode gets no file of its own. */
   opencodeFallback?: string | null;
+  /** The fallback holds blocks no installed, enabled Claude Code keeps current. */
+  opencodeFallbackStale?: boolean;
 }
 
 /**
@@ -376,7 +378,7 @@ function retiredTargets(toolPaths: Record<string, ToolPaths>, localConfig: Local
  * tools and says nothing about any one of them, so such an entry counts as
  * installed, as it did before #945.
  */
-async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalConfig): Promise<boolean> {
+export async function isInstructionToolInstalled(tool: string, paths: ToolPaths, localConfig: LocalConfig): Promise<boolean> {
   // Hermes lives in $HERMES_HOME, which ~/.hermes need not be.
   if (tool === 'hermes') return pathExists(getHermesHome());
   // teamai installs the OMP extension only where ~/.omp exists; a project's
@@ -402,13 +404,13 @@ export async function resolveInstructionTargets(
   for (const [tool, paths] of Object.entries(toolPaths)) {
     const entry = entryFor(tool, localConfig.scope);
     if (entry?.hook) {
-      if (!isAgentExcluded(localConfig, tool) && await isInstalled(tool, paths, localConfig)) {
+      if (!isAgentExcluded(localConfig, tool) && await isInstructionToolInstalled(tool, paths, localConfig)) {
         hooks.push({ tool, recall: Boolean(paths.agents), limit: entry.hookLimit });
       }
       continue;
     }
     const file = instructionTargetPath(tool, paths, localConfig);
-    if (!file || !await isInstalled(tool, paths, localConfig)) continue;
+    if (!file || !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
     inUse.add(file);
     if (isAgentExcluded(localConfig, tool)) continue;
     const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope);
@@ -420,15 +422,19 @@ export async function resolveInstructionTargets(
   const stale = [...retiredTargets(toolPaths, localConfig).values()].filter((t) => !inUse.has(t.path));
   // OpenCode reads ~/.claude/CLAUDE.md while its own user AGENTS.md does not
   // exist; when Claude's blocks are there, a second copy would duplicate them.
+  // That holds for blocks an excluded Claude left there too: OpenCode reads
+  // them all the same.
   const opencode = [...targets.values()].find((target) => target.tools.includes('opencode'));
+  const claudeFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
+  const claudeHolds = !targets.has(claudeFile) && await holdsInstructionBlocks(claudeFile);
   const opencodeFallback = localConfig.scope === 'user' && opencode !== undefined
-    ? await opencodeClaudeFallback(getUserHome(), [...targets.keys()])
+    ? await opencodeClaudeFallback(getUserHome(), [...targets.keys(), ...claudeHolds ? [claudeFile] : []])
     : null;
   if (opencode && opencodeFallback) {
     targets.delete(opencode.path);
     stale.push(opencode);
   }
-  return { targets: [...targets.values()], hooks, stale, opencodeFallback };
+  return { targets: [...targets.values()], hooks, stale, opencodeFallback, opencodeFallbackStale: Boolean(opencodeFallback) && claudeHolds };
 }
 
 /**

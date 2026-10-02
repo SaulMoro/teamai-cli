@@ -828,6 +828,7 @@ describe('hook-handlers registry', () => {
     // A new handler must decide: team handlers set requiresConfig, the rest join this list.
     const names = new Set(filterHandlersForConfig(buildHandlerRegistry(), null).map((r) => r.handler.name));
     expect([...names].sort()).toEqual([
+      'local-agent-instructions',
       'local-agent-sync',
       'package-pending-hint',
       'pull',
