@@ -20,6 +20,7 @@ import {
   TEAMAI_TEAM_RULES_END,
   getDataHome,
   getManagedHooksPath,
+  getUserConfigPath,
   isAgentExcluded,
   managedMcpManifestPath,
   resolveBaseDir,
@@ -70,6 +71,7 @@ import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from './utils/home.js';
+import { projectsRootDir } from './utils/partition.js';
 import {
   detectShellProfile,
   findEnvBlockFor,
@@ -137,6 +139,8 @@ interface RemovalPlan {
   hermesCleanup: boolean;
   /** Scope being uninstalled (issue #73: surfaced to the user). */
   scope: Scope;
+  /** Whether this removal takes the machine-wide adapters (`removesGlobalAdapters`). */
+  globalAdapters: boolean;
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
@@ -188,6 +192,25 @@ function hasToolResources(r: ToolResources): boolean {
 }
 
 // ─── Helpers ───────────────────────────────────────────
+
+/**
+ * Whether this removal takes the machine-wide delivery adapters: the Pi and
+ * OMP extensions, the Hermes plugin, Codex's user hooks and server-pushed
+ * agent hooks. A user-scope uninstall always does. A project uninstall keeps
+ * them while another install on this machine still uses them, the user scope
+ * or another project's partition, and the last install takes them (#945).
+ */
+async function removesGlobalAdapters(localConfig: LocalConfig): Promise<boolean> {
+  if (localConfig.scope === 'user') return true;
+  if (await pathExists(getUserConfigPath())) return false;
+  const root = projectsRootDir();
+  const own = path.resolve(getDataHome(localConfig));
+  for (const dir of await listDirs(root)) {
+    const partition = path.resolve(root, dir);
+    if (partition !== own && await pathExists(path.join(partition, 'config.yaml'))) return false;
+  }
+  return true;
+}
 
 const CLAUDEMD_MARKER_PAIRS: Array<[string, string]> = [
   [TEAMAI_RULES_START, TEAMAI_RULES_END],
@@ -326,6 +349,8 @@ async function discoverToolResources(
    * HOME forever.
    */
   hookSettingsPath?: string,
+  /** Whether the machine-wide Pi/OMP extensions and Codex user hooks go too (`removesGlobalAdapters`). */
+  globalAdapters = scope === 'user',
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
@@ -371,7 +396,7 @@ async function discoverToolResources(
     // project copy, so there is just the one place to look.
     const { hasOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
     const extFile = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
-    if (scope === 'user' && await hasOmpHooks()) {
+    if (globalAdapters && await hasOmpHooks()) {
       res.ompHookFile = extFile;
     }
   } else if (tool === 'pi') {
@@ -382,9 +407,9 @@ async function discoverToolResources(
       resolvePiProjectExtensionsDir,
       PI_HOOK_FILE,
     } = await import('./pi-hooks.js');
-    // Project uninstall owns only legacy project copies; other projects still
-    // use the single global extension and server-pushed agent hooks.
-    if (scope === 'user' && await hasPiHooks()) {
+    // Project uninstall owns only legacy project copies while other installs
+    // still use the single global extension and server-pushed agent hooks.
+    if (globalAdapters && await hasPiHooks()) {
       res.piHookFiles.push(path.join(resolvePiExtensionsDir(), PI_HOOK_FILE));
     }
     // Server-pushed agent hooks (teamai-agent-<slug>.ts) always install into
@@ -393,7 +418,7 @@ async function discoverToolResources(
     // leftover-plugin pattern so a Pi-only agent-hook install isn't missed.
     // Each match is marker-checked by its own slug so a same-named file a
     // user authored by hand is never swept up.
-    for (const file of scope === 'user' ? await listFiles(resolvePiExtensionsDir()) : []) {
+    for (const file of globalAdapters ? await listFiles(resolvePiExtensionsDir()) : []) {
       const base = path.basename(file);
       if (!base.startsWith('teamai-agent-') || !base.endsWith('.ts')) continue;
       const slug = base.slice('teamai-agent-'.length, -'.ts'.length);
@@ -415,8 +440,8 @@ async function discoverToolResources(
     // except for the legacy copy, written into <projectRoot> by a CLI that knew
     // nothing about a member's relocated root, so it sits at the team path.
     for (const { baseDir: hookBaseDir, manifestPath } of hookTargets) {
-      // Other projects use Codex's user hooks as their instruction channel.
-      if (scope === 'project' && CODEX_TOOL_IDS.some((id) => id === tool)
+      // Other installs use Codex's user hooks as their instruction channel.
+      if (!globalAdapters && CODEX_TOOL_IDS.some((id) => id === tool)
         && path.resolve(hookBaseDir) === path.resolve(getUserHome())) continue;
       const settingsRel = path.resolve(hookBaseDir) === path.resolve(getUserHome())
         ? (hookSettingsPath ?? toolPath.settings)
@@ -610,6 +635,7 @@ async function buildRemovalPlan(
   const hookToolPaths = scopedToolPaths(teamConfig, { ...localConfig, scope: primaryHookScope.scope });
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const perTool = new Map<string, ToolResources>();
+  const globalAdapters = await removesGlobalAdapters(localConfig);
   for (const [tool, toolPath] of Object.entries(toolPaths)) {
     perTool.set(
       tool,
@@ -625,6 +651,7 @@ async function buildRemovalPlan(
         standaloneHookManifestPath,
         localConfig.scope,
         hookToolPaths[tool]?.settings,
+        globalAdapters,
       ),
     );
   }
@@ -696,7 +723,7 @@ async function buildRemovalPlan(
     // no-op for shared resources (plan will be empty → "Nothing to uninstall").
     includeShared = targetHasResources && !othersHaveResources;
     // Keep this project's config so the global hook can read its exclusion.
-    if (localConfig.scope === 'project' && CODEX_TOOL_IDS.some((id) => id === agentFilter)) includeShared = false;
+    if (!globalAdapters && CODEX_TOOL_IDS.some((id) => id === agentFilter)) includeShared = false;
   } else {
     toolsToMerge = [...perTool.keys()];
     includeShared = true;
@@ -724,8 +751,9 @@ async function buildRemovalPlan(
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
     unpublishedQueues: includeShared ? await listQueuesIn(teamaiHome) : [],
     includeShared,
-    hermesCleanup: localConfig.scope === 'user' && toolsToMerge.includes('hermes'),
+    hermesCleanup: globalAdapters && toolsToMerge.includes('hermes'),
     scope: localConfig.scope,
+    globalAdapters,
   };
 
   // A single instruction file can be the target of several agents (for
@@ -1112,7 +1140,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   // heavy dependency graph out of uninstall's static import chain. Best-effort.
   try {
     const { removeAllAgentHooks } = await import('./local-agent.js');
-    if (plan.scope === 'user') await removeAllAgentHooks();
+    if (plan.globalAdapters) await removeAllAgentHooks();
   } catch (e) {
     log.warn(`Failed to remove agent hooks: ${(e as Error).message}`);
   }

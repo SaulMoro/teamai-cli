@@ -112,6 +112,11 @@ function makeLocalConfig(homeDir: string, repoPath: string, overrides?: Partial<
   };
 }
 
+/** Another project set up on this machine, which uses the global adapters too. */
+async function addOtherProject(homeDir: string): Promise<void> {
+  await fse.outputFile(path.join(homeDir, '.teamai', 'projects', 'other-project', 'config.yaml'), 'scope: project\n');
+}
+
 async function setupFixture(tmpDir: string) {
   const homeDir = path.join(tmpDir, 'home');
   const repoPath = path.join(tmpDir, 'team-repo');
@@ -484,6 +489,7 @@ describe('uninstall', () => {
     await fse.ensureDir(path.dirname(projectPiHook));
     await fse.writeFile(globalPiHook, TEAMAI_PI_HOOK);
     await fse.writeFile(projectPiHook, TEAMAI_PI_HOOK);
+    await addOtherProject(homeDir);
 
     const teamConfig = makeTeamConfig({
       toolPaths: {
@@ -534,6 +540,7 @@ describe('uninstall', () => {
       vi.stubEnv('HOME', homeDir);
       vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
       await fse.ensureDir(projectRoot);
+      await addOtherProject(homeDir);
       let globalFile: string;
       let configBefore: string | undefined;
       if (tool === 'omp') {
@@ -582,6 +589,7 @@ describe('uninstall', () => {
     mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
     const globalHooks = path.join(homeDir, `.${tool}/hooks.json`);
     await actualHooks.reconcileHooks(globalHooks, tool, []);
+    await addOtherProject(homeDir);
     const before = await fse.readFile(globalHooks, 'utf8');
     const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, enabledAgents: [tool] });
     await fse.outputFile(path.join(projectRoot, '.teamai/config.yaml'), 'scope: project\n');
@@ -596,6 +604,45 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(projectRoot, '.teamai/config.yaml'))).toBe(true);
     expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ disabledAgents: [tool], enabledAgents: [] }), 'project', projectRoot);
     if (legacy) expect(await actualHooks.hasTeamaiHooks(projectHooks, tool)).toBe(false);
+  });
+
+  it.each(['pi', 'omp', 'hermes', 'codex'])('removes global %s delivery when no other teamai install on the machine uses it', async (tool) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'only-project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.ensureDir(repoPath);
+    const actualHooks = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
+    let removed: () => Promise<boolean>;
+    if (tool === 'pi') {
+      const file = path.join(homeDir, '.pi', 'agent', 'extensions', 'teamai-hooks.ts');
+      await fse.outputFile(file, TEAMAI_PI_HOOK);
+      removed = async () => !await fse.pathExists(file);
+    } else if (tool === 'omp') {
+      const { injectOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('../omp-hooks.js');
+      await injectOmpHooks();
+      const file = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
+      removed = async () => !await fse.pathExists(file);
+    } else if (tool === 'hermes') {
+      const { injectHermesHooks, getInstructionsPluginDir } = await import('../hermes-hooks.js');
+      await injectHermesHooks();
+      const dir = getInstructionsPluginDir();
+      removed = async () => !await fse.pathExists(dir);
+    } else {
+      const globalHooks = path.join(homeDir, '.codex/hooks.json');
+      await actualHooks.reconcileHooks(globalHooks, 'codex', []);
+      removed = async () => !await actualHooks.hasTeamaiHooks(globalHooks, 'codex');
+    }
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true });
+
+    expect(await removed()).toBe(true);
   });
 
   it('still removes global Codex hooks on a user-scope uninstall', async () => {

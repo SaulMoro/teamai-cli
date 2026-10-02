@@ -2872,7 +2872,7 @@ An enabled, installed Pi, Oh My Pi, Hermes or project Codex keeps the project st
 
 If removing an OpenCode entry added by teamai fails, uninstall exits with an error and keeps the shared data directory and ownership record, even when OpenCode is the last tool. Repair the config or its permissions, then retry the same uninstall command.
 
-Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, and the Codex family's user-level hooks, which other projects use. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
+Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, and the Codex family's user-level hooks while the user scope or another project on this machine still uses them; uninstalling the last install removes them. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
 
 The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
 
