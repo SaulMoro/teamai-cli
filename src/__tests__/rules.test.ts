@@ -971,6 +971,27 @@ scope: 'user',
     expect(await fse.pathExists(path.join(localRulesDir, 'teamai-recall.md'))).toBe(true);
     expect(await fse.pathExists(path.join(localRulesDir, 'old-user-rule.md'))).toBe(false);
   });
+
+  it.each([[['team-rule.md']], [[]]])('removes the copy of a team rule named teamai-context an earlier release delivered, and keeps teamai\'s own context file (other team rules: %j) (#945)', async (others) => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    for (const other of others) await fse.writeFile(path.join(teamRulesDir, other), 'team content');
+    await fse.writeFile(path.join(teamRulesDir, 'teamai-context.md'), 'RESERVED-RULE');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    const context = path.join(localRulesDir, 'teamai-context.md');
+
+    await fse.writeFile(context, 'RESERVED-RULE');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.pathExists(context)).toBe(false);
+
+    const blocks = '<!-- [teamai:claudemd:start] -->\nShared.\n<!-- [teamai:claudemd:end] -->\n';
+    await fse.writeFile(context, blocks);
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.readFile(context, 'utf8')).toBe(blocks);
+
+    await fse.writeFile(context, 'RESERVED-RULE, edited by the member');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.readFile(context, 'utf8')).toBe('RESERVED-RULE, edited by the member');
+  });
 });
 
 describe('RulesHandler.pullAllRules — OpenCode instructions activation', () => {

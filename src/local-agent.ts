@@ -52,7 +52,9 @@ import {
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
-import { applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles, registerOpencodeContext } from './instruction-targets.js';
+import {
+  applyInstructionPlan, instructionTargetAt, instructionTargetFile, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+} from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
@@ -2001,7 +2003,7 @@ async function installDownloadedResource(input: {
       const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
       await fse.ensureDir(path.dirname(dest));
       await fse.copyFile(mdFile, dest);
-      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath);
+      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
     }
 
     const version = commandVersion(input.command, input.kind);
@@ -2051,18 +2053,24 @@ async function uninstallResource(input: {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
     await remove(path.join(repoPath, 'claudemd', `${input.slug}.md`));
-    await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath);
+    await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
   }
 
   delete scopeManifest[manifestKind(input.kind)][input.slug];
   await saveManifest(manifest);
 }
 
+/**
+ * Deliver the HTTP agent's claudemd block to `teamConfig`'s one tool, and
+ * strip the blocks earlier releases left in files no installed tool of
+ * `fullTeamConfig` reads now, as pull does (#945).
+ */
 async function syncClaudemd(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   repoPath: string,
-  workspacePath?: string,
+  workspacePath: string | undefined,
+  fullTeamConfig: TeamaiConfig,
 ): Promise<void> {
   const claudemdDir = path.join(repoPath, 'claudemd');
   const files = (await pathExists(claudemdDir))
@@ -2125,6 +2133,13 @@ async function syncClaudemd(
     log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
     syncedAny = true;
   }
+
+  const { stale } = await resolveInstructionTargets(fullTeamConfig, localConfig);
+  const cleanup = await planInstructionFiles([], {}, stale);
+  for (const warning of cleanup.warnings) log.warn(warning);
+  const { report, failures } = await applyInstructionPlan(cleanup, { dryRun: false });
+  for (const line of report) log.info(`${line}: no installed tool loads them from this file`);
+  for (const failure of failures) log.warn(failure);
 
   if (files.length > 0 && !syncedAny) {
     throw new Error('CLAUDE.md sync landed on no tool: every configured target was skipped');

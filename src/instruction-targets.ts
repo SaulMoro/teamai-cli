@@ -85,8 +85,10 @@ const codexHook: TargetEntry = { file: () => undefined, hook: true, retired: ['A
 /**
  * CodeBuddy and WorkBuddy both read the project's .codebuddy/rules, so they
  * share one copy there; uninstalling one keeps it while the other remains.
+ * An entry without `rules` keeps its configured `claudemd`, as `contextRule`.
  */
-const codebuddyProjectRule = (): string => `.codebuddy/rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
+const codebuddyProjectRule = (paths: ToolPaths): string | undefined =>
+  paths.rules === undefined ? paths.claudemd : `.codebuddy/rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
 
 // One line per tool, so a change to one tool's target edits one line.
 const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
@@ -369,8 +371,10 @@ function retiredTargets(toolPaths: Record<string, ToolPaths>, localConfig: Local
 
 /**
  * Whether `tool` is installed, probed through a path under its own root. The
- * instruction file is never the probe: a bare `AGENTS.md` is shared by several
- * tools and says nothing about any one of them.
+ * instruction file is the probe only when the entry has no other path, and
+ * then only through its directory: a bare `AGENTS.md` is shared by several
+ * tools and says nothing about any one of them, so such an entry counts as
+ * installed, as it did before #945.
  */
 async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalConfig): Promise<boolean> {
   // Hermes lives in $HERMES_HOME, which ~/.hermes need not be.
@@ -378,8 +382,10 @@ async function isInstalled(tool: string, paths: ToolPaths, localConfig: LocalCon
   // teamai installs the OMP extension only where ~/.omp exists; a project's
   // own .omp/ says nothing about this member using OMP.
   if (tool === 'omp') return pathExists(path.join(getUserHome(), '.omp'));
-  const probe = paths.skills ?? paths.rules ?? paths.agents ?? paths.settings;
-  return probe !== undefined && isToolInstalledForConfig(tool, probe, localConfig);
+  const nestedClaudemd = paths.claudemd !== undefined && paths.claudemd.includes('/') ? paths.claudemd : undefined;
+  const probe = paths.skills ?? paths.rules ?? paths.agents ?? paths.settings ?? nestedClaudemd;
+  if (probe === undefined) return paths.claudemd !== undefined;
+  return isToolInstalledForConfig(tool, probe, localConfig);
 }
 
 /** Resolve where this scope's instruction blocks go, and which files to clean. */

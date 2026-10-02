@@ -1662,7 +1662,7 @@ Two members of the same project can have different roles, so their shared instru
 | Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension |
 | Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block (unverified) | A system prompt section from teamai's Hermes plugin (unverified) |
 
-A team `toolPaths` entry without `rules` keeps its configured `claudemd` for Claude Code, Cursor and WorkBuddy, which have no rules directory to take a `teamai-context` file.
+A team `toolPaths` entry without `rules` keeps its configured `claudemd` for Claude Code, Cursor, CodeBuddy and WorkBuddy, which have no rules directory to take a `teamai-context` file. An entry with only `claudemd` counts as installed when that file's directory exists, and always for a bare file such as `AGENTS.md`.
 
 *Unverified*: built from the tool's documented or source-read loader, not yet checked in a live session. Claude Code, Oh My Pi, OpenCode and Pi (project scope) were checked in live sessions, from the project root and a subdirectory. A tool with the `teamai-recall` subagent gets a recall block that calls it; a tool without one (Pi, Hermes, OpenClaw) gets a recall block that tells the agent to run `teamai recall` directly. A file several tools share gets the subagent block only when every one of them has the subagent.
 
@@ -1691,7 +1691,7 @@ A pull from an earlier release may have left these blocks in a file listed below
 
 `teamai doctor` checks that each installed tool can load these blocks: that each file holds the current blocks, that OpenCode's config lists its file, that the Pi or Oh My Pi extension and the Hermes plugin are installed and enabled, that the Hermes section fits its limit, and that no file an earlier release wrote still holds blocks.
 
-A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions`, and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
+A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions`, and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
 
 ### Viewing the result
 
@@ -2845,7 +2845,7 @@ teamai uninstall --agent claude
 What gets removed:
 - TeamAI-managed model settings are restored first when ownership is still intact
 - teamai hooks in AI tool settings
-- The teamai blocks (culture, shared instructions, recall, and Codex's team rules) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too, even when your own text keeps the file)
+- The teamai blocks (culture, shared instructions, recall, and Codex's team rules) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too, even when your own text keeps the file or the file is gone)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)

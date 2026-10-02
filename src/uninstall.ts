@@ -100,6 +100,7 @@ interface RemovalPlan {
   hookManifestPath: string;
   /** Instruction files (CLAUDE.md, AGENTS.md, …), each with the teamai blocks to strip from it. */
   claudeMdFiles: Array<{ path: string; blocks: Array<[string, string]> }>;
+  opencodeInstructions: OpencodeInstruction[];
   /**
    * Skill directories synced from team repo, each with the base directory its
    * skills root hangs off: the prune refuses a link anywhere below that base.
@@ -143,6 +144,12 @@ interface SkillDirEntry {
   baseDir: string;
 }
 
+/** An entry teamai added to an OpenCode config's `instructions`. */
+interface OpencodeInstruction {
+  config: string;
+  entry: string;
+}
+
 interface ToolResources {
   hookFiles: Array<{ path: string; tool: string; manifestPath: string }>;
   openclawHookDirs: Array<{ hooksDir: string; tool: string }>;
@@ -153,6 +160,8 @@ interface ToolResources {
   claudeMdFiles: string[];
   /** Files an earlier release wrote this tool's instruction blocks to; no tool reads them now (#945). */
   retiredInstructionFiles: string[];
+  /** teamai's entries in OpenCode's `instructions`, whether or not their file still holds blocks (#945). */
+  opencodeInstructions: OpencodeInstruction[];
   skillDirs: SkillDirEntry[];
   ruleFiles: string[];
   keptRuleFiles: string[];
@@ -169,6 +178,7 @@ function hasToolResources(r: ToolResources): boolean {
     r.dshHookFile !== null ||
     r.claudeMdFiles.length > 0 ||
     r.retiredInstructionFiles.length > 0 ||
+    r.opencodeInstructions.length > 0 ||
     r.skillDirs.length > 0 ||
     r.ruleFiles.length > 0 ||
     r.agentFiles.length > 0
@@ -176,12 +186,6 @@ function hasToolResources(r: ToolResources): boolean {
 }
 
 // ─── Helpers ───────────────────────────────────────────
-
-/** OpenCode's teamai instruction files in each scope (#945). */
-const OPENCODE_CONTEXT_FILES = [
-  path.join('.config', 'opencode', 'teamai-context.md'),
-  path.join('.opencode', 'teamai-context.md'),
-];
 
 const CLAUDEMD_MARKER_PAIRS: Array<[string, string]> = [
   [TEAMAI_RULES_START, TEAMAI_RULES_END],
@@ -323,7 +327,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], retiredInstructionFiles: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -451,6 +455,11 @@ async function discoverToolResources(
     if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
       res.claudeMdFiles.push(claudeMdPath);
     }
+  }
+  if (tool === 'opencode' && instructionFile) {
+    const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+    const reference = opencodeContextReference(path.resolve(baseDir, instructionFile), scope, baseDir);
+    if ((await readOpencodeInstructionList(reference.config))?.includes(reference.entry)) res.opencodeInstructions.push(reference);
   }
   for (const retired of retiredInstructionFiles(tool, toolPath, scope)) {
     const file = path.resolve(baseDir, retired);
@@ -673,6 +682,7 @@ async function buildRemovalPlan(
     dshHookFile: null,
     hookManifestPath: hookTargets[0].manifestPath,
     claudeMdFiles: [],
+    opencodeInstructions: [],
     skillDirs: [],
     ruleFiles: [],
     keptRuleFiles: [],
@@ -715,6 +725,7 @@ async function buildRemovalPlan(
     if (res.ompHookFile) plan.ompHookFile = res.ompHookFile;
     plan.piHookFiles.push(...res.piHookFiles);
     if (res.dshHookFile) plan.dshHookFile = res.dshHookFile;
+    plan.opencodeInstructions.push(...res.opencodeInstructions);
     for (const file of res.claudeMdFiles) {
       if (plan.claudeMdFiles.some((entry) => entry.path === file)) continue;
       const content = await readFileSafe(file) ?? '';
@@ -825,6 +836,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.piHookFiles.length === 0 &&
     plan.dshHookFile === null &&
     plan.claudeMdFiles.length === 0 &&
+    plan.opencodeInstructions.length === 0 &&
     plan.skillDirs.length === 0 &&
     plan.ruleFiles.length === 0 &&
     plan.agentFiles.length === 0 &&
@@ -870,6 +882,12 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
       const configDir = scope === 'project' ? '.opencode' : path.join('.config', 'opencode');
       console.log(`     ${path.join(baseDir, configDir, 'plugin')}/teamai-*.ts`);
     }
+    console.log('');
+  }
+
+  if (plan.opencodeInstructions.length > 0) {
+    console.log('   OpenCode instructions entries:');
+    for (const { config, entry } of plan.opencodeInstructions) console.log(`     ${entry} in ${config}`);
     console.log('');
   }
 
@@ -1074,15 +1092,18 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
       const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start));
       for (const warning of warnings) log.warn(warning);
       if (changed) log.success(`Cleaned ${claudeMdPath}`);
-      // OpenCode loads its file through an `instructions` entry teamai added;
-      // drop it even when the member's own text keeps the file.
-      if (OPENCODE_CONTEXT_FILES.some((suffix) => claudeMdPath.endsWith(suffix))) {
-        const { opencodeContextReference, reconcileOpencodeInstructions } = await import('./resources/opencode-config.js');
-        const { config, entry } = opencodeContextReference(claudeMdPath, plan.scope, path.dirname(path.dirname(claudeMdPath)));
-        await reconcileOpencodeInstructions(config, entry, false, 'team instructions');
-      }
     } catch (e) {
       log.warn(`Failed to clean ${claudeMdPath}: ${(e as Error).message}`);
+    }
+  }
+  // OpenCode loads its file through an `instructions` entry teamai added: it
+  // goes even when the member's text keeps the file, or the file is gone.
+  for (const { config, entry } of plan.opencodeInstructions) {
+    try {
+      const { reconcileOpencodeInstructions } = await import('./resources/opencode-config.js');
+      if (await reconcileOpencodeInstructions(config, entry, false, 'team instructions')) log.success(`Removed "${entry}" from the instructions of ${config}`);
+    } catch (e) {
+      log.warn(`Failed to remove "${entry}" from the instructions of ${config}: ${(e as Error).message}`);
     }
   }
 

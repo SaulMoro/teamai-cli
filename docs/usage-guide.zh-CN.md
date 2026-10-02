@@ -1540,7 +1540,7 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
 | Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
 
-团队 `toolPaths` 中没有 `rules` 的条目，Claude Code、Cursor 和 WorkBuddy 继续使用其配置的 `claudemd`，因为它们没有可放置 `teamai-context` 文件的 rules 目录。
+团队 `toolPaths` 中没有 `rules` 的条目，Claude Code、Cursor、CodeBuddy 和 WorkBuddy 继续使用其配置的 `claudemd`，因为它们没有可放置 `teamai-context` 文件的 rules 目录。只有 `claudemd` 的条目在该文件所在目录存在时视为已安装；对 `AGENTS.md` 这类不在目录中的文件则始终视为已安装。
 
 *未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。多个工具共用的文件只有在每个工具都有该 subagent 时才获得 subagent 块。
 
@@ -1569,7 +1569,7 @@ Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用�
 
 `teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件，Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
 
-与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`，pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`，pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
 
 ### 查看效果
 
@@ -2656,7 +2656,7 @@ teamai uninstall --agent claude
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
 - AI 工具 settings 中的 teamai hooks
-- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除，即使你自写的内容让该文件保留下来）
+- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）

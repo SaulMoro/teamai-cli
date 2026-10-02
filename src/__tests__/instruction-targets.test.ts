@@ -253,5 +253,53 @@ describe('a tool configured without a rules directory (#945)', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('keeps WorkBuddy\'s configured project claudemd when its entry has no rules', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-wb-norules-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectRoot, '.workbuddy'), { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, '.workbuddy', 'settings.json'), '{}\n');
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({
+        team: 't',
+        repo: 'https://example.invalid/t.git',
+        toolPaths: { workbuddy: { settings: '.workbuddy/settings.json', claudemd: 'AGENTS.md' } },
+      });
+
+      const { targets, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+
+      const file = path.join(projectRoot, 'AGENTS.md');
+      expect(targets).toEqual([expect.objectContaining({ path: file, tools: ['workbuddy'], header: undefined, owned: undefined })]);
+      expect(stale.map((t) => t.path)).not.toContain(file);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('probes a tool whose entry has only claudemd through that file\'s directory', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-onlymd-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(projectRoot, { recursive: true });
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({
+        team: 't', repo: 'https://example.invalid/t.git', toolPaths: { claude: { claudemd: '.claude/CLAUDE.md' } },
+      });
+
+      expect((await resolveInstructionTargets(teamConfig, localConfig)).targets).toEqual([]);
+      fs.mkdirSync(path.join(projectRoot, '.claude'));
+      expect((await resolveInstructionTargets(teamConfig, localConfig)).targets.map((t) => t.path))
+        .toEqual([path.join(projectRoot, '.claude', 'CLAUDE.md')]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 

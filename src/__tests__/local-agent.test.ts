@@ -1685,6 +1685,21 @@ describe('local-agent: cmds[] migration', () => {
     expect(manifest.scopes.user.rules?.['doc-a']).toBeUndefined();
   });
 
+  it('handle_type=prompt strips the block an earlier release left in ~/AGENTS.md (#945)', async () => {
+    const legacy = path.join(tmpDir, 'AGENTS.md');
+    await fse.writeFile(legacy, `# mine\n\n${TEAMAI_CLAUDEMD_START}\nanother member's selection\n<!-- [teamai:claudemd:end] -->\n`);
+
+    const acks = await runResponse({
+      cmds: [{
+        id: 6, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-a',
+        version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-a.md', scope: 'user',
+      }],
+    });
+
+    expect(acks.find((a) => a.id === 6)?.status).toBe('success');
+    expect(await fse.readFile(legacy, 'utf8')).toBe('# mine\n');
+  });
+
   // Codex's default `claudemd` (#938) makes a Codex report a target of this sync.
   it('handle_type=prompt from Codex writes the prompt into ~/.codex/AGENTS.md when ~/.codex exists', async () => {
     await fse.ensureDir(path.join(tmpDir, '.codex'));

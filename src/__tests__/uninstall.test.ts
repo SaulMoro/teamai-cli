@@ -1594,6 +1594,30 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(projectPlugin, 'my-own-plugin.ts'))).toBe(true);
   });
 
+  it.each([
+    ['deleted', null],
+    ['stripped of its markers', '# My own notes\n'],
+  ])('removes OpenCode\'s instructions entry when its context file was %s (#945)', async (_state, content) => {
+    const projectRoot = path.join(tmpDir, 'oc-entry-project');
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'skills'));
+    const config = path.join(projectRoot, '.opencode', 'opencode.json');
+    await fse.writeJson(config, { instructions: ['docs/style.md', '.opencode/teamai-context.md'] });
+    if (content !== null) await fse.writeFile(path.join(projectRoot, '.opencode', 'teamai-context.md'), content);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+
+    const teamConfig = makeTeamConfig({ toolPaths: { opencode: { skills: '.opencode/skills', rules: '.opencode/rules' } } });
+    const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'opencode' });
+
+    expect((await fse.readJson(config)).instructions).toEqual(['docs/style.md']);
+  });
+
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the
   // legacy <projectRoot> copy was written by a CLI that knew nothing about it —
   // so the two targets must be looked for at different paths.

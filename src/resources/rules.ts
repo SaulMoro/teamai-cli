@@ -432,6 +432,41 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
+   * Remove the copy of a team rule named teamai-context an earlier release
+   * delivered to a rules directory (#945): that path is teamai's own
+   * instruction file now. A copy goes only without teamai's blocks and when
+   * the record shows it unchanged or it matches what pull rendered for the
+   * team's rule; any other is kept, and the instruction sync names it.
+   */
+  private async reclaimReservedRuleCopies(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    ledger: DeliveryLedger | undefined,
+  ): Promise<void> {
+    const { holdsInstructionBlocks } = await import('../instruction-targets.js');
+    const relativePath = `rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
+    const rule: ResourceItem = {
+      name: TEAMAI_CONTEXT_RULE_NAME, type: 'rules', relativePath, sourcePath: path.join(localConfig.repo.localPath, relativePath),
+    };
+    let deliveredRevs: readonly string[] | undefined;
+    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+      if (!toolPath.rules || isAgentExcluded(localConfig, tool)) continue;
+      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules, `${TEAMAI_CONTEXT_RULE_NAME}${ruleFileExtensionForTool(tool)}`);
+      if (!await pathExists(file) || await holdsInstructionBlocks(file)) continue;
+      const recorded = ledger?.previous?.[file];
+      deliveredRevs ??= (
+        await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
+      ).revs;
+      const delivered = (recorded !== undefined && recorded === await fileHash(file))
+        || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+      if (!delivered) continue;
+      await remove(file);
+      if (ledger) forgetDelivered(ledger.hashes, file);
+      log.info(`Removed ${file}, the copy of the team rule ${TEAMAI_CONTEXT_RULE_NAME} an earlier release delivered: the team instructions go there now`);
+    }
+  }
+
+  /**
    * Distribute rule files to each tool's rules/ directory, then update
    * CLAUDE.md with a lightweight reference list instead of inlining content.
    *
@@ -453,6 +488,7 @@ export class RulesHandler extends ResourceHandler {
       log.warn(`rules/${TEAMAI_CONTEXT_RULE_NAME}.md is not delivered: ${TEAMAI_CONTEXT_RULE_NAME} is the name of teamai's own instruction file `
         + 'in each rules directory. Rename the rule in the team repo, for example with `git mv`, and push the change.');
     }
+    await this.reclaimReservedRuleCopies(teamConfig, localConfig, ledger);
 
     // Hermes: inline all team rules into a teamai-managed block in SOUL.md
     // (user-level standing instructions). Only when Hermes is actually
