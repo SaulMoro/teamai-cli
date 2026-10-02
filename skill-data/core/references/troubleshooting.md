@@ -16,8 +16,10 @@ reports before anything else.
 
 This is the #1 onboarding issue. In order:
 
-1. **Open a fresh session.** Resources sync on **session start** via a hook, not
-   at init time. An empty skills folder right after `teamai init` is normal.
+1. **Did init pick this tool?** `teamai init` ends with a pull, but a project-scope
+   init creates only the directories of tools named with `--agent`. Without it, a
+   tool's project directory appears when that tool opens a session there. Re-run
+   `teamai init <repo> --agent <tool>` to add the tool and fill it now.
 2. **Sync manually to confirm:**
    ```bash
    teamai pull

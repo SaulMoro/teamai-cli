@@ -2055,6 +2055,16 @@ export async function init(options: GlobalOptions & {
     // Non-critical: state file may not exist yet on first init
   }
 
+  // Step 6.6: project scope creates the roots of the tools the member chose
+  // (`--agent`), so the stub below and the closing pull have somewhere to
+  // write. Runs after the config is saved: createProjectToolRoots filters by
+  // the saved enabledAgents, which now includes this run's choice. Without
+  // `--agent` no root is invented, as before.
+  if (scope === 'project' && requestedAgents.length > 0) {
+    const { createProjectToolRoots } = await import('./project-agent-root.js');
+    await createProjectToolRoots({ cwd: projectRoot, tools: requestedAgents });
+  }
+
   // Step 7: Inject built-in + team hooks into AI tools
   const reloadedTeamConfig = await loadTeamConfig(localPath);
   // Only a stub that actually landed is announced as ready in the IDE.
@@ -2071,7 +2081,8 @@ export async function init(options: GlobalOptions & {
     // installed" (#867). Built-in tools are left untouched here: their root
     // already existing is exactly what doctor's "is installed" check verifies
     // (#598), so seeding them outside self mode would silently manufacture a
-    // directory for software that was never actually installed.
+    // directory for software that was never actually installed. Only the
+    // project roots of tools named with `--agent` are created (Step 6.6).
     try {
       const { seedSelfModeToolDirs } = await import('./known-agents.js');
       const seeded = await seedSelfModeToolDirs(localConfig, reloadedTeamConfig);
@@ -2095,6 +2106,13 @@ export async function init(options: GlobalOptions & {
       log.warn(`The built-in teamai skill was not deployed: ${(e as Error).message}`);
     }
   }
+
+  // Step 8: deliver the team's resources now. Rules and MCP are read once at
+  // session start, before the SessionStart hook syncs, so without this the
+  // first session after init runs without them. Failures are reported by pull
+  // in its own words; init itself has succeeded.
+  const { pull } = await import('./pull.js');
+  await pull({ verbose: options.verbose, interactive: true });
 
   log.success('teamai initialized successfully!');
   if (stubDeployed > 0) {

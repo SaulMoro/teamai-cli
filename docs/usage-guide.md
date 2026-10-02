@@ -162,10 +162,12 @@ there stops if it finds a team rule or skill that differs from the team repo, si
 cannot tell a teammate's update from your edit. `teamai pull` replaces those files, so
 copy any you edited somewhere safe, pull, put your edits back and push again. Per-agent
 project roots (`.claude/`, `.cursor/`, `.codebuddy/`, …) are still created inside the
-workspace on **SessionStart** for the tool that just opened. For example, opening
-Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull` still
-skips tools whose project root does not exist, so it never invents agent directories
-for tools you have not opened in this project.
+workspace. `teamai init --agent <tool>` creates the root of each tool it names, then
+ends with a pull that fills it. Otherwise **SessionStart** creates the root of the tool
+that just opened: opening Claude Code creates `.claude/`, then pull writes into it. A
+bare `teamai pull`, and an `init` without `--agent`, still skip tools whose project
+root does not exist, so they never invent agent directories for tools you have not
+chosen or opened in this project.
 
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
 > `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
@@ -645,7 +647,7 @@ resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ### Auto-sync
 
-`teamai init` already injected Hooks into your AI tools. **`teamai pull` runs automatically every time you start an AI session** — no manual action needed. In project scope, that SessionStart hook first creates the current agent's project root (e.g. `<project>/.claude` when Claude Code opens the repo) if it is missing, then pulls.
+`teamai init` already injected Hooks into your AI tools and ended with a pull, so your first session has the team's skills, rules and MCP servers. **`teamai pull` runs automatically every time you start an AI session** — no manual action needed. In project scope, that SessionStart hook first creates the current agent's project root (e.g. `<project>/.claude` when Claude Code opens the repo) if it is missing, then pulls.
 
 *(Note: Automatic sync on session start requires an agent that supports lifecycle hooks, such as [CC], Codex, GitHub Copilot CLI, Cursor, CodeBuddy, WorkBuddy, Qoder, Kiro, OpenCode, Oh My Pi, Pi, Hermes, or OpenClaw. Kiro runs the hook when a TeamAI-rendered custom agent is activated in an interactive CLI session; its in-memory built-in default agent is not writable, and non-interactive mode does not fire `agentSpawn`. For tools without a teamai-writable hooks surface such as JoyCode or Gemini CLI, run `teamai pull` manually.)*
 
@@ -2817,7 +2819,6 @@ To rejoin after uninstalling:
 
 ```bash
 teamai init --repo https://github.com/yourorg/yourrepo --scope user --role <role_id> --force
-teamai pull
 ```
 
 ---
@@ -2838,7 +2839,7 @@ teamai init --repo https://github.com/yourorg/yourrepo --force
 
 **Q: After `teamai init` in a project, there is no `.claude/` (or `.cursor/`, `.codebuddy/`) directory?**
 
-That is expected for a built-in tool: `init` does not know which agent you will open. Open Claude Code / Cursor / CodeBuddy in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
+That is expected for a built-in tool when `init` ran without `--agent`: it does not know which agent you will open. Run `teamai init <repo> --agent claude` (or `cursor`, `codebuddy`, …) to create that tool's root and fill it before init exits, or open the tool in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
 
 **Q: Hooks aren't firing automatically?**
 

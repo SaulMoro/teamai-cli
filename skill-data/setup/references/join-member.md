@@ -126,11 +126,13 @@ section "Which tools actually get hooks".
 
 ## Step 6 — Confirm the skills actually arrived
 
-Team resources sync on **session start**, so they may be empty right after init.
-To confirm now:
+`teamai init` ends with a pull, so the team's skills, rules and MCP servers are
+already in place in user scope, and in project scope for each tool named with
+`--agent`. A project-scope init without `--agent` creates no tool directory; a
+tool's directory fills when the user first opens that tool in the project. To
+confirm:
 
 ```bash
-teamai pull        # sync immediately
 teamai list        # see the team skills / rules / docs you now have
 ```
 

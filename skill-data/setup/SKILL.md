@@ -49,10 +49,12 @@ and create-repo URLs, and the per-provider caveats, and points at
    auto-start TeamAI, and which detected tools were skipped and why (e.g. Codex
    trust-gate, CodeBuddy design). Verify the real per-tool result with
    `teamai doctor` and `teamai hooks list`.
-3. **After init, resources appear on the NEXT session.** `teamai init` injects a
-   session-start hook that auto-runs `teamai pull`. Empty skills/rules directories
-   right after init are normal; they fill in when the user opens a fresh session in
-   this tool. To sync immediately, run `teamai pull`.
+3. **`teamai init` ends with a pull.** In user scope, and in project scope for each
+   tool named with `--agent`, the team's skills, rules and MCP servers are in place
+   when init exits; there is no need to run `teamai pull` after it. A project-scope
+   init without `--agent` creates no tool directory: a tool's directory appears and
+   fills when the user opens that tool in the project. Init also injects a
+   session-start hook that keeps resources synced from then on.
 4. **Finish with `teamai doctor`.** Every setup or onboarding flow ends by running
    it and resolving what it reports before you call the job done.
 
