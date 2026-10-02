@@ -219,7 +219,11 @@ describe('instruction block targets on real CLI pull (#945)', () => {
   });
 
   afterEach(() => {
-    for (const dir of sandboxes.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+    // SessionStart's detached pull/plugin workers may finish writing after the
+    // foreground hook exits. Retry transient ENOTEMPTY, as other hook E2Es do.
+    for (const dir of sandboxes.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it('writes no ~/AGENTS.md when only Claude is installed', async () => {

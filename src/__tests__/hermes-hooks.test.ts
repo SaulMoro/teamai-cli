@@ -87,4 +87,3 @@ describe('the teamai-instructions plugin (#945)', () => {
     expect(config()).toContain('- teamai-instructions');
   });
 });
-
