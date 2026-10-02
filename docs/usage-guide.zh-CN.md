@@ -162,6 +162,17 @@ teamai init https://github.com/yourorg/yourrepo
 工具创建：打开 Claude Code 时会创建 `.claude/`，再由 pull 写入。单独执行 `teamai pull`，以及不带
 `--agent` 的 `init`，仍会跳过项目里还不存在根目录的工具，因此不会给尚未在本项目选择或打开过的 Agent 凭空建目录。
 
+新 worktree 不必等到第一次会话。在项目 scope 下，`teamai init` 与 `teamai pull` 会在仓库的本地
+git 配置中安装一个 git hook，所有 worktree 共用：`hook.teamai-post-checkout` 与
+`hook.teamai-post-merge`（需要 Git 2.54 或更高版本；更旧的 Git 不会安装）。Git 会在任何
+`core.hooksPath` hook 管理器和 `.git/hooks` 脚本之外一并运行它。当 `git worktree add`，或会创建
+worktree 的应用，新建一个检出时，该 hook 会创建 `enabledAgents` 的项目根目录（为空时，取主检出已有的根目录），
+并在命令返回前向该 worktree 执行 pull，因此其中的第一次会话就已具备团队的 skill、rule 与 MCP 服务器。
+切换分支不会触发任何操作，`post-merge` 目前也不做任何事。该 hook 不输出任何内容且始终以 0 退出，
+因此 pull 失败也不会让 git 命令失败。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
+都不会同步。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
+与 Agent hook 一样通过 `~/.teamai/bin` 找到 `teamai`。
+
 > **从旧版 teamai 升级？** 升级后首次执行 `teamai init` / `pull` / `push` / `contribute`
 > （或 `import --from-mr`）会自动把已有的
 > `<repo>/.teamai/` 迁移进分区（复制 → 校验 → 原子切换），并把旧目录保留为

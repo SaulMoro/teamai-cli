@@ -169,6 +169,21 @@ bare `teamai pull`, and an `init` without `--agent`, still skip tools whose proj
 root does not exist, so they never invent agent directories for tools you have not
 chosen or opened in this project.
 
+A new worktree does not wait for that first session. In project scope, `teamai init`
+and `teamai pull` install a git hook in the repository's local git config, shared by
+every worktree: `hook.teamai-post-checkout` and `hook.teamai-post-merge` (Git 2.54 or
+later; with older Git none is installed). Git runs it beside any `core.hooksPath` hook
+manager and any `.git/hooks` script. When `git worktree add`, or an app that creates
+worktrees, makes a new checkout, the hook creates the project roots of
+`enabledAgents` (when that is empty, the roots the main checkout has) and pulls into
+the worktree before the command returns, so the first session there already has the
+team's skills, rules and MCP servers. A branch switch does nothing, and `post-merge`
+does nothing yet. The hook prints nothing and always exits 0, so a failed pull never
+fails the git command. It follows the scope rules below: no project config, or one
+that cannot be read, means no sync. The command is one `sh` line that runs
+`teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
+through `~/.teamai/bin` as the agent hooks do.
+
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
 > `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
 > (copy → verify → atomic switch), then leaves the old directory as `<repo>/.teamai.bak/`

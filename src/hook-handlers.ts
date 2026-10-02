@@ -140,6 +140,43 @@ const pullHandler: HookHandler = {
   },
 };
 
+/**
+ * `post-checkout` from the git hook: a new checkout (a linked worktree) of a
+ * project-scope repository gets its tool roots and the team's resources. A
+ * branch switch, user scope (whose resources live in HOME), and checkouts
+ * teamai itself creates (its knowledge and reports worktrees, under the scope's
+ * data home or team clone) do nothing.
+ */
+const newWorktreeHandler: HookHandler = {
+  name: 'new-worktree',
+  async execute(stdin, _tool, config) {
+    const { isNewCheckout } = await import('./git-hook.js');
+    const args = Array.isArray(stdin.git_args) ? stdin.git_args.map(String) : [];
+    if (!config || config.scope !== 'project' || !isNewCheckout(args)) return null;
+    const cwd = resolveHookCwd(stdin) ?? process.cwd();
+    const { getDataHome } = await import('./types.js');
+    if (await isWithin(cwd, [getDataHome(config), config.repo.localPath])) return null;
+
+    const { createProjectToolRoots } = await import('./project-agent-root.js');
+    await createProjectToolRoots({ cwd });
+    const { pull } = await import('./pull.js');
+    await pull({ silent: true });
+    return null;
+  },
+};
+
+/** Whether `dir` is one of `parents` or inside one (real paths). */
+async function isWithin(dir: string, parents: string[]): Promise<boolean> {
+  const { realpath } = await import('node:fs/promises');
+  const real = (p: string) => realpath(p).catch(() => path.resolve(p));
+  const target = await real(dir);
+  for (const parent of parents) {
+    const rel = path.relative(await real(parent), target);
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  }
+  return false;
+}
+
 const updateHandler: HookHandler = {
   name: 'update',
   async execute(_stdin, _tool) {
@@ -917,6 +954,12 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'prompt-submit', matcher: '*', handler: trackSlashHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'prompt-submit', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'prompt-submit', matcher: '*', handler: localAgentHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
+
+    // ─── Git (`--tool git`, see git-hook.ts) ──────────
+    // Inline: the delivery has to land before `git worktree add` returns. Git
+    // has no hook timeout, so the budget is the detached pull's. `post-merge`
+    // is installed but has no handler yet.
+    { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
   ];
 }
 

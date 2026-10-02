@@ -167,6 +167,7 @@ vi.mock('../project-agent-root.js', () => ({
 
 import { buildAdoptedSummary, buildHandlerRegistry, filterHandlersForConfig } from '../hook-handlers.js';
 import { createDispatcher } from '../hook-dispatch.js';
+import { GIT_HOOK_EVENTS } from '../git-hook.js';
 import type { LocalConfig } from '../types.js';
 
 /** The scope hook-dispatch resolved for the hook's cwd, handed to every handler. */
@@ -772,10 +773,12 @@ describe('hook-handlers registry', () => {
   // (inline, blocking) handler must therefore stay well under that ceiling —
   // unified at <5s — so a slow/unreachable endpoint can never trip the host
   // timeout on any event. Background (detached) handlers are not awaited by the
-  // host, so they may keep longer budgets.
+  // host, so they may keep longer budgets. Git's own events (git-hook.ts) run
+  // under git, which has no hook timeout.
   it('every foreground handler timeout is under 5s', () => {
     const registry = buildHandlerRegistry();
-    const foreground = registry.filter((r) => r.background !== true);
+    const gitEvents: readonly string[] = GIT_HOOK_EVENTS;
+    const foreground = registry.filter((r) => r.background !== true && !gitEvents.includes(r.event));
     expect(foreground.length).toBeGreaterThan(0);
     for (const reg of foreground) {
       expect(reg.timeoutMs).toBeLessThan(5_000);

@@ -1873,6 +1873,7 @@ export async function reconcileTeamHooksForConfig(
     }
     return resolved.ok ? { ok: true, defs: teamDefs } : { ok: false, builtins: builtinsOnly ?? 'with-overrides' };
   }
+  if (!opts.removeAll) await installProjectGitHook(localConfig);
   await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
@@ -1915,6 +1916,24 @@ export async function reconcileTeamHooksForConfig(
   if (builtinsOnly) return { ok: false, builtins: builtinsOnly };
   await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig);
   return { ok: true, defs: teamDefs };
+}
+
+/**
+ * Project scope: install teamai's git hook (git-hook.ts) in the repository, so
+ * a new worktree gets the team's resources before `git worktree add` returns.
+ * User scope installs none: its resources live in HOME, which a new worktree
+ * does not change. A failure is reported and does not stop the caller.
+ */
+async function installProjectGitHook(localConfig: LocalConfig): Promise<void> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return;
+  const { installGitHook } = await import('./git-hook.js');
+  try {
+    const result = await installGitHook(localConfig.projectRoot);
+    if (!result.installed) log.debug(`git hook: not installed in ${localConfig.projectRoot} (${result.reason})`);
+  } catch (e) {
+    log.warn(`Could not install the teamai git hook in ${localConfig.projectRoot}: ${(e as Error).message}. `
+      + 'New worktrees get the team\'s resources at their first session instead; the next `teamai pull` retries.');
+  }
 }
 
 /**

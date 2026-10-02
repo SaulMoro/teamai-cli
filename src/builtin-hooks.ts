@@ -34,7 +34,7 @@ import { bundledShellFor, resetBundledRuntimeCache, resolveCodebuddyNode, resolv
 //  resolver the wrapper writer uses, so write and lookup cannot diverge.
 //  Other tools keep the plain `bash -lc "teamai ..."` form.
 
-const TEAMAI_BIN_DIR = '.teamai/bin';
+export const TEAMAI_BIN_DIR = '.teamai/bin';
 const WRAPPER_NAME = 'teamai';
 
 /**

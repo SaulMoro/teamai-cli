@@ -127,6 +127,15 @@ changed since, or push says so for that copy, merge that change into the copy fi
 the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
+In project scope, `init` and `pull` also install a git hook in the repository's
+local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`; Git
+2.54+), beside any `core.hooksPath` manager or `.git/hooks` script. When a
+worktree is created (`git worktree add`, or an app), it creates the project roots
+of `enabledAgents` (else the ones the main checkout has) and pulls into it before
+the command returns. A branch switch does nothing. It prints nothing and always
+exits 0, so a worktree still missing team resources needs a `teamai pull` there;
+`git config --local --get-regexp '^hook\.teamai-'` shows whether it is installed.
+
 A team agent (`agents/<name>.yaml`) can set `model: strong`, `model: fast`, or an
 alias the team defines, instead of one tool's model. The team maps each alias per
 tool in `models/aliases.yaml`, in that tool's own model value, with an optional effort:
