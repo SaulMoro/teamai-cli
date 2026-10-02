@@ -1691,7 +1691,7 @@ A pull from an earlier release may have left these blocks in a file listed below
 
 `teamai doctor` checks that each installed tool can load these blocks: that each file holds the current blocks, that OpenCode's config lists its file, that the Pi or Oh My Pi extension and the Hermes plugin are installed and enabled, that the Hermes section fits its limit, and that no file an earlier release wrote still holds blocks.
 
-A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions`, and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
+A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions` (an entry you listed for it stays), and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
 
 ### Viewing the result
 

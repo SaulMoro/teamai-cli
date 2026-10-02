@@ -8,6 +8,7 @@ import {
   clearInstructionFile,
   instructionChannelProblems,
   planInstructionFiles,
+  registerOpencodeContext,
   resolveInstructionTargets,
   type InstructionTarget,
 } from '../instruction-targets.js';
@@ -328,6 +329,32 @@ describe('OpenCode\'s Claude fallback (#945)', () => {
       expect(resolved.targets.map((t) => t.path)).not.toContain(path.join(home, '.config', 'opencode', 'teamai-context.md'));
     } finally {
       process.env.HOME = prevHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('OpenCode instructions registration (#945)', () => {
+  it('leaves the member\'s own listed teamai-context.md entry alone, in a dry run and a real pull', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocreg-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectRoot, '.opencode', 'skills'), { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, '.opencode', 'teamai-context.md'), '# My own notes\n');
+      const config = path.join(projectRoot, '.opencode', 'opencode.json');
+      const listed = JSON.stringify({ instructions: ['.opencode/teamai-context.md'] });
+      fs.writeFileSync(config, listed);
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+
+      expect(await registerOpencodeContext(teamConfig, localConfig, resolved, true)).toBeNull();
+      expect(await registerOpencodeContext(teamConfig, localConfig, resolved, false)).toBeNull();
+      expect(fs.readFileSync(config, 'utf8')).toBe(listed);
+    } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

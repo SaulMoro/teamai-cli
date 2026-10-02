@@ -2071,12 +2071,13 @@ describe('local-agent: per-worktree claudemd isolation (issue #374 P1-2C)', () =
 });
 
 describe('local-agent: project prompts reach every installed tool (#945)', () => {
-  async function installProjectPrompt(tool: string, toolDirs: string[]) {
+  async function installProjectPrompt(tool: string, toolDirs: string[], options: { prompt?: string; files?: Record<string, string> } = {}) {
     const { execFileSync } = await import('node:child_process');
     const repo = path.join(tmpDir, 'project');
     await fse.ensureDir(repo);
     execFileSync('git', ['init', '-q'], { cwd: repo, stdio: 'pipe' });
     for (const dir of toolDirs) await fse.ensureDir(path.join(repo, dir));
+    for (const [rel, text] of Object.entries(options.files ?? {})) await fse.outputFile(path.join(repo, rel), text);
     await fse.ensureDir(path.join(tmpDir, '.teamai', 'local-agent'));
     await fse.writeJson(path.join(tmpDir, '.teamai', 'local-agent', 'config.json'), {
       endpoint: 'https://test.example.com/api', token: 't', localAgentId: 'id',
@@ -2085,7 +2086,7 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     const acks: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: { body?: string }) => {
       const url = String(input);
-      if (url.endsWith('doc.md')) return new Response('PROJECT-PROMPT');
+      if (url.endsWith('doc.md')) return new Response(options.prompt ?? 'PROJECT-PROMPT');
       if (url.includes('/local-agent/sync')) {
         return new Response(JSON.stringify({
           ok: true,
@@ -2128,6 +2129,28 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     const { ack } = await installProjectPrompt('pi', ['.pi/skills']);
 
     expect(ack?.status).toBe('failed');
+  });
+
+  it('fails a Claude project prompt whose target is a file teamai did not write, and says why', async () => {
+    const mine = '# My own context rule\n';
+    const { repo, ack } = await installProjectPrompt('claude', ['.claude/skills'], { files: { '.claude/rules/teamai-context.md': mine } });
+
+    expect(ack?.status).toBe('failed');
+    expect(String(ack?.error)).toContain('was not written by teamai');
+    expect(await fse.readFile(path.join(repo, '.claude', 'rules', 'teamai-context.md'), 'utf8')).toBe(mine);
+  });
+
+  it('fails a Hermes project prompt over its 4,000-character section, and acks one that fits', async () => {
+    const { injectHermesHooks } = await import('../hermes-hooks.js');
+    await fse.ensureDir(path.join(tmpDir, '.hermes'));
+    await injectHermesHooks();
+
+    const over = await installProjectPrompt('hermes', [], { prompt: 'x'.repeat(4100) });
+    expect(over.ack?.status).toBe('failed');
+    expect(String(over.ack?.error)).toMatch(/over the 4000-character limit/);
+
+    const fits = await installProjectPrompt('hermes', [], { prompt: 'PROJECT-PROMPT' });
+    expect(fits.ack?.status).toBe('success');
   });
 });
 

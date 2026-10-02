@@ -439,9 +439,10 @@ export async function resolveInstructionTargets(
 
 /**
  * List teamai's OpenCode instruction file in OpenCode's `instructions` while
- * it holds teamai's blocks, and drop the entry once they are gone: OpenCode
- * reads no file it is not told about. Returns what it did or, with `dryRun`,
- * would do.
+ * it holds teamai's blocks, and drop the entry once the file is gone: OpenCode
+ * reads no file it is not told about. A file without teamai's blocks is the
+ * member's, so its entry is left as it is. Returns what it did or, with
+ * `dryRun`, would do.
  */
 export async function registerOpencodeContext(
   teamConfig: TeamaiConfig,
@@ -455,7 +456,10 @@ export async function registerOpencodeContext(
   if (!contextFile) return null;
   const wanted = resolved.targets.some((target) => target.path === contextFile);
   if (!wanted && !resolved.stale.some((target) => target.path === contextFile)) return null;
-  const present = wanted && (await holdsInstructionBlocks(contextFile) || (dryRun && planned.includes(contextFile)));
+  const delivered = await holdsInstructionBlocks(contextFile) || (dryRun && planned.includes(contextFile));
+  // A same-named file of the member's: its entry, if any, is theirs too.
+  if (!delivered && await pathExists(contextFile)) return null;
+  const present = wanted && delivered;
   const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
   if (dryRun) {
     const listed = (await readOpencodeInstructionList(config))?.includes(entry) ?? false;

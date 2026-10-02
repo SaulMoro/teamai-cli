@@ -52,8 +52,8 @@ import {
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
-  applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionTargetAt, instructionTargetFile,
-  isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
+  instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
@@ -2099,14 +2099,21 @@ async function syncClaudemd(
 ): Promise<void> {
   const { files, block } = await cachedClaudemdBlock(repoPath);
   let syncedAny = false;
+  // Why each tool got nothing, for the ACK when none did.
+  const skipped: string[] = [];
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     // Pi, OMP and Hermes in a project take the cache from their extension or
     // plugin through `hook-dispatch instructions` (localAgentInstructionText).
     if (deliversInstructionsByHook(tool, localConfig.scope)) {
-      const ready = await isInstructionToolInstalled(tool, toolPath, localConfig) && (await instructionHookChannel(tool)).ready;
-      log.debug(`local-agent: ${ready ? `${tool} adds the CLAUDE.md instructions through its extension` : `skipped CLAUDE.md sync for ${tool}: its extension is not installed`}`);
-      syncedAny ||= ready;
+      const problem = await hookDeliveryProblem(teamConfig, localConfig, tool, block);
+      if (problem) {
+        log.debug(`local-agent: skipped CLAUDE.md sync for ${tool}: ${problem}`);
+        skipped.push(problem);
+        continue;
+      }
+      log.debug(`local-agent: ${tool} adds the CLAUDE.md instructions through its extension`);
+      syncedAny = true;
       continue;
     }
     const targetFile = instructionTargetFile(tool, toolPath, localConfig.scope);
@@ -2143,10 +2150,16 @@ async function syncClaudemd(
     }
     const target = instructionTargetAt(tool, claudeMdPath, localConfig.scope);
     const plan = await planInstructionFiles([target], { claudemd: block });
-    for (const warning of plan.warnings) log.warn(warning);
+    // A warning means the file was left as it was: nothing reached the tool.
+    if (plan.warnings.length > 0) {
+      for (const warning of plan.warnings) log.warn(warning);
+      skipped.push(...plan.warnings);
+      continue;
+    }
     const { failures } = await applyInstructionPlan(plan, { dryRun: false });
     if (failures.length > 0) {
       log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${failures.join(' ')}`);
+      skipped.push(...failures);
       continue;
     }
     if (tool === 'opencode') await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
@@ -2162,8 +2175,37 @@ async function syncClaudemd(
   for (const failure of failures) log.warn(failure);
 
   if (files.length > 0 && !syncedAny) {
-    throw new Error('CLAUDE.md sync landed on no tool: every configured target was skipped');
+    throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
   }
+}
+
+/**
+ * Why a hook tool cannot add the HTTP agent's instructions in this scope, or
+ * null when it can: not installed, its extension or plugin not ready, or the
+ * text over its prompt section's limit. The text counts the team's blocks the
+ * same hook adds for this project, when a team repo governs it.
+ */
+async function hookDeliveryProblem(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  tool: string,
+  block: string | null,
+): Promise<string | null> {
+  const hook = (await resolveInstructionTargets(teamConfig, localConfig)).hooks.find((entry) => entry.tool === tool);
+  if (!hook) return `${tool} is not installed here.`;
+  const channel = await instructionHookChannel(tool);
+  if (!channel.ready) return channel.fix;
+  if (hook.limit === undefined) return null;
+  const parts = [block ? instructionHookText({ claudemd: block }, false) : ''];
+  const { loadTeamConfig, resolveConfigForDir } = await import('./config.js');
+  const memberConfig = localConfig.projectRoot ? await resolveConfigForDir(localConfig.projectRoot) : null;
+  const memberTeam = memberConfig ? await loadTeamConfig(memberConfig.repo.localPath) : null;
+  if (memberConfig && memberTeam) parts.unshift(await instructionHookTextFor(memberTeam, memberConfig, tool));
+  const length = parts.filter(Boolean).join('\n\n').length;
+  return length > hook.limit
+    ? `${tool} cannot load this project's instructions: with the HTTP prompts they are ${length} characters, over the `
+      + `${hook.limit}-character limit of its prompt section, so ${tool} skips them. Shorten the prompts for this project.`
+    : null;
 }
 
 async function ackCommand(
