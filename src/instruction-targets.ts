@@ -409,8 +409,18 @@ export async function resolveInstructionTargets(
     if (entry?.hook) {
       // Codex's hooks are user-level, so a project without its own `.codex/`
       // still reaches an installed Codex.
-      const probeConfig: LocalConfig = entry === codexHook ? { ...localConfig, scope: 'user' } : localConfig;
-      if (!isAgentExcluded(localConfig, tool) && await isInstructionToolInstalled(tool, paths, probeConfig)) {
+      // Probe at the member's recorded root (toolRoots), as hook install does.
+      let probeConfig = localConfig;
+      let probePaths = paths;
+      if (entry === codexHook) {
+        // A project config records no tool roots; the member's are in the
+        // user config, which a user-scope init may have written later.
+        const { loadLocalConfig } = await import('./config.js');
+        const toolRoots = localConfig.toolRoots ?? (await loadLocalConfig())?.toolRoots;
+        probeConfig = { ...localConfig, scope: 'user', toolRoots };
+        probePaths = scopedToolPaths(teamConfig, probeConfig)[tool] ?? paths;
+      }
+      if (!isAgentExcluded(localConfig, tool) && await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
         hooks.push({ tool, recall: Boolean(paths.agents), limit: entry.hookLimit });
       }
       continue;

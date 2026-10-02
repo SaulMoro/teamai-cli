@@ -440,7 +440,7 @@ export class RulesHandler extends ResourceHandler {
    * the record shows it unchanged or it matches what pull rendered for the
    * team's rule; any other is kept, and the instruction sync names it.
    */
-  private async reclaimReservedRuleCopies(
+  async reclaimReservedRuleCopies(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     ledger: DeliveryLedger | undefined,

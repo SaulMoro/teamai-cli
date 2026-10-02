@@ -616,6 +616,35 @@ describe('uninstall', () => {
     expect(await fse.readFile(sharedInstructions, 'utf8')).toContain(TEAMAI_CULTURE_START);
   });
 
+  it('targeted CodeBuddy uninstall keeps the shared rule when the team still has a rule named teamai-context (#945)', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.writeFile(path.join(repoPath, 'rules', 'teamai-context.md'), '# Old team rule\n');
+    const sharedInstructions = path.join(projectRoot, '.codebuddy', 'rules', 'teamai-context.md');
+    await fse.ensureDir(path.join(projectRoot, '.codebuddy', 'skills'));
+    await fse.ensureDir(path.join(projectRoot, '.workbuddy', 'skills'));
+    await fse.outputFile(sharedInstructions, `---\nalwaysApply: true\n---\n\n${TEAMAI_CULTURE_START}\nculture\n${TEAMAI_CULTURE_END}\n`);
+    const teamConfig = makeTeamConfig({
+      toolPaths: {
+        codebuddy: { skills: '.codebuddy/skills', rules: '.codebuddy/rules' },
+        workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules' },
+      },
+    });
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      enabledAgents: ['codebuddy', 'workbuddy'],
+      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'codebuddy' });
+
+    expect(await fse.readFile(sharedInstructions, 'utf8')).toContain(TEAMAI_CULTURE_START);
+  });
+
   it('targeted CodeBuddy uninstall keeps the shared .codebuddy rule for a WorkBuddy entry without claudemd (#945)', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');
@@ -1623,6 +1652,44 @@ describe('uninstall', () => {
     await uninstall({ force: true, agent: 'opencode' });
 
     expect((await fse.readJson(config)).instructions).toEqual(expected);
+  });
+
+  it('removes only this checkout\'s recorded OpenCode entry, and forgets it (#945)', async () => {
+    const projectRoot = path.join(tmpDir, 'oc-own-project');
+    const sibling = path.join(tmpDir, 'oc-own-sibling');
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.ensureDir(path.join(projectRoot, '.opencode', 'skills'));
+    // Claude keeps a team skill, so OpenCode is not the last tool.
+    await fse.outputFile(path.join(repoPath, 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    await fse.outputFile(path.join(projectRoot, '.claude', 'skills', 'team-skill', 'SKILL.md'), '# Team Skill');
+    const entry = '.opencode/teamai-context.md';
+    const config = path.join(projectRoot, '.opencode', 'opencode.json');
+    const siblingConfig = path.join(sibling, '.opencode', 'opencode.json');
+    await fse.outputJson(config, { instructions: [entry] });
+    await fse.outputJson(siblingConfig, { instructions: [entry] });
+    await fse.writeFile(path.join(projectRoot, '.opencode', 'teamai-context.md'), 'Generated text.\n');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+
+    const teamConfig = makeTeamConfig({ toolPaths: {
+      opencode: { skills: '.opencode/skills', rules: '.opencode/rules' },
+      claude: { skills: '.claude/skills', rules: '.claude/rules' },
+    } });
+    const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    const { loadStateForScope, saveStateForScope } = await import('../config.js');
+    await saveStateForScope({
+      ...await loadStateForScope(localConfig),
+      opencodeContextEntries: [{ config, entry }, { config: siblingConfig, entry }],
+    }, localConfig);
+
+    await uninstall({ force: true, agent: 'opencode' });
+
+    expect((await fse.readJson(config)).instructions).toBeUndefined();
+    expect((await fse.readJson(siblingConfig)).instructions).toEqual([entry]);
+    expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config: siblingConfig, entry }]);
   });
 
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the

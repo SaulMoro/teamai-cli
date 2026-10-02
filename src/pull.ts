@@ -1221,6 +1221,17 @@ async function pullForScope(
           // Refresh the managed instruction blocks as well. A CLI upgrade may
           // move a target or ship a new recall block while the team repo SHA
           // and tool target set remain unchanged.
+          // An earlier release's copy of a team rule named teamai-context
+          // holds the path the instructions go to; reclaim it first (#945).
+          if (resourceTypes.includes('rules')) {
+            try {
+              await (getHandler('rules') as RulesHandler).reclaimReservedRuleCopies(
+                freshConfig, localConfig, openLedger(await deliveredHashes(localConfig, state)),
+              );
+            } catch (error) {
+              log.warn(`[${scopeLabel}] The earlier copy of the team rule teamai-context was not reclaimed: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
+            }
+          }
           await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel);
           // Same reason: a machine that already pulled a tombstone with an older
           // CLI keeps the copies that CLI failed to delete, and its stored rev

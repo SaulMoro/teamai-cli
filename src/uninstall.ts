@@ -33,7 +33,7 @@ import {
   type Scope,
   type ManagedMcpManifest,
 } from './types.js';
-import { BUILTIN_RULE_NAMES } from './builtin-rules.js';
+import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { ruleStemFromFilename, writesInstructionBlock, type InstructionBlock } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
@@ -524,6 +524,12 @@ async function discoverToolResources(
         const ruleName = ruleStemFromFilename(file);
         if (ruleName === null) continue;
         if (teamRuleNames.has(ruleName)) {
+          // teamai's instruction file shares the reserved name; its blocks are
+          // stripped above, keeping what another tool or the member still uses.
+          if (ruleName === TEAMAI_CONTEXT_RULE_NAME) {
+            const text = await readFileSafe(path.join(rulesDir, file));
+            if (text && CLAUDEMD_MARKER_PAIRS.some(([start]) => text.includes(start))) continue;
+          }
           res.ruleFiles.push(path.join(rulesDir, file));
         }
       }
@@ -635,9 +641,17 @@ async function buildRemovalPlan(
   if (opencodeRes) {
     const { loadStateForScope } = await import('./config.js');
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    for (const ref of (await loadStateForScope(localConfig)).opencodeContextEntries ?? []) {
-      if (opencodeRes.opencodeInstructions.some((e) => e.config === ref.config && e.entry === ref.entry)) continue;
-      if ((await readOpencodeInstructionList(ref.config))?.includes(ref.entry)) opencodeRes.opencodeInstructions.push(ref);
+    const { opencodeContextReference } = await import('./resources/opencode-config.js');
+    const contextFile = toolPaths.opencode && instructionTargetFile('opencode', toolPaths.opencode, localConfig.scope);
+    // Worktrees share state.json: only this checkout's own record counts.
+    const own = contextFile
+      ? opencodeContextReference(path.resolve(resolveToolBaseDir('opencode', localConfig), contextFile), localConfig.scope, resolveToolBaseDir('opencode', localConfig))
+      : undefined;
+    const recorded = (await loadStateForScope(localConfig)).opencodeContextEntries ?? [];
+    if (own && recorded.some((ref) => ref.config === own.config && ref.entry === own.entry)
+      && !opencodeRes.opencodeInstructions.some((e) => e.config === own.config && e.entry === own.entry)
+      && (await readOpencodeInstructionList(own.config))?.includes(own.entry)) {
+      opencodeRes.opencodeInstructions.push(own);
     }
   }
 
@@ -1398,6 +1412,18 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     await executeRemoval(plan);
+
+    // The OpenCode entries uninstall removed are no longer teamai's to track.
+    if (plan.opencodeInstructions.length > 0 && !plan.includeShared) {
+      const { loadStateForScope, saveStateForScope } = await import('./config.js');
+      const state = await loadStateForScope(localConfig!);
+      if (state.opencodeContextEntries) {
+        state.opencodeContextEntries = state.opencodeContextEntries.filter(
+          (ref) => !plan.opencodeInstructions.some((e) => e.config === ref.config && e.entry === ref.entry),
+        );
+        await saveStateForScope(state, localConfig!);
+      }
+    }
 
     // Persist the exclusion so the next pull (or another tool's session-start
     // hook) does not resurrect this tool's resources. Only meaningful when the

@@ -362,6 +362,30 @@ describe('OpenCode instructions registration (#945)', () => {
   });
 });
 
+describe('Codex project instructions (#945)', () => {
+  it('reaches a Codex the member relocated with toolRoots, with no project .codex/', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-codexroot-')));
+    const prevHome = process.env.HOME;
+    process.env.HOME = path.join(root, 'home');
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(projectRoot, { recursive: true });
+      fs.mkdirSync(path.join(root, 'home', '.codex-work', 'skills'), { recursive: true });
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, toolRoots: { codex: '~/.codex-work' },
+      } as unknown as LocalConfig;
+
+      const resolved = await resolveInstructionTargets(TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' }), localConfig);
+
+      expect(resolved.hooks.map((hook) => hook.tool)).toContain('codex');
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('OpenCode instructions ownership (#945)', () => {
   it('records the entry teamai adds, for uninstall, and forgets it once removed', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocown-')));

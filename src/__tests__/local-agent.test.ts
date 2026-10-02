@@ -2153,6 +2153,31 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     }
   });
 
+  it('records the OpenCode entry it adds in the project\'s data home, where uninstall reads it', async () => {
+    // A partitioned project: its data home is under ~/.teamai/projects.
+    const { projectSlug } = await import('../utils/partition.js');
+    const project = path.join(tmpDir, 'project');
+    const partition = path.join(tmpDir, '.teamai', 'projects', projectSlug(fs.realpathSync(tmpDir) + '/project'));
+    await fse.outputFile(path.join(partition, 'config.yaml'),
+      `repo:\n  localPath: ${partition}/team-repo\n  remote: https://example.com/t.git\nusername: u\nscope: project\nprojectRoot: ${project}\n`);
+    const { repo, ack } = await installProjectPrompt('opencode', ['.opencode/skills']);
+
+    expect(ack?.status).toBe('success');
+    const { loadStateForScope, resolveDataHomeForScope } = await import('../config.js');
+    const dataHome = await resolveDataHomeForScope('project', repo);
+    expect(dataHome).toBe(partition);
+    const state = await loadStateForScope({ scope: 'project', projectRoot: repo, dataHome } as never);
+    expect(state.opencodeContextEntries?.map((e) => e.entry)).toEqual(['.opencode/teamai-context.md']);
+  });
+
+  it('fails an OpenCode project prompt whose config teamai cannot list it in', async () => {
+    const { ack } = await installProjectPrompt('opencode', ['.opencode/skills'], {
+      files: { '.opencode/opencode.json': '{\n  // my settings\n  "instructions": []\n}\n' },
+    });
+
+    expect(ack?.status).toBe('failed');
+  });
+
   it('fails a Pi project prompt while its extension is missing', async () => {
     const { ack } = await installProjectPrompt('pi', ['.pi/skills']);
 
@@ -2176,6 +2201,9 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     const over = await installProjectPrompt('hermes', [], { prompt: 'x'.repeat(4100) });
     expect(over.ack?.status).toBe('failed');
     expect(String(over.ack?.error)).toMatch(/over the 4000-character limit/);
+    // The rejected prompt does not reach the session hook either.
+    const { localAgentInstructionText } = await import('../local-agent.js');
+    expect(await localAgentInstructionText(over.repo)).not.toContain('xxxx');
 
     const fits = await installProjectPrompt('hermes', [], { prompt: 'PROJECT-PROMPT' });
     expect(fits.ack?.status).toBe('success');

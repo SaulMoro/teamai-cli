@@ -298,6 +298,24 @@ describe('pull role-aware sync and cleanup', () => {
     expect(await fse.readFile(context, 'utf8')).toContain('Be kind.');
   });
 
+  it('reclaims an earlier release\'s teamai-context rule copy when the revision is unchanged (#945)', async () => {
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { claude: { skills: '.claude/skills', rules: '.claude/rules' } } });
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    await fse.writeFile(path.join(repoPath, 'rules', 'teamai-context.md'), '# Old team rule\n');
+    const context = path.join(homeDir, '.claude', 'rules', 'teamai-context.md');
+    await fse.copy(path.join(repoPath, 'rules', 'teamai-context.md'), context);
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({
+      lastPull: null,
+      lastPullRev: HEAD_REV,
+      lastPullTargets: ['claude'],
+    }) as Awaited<ReturnType<typeof loadStateForScope>>);
+
+    await pull({});
+
+    expect(await fse.pathExists(context)).toBe(false);
+  });
+
   it('should not delete files that are NOT tombstoned', async () => {
     // No tombstone files
     await fse.writeFile(path.join(homeDir, '.claude/rules', 'keep-rule.md'), '# Keep');

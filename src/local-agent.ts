@@ -704,6 +704,11 @@ async function createResourceLocalConfig(
     // User-scope paths resolve under $HOME here, so a tool the member relocated
     // must be addressed at its recorded root — the same one `teamai pull` uses.
     ...(projectScope ? {} : { toolRoots: await memberToolRoots(workspacePath) }),
+    // State a sync records (OpenCode's instructions entry) goes to the
+    // project's data home, where uninstall reads it.
+    ...(projectScope && workspacePath
+      ? { dataHome: await (await import('./config.js')).resolveDataHomeForScope('project', workspacePath) }
+      : {}),
   };
 }
 
@@ -2002,8 +2007,17 @@ async function installDownloadedResource(input: {
       const mdFile = await resolveMarkdownFromDownload(downloadedPath, input.slug);
       const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
       await fse.ensureDir(path.dirname(dest));
+      const previous = await readFileSafe(dest);
       await fse.copyFile(mdFile, dest);
-      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+      try {
+        await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+      } catch (error) {
+        // Session hooks read the cache directly: a prompt that was not
+        // delivered must not reach them, nor push out the ones that were.
+        if (previous === null) await remove(dest);
+        else await fse.writeFile(dest, previous);
+        throw error;
+      }
     }
 
     const version = commandVersion(input.command, input.kind);
@@ -2165,7 +2179,21 @@ async function syncClaudemd(
       skipped.push(...failures);
       continue;
     }
-    if (tool === 'opencode') await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
+    if (tool === 'opencode') {
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false);
+      // OpenCode reads the file only through its `instructions` entry.
+      if (block) {
+        const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+        const { config, entry } = opencodeContextReference(claudeMdPath, localConfig.scope, baseDir);
+        if (!(await readOpencodeInstructionList(config))?.includes(entry)) {
+          const problem = `OpenCode does not load ${claudeMdPath}: teamai could not add "${entry}" to the instructions of ${config} `
+            + '(the file is missing, unreadable or not plain JSON). Add the entry by hand, or run `teamai doctor`.';
+          log.warn(problem);
+          skipped.push(problem);
+          continue;
+        }
+      }
+    }
     log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
     syncedAny = true;
     reached.push(tool);
