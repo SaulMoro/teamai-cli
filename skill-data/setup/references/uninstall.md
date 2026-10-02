@@ -68,6 +68,9 @@ and give it your team repo URL."*
   its ownership record and shared data directory, even for the last tool.
 - Project uninstall keeps the global Pi and Oh My Pi extensions and Hermes
   plugin and config for other projects. User-scope uninstall removes them.
+- An enabled, installed Pi, Oh My Pi, Hermes or project Codex also keeps the
+  project's shared state in use without a local tool directory. Uninstalling
+  another tool preserves that state and the remaining tool's instructions.
 - Do **not** delete the team repo on the Git platform — uninstall never touches it,
   and neither should you.
 - If the user only wants to stop auto-sync for one tool but keep TeamAI otherwise,

@@ -53,7 +53,7 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
-import { clearInstructionFile, instructionTargetFile, retiredInstructionFiles } from './instruction-targets.js';
+import { clearInstructionFile, instructionTargetFile, retiredInstructionFiles, resolveInstructionTargets } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -666,7 +666,9 @@ async function buildRemovalPlan(
   // tool that was never enabled or set up. The probe path must be a
   // tool-specific root (skills/rules/settings), never `claudemd`: that's
   // exactly the shared, ambiguous path this check exists to disambiguate.
-  const activeTools = new Set<string>();
+  const { hooks: instructionHooks } = await resolveInstructionTargets(teamConfig, localConfig);
+  const hookTools = new Set(instructionHooks.map((hook) => hook.tool));
+  const activeTools = new Set(hookTools);
   for (const [tool, toolPath] of Object.entries(toolPaths)) {
     if (isAgentExcluded(localConfig, tool)) continue;
     const probePath = toolPath.skills ?? toolPath.rules ?? toolPath.settings ?? toolPath.claudemd;
@@ -684,7 +686,7 @@ async function buildRemovalPlan(
     const targetHasResources = targetRes ? hasToolResources(targetRes) : false;
     // Other tools still have teamai resources → keep shared resources.
     const othersHaveResources = [...perTool.entries()]
-      .some(([t, r]) => t !== agentFilter && activeTools.has(t) && hasToolResources(r));
+      .some(([t, r]) => t !== agentFilter && activeTools.has(t) && (hasToolResources(r) || hookTools.has(t)));
     // Remove shared resources only when the target itself has resources AND is
     // the last tool using teamai. Targeting a tool with no teamai resources is a
     // no-op for shared resources (plan will be empty → "Nothing to uninstall").

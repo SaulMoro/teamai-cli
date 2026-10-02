@@ -715,6 +715,8 @@ export async function planInstructionFiles(
   targets: readonly InstructionTarget[],
   blocks: InstructionBlocks,
   stale: readonly InstructionTarget[] = [],
+  /** Only retire block types whose replacements were resolved and delivered. */
+  retiredBlocks?: InstructionBlocks,
 ): Promise<InstructionPlan> {
   const warnings: string[] = [];
   const changes: InstructionFileChange[] = [];
@@ -730,9 +732,17 @@ export async function planInstructionFiles(
     if (change) changes.push(change);
     files.push({ path: target.path, status: warnings.length > before ? 'blocked' : change ? 'planned' : 'current' });
   }
+  const cleanupBlocks = retiredBlocks === undefined ? STALE_BLOCKS : [
+    ...retiredBlocks.culture !== undefined ? [CULTURE] : [],
+    ...retiredBlocks.claudemd !== undefined ? [CLAUDEMD] : [],
+    ...retiredBlocks.recall !== undefined && retiredBlocks.directRecall !== undefined ? [RECALL] : [],
+    // Old combined rule blocks have no independently resolved replacement.
+    ...retiredBlocks.culture !== undefined && retiredBlocks.claudemd !== undefined
+      && retiredBlocks.recall !== undefined && retiredBlocks.directRecall !== undefined ? [LEGACY_RULES, TEAM_RULES] : [],
+  ];
   for (const file of stale) {
     const before = warnings.length;
-    const change = await planFile(file, STALE_BLOCKS.map((pair) => [pair, null] as const), 'cleanup', warnings);
+    const change = await planFile(file, cleanupBlocks.map((pair) => [pair, null] as const), 'cleanup', warnings);
     if (change) changes.push(change);
     files.push({ path: file.path, status: warnings.length > before ? 'blocked' : change ? 'planned' : 'current' });
   }

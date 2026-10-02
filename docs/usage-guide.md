@@ -1678,7 +1678,11 @@ OpenCode loads a file only when its config lists it in `instructions`. teamai ad
 
 Oh My Pi reads `RULES.md` as an always-applied rule beside its single user context file. In project scope teamai's OMP extension asks `teamai` for the blocks when the session starts and adds them to each turn's system prompt, from the project root and any subdirectory. Without that extension (for example with hooks removed), an Oh My Pi project session gets no team blocks. Prompts the HTTP local agent delivers for a project reach Pi, Oh My Pi and Hermes the same way, through their extension or plugin, and the Codex family through its session-start and subagent-start hooks. Pi and Oh My Pi wait for foreground session-start dispatch, including HTTP prompt sync, before caching the project instructions for the first prompt. Codex reads its HTTP prompt cache after the same sync, before returning SessionStart context.
 
-A pull from an earlier release may have left these blocks in a file listed below. A pull removes them only after every installed tool that wrote that file has its replacement instructions. Failed target writes, foreign files, missing extensions or disabled plugins keep the old blocks for a retry. Excluded tools' retired files stay unchanged. The pull names each file it changes:
+A pull from an earlier release may have left these blocks in a file listed below. A pull removes each block only after its replacement was resolved and delivered to every installed tool that wrote that file. An unreadable or invalid culture source keeps the old culture block even if shared instructions and recall sync successfully. Failed target writes, foreign files, missing extensions or disabled plugins keep the old blocks for a retry. Excluded tools' retired files stay unchanged.
+
+HTTP prompt commands verify the current destinations of all installed former writers, including delivery from previous commands, before removing the retired shared-instructions block. A destination holding an older prompt does not count as delivered. HTTP cleanup preserves culture and recall blocks, which those commands do not replace.
+
+The pull names each file it changes:
 
 - Claude Code, project scope: `.claude/CLAUDE.md`
 - CodeBuddy, project scope: `.codebuddy/CODEBUDDY.md`
@@ -2863,6 +2867,8 @@ What gets removed:
 An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The common case is `.codebuddy/rules/teamai-context.md`, which CodeBuddy and WorkBuddy share: `--agent workbuddy` keeps it while CodeBuddy is installed. A file an earlier release wrote the blocks to, such as the project `AGENTS.md`, is read by no tool now, so its teamai blocks go and your own text stays. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one. A configured `claudemd` remains a member file even when its basename is `teamai-context.md`.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. Targeting a tool with no local resources leaves shared resources in place, even if it is the only tool. Project uninstall still records the exclusion for Pi, Oh My Pi and Hermes, whose instruction channels are global.
+
+An enabled, installed Pi, Oh My Pi, Hermes or project Codex keeps the project state in use through its global delivery channel, even without a project-local tool directory. Uninstalling another tool preserves that state so the remaining tool can still deliver this project's instructions.
 
 If removing an OpenCode entry added by teamai fails, uninstall exits with an error and keeps the shared data directory and ownership record, even when OpenCode is the last tool. Repair the config or its permissions, then retry the same uninstall command.
 

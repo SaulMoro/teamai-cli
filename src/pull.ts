@@ -2597,7 +2597,7 @@ async function reconcileHooksAllScopes(
             delivery.reached.push(hook.tool);
           }
         }
-        const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(teamConfig, localConfig, delivery.reached));
+        const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(teamConfig, localConfig, delivery.reached), delivery.blocks);
         for (const warning of cleanup.warnings) log.warn(`[${localConfig.scope}] ${warning}`);
         const applied = await applyInstructionPlan(cleanup, { dryRun: Boolean(options.dryRun) });
         for (const line of applied.report) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${line}: replacement instructions are ready`);

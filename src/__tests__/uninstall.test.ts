@@ -572,6 +572,28 @@ describe('uninstall', () => {
     expect(await fse.pathExists(repoPath)).toBe(true);
   });
 
+  it.each(['pi', 'omp', 'hermes', 'codex'])('keeps project state when WorkBuddy is removed and global %s remains', async (tool) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('HERMES_HOME', path.join(homeDir, '.hermes'));
+    await fse.ensureDir(path.join(homeDir, `.${tool}`));
+    await fse.outputFile(path.join(projectRoot, '.codebuddy/rules/teamai-context.md'), `${TEAMAI_CLAUDEMD_START}\nold prompt\n${TEAMAI_CLAUDEMD_END}\n`);
+    await fse.ensureDir(path.join(projectRoot, '.workbuddy'));
+    const configFile = path.join(projectRoot, '.teamai', 'config.yaml');
+    await fse.outputFile(configFile, 'scope: project\n');
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, enabledAgents: ['workbuddy', tool] });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'workbuddy' });
+
+    expect(await fse.pathExists(configFile)).toBe(true);
+    expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ enabledAgents: [tool], disabledAgents: ['workbuddy'] }), 'project', projectRoot);
+    expect(await fse.pathExists(path.join(projectRoot, '.codebuddy/rules/teamai-context.md'))).toBe(false);
+  });
+
   it('user-scope Pi uninstall removes a server-pushed agent hook even without the main extension', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

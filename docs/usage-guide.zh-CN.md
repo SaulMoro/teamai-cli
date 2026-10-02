@@ -1556,7 +1556,11 @@ OpenCode 只加载配置中 `instructions` 列出的文件。仅当目标已包�
 
 Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。HTTP local agent 为项目下发的 prompt 也以同样方式，通过扩展或插件到达 Pi、Oh My Pi 和 Hermes，并通过 session-start 和 subagent-start hook 到达 Codex 系列。Pi 和 Oh My Pi 会等待前台 session-start 派发（包括 HTTP prompt 同步）完成，再为首个 prompt 缓存项目指令。Codex 也会在该同步完成后读取 HTTP prompt 缓存，再返回 SessionStart 上下文。
 
-早期版本的 pull 可能把这些块留在下列文件中。只有曾写入该文件的每个已安装工具都获得替代指令后，pull 才移除旧块。目标写入失败、文件并非 teamai 所有、扩展缺失或插件被禁用时，旧块保留以便重试。被排除工具的旧指令文件保持不变。pull 会列出所修改的每个文件：
+早期版本的 pull 可能把这些块留在下列文件中。只有某个区块的替代内容已成功解析并投递给曾写入该文件的每个已安装工具后，pull 才移除该旧区块。文化源文件不可读或无效时，即使共享指令和 recall 已成功同步，旧文化区块仍会保留。目标写入失败、文件并非 teamai 所有、扩展缺失或插件被禁用时，旧块保留以便重试。被排除工具的旧指令文件保持不变。
+
+HTTP prompt 命令会检查所有已安装的旧写入工具的当前目标，包括先前命令的投递结果，确认后才移除旧共享指令区块。目标仍含旧 prompt 时不算投递成功。HTTP 清理保留文化和 recall 区块，因为这些命令不替换它们。
+
+pull 会列出所修改的每个文件：
 
 - Claude Code，项目范围：`.claude/CLAUDE.md`
 - CodeBuddy，项目范围：`.codebuddy/CODEBUDDY.md`
@@ -2674,6 +2678,8 @@ teamai uninstall --agent claude
 多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
 
 跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi 和 Hermes 的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
+
+已启用且已安装的 Pi、Oh My Pi、Hermes 或项目级 Codex 通过全局投递通道继续使用项目状态，即使项目中没有该工具的本地目录。卸载其他工具时会保留此状态，以便剩余工具继续投递该项目的指令。
 
 若删除 teamai 添加的 OpenCode 条目失败，卸载以错误状态退出，并保留共享数据目录和所有权记录，即使 OpenCode 是最后一个工具。修复配置或权限后，重试同一卸载命令。
 

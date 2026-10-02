@@ -536,6 +536,53 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     console.log('pull after repair: replacement delivered, old prompt removed');
   });
 
+  it('keeps unreadable culture in its retired file until that block is delivered', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-block-migration-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.claude/skills']);
+    const source = path.join(member.projectRoot, '.teamai/team-repo/culture.md');
+    fs.unlinkSync(source);
+    fs.mkdirSync(source);
+    const legacy = path.join(member.projectRoot, '.claude/CLAUDE.md');
+    fs.writeFileSync(legacy, `# Mine\n${CULTURE_START}\nWORKING-CULTURE\n${CULTURE_END}\n${CLAUDEMD_START}\nold prompt\n${CLAUDEMD_END}\n`);
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('Failed to read team culture');
+    expect(fs.readFileSync(legacy, 'utf8')).toContain('WORKING-CULTURE');
+    expect(fs.readFileSync(legacy, 'utf8')).not.toContain('old prompt');
+    const replacement = path.join(member.projectRoot, '.claude/rules/teamai-context.md');
+    expect(fs.readFileSync(replacement, 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+    console.log('unreadable culture: old culture retained; resolved shared instructions delivered and retired');
+
+    const repaired = path.join(memberData(member).teamRepo, 'culture.md');
+    fs.rmdirSync(repaired);
+    fs.writeFileSync(repaired, '---\ncompany:\n  name: Acme\n---\n\nRESTORED-CULTURE\n');
+    const retry = await runCLI(['pull'], { HOME: member.home }, member.projectRoot);
+    expect(retry.code, retry.output).toBe(0);
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('# Mine\n');
+    expect(fs.readFileSync(replacement, 'utf8')).toContain('RESTORED-CULTURE');
+    console.log('culture repair: replacement delivered; retired culture removed on the next pull');
+  });
+
+  it('keeps globally installed Pi delivering after project WorkBuddy uninstall', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-active-hook-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.workbuddy/skills']);
+    const config = path.join(member.projectRoot, '.teamai/config.yaml');
+    fs.appendFileSync(config, '\nenabledAgents: [workbuddy, pi]\n');
+    fs.mkdirSync(path.join(member.home, '.pi'), { recursive: true });
+    const result = await pullAs(member);
+    expect(result.code, result.output).toBe(0);
+    expect(fs.existsSync(path.join(member.projectRoot, '.pi'))).toBe(false);
+    const data = memberData(member);
+    const removed = await runCLI(['uninstall', '--force', '--agent', 'workbuddy'], { HOME: member.home }, member.projectRoot);
+    expect(removed.code, removed.output).toBe(0);
+    expect(fs.existsSync(data.config)).toBe(true);
+    expect(fs.existsSync(path.join(member.projectRoot, '.codebuddy/rules/teamai-context.md'))).toBe(false);
+    expect(await sessionInstructions('pi', member.home, member.projectRoot)).toContain('DEVELOPMENT-SENTINEL');
+    console.log('WorkBuddy project uninstall: project state preserved; global-only Pi still receives member instructions');
+  });
+
   it('retains Pi legacy instructions until its extension is ready, and protects exclusions', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-migration-')));
     sandboxes.push(sandbox);

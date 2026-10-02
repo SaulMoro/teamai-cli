@@ -2206,7 +2206,37 @@ async function syncClaudemd(
     reached.push(tool);
   }
 
-  const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(fullTeamConfig, localConfig, reached));
+  // Commands deliver to one tool at a time, but earlier commands may already
+  // have reached the other writers. Verify current destinations rather than
+  // forgetting those deliveries or trusting a receipt for an older prompt.
+  const resolved = await resolveInstructionTargets(fullTeamConfig, localConfig);
+  for (const hook of resolved.hooks) {
+    if (!reached.includes(hook.tool) && !await hookDeliveryProblem(fullTeamConfig, localConfig, hook.tool, block)) {
+      reached.push(hook.tool);
+    }
+  }
+  for (const target of resolved.targets) {
+    if (target.tools.every((tool) => reached.includes(tool))) continue;
+    // A failed write in this command cannot become a previous delivery.
+    if (target.tools.some((tool) => teamConfig.toolPaths[tool] && !reached.includes(tool))) continue;
+    try {
+      await readFileIfExists(target.path);
+    } catch (error) {
+      log.debug(`local-agent: retained retired instructions because ${target.path} could not be verified: ${(error as Error).message}`);
+      continue;
+    }
+    const verification = await planInstructionFiles([target], { claudemd: block });
+    if (verification.files[0]?.status !== 'current') continue;
+    for (const tool of target.tools) {
+      if (tool === 'opencode' && block) {
+        const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+        const { config, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir(tool, localConfig));
+        if (!(await readOpencodeInstructionList(config))?.includes(entry)) continue;
+      }
+      reached.push(tool);
+    }
+  }
+  const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(fullTeamConfig, localConfig, reached), { claudemd: block });
   for (const warning of cleanup.warnings) log.warn(warning);
   const { report, failures } = await applyInstructionPlan(cleanup, { dryRun: false });
   for (const line of report) log.info(`${line}: no installed tool loads them from this file`);

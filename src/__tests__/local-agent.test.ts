@@ -2202,6 +2202,61 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     expect(outputs.filter(Boolean).join('\n')).toContain('PROJECT-PROMPT');
   });
 
+  it.each([['pi', 'workbuddy'], ['workbuddy', 'pi']])('retires a shared HTTP prompt after separate %s then %s deliveries', async (first, second) => {
+    await fse.ensureDir(path.join(tmpDir, '.pi'));
+    const { injectPiHooks } = await import('../pi-hooks.js');
+    if (first === 'pi') await injectPiHooks();
+    const legacy = '# Team notes\n<!-- [teamai:claudemd:start] -->\nold member prompt\n<!-- [teamai:claudemd:end] -->\n<!-- [teamai:culture:start] -->\nworking culture\n<!-- [teamai:culture:end] -->\n';
+    const { repo, ack } = await installProjectPrompt(first, ['.workbuddy/skills'], { files: { 'AGENTS.md': legacy } });
+    expect(ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(repo, 'AGENTS.md'), 'utf8')).toContain('old member prompt');
+
+    await injectPiHooks();
+    const next = await installProjectPrompt(second, []);
+    expect(next.ack?.status).toBe('success');
+    const retired = await fse.readFile(path.join(repo, 'AGENTS.md'), 'utf8');
+    expect(retired).not.toContain('old member prompt');
+    expect(retired).toContain('working culture');
+    expect(await fse.readFile(path.join(repo, '.codebuddy/rules/teamai-context.md'), 'utf8')).toContain('PROJECT-PROMPT');
+    const { localAgentInstructionText } = await import('../local-agent.js');
+    expect(await localAgentInstructionText(repo)).toContain('PROJECT-PROMPT');
+  });
+
+  it('does not count a previous HTTP delivery after the cached prompt changes', async () => {
+    await fse.ensureDir(path.join(tmpDir, '.pi'));
+    const legacy = '# Notes\n<!-- [teamai:claudemd:start] -->\nlegacy prompt\n<!-- [teamai:claudemd:end] -->\n';
+    const first = await installProjectPrompt('workbuddy', ['.workbuddy/skills'], { prompt: 'OLD-PROMPT', files: { 'AGENTS.md': legacy } });
+    expect(first.ack?.status).toBe('success');
+    const { injectPiHooks } = await import('../pi-hooks.js');
+    await injectPiHooks();
+    const next = await installProjectPrompt('pi', [], { prompt: 'NEW-PROMPT' });
+    expect(next.ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(next.repo, 'AGENTS.md'), 'utf8')).toBe(legacy);
+    expect(await fse.readFile(path.join(next.repo, '.codebuddy/rules/teamai-context.md'), 'utf8')).toContain('OLD-PROMPT');
+
+    const retry = await installProjectPrompt('workbuddy', [], { prompt: 'NEW-PROMPT' });
+    expect(retry.ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(next.repo, 'AGENTS.md'), 'utf8')).toBe('# Notes\n');
+  });
+
+  it('retains a shared HTTP prompt while another writer has a rejected replacement', async () => {
+    await fse.ensureDir(path.join(tmpDir, '.pi'));
+    const { injectPiHooks } = await import('../pi-hooks.js');
+    await injectPiHooks();
+    const legacy = '# Notes\n<!-- [teamai:claudemd:start] -->\nlegacy prompt\n<!-- [teamai:claudemd:end] -->\n';
+    const first = await installProjectPrompt('pi', ['.workbuddy/skills'], { files: {
+      'AGENTS.md': legacy, '.codebuddy/rules/teamai-context.md': '# Foreign\n',
+    } });
+    expect(first.ack?.status).toBe('success');
+    const failed = await installProjectPrompt('workbuddy', []);
+    expect(failed.ack?.status).toBe('failed');
+    expect(await fse.readFile(path.join(first.repo, 'AGENTS.md'), 'utf8')).toBe(legacy);
+    await fse.remove(path.join(first.repo, '.codebuddy/rules/teamai-context.md'));
+    const retry = await installProjectPrompt('workbuddy', []);
+    expect(retry.ack?.status).toBe('success');
+    expect(await fse.readFile(path.join(first.repo, 'AGENTS.md'), 'utf8')).toBe('# Notes\n');
+  });
+
   it('leaves the blocks an earlier release left for another installed tool that this prompt did not reach', async () => {
     const legacy = '# Team notes\n\n<!-- [teamai:claudemd:start] -->\nClaude\'s earlier selection\n<!-- [teamai:claudemd:end] -->\n';
     const { repo, ack } = await installProjectPrompt('codebuddy', ['.codebuddy/skills', '.claude/skills'], {
