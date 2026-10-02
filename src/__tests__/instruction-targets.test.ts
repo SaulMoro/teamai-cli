@@ -226,3 +226,32 @@ describe('instruction targets shared by several tools (#945)', () => {
     }
   });
 });
+
+describe('a tool configured without a rules directory (#945)', () => {
+  it('keeps the configured claudemd as its target, as the member\'s own file, instead of retiring it', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-norules-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectRoot, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, '.claude', 'settings.json'), '{}\n');
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({
+        team: 't',
+        repo: 'https://example.invalid/t.git',
+        toolPaths: { claude: { settings: '.claude/settings.json', claudemd: '.claude/CLAUDE.md' } },
+      });
+
+      const { targets, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+
+      const file = path.join(projectRoot, '.claude', 'CLAUDE.md');
+      expect(targets).toEqual([expect.objectContaining({ path: file, tools: ['claude'], header: undefined, owned: undefined })]);
+      expect(stale.map((t) => t.path)).not.toContain(file);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+

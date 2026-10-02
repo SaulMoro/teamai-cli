@@ -64,9 +64,13 @@ interface TargetEntry {
 /** The tool's `claudemd` path from the team's `toolPaths` (honors `toolRoots`). */
 const configured = (paths: ToolPaths): string | undefined => paths.claudemd;
 
-/** teamai's own always-applied file in the tool's rules directory. */
+/**
+ * teamai's own always-applied file in the tool's rules directory. A team's
+ * `toolPaths` entry without `rules` keeps its configured `claudemd`, which is
+ * the member's file there, not teamai's.
+ */
 const contextRule = (extension: string) => (paths: ToolPaths): string | undefined =>
-  paths.rules === undefined ? undefined : path.posix.join(paths.rules, `${TEAMAI_CONTEXT_RULE_NAME}${extension}`);
+  paths.rules === undefined ? paths.claudemd : path.posix.join(paths.rules, `${TEAMAI_CONTEXT_RULE_NAME}${extension}`);
 
 /**
  * Cursor applies an `.mdc` rule in every session only with this frontmatter;
@@ -217,7 +221,7 @@ export function instructionTargetFile(tool: string, paths: ToolPaths, scope: Sco
 export function retiredInstructionFiles(tool: string, paths: ToolPaths, scope: Scope): readonly string[] {
   const entry = entryFor(tool, scope);
   if (!entry) return [];
-  const previous = entry.file === configured ? undefined : paths.claudemd;
+  const previous = paths.claudemd === instructionTargetFile(tool, paths, scope) ? undefined : paths.claudemd;
   return previous === undefined || entry.retired.includes(previous) ? entry.retired : [...entry.retired, previous];
 }
 
@@ -333,10 +337,15 @@ export function instructionTargetPath(
   return file === undefined ? undefined : path.resolve(resolveToolBaseDir(tool, localConfig), file);
 }
 
-/** The target `tool` reads from `file` in `scope`, with the header and ownership its entry declares. */
+/**
+ * The target `tool` reads from `file` in `scope`, with the header and
+ * ownership its entry declares. Only teamai's `teamai-context` file takes
+ * them; a configured file is the member's.
+ */
 export function instructionTargetAt(tool: string, file: string, scope: Scope): InstructionTarget {
   const entry = entryFor(tool, scope);
-  return { path: file, tools: [], recall: false, header: entry?.header, owned: entry?.owned };
+  const own = path.basename(file).startsWith(`${TEAMAI_CONTEXT_RULE_NAME}.`);
+  return { path: file, tools: [], recall: false, header: own ? entry?.header : undefined, owned: own ? entry?.owned : undefined };
 }
 
 /**
