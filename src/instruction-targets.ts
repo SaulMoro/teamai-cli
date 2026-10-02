@@ -426,6 +426,14 @@ export async function resolveInstructionTargets(
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   for (const [tool, paths] of Object.entries(toolPaths)) {
     const entry = entryFor(tool, localConfig.scope);
+    const file = instructionTargetPath(tool, paths, localConfig);
+    if (isAgentExcluded(localConfig, tool)) {
+      if (file) inUse.add(file);
+      for (const retired of retiredInstructionFiles(tool, paths, localConfig.scope)) {
+        inUse.add(path.resolve(resolveToolBaseDir(tool, localConfig), retired));
+      }
+      continue;
+    }
     if (entry?.hook) {
       // Codex's hooks are user-level, so a project without its own `.codex/`
       // still reaches an installed Codex.
@@ -440,19 +448,13 @@ export async function resolveInstructionTargets(
         probeConfig = { ...localConfig, scope: 'user', toolRoots };
         probePaths = scopedToolPaths(teamConfig, probeConfig)[tool] ?? paths;
       }
-      if (isAgentExcluded(localConfig, tool)) {
-        for (const file of retiredInstructionFiles(tool, paths, localConfig.scope)) {
-          inUse.add(path.resolve(resolveToolBaseDir(tool, localConfig), file));
-        }
-      } else if (await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
+      if (await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
         hooks.push({ tool, recall: Boolean(paths.agents), limit: entry.hookLimit });
       }
       continue;
     }
-    const file = instructionTargetPath(tool, paths, localConfig);
     if (!file || !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
     inUse.add(file);
-    if (isAgentExcluded(localConfig, tool)) continue;
     const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope, paths);
     // The subagent block only where every tool reading the file has the subagent.
     target.recall = Boolean(paths.agents) && (target.tools.length === 0 || target.recall);
@@ -536,8 +538,16 @@ export async function registerOpencodeContext(
     if (listed === present) return null;
     return `Would ${present ? 'add' : 'remove'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}`;
   }
+  const listed = await readOpencodeInstructionList(config);
+  if (present && !listed?.includes(entry) && (listed !== null || !await pathExists(config))) {
+    // Persist ownership before activation. If either write fails, retry can
+    // safely finish without claiming an entry the member already listed.
+    await recordOpencodeContextEntry(localConfig, { config, entry }, true);
+  }
   const changed = await reconcileOpencodeInstructions(config, entry, present, 'team instructions');
-  if (changed) await recordOpencodeContextEntry(localConfig, { config, entry }, present);
+  if (!present && ((await readOpencodeInstructionList(config))?.includes(entry) === false || !await pathExists(config))) {
+    await recordOpencodeContextEntry(localConfig, { config, entry }, false);
+  }
   return changed ? `${present ? 'Added' : 'Removed'} "${entry}" ${present ? 'to' : 'from'} the instructions of ${config}` : null;
 }
 

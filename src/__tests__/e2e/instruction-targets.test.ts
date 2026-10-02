@@ -635,6 +635,29 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     console.log('uninstall Pi from project A: global extension unchanged; project B instructions still delivered; project A empty');
   });
 
+  it.each([true, false])('preserves global Codex delivery across two projects on project uninstall, targeted: %s', async (targeted) => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-codex-uninstall-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox);
+    const developer = makeProjectMember(sandbox, fixture, 'dev', 'developer', []);
+    const product = { ...makeProjectMember(sandbox, fixture, 'pm', 'product', []), home: developer.home };
+    fs.mkdirSync(path.join(developer.home, '.codex'), { recursive: true });
+    for (const member of [developer, product]) {
+      fs.appendFileSync(path.join(member.projectRoot, '.teamai/config.yaml'), '\nenabledAgents: [codex]\n');
+      const result = await pullAs(member);
+      expect(result.code, result.output).toBe(0);
+    }
+    const hooks = path.join(developer.home, '.codex/hooks.json');
+    const before = fs.readFileSync(hooks, 'utf8');
+    const removed = await runCLI(['uninstall', '--force', ...targeted ? ['--agent', 'codex'] : []], { HOME: developer.home }, developer.projectRoot);
+    expect(removed.code, removed.output).toBe(0);
+    expect(fs.readFileSync(hooks, 'utf8')).toBe(before);
+    expect(await sessionInstructions('codex', product.home, product.projectRoot)).toContain('PRODUCT-SENTINEL');
+    expect(await sessionInstructions('codex', developer.home, developer.projectRoot)).toBe('');
+    if (targeted) expect(fs.readFileSync(memberData(developer).config, 'utf8')).toContain('codex');
+    console.log(`Codex project ${targeted ? 'targeted' : 'full'} uninstall: global hooks unchanged; project B delivered; project A empty`);
+  });
+
   it('gives Hermes its project blocks through its plugin and frees the project AGENTS.md', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
     sandboxes.push(sandbox);

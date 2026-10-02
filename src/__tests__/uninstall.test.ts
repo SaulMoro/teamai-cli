@@ -572,6 +572,47 @@ describe('uninstall', () => {
     expect(await fse.pathExists(repoPath)).toBe(true);
   });
 
+  it.each(['codex', 'codex-internal', 'tcodex'].flatMap((tool) => [[tool, false], [tool, true]] as const))(
+    'preserves global %s hooks while excluding only the targeted project, legacy copy: %s', async (tool, legacy) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(projectRoot, '.teamai/team-repo');
+    vi.stubEnv('HOME', homeDir);
+    const actualHooks = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
+    const globalHooks = path.join(homeDir, `.${tool}/hooks.json`);
+    await actualHooks.reconcileHooks(globalHooks, tool, []);
+    const before = await fse.readFile(globalHooks, 'utf8');
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, enabledAgents: [tool] });
+    await fse.outputFile(path.join(projectRoot, '.teamai/config.yaml'), 'scope: project\n');
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    const projectHooks = path.join(projectRoot, `.${tool}/hooks.json`);
+    if (legacy) await actualHooks.reconcileHooks(projectHooks, tool, [], { manifestPath: path.join(projectRoot, '.teamai/managed-hooks.json') });
+
+    await uninstall({ force: true, agent: tool });
+
+    expect(await fse.readFile(globalHooks, 'utf8')).toBe(before);
+    expect(await fse.pathExists(path.join(projectRoot, '.teamai/config.yaml'))).toBe(true);
+    expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ disabledAgents: [tool], enabledAgents: [] }), 'project', projectRoot);
+    if (legacy) expect(await actualHooks.hasTeamaiHooks(projectHooks, tool)).toBe(false);
+  });
+
+  it('still removes global Codex hooks on a user-scope uninstall', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(homeDir, '.teamai/team-repo');
+    vi.stubEnv('HOME', homeDir);
+    const actualHooks = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
+    const globalHooks = path.join(homeDir, '.codex/hooks.json');
+    await actualHooks.reconcileHooks(globalHooks, 'codex', []);
+    const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['codex'] });
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true, agent: 'codex' });
+    expect(await actualHooks.hasTeamaiHooks(globalHooks, 'codex')).toBe(false);
+  });
+
   it.each(['pi', 'omp', 'hermes', 'codex'])('keeps project state when WorkBuddy is removed and global %s remains', async (tool) => {
     const homeDir = path.join(tmpDir, 'home');
     const projectRoot = path.join(tmpDir, 'project');

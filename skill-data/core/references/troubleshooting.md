@@ -235,7 +235,8 @@ marker, then run `teamai pull` again. Other files can still sync successfully.
 
 Pull keeps retired instruction blocks until every installed tool that wrote the
 file has a working replacement. Repair the named target, extension or plugin
-and run `teamai pull` again. Excluded tools' retired files stay unchanged.
+and run `teamai pull` again. Excluded tools' current and retired files stay
+unchanged and are excluded from doctor's stale-instruction check.
 If a block's source cannot be resolved, its old block stays even when other
 blocks sync. Repair the source and pull again to complete its migration.
 HTTP prompt commands verify earlier deliveries against the current prompt
@@ -243,3 +244,9 @@ before cleaning shared instructions. Older destination contents do not count;
 culture and recall stay because HTTP prompt commands do not replace them.
 An HTTP prompt sync that cannot clean retired blocks reports a failed ACK and
 keeps its previous cache and manifest for the server's retry.
+
+OpenCode registration saves ownership before activating a new config entry.
+If the state write fails, repair the state directory's permissions and retry
+`teamai pull`; the entry is not activated without its removal ownership.
+If the config write fails, ownership stays available for retry. Entries the
+member already listed are never claimed.

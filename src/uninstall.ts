@@ -52,6 +52,7 @@ import {
   skillsGuardBase,
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
+import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
 import { clearInstructionFile, instructionTargetFile, retiredInstructionFiles, resolveInstructionTargets } from './instruction-targets.js';
 import {
@@ -414,6 +415,9 @@ async function discoverToolResources(
     // except for the legacy copy, written into <projectRoot> by a CLI that knew
     // nothing about a member's relocated root, so it sits at the team path.
     for (const { baseDir: hookBaseDir, manifestPath } of hookTargets) {
+      // Other projects use Codex's user hooks as their instruction channel.
+      if (scope === 'project' && CODEX_TOOL_IDS.some((id) => id === tool)
+        && path.resolve(hookBaseDir) === path.resolve(getUserHome())) continue;
       const settingsRel = path.resolve(hookBaseDir) === path.resolve(getUserHome())
         ? (hookSettingsPath ?? toolPath.settings)
         : toolPath.settings;
@@ -691,6 +695,8 @@ async function buildRemovalPlan(
     // the last tool using teamai. Targeting a tool with no teamai resources is a
     // no-op for shared resources (plan will be empty → "Nothing to uninstall").
     includeShared = targetHasResources && !othersHaveResources;
+    // Keep this project's config so the global hook can read its exclusion.
+    if (localConfig.scope === 'project' && CODEX_TOOL_IDS.some((id) => id === agentFilter)) includeShared = false;
   } else {
     toolsToMerge = [...perTool.keys()];
     includeShared = true;
@@ -1317,7 +1323,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     if (isPlanEmpty(plan)) {
-      if (agentKey && localConfig.scope === 'project' && ['pi', 'omp', 'hermes'].includes(agentKey)) {
+      if (agentKey && localConfig.scope === 'project' && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey)) {
         // The global channel belongs to other projects too; exclusion is this
         // project's removal even when there are no local files to delete.
         await excludeUninstalledAgent(localConfig, agentKey);

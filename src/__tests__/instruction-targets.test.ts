@@ -553,6 +553,85 @@ describe('a configured claudemd named like teamai\'s file (#945)', () => {
 });
 
 describe('OpenCode instructions ownership (#945)', () => {
+  it.each(['state', 'config'])('keeps OpenCode registration retryable after a %s write fails', async (failure) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocretry-')));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const context = path.join(projectRoot, '.opencode/teamai-context.md');
+      fs.mkdirSync(path.dirname(context), { recursive: true });
+      fs.writeFileSync(context, `${claudemd('team')}\n`);
+      const config = path.join(projectRoot, '.opencode/opencode.json');
+      fs.writeFileSync(config, JSON.stringify({ instructions: ['docs/style.md'] }));
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, dataHome: path.join(root, 'data'), enabledAgents: ['opencode'],
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+      const files = [{ path: context, status: 'current' as const }];
+      const rename = fse.rename.bind(fse);
+      const failedPath = failure === 'state' ? path.join(root, 'data/state.json') : config;
+      const write = vi.spyOn(fse, 'rename').mockImplementation(async (from, to) => {
+        if (String(to) === failedPath) throw new Error(`EACCES ${failure}`);
+        return rename(from, to);
+      });
+      await expect(registerOpencodeContext(teamConfig, localConfig, resolved, false, files)).rejects.toThrow('EACCES');
+      // A failed ownership save must never leave an unowned active entry.
+      expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['docs/style.md']);
+      write.mockRestore();
+
+      await registerOpencodeContext(teamConfig, localConfig, resolved, false, files);
+      const { loadStateForScope } = await import('../config.js');
+      expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([{ config, entry: '.opencode/teamai-context.md' }]);
+      fs.unlinkSync(context);
+      if (failure === 'state') {
+        const removalWrite = vi.spyOn(fse, 'rename').mockImplementation(async (from, to) => {
+          if (String(to) === failedPath) throw new Error('EACCES removal state');
+          return rename(from, to);
+        });
+        await expect(registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false, []))
+          .rejects.toThrow('EACCES removal state');
+        expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['docs/style.md']);
+        expect((await loadStateForScope(localConfig)).opencodeContextEntries).toHaveLength(1);
+        removalWrite.mockRestore();
+      }
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false, []);
+      expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['docs/style.md']);
+      expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not report excluded Claude legacy blocks as a stale doctor delivery', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-excluded-file-')));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const legacy = path.join(projectRoot, '.claude/CLAUDE.md');
+      fs.mkdirSync(path.dirname(legacy), { recursive: true });
+      const original = `${claudemd('excluded prompt')}\n`;
+      fs.writeFileSync(legacy, original);
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot, disabledAgents: ['claude'],
+      } as unknown as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const { buildInstructionDeliveryChecks } = await import('../doctor-delivery.js');
+      const checks = await buildInstructionDeliveryChecks({ teamConfig, localConfig } as never);
+      const stale = checks.find((check) => check.name === 'No team instruction blocks are left in files no tool loads them from');
+      expect(await stale!.check()).toBe(true);
+      expect((await resolveInstructionTargets(teamConfig, localConfig)).stale.map((target) => target.path)).not.toContain(legacy);
+      expect(fs.readFileSync(legacy, 'utf8')).toBe(original);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('records the entry teamai adds, for uninstall, and forgets it once removed', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocown-')));
     const prevHome = process.env.HOME;
@@ -584,6 +663,10 @@ describe('OpenCode instructions ownership (#945)', () => {
       fs.writeFileSync(config, JSON.stringify({ instructions: ['.opencode/teamai-context.md'] }));
       await registerOpencodeContext(teamConfig, localConfig, { targets: [], stale: resolved.targets }, false, []);
       expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['.opencode/teamai-context.md']);
+      // Even a generated file does not prove ownership of a member's entry.
+      fs.writeFileSync(context, `${claudemd('team')}\n`);
+      await registerOpencodeContext(teamConfig, localConfig, resolved, false, [{ path: context, status: 'current' }]);
+      expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(root, { recursive: true, force: true });
