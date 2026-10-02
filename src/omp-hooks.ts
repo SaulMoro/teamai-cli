@@ -36,7 +36,7 @@
  */
 
 import path from 'node:path';
-import { writeIfChanged, pathExists, remove } from './utils/fs.js';
+import { generatedFileState, writeIfChanged, remove } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
 
@@ -245,6 +245,10 @@ export default function teamaiHooks(pi) {
  */
 export async function injectOmpHooks(): Promise<void> {
   const file = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
+  if (await hasForeignOmpHooks()) {
+    log.warn(`Skipping OMP hook injection: ${file} exists without the TeamAI marker`);
+    return;
+  }
   if (await writeIfChanged(file, buildOmpExtensionSource())) {
     log.success(`Injected teamai OMP hook into ${file}`);
   } else {
@@ -255,8 +259,18 @@ export async function injectOmpHooks(): Promise<void> {
 /** Remove the teamai OMP extension if present. */
 export async function removeOmpHooks(): Promise<void> {
   const file = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
-  if (await pathExists(file)) {
-    await remove(file);
-    log.success(`Removed teamai OMP hook from ${file}`);
-  }
+  if (!await hasOmpHooks()) return;
+  await remove(file);
+  log.success(`Removed teamai OMP hook from ${file}`);
+}
+
+const ompHookState = () => generatedFileState(path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE), `${TEAMAI_MARKER} hooks extension`);
+
+/** Whether the OMP extension file is teamai's. */
+export async function hasOmpHooks(): Promise<boolean> {
+  return await ompHookState() === 'teamai';
+}
+
+async function hasForeignOmpHooks(): Promise<boolean> {
+  return await ompHookState() === 'foreign';
 }

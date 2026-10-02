@@ -363,9 +363,9 @@ async function discoverToolResources(
     // OMP hooks are a single teamai-managed TS extension in the user agent dir
     // (~/.omp/agent/extensions/teamai-hooks.ts) — the adapter never writes a
     // project copy, so there is just the one place to look.
-    const { resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
+    const { hasOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
     const extFile = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
-    if (await pathExists(extFile)) {
+    if (await hasOmpHooks()) {
       res.ompHookFile = extFile;
     }
   } else if (tool === 'pi') {

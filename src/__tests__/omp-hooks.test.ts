@@ -130,6 +130,16 @@ describe('injectOmpHooks / removeOmpHooks', () => {
     await removeOmpHooks();
     expect(await fse.pathExists(extFile())).toBe(false);
   });
+
+  it('leaves a same-named extension teamai did not write alone on inject and remove', async () => {
+    await fse.outputFile(extFile(), 'export default function mine() {}\n');
+
+    await injectOmpHooks();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`${extFile()} exists without the TeamAI marker`));
+    await removeOmpHooks();
+
+    expect(await fse.readFile(extFile(), 'utf8')).toBe('export default function mine() {}\n');
+  });
 });
 
 describe('reconcileHooksToAllTools routes omp to the extension adapter', () => {

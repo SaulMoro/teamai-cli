@@ -25,7 +25,7 @@
  */
 
 import path from 'node:path';
-import { writeFile, writeIfChanged, ensureDir, pathExists, remove, readFileSafe } from './utils/fs.js';
+import { generatedFileState, writeFile, writeIfChanged, ensureDir, remove } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
 
@@ -198,7 +198,7 @@ export default function teamaiHooks(pi) {
 export async function injectPiHooks(): Promise<void> {
   const dir = resolvePiExtensionsDir();
   const file = path.join(dir, PI_HOOK_FILE);
-  if (await pathExists(file) && !await hasPiHooks()) {
+  if (await generatedFileState(file, `${TEAMAI_MARKER} hooks extension`) === 'foreign') {
     log.warn(`Skipping Pi hook injection: ${file} exists without the TeamAI marker`);
     return;
   }
@@ -275,9 +275,10 @@ function piAgentHookFile(slug: string): string {
  * on this file must never touch a same-named file a user authored by hand.
  */
 export async function hasPiAgentHook(slug: string): Promise<boolean> {
-  const content = await readFileSafe(piAgentHookFile(slug));
-  return content?.includes(`${TEAMAI_MARKER} agent hook [${slug}]`) ?? false;
+  return await piAgentHookState(slug) === 'teamai';
 }
+
+const piAgentHookState = (slug: string) => generatedFileState(piAgentHookFile(slug), `${TEAMAI_MARKER} agent hook [${slug}]`);
 
 /**
  * Install one HTTP-source agent hook as a Pi extension.
@@ -301,7 +302,7 @@ export async function applyPiAgentHook(def: {
     throw new Error(`Pi does not support event "${def.event}" — skipping hook [${def.slug}]`);
   }
   const file = piAgentHookFile(def.slug);
-  if (await pathExists(file) && !await hasPiAgentHook(def.slug)) {
+  if (await piAgentHookState(def.slug) === 'foreign') {
     throw new Error(`Skipping Pi agent hook [${def.slug}]: ${file} exists without the TeamAI marker`);
   }
   await ensureDir(resolvePiExtensionsDir());
@@ -320,7 +321,5 @@ export async function removePiAgentHook(slug: string): Promise<void> {
 /** Check whether a global or legacy project extension has TeamAI's marker. */
 export async function hasPiHooks(baseDir?: string): Promise<boolean> {
   const file = path.join(baseDir ? resolvePiProjectExtensionsDir(baseDir) : resolvePiExtensionsDir(), PI_HOOK_FILE);
-  if (!await pathExists(file)) return false;
-  const content = await readFileSafe(file);
-  return content?.includes(`${TEAMAI_MARKER} hooks extension`) ?? false;
+  return await generatedFileState(file, `${TEAMAI_MARKER} hooks extension`) === 'teamai';
 }
