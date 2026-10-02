@@ -185,7 +185,13 @@ After `git pull` (`post-merge`), the hook fetches the team repo, waiting at most
 and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
 learnings and reports, the same background pull takes over. In single-repo mode it
 delivers the knowledge `git pull` just brought, with no network. The hook prints nothing and always exits 0, so a failed pull never
-fails the git command. It follows the scope rules below: no project config, or one
+fails the git command. A failure inside it (the team repo fetch failed, or stopped at the
+5-second cap and the background pull did not finish it; another teamai process held the
+project's sync lock longer than the hook waits, 5 seconds after `git pull` and 60 seconds
+for a new worktree) is written to `~/.teamai/debug.log` and recorded: `teamai doctor`
+names it with its fix, and the next interactive `teamai pull` mentions it once. The
+background pull retries, and a hook pull that succeeds clears the record. `teamai doctor`
+also reports whether the hook is installed and, when it is not, why. It follows the scope rules below: no project config, or one
 that cannot be read, means no sync. The command is one `sh` line that runs
 `teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
 through `~/.teamai/bin` as the agent hooks do.

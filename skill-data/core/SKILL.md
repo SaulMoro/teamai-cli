@@ -136,8 +136,9 @@ the command returns, from the team clone as last fetched when that was within
 24 h; a full pull then runs in the background. A branch switch does nothing.
 After `git pull` it fetches the team repo (5 s cap, then the background pull) and
 delivers; in single-repo mode it delivers what `git pull` brought, offline. It prints nothing and always
-exits 0, so a worktree still missing team resources needs a `teamai pull` there;
-`git config --local --get-regexp '^hook\.teamai-'` shows whether it is installed.
+exits 0; a failure inside it is recorded, and `teamai doctor` names it (`Last git
+hook run failed: ...`) with its fix, as does the next interactive `teamai pull`, once.
+`teamai doctor` also reports whether the hook is installed, and why not.
 
 A team agent (`agents/<name>.yaml`) can set `model: strong`, `model: fast`, or an
 alias the team defines, instead of one tool's model. The team maps each alias per

@@ -97,6 +97,9 @@ function teamFetchStamp(localConfig: LocalConfig): string {
 /** How long an inline pull waits for another pull's partition lock. */
 const INLINE_LOCK_WAIT_MS = 60_000;
 
+/** `Error.name` of a team repo fetch stopped at `fetchTimeoutMs`. */
+const TEAM_FETCH_TIMEOUT = 'TeamFetchTimeout';
+
 async function teamFetchedWithinTtl(localConfig: LocalConfig): Promise<boolean> {
   const stamp = await readJson<{ lastFetch: string }>(teamFetchStamp(localConfig));
   const elapsed = stamp ? Date.now() - new Date(stamp.lastFetch).getTime() : NaN;
@@ -157,7 +160,11 @@ async function refreshTeamRepo(
   // The post-merge hook caps the fetch: git pull is waiting on it.
   const cap = options.fetchTimeoutMs === undefined ? undefined : AbortSignal.timeout(options.fetchTimeoutMs);
   const result = await pullRepo(localConfig.repo.localPath, cap).catch((e: unknown) => {
-    if (cap?.aborted) throw new Error(`team repo fetch exceeded ${options.fetchTimeoutMs} ms, left to the detached pull`);
+    if (cap?.aborted) {
+      const timeout = new Error(`team repo fetch exceeded ${options.fetchTimeoutMs} ms, left to the detached pull`);
+      timeout.name = TEAM_FETCH_TIMEOUT;
+      throw timeout;
+    }
     throw e;
   });
   await writeJson(teamFetchStamp(localConfig), { lastFetch: new Date().toISOString() })
@@ -919,7 +926,7 @@ async function pullForScope(
     revisionField?: 'lastPullRev' | 'lastInheritedPullRev';
   } = {},
   /** Set to `{ completed: true }` on a real (non-dry-run) sync. See pull(). */
-  result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean },
+  result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean; teamRepoFailed?: boolean },
   /** Collects this scope's env resolution for the stages after it (see resolvePullEnv). */
   teamEnvs?: Map<LocalConfig, TeamEnv>,
 ): Promise<void> {
@@ -956,6 +963,14 @@ async function pullForScope(
     const reason = `[${scopeLabel}] Pull failed: ${(e as Error).message}`;
     pullSpin.fail(reason);
     log.persist(reason);
+    if (result) result.teamRepoFailed = true;
+    if (options.gitHook && localConfig.scope === 'project') {
+      const { recordGitHookFailure } = await import('./git-hook.js');
+      const at = new Date().toISOString();
+      await recordGitHookFailure(localConfig, (e as Error).name === TEAM_FETCH_TIMEOUT
+        ? { kind: 'fetch-timeout', event: options.gitHook, at, capMs: options.fetchTimeoutMs ?? 0 }
+        : { kind: 'fetch-failed', event: options.gitHook, at, error: (e as Error).message });
+    }
     return;
   }
 
@@ -2169,6 +2184,18 @@ async function reinjectLegacyHooks(localConfig: LocalConfig): Promise<void> {
   log.debug('Hooks migrated to dispatch format');
 }
 
+/** Say the failure the git hook recorded, then drop it: an interactive pull says it once. */
+async function mentionGitHookFailure(config: LocalConfig, reported: Set<string>): Promise<void> {
+  const { readGitHookFailure, clearGitHookFailure, describeGitHookFailure } = await import('./git-hook.js');
+  const failure = await readGitHookFailure(config);
+  if (!failure) return;
+  const { message, fix } = describeGitHookFailure(failure);
+  log.warn(`Last git hook run failed: ${message}`);
+  log.dim(`  → ${fix}`);
+  reported.add('git-hook-failure');
+  await clearGitHookFailure(config);
+}
+
 /**
  * Main pull entry point.
  *
@@ -2191,12 +2218,16 @@ export async function pull(
   // Warnings about the team repo are said once per pull, not once per scope or
   // per resolution, and every pull says them again.
   resetWarnOnce();
+  // A pull a git hook started: inline, or the detached one it hands over to.
+  const { isGitHookEvent } = await import('./git-hook.js');
+  const hookEnv = process.env.TEAMAI_GIT_HOOK;
+  if (!options.gitHook && isGitHookEvent(hookEnv)) options = { ...options, gitHook: hookEnv };
   // What the scopes below say in their own words, so the post-pull pass does
   // not repeat it. Owned here rather than at module scope so nothing survives
   // into another call.
   const reported = new Set<string>();
   // A later successful scope must not hide an earlier docs failure (or vice versa).
-  const syncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false };
+  const syncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false, teamRepoFailed: false };
   // Each scope's env, resolved once by its env stage (resolvePullEnv).
   const teamEnvs = new Map<LocalConfig, TeamEnv>();
 
@@ -2237,7 +2268,10 @@ export async function pull(
     // Inline (new-worktree hook), a skipped scope is a worktree without the
     // team's resources, and the holder is often the detached pull of the
     // worktree created just before: wait for it, within the hook's budget.
-    const waitUntil = options.inline ? Date.now() + INLINE_LOCK_WAIT_MS : 0;
+    // Post-merge caps it like its fetch: `git pull` waits on it, and the holder
+    // may be a detached pull hung on the network.
+    const lockWaitMs = options.fetchTimeoutMs ?? INLINE_LOCK_WAIT_MS;
+    const waitUntil = options.inline ? Date.now() + lockWaitMs : 0;
     let acquired = await acquireLock(lock, { dryRun: options.dryRun });
     while (!acquired && Date.now() < waitUntil) {
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -2252,6 +2286,14 @@ export async function pull(
     // once the other process finishes syncs it normally.
     log.info(`[${config.scope}] sync in progress elsewhere — skipped (another pull/push holds the lock)`);
     contended.add(config);
+    // A detached hook pull skipping is fine: the holder syncs. An inline one
+    // leaves the checkout without what the next session reads.
+    if (options.inline && options.gitHook && config.scope === 'project') {
+      const { recordGitHookFailure } = await import('./git-hook.js');
+      await recordGitHookFailure(config, {
+        kind: 'lock-held', event: options.gitHook, at: new Date().toISOString(), waitedMs: lockWaitMs,
+      });
+    }
     return false;
   };
 
@@ -2324,9 +2366,15 @@ export async function pull(
 
   // 3. Project scope.
   if (projectConfig) {
+    // The git hook runs silently; what failed in it is said here, once.
+    if (!options.silent && !options.dryRun) await mentionGitHookFailure(projectConfig, reported);
     try {
       if (await lockScope(projectConfig)) {
         await pullForScope(projectConfig, options, reported, {}, syncResult, teamEnvs);
+        if (options.gitHook && !syncResult.teamRepoFailed) {
+          const { clearGitHookFailure } = await import('./git-hook.js');
+          await clearGitHookFailure(projectConfig);
+        }
       }
     } catch (e) {
       log.warn(`Project-scope pull error: ${(e as Error).message}`);

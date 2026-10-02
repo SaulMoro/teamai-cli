@@ -1079,6 +1079,12 @@ export interface GlobalOptions {
    * is then not delivered and the detached pull after the hook does it.
    */
   fetchTimeoutMs?: number;
+  /**
+   * Internal (`pull` only): the git hook event that started this pull, inline
+   * or detached (`TEAMAI_GIT_HOOK` in the environment). Its failures are
+   * recorded for `doctor` and the next interactive pull; its success clears them.
+   */
+  gitHook?: 'post-checkout' | 'post-merge';
   /** Push a specific skill by path. */
   skill?: string;
   /** Target role namespace (overrides detected namespace). */

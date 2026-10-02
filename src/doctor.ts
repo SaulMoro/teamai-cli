@@ -514,6 +514,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
       fix: 'Run `teamai pull` to publish them. If they stay queued, check that you '
         + 'can push to the team repo (run with --verbose to see the push error).',
     },
+    ...await buildGitHookChecks(localConfig, stage),
     ...buildToolRootChecks(localConfig, teamConfig),
     ...await buildEnabledToolChecks(ctx),
     ...await buildHookChecks(toolPaths, hookToolPaths, baseDir, localConfig),
@@ -533,6 +534,39 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
   );
 
   return checks;
+}
+
+/**
+ * Project scope: whether teamai's git hook is installed (`doctor` only: pull
+ * installs it, and a member on an old git would hear it after every pull), and
+ * the failure its last silent run recorded (git-hook.ts), which `pull`
+ * mentions itself. A project root outside git has no hook to report.
+ */
+async function buildGitHookChecks(localConfig: LocalConfig, stage: CheckStage): Promise<Check[]> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return [];
+  const { gitHookStatus, describeMissingGitHook, readGitHookFailure, describeGitHookFailure } = await import('./git-hook.js');
+  // A project root that no longer exists cannot be asked (git refuses the cwd).
+  const status = stage === 'doctor' ? await gitHookStatus(localConfig.projectRoot).catch(() => null) : null;
+  const failure = await readGitHookFailure(localConfig);
+  const report = failure ? describeGitHookFailure(failure) : null;
+  const installed: Check[] = !status || (!status.installed && status.reason === 'not-a-repository') ? [] : [{
+    name: 'Git hook syncs new worktrees and git pull',
+    source: 'local',
+    check: async () => status.installed,
+    ...(status.installed ? {} : { fix: describeMissingGitHook(status) }),
+  }];
+  return [
+    ...installed,
+    report
+      ? {
+        name: `Last git hook run failed: ${report.message}`,
+        source: 'local',
+        reportedByPull: 'git-hook-failure',
+        check: async () => false,
+        fix: report.fix,
+      }
+      : { name: 'No git hook failure recorded', source: 'local', check: async () => true },
+  ];
 }
 
 /**

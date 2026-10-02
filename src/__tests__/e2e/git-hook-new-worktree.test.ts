@@ -487,6 +487,106 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     });
   });
 
+  describe('a failure inside the hook is visible', () => {
+    /** Make the next post-checkout fetch the team repo, and fail doing it (with the detached retry). */
+    const failNextHook = (repo: string): (() => void) => {
+      fs.writeFileSync(stampOf(repo), JSON.stringify({ lastFetch: new Date(Date.now() - 25 * 3600_000).toISOString() }));
+      const away = `${remote}.away`;
+      fs.renameSync(remote, away);
+      return () => fs.renameSync(away, remote);
+    };
+
+    it('doctor reports the hook installed, and missing with the reason', () => {
+      const repo = project('doctor-hook-project', ['--agent', 'claude']);
+      expect(teamai(['doctor'], repo).output).toContain('✔ Git hook syncs new worktrees and git pull');
+
+      gitOk(['config', '--local', '--unset', 'hook.teamai-post-checkout.command'], repo);
+      const missing = teamai(['doctor'], repo).output;
+
+      expect(missing).toContain('✖ Git hook syncs new worktrees and git pull');
+      expect(missing).toMatch(/not in this repository's git config.*Run `teamai pull`/);
+    });
+
+    it('git worktree add exits 0; doctor names the failure; the next interactive pull mentions it once', async () => {
+      const repo = project('fail-project', ['--agent', 'claude']);
+      await settle(repo);
+      const restore = failNextHook(repo);
+      let wt: { dir: string } & Run;
+      try {
+        wt = worktreeAdd(repo, 'wt-fail');
+        expect(wt.code).toBe(0);
+        expect(wt.output).toBe('');
+        await settle(repo);
+      } finally {
+        restore();
+      }
+
+      const doctor = teamai(['doctor'], repo).output;
+      expect(doctor).toMatch(/✖ Last git hook run failed: post-checkout could not fetch the team repo/);
+      expect(doctor).toMatch(/→ .*teamai pull/);
+
+      const first = teamai(['pull'], wt.dir);
+      expect(first.output).toMatch(/Last git hook run failed: post-checkout could not fetch the team repo/);
+      const second = teamai(['pull'], wt.dir);
+      expect(second.output).not.toMatch(/git hook run failed/);
+      expect(teamai(['doctor'], repo).output).toContain('✔ No git hook failure recorded');
+    });
+
+    it('a partition lock another pull holds: post-merge waits no longer than its cap and records why it skipped', async () => {
+      const repo = project('locked-project', ['--agent', 'claude']);
+      const bare = `${repo}.git`;
+      gitOk(['clone', '-q', '--bare', repo, bare], sandbox);
+      gitOk(['remote', 'add', 'origin', bare], repo);
+      gitOk(['fetch', '-q', 'origin'], repo);
+      gitOk(['branch', '-q', '-u', 'origin/main'], repo);
+      const mate = `${repo}-mate`;
+      gitOk(['clone', '-q', bare, mate], sandbox);
+      fs.writeFileSync(path.join(mate, 'change.txt'), '1\n');
+      gitOk(['add', '-A'], mate);
+      gitOk(['commit', '-q', '-m', 'change'], mate);
+      gitOk(['push', '-q', 'origin', 'HEAD:main'], mate);
+      await settle(repo);
+      // A live holder: this test process.
+      const lock = path.join(partitionOf(repo), '.sync-lock');
+      fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), owner: 'e2e' }));
+      try {
+        const started = Date.now();
+        const r = git(['pull', '-q'], repo);
+        const elapsed = Date.now() - started;
+
+        expect(r.code, r.output).toBe(0);
+        expect(r.output).toBe('');
+        expect(elapsed).toBeLessThan(15_000);
+        // The detached pull it hands over to meets the same lock and skips.
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      } finally {
+        fs.rmSync(lock, { force: true });
+      }
+
+      const doctor = teamai(['doctor'], repo).output;
+      expect(doctor).toMatch(/✖ Last git hook run failed: post-merge skipped its sync: another teamai process held the project's sync lock/);
+    }, 60_000);
+
+    it('a successful hook run clears the recorded failure', async () => {
+      const repo = project('recover-project', ['--agent', 'claude']);
+      await settle(repo);
+      const restore = failNextHook(repo);
+      try {
+        worktreeAdd(repo, 'wt-recover-fail');
+        await settle(repo);
+      } finally {
+        restore();
+      }
+      expect(teamai(['doctor'], repo).output).toMatch(/✖ Last git hook run failed/);
+
+      const wt = worktreeAdd(repo, 'wt-recover-ok');
+      expect(wt.code).toBe(0);
+      await settle(repo);
+
+      expect(teamai(['doctor'], repo).output).toContain('✔ No git hook failure recorded');
+    });
+  });
+
   it('with no enabledAgents, creates the tool roots the main checkout has, and only those', () => {
     const codexProject = project('codex-project', []);
     fs.mkdirSync(path.join(codexProject, '.codex'));

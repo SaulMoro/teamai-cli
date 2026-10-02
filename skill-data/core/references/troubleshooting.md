@@ -67,6 +67,19 @@ This is the #1 onboarding issue. In order:
    `recall` refuses the same way with `Nothing was searched: <file>: <reason>`:
    no team knowledge was searched, so do not report that the team has none.
 
+## "Last git hook run failed: ..." / a new worktree lacks team resources
+
+In project scope, teamai's git hook syncs on `git worktree add` and `git pull`
+silently and always exits 0, so its failures surface only here: `teamai doctor`
+names the last one with its fix, and the next interactive `teamai pull` says it
+once. The causes are a team repo fetch that failed or hit the 5 s post-merge
+cap without the background pull finishing it, and another teamai process
+holding the project's sync lock longer than the hook waits. Run `teamai pull`
+in the checkout (after a stuck pull ends, or once the team repo is reachable);
+`~/.teamai/debug.log` has the details. If doctor reports `Git hook syncs new
+worktrees and git pull` as failing, follow its fix: `teamai pull` installs it,
+and Git older than 2.54 has no config hooks.
+
 ## "KEY is not set. Run `teamai env set KEY`"
 
 `pull`, `teamai mcp list`, `teamai env list`, `teamai doctor` and

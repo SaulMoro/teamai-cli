@@ -157,13 +157,15 @@ const newWorktreeHandler: HookHandler = {
     const { getDataHome } = await import('./types.js');
     if (await isWithin(cwd, [getDataHome(config), config.repo.localPath])) return null;
 
-    const { createProjectToolRoots } = await import('./project-agent-root.js');
-    await createProjectToolRoots({ cwd });
-    const { pull } = await import('./pull.js');
-    await pull({ silent: true, inline: true });
+    await recordingFailure(config, 'post-checkout', async () => {
+      const { createProjectToolRoots } = await import('./project-agent-root.js');
+      await createProjectToolRoots({ cwd });
+      const { pull } = await import('./pull.js');
+      await pull({ silent: true, inline: true, gitHook: 'post-checkout' });
+    });
     // Learnings, reports, sources and the team repo itself refresh after
-    // `git worktree add` returns.
-    await spawnDetachedPull(cwd);
+    // `git worktree add` returns; it also retries what failed above.
+    await spawnDetachedPull(cwd, 'post-checkout');
     return null;
   },
 };
@@ -190,22 +192,41 @@ const gitPullHandler: HookHandler = {
     if (await isWithin(cwd, self ? [getDataHome(config)] : [getDataHome(config), config.repo.localPath])) return null;
 
     const { pull } = await import('./pull.js');
-    if (self) {
-      await pull({ silent: true, inline: true });
-      return null;
-    }
-    await pull({ silent: true, inline: true, fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS });
-    await spawnDetachedPull(cwd);
+    await recordingFailure(config, 'post-merge', () => pull(self
+      ? { silent: true, inline: true, gitHook: 'post-merge' }
+      : { silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS }));
+    if (!self) await spawnDetachedPull(cwd, 'post-merge');
     return null;
   },
 };
 
-/** Start a full `teamai pull --silent` in `cwd` that this process does not wait for. */
-async function spawnDetachedPull(cwd: string): Promise<void> {
+/**
+ * Run the inline pass of a git hook; what it throws is recorded (the hook is
+ * silent), not raised.
+ */
+async function recordingFailure(
+  config: LocalConfig,
+  event: 'post-checkout' | 'post-merge',
+  pass: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await pass();
+  } catch (e) {
+    const { recordGitHookFailure } = await import('./git-hook.js');
+    await recordGitHookFailure(config, { kind: 'hook-error', event, at: new Date().toISOString(), error: (e as Error).message });
+  }
+}
+
+/**
+ * Start a full `teamai pull --silent` in `cwd` that this process does not wait
+ * for. TEAMAI_GIT_HOOK makes it record its failure, and clear the record when it
+ * succeeds.
+ */
+async function spawnDetachedPull(cwd: string, event: 'post-checkout' | 'post-merge'): Promise<void> {
   const { resolveCliEntry } = await import('./builtin-hooks.js');
   const { spawn } = await import('node:child_process');
   spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
-    cwd, detached: true, stdio: 'ignore', windowsHide: true,
+    cwd, detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, TEAMAI_GIT_HOOK: event },
   }).on('error', (e) => log.debug(`git hook: detached pull failed to start: ${e.message}`)).unref();
 }
 

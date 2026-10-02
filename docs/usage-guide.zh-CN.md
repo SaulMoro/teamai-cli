@@ -173,7 +173,11 @@ worktree 的应用，新建一个检出时，该 hook 会创建 `enabledAgents` 
 切换分支不会触发任何操作。`git pull` 之后（`post-merge`），该 hook 会 fetch 团队仓库（最多等待 5 秒），
 并在 `git pull` 返回前交付其变更；超过 5 秒时，以及 source、learnings 与 reports，交给同样的后台 pull。
 单仓库模式下，它交付 `git pull` 刚带来的知识，不访问网络。该 hook 不输出任何内容且始终以 0 退出，
-因此 pull 失败也不会让 git 命令失败。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
+因此 pull 失败也不会让 git 命令失败。hook 内的失败（团队仓库 fetch 失败，或在 5 秒上限处被中止而后台 pull
+也未完成；另一个 teamai 进程持有项目的同步锁，超过 hook 的等待时间：`git pull` 之后 5 秒，新 worktree 60 秒）
+会写入 `~/.teamai/debug.log` 并被记录：`teamai doctor` 会指出它及其修复方法，下一次交互式 `teamai pull`
+会提示一次。后台 pull 会重试，任何一次成功的 hook pull 都会清除该记录。`teamai doctor` 还会报告 hook
+是否已安装，未安装时说明原因。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
 都不会同步。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
 与 Agent hook 一样通过 `~/.teamai/bin` 找到 `teamai`。
 
