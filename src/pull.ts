@@ -69,23 +69,6 @@ let pendingUsageReport: Promise<void> | undefined;
 const FILE_NOT_FOUND_ERROR_CODE = 'ENOENT';
 
 /**
- * Refresh the local team-repo tree, abstracting the two backends.
- *
- * - git:  `git pull` into localPath; version = current HEAD rev.
- * - http: nothing to clone — skills/rules/CLAUDE.md are delivered per-session via
- *         report/sync/ack (the local-agent bypass), not a repo snapshot.
- *
- * Returns a display label and the opaque version string used as the
- * incremental-sync cache key (state.lastPullRev). `version` is null only when
- * the git backend can't resolve a rev. `submodulesFailed` marks a git pull
- * whose submodule update failed: the caller must then NOT persist the new rev,
- * or the next pull's unchanged-rev fast path would skip the retry and leave
- * tool directories pointed at stale/empty submodule content forever.
- * `submodulesChanged` marks a run whose submodule update succeeded but moved the
- * tree on disk: the caller must then NOT take that same fast path *this* run,
- * because the parent rev alone cannot see the change (issue #525).
- */
-/**
  * When the team clone was last fetched, beside the clone (as a source cache's
  * last-pull.json). A fresh clone has no FETCH_HEAD, and state.lastPull moves
  * only on a full sync, so neither can tell.
@@ -106,9 +89,30 @@ async function teamFetchedWithinTtl(localConfig: LocalConfig): Promise<boolean> 
   return Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= SOURCE_PULL_TTL_MS;
 }
 
+/**
+ * Refresh the local team-repo tree, abstracting the two backends.
+ *
+ * - git:  `git pull` into localPath; version = current HEAD rev.
+ * - http: nothing to clone — skills/rules/CLAUDE.md are delivered per-session via
+ *         report/sync/ack (the local-agent bypass), not a repo snapshot.
+ *
+ * Returns a display label and the opaque version string used as the
+ * incremental-sync cache key (state.lastPullRev). `version` is null only when
+ * the git backend can't resolve a rev. `submodulesFailed` marks a git pull
+ * whose submodule update failed: the caller must then NOT persist the new rev,
+ * or the next pull's unchanged-rev fast path would skip the retry and leave
+ * tool directories pointed at stale/empty submodule content forever.
+ * `submodulesChanged` marks a run whose submodule update succeeded but moved the
+ * tree on disk: the caller must then NOT take that same fast path *this* run,
+ * because the parent rev alone cannot see the change (issue #525).
+ *
+ * `options.dryRun` marks a preview. The refresh still reads the tree, but the
+ * self-mode `.gitignore` self-heal is skipped: it rewrites a tracked file in the
+ * member's checkout, and a preview writes nothing (#866).
+ */
 async function refreshTeamRepo(
   localConfig: LocalConfig,
-  options: Pick<GlobalOptions, 'inline' | 'fetchTimeoutMs'> = {},
+  options: Pick<GlobalOptions, 'inline' | 'fetchTimeoutMs' | 'dryRun'> = {},
 ): Promise<{ label: string; version: string | null; submodulesFailed: boolean; submodulesChanged: boolean }> {
   if (localConfig.repo.kind === 'http') {
     const { resolveApiKey } = await import('./api-key.js');
@@ -131,10 +135,15 @@ async function refreshTeamRepo(
     // Self-heal an older .teamai/.gitignore that still ignores `env` (pre-beta.5),
     // which would keep team env vars off main. Best-effort; prompts the user to
     // commit the change.
-    try {
-      const { migrateSelfModeGitignore } = await import('./init.js');
-      await migrateSelfModeGitignore(localConfig);
-    } catch { /* best-effort */ }
+    //
+    // It rewrites a TRACKED file, so a preview must not run it. The migration is
+    // idempotent, so the next real pull performs it (#866).
+    if (!options.dryRun) {
+      try {
+        const { migrateSelfModeGitignore } = await import('./init.js');
+        await migrateSelfModeGitignore(localConfig);
+      } catch { /* best-effort */ }
+    }
 
     let version: string | null = null;
     try {
