@@ -77,8 +77,12 @@ cap without the background pull finishing it, and another teamai process
 holding the project's sync lock longer than the hook waits. Run `teamai pull`
 in the checkout (after a stuck pull ends, or once the team repo is reachable);
 `~/.teamai/debug.log` has the details. If doctor reports `Git hook syncs new
-worktrees and git pull` as failing, follow its fix: `teamai pull` installs it,
-and Git older than 2.54 has no config hooks.
+worktrees and git pull` as failing, follow its fix: `teamai pull` installs it.
+Git older than 2.54 has no config hooks: teamai then adds a marked block to
+`.git/hooks/post-checkout` and `post-merge`, unless `core.hooksPath` is set (or a
+hook there is not a shell script), in which case doctor's fix says to upgrade Git
+or, if the team agrees, to commit its guarded `command -v teamai ... || true`
+line into the manager's post-checkout and post-merge hooks.
 
 ## "KEY is not set. Run `teamai env set KEY`"
 

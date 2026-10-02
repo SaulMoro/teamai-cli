@@ -14,9 +14,15 @@
  * definition followed by its call, which receives them, and the function ends
  * in `|| :` so the hook always exits 0 (a non-zero `post-checkout` becomes the
  * exit status of `git worktree add`).
+ *
+ * Older Git: without `core.hooksPath`, the same dispatch goes into a
+ * marker-delimited block in `.git/hooks/<event>`, inserted after the shebang so
+ * the script's own lines and exit status stay as they were. With
+ * `core.hooksPath` (a hook manager) nothing is written; `doctor` advises.
  */
 
 import { ensureTeamaiWrapper, TEAMAI_BIN_DIR } from './builtin-hooks.js';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDataHome, type LocalConfig } from './types.js';
 import { execCommand } from './utils/exec.js';
@@ -43,13 +49,41 @@ export function gitHookCommand(event: GitHookEvent): string {
   return `teamai_git_hook() { PATH="$HOME/${TEAMAI_BIN_DIR}:$PATH" teamai hook-dispatch ${event} --tool ${GIT_HOOK_TOOL} "$@" >/dev/null 2>&1 || :; }; teamai_git_hook`;
 }
 
+/**
+ * The line a team may commit into its own hook manager's post-checkout and
+ * post-merge hooks when teamai cannot install its hook: a no-op that exits 0
+ * on a machine without teamai.
+ */
+export function guardedGitHookLine(event: GitHookEvent): string {
+  return `command -v teamai >/dev/null 2>&1 && teamai hook-dispatch ${event} --tool ${GIT_HOOK_TOOL} "$@" >/dev/null 2>&1 || true`;
+}
+
+// Markers of the block in `.git/hooks/<event>` on Git without config hooks.
+const BLOCK_START = '# >>> teamai git hook (managed by teamai) >>>';
+const BLOCK_END = '# <<< teamai git hook <<<';
+
+function scriptBlock(event: GitHookEvent): string {
+  return `${BLOCK_START}\nPATH="$HOME/${TEAMAI_BIN_DIR}:$PATH" teamai hook-dispatch ${event} --tool ${GIT_HOOK_TOOL} "$@" >/dev/null 2>&1 || :\n${BLOCK_END}\n`;
+}
+
+/** `text` with the current block for `event`, or null when it is not a shell script. */
+function withScriptBlock(text: string | null, event: GitHookEvent): string | null {
+  if (text === null) return `#!/bin/sh\n${scriptBlock(event)}`;
+  const start = text.indexOf(`${BLOCK_START}\n`);
+  const end = text.indexOf(`${BLOCK_END}\n`, start);
+  const rest = start >= 0 && end > start ? text.slice(0, start) + text.slice(end + BLOCK_END.length + 1) : text;
+  const shebang = /^#![^\n]*(\n|$)/.exec(rest)?.[0] ?? '';
+  if (shebang && !/\b(ba|da|k|z)?sh\b/.test(shebang)) return null;
+  return `${shebang}${shebang && !shebang.endsWith('\n') ? '\n' : ''}${scriptBlock(event)}${rest.slice(shebang.length)}`;
+}
+
 export type GitHookInstall =
   | { installed: true; changed: boolean }
-  | { installed: false; reason: 'old-git' | 'not-a-repository' };
+  | { installed: false; reason: 'hooks-path' | 'other-hook' | 'not-a-repository' };
 
 export type GitHookStatus =
   | { installed: true }
-  | { installed: false; reason: 'old-git'; gitVersion: string }
+  | { installed: false; reason: 'hooks-path' | 'other-hook'; gitVersion: string }
   | { installed: false; reason: 'not-a-repository' | 'not-configured' };
 
 type Git = (args: string[]) => ReturnType<typeof execCommand>;
@@ -70,17 +104,32 @@ async function eventsToWrite(git: Git): Promise<GitHookEvent[]> {
 export async function gitHookStatus(repoDir: string): Promise<GitHookStatus> {
   const git = gitIn(repoDir);
   const version = (await git(['--version'])).stdout.trim();
-  if (!supportsConfigHooks(version)) return { installed: false, reason: 'old-git', gitVersion: version };
   if ((await git(['rev-parse', '--git-dir'])).code !== 0) return { installed: false, reason: 'not-a-repository' };
+  if (!supportsConfigHooks(version)) {
+    const scripts = await scriptsToWrite(git, repoDir);
+    if (scripts.blocked) return { installed: false, reason: scripts.blocked, gitVersion: version };
+    return scripts.stale.length === 0 ? { installed: true } : { installed: false, reason: 'not-configured' };
+  }
   return (await eventsToWrite(git)).length === 0 ? { installed: true } : { installed: false, reason: 'not-configured' };
 }
 
 /** What `doctor` says about a hook that is not installed: the cause, then the next step. */
 export function describeMissingGitHook(status: Exclude<GitHookStatus, { installed: true }>): string {
   switch (status.reason) {
-    case 'old-git':
-      return `${status.gitVersion || 'This git'} has no config-based hooks (Git 2.54 or later), so new worktrees and `
-        + '`git pull` get the team\'s resources only at the next session. Upgrade git, then run `teamai pull`.';
+    case 'hooks-path':
+    case 'other-hook': {
+      const where = status.reason === 'hooks-path'
+        ? 'core.hooksPath is set, so teamai leaves the hook manager\'s files alone'
+        : 'a post-checkout or post-merge hook in .git/hooks is not a shell script, so teamai leaves it alone';
+      const owner = status.reason === 'hooks-path' ? 'your hook manager defines' : 'in .git/hooks';
+      return `${status.gitVersion || 'This git'} has no config-based hooks (Git 2.54 or later) and ${where}: new `
+        + 'worktrees and `git pull` get the team\'s resources only at the next session. Either: '
+        + '1. Upgrade Git to 2.54 or later, then run `teamai pull`. '
+        + `2. If the team agrees to commit it, run this line from the post-checkout hook ${owner}, `
+        + `\`${guardedGitHookLine('post-checkout')}\`, and this one from the post-merge hook, `
+        + `\`${guardedGitHookLine('post-merge')}\`; wrap each in \`sh -c '...'\` when the hook config is not a `
+        + 'shell script. Both do nothing on a machine without teamai.';
+    }
     case 'not-a-repository':
       return 'The project root is not a git repository, so there is no git event to hook.';
     case 'not-configured':
@@ -94,8 +143,9 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
  */
 export async function installGitHook(repoDir: string): Promise<GitHookInstall> {
   const git = gitIn(repoDir);
-  if (!supportsConfigHooks((await git(['--version'])).stdout)) return { installed: false, reason: 'old-git' };
+  const configHooks = supportsConfigHooks((await git(['--version'])).stdout);
   if ((await git(['rev-parse', '--git-dir'])).code !== 0) return { installed: false, reason: 'not-a-repository' };
+  if (!configHooks) return installHookScripts(git, repoDir);
 
   // The wrapper is what the hook command finds `teamai` through when the app
   // that runs git has no login PATH.
@@ -109,6 +159,36 @@ export async function installGitHook(repoDir: string): Promise<GitHookInstall> {
   }
   if (stale.length > 0) log.debug(`git hook: installed teamai hooks in ${repoDir}`);
   return { installed: true, changed: stale.length > 0 };
+}
+
+type ScriptPlan = { blocked: 'hooks-path' | 'other-hook'; stale: [] } | { blocked: null; stale: { file: string; text: string }[] };
+
+async function scriptsToWrite(git: Git, repoDir: string): Promise<ScriptPlan> {
+  if ((await git(['config', '--get', 'core.hooksPath'])).stdout.trim()) return { blocked: 'hooks-path', stale: [] };
+  // The common hooks directory, from a linked worktree too.
+  const dir = path.resolve(repoDir, (await git(['rev-parse', '--git-path', 'hooks'])).stdout.trim());
+  const stale: { file: string; text: string }[] = [];
+  for (const event of GIT_HOOK_EVENTS) {
+    const file = path.join(dir, event);
+    const current = await fs.readFile(file, 'utf8').catch(() => null);
+    const text = withScriptBlock(current, event);
+    if (text === null) return { blocked: 'other-hook', stale: [] };
+    if (text !== current) stale.push({ file, text });
+  }
+  return { blocked: null, stale };
+}
+
+async function installHookScripts(git: Git, repoDir: string): Promise<GitHookInstall> {
+  const plan = await scriptsToWrite(git, repoDir);
+  if (plan.blocked) return { installed: false, reason: plan.blocked };
+  ensureTeamaiWrapper();
+  for (const { file, text } of plan.stale) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, text);
+    await fs.chmod(file, (await fs.stat(file)).mode | 0o111);
+  }
+  if (plan.stale.length > 0) log.debug(`git hook: installed teamai hook scripts in ${repoDir}`);
+  return { installed: true, changed: plan.stale.length > 0 };
 }
 
 async function ok(result: ReturnType<typeof execCommand>, key: string): Promise<void> {

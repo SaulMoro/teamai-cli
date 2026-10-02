@@ -129,7 +129,8 @@ new worktree's first pull, still overwrite: nothing is recorded yet.
 
 In project scope, `init` and `pull` also install a git hook in the repository's
 local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`; Git
-2.54+), beside any `core.hooksPath` manager or `.git/hooks` script. When a
+2.54+; older Git without `core.hooksPath` gets a marked block in `.git/hooks/`
+scripts, and with it `teamai doctor` advises), beside any `core.hooksPath` manager or `.git/hooks` script. When a
 worktree is created (`git worktree add`, or an app), it creates the project roots
 of `enabledAgents` (else the ones the main checkout has) and pulls into it before
 the command returns, from the team clone as last fetched when that was within

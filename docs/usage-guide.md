@@ -172,7 +172,7 @@ chosen or opened in this project.
 A new worktree does not wait for that first session. In project scope, `teamai init`
 and `teamai pull` install a git hook in the repository's local git config, shared by
 every worktree: `hook.teamai-post-checkout` and `hook.teamai-post-merge` (Git 2.54 or
-later; with older Git none is installed). Git runs it beside any `core.hooksPath` hook
+later). Git runs it beside any `core.hooksPath` hook
 manager and any `.git/hooks` script. When `git worktree add`, or an app that creates
 worktrees, makes a new checkout, the hook creates the project roots of
 `enabledAgents` (when that is empty, the roots the main checkout has) and pulls into
@@ -195,6 +195,18 @@ also reports whether the hook is installed and, when it is not, why. It follows 
 that cannot be read, means no sync. The command is one `sh` line that runs
 `teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
 through `~/.teamai/bin` as the agent hooks do.
+
+With Git older than 2.54 and no `core.hooksPath`, teamai instead adds a block between
+`# >>> teamai git hook` and `# <<< teamai git hook <<<` markers to `.git/hooks/post-checkout`
+and `.git/hooks/post-merge`, right after the shebang, creating the script when there is
+none; the script's other lines are kept. The block runs the same command, silently, and
+does not change the script's exit status. With `core.hooksPath` set (a hook manager), or
+a hook script that is not a shell script, teamai writes nothing, and `teamai doctor`
+advises: upgrade Git to 2.54 or later; or, if the team agrees to commit it, run
+`command -v teamai >/dev/null 2>&1 && teamai hook-dispatch <event> --tool git "$@" >/dev/null 2>&1 || true`
+from the post-checkout and post-merge hooks your manager defines (with `post-checkout` or
+`post-merge` as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
+That line does nothing on a machine without teamai.
 
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
 > `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition

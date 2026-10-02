@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { installGitHook } from '../git-hook.js';
+import { describeMissingGitHook, gitHookStatus, guardedGitHookLine, installGitHook } from '../git-hook.js';
 
 const gitVersion = (): [number, number] => {
   const m = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], { encoding: 'utf8' }));
@@ -107,5 +107,121 @@ describe.skipIf(!configHooks)('teamai git hook in the repository config', () => 
     });
     expect(missing.status).toBe(0);
     expect(missing.stdout + missing.stderr).toBe('');
+  });
+});
+
+describe('teamai hook script on a Git without config hooks', () => {
+  let sandbox: string;
+  let repo: string;
+  let home: string;
+  let saved: { PATH?: string; HOME?: string };
+
+  const run = (args: string[], cwd = repo) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...GIT_ENV } });
+  const hookFile = (event: string) => path.join(repo, '.git', 'hooks', event);
+  const calls = () => {
+    const file = path.join(sandbox, 'calls.txt');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n') : [];
+  };
+
+  beforeEach(() => {
+    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-git-hook-old-')));
+    repo = path.join(sandbox, 'repo');
+    home = path.join(sandbox, 'home');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(home);
+    // Old Git, simulated where teamai reads the version: a `git` on PATH that
+    // reports 2.39 and hands every other command to the real one.
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const shim = path.join(sandbox, 'old-git');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(
+      path.join(shim, 'git'),
+      `#!/bin/sh\nif [ "$1" = --version ]; then echo "git version 2.39.5"; exit 0; fi\nexec "${realGit}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    saved = { PATH: process.env.PATH, HOME: process.env.HOME };
+    process.env.PATH = `${shim}${path.delimiter}${process.env.PATH}`;
+    process.env.HOME = home;
+    run(['init', '-q', '-b', 'main']);
+    run(['commit', '-q', '--allow-empty', '-m', 'init']);
+  });
+
+  afterEach(() => {
+    process.env.PATH = saved.PATH;
+    process.env.HOME = saved.HOME;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  const fakeTeamai = () => {
+    fs.mkdirSync(path.join(home, '.teamai', 'bin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, '.teamai', 'bin', 'teamai'),
+      `#!/bin/sh\necho "$@" >> "${path.join(sandbox, 'calls.txt')}"\necho noise\nexit 3\n`,
+      { mode: 0o755 },
+    );
+  };
+
+  it('adds a marked block to an existing hook script without changing its other lines', async () => {
+    const original = '#!/bin/sh\n# the team\'s own hook\necho mine >> "$0.log"\n';
+    fs.writeFileSync(hookFile('post-checkout'), original, { mode: 0o755 });
+
+    expect(await installGitHook(repo)).toEqual({ installed: true, changed: true });
+    const text = fs.readFileSync(hookFile('post-checkout'), 'utf8');
+    const block = /# >>> teamai[^\n]*\n[\s\S]*?# <<< teamai[^\n]*\n/.exec(text);
+    expect(block).not.toBeNull();
+    expect(text.replace(block![0], '')).toBe(original);
+    // A second run leaves it alone.
+    expect(await installGitHook(repo)).toEqual({ installed: true, changed: false });
+    expect(fs.readFileSync(hookFile('post-checkout'), 'utf8')).toBe(text);
+    // post-merge had no script: a new executable one.
+    expect(fs.statSync(hookFile('post-merge')).mode & 0o111).not.toBe(0);
+    expect(await gitHookStatus(repo)).toEqual({ installed: true });
+  });
+
+  it('runs the dispatcher with Git\'s arguments, silently, keeping the script\'s own work and exit status', async () => {
+    fs.writeFileSync(hookFile('post-checkout'), '#!/bin/sh\necho mine >> "$0.log"\n', { mode: 0o755 });
+    await installGitHook(repo);
+    fakeTeamai();
+
+    const r = run(['worktree', 'add', '-q', path.join(sandbox, 'wt')]);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout + r.stderr).toBe('');
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]).toMatch(/^hook-dispatch post-checkout --tool git 0+ [0-9a-f]{40} 1$/);
+    expect(fs.readFileSync(`${hookFile('post-checkout')}.log`, 'utf8')).toBe('mine\n');
+  });
+
+  it('leaves a core.hooksPath manager\'s files alone, and doctor advises upgrading or a guarded line', async () => {
+    const managed = path.join(sandbox, 'managed');
+    fs.mkdirSync(managed);
+    fs.writeFileSync(path.join(managed, 'post-checkout'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    run(['config', 'core.hooksPath', managed]);
+
+    expect(await installGitHook(repo)).toEqual({ installed: false, reason: 'hooks-path' });
+    expect(fs.readdirSync(managed)).toEqual(['post-checkout']);
+    expect(fs.readFileSync(path.join(managed, 'post-checkout'), 'utf8')).toBe('#!/bin/sh\nexit 0\n');
+    expect(fs.existsSync(hookFile('post-checkout'))).toBe(false);
+
+    const status = await gitHookStatus(repo);
+    expect(status).toMatchObject({ installed: false, reason: 'hooks-path' });
+    const advice = describeMissingGitHook(status as Exclude<typeof status, { installed: true }>);
+    const upgrade = advice.indexOf('Upgrade Git');
+    const guarded = advice.indexOf('command -v teamai >/dev/null 2>&1 && teamai hook-dispatch post-checkout --tool git "$@"');
+    expect(upgrade).toBeGreaterThan(-1);
+    expect(guarded).toBeGreaterThan(upgrade);
+    expect(advice).toContain('teamai hook-dispatch post-merge --tool git "$@"');
+    expect(advice).toContain('sh -c');
+  });
+
+  it('the guarded line does nothing and exits 0 without teamai', () => {
+    const line = guardedGitHookLine('post-checkout');
+    const r = spawnSync('/bin/sh', ['-c', line, 'post-checkout', '0', '1', '1'], {
+      encoding: 'utf8',
+      env: { PATH: '/usr/bin:/bin', HOME: home },
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout + r.stderr).toBe('');
   });
 });
