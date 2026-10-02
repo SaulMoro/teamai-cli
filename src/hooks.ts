@@ -1025,16 +1025,20 @@ async function reconcileCodexFormat(
   return records;
 }
 
-/** Recover a moved entry only when its complete recorded definition is unique. */
+/** Recover only a unique match on the definition or fields the manifest recorded. */
 function ownsCodexEntry(record: ManagedHookRecord, event: string, index: number, entries: CodexHookMatcher[]): boolean {
   if (record.event !== event) return false;
   const entry = entries[index];
   if (record.codexEntry && record.codexEntryIndex === index && isDeepStrictEqual(entry, record.codexEntry)) return true;
-  const recorded = record.codexEntry ?? {
-    ...(record.matcher ? { matcher: record.matcher } : {}),
-    hooks: [{ type: 'command', command: record.command }],
-  };
-  return isDeepStrictEqual(entry, recorded) && entries.filter((candidate) => isDeepStrictEqual(candidate, recorded)).length === 1;
+  // Legacy manifests omitted timeout and additionalContextLimit. Requiring
+  // those unrecorded options to be absent would orphan hooks on upgrade.
+  const matches = record.codexEntry
+    ? (candidate: CodexHookMatcher) => isDeepStrictEqual(candidate, record.codexEntry)
+    : (candidate: CodexHookMatcher) => candidate.matcher === record.matcher
+      && candidate.hooks?.length === 1
+      && candidate.hooks[0].type === 'command'
+      && candidate.hooks[0].command === record.command;
+  return matches(entry) && entries.filter(matches).length === 1;
 }
 
 // ─── ZCode (~/.zcode/cli/config.json) reconcile ─────────────
@@ -1917,31 +1921,36 @@ export async function reconcileHooksToAllTools(
     const installedRoot = opts.installedBaseDir
       ? path.join(opts.installedBaseDir, toolInstallRoot(paths.settings))
       : toolRoot;
-    if (!await pathExists(toolRoot) && !await pathExists(installedRoot)) continue;
+    const installed = await pathExists(toolRoot) || await pathExists(installedRoot);
+    const mainFile = mainCheckoutHookFile(opts.mainCheckout, tool);
+    // Existing main-checkout hooks can be removed after HOME was deleted or
+    // relocated. Do not recreate the missing HOME root just to remove them.
+    if (!installed && !(opts.removeAll && mainFile)) continue;
     const settingsPath = path.join(baseDir, paths.settings);
     const settingsFileKey = path.resolve(settingsPath);
     if (claimedSettingsFiles.has(settingsFileKey)) continue;
     claimedSettingsFiles.add(settingsFileKey);
     try {
-      if (await skipInstalled(settingsPath, tool)) continue;
-      const mainFile = mainCheckoutHookFile(opts.mainCheckout, tool);
-      if (mainFile && opts.mainCheckout && opts.teamHookProjectRoot && !opts.removeAll) {
-        // HOME keeps this tool's built-ins only: the project's team hooks live
-        // in the main checkout, and the gated copies of them are removed.
-        for (const root of await staleCheckoutGateRoots(teamManifestPath, tool, opts.teamHookProjectRoot, opts.mainCheckout)) {
-          await reconcileHooks(settingsPath, tool, [], {
+      if (installed && await skipInstalled(settingsPath, tool)) continue;
+      if (installed) {
+        if (mainFile && opts.mainCheckout && opts.teamHookProjectRoot && !opts.removeAll) {
+          // HOME keeps this tool's built-ins only: the project's team hooks live
+          // in the main checkout, and the gated copies of them are removed.
+          for (const root of await staleCheckoutGateRoots(teamManifestPath, tool, opts.teamHookProjectRoot, opts.mainCheckout)) {
+            await reconcileHooks(settingsPath, tool, [], {
+              manifestPath: teamManifestPath,
+              builtinOverride: opts.builtinOverride,
+              teamHookProjectRoot: root,
+            });
+          }
+        } else {
+          await reconcileHooks(settingsPath, tool, defs, {
             manifestPath: teamManifestPath,
+            removeAll: opts.removeAll,
             builtinOverride: opts.builtinOverride,
-            teamHookProjectRoot: root,
+            teamHookProjectRoot: opts.teamHookProjectRoot,
           });
         }
-      } else {
-        await reconcileHooks(settingsPath, tool, defs, {
-          manifestPath: teamManifestPath,
-          removeAll: opts.removeAll,
-          builtinOverride: opts.builtinOverride,
-          teamHookProjectRoot: opts.teamHookProjectRoot,
-        });
       }
       // With the team hooks unresolved, the ones installed there are kept.
       if (mainFile && opts.mainCheckout && !opts.builtinsOnly) {

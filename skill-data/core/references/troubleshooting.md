@@ -32,6 +32,8 @@ This is the #1 onboarding issue. In order:
    settings (e.g. `~/.claude/settings.json`), not the project folder; the team's own
    hooks for Claude Code and Codex go to the main checkout
    (`.claude/settings.local.json`, `.codex/hooks.json`). That is intentional.
+   Removal also checks existing Claude/Codex main-checkout hook files when the
+   HOME tool root is missing or relocated.
    In project scope, `teamai hooks remove` preserves other projects' gated team
    hooks in HOME, while removing the shared built-in hooks.
    If you initialized project scope but expected machine-wide resources, re-run
@@ -175,8 +177,9 @@ then reopen a session. A new linked worktree gets the team hooks from its second
 Codex session (the first creates its `.codex/`). Member hooks with the same command
 are preserved and remain untouched by automatic trust. Codex ownership uses the
 recorded event, position and complete entry. A moved entry is recovered only by a
-unique full-definition match; unrecorded or ambiguous legacy team-hook copies
-are preserved rather than claimed by command. Project hook paths follow `toolPaths`;
+unique full-definition match. Legacy records recover only a unique event, matcher
+and command match; `timeout` and `additionalContextLimit` were not recorded.
+Unrecorded or ambiguous legacy team-hook copies are preserved. Project hook paths follow `toolPaths`;
 Claude uses `settings.local.json` beside its configured settings file. A custom
 Codex path that Codex does not load is reported as `not loaded` by doctor.
 

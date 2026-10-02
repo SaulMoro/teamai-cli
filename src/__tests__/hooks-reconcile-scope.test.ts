@@ -624,6 +624,34 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     expect(await read()).toEqual(before);
   });
 
+  it('removes main-checkout hooks without recreating missing HOME roots', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const cfg = { ...localConfig(), projectRoot: worktree };
+    try {
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      const files = [path.join(main, '.claude', 'settings.local.json'), path.join(main, '.codex', 'hooks.json')];
+      const member = { hooks: [{ type: 'command', command: 'echo member' }] };
+      for (const file of files) {
+        const json = await fse.readJson(file);
+        json.hooks.Stop.push(member);
+        await fse.writeJson(file, json);
+      }
+      await fse.remove(path.join(home, '.claude'));
+      await fse.remove(path.join(home, '.codex'));
+
+      await reconcileTeamHooksForConfig(teamConfig, cfg, { removeAll: true });
+
+      for (const file of files) expect((await fse.readJson(file)).hooks.Stop).toEqual([member]);
+      for (const root of [home, worktree]) {
+        expect(await fse.pathExists(path.join(root, '.claude'))).toBe(false);
+        expect(await fse.pathExists(path.join(root, '.codex'))).toBe(false);
+      }
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
   it('removeAll clears the main checkout\'s team hooks too', async () => {
     await writeYaml(STOP_LINT);
     await reconcileTeamHooksForConfig(teamConfig, localConfig());

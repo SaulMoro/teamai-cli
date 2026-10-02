@@ -177,6 +177,83 @@ describe('Codex hook ownership', () => {
     expect((await fse.readJson(file)).hooks[event]).toEqual(memberGroups);
   });
 
+  it.each([
+    { timeout: 30 },
+    { additionalContextLimit: 0 },
+    { timeout: 30, additionalContextLimit: 0 },
+  ])('migrates legacy Codex ownership with unrecorded options %j', async (options) => {
+    const file = path.join(codexHome(), 'hooks.json');
+    const legacy = { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', ...options }] };
+    const member = { matcher: 'Write', hooks: [{ type: 'command', command: 'npm run lint', timeout: 17 }] };
+    await fse.writeJson(file, { hooks: { PreToolUse: [member, legacy], Stop: [legacy] } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'PreToolUse', matcher: 'Bash', command: 'npm run lint' }],
+    });
+    const desiredOptions = options.timeout === undefined ? {} : { timeout: options.timeout };
+    const yaml = LINT_HOOK + '    matcher: Bash\n'
+      + (options.timeout === undefined ? '' : `    timeout: ${options.timeout}\n`);
+    await writeYaml(yaml);
+
+    await writeAndTrust(userConfig());
+
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([
+      member, { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', ...desiredOptions }] },
+    ]);
+    expect((await fse.readJson(file)).hooks.Stop[0]).toEqual(legacy);
+    expect(trustedKeys()).toContain(`${file}:pre_tool_use:1:0`);
+    expect(trustedKeys()).not.toContain(`${file}:pre_tool_use:0:0`);
+    expect(trustedKeys()).not.toContain(`${file}:stop:0:0`);
+    await writeYaml(yaml.replace('npm run lint', 'npm run lint:fix'));
+    await writeAndTrust(userConfig());
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([
+      member, { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint:fix', ...desiredOptions }] },
+    ]);
+    await writeAndTrust(userConfig(), { removeAll: true });
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([member]);
+    expect((await fse.readJson(file)).hooks.Stop).toEqual([legacy]);
+  });
+
+  it('trusts and removes a unique legacy hook before its first upgraded reconcile', async () => {
+    const file = path.join(codexHome(), 'hooks.json');
+    const member = { matcher: 'Write', hooks: [{ type: 'command', command: 'npm run lint' }] };
+    const legacy = { hooks: [{ type: 'command', command: 'npm run lint', timeout: 30, additionalContextLimit: 0 }] };
+    await fse.writeJson(file, { hooks: { PreToolUse: [member, legacy] } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'PreToolUse', command: 'npm run lint' }],
+    });
+
+    expect(await trustCodexForScope(teamConfig, userConfig())).toEqual({ kind: 'trusted', hooks: 1 });
+    expect(trustedKeys()).toEqual([`${file}:pre_tool_use:1:0`]);
+    await writeAndTrust(userConfig(), { removeAll: true });
+
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([member]);
+  });
+
+  it('preserves legacy option collisions and multi-handler member groups', async () => {
+    await writeYaml(LINT_HOOK + '    matcher: Bash\n');
+    const file = path.join(codexHome(), 'hooks.json');
+    const groups = [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', timeout: 30 }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint', additionalContextLimit: 0 }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint' }, { type: 'command', command: 'echo member' }] },
+    ];
+    await fse.writeJson(file, { hooks: { PreToolUse: groups } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-hooks.json'), {
+      codex: [{ id: 'lint', event: 'PreToolUse', matcher: 'Bash', command: 'npm run lint' }],
+    });
+    const memberKeys = (await codexEntries(file)).map((e) => e.key);
+
+    expect(await trustCodexForScope(teamConfig, userConfig())).toBeUndefined();
+    await writeAndTrust(userConfig());
+
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([
+      ...groups, { matcher: 'Bash', hooks: [{ type: 'command', command: 'npm run lint' }] },
+    ]);
+    expect(trustedKeys().some((key) => memberKeys.includes(key))).toBe(false);
+    await writeAndTrust(userConfig(), { removeAll: true });
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual(groups);
+  });
+
   it('keeps ambiguous legacy entries instead of claiming every identical command', async () => {
     await writeYaml(LINT_HOOK);
     const file = path.join(codexHome(), 'hooks.json');

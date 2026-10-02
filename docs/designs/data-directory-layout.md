@@ -499,6 +499,7 @@ every checkout, so that is where they live now:
 │                                              settings, shared by every checkout (#955; the built-in hooks stay in HOME)
 │                                              project toolPaths choose the files; Claude uses settings.local.json beside its settings file
 │                                              Codex records event, matcher-group position and complete rendered entry; unique definitions recover moved entries
+│                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
