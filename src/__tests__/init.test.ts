@@ -232,6 +232,7 @@ vi.mock('../utils/prompt.js', async (importOriginal) => ({
     }
     return Promise.resolve(defaultValue ?? false);
   }),
+  askSelection: vi.fn(),
   closePrompt: vi.fn(),
 }));
 
@@ -865,6 +866,69 @@ describe('init', () => {
         'project',
         process.cwd(),
       );
+    });
+
+    describe('project-scope tool picker', () => {
+      let originalIsTTY: boolean | undefined;
+      let logSpy: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        originalIsTTY = process.stdin.isTTY;
+        logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const projectLocalPath = path.join(process.cwd(), '.teamai', 'team-repo');
+        let cloneDone = false;
+        pathExistsFn = (p: string) => {
+          if (p === projectLocalPath) return cloneDone;
+          if (p.endsWith(`${path.sep}.git`) || p.endsWith('/.git')) return true;
+          return false;
+        };
+        mockGfRepoClone.mockImplementation(() => { cloneDone = true; });
+        questionAnswers = ['n', '1'];
+      });
+
+      afterEach(() => {
+        logSpy.mockRestore();
+        Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
+      });
+
+      it('asks which tools when interactive without --agent and saves the choice', async () => {
+        Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+        const { askSelection } = await import('../utils/prompt.js');
+        vi.mocked(askSelection).mockResolvedValueOnce([1]); // option 2 = Claude Code
+        const { saveLocalConfigForScope } = await import('../config.js');
+
+        await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git' });
+
+        expect(askSelection).toHaveBeenCalledTimes(1);
+        const printed = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+        expect(printed).toContain('Which AI tools do you use in this project?');
+        expect(saveLocalConfigForScope).toHaveBeenCalledWith(
+          expect.objectContaining({ scope: 'project', enabledAgents: ['claude'] }),
+          'project',
+          process.cwd(),
+        );
+      });
+
+      it('skips the picker when --agent is given', async () => {
+        Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+        const { askSelection } = await import('../utils/prompt.js');
+
+        await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git', agent: ['codex'] });
+
+        expect(askSelection).not.toHaveBeenCalled();
+      });
+
+      it('skips the picker and enables nothing when not interactive', async () => {
+        Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+        const { askSelection } = await import('../utils/prompt.js');
+        const { saveLocalConfigForScope } = await import('../config.js');
+
+        await init({ repo: 'https://git.woa.com/HyperAI/teamai-test.git' });
+
+        expect(askSelection).not.toHaveBeenCalled();
+        const saved = vi.mocked(saveLocalConfigForScope).mock.calls[0]?.[0];
+        expect(saved?.enabledAgents).toBeUndefined();
+      });
     });
 
     it('should print scope summary without interactive Select scope when --scope is provided', async () => {

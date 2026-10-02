@@ -128,7 +128,8 @@ section "Which tools actually get hooks".
 
 `teamai init` ends with a pull, so the team's skills, rules and MCP servers are
 already in place in user scope, and in project scope for each tool named with
-`--agent`. A project-scope init without `--agent` creates no tool directory; a
+`--agent` or picked in init's interactive tool picker. A project-scope init run
+without a terminal and without `--agent` creates no tool directory; a
 tool's directory fills when the user first opens that tool in the project. To
 confirm:
 

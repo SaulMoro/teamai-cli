@@ -50,9 +50,10 @@ and create-repo URLs, and the per-provider caveats, and points at
    trust-gate, CodeBuddy design). Verify the real per-tool result with
    `teamai doctor` and `teamai hooks list`.
 3. **`teamai init` ends with a pull.** In user scope, and in project scope for each
-   tool named with `--agent`, the team's skills, rules and MCP servers are in place
-   when init exits; there is no need to run `teamai pull` after it. A project-scope
-   init without `--agent` creates no tool directory: a tool's directory appears and
+   tool named with `--agent` (or picked in init's tool picker when a person runs it
+   in a terminal), the team's skills, rules and MCP servers are in place when init
+   exits; there is no need to run `teamai pull` after it. Run from an agent shell
+   (no terminal), a project-scope init without `--agent` creates no tool directory: a tool's directory appears and
    fills when the user opens that tool in the project. Init also injects a
    session-start hook that keeps resources synced from then on.
 4. **Finish with `teamai doctor`.** Every setup or onboarding flow ends by running

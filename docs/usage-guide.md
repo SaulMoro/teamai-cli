@@ -162,11 +162,15 @@ there stops if it finds a team rule or skill that differs from the team repo, si
 cannot tell a teammate's update from your edit. `teamai pull` replaces those files, so
 copy any you edited somewhere safe, pull, put your edits back and push again. Per-agent
 project roots (`.claude/`, `.cursor/`, `.codebuddy/`, …) are still created inside the
-workspace. `teamai init --agent <tool>` creates the root of each tool it names, then
-ends with a pull that fills it. Otherwise **SessionStart** creates the root of the tool
-that just opened: opening Claude Code creates `.claude/`, then pull writes into it. A
-bare `teamai pull`, and an `init` without `--agent`, still skip tools whose project
-root does not exist, so they never invent agent directories for tools you have not
+workspace. `teamai init` creates the root of each tool you choose, then ends with a
+pull that fills it: name the tools with `--agent <tool>`, or, in a terminal without
+`--agent`, pick them from the same picker single-repo mode uses (option 1, **Auto**,
+is the tools installed under your home dir and the Enter default). The choice is
+added to `enabledAgents`, so a re-run adds tools without dropping earlier ones.
+Otherwise **SessionStart** creates the root of the tool that just opened: opening
+Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull`, and a
+non-interactive `init` without `--agent`, still skip tools whose project root does
+not exist, so they never invent agent directories for tools you have not
 chosen or opened in this project.
 
 A new worktree does not wait for that first session. In project scope, `teamai init`
@@ -2878,7 +2882,7 @@ teamai init --repo https://github.com/yourorg/yourrepo --force
 
 **Q: After `teamai init` in a project, there is no `.claude/` (or `.cursor/`, `.codebuddy/`) directory?**
 
-That is expected for a built-in tool when `init` ran without `--agent`: it does not know which agent you will open. Run `teamai init <repo> --agent claude` (or `cursor`, `codebuddy`, …) to create that tool's root and fill it before init exits, or open the tool in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
+That is expected for a built-in tool when `init` ran without `--agent` and without a terminal (no picker): it does not know which agent you will open. Run `teamai init <repo> --agent claude` (or `cursor`, `codebuddy`, …) to create that tool's root and fill it before init exits, or open the tool in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
 
 **Q: Hooks aren't firing automatically?**
 

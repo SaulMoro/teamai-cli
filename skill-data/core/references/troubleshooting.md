@@ -17,8 +17,9 @@ reports before anything else.
 This is the #1 onboarding issue. In order:
 
 1. **Did init pick this tool?** `teamai init` ends with a pull, but a project-scope
-   init creates only the directories of tools named with `--agent`. Without it, a
-   tool's project directory appears when that tool opens a session there. Re-run
+   init creates only the directories of tools named with `--agent` or picked in
+   its interactive tool picker. Run without a terminal and without `--agent`, it
+   creates none, and a tool's project directory appears when that tool opens a session there. Re-run
    `teamai init <repo> --agent <tool>` to add the tool and fill it now.
 2. **Sync manually to confirm:**
    ```bash

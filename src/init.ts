@@ -1012,6 +1012,8 @@ export async function promptForSelfModeAgents(options: {
   agent?: string | string[];
   silent?: boolean;
   force?: boolean;
+  /** Project-scope init: asks which tools the member uses here, commits nothing. */
+  projectScope?: boolean;
 }): Promise<string[]> {
   const explicit = normalizeAgentList(options.agent);
   if (explicit.length > 0) return explicit;
@@ -1038,8 +1040,13 @@ export async function promptForSelfModeAgents(options: {
     : 'Auto — none detected (will set up Claude Code)';
 
   console.log('');
-  console.log('Which AI tools should teamai set up in this repo?');
-  console.log('(creates the skills dir, injects hooks, commits settings to main)');
+  if (options.projectScope) {
+    console.log('Which AI tools do you use in this project?');
+    console.log('(creates their tool dirs here and syncs the team\'s resources into them)');
+  } else {
+    console.log('Which AI tools should teamai set up in this repo?');
+    console.log('(creates the skills dir, injects hooks, commits settings to main)');
+  }
   console.log('');
   console.log(`  1. ${autoLabel}`);
   tools.forEach((t, i) => {
@@ -2003,6 +2010,13 @@ export async function init(options: GlobalOptions & {
 
   // Persist --agent into enabledAgents (additive across runs)
   const requestedAgents = normalizeAgentList(options.agent);
+  // Interactive project init without --agent asks which tools the member uses.
+  // Non-interactive runs skip this on purpose: the picker's own non-TTY branch
+  // mirrors HOME tools, while project init then creates no root.
+  if (scope === 'project' && requestedAgents.length === 0
+    && !options.silent && !options.force && isInteractive()) {
+    requestedAgents.push(...await promptForSelfModeAgents({ projectScope: true }));
+  }
   if (requestedAgents.length > 0) {
     // As loaded before the clone: that config may have been moved aside since.
     const prev = carriedConfig?.enabledAgents ?? [];

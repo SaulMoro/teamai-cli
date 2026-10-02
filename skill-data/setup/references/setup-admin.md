@@ -268,7 +268,8 @@ carries counts + tool names only, on a separate branch of that same repo.)
    Tell them to send the URL + this line to each member.
 3. Remind them (in their language): a member's `teamai init` ends with a pull, so
    the team's resources are in place when it exits (in project scope, for each
-   tool named with `--agent`; without it, a tool's directory fills when the
+   tool named with `--agent` or picked in init's tool picker; otherwise a tool's
+   directory fills when the
    member first opens that tool in the project). Resources the team adds later
    arrive at the next session start.
 
