@@ -518,6 +518,28 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     }
   });
 
+  it('preserves a claude member hook sharing the team command with a different definition', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const file = path.join(main, '.claude/settings.local.json');
+    const cfg = { ...localConfig(), projectRoot: worktree };
+    try {
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      const generated = (await fse.readJson(file)).hooks.Stop[0];
+      const member = { matcher: '*', hooks: [{ type: 'command', command: generated.hooks[0].command, timeout: 30 }], description: 'mine' };
+      await fse.outputJson(file, { hooks: { Stop: [member, generated] } });
+
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([member, generated]);
+      await reconcileTeamHooksForConfig(teamConfig, cfg, { removeAll: true });
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([member]);
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
   it('uses project toolPaths for main hooks and userScope paths for HOME built-ins', async () => {
     await writeYaml(STOP_LINT);
     const custom = { toolPaths: {

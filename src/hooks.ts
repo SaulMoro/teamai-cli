@@ -786,7 +786,8 @@ async function reconcileClaudeFormat(
   const isManaged = (event: string, e: HookMatcher): boolean => {
     if (opts.teamOnly) {
       return isExactBuiltinEntry(event, tool, e) || (e.hooks?.length === 1 && priorRecords.some((r) =>
-        r.event === event && (r.matcher ?? '*') === (e.matcher ?? '*') && r.command === e.hooks[0].command));
+        r.event === event && (r.matcher ?? '*') === (e.matcher ?? '*') && r.command === e.hooks[0].command
+        && teamHookIdOf(e.description) === r.id));
     }
     if (isBuiltinClaudeEntry(e) || (!!opts.removeAll && isAgentClaudeEntry(e))) return true;
     if (!teamActive || !isTeamClaudeEntry(e)) return false;
