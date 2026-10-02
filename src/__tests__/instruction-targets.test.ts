@@ -8,6 +8,7 @@ import {
   applyInstructionPlan,
   clearInstructionFile,
   instructionChannelProblems,
+  instructionHookTextFor,
   planInstructionFiles,
   registerOpencodeContext,
   retiredFilesOfReached,
@@ -229,6 +230,36 @@ describe('instruction file planning (#945)', () => {
 });
 
 describe('instruction channel problems (#945)', () => {
+  it.each(['pi', 'omp', 'hermes', 'codex', 'codex-internal', 'tcodex'])('suppresses only native legacy blocks for %s until cleanup succeeds', async (tool) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-native-'));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const repo = path.join(root, 'repo');
+      const legacy = path.join(projectRoot, tool === 'omp' ? '.omp/AGENTS.md' : 'AGENTS.md');
+      fs.mkdirSync(path.dirname(legacy), { recursive: true });
+      fs.mkdirSync(path.join(repo, 'claudemd'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'claudemd/shared.md'), 'FRESH-PROMPT');
+      fs.writeFileSync(path.join(repo, 'culture.md'), 'FRESH-CULTURE');
+      fs.writeFileSync(legacy, `${claudemd('OLD-MEMBER-PROMPT')}\n`);
+      const localConfig = { repo: { localPath: repo, remote: '' }, username: 'u', additionalRoles: [], scope: 'project', projectRoot, recallEnabled: false } as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const held = await instructionHookTextFor(teamConfig, localConfig, tool);
+      expect(held).not.toContain('FRESH-PROMPT');
+      expect(held).toContain('FRESH-CULTURE');
+      fs.writeFileSync(legacy, '# Authored instructions\n');
+      expect(await instructionHookTextFor(teamConfig, localConfig, tool)).toContain('FRESH-PROMPT');
+      if (tool.includes('codex')) {
+        fs.writeFileSync(legacy, claudemd('SHADOWED-PROMPT'));
+        fs.writeFileSync(path.join(projectRoot, 'AGENTS.override.md'), '# Native override\n');
+        expect(await instructionHookTextFor(teamConfig, localConfig, tool)).toContain('FRESH-PROMPT');
+        fs.writeFileSync(path.join(projectRoot, 'AGENTS.override.md'), `${TEAMAI_CLAUDEMD_START}\nMALFORMED-LEGACY`);
+        expect(await instructionHookTextFor(teamConfig, localConfig, tool)).not.toContain('FRESH-PROMPT');
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('names a missing Pi extension in a project, and nothing once it is installed', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-channel-')));
     const prevHome = process.env.HOME;
@@ -601,6 +632,28 @@ describe('OpenCode instructions ownership (#945)', () => {
       expect((await loadStateForScope(localConfig)).opencodeContextEntries).toEqual([]);
     } finally {
       vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['incomplete', 'repeated'])('reports %s markers left in a retired file through doctor', async (kind) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-malformed-doctor-'));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    try {
+      const projectRoot = path.join(root, 'project');
+      const legacy = path.join(projectRoot, '.claude/CLAUDE.md');
+      fs.mkdirSync(path.dirname(legacy), { recursive: true });
+      fs.writeFileSync(legacy, kind === 'incomplete' ? `${TEAMAI_CLAUDEMD_START}\nold` : `${claudemd('old')}\n${claudemd('repeated')}`);
+      const localConfig = { repo: { localPath: path.join(root, 'repo'), remote: '' }, username: 'u', additionalRoles: [], scope: 'project', projectRoot } as LocalConfig;
+      const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+      const { buildInstructionDeliveryChecks } = await import('../doctor-delivery.js');
+      const checks = await buildInstructionDeliveryChecks({ teamConfig, localConfig } as never);
+      const stale = checks.find((check) => check.name === 'No team instruction blocks are left in files no tool loads them from');
+      expect(await stale!.check()).toBe(false);
+      expect(stale!.fix).toContain(legacy);
+      expect(stale!.fix).toMatch(/marker/i);
+    } finally {
       vi.unstubAllEnvs();
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -237,6 +237,10 @@ Pull keeps retired instruction blocks until every installed tool that wrote the
 file has a working replacement. Repair the named target, extension or plugin
 and run `teamai pull` again. Excluded tools' current and retired files stay
 unchanged and are excluded from doctor's stale-instruction check.
+When a native project file retains a TeamAI block, the session hook skips that
+block, including cached HTTP prompts, until cleanup succeeds. Other blocks
+still reach the hook. Doctor reports malformed markers in retired files;
+repair them before retrying pull.
 If a block's source cannot be resolved, its old block stays even when other
 blocks sync. Repair the source and pull again to complete its migration.
 HTTP prompt commands verify earlier deliveries against the current prompt

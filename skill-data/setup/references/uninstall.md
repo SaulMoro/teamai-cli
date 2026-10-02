@@ -75,6 +75,9 @@ and give it your team repo URL."*
   Targeted project Codex uninstall keeps project config and records its
   exclusion, even without local resources. Legacy project hook copies go.
   User-scope uninstall removes these global channels.
+  The retained adapters respect project exclusions, including cached HTTP
+  prompt injection and HTTP sync. An excluded tool does not download its
+  resources again on the next session start.
 - An enabled, installed Pi, Oh My Pi, Hermes or project Codex also keeps the
   project's shared state in use without a local tool directory. Uninstalling
   another tool preserves that state and the remaining tool's instructions.

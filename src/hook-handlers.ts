@@ -779,7 +779,9 @@ const instructionsHandler: HookHandler = {
  */
 const localAgentInstructionsHandler: HookHandler = {
   name: 'http-prompt-instructions',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
+    const { isAgentExcluded } = await import('./types.js');
+    if (config && isAgentExcluded(config, tool)) return null;
     const { deliversInstructionsByHook } = await import('./instruction-targets.js');
     const { getsRulesFromSessionHook } = await import('./resources/rule-format.js');
     if (!deliversInstructionsByHook(tool, 'project')) return null;
@@ -787,7 +789,7 @@ const localAgentInstructionsHandler: HookHandler = {
     // Each tool through its own channel only; a resumed Codex session holds them already.
     if (getsRulesFromSessionHook(tool) !== sessionEvent || stdin.source === 'resume') return null;
     const { localAgentInstructionText } = await import('./local-agent.js');
-    const text = await localAgentInstructionText(resolveHookCwd(stdin) ?? process.cwd());
+    const text = await localAgentInstructionText(resolveHookCwd(stdin) ?? process.cwd(), tool);
     if (!text) return null;
     const hookEventName = stdin.hook_event_name === 'SubagentStart' ? 'SubagentStart' : 'SessionStart';
     return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: text } });
@@ -797,13 +799,15 @@ const localAgentInstructionsHandler: HookHandler = {
 /** HTTP local-agent report/sync + workspace binding prompts. */
 const localAgentHandler: HookHandler = {
   name: 'local-agent-sync',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
+    const { isAgentExcluded } = await import('./types.js');
+    if (config && isAgentExcluded(config, tool)) return null;
     const { reportAndSyncFromHook } = await import('./local-agent.js');
     const output = await reportAndSyncFromHook(stdin, tool);
     // Codex's first prompt must read the cache after this sync, rather than
     // racing it in another handler. SubagentStart reads the parent's cache.
     if (stdin.hook_event_name === 'SessionStart') {
-      return await localAgentInstructionsHandler.execute(stdin, tool, null) ?? output;
+      return await localAgentInstructionsHandler.execute(stdin, tool, config) ?? output;
     }
     return output;
   },

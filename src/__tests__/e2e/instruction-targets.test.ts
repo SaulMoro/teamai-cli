@@ -517,6 +517,36 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(context).not.toContain('teamai-recall');
   });
 
+  it('suppresses Pi hook blocks while a blocked WorkBuddy replacement retains shared native instructions', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-held-native-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.workbuddy/skills']);
+    fs.mkdirSync(path.join(member.home, '.pi'), { recursive: true });
+    const legacy = path.join(member.projectRoot, 'AGENTS.md');
+    const original = `${PROJECT_AGENTS_MD}${CLAUDEMD_START}\nPRODUCT-STALE\n${CLAUDEMD_END}\n`;
+    fs.writeFileSync(legacy, original);
+    const replacement = path.join(member.projectRoot, '.codebuddy/rules/teamai-context.md');
+    fs.mkdirSync(path.dirname(replacement), { recursive: true });
+    fs.writeFileSync(replacement, '# Foreign file\n');
+
+    const blocked = await pullAs(member);
+    expect(blocked.code, blocked.output).toBe(0);
+    expect(fs.readFileSync(legacy, 'utf8')).toBe(original);
+    const held = await sessionInstructions('pi', member.home, member.projectRoot);
+    expect(held).not.toContain('DEVELOPMENT-SENTINEL');
+    expect(held).not.toContain('PRODUCT-STALE');
+    expect(held).toContain('Acme');
+    console.log('blocked WorkBuddy replacement: native prompt retained; Pi hook omits that block and still delivers culture');
+
+    fs.unlinkSync(replacement);
+    const retry = await runCLI(['pull'], { HOME: member.home }, member.projectRoot);
+    expect(retry.code, retry.output).toBe(0);
+    expect(fs.readFileSync(replacement, 'utf8')).toContain('DEVELOPMENT-SENTINEL');
+    expect(fs.readFileSync(legacy, 'utf8')).toBe(PROJECT_AGENTS_MD);
+    expect(await sessionInstructions('pi', member.home, member.projectRoot)).toContain('DEVELOPMENT-SENTINEL');
+    console.log('WorkBuddy repair: legacy block removed; Pi hook resumes the developer prompt');
+  });
+
   it('retains Claude legacy instructions until a foreign replacement is repaired', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-migration-')));
     sandboxes.push(sandbox);
@@ -1079,11 +1109,13 @@ describe('instruction block targets on real CLI pull (#945)', () => {
       "process.on('exit', () => fs.writeFileSync(workers + '/' + process.pid + '.done', ''));",
     ].join('\n'));
     let endpoint = '';
+    let syncRequests = 0;
     const acks: Array<{ status: string }> = [];
     const server = createServer((request, response) => {
       let body = '';
       request.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       request.on('end', () => {
+        if (request.url?.endsWith('/local-agent/sync')) syncRequests++;
         if (request.url?.endsWith('/first.md')) {
           setTimeout(() => response.end('FIRST-HTTP-PROMPT-SENTINEL'), 100);
           return;
@@ -1116,6 +1148,17 @@ describe('instruction block targets on real CLI pull (#945)', () => {
         expect(fs.existsSync(path.join(workers, file.replace('.started', '.done'))), `Worker ${file} must exit before fixture cleanup`).toBe(true);
       }
       console.log('real Codex SessionStart: empty HTTP cache → download ACK success → FIRST-HTTP-PROMPT-SENTINEL in first output');
+      const removed = await runCLI(['uninstall', '--agent', 'codex', '--force'], { HOME: member.home }, member.projectRoot);
+      expect(removed.code, removed.output).toBe(0);
+      const before = syncRequests;
+      for (const [event, hook_event_name] of [['session-start', 'SessionStart'], ['subagent-start', 'SubagentStart']] as const) {
+        const excluded = await runCLI(['hook-dispatch', event, '--tool', 'codex'], { HOME: member.home, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` }, member.projectRoot,
+          JSON.stringify({ cwd: member.projectRoot, session_id: 'excluded-http', hook_event_name, source: 'startup' }));
+        expect(excluded.code, excluded.output).toBe(0);
+        expect(excluded.stdout).not.toContain('FIRST-HTTP-PROMPT-SENTINEL');
+      }
+      expect(syncRequests).toBe(before);
+      console.log('after project Codex uninstall: SessionStart/SubagentStart inject no cached HTTP prompt and send no HTTP sync');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

@@ -249,11 +249,27 @@ export function instructionHookText(blocks: InstructionBlocks, recall: boolean):
     .join('\n\n');
 }
 
+/** The native project context, including legacy blocks that migration could not yet retire. */
+export async function nativeProjectInstructions(tool: string, projectRoot: string): Promise<string> {
+  const preferred = CODEX_TOOL_IDS.some((id) => id === tool) ? 'AGENTS.override.md'
+    : tool === 'omp' ? '.omp/AGENTS.md' : undefined;
+  return (preferred ? await readFileSafe(path.join(projectRoot, preferred)) : null)
+    ?? await readFileSafe(path.join(projectRoot, 'AGENTS.md')) ?? '';
+}
+
 /** The text a session hook adds for `tool`, resolved for the member, project and scope in `localConfig`. */
 export async function instructionHookTextFor(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<string> {
   const { buildRolePullContext } = await import('./resources/desired.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
   const { blocks } = await resolveInstructionBlocks(teamConfig, localConfig, await buildRolePullContext(localConfig));
+  if (localConfig.scope === 'project' && localConfig.projectRoot) {
+    const native = await nativeProjectInstructions(tool, localConfig.projectRoot);
+    // Native context still supplies each retained block. Do not add a second
+    // member selection while another writer's replacement holds cleanup back.
+    if (native.includes(CULTURE[0]) || native.includes(CULTURE[1])) blocks.culture = null;
+    if (native.includes(CLAUDEMD[0]) || native.includes(CLAUDEMD[1])) blocks.claudemd = null;
+    if (native.includes(RECALL[0]) || native.includes(RECALL[1])) blocks.recall = blocks.directRecall = null;
+  }
   return instructionHookText(blocks, Boolean(scopedToolPaths(teamConfig, localConfig)[tool]?.agents));
 }
 

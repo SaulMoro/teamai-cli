@@ -1211,14 +1211,17 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   }
 
   const leftovers: string[] = [];
+  const warnings: string[] = [];
   for (const file of stale) {
-    if ((await planInstructionFiles([], {}, [file])).changes.length > 0) leftovers.push(file.path);
+    const plan = await planInstructionFiles([], {}, [file]);
+    if (plan.changes.length > 0 || plan.warnings.length > 0) leftovers.push(file.path);
+    warnings.push(...plan.warnings);
   }
   checks.push({
     name: 'No team instruction blocks are left in files no tool loads them from',
     source: 'local',
     check: async () => leftovers.length === 0,
-    fix: `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`,
+    fix: [...warnings, `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`].join(' '),
   });
   return checks;
 }

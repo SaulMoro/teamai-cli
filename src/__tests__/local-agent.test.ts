@@ -2210,6 +2210,8 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     const { repo, ack } = await installProjectPrompt(first, ['.workbuddy/skills'], { files: { 'AGENTS.md': legacy } });
     expect(ack?.status).toBe('success');
     expect(await fse.readFile(path.join(repo, 'AGENTS.md'), 'utf8')).toContain('old member prompt');
+    const { localAgentInstructionText } = await import('../local-agent.js');
+    expect(await localAgentInstructionText(repo, 'pi')).toBe('');
 
     await injectPiHooks();
     const next = await installProjectPrompt(second, []);
@@ -2218,7 +2220,6 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     expect(retired).not.toContain('old member prompt');
     expect(retired).toContain('working culture');
     expect(await fse.readFile(path.join(repo, '.codebuddy/rules/teamai-context.md'), 'utf8')).toContain('PROJECT-PROMPT');
-    const { localAgentInstructionText } = await import('../local-agent.js');
     expect(await localAgentInstructionText(repo)).toContain('PROJECT-PROMPT');
   });
 

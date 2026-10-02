@@ -54,7 +54,7 @@ import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
   applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
   instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
-  retiredFilesOfReached,
+  retiredFilesOfReached, nativeProjectInstructions,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
@@ -2100,9 +2100,11 @@ async function cachedClaudemdBlock(repoPath: string): Promise<{ files: string[];
  * session hook adds (#945): Pi, OMP and Hermes have no project file of their
  * own. Empty outside a project the agent delivered to.
  */
-export async function localAgentInstructionText(cwd: string): Promise<string> {
+export async function localAgentInstructionText(cwd: string, tool = ''): Promise<string> {
   const workspacePath = await resolveWorkspacePath(cwd);
   if (!workspacePath) return '';
+  const native = await nativeProjectInstructions(tool, workspacePath);
+  if (native.includes(TEAMAI_CLAUDEMD_START) || native.includes(TEAMAI_CLAUDEMD_END)) return '';
   const { block } = await cachedClaudemdBlock(await getResourceRepoPath('project', workspacePath));
   return block ? instructionHookText({ claudemd: block }, false) : '';
 }

@@ -1682,6 +1682,8 @@ A pull from an earlier release may have left these blocks in a file listed below
 
 HTTP prompt commands verify the current destinations of all installed former writers, including delivery from previous commands, before removing the retired shared-instructions block. A destination holding an older prompt does not count as delivered. HTTP cleanup preserves culture and recall blocks, which those commands do not replace.
 
+While a native project instruction file still contains a TeamAI block, the session hook skips that block, including a cached HTTP prompt, to avoid adding a second member selection. Other blocks still reach the hook. Delivery resumes after the retained block is cleaned. Codex respects `AGENTS.override.md` precedence, and Oh My Pi respects `.omp/AGENTS.md`. Doctor reports incomplete or repeated markers in retired files; repair those markers before retrying pull.
+
 The pull names each file it changes:
 
 - Claude Code, project scope: `.claude/CLAUDE.md`
@@ -2876,7 +2878,7 @@ If removing an OpenCode entry added by teamai fails, uninstall exits with an err
 
 Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, the Codex family's user-level hooks and server-pushed agent hooks, which the user scope, the HTTP agent or another project on this machine may use, and names them in its summary. When none uses them, run `teamai hooks remove` in the project before uninstalling: it removes them. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
 
-The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
+The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Retained global adapters also skip HTTP sync and cached HTTP prompt injection for that excluded tool. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
 
 The same `enabledAgents` whitelist (from `init --agent`) also gates CLI built-in skills/rules/agents and team instruction blocks: an already-installed tool outside the list is neither written to nor deleted from, even if its root directory already exists. `teamai remove` respects the same whitelist for agents, rules, and skills, `teamai push` reads no rules or agents from a tool outside it, and `teamai pull` / `teamai mcp inject` respect it for MCP servers. Editing `enabledAgents` without `init` still invalidates the last-pull skip cache for newly added tools.
 
