@@ -168,6 +168,8 @@ git 配置中安装一个 git hook，所有 worktree 共用：`hook.teamai-post-
 `core.hooksPath` hook 管理器和 `.git/hooks` 脚本之外一并运行它。当 `git worktree add`，或会创建
 worktree 的应用，新建一个检出时，该 hook 会创建 `enabledAgents` 的项目根目录（为空时，取主检出已有的根目录），
 并在命令返回前向该 worktree 执行 pull，因此其中的第一次会话就已具备团队的 skill、rule 与 MCP 服务器。
+团队仓库克隆若在 24 小时内 fetch 过，这次 pull 直接读取它（否则先 fetch），订阅的 source 读取其缓存克隆；
+随后在后台运行一次完整的 `teamai pull --silent`，fetch 团队仓库、source、learnings 与 reports。
 切换分支不会触发任何操作，`post-merge` 目前也不做任何事。该 hook 不输出任何内容且始终以 0 退出，
 因此 pull 失败也不会让 git 命令失败。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
 都不会同步。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，

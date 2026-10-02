@@ -12,7 +12,7 @@ import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { log, spinner } from './utils/logger.js';
-import { pathExists, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
+import { pathExists, readJson, writeJson, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
@@ -47,6 +47,7 @@ import {
   SYNC_LOCK_FILENAME,
   usesBranchWorktree,
   managedMcpWorkspaceId,
+  SOURCE_PULL_TTL_MS,
 } from './types.js';
 import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
@@ -84,8 +85,27 @@ const FILE_NOT_FOUND_ERROR_CODE = 'ENOENT';
  * tree on disk: the caller must then NOT take that same fast path *this* run,
  * because the parent rev alone cannot see the change (issue #525).
  */
+/**
+ * When the team clone was last fetched, beside the clone (as a source cache's
+ * last-pull.json). A fresh clone has no FETCH_HEAD, and state.lastPull moves
+ * only on a full sync, so neither can tell.
+ */
+function teamFetchStamp(localConfig: LocalConfig): string {
+  return path.join(path.dirname(localConfig.repo.localPath), 'last-fetch.json');
+}
+
+/** How long an inline pull waits for another pull's partition lock. */
+const INLINE_LOCK_WAIT_MS = 60_000;
+
+async function teamFetchedWithinTtl(localConfig: LocalConfig): Promise<boolean> {
+  const stamp = await readJson<{ lastFetch: string }>(teamFetchStamp(localConfig));
+  const elapsed = stamp ? Date.now() - new Date(stamp.lastFetch).getTime() : NaN;
+  return Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= SOURCE_PULL_TTL_MS;
+}
+
 async function refreshTeamRepo(
   localConfig: LocalConfig,
+  options: Pick<GlobalOptions, 'inline'> = {},
 ): Promise<{ label: string; version: string | null; submodulesFailed: boolean; submodulesChanged: boolean }> {
   if (localConfig.repo.kind === 'http') {
     const { resolveApiKey } = await import('./api-key.js');
@@ -129,7 +149,14 @@ async function refreshTeamRepo(
   // the reconcile/source/report stages — so there is no unlocked window in which
   // another writer could reset/checkout the tree. We must NOT lock here: the lock
   // is non-reentrant, so re-acquiring it in the same process would fail.
+  // The new-worktree hook reads a recently fetched clone as it is.
+  if (options.inline && await teamFetchedWithinTtl(localConfig)) {
+    const version = await getHeadRev(localConfig.repo.localPath).catch(() => null);
+    return { label: 'fetched within the TTL, not refetched', version, submodulesFailed: false, submodulesChanged: false };
+  }
   const result = await pullRepo(localConfig.repo.localPath);
+  await writeJson(teamFetchStamp(localConfig), { lastFetch: new Date().toISOString() })
+    .catch((e) => log.debug(`Could not record the team repo fetch: ${(e as Error).message}`));
 
   let version: string | null = null;
   try {
@@ -913,7 +940,7 @@ async function pullForScope(
   // unchanged-rev fast path for THIS run — the parent rev cannot see it (#525).
   let submodulesChanged = false;
   try {
-    const refresh = await refreshTeamRepo(localConfig);
+    const refresh = await refreshTeamRepo(localConfig, options);
     currentRev = refresh.version;
     submodulesFailed = refresh.submodulesFailed;
     submodulesChanged = refresh.submodulesChanged;
@@ -955,7 +982,8 @@ async function pullForScope(
   // pull will retry, and that has to hold in every mode. pull() holds the
   // partition sync lock across this scope and the lock is not reentrant, so
   // publishing must not try to take it again. Never let it block the pull.
-  try {
+  // Inline (new-worktree hook) it is left to the detached pull after it.
+  if (!options.inline) try {
     const queue = await publishQueuedLearnings(localConfig, localConfig.username, { holdsSyncLock: true, dryRun: options.dryRun });
     if (options.dryRun) {
       if (queue.remaining > 0) log.info(`[${scopeLabel}] [dry-run] Would publish ${queue.remaining} queued learning(s)`);
@@ -1048,7 +1076,8 @@ async function pullForScope(
   // and it never publishes, so running it on the fast path cannot flush pending
   // learnings outside the caller's partition sync lock.
   const syncLearningsAndRebuildIndex = async (): Promise<void> => {
-    if (options.dryRun) return;
+    // Inline (new-worktree hook): the detached pull after it does this.
+    if (options.dryRun || options.inline) return;
     try {
       // Bring the learnings branch up to date before reading it, or a member
       // only ever sees their own contributions. Read-only: a cold start
@@ -2200,7 +2229,16 @@ export async function pull(
     // what the real run would have found: a live holder reports this scope as
     // contended and skips it, exactly as a real pull does. Nothing is recorded
     // for release, because nothing was taken.
-    if (await acquireLock(lock, { dryRun: options.dryRun })) {
+    // Inline (new-worktree hook), a skipped scope is a worktree without the
+    // team's resources, and the holder is often the detached pull of the
+    // worktree created just before: wait for it, within the hook's budget.
+    const waitUntil = options.inline ? Date.now() + INLINE_LOCK_WAIT_MS : 0;
+    let acquired = await acquireLock(lock, { dryRun: options.dryRun });
+    while (!acquired && Date.now() < waitUntil) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      acquired = await acquireLock(lock, { dryRun: options.dryRun });
+    }
+    if (acquired) {
       if (!options.dryRun) heldLocks.set(config, lock);
       return true;
     }
@@ -2349,7 +2387,7 @@ export async function pull(
   //    truncates only its own file. Dashboard sessions live in one shared file
   //    and are filtered instead: each target gets the sessions its scope
   //    recorded (#785).
-  if (!options.dryRun && !pendingUsageReport) {
+  if (!options.dryRun && !options.inline && !pendingUsageReport) {
     pendingUsageReport = (async () => {
       try {
         const { reportUsageToTeam } = await import('./team-push.js');
@@ -2474,7 +2512,7 @@ export async function pull(
   //    usage report (above) may still hold them; its writes go to the reports
   //    worktree, not this clone's tree. Launch shape: post-pull.ts. Nothing
   //    here can fail the pull.
-  if (!options.dryRun && postPullRepo) {
+  if (!options.dryRun && !options.inline && postPullRepo) {
     await runDeclaredPostPull(postPullRepo, { interactive: options.interactive === true });
   }
 }

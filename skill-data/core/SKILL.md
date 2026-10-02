@@ -132,7 +132,8 @@ local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`; Git
 2.54+), beside any `core.hooksPath` manager or `.git/hooks` script. When a
 worktree is created (`git worktree add`, or an app), it creates the project roots
 of `enabledAgents` (else the ones the main checkout has) and pulls into it before
-the command returns. A branch switch does nothing. It prints nothing and always
+the command returns, from the team clone as last fetched when that was within
+24 h; a full pull then runs in the background. A branch switch does nothing. It prints nothing and always
 exits 0, so a worktree still missing team resources needs a `teamai pull` there;
 `git config --local --get-regexp '^hook\.teamai-'` shows whether it is installed.
 

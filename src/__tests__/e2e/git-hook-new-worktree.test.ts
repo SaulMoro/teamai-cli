@@ -132,7 +132,8 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
   }, 60_000);
 
   afterAll(() => {
-    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+    // Detached pulls of the last worktrees may still be writing.
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   });
 
   it('init installs one named hook per git event in the repository config', () => {
@@ -282,6 +283,107 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     expect(r.code).toBe(0);
     expect(r.output).toBe('');
     expect(delivered(dir)).toEqual(ALL);
+  });
+
+  describe('inline pass reads the team clone, the detached pull fetches the rest', () => {
+    const stampOf = (root: string) => path.join(partitionOf(root), 'last-fetch.json');
+    /** Commit a new skill to the team remote; returns its name. */
+    const pushSkill = (name: string): void => {
+      const work = path.join(sandbox, `push-${name}`);
+      gitOk(['clone', '-q', remote, work], sandbox);
+      fs.mkdirSync(path.join(work, 'skills', name), { recursive: true });
+      fs.writeFileSync(path.join(work, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\n`);
+      gitOk(['add', '-A'], work);
+      gitOk(['commit', '-q', '-m', name], work);
+      gitOk(['push', '-q', 'origin', 'HEAD:main'], work);
+    };
+    const hasSkill = (dir: string, name: string) => fs.existsSync(path.join(dir, '.claude', 'skills', name, 'SKILL.md'));
+    const waitFor = async (check: () => boolean, ms = 30_000) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        if (check()) return true;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return check();
+    };
+    /**
+     * Wait for the detached pulls of the project to finish: no partition lock
+     * for a full second (one may not have taken it yet).
+     */
+    const settle = async (root: string) => {
+      const lock = path.join(partitionOf(root), '.sync-lock');
+      let freeSince = Date.now();
+      await waitFor(() => {
+        if (fs.existsSync(lock)) freeSince = Date.now();
+        return Date.now() - freeSince >= 1000;
+      });
+    };
+
+    it('a clone fetched within the TTL: no fetch while the hook runs; the detached pull fetches afterwards', async () => {
+      const repo = project('fresh-project', ['--agent', 'claude']);
+      await settle(repo);
+      expect(fs.existsSync(stampOf(repo))).toBe(true);
+      pushSkill('late-skill');
+      const trace = path.join(sandbox, 'fresh-trace.log');
+
+      const wt = worktreeAdd(repo, 'wt-fresh', { GIT_TRACE: trace });
+
+      expect(wt.code, wt.output).toBe(0);
+      expect(wt.output).toBe('');
+      expect(delivered(wt.dir)).toEqual(ALL);
+      expect(hasSkill(wt.dir, 'late-skill')).toBe(false);
+      const traced = fs.readFileSync(trace, 'utf8');
+      expect(traced).toMatch(/hook-dispatch post-checkout/);
+      expect(traced).not.toMatch(/\b(fetch|upload-pack|pull)\b/);
+
+      expect(await waitFor(() => hasSkill(wt.dir, 'late-skill'))).toBe(true);
+      await settle(repo);
+    });
+
+    it('a clone fetched more than 24 h ago: the hook fetches the team repo before delivering', async () => {
+      const repo = project('stale-project', ['--agent', 'claude']);
+      await settle(repo);
+      fs.writeFileSync(stampOf(repo), JSON.stringify({ lastFetch: new Date(Date.now() - 25 * 3600_000).toISOString() }));
+      pushSkill('stale-skill');
+
+      const wt = worktreeAdd(repo, 'wt-stale');
+
+      expect(wt.code, wt.output).toBe(0);
+      expect(hasSkill(wt.dir, 'stale-skill')).toBe(true);
+      await settle(repo);
+    });
+
+    it('delivers what a full pull delivers at the same team revision', async () => {
+      const repo = project('equal-project', ['--agent', 'claude']);
+      await settle(repo);
+      const tree = (dir: string): string[] => {
+        const out: string[] = [];
+        const walk = (rel: string) => {
+          for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+            const r = path.join(rel, e.name);
+            if (e.isDirectory()) walk(r);
+            else out.push(`${r}:${fs.readFileSync(path.join(dir, r), 'utf8')}`);
+          }
+        };
+        for (const top of ['.claude', '.mcp.json']) {
+          if (!fs.existsSync(path.join(dir, top))) continue;
+          if (fs.statSync(path.join(dir, top)).isDirectory()) walk(top);
+          else out.push(`${top}:${fs.readFileSync(path.join(dir, top), 'utf8')}`);
+        }
+        return out.sort();
+      };
+      const hooked = worktreeAdd(repo, 'wt-equal-hook');
+      const snapshot = tree(hooked.dir);
+      await settle(repo);
+      const manual = path.join(sandbox, 'wt-equal-pull');
+      gitOk(['-c', 'hook.teamai-post-checkout.enabled=false', 'worktree', 'add', '-q', manual], repo);
+      fs.mkdirSync(path.join(manual, '.claude')); // the root the hook creates; pull skips a tool without one
+      const pulled = teamai(['pull', '--silent'], manual);
+      expect(pulled.code, pulled.output).toBe(0);
+
+      expect(snapshot.length).toBeGreaterThan(0);
+      expect(snapshot).toEqual(tree(manual));
+    });
   });
 
   it('with no enabledAgents, creates the tool roots the main checkout has, and only those', () => {

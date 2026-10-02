@@ -1066,6 +1066,13 @@ export interface GlobalOptions {
    * the confirmation prompt (`remove`).
    */
   force?: boolean;
+  /**
+   * Internal (the new-worktree git hook, `pull` only): deliver what the next
+   * session reads, without network when the team clone was fetched within
+   * SOURCE_PULL_TTL_MS; sources come from their cached clones. Learnings,
+   * reports, usage reporting and post-pull scripts are left to a full pull.
+   */
+  inline?: boolean;
   /** Push a specific skill by path. */
   skill?: string;
   /** Target role namespace (overrides detected namespace). */

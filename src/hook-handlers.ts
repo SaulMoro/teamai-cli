@@ -160,7 +160,14 @@ const newWorktreeHandler: HookHandler = {
     const { createProjectToolRoots } = await import('./project-agent-root.js');
     await createProjectToolRoots({ cwd });
     const { pull } = await import('./pull.js');
-    await pull({ silent: true });
+    await pull({ silent: true, inline: true });
+    // Learnings, reports, sources and the team repo itself refresh after
+    // `git worktree add` returns, in a pull this process does not wait for.
+    const { resolveCliEntry } = await import('./builtin-hooks.js');
+    const { spawn } = await import('node:child_process');
+    spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
+      cwd, detached: true, stdio: 'ignore', windowsHide: true,
+    }).on('error', (e) => log.debug(`new-worktree: detached pull failed to start: ${e.message}`)).unref();
     return null;
   },
 };

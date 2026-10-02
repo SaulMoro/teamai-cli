@@ -198,8 +198,10 @@ async function recordSourcePull(source: SourceConfig): Promise<void> {
 /**
  * Clone or pull a source repo. Returns the repo path, or null on failure.
  */
-async function ensureSourceRepo(source: SourceConfig, force: boolean, dryRun = false): Promise<string | null> {
+async function ensureSourceRepo(source: SourceConfig, force: boolean, dryRun = false, offline = false): Promise<string | null> {
   const repoDir = getSourceRepoDir(source);
+  // The new-worktree hook reads the cached clone, as a dry run does (#929).
+  if (offline) return await pathExists(repoDir) ? repoDir : null;
   if (dryRun) {
     if (!await pathExists(repoDir)) {
       log.info(`[dry-run] [source:${source.name}] Would clone the repository; no cached skills are available to preview.`);
@@ -555,7 +557,7 @@ async function sourceBrowseLocked(name: string, options: GlobalOptions, localCon
   }
 
   // Ensure source repo is cloned
-  const repoDir = await ensureSourceRepo(source, !!options.force, !!options.dryRun);
+  const repoDir = await ensureSourceRepo(source, !!options.force, !!options.dryRun, !!options.inline);
   if (!repoDir) {
     if (!options.dryRun) log.error(`Could not access source "${name}".`);
     return;
@@ -639,7 +641,7 @@ async function pullSingleSource(
   options: GlobalOptions,
 ): Promise<void> {
   // Ensure source repo is cloned/updated
-  const repoDir = await ensureSourceRepo(source, !!options.force, !!options.dryRun);
+  const repoDir = await ensureSourceRepo(source, !!options.force, !!options.dryRun, !!options.inline);
   if (!repoDir) return;
 
   // Load source's teamai.yaml
