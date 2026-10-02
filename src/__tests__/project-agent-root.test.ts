@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { seedProjectAgentRoot } from '../project-agent-root.js';
+import { createProjectToolRoots, seedProjectAgentRoot } from '../project-agent-root.js';
 
 let tmpDir: string;
 
@@ -128,5 +129,56 @@ describe('seedProjectAgentRoot', () => {
     await seedProjectAgentRoot('claude', projectRoot);
     expect(fs.existsSync(path.join(projectRoot, '.claude-custom'))).toBe(true);
     expect(fs.existsSync(path.join(projectRoot, '.claude'))).toBe(false);
+  });
+});
+
+function dotEntries(dir: string): string[] {
+  return fs.readdirSync(dir).filter((name) => name.startsWith('.')).sort();
+}
+
+describe('createProjectToolRoots', () => {
+  it('creates the root of every tool in enabledAgents and nothing else', async () => {
+    const projectRoot = writeProjectConfig({ enabledAgents: ['claude', 'codex'] });
+
+    await createProjectToolRoots({ cwd: projectRoot });
+
+    expect(dotEntries(projectRoot)).toEqual(['.claude', '.codex', '.teamai']);
+  });
+
+  describe('in a linked worktree with empty enabledAgents', () => {
+    function runGit(cwd: string, ...args: string[]): void {
+      execFileSync('git', args, { cwd, stdio: 'pipe' });
+    }
+
+    function linkedWorktree(mainRoots: string[], config: { disabledAgents?: string[] } = {}): string {
+      const base = fs.realpathSync.native(tmpDir);
+      const main = path.join(base, 'main');
+      fs.mkdirSync(main);
+      runGit(main, 'init', '-q');
+      runGit(main, 'config', 'user.email', 'test@example.com');
+      runGit(main, 'config', 'user.name', 'Test');
+      runGit(main, 'commit', '--allow-empty', '-q', '-m', 'init');
+      for (const root of mainRoots) fs.mkdirSync(path.join(main, root), { recursive: true });
+
+      const worktree = path.join(base, 'wt');
+      runGit(main, 'worktree', 'add', '-q', worktree, 'HEAD');
+      return writeProjectConfig({ projectRoot: worktree, ...config });
+    }
+
+    it('creates the tool roots the main checkout has', async () => {
+      const worktree = linkedWorktree(['.claude', '.codex', '.github']);
+
+      await createProjectToolRoots({ cwd: worktree });
+
+      expect(dotEntries(worktree)).toEqual(['.claude', '.codex', '.git', '.teamai']);
+    });
+
+    it('skips a disabled tool even when the main checkout has its root', async () => {
+      const worktree = linkedWorktree(['.claude', '.cursor'], { disabledAgents: ['cursor'] });
+
+      await createProjectToolRoots({ cwd: worktree });
+
+      expect(dotEntries(worktree)).toEqual(['.claude', '.git', '.teamai']);
+    });
   });
 });
