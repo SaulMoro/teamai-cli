@@ -241,6 +241,34 @@ describe('hook-handlers registry', () => {
     expect(mockPull).toHaveBeenCalledWith({ silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: 5000 });
   });
 
+  it('does not sync teamai\'s own knowledge worktree on post-checkout or post-merge', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'git-hook-own-wt-')));
+    const git = (args: string[], cwd: string) => execFileSync('git', args, {
+      cwd, stdio: 'ignore',
+      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+    });
+    try {
+      git(['init', '-q', '-b', 'main'], main);
+      git(['commit', '-q', '--allow-empty', '-m', 'init'], main);
+      const wt = path.join(main, '.teamai', 'knowledge-wt');
+      git(['worktree', 'add', '-q', '--detach', wt, 'HEAD'], main);
+      // As detection resolves it from inside that worktree: its own checkout.
+      const config = {
+        scope: 'project', projectRoot: wt, username: 'test', additionalRoles: [],
+        repo: { kind: 'self', localPath: path.join(wt, '.teamai'), remote: '' },
+      } as unknown as LocalConfig;
+      const registry = buildHandlerRegistry();
+      mockPull.mockClear();
+      await registry.find(r => r.event === 'post-checkout')!.handler.execute(
+        { cwd: wt, git_args: ['0'.repeat(40), 'abc', '1'] }, 'git', config);
+      await registry.find(r => r.event === 'post-merge')!.handler.execute({ cwd: wt, git_args: ['0'] }, 'git', config);
+      expect(mockPull).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+    }
+  });
+
   it('session-start pull seeds the hook tool root before pulling', async () => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(

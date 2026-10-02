@@ -155,7 +155,7 @@ const newWorktreeHandler: HookHandler = {
     if (!config || config.scope !== 'project' || !isNewCheckout(args)) return null;
     const cwd = resolveHookCwd(stdin) ?? process.cwd();
     const { getDataHome } = await import('./types.js');
-    if (await isWithin(cwd, [getDataHome(config), config.repo.localPath])) return null;
+    if (await isWithin(cwd, [getDataHome(config), config.repo.localPath, ...await ownCheckoutsDir(cwd)])) return null;
 
     await recordingFailure(config, 'post-checkout', async () => {
       const { createProjectToolRoots } = await import('./project-agent-root.js');
@@ -189,7 +189,8 @@ const gitPullHandler: HookHandler = {
     const { getDataHome, isSelfMode } = await import('./types.js');
     const self = isSelfMode(config);
     // teamai's own checkouts; in self mode the team repo is the member's.
-    if (await isWithin(cwd, self ? [getDataHome(config)] : [getDataHome(config), config.repo.localPath])) return null;
+    const own = [getDataHome(config), ...await ownCheckoutsDir(cwd)];
+    if (await isWithin(cwd, self ? own : [...own, config.repo.localPath])) return null;
 
     const { pull } = await import('./pull.js');
     await recordingFailure(config, 'post-merge', () => pull({
@@ -228,6 +229,19 @@ async function spawnDetachedPull(cwd: string, event: 'post-checkout' | 'post-mer
   spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
     cwd, detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, TEAMAI_GIT_HOOK: event },
   }).on('error', (e) => log.debug(`git hook: detached pull failed to start: ${e.message}`)).unref();
+}
+
+/**
+ * The main checkout's `.teamai/`, where teamai creates its knowledge worktree.
+ * Detection run from inside that worktree resolves the worktree as its own
+ * project root, so the config alone cannot tell it is teamai's.
+ */
+async function ownCheckoutsDir(cwd: string): Promise<string[]> {
+  // Git refuses to open a directory that no longer exists.
+  if (!await pathExists(cwd)) return [];
+  const { resolveAnchors } = await import('./utils/git.js');
+  const anchors = await resolveAnchors(cwd);
+  return anchors ? [path.join(anchors.projectAnchor, '.teamai')] : [];
 }
 
 /** Whether `dir` is one of `parents` or inside one (real paths). */
