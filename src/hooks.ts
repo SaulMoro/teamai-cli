@@ -27,6 +27,7 @@ import {
   isSelfMode,
   managedMcpManifestKey,
   managedMcpManifestPath,
+  managedMcpWorkspaceId,
   resolveToolRootDir,
 } from './types.js';
 import { builtinHookDefs, applyBuiltinOverride, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
@@ -280,7 +281,7 @@ function teamDefsForTool(teamDefs: HookDef[], tool: string): HookDef[] {
 /**
  * Build the per-tool desired HookDef set: built-in (A) followed by team (B).
  * `teamOnly` leaves the built-ins out, for a file that holds team hooks only
- * (the main checkout's, see MAIN_CHECKOUT_TEAM_HOOK_FILES).
+ * (the main checkout's, see MAIN_CHECKOUT_TEAM_HOOK_TOOLS).
  */
 function desiredDefs(
   tool: string,
@@ -446,7 +447,7 @@ const POSIX_GATE_ROOT_RE = /^if \[ "\$PWD" = ('(?:[^']|'"'"')*') \] \|\| case "\
 /**
  * The project root a POSIX gate was rendered for, or null for an ungated or
  * cmd.exe-gated command. Only the POSIX form is read: it is the one the tools
- * that moved to the main checkout (MAIN_CHECKOUT_TEAM_HOOK_FILES) ever wrote.
+ * that moved to the main checkout (MAIN_CHECKOUT_TEAM_HOOK_TOOLS) ever wrote.
  */
 function gatedProjectRoot(command: string): string | null {
   const quoted = POSIX_GATE_ROOT_RE.exec(command)?.[1];
@@ -465,17 +466,18 @@ function gatedProjectRoot(command: string): string | null {
  * HOME, which every worktree reads from its first session. Every other tool
  * keeps its team hooks in HOME behind a `$PWD` gate.
  */
-const MAIN_CHECKOUT_TEAM_HOOK_FILES: Readonly<Record<string, string>> = {
-  claude: '.claude/settings.local.json',
-  codex: '.codex/hooks.json',
-};
+const MAIN_CHECKOUT_TEAM_HOOK_TOOLS = ['claude', 'codex'] as const;
 
-/** Where a non-self project scope keeps the team hooks of MAIN_CHECKOUT_TEAM_HOOK_FILES' tools. */
+/** Where a non-self project scope keeps Claude/Codex team hooks. */
 export interface MainCheckoutHooks {
-  /** The main checkout (realpath), shared by every linked worktree. */
+  /** The main checkout (realpath), or the current workspace when the anchor is bare. */
   root: string;
-  /** Manifest of the team hooks written there, in the project's shared data home. */
+  /** Bare repositories have no main checkout; each workspace keeps its own files. */
+  worktreeScoped: boolean;
+  /** Manifest of the team hooks written in this target root. */
   manifestPath: string;
+  /** Configured project-scope targets; Claude uses settings.local.json beside its settings file. */
+  files: Readonly<Record<string, string>>;
 }
 
 /**
@@ -484,27 +486,43 @@ export interface MainCheckoutHooks {
  * (which writes every hook into its own checkout), or a project rooted at HOME,
  * whose "main checkout" files are the HOME files themselves.
  */
-export async function resolveMainCheckoutHooks(localConfig: LocalConfig): Promise<MainCheckoutHooks | null> {
+export async function resolveMainCheckoutHooks(
+  localConfig: LocalConfig,
+  toolPaths: Record<string, { settings?: string }>,
+): Promise<MainCheckoutHooks | null> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot || isSelfMode(localConfig)) return null;
-  const root = await mainCheckoutOf(localConfig.projectRoot);
+  const { root, worktreeScoped } = await mainCheckoutOf(localConfig.projectRoot);
   if (root === canonicalProjectRoot(getUserHome())) return null;
-  return { root, manifestPath: path.join(getDataHome(localConfig), 'managed-main-checkout-hooks.json') };
+  const files = Object.fromEntries(MAIN_CHECKOUT_TEAM_HOOK_TOOLS.flatMap((tool) => {
+    const settings = toolPaths[tool]?.settings;
+    if (!settings) return [];
+    const relative = tool === 'claude' ? path.join(path.dirname(settings), 'settings.local.json') : settings;
+    return [[tool, path.join(root, relative)]];
+  }));
+  const manifestRoot = worktreeScoped
+    ? path.join(getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(root))
+    : getDataHome(localConfig);
+  return { root, worktreeScoped, manifestPath: path.join(manifestRoot, 'managed-main-checkout-hooks.json'), files };
 }
 
 /**
  * The main checkout (realpath) of the repository `projectRoot` belongs to, or
  * `projectRoot` itself outside git — including a checkout that no longer
- * exists, which git cannot be asked about.
+ * exists, which git cannot be asked about. A bare anchor has no main checkout,
+ * so each actual workspace supplies its own hook files and ownership.
  */
-async function mainCheckoutOf(projectRoot: string): Promise<string> {
+async function mainCheckoutOf(projectRoot: string): Promise<{ root: string; worktreeScoped: boolean }> {
   const anchors = await pathExists(projectRoot) ? await resolveAnchors(projectRoot) : null;
-  return anchors?.projectAnchor ?? canonicalProjectRoot(projectRoot);
+  return {
+    root: (anchors?.projectAnchorIsBare ? anchors.workspaceRoot : anchors?.projectAnchor)
+      ?? canonicalProjectRoot(projectRoot),
+    worktreeScoped: anchors?.projectAnchorIsBare === true,
+  };
 }
 
 /** The main checkout's team hook file of `tool`, when the tool keeps one there. */
 export function mainCheckoutHookFile(mainCheckout: MainCheckoutHooks | null | undefined, tool: string): string | null {
-  const relative = MAIN_CHECKOUT_TEAM_HOOK_FILES[tool];
-  return mainCheckout && relative ? path.join(mainCheckout.root, relative) : null;
+  return mainCheckout?.files[tool] ?? null;
 }
 
 /**
@@ -1007,18 +1025,16 @@ async function reconcileCodexFormat(
   return records;
 }
 
-/** Legacy records identify only an unambiguous, exact default entry under their event. */
+/** Recover a moved entry only when its complete recorded definition is unique. */
 function ownsCodexEntry(record: ManagedHookRecord, event: string, index: number, entries: CodexHookMatcher[]): boolean {
   if (record.event !== event) return false;
   const entry = entries[index];
-  if (record.codexEntry) {
-    return record.codexEntryIndex === index && isDeepStrictEqual(entry, record.codexEntry);
-  }
-  const legacy = {
+  if (record.codexEntry && record.codexEntryIndex === index && isDeepStrictEqual(entry, record.codexEntry)) return true;
+  const recorded = record.codexEntry ?? {
     ...(record.matcher ? { matcher: record.matcher } : {}),
     hooks: [{ type: 'command', command: record.command }],
   };
-  return isDeepStrictEqual(entry, legacy) && entries.filter((candidate) => isDeepStrictEqual(candidate, legacy)).length === 1;
+  return isDeepStrictEqual(entry, recorded) && entries.filter((candidate) => isDeepStrictEqual(candidate, recorded)).length === 1;
 }
 
 // ─── ZCode (~/.zcode/cli/config.json) reconcile ─────────────
@@ -1942,7 +1958,7 @@ export async function reconcileHooksToAllTools(
 
 /**
  * Reconcile the team hooks of one tool's main-checkout file
- * (MAIN_CHECKOUT_TEAM_HOOK_FILES). Nothing is created for a tool without team
+ * (MAIN_CHECKOUT_TEAM_HOOK_TOOLS). Nothing is created for a tool without team
  * hooks: a business repo that never had any gets no `.claude/settings.local.json`
  * or `.codex/` from teamai.
  */
@@ -2013,8 +2029,8 @@ async function codexTrustTargets(
   let anchor: string | undefined;
   let mainFile: string | null = null;
   if (localConfig.scope === 'project' && localConfig.projectRoot) {
-    anchor = await mainCheckoutOf(localConfig.projectRoot);
-    const mainCheckout = await resolveMainCheckoutHooks(localConfig);
+    anchor = (await mainCheckoutOf(localConfig.projectRoot)).root;
+    const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
     mainFile = mainCheckoutHookFile(mainCheckout, CODEX_TOOL_ID);
     if (mainCheckout && mainFile) {
       sources.push({ file: mainFile, manifestPath: mainCheckout.manifestPath });
@@ -2141,9 +2157,9 @@ export async function sweepLegacyProjectHooks(
   const legacy = resolveLegacyProjectHookScope(localConfig);
   if (!legacy) return;
   // In the main checkout, Codex's legacy file is the one its team hooks now
-  // live in (MAIN_CHECKOUT_TEAM_HOOK_FILES); that pass removes the legacy
+  // live in (MAIN_CHECKOUT_TEAM_HOOK_TOOLS); that pass removes the legacy
   // built-ins from it, so the sweep must not empty it.
-  const mainCheckout = await resolveMainCheckoutHooks(localConfig);
+  const mainCheckout = await resolveMainCheckoutHooks(localConfig, toolPaths);
   const legacyToolPaths = Object.fromEntries(Object.entries(toolPaths).filter(([tool, paths]) => {
     const mainFile = mainCheckoutHookFile(mainCheckout, tool);
     return !(mainFile && paths.settings && path.join(canonicalProjectRoot(legacy.baseDir), paths.settings) === mainFile);
@@ -2262,7 +2278,7 @@ export async function reconcileTeamHooksForConfig(
     installedBaseDir: localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined,
     scope: localConfig.scope,
     builtinsOnly,
-    mainCheckout: await resolveMainCheckoutHooks(localConfig),
+    mainCheckout: await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths),
   });
 
   const copilotExcluded = disabled?.includes(COPILOT_TOOL_ID) ?? false;

@@ -2021,6 +2021,38 @@ describe('uninstall', () => {
     );
   });
 
+  it('removes the separate team-hook files of live bare worktrees (#955)', async () => {
+    const bare = path.join(tmpDir, 'bare.git');
+    const first = path.join(tmpDir, 'first');
+    const second = path.join(tmpDir, 'second');
+    execFileSync('git', ['init', '--bare', bare]);
+    execFileSync('git', ['--git-dir', bare, 'worktree', 'add', '--orphan', first]);
+    execFileSync('git', ['--git-dir', bare, 'worktree', 'add', '--orphan', second]);
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const homeDir = path.join(tmpDir, 'home');
+    const dataHome = path.join(homeDir, '.teamai', 'shared-project');
+    await fse.ensureDir(repoPath);
+    await fse.ensureDir(dataHome);
+    for (const root of [first, second]) {
+      await fse.outputJson(path.join(root, '.claude', 'settings.local.json'), {
+        hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'npm run lint' }], description: '[teamai:hook:lint] lint' }] },
+      });
+    }
+    vi.stubEnv('HOME', homeDir);
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: first, dataHome });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    const calls = mockReconcileHooks.mock.calls.filter((c) => String(c[0]).endsWith('settings.local.json'));
+    const files = await Promise.all([first, second].map(async (root) =>
+      path.join(await fse.realpath(root), '.claude', 'settings.local.json')));
+    expect(calls.map((c) => c[0]).sort()).toEqual(files.sort());
+    const manifests = calls.map((c) => c[3].manifestPath);
+    expect(new Set(manifests).size).toBe(2);
+    for (const manifest of manifests) expect(manifest).toMatch(/workspaces[/\\][a-f0-9]+[/\\]managed-main-checkout-hooks\.json$/);
+  });
+
   // #667: hook discovery must resolve the settings *file* at the scope hooks
   // were injected into, not at the config's scope. Qoder CN reads
   // `~/.qoder-cn/` for its user scope, so a non-self project scope (which

@@ -837,6 +837,8 @@ export async function isDedicatedRepoRoot(repoPath: string): Promise<boolean> {
 export interface ProjectAnchors {
   workspaceRoot: string;
   projectAnchor: string;
+  /** The shared identity is a bare repository, not a checkout suitable for project files. */
+  projectAnchorIsBare?: boolean;
 }
 
 /**
@@ -881,6 +883,7 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
   const git = createGit(cwd);
   let toplevel: string;
   let mainWorktree: string;
+  let projectAnchorIsBare = false;
   try {
     toplevel = (await git.revparse(['--show-toplevel'])).trim();
     const list = await git.raw(['worktree', 'list', '--porcelain']);
@@ -888,6 +891,7 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
     // linked worktrees of this repository.
     const first = list.split('\n').find((l) => l.startsWith('worktree '));
     mainWorktree = first ? first.slice('worktree '.length).trim() : '';
+    projectAnchorIsBare = list.split('\n\n')[0].split('\n').some((line) => line.trim() === 'bare');
   } catch {
     return null;
   }
@@ -897,7 +901,7 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
       realpath(toplevel),
       realpath(mainWorktree),
     ]);
-    return { workspaceRoot, projectAnchor };
+    return { workspaceRoot, projectAnchor, ...(projectAnchorIsBare ? { projectAnchorIsBare: true } : {}) };
   } catch {
     return null;
   }

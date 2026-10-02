@@ -69,6 +69,7 @@ import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from './utils/home.js';
+import { listWorktrees } from './utils/git.js';
 import {
   detectShellProfile,
   findEnvBlockFor,
@@ -581,12 +582,22 @@ async function buildRemovalPlan(
   const legacyHookScope = resolveLegacyProjectHookScope(localConfig);
   if (legacyHookScope) hookTargets.push(legacyHookScope);
   // The project's Claude and Codex team hooks, in the main checkout (#955).
-  const mainCheckout = await resolveMainCheckoutHooks(localConfig);
-  if (mainCheckout) {
+  const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
+  const mainCheckouts = mainCheckout ? [mainCheckout] : [];
+  // A bare anchor has no shared checkout file. Uninstall removes the shared
+  // data home, so collect every live workspace's hooks before deleting ownership.
+  if (mainCheckout?.worktreeScoped) {
+    for (const root of await listWorktrees(localConfig.projectRoot!)) {
+      if (root === mainCheckout.root) continue;
+      const target = await resolveMainCheckoutHooks({ ...localConfig, projectRoot: root }, teamConfig.toolPaths);
+      if (target?.worktreeScoped) mainCheckouts.push(target);
+    }
+  }
+  for (const target of mainCheckouts) {
     hookTargets.push({
-      baseDir: mainCheckout.root,
-      manifestPath: mainCheckout.manifestPath,
-      fileFor: (tool) => mainCheckoutHookFile(mainCheckout, tool),
+      baseDir: target.root,
+      manifestPath: target.manifestPath,
+      fileFor: (tool) => mainCheckoutHookFile(target, tool),
     });
   }
   // Hook discovery resolves its file name at the same scope as the targets: a

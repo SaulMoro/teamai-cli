@@ -282,7 +282,7 @@ export async function hooksRemove(_options: GlobalOptions): Promise<void> {
             ? localConfig.projectRoot
             : undefined,
         // The project's Claude and Codex team hooks live in the main checkout.
-        mainCheckout: await resolveMainCheckoutHooks(localConfig),
+        mainCheckout: await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths),
     });
 
     const copilotPaths = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID];

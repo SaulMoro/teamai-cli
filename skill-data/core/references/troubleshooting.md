@@ -167,15 +167,18 @@ step — do not assume auto-sync just works.
 
 Codex runs a non-managed hook only once it is **trusted**. `teamai init`, `pull`
 and `teamai hooks inject` trust the hooks they write (and, in a project, the main
-checkout) through `codex app-server`; trust written by a session-start pull applies
-from the next Codex session. `teamai doctor` names any teamai hook Codex will not
+checkout, or the current worktree for a bare repository) through `codex app-server`.
+Trust written by a session-start pull applies from the next Codex session. `teamai doctor` names any teamai hook Codex will not
 run. Then: run `teamai pull`; if `codex` is not on PATH or `codexTrustEnabled: false`
 is set in `config.yaml`, guide the user to trust the teamai hooks in Codex `/hooks`,
 then reopen a session. A new linked worktree gets the team hooks from its second
 Codex session (the first creates its `.codex/`). Member hooks with the same command
 are preserved and remain untouched by automatic trust. Codex ownership uses the
-recorded event, position and complete entry; unrecorded or ambiguous legacy team-hook copies
-are preserved rather than claimed by command.
+recorded event, position and complete entry. A moved entry is recovered only by a
+unique full-definition match; unrecorded or ambiguous legacy team-hook copies
+are preserved rather than claimed by command. Project hook paths follow `toolPaths`;
+Claude uses `settings.local.json` beside its configured settings file. A custom
+Codex path that Codex does not load is reported as `not loaded` by doctor.
 
 ### Cursor
 

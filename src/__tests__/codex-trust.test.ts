@@ -103,6 +103,29 @@ afterEach(async () => {
 });
 
 describe('Codex hook ownership', () => {
+  it('recovers a unique managed definition after member groups move it', async () => {
+    await writeYaml(LINT_HOOK);
+    await writeAndTrust(userConfig());
+    const file = path.join(codexHome(), 'hooks.json');
+    const json = await fse.readJson(file);
+    const member = { hooks: [{ type: 'command', command: 'echo member' }] };
+    json.hooks.PreToolUse.unshift(member);
+    await fse.writeJson(file, json);
+
+    await writeAndTrust(userConfig());
+
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([
+      member, { hooks: [{ type: 'command', command: 'npm run lint' }] },
+    ]);
+    await writeYaml(LINT_HOOK.replace('npm run lint', 'npm run lint:fix'));
+    await writeAndTrust(userConfig());
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([
+      member, { hooks: [{ type: 'command', command: 'npm run lint:fix' }] },
+    ]);
+    await writeAndTrust(userConfig(), { removeAll: true });
+    expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([member]);
+  });
+
   it('preserves member hooks on the first project reconcile and through team updates/removal', async () => {
     await writeYaml(LINT_HOOK);
     const project = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-codex-owner-project-')));
@@ -440,6 +463,71 @@ describe('Codex trust — project scopes', () => {
       repo: { localPath: path.join(root, '.teamai'), remote: 'x', kind: 'self', businessRepoRoot: root },
     } as Partial<LocalConfig>);
   }
+
+  it('writes and trusts team hooks in the current workspace when the project anchor is bare', async () => {
+    const bare = path.join(home, 'bare.git');
+    await fse.ensureDir(bare);
+    vi.mocked(resolveAnchors).mockResolvedValue({
+      workspaceRoot: project, projectAnchor: bare, projectAnchorIsBare: true,
+    });
+    await writeYaml(LINT_HOOK);
+
+    const result = await writeAndTrust(projectConfig());
+
+    const file = path.join(project, '.codex', 'hooks.json');
+    expect(await fse.pathExists(file)).toBe(true);
+    expect((await fse.readJson(file)).hooks.PreToolUse[0].hooks[0].command).toBe('npm run lint');
+    expect(await fse.pathExists(path.join(bare, '.codex'))).toBe(false);
+    expect(result.codexTrust).toMatchObject({ kind: 'trusted', project });
+    expect(readFakeCodexState(codexHome()).projects).toEqual({ [project]: { trust_level: 'trusted' } });
+    expect(await readCodexHookTrustForScope(teamConfig, projectConfig())).toEqual({ kind: 'listed', notTrusted: [] });
+  });
+
+  it('uses the configured project file in trust and doctor when Codex does not load it', async () => {
+    await writeYaml(LINT_HOOK);
+    const configured = { ...teamConfig, toolPaths: {
+      codex: { settings: '.custom-codex/hooks.json', userScope: { settings: '.codex/hooks.json' } },
+    } } as TeamaiConfig;
+    const cfg = projectConfig();
+    await reconcileTeamHooksForConfig(configured, cfg);
+    const file = path.join(project, '.custom-codex', 'hooks.json');
+
+    expect(await fse.pathExists(file)).toBe(true);
+    expect(await fse.pathExists(path.join(project, '.codex', 'hooks.json'))).toBe(false);
+    expect(await trustCodexForScope(configured, cfg)).toEqual({
+      kind: 'failed', reason: expect.stringContaining(file),
+    });
+    expect(await readCodexHookTrustForScope(configured, cfg)).toEqual({
+      kind: 'listed', notTrusted: [
+        ...(await codexEntries(path.join(codexHome(), 'hooks.json'))).map(({ command }) => ({
+          file: path.join(codexHome(), 'hooks.json'), command, status: 'untrusted',
+        })),
+        { file, command: 'npm run lint', status: 'not loaded' },
+      ],
+    });
+  });
+
+  it('keeps separate hook ownership for bare worktrees sharing one data home', async () => {
+    const other = path.join(home, 'other-worktree');
+    const bare = path.join(home, 'bare.git');
+    await fse.ensureDir(other);
+    await fse.ensureDir(bare);
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({
+      workspaceRoot: cwd!, projectAnchor: bare, projectAnchorIsBare: true,
+    }));
+    const dataHome = path.join(home, 'shared-data');
+    const first = projectConfig({ dataHome });
+    const second = projectConfig({ dataHome, projectRoot: other });
+    await writeYaml(LINT_HOOK);
+    await writeAndTrust(first);
+    await writeYaml(LINT_HOOK.replace('npm run lint', 'npm run lint:fix'));
+    await writeAndTrust(second);
+
+    await writeAndTrust(first, { removeAll: true });
+
+    expect((await fse.readJson(path.join(project, '.codex', 'hooks.json'))).hooks.PreToolUse).toEqual([]);
+    expect((await fse.readJson(path.join(other, '.codex', 'hooks.json'))).hooks.PreToolUse[0].hooks[0].command).toBe('npm run lint:fix');
+  });
 
   it('trustCodexProject resolves symlinks and preserves an explicit untrusted choice', async () => {
     const alias = path.join(home, 'project-link');

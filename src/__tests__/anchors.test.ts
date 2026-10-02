@@ -201,6 +201,7 @@ describe('defaultProjectSlug (#809)', () => {
       const checkout = path.join(base, 'bare-layout', wt);
       git(bare, 'worktree', 'add', '-q', checkout);
       expect((await resolveAnchors(checkout))?.projectAnchor).toBe(bare);
+      expect((await resolveAnchors(checkout))?.projectAnchorIsBare).toBe(true);
       expect(await defaultProjectSlug(checkout)).toBe('bare-layout');
     }
     const sub = path.join(base, 'bare-layout', 'main', 'pkg');

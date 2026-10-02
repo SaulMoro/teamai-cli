@@ -482,6 +482,32 @@ builtin:
 describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () => {
   const STOP_LINT = 'hooks:\n  - id: lint\n    description: lint\n    event: Stop\n    command: npm run lint\n';
 
+  it('uses project toolPaths for main hooks and userScope paths for HOME built-ins', async () => {
+    await writeYaml(STOP_LINT);
+    const custom = { toolPaths: {
+      claude: { settings: '.custom-claude/settings.json', userScope: { settings: '.claude/settings.json' } },
+      codex: { settings: '.custom-codex/hooks.json', userScope: { settings: '.codex/hooks.json' } },
+    } } as unknown as TeamaiConfig;
+    const files = [path.join(project, '.custom-claude', 'settings.local.json'), path.join(project, '.custom-codex', 'hooks.json')];
+
+    await reconcileTeamHooksForConfig(custom, localConfig());
+
+    for (const file of files) {
+      expect(await fse.pathExists(file)).toBe(true);
+      expect((await fse.readJson(file)).hooks.Stop[0].hooks[0].command).toContain('npm run lint');
+      expect(await fse.readFile(file, 'utf8')).not.toContain('$PWD');
+    }
+    expect((await claudeSettings()).hooks.SessionStart).toHaveLength(1);
+    expect((await codexSettings()).hooks.SessionStart).toHaveLength(1);
+    expect(await fse.pathExists(path.join(project, '.claude', 'settings.local.json'))).toBe(false);
+    expect(await fse.pathExists(path.join(project, '.codex', 'hooks.json'))).toBe(false);
+    const before = await Promise.all(files.map((file) => fse.readFile(file, 'utf8')));
+    await reconcileTeamHooksForConfig(custom, localConfig());
+    expect(await Promise.all(files.map((file) => fse.readFile(file, 'utf8')))).toEqual(before);
+    await reconcileTeamHooksForConfig(custom, localConfig(), { removeAll: true });
+    for (const file of files) expect((await fse.readJson(file)).hooks.Stop).toEqual([]);
+  });
+
   it('keeps one HOME-gated internal Codex hook per project when their pulls alternate', async () => {
     await writeYaml(STOP_LINT);
     const other = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-internal-other-'));
