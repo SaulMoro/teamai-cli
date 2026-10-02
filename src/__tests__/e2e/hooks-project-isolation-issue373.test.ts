@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { CLAUDE_HOOK_OTHER_HOST_SKIP } from '../../hooks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -31,6 +32,8 @@ describe('issue #373 project hook isolation (real CLI)', () => {
   let worktreeA: string;
 
   type Settings = { hooks: { SessionStart?: Array<unknown>; Stop: Array<{ description?: string; hooks: Array<{ command: string }> }> } };
+  const expectedCommand = (file: string, command: string): string =>
+    file.includes('.claude') ? `${CLAUDE_HOOK_OTHER_HOST_SKIP}${command}` : command;
   const readSettings = (file: string): Settings => JSON.parse(fs.readFileSync(file, 'utf8')) as Settings;
   const mainFiles = (project: string): string[] => [
     path.join(project, '.claude', 'settings.local.json'),
@@ -104,7 +107,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     for (const [project, command] of [[projectA, 'echo A'], [projectB, 'echo B']]) {
       for (const file of mainFiles(project)) {
         const settings = readSettings(file);
-        expect(settings.hooks.Stop.map((entry) => entry.hooks[0].command)).toEqual([command]);
+        expect(settings.hooks.Stop.map((entry) => entry.hooks[0].command)).toEqual([expectedCommand(file, command)]);
         expect(settings.hooks.SessionStart).toBeUndefined();
       }
     }
@@ -132,7 +135,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     expect(removed.code, removed.output).toBe(0);
     for (const file of mainFiles(projectA)) expect(readSettings(file).hooks.Stop ?? []).toEqual([]);
     for (const file of mainFiles(projectB)) {
-      expect(readSettings(file).hooks.Stop.map((entry) => entry.hooks[0].command)).toEqual(['echo B']);
+      expect(readSettings(file).hooks.Stop.map((entry) => entry.hooks[0].command)).toEqual([expectedCommand(file, 'echo B')]);
     }
     const remaining = readSettings(settingsPath).hooks.Stop.filter((entry) => entry.description?.startsWith('[teamai:hook:'));
     expect(remaining.map((entry) => entry.hooks[0].command)).toEqual([commandB]);
@@ -153,8 +156,19 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     for (const file of mainFiles(worktreeA)) expect(fs.existsSync(file)).toBe(false);
     for (const file of mainFiles(projectA)) {
       const [command] = readSettings(file).hooks.Stop.map((entry) => entry.hooks[0].command);
-      expect(command).toBe('echo A');
+      expect(command).toBe(expectedCommand(file, 'echo A'));
+      expect(command).not.toContain('$PWD');
       expect(execFileSync('sh', ['-c', command], { cwd: worktreeA, encoding: 'utf8' })).toBe('A\n');
+      if (file.includes('.claude')) {
+        // The main-checkout layout preserves #950's other-host check without a cwd gate.
+        const cursorFile = path.join(home, '.cursor', 'hooks.json');
+        const env = { ...process.env, HOME: home, CURSOR_VERSION: 'test', CURSOR_PROJECT_DIR: '', COPILOT_PROJECT_DIR: '' };
+        fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+        fs.writeFileSync(cursorFile, JSON.stringify({ hooks: { stop: [{ command: 'teamai hook-dispatch stop --tool cursor' }] } }));
+        expect(execFileSync('sh', ['-c', command], { cwd: worktreeA, env, encoding: 'utf8' })).toBe('');
+        fs.rmSync(cursorFile);
+        expect(execFileSync('sh', ['-c', command], { cwd: worktreeA, env, encoding: 'utf8' })).toBe('A\n');
+      }
     }
   });
 });

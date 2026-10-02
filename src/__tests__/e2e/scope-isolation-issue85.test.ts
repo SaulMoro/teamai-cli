@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { CLAUDE_HOOK_OTHER_HOST_SKIP } from '../../hooks.js';
 
 // ─── Issue #85 end-to-end: remaining scope-isolation gaps ──────────────
 //
@@ -195,7 +196,8 @@ describe('issue #85 remaining scope-isolation gaps (e2e)', () => {
       for (const file of mainFiles()) {
         const settings = JSON.parse(fs.readFileSync(file, 'utf-8'));
         expect(settings.hooks.Stop.map((entry: { hooks: Array<{ command: string }> }) => entry.hooks[0].command))
-          .toEqual(['echo teamai-e2e-hook-marker']);
+          .toEqual([`${file.includes('.claude') ? CLAUDE_HOOK_OTHER_HOST_SKIP : ''}echo teamai-e2e-hook-marker`]);
+        expect(fs.readFileSync(file, 'utf-8')).not.toContain('$PWD');
         expect(settings.hooks.SessionStart).toBeUndefined();
       }
       for (const file of homeFiles()) {
