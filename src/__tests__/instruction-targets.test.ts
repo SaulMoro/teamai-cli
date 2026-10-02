@@ -8,6 +8,7 @@ import {
   clearInstructionFile,
   instructionChannelProblems,
   planInstructionFiles,
+  resolveInstructionTargets,
   type InstructionTarget,
 } from '../instruction-targets.js';
 import { injectPiHooks } from '../pi-hooks.js';
@@ -191,6 +192,36 @@ describe('instruction channel problems (#945)', () => {
       expect(await instructionChannelProblems(teamConfig, localConfig)).toEqual([]);
     } finally {
       process.env.HOME = prevHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('instruction targets shared by several tools (#945)', () => {
+  it('gives a shared file the subagent recall block only when every tool reading it has the subagent', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-shared-')));
+    try {
+      const projectRoot = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectRoot, '.codebuddy', 'skills'), { recursive: true });
+      fs.mkdirSync(path.join(projectRoot, '.workbuddy', 'skills'), { recursive: true });
+      const localConfig = {
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+      } as unknown as LocalConfig;
+      const resolve = async (workbuddyAgents: boolean) => (await resolveInstructionTargets(TeamaiConfigSchema.parse({
+        team: 't',
+        repo: 'https://example.invalid/t.git',
+        toolPaths: {
+          codebuddy: { skills: '.codebuddy/skills', rules: '.codebuddy/rules', agents: '.codebuddy/agents' },
+          workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules', ...(workbuddyAgents ? { agents: '.workbuddy/agents' } : {}) },
+        },
+      }), localConfig)).targets;
+
+      const [mixed] = await resolve(false);
+      expect(mixed).toMatchObject({ tools: ['codebuddy', 'workbuddy'], recall: false });
+      const [both] = await resolve(true);
+      expect(both).toMatchObject({ tools: ['codebuddy', 'workbuddy'], recall: true });
+    } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

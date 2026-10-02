@@ -163,7 +163,7 @@ export interface InstructionTarget {
   /** Absolute path. */
   path: string;
   tools: string[];
-  /** Whether a tool reading this file has the `teamai-recall` subagent, which decides the recall block it gets. */
+  /** Whether every tool reading this file has the `teamai-recall` subagent, which decides the recall block it gets. */
   recall: boolean;
   header?: string;
   owned?: boolean;
@@ -273,8 +273,11 @@ export async function instructionHookChannel(tool: string): Promise<{ ready: boo
     };
   }
   if (tool === 'hermes') {
-    const { buildInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN } = await import('./hermes-hooks.js');
+    const {
+      buildInstructionsPlugin, foreignInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN, ownsInstructionsPlugin,
+    } = await import('./hermes-hooks.js');
     const { getHermesConfigPath, isHermesPluginEnabled } = await import('./hermes-config.js');
+    if (!await ownsInstructionsPlugin()) return { ready: false, fix: foreignInstructionsPlugin() };
     const dir = getInstructionsPluginDir();
     const plugin = buildInstructionsPlugin();
     const installed = await readFileSafe(path.join(dir, '__init__.py')) === plugin.init
@@ -394,8 +397,9 @@ export async function resolveInstructionTargets(
     inUse.add(file);
     if (isAgentExcluded(localConfig, tool)) continue;
     const target = targets.get(file) ?? instructionTargetAt(tool, file, localConfig.scope);
+    // The subagent block only where every tool reading the file has the subagent.
+    target.recall = Boolean(paths.agents) && (target.tools.length === 0 || target.recall);
     target.tools.push(tool);
-    if (paths.agents) target.recall = true;
     targets.set(file, target);
   }
   const stale = [...retiredTargets(toolPaths, localConfig).values()].filter((t) => !inUse.has(t.path));
@@ -477,7 +481,8 @@ function editBlock(content: string, [start, end]: MarkerPair, block: string | nu
   const after = content.substring(endIdx + end.length);
   if (block !== null) return { content: content.substring(0, startIdx) + block + after };
   const before = content.substring(0, startIdx).replace(/\n+$/, '\n');
-  const rest = (before + after.replace(/^\n+/, '\n')).trimEnd();
+  // A block that opened the file leaves no blank line above what follows it.
+  const rest = (before + after.replace(/^\n+/, before ? '\n' : '')).trimEnd();
   return { content: rest ? `${rest}\n` : '' };
 }
 

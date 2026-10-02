@@ -802,4 +802,23 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(fs.readFileSync(contextFile, 'utf8')).toBe('# My own notes\n');
     expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md'] });
   });
+
+  it('drops OpenCode\'s instructions entry on uninstall even when the member\'s text keeps the file', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-e2e-')));
+    sandboxes.push(sandbox);
+    const member = makeProjectMember(sandbox, makeTeamAndProject(sandbox), 'dev', 'developer', ['.opencode/skills']);
+    const contextFile = path.join(member.projectRoot, '.opencode', 'teamai-context.md');
+    const config = path.join(member.projectRoot, '.opencode', 'opencode.json');
+
+    const pull = await pullAs(member);
+    expect(pull.code, pull.output).toBe(0);
+    expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions).toEqual(['.opencode/teamai-context.md']);
+    fs.appendFileSync(contextFile, '\n# My own notes\n');
+
+    const uninstall = await runCLI(['uninstall', '--agent', 'opencode', '--force'], { HOME: member.home }, member.projectRoot);
+    expect(uninstall.code, uninstall.output).toBe(0);
+    expect(fs.readFileSync(contextFile, 'utf8')).toBe('# My own notes\n');
+    expect(JSON.parse(fs.readFileSync(config, 'utf8')).instructions ?? []).toEqual([]);
+  });
 });
+

@@ -1540,7 +1540,7 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
 | Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
 
-*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。
+*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。多个工具共用的文件只有在每个工具都有该 subagent 时才获得 subagent 块。
 
 Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
 
@@ -1548,7 +1548,7 @@ Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-
 
 CodeBuddy 和 WorkBuddy 的规则文件带有 `alwaysApply: true`，CodeBuddy 的规则解析器将其视为始终应用。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
 
-在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
+在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。同名但并非 teamai 写入的插件保持不变，卸载时也一样，`teamai pull` 和 `teamai doctor` 会指出这一点。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
 
 OpenCode 只加载配置中 `instructions` 列出的文件，因此 teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode 已经获得它们，因此 teamai 不会为 OpenCode 再写一份用户副本，并在 pull 输出中说明。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
 
@@ -2654,7 +2654,7 @@ teamai uninstall --agent claude
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
 - AI 工具 settings 中的 teamai hooks
-- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除）
+- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，OpenCode 中对应的 `instructions` 条目一并移除，即使你自写的内容让该文件保留下来）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）

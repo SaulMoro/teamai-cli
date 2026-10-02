@@ -1074,8 +1074,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<void> {
       const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start));
       for (const warning of warnings) log.warn(warning);
       if (changed) log.success(`Cleaned ${claudeMdPath}`);
-      // OpenCode loads its file through an `instructions` entry; drop it with the file.
-      if (OPENCODE_CONTEXT_FILES.some((suffix) => claudeMdPath.endsWith(suffix)) && !await pathExists(claudeMdPath)) {
+      // OpenCode loads its file through an `instructions` entry teamai added;
+      // drop it even when the member's own text keeps the file.
+      if (OPENCODE_CONTEXT_FILES.some((suffix) => claudeMdPath.endsWith(suffix))) {
         const { opencodeContextReference, reconcileOpencodeInstructions } = await import('./resources/opencode-config.js');
         const { config, entry } = opencodeContextReference(claudeMdPath, plan.scope, path.dirname(path.dirname(claudeMdPath)));
         await reconcileOpencodeInstructions(config, entry, false, 'team instructions');

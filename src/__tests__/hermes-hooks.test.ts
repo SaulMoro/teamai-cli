@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { injectHermesHooks, removeHermesHooks, getReportScriptPath, getInstructionsPluginDir } from '../hermes-hooks.js';
 import { log } from '../utils/logger.js';
+import { instructionHookChannel } from '../instruction-targets.js';
 
 let tmpDir: string;
 let savedHermesHome: string | undefined;
@@ -64,4 +65,26 @@ describe('the teamai-instructions plugin (#945)', () => {
 
     expect(config()).not.toMatch(/enabled:/);
   });
+
+  it('leaves a same-named plugin teamai did not write alone on inject and remove', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), 'plugins:\n  enabled:\n    - teamai-instructions\n');
+    const dir = getInstructionsPluginDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'plugin.yaml'), 'name: teamai-instructions\n');
+    fs.writeFileSync(path.join(dir, '__init__.py'), 'def register(ctx): pass\n');
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'mine\n');
+    vi.spyOn(log, 'success').mockImplementation(() => {});
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+
+    await injectHermesHooks();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${dir} exists without the TeamAI marker`));
+    expect(fs.readFileSync(path.join(dir, '__init__.py'), 'utf8')).toBe('def register(ctx): pass\n');
+    expect(fs.existsSync(getReportScriptPath())).toBe(true);
+    expect(await instructionHookChannel('hermes')).toEqual({ ready: false, fix: expect.stringContaining(`${dir} holds a plugin teamai did not write`) });
+
+    await removeHermesHooks();
+    expect(fs.readdirSync(dir).sort()).toEqual(['__init__.py', 'notes.txt', 'plugin.yaml']);
+    expect(config()).toContain('- teamai-instructions');
+  });
 });
+
