@@ -338,6 +338,20 @@ export async function pathExists(p: string): Promise<boolean> {
 }
 
 /**
+ * Who wrote a file teamai generates into another tool's directory: nobody yet,
+ * teamai (its content carries `marker`), or someone else. teamai writes and
+ * removes only `absent` and `teamai` files, so a same-named file of the
+ * user's is never overwritten or deleted.
+ */
+export type GeneratedFileState = 'absent' | 'teamai' | 'foreign';
+
+export async function generatedFileState(file: string, marker: string): Promise<GeneratedFileState> {
+  const content = await readFileSafe(file);
+  if (content === null) return await pathExists(file) ? 'foreign' : 'absent';
+  return content.includes(marker) ? 'teamai' : 'foreign';
+}
+
+/**
  * Remove a file or directory
  */
 export async function remove(p: string): Promise<void> {

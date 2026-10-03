@@ -278,6 +278,59 @@ describe('pull role-aware sync and cleanup', () => {
     await expectAgentRendersGone();
   });
 
+  it('keeps teamai\'s instruction file when the team tombstoned a rule named teamai-context (#945)', async () => {
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } });
+    await fse.ensureDir(path.join(homeDir, '.cursor', 'skills'));
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'teamai-context\n');
+    const context = path.join(homeDir, '.cursor', 'rules', 'teamai-context.mdc');
+
+    await pull({});
+    expect(await fse.readFile(context, 'utf8')).toContain('Be kind.');
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({
+      lastPull: null,
+      lastPullRev: HEAD_REV,
+      lastPullTargets: ['cursor'],
+    }) as Awaited<ReturnType<typeof loadStateForScope>>);
+    await pull({});
+
+    expect(await fse.readFile(context, 'utf8')).toContain('Be kind.');
+  });
+
+  it('reclaims an earlier release\'s teamai-context rule copy when the revision is unchanged (#945)', async () => {
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { claude: { skills: '.claude/skills', rules: '.claude/rules' } } });
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    await fse.writeFile(path.join(repoPath, 'rules', 'teamai-context.md'), '# Old team rule\n');
+    const context = path.join(homeDir, '.claude', 'rules', 'teamai-context.md');
+    await fse.copy(path.join(repoPath, 'rules', 'teamai-context.md'), context);
+    vi.mocked(loadStateForScope).mockImplementation(async () => ({
+      lastPull: null,
+      lastPullRev: HEAD_REV,
+      lastPullTargets: ['claude'],
+    }) as Awaited<ReturnType<typeof loadStateForScope>>);
+
+    await pull({});
+
+    expect(await fse.pathExists(context)).toBe(false);
+  });
+
+  it('reports no synced culture when every instruction target was left alone (#945)', async () => {
+    const { log } = await import('../utils/logger.js');
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } });
+    await fse.ensureDir(path.join(homeDir, '.cursor', 'skills'));
+    await fse.writeFile(path.join(repoPath, 'culture.md'), 'Be kind.\n');
+    // A member's own file holds teamai's target path.
+    await fse.outputFile(path.join(homeDir, '.cursor', 'rules', 'teamai-context.mdc'), '# Mine\n');
+    vi.mocked(log.success).mockClear();
+
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.flat()).not.toContain('Synced team culture');
+  });
+
   it('should not delete files that are NOT tombstoned', async () => {
     // No tombstone files
     await fse.writeFile(path.join(homeDir, '.claude/rules', 'keep-rule.md'), '# Keep');

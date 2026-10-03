@@ -24,6 +24,7 @@ const mockIncrementUpvoted = vi.fn().mockImplementation(async (_p: string, docId
 const mockSyncVotesToTeam = vi.fn().mockResolvedValue(false);
 const mockDoUpdate = vi.fn().mockResolvedValue(undefined);
 const mockReportAndSyncFromHook = vi.fn().mockResolvedValue(null);
+const mockLocalAgentInstructionText = vi.fn().mockResolvedValue('');
 const mockPackageManifestHash = vi.fn().mockResolvedValue('before-hash');
 const mockStashPackageHint = vi.fn().mockResolvedValue(undefined);
 const mockClaimPackageHint = vi.fn().mockResolvedValue(null);
@@ -114,6 +115,7 @@ vi.mock('../utils/logger.js', () => ({
 
 vi.mock('../local-agent.js', () => ({
   reportAndSyncFromHook: mockReportAndSyncFromHook,
+  localAgentInstructionText: mockLocalAgentInstructionText,
 }));
 
 vi.mock('../pkg/pkg-hint.js', () => ({
@@ -177,6 +179,7 @@ const scope: LocalConfig = { repo: { localPath: '/tmp', remote: '' }, username: 
 describe('hook-handlers registry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLocalAgentInstructionText.mockResolvedValue('');
     mockParseTranscriptForVotes.mockResolvedValue({ recalledDocIds: [], finalAssistantText: '', recalledDocPaths: {}, recalledDocScopes: {} });
     mockIncrementUpvoted.mockImplementation(async (_p: string, docIds: string[]) => docIds);
     mockCreditAdoptedDocs.mockResolvedValue({ credited: [], recalled: 0 });
@@ -229,6 +232,28 @@ describe('hook-handlers registry', () => {
       .map((r) => r.handler.name);
     expect(sessionStartHandlers).toContain('pull');
     expect(sessionStartHandlers).toContain('dashboard-report');
+  });
+
+  it.each(['pi', 'omp', 'hermes', 'codex', 'codex-internal', 'tcodex'])('does not read or sync HTTP prompts for excluded %s', async (tool) => {
+    const registry = buildHandlerRegistry();
+    const cached = registry.find((r) => r.handler.name === 'http-prompt-instructions')!.handler;
+    const sync = registry.find((r) => r.handler.name === 'local-agent-sync')!.handler;
+    const config = { scope: 'project', disabledAgents: [tool] } as never;
+    const input = { cwd: '/project', hook_event_name: tool.includes('codex') ? 'SubagentStart' : 'instructions' };
+    expect(await cached.execute(input, tool, config)).toBeNull();
+    expect(await sync.execute({ cwd: '/project', hook_event_name: 'SessionStart' }, tool, config)).toBeNull();
+    expect(mockLocalAgentInstructionText).not.toHaveBeenCalled();
+    expect(mockReportAndSyncFromHook).not.toHaveBeenCalled();
+  });
+
+  it('still delivers cached HTTP prompts without a git team configuration', async () => {
+    mockLocalAgentInstructionText.mockResolvedValue('HTTP-PROMPT');
+    const registry = buildHandlerRegistry();
+    const cached = registry.find((r) => r.handler.name === 'http-prompt-instructions')!.handler;
+    const sync = registry.find((r) => r.handler.name === 'local-agent-sync')!.handler;
+    expect(await cached.execute({ cwd: '/project' }, 'pi', null)).toContain('HTTP-PROMPT');
+    expect(await sync.execute({ cwd: '/project', hook_event_name: 'SessionStart' }, 'codex', null)).toContain('HTTP-PROMPT');
+    expect(mockReportAndSyncFromHook).toHaveBeenCalledOnce();
   });
 
   it('session-start pull seeds the hook tool root before pulling', async () => {
@@ -828,6 +853,7 @@ describe('hook-handlers registry', () => {
     // A new handler must decide: team handlers set requiresConfig, the rest join this list.
     const names = new Set(filterHandlersForConfig(buildHandlerRegistry(), null).map((r) => r.handler.name));
     expect([...names].sort()).toEqual([
+      'http-prompt-instructions',
       'local-agent-sync',
       'package-pending-hint',
       'pull',

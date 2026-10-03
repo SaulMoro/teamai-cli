@@ -774,6 +774,22 @@ scope: 'user',
     expect(await fse.pathExists(path.join(localRulesDir, 'fe-know/my-rule.md'))).toBe(false);
   });
 
+  it('keeps a placed rule named teamai-context at its namespaced path, off teamai\'s instruction file (#945)', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.outputFile(path.join(teamRulesDir, 'fe-know/teamai-context.md'), 'the author\'s namespaced rule');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    vi.mocked(loadStateForScope).mockResolvedValue({
+      lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
+      pushedEnvVars: [], pendingPushes: [], lastUpdateCheck: null, availableUpdate: null,
+      placedRules: { 'teamai-context': 'rules/fe-know/teamai-context.md' },
+    } as State);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(localRulesDir, 'teamai-context.md'))).toBe(false);
+    expect(await fse.readFile(path.join(localRulesDir, 'fe-know/teamai-context.md'), 'utf-8')).toBe('the author\'s namespaced rule');
+  });
+
   it('does not redirect a placed rule onto a root path a shared-root rule of the same name owns', async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
     await fse.outputFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'the author\'s namespaced rule');
@@ -970,6 +986,27 @@ scope: 'user',
     expect(await fse.pathExists(path.join(localRulesDir, 'team-rule.md'))).toBe(true);
     expect(await fse.pathExists(path.join(localRulesDir, 'teamai-recall.md'))).toBe(true);
     expect(await fse.pathExists(path.join(localRulesDir, 'old-user-rule.md'))).toBe(false);
+  });
+
+  it.each([[['team-rule.md']], [[]]])('removes the copy of a team rule named teamai-context an earlier release delivered, and keeps teamai\'s own context file (other team rules: %j) (#945)', async (others) => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    for (const other of others) await fse.writeFile(path.join(teamRulesDir, other), 'team content');
+    await fse.writeFile(path.join(teamRulesDir, 'teamai-context.md'), 'RESERVED-RULE');
+    const localRulesDir = path.join(homeDir, '.claude/rules');
+    const context = path.join(localRulesDir, 'teamai-context.md');
+
+    await fse.writeFile(context, 'RESERVED-RULE');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.pathExists(context)).toBe(false);
+
+    const blocks = '<!-- [teamai:claudemd:start] -->\nShared.\n<!-- [teamai:claudemd:end] -->\n';
+    await fse.writeFile(context, blocks);
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.readFile(context, 'utf8')).toBe(blocks);
+
+    await fse.writeFile(context, 'RESERVED-RULE, edited by the member');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect(await fse.readFile(context, 'utf8')).toBe('RESERVED-RULE, edited by the member');
   });
 });
 

@@ -50,10 +50,10 @@ export type InstructionBlock = 'culture' | 'claudemd' | 'recall' | 'team-rules';
  * Whether pull writes `block` into this tool's instructions file: culture and
  * shared instructions for every tool that has one, recall for a tool that
  * also has `agents`, the team rules for a tool with no rules format (the
- * Codex family has an instructions file in user scope only). Pull's writers
- * and uninstall both ask this, so what uninstall keeps for a remaining tool is
- * what that tool's next pull refreshes. Whether the tool is installed is a
- * separate question (`instructionFileInstallProbe`).
+ * Codex family has an instructions file in user scope only). The team-rules
+ * writer and doctor ask this; culture, shared instructions and recall follow
+ * the targets in instruction-targets.ts (#945). Whether the tool is installed
+ * is a separate question (`instructionFileInstallProbe`).
  */
 export function writesInstructionBlock(
   tool: string, toolPath: ToolPath, block: 'recall',

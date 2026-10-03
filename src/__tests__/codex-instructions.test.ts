@@ -126,6 +126,21 @@ describe('a project-scope rules sync writes no team rules for Codex (#938)', () 
     expect(await fse.pathExists(path.join(projectRoot, `.${tool}`, 'rules'))).toBe(false);
   });
 
+  it.each(CODEX_FAMILY)('writes no team rules for %s into <project>/AGENTS.md even when the team points its claudemd there (#945)', async (tool) => {
+    await fse.ensureDir(path.join(projectRoot, `.${tool}`));
+    teamConfig = TeamaiConfigSchema.parse({
+      team: 'test',
+      repo: 'https://example.invalid/x/team.git',
+      toolPaths: { [tool]: { skills: `.${tool}/skills`, settings: `.${tool}/hooks.json`, claudemd: 'AGENTS.md' } },
+    });
+    localConfig = { ...localConfig, enabledAgents: [tool] } as LocalConfig;
+    await fse.writeFile(agentsMd(), '# Project notes\n');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.readFile(agentsMd(), 'utf8')).toBe('# Project notes\n');
+  });
+
   it('keeps the rule files to the member\'s projects after `remove rules`', async () => {
     await fse.outputFile(path.join(repoPath, 'manifest', 'projects.yaml'), `
 version: 1
@@ -535,7 +550,7 @@ describe('a project-scope pull at an unchanged team revision after a CLI upgrade
   });
 });
 
-describe('Codex leaves the project AGENTS.md to the tools that write it (#938, #945)', () => {
+describe('Codex and the other tools leave the project AGENTS.md alone (#938, #945)', () => {
   const BLOCK_START: Record<string, string> = {
     culture: TEAMAI_CULTURE_START,
     claudemd: TEAMAI_CLAUDEMD_START,
@@ -574,13 +589,13 @@ describe('Codex leaves the project AGENTS.md to the tools that write it (#938, #
   });
 
   it.each([
-    ['pi', 'no agents', { skills: '.pi/skills', rules: '.pi/rules', claudemd: 'AGENTS.md' }, ['culture', 'claudemd']],
+    ['pi', 'no agents', { skills: '.pi/skills', rules: '.pi/rules', claudemd: 'AGENTS.md' }, []],
     ['workbuddy', 'agents', {
       skills: '.workbuddy/skills', rules: '.workbuddy/rules', settings: '.workbuddy/settings.json',
       claudemd: 'AGENTS.md', agents: '.workbuddy/agents',
-    }, ['culture', 'claudemd', 'recall']],
+    }, []],
     ['tcodex', 'the default entry', defaults.tcodex, []],
-  ])('Codex adds nothing to the AGENTS.md %s (%s) writes, and uninstall --agent codex leaves it', async (tool, _label, entry, written) => {
+  ])('neither Codex nor %s (%s) writes the project AGENTS.md, and uninstall --agent codex leaves it', async (tool, _label, entry, written: string[]) => {
     const teamConfig = TeamaiConfigSchema.parse({
       team: 'test', repo: 'https://example.invalid/x/team.git', toolPaths: { codex: defaults.codex, [tool]: entry },
     });

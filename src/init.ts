@@ -791,6 +791,14 @@ async function reconcileHooksForInit(
   const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
   if (!reconciled.ok) log.warn(describeUnappliedTeamHooks(reconciled));
   reportCodexTrust(await trustCodexForScope(teamConfig, localConfig, { filterAgents, force: true }), 'all');
+  // The hooks install the extensions and plugins that add team instructions
+  // for Pi, OMP and Hermes; name what keeps a tool from getting them (#945).
+  try {
+    const { instructionChannelProblems } = await import('./instruction-targets.js');
+    for (const problem of await instructionChannelProblems(teamConfig, localConfig)) log.warn(problem);
+  } catch (e) {
+    log.debug(`Team instruction check skipped: ${(e as Error).message}`);
+  }
 }
 
 /**

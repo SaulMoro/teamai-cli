@@ -24,7 +24,7 @@ import {
 } from '../omp-hooks.js';
 import { reconcileHooksToAllTools } from '../hooks.js';
 import { log } from '../utils/logger.js';
-import { loadOmpExtension } from './helpers/pi-extensions.js';
+import { loadOmpExtension, type ExtensionDispatch } from './helpers/pi-extensions.js';
 
 describe('resolveOmpExtensionsDir', () => {
   it('always targets the user agent dir (single-copy policy)', () => {
@@ -82,6 +82,8 @@ describe('buildOmpExtensionSource', () => {
   it('is syntactically valid JavaScript', () => {
     assertValidJs(src);
   });
+
+
 });
 
 describe('injectOmpHooks / removeOmpHooks', () => {
@@ -127,6 +129,16 @@ describe('injectOmpHooks / removeOmpHooks', () => {
     expect(await fse.pathExists(extFile())).toBe(true);
     await removeOmpHooks();
     expect(await fse.pathExists(extFile())).toBe(false);
+  });
+
+  it('leaves a same-named extension teamai did not write alone on inject and remove', async () => {
+    await fse.outputFile(extFile(), 'export default function mine() {}\n');
+
+    await injectOmpHooks();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`${extFile()} exists without the TeamAI marker`));
+    await removeOmpHooks();
+
+    expect(await fse.readFile(extFile(), 'utf8')).toBe('export default function mine() {}\n');
   });
 });
 
@@ -191,7 +203,46 @@ describe('reconcileHooksToAllTools routes omp to the extension adapter', () => {
   });
 });
 
+// Team instructions (#945): the extension adds hook-dispatch's context to the prompt.
+describe('OMP extension: team instructions in the system prompt (#945)', () => {
+  const ctx = { cwd: '/work/proj/src', sessionManager: { getSessionId: () => 'omp-main' } };
+  const context = (text: string) => (args: string[]) => args[1] === 'instructions'
+    ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+    : '';
+
+  it('appends the blocks to each turn\'s system prompt, asking hook-dispatch once per session', async () => {
+    const { on, dispatches } = loadOmpExtension(context('TEAM-BLOCKS'));
+    await on.session_start({}, ctx);
+    const first = await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx);
+    const second = await on.before_agent_start({ prompt: 'two', systemPrompt: ['BASE'] }, ctx);
+    expect(first).toEqual({ systemPrompt: ['BASE', 'TEAM-BLOCKS'] });
+    expect(second).toEqual({ systemPrompt: ['BASE', 'TEAM-BLOCKS'] });
+    expect(dispatches.filter((d) => d.args[1] === 'instructions')).toHaveLength(1);
+    expect(dispatches.find((d) => d.args[1] === 'instructions')?.payload).toEqual({ cwd: '/work/proj/src', session_id: 'omp-main' });
+  });
+
+  it('waits for session-start HTTP sync before reading the first prompt cache', async () => {
+    let synced = false;
+    const { on } = loadOmpExtension((args) => {
+      if (args[1] === 'session-start') synced = true;
+      return args[1] === 'instructions' ? context(synced ? 'FRESH-HTTP-PROMPT' : '')(args) : '';
+    });
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx))
+      .toEqual({ systemPrompt: ['BASE', 'FRESH-HTTP-PROMPT'] });
+  });
+
+  it('leaves the system prompt alone when there are no blocks (user scope, or teamai unavailable)', async () => {
+    const { on } = loadOmpExtension();
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx)).toBeUndefined();
+  });
+});
+
 // Recall attribution (#884): the extension evaluated in `vm`, with a fake host.
+/** The lifecycle dispatches, without the team-instructions request (#945), which has its own tests. */
+const lifecycle = (dispatches: ExtensionDispatch[]) => dispatches.filter((d) => d.args[1] !== 'instructions');
+
 describe('OMP extension: bridge payloads (#884)', () => {
   const main = { cwd: '/work/proj', sessionManager: { getSessionId: () => 'omp-main' }, agent: { kind: 'main' as const, id: 'Main', name: 'main', depth: 0 } };
   const sub = {
@@ -204,12 +255,12 @@ describe('OMP extension: bridge payloads (#884)', () => {
     await on.session_start({}, main);
     await on.before_agent_start({ prompt: 'hi' }, main);
     await on.session_stop({}, main);
-    expect(dispatches.map((d) => [d.args[1], d.payload])).toEqual([
+    expect(lifecycle(dispatches).map((d) => [d.args[1], d.payload])).toEqual([
       ['session-start', { cwd: '/work/proj', session_id: 'omp-main' }],
       ['prompt-submit', { cwd: '/work/proj', session_id: 'omp-main', prompt: 'hi' }],
       ['stop', { cwd: '/work/proj', session_id: 'omp-main' }],
     ]);
-    expect(dispatches.every((d) => d.args.join(' ').endsWith('--tool omp'))).toBe(true);
+    expect(lifecycle(dispatches).every((d) => d.args.join(' ').endsWith('--tool omp'))).toBe(true);
   });
 
   it('sends the text output and the status on post-tool-use', async () => {
@@ -218,7 +269,7 @@ describe('OMP extension: bridge payloads (#884)', () => {
       content: [{ type: 'text', text: 'a.md' }, { type: 'image', data: 'AAAA' }, { type: 'text', text: 'b.md' }], isError: false }, main);
     await on.tool_result({ type: 'tool_result', toolCallId: 'c2', toolName: 'bash', input: { command: 'false' },
       content: [{ type: 'text', text: 'Command exited with code 1' }], isError: true }, main);
-    expect(dispatches.map((d) => d.payload)).toEqual([
+    expect(lifecycle(dispatches).map((d) => d.payload)).toEqual([
       { cwd: '/work/proj', session_id: 'omp-main', tool_name: 'bash', tool_input: { command: 'ls' }, tool_response: 'a.md\nb.md', tool_status: 'success' },
       { cwd: '/work/proj', session_id: 'omp-main', tool_name: 'bash', tool_input: { command: 'false' }, tool_response: 'Command exited with code 1', tool_status: 'failure' },
     ]);
@@ -229,7 +280,7 @@ describe('OMP extension: bridge payloads (#884)', () => {
     await on.session_start({}, sub);
     await on.tool_result({ type: 'tool_result', toolCallId: 'c1', toolName: 'read', input: { path: 'x.md' }, content: [], isError: false }, sub);
     await on.session_stop({}, sub);
-    expect(dispatches.map((d) => d.payload)).toEqual([
+    expect(lifecycle(dispatches).map((d) => d.payload)).toEqual([
       { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall' },
       { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall', tool_name: 'read', tool_input: { path: 'x.md' }, tool_response: '', tool_status: 'success' },
       { cwd: '/work/proj', session_id: 'omp-sub', agent_id: '0-TeamaiRecall', agent_type: 'teamai-recall' },
@@ -240,7 +291,7 @@ describe('OMP extension: bridge payloads (#884)', () => {
     const { on, dispatches } = loadOmpExtension();
     await on.session_start({}, { cwd: '/work/proj', sessionManager: { getSessionId: () => 'omp-old' } });
     await on.tool_result({ toolName: 'read', input: { path: 'x.md' } }, { cwd: '/work/proj' });
-    expect(dispatches.map((d) => d.payload)).toEqual([
+    expect(lifecycle(dispatches).map((d) => d.payload)).toEqual([
       { cwd: '/work/proj', session_id: 'omp-old' },
       { cwd: '/work/proj', tool_name: 'read', tool_input: { path: 'x.md' }, tool_status: 'unknown' },
     ]);

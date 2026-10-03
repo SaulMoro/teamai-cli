@@ -962,7 +962,7 @@ teamai push
 
 Most tools get one file per rule in their rules directory. Codex, `codex-internal` and `tcodex` read no rules directory (`.codex/rules/` holds Codex's own `*.rules` command policies), so `pull` writes no rule file for them. In user scope the team rules go into a `<!-- [teamai:team-rules:start] -->` block of the tool's own `AGENTS.md` (`~/.codex/AGENTS.md`, `~/.codex-internal/AGENTS.md`, `~/.tcodex/AGENTS.md`; a `toolRoots` entry moves it), which only that tool reads. In a project their session-start hook adds the project's team rules to each session instead: the project `AGENTS.md` is the owners' file, and other tools with a rules format of their own read it too. Hermes gets the same text in its `SOUL.md` block. Frontmatter is dropped, so a rule with `paths:` applies everywhere there, led by an `Applies to files matching: <globs>` line. Codex runs the hook again after a compaction or a clear, and adds nothing when it resumes a session, which already holds the rules. A subagent Codex spawns gets them through the `SubagentStart` hook. The public Codex runs only trusted hooks. teamai trusts the hooks it writes automatically; if automatic trust is disabled or fails, approve them in `/hooks` to receive the project rules.
 
-The culture, shared-instructions and recall blocks follow the same split. In user scope they go to that same `AGENTS.md`, and your own content outside the markers is kept. In a project the session-start hook adds them with the rules, and `pull` leaves the project `AGENTS.md` unchanged. The hook leaves out a block already present in the active project instructions file. Codex reads `AGENTS.override.md` when it exists, otherwise `AGENTS.md`, so a block in a shadowed `AGENTS.md` still reaches Codex through the hook.
+The culture, shared-instructions and recall blocks follow the same split. In user scope they go to that same `AGENTS.md`, and your own content outside the markers is kept. In a project the session-start hook adds them with the rules, and `pull` leaves the project `AGENTS.md` unchanged.
 
 > A `toolPaths` in the team `teamai.yaml` replaces the built-in defaults whole. A team that sets it should give each Codex-family entry `userScope.claudemd: .codex/AGENTS.md` (`.codex-internal/…`, `.tcodex/…`) for the user-scope rules and blocks, and drop its `rules` path, since Codex never reads that directory. A top-level `claudemd` would put the blocks back in the project `AGENTS.md`, so leave it out. In a project the hook needs only the entry's `settings` path, where it is installed.
 
@@ -1425,7 +1425,7 @@ teamai recall status     # View the current effective status (team default + use
 
 Append `--dry-run` to `enable` or `disable` to preview the config and managed-artifact changes without writing them.
 
-When disabled, `teamai pull` skips deploying the recall subagent, the recall rules injection block, and the TodoWrite reminder hook. Manually running `teamai recall <query>` to search is not affected by this switch.
+When disabled, `teamai pull` skips deploying the recall subagent and the TodoWrite reminder hook, and removes the recall block from the team instructions. Manually running `teamai recall <query>` to search is not affected by this switch.
 
 ### Knowledge Base Maintenance
 
@@ -1615,7 +1615,7 @@ team:
 | `team.mission` | string | Team mission |
 | `team.goals` | string[] | Team goals |
 
-The markdown body after the frontmatter becomes the body content of the team culture guidance, injected as a whole into `CLAUDE.md`.
+The markdown body after the frontmatter becomes the body content of the team culture guidance, injected as a whole into each AI tool's instruction target (see [Where the blocks go](#where-the-blocks-go)).
 
 ### How it works
 
@@ -1632,19 +1632,78 @@ teamai pull
     │  ├─ frontmatter → structured company/team info
     │  └─ body → team culture guidance body
     │
-    ▼  Compile into a CLAUDE.md injection block
+    ▼  Compile into an injection block
     │
-    ▼  Inject into each AI tool's CLAUDE.md
-       ├─ ~/.claude/CLAUDE.md
-       ├─ ~/.cursor/CLAUDE.md
+    ▼  Write it to each installed AI tool's instruction target
+       ├─ ~/.claude/CLAUDE.md                       (user scope)
+       ├─ <project>/.claude/rules/teamai-context.md (project scope)
        └─ ...
 ```
 
 The injected content sits between the `<!-- [teamai:culture:start] -->` and `<!-- [teamai:culture:end] -->` markers, is automatically updated on every `pull`, and does not affect any other content in the file.
 
+A pull writes the culture, shared-instructions and recall blocks only to the files of AI tools that are installed, and leaves a file alone when its blocks are already current. Earlier releases wrote these blocks to files that tools now share or that hide other instructions (listed under [Where the blocks go](#where-the-blocks-go)); while no installed tool reads such a file, the next pull removes the teamai blocks from it and names the file in its output. A tool's current file is never cleaned on its own: `teamai uninstall --agent <tool>` removes those blocks. It deletes the file when nothing else is left, unless git tracks it. A block with a missing or repeated marker is left as it is, with a warning to fix it by hand. `teamai pull --dry-run` lists the files a pull would change without writing them. When recall is disabled, the pull removes the recall block.
+
+#### Where the blocks go
+
+Two members of the same project can have different roles, so their shared instructions (`claudemd/`) can differ. The project's root `AGENTS.md` holds the instructions the project writes for everyone, so teamai never writes these blocks into it, into `~/AGENTS.md` or `~/.agents/AGENTS.md`, or into a file another tool reads. Each tool gets them in a file of its own or through its session hook:
+
+| Tool | User scope | Project scope |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+| claude-internal, tclaude | `.claude-internal/CLAUDE.md`, `.tclaude/CLAUDE.md` in their homes (unchanged) | The same paths under the project (unchanged, unverified) |
+| Codex, codex-internal, tcodex | `$CODEX_HOME/AGENTS.md` (and the variants' homes), beside the team rules | Added by the session-start and subagent-start hooks, beside the project's team rules; nothing on resume |
+| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md` (unchanged) | `.github/copilot-instructions.md` (unchanged) |
+| Cursor | `~/.cursor/rules/teamai-context.mdc` (unverified) | `.cursor/rules/teamai-context.mdc` (unverified) |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`, one copy shared with WorkBuddy (unverified) |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md` (unverified) | `.codebuddy/rules/teamai-context.md`, one copy shared with CodeBuddy (unverified) |
+| OpenCode | `~/.config/opencode/teamai-context.md`, listed by absolute path in `instructions` of `~/.config/opencode/opencode.json` | `.opencode/teamai-context.md`, listed in `instructions` of `.opencode/opencode.json` |
+| Oh My Pi | `~/.omp/agent/RULES.md` | Added to each turn's system prompt by teamai's OMP extension |
+| Pi | `~/.pi/agent/AGENTS.md` | Added to each run's system prompt by teamai's Pi extension |
+| Hermes | A block in `$HERMES_HOME/SOUL.md`, beside the team rules block (unverified) | A system prompt section from teamai's Hermes plugin (unverified) |
+
+A team `toolPaths` entry without `rules` keeps its configured `claudemd` for Claude Code, Cursor, CodeBuddy and WorkBuddy, which have no rules directory to take a `teamai-context` file. An entry with only `claudemd` counts as installed when that file's directory exists, and always for a bare file such as `AGENTS.md`.
+
+*Unverified*: built from the tool's documented or source-read loader, not yet checked in a live session. Claude Code, Oh My Pi, OpenCode and Pi (project scope) were checked in live sessions, from the project root and a subdirectory. A tool with the `teamai-recall` subagent gets a recall block that calls it; a tool without one (Pi, Hermes, OpenClaw) gets a recall block that tells the agent to run `teamai recall` directly. A file several tools share gets the subagent block only when every one of them has the subagent.
+
+Claude Code loads `.claude/rules/teamai-context.md` from the project root and any subdirectory, and still reads the project's `AGENTS.md` or authored `CLAUDE.md` the way it chose to. Copilot CLI 1.0.89 and later also reads a project's `.claude/rules`, so with both tools installed Copilot can get the blocks twice.
+
+Both `teamai-context.mdc` files carry `alwaysApply: true`, which Cursor's rule loader reads as always applied. Cursor CLI reads `~/.cursor/rules` when the session starts under your home directory; the Cursor IDE was not checked.
+
+The CodeBuddy and WorkBuddy rule files carry `alwaysApply: true`, which CodeBuddy's rule parser reads as always applied. Uninstalling one of the two keeps the shared project copy while the other is still installed.
+
+In a project, teamai installs the Hermes plugin `$HERMES_HOME/plugins/teamai-instructions/` and adds it to `plugins.enabled` in `$HERMES_HOME/config.yaml` (a name you list under `plugins.disabled` stays off). A plugin of that name teamai did not write is left alone, also on uninstall, and `teamai pull` and `teamai doctor` say so. According to Hermes' documentation it builds the section once for each new session from the session's directory and keeps it through compression and resume. A section holds at most 4,000 characters, and all plugin sections together at most 8,000. When this member's instructions for the project are longer, Hermes skips them and `teamai pull` says so: teamai does not cut them or write them to `AGENTS.md`. Outside a project the section is empty, and Hermes may log that it skipped an empty section.
+
+OpenCode loads a file only when its config lists it in `instructions`. teamai adds that entry only when the target already matches the desired blocks or its update succeeds. A malformed target or a failed write does not activate stale blocks. A failed edit keeps an existing instructions entry, including when malformed recall markers prevent a recall toggle. TeamAI saves ownership before adding a new config entry; a failed state write prevents activation, and a failed config write can be retried. Entries you already listed remain yours. It keeps your other entries and keys; the root `opencode.json` and OpenCode's own `AGENTS.md` files are left alone. While `~/.config/opencode/AGENTS.md` does not exist, OpenCode reads `~/.claude/CLAUDE.md` instead; when Claude Code gets the user blocks there, OpenCode already has them, so teamai writes no second user copy for OpenCode and says so in the pull output. Blocks left there by a Claude Code you excluded count too, since OpenCode reads them all the same; the pull then warns that nothing keeps them current. A config file teamai cannot parse as JSON (for example one with comments) is left unchanged with a warning; add the entry by hand.
+
+Oh My Pi reads `RULES.md` as an always-applied rule beside its single user context file. In project scope teamai's OMP extension asks `teamai` for the blocks when the session starts and adds them to each turn's system prompt, from the project root and any subdirectory. Without that extension (for example with hooks removed), an Oh My Pi project session gets no team blocks. Prompts the HTTP local agent delivers for a project reach Pi, Oh My Pi and Hermes the same way, through their extension or plugin, and the Codex family through its session-start and subagent-start hooks. Pi and Oh My Pi wait for foreground session-start dispatch, including HTTP prompt sync, before caching the project instructions for the first prompt. Codex reads its HTTP prompt cache after the same sync, before returning SessionStart context.
+
+A pull from an earlier release may have left these blocks in a file listed below. A pull removes each block only after its replacement was resolved and delivered to every installed tool that wrote that file. An unreadable or invalid culture source keeps the old culture block even if shared instructions and recall sync successfully. Failed target writes, foreign files, missing extensions or disabled plugins keep the old blocks for a retry. Excluded tools' current and retired files stay unchanged and are excluded from doctor's stale-instruction check.
+
+HTTP prompt commands verify the current destinations of all installed former writers, including delivery from previous commands, before removing the retired shared-instructions block. A destination holding an older prompt does not count as delivered. HTTP cleanup preserves culture and recall blocks, which those commands do not replace.
+
+While a native project instruction file still contains a TeamAI block, the session hook skips that block, including a cached HTTP prompt, to avoid adding a second member selection. Other blocks still reach the hook. Delivery resumes after the retained block is cleaned. Codex respects `AGENTS.override.md` precedence, and Oh My Pi respects `.omp/AGENTS.md`. Doctor reports incomplete or repeated markers in retired files; repair those markers before retrying pull.
+
+The pull names each file it changes:
+
+- Claude Code, project scope: `.claude/CLAUDE.md`
+- CodeBuddy, project scope: `.codebuddy/CODEBUDDY.md`
+- WorkBuddy: `~/AGENTS.md` and the project `AGENTS.md`
+- Hermes: `~/AGENTS.md`
+- Oh My Pi: `~/.omp/agent/AGENTS.md` and `.omp/AGENTS.md`. Oh My Pi reads one context file per level, so these hid `~/.agents/AGENTS.md` and the project's `AGENTS.md`.
+- Pi: the project `AGENTS.md`
+- Codex family: the project `AGENTS.md`, when a team's `toolPaths` or an earlier build pointed Codex there
+- Any tool whose file changed: the `claudemd` path the team's `toolPaths` sets for it, unless another tool's blocks go there now
+
+`teamai doctor` checks that each installed tool can load these blocks: that each file holds the current blocks, that OpenCode's config lists its file, that the Pi or Oh My Pi extension and the Hermes plugin are installed and enabled, that the Hermes section fits its limit, and that no file an earlier release wrote still holds blocks.
+
+If a requested block has incomplete or duplicated markers, the entire file stays unchanged, including its other managed blocks. Fix the named markers, then run `teamai pull` again.
+
+A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions` (an entry you listed for it stays), and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
+
 ### Viewing the result
 
-After pulling, you can view the AI tool's CLAUDE.md directly:
+After pulling, you can view an AI tool's instruction file directly, for example Claude Code's user file:
 
 ```bash
 teamai pull
@@ -1698,6 +1757,8 @@ When using `teamai init --http <baseUrl>`, the endpoint must implement the follo
   "commands": [{ "id": 1, "type": "install_skill", "skill_slug": "x", "skill_version": "1.0.0", "download_url": "https://signed-url/..." }]
 }
 ```
+
+Removing the final HTTP prompt is acknowledged as `failed` when its target cannot be updated. The cached prompt and manifest record remain available for a retry after repairing the markers or file permissions.
 
 The backend may push an **`apply_model_config`** task whose `cmd` is JSON. Both
 the documented candidate-set shape and the legacy single-model shape are accepted.
@@ -2156,8 +2217,8 @@ Team hooks still come from the team's `hooks/hooks.yaml`: edit that source in th
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) is supported through its documented skills, instruction, and extension surfaces:
 
 - **Scopes.** Project skills and TeamAI-managed rules are written to `.pi/skills/` and `.pi/rules/`. User-scope copies use `~/.pi/agent/skills/` and `~/.pi/agent/rules/`.
-- **Instructions.** Project instructions use `AGENTS.md`; user instructions use `~/.pi/agent/AGENTS.md`. Pi also accepts `CLAUDE.md` as a project instruction file, but TeamAI keeps the canonical TeamAI block in `AGENTS.md`.
-- **Hooks.** TeamAI generates one user-scoped `teamai-hooks.ts` under `~/.pi/agent/extensions/`. It maps `session_start` → session-start, `before_agent_start` → prompt-submit, and `agent_settled` → stop; `tool_execution_start` caches the tool's input, and `tool_execution_end` dispatches post-tool-use forwarding that cached input as `tool_input`, plus the result's text as `tool_response` and a `tool_status` from its error flag. Every event carries the Pi session id (`ctx.sessionManager.getSessionId()`), the same id Pi's bash tool exports as `PI_SESSION_ID`, so a `teamai recall` run there joins the session its hooks carry and upvote **adoption** runs for Pi. Pi loads both user and project extension roots, so TeamAI never creates a project copy — a second copy would double-dispatch every event, the same single-copy policy as the OMP adapter. An older TeamAI-managed project copy is removed during the next sync, and injection never overwrites a same-named file that lacks the TeamAI marker. Pi has no settings file for self mode to commit, so a fresh clone still needs one `teamai init`/`pull` on that machine before Pi hooks are active there. Any targeted removal — the explicit `teamai hooks remove` command, or a scoped `teamai uninstall --agent pi` — deletes this shared extension outright, the same single-file removal semantics as the OMP adapter: Pi has no way to scope one shared file to a single project, so it doesn't pretend to preserve it for other projects while the extension keeps firing for this one anyway; files without the TeamAI marker are never removed. `teamai hooks list` always reports this global path. Pi profile overrides (`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`), which relocate the agent directory, are not supported for hooks — same as the OMP adapter — and the default `~/.pi/agent/` layout is used. Model profiles are separate and do read `PI_CODING_AGENT_DIR`. Because the extension is one shared file rather than a per-project one, a scoped removal is not durable in a multi-project setup: the next `teamai init`/`pull` in any other scope where Pi is still enabled re-creates it, and hook dispatch has no per-project exclusion check, so hooks can resume firing in the project that was just uninstalled from. This is the same trade-off the OMP adapter already ships with.
+- **Instructions.** Pi reads the project's own `AGENTS.md` (or `CLAUDE.md`); TeamAI leaves it unchanged. User-scope team instructions go to `~/.pi/agent/AGENTS.md`. In a project, the TeamAI Pi extension asks `teamai` for the member's team instructions when the session starts and adds them to the system prompt of each run.
+- **Hooks.** TeamAI generates one user-scoped `teamai-hooks.ts` under `~/.pi/agent/extensions/`. It maps `session_start` → session-start, `before_agent_start` → prompt-submit, and `agent_settled` → stop; `tool_execution_start` caches the tool's input, and `tool_execution_end` dispatches post-tool-use forwarding that cached input as `tool_input`, plus the result's text as `tool_response` and a `tool_status` from its error flag. Every event carries the Pi session id (`ctx.sessionManager.getSessionId()`), the same id Pi's bash tool exports as `PI_SESSION_ID`, so a `teamai recall` run there joins the session its hooks carry and upvote **adoption** runs for Pi. Pi loads both user and project extension roots, so TeamAI never creates a project copy — a second copy would double-dispatch every event, the same single-copy policy as the OMP adapter. An older TeamAI-managed project copy is removed during the next sync, and injection never overwrites a same-named file that lacks the TeamAI marker. Pi has no settings file for self mode to commit, so a fresh clone still needs one `teamai init`/`pull` on that machine before Pi hooks are active there. The explicit `teamai hooks remove` command and user-scope `teamai uninstall --agent pi` delete this shared extension. Project uninstall preserves it for other projects and removes any legacy project copy; files without the TeamAI marker are never removed. `teamai hooks list` always reports this global path. Pi profile overrides (`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`), which relocate the agent directory, are not supported for hooks — same as the OMP adapter — and the default `~/.pi/agent/` layout is used. Model profiles are separate and do read `PI_CODING_AGENT_DIR`. The shared extension remains installed after project uninstall; instruction dispatch checks the project's tool exclusion before adding its instructions.
 - **Team hooks boundary.** The Pi adapter installs only the built-in lifecycle bridge. Custom team hooks and built-in hook overrides declared in `hooks/hooks.yaml` are skipped with a warning. Full team-hook and per-project ownership semantics require a separate cross-adapter design and are deferred to a follow-up PR.
 - **Server-pushed agent hooks.** HTTP-source hooks are installed as `teamai-agent-<slug>.ts` extensions in the same global extension directory. Unsupported lifecycle events are skipped with a warning.
 - **MCP (Pi 0.99.0+).** Supports stdio and streamable HTTP; SSE is skipped. User configuration goes to `~/.pi/agent/mcp.json`, project configuration to `.pi/mcp.json`; Pi loads project configuration only after trusting the project. The native `codemode` default is retained, without forcing direct exposure; timeout values in `mcp.yaml` are converted from milliseconds to seconds. Local exposure/enabled changes to managed entries survive unchanged team definitions but are replaced when the team definition changes; doctor compares complete entries and reports these local differences. An extension taking over `/mcp` can disable built-in MCP; remove that extension to use the built-in support.
@@ -2185,7 +2246,7 @@ These paths are verified against the ZCode desktop app: profiles created in its 
 
 ### Oh My Pi
 
-Oh My Pi (OMP) is available as a built-in target. TeamAI deploys skills, rules, and subagents to OMP's native directories — `.omp/skills/`, `.omp/rules/`, and `.omp/agents/` at project scope, and `~/.omp/agent/skills/`, `~/.omp/agent/rules/`, and `~/.omp/agent/agents/` at user scope (user-scope resources live under the agent directory `~/.omp/agent/`, a different prefix from the project one, so TeamAI switches prefixes with the scope). Instructions (`claudemd`) deploy to the matching `AGENTS.md`, and MCP servers merge into `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json` (Claude `mcpServers` shape — see the MCP section above). Skills are one-level `<name>/SKILL.md` bundles and TeamAI fills in a `description` on sync, which OMP's native skill provider requires to discover a skill. These paths follow OMP's documented discovery layout (verified against OMP 18.2.5). Hooks ride OMP's extension runner: `teamai pull` writes a single generated extension to `~/.omp/agent/extensions/teamai-hooks.ts` (never a project copy — OMP auto-loads both roots and would double-dispatch every event), which forwards OMP's `session_start` / `session_stop` / `before_agent_start` / `tool_result` events to the same `teamai hook-dispatch` entry point every other agent uses, gated on the session `cwd`. Every event carries the OMP session id (`ctx.sessionManager.getSessionId()`; a subagent has its own), and `tool_result` also the tool's text output and a status from `isError`, so upvote **adoption** runs for OMP's main agent: OMP sets no session variable in its shell, so a recall joins the session of the `bash` call that ran it, and a `read` with a line selector (`x.md:50-200`, `x.md:raw`) counts as a read of the file. From OMP 18.3.2 a subagent's events also carry its `ctx.agent` id and name, so the `teamai-recall` subagent's own reads never count. A subagent's session file sits under its parent's, whose header names the parent session, so the extension links the two on the subagent's tool calls, and a doc the main agent opens after a subagent's recall is upvoted (verified against OMP 18.4.8). The `session_stop` handler returns nothing, so a dispatch can never force a session continuation, and there is no matcher-scoped post-tool-use pass because OMP's tool ids are lowercase (`bash`, `read`, …) and it has no `Skill` / `TodoWrite` tool. `teamai uninstall` removes the extension. OMP profiles (`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`), which relocate the agent directory, are not supported; the default `~/.omp/agent/` layout is used.
+Oh My Pi (OMP) is available as a built-in target. TeamAI deploys skills, rules, and subagents to OMP's native directories — `.omp/skills/`, `.omp/rules/`, and `.omp/agents/` at project scope, and `~/.omp/agent/skills/`, `~/.omp/agent/rules/`, and `~/.omp/agent/agents/` at user scope (user-scope resources live under the agent directory `~/.omp/agent/`, a different prefix from the project one, so TeamAI switches prefixes with the scope). Team instructions go to `~/.omp/agent/RULES.md` in user scope and, in project scope, into each turn's system prompt through the extension below (see [Where the blocks go](#where-the-blocks-go)), and MCP servers merge into `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json` (Claude `mcpServers` shape — see the MCP section above). Skills are one-level `<name>/SKILL.md` bundles and TeamAI fills in a `description` on sync, which OMP's native skill provider requires to discover a skill. These paths follow OMP's documented discovery layout (verified against OMP 18.2.5). Hooks ride OMP's extension runner: `teamai pull` writes a single generated extension to `~/.omp/agent/extensions/teamai-hooks.ts` (never a project copy — OMP auto-loads both roots and would double-dispatch every event), which forwards OMP's `session_start` / `session_stop` / `before_agent_start` / `tool_result` events to the same `teamai hook-dispatch` entry point every other agent uses, gated on the session `cwd`. In a project session it also asks for the member's team instructions at `session_start` and appends them to the system prompt in `before_agent_start`. Every event carries the OMP session id (`ctx.sessionManager.getSessionId()`; a subagent has its own), and `tool_result` also the tool's text output and a status from `isError`, so upvote **adoption** runs for OMP's main agent: OMP sets no session variable in its shell, so a recall joins the session of the `bash` call that ran it, and a `read` with a line selector (`x.md:50-200`, `x.md:raw`) counts as a read of the file. From OMP 18.3.2 a subagent's events also carry its `ctx.agent` id and name, so the `teamai-recall` subagent's own reads never count. A subagent's session file sits under its parent's, whose header names the parent session, so the extension links the two on the subagent's tool calls, and a doc the main agent opens after a subagent's recall is upvoted (verified against OMP 18.4.8). The `session_stop` handler returns nothing, so a dispatch can never force a session continuation, and there is no matcher-scoped post-tool-use pass because OMP's tool ids are lowercase (`bash`, `read`, …) and it has no `Skill` / `TodoWrite` tool. User-scope `teamai uninstall` removes the extension; project uninstall preserves it for other projects. A same-named file without the TeamAI marker is never overwritten or removed, as with Pi. OMP profiles (`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`), which relocate the agent directory, are not supported; the default `~/.omp/agent/` layout is used.
 
 ### DeepSeek Harness
 
@@ -2689,7 +2750,10 @@ The example above has no `openai-responses` group, so Codex is left alone; add t
 teamai models list                     # every profile: file it comes from, key source, gateway, models, agents, where it is active
 teamai models list tokenhub            # just one profile
 teamai models switch tokenhub          # asks for the key the first time
+teamai models switch                   # lists the profiles and asks which one to use
 ```
+
+Run `switch` with no profile and it lists every profile, team ones first, and switches the one you pick; answer `none` to cancel. It takes a single profile, so an answer naming several is asked again rather than silently narrowed. Without a terminal there is nothing to pick from, so the profile is required there.
 
 `switch` updates every installed, compatible agent. Narrow it with `--agent claude` (repeatable), pick the default model with `--model deepseek-v4-flash`, or preview with `--dry-run`.
 
@@ -2780,6 +2844,8 @@ A full user-scope `teamai uninstall` restores managed model settings first and s
 
 `teamai uninstall` intelligently cleans up all teamai-managed resources, **preserving anything you created yourself**.
 
+A targeted project exclusion also requires confirmation or `--force`, even when there are no local files to remove. `--dry-run` and a declined confirmation leave the project config unchanged.
+
 ```bash
 # Preview every managed path that will be removed (no actual changes)
 teamai uninstall --dry-run
@@ -2797,7 +2863,7 @@ teamai uninstall --agent claude
 What gets removed:
 - TeamAI-managed model settings are restored first when ownership is still intact
 - teamai hooks in AI tool settings
-- The teamai blocks in CLAUDE.md and AGENTS.md (your own content is preserved)
+- The teamai blocks (culture, shared instructions, recall, and Codex's team rules) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too when teamai added it, even when your own text keeps the file or the file is gone; an entry you listed yourself stays)
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
@@ -2806,15 +2872,21 @@ What gets removed:
 
 ### Uninstall a single tool (`--agent <tool>`)
 
-`--agent <tool>` removes only that tool's teamai resources (hooks, CLAUDE.md block, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
+`--agent <tool>` removes only that tool's teamai resources (hooks, team instruction blocks, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
 
-An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The project `AGENTS.md` is the common case: with Pi still enabled, `--agent workbuddy` removes the recall block and keeps the culture and shared-instructions blocks Pi writes. The Codex family writes nothing there. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one.
+An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The common case is `.codebuddy/rules/teamai-context.md`, which CodeBuddy and WorkBuddy share: `--agent workbuddy` keeps it while CodeBuddy is installed. A file an earlier release wrote the blocks to, such as the project `AGENTS.md`, is read by no tool now, so its teamai blocks go and your own text stays. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one. A configured `claudemd` remains a member file even when its basename is `teamai-context.md`.
 
-Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. (So targeting a tool that has no teamai resources of its own is a no-op and leaves shared resources in place, even if it happens to be the only tool.)
+Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. Targeting a tool with no local resources leaves shared resources in place, even if it is the only tool. Project uninstall still records the exclusion for Pi, Oh My Pi, Hermes and the Codex family, whose instruction channels are global.
 
-The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, CLAUDE.md block, or hooks. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
+An enabled, installed Pi, Oh My Pi, Hermes or project Codex keeps the project state in use through its global delivery channel, even without a project-local tool directory. Uninstalling another tool preserves that state so the remaining tool can still deliver this project's instructions.
 
-The same `enabledAgents` whitelist (from `init --agent`) also gates CLI built-in skills/rules/agents and CLAUDE.md-class injects: an already-installed tool outside the list is neither written to nor deleted from, even if its root directory already exists. `teamai remove` respects the same whitelist for agents, rules, and skills, `teamai push` reads no rules or agents from a tool outside it, and `teamai pull` / `teamai mcp inject` respect it for MCP servers. Editing `enabledAgents` without `init` still invalidates the last-pull skip cache for newly added tools.
+If removing an OpenCode entry added by teamai fails, uninstall exits with an error and keeps the shared data directory and ownership record, even when OpenCode is the last tool. Repair the config or its permissions, then retry the same uninstall command.
+
+Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, the Codex family's user-level hooks and server-pushed agent hooks, which the user scope, the HTTP agent or another project on this machine may use, and names them in its summary. When none uses them, run `teamai hooks remove` in the project before uninstalling: it removes them. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
+
+The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Retained global adapters also skip HTTP sync and cached HTTP prompt injection for that excluded tool. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
+
+The same `enabledAgents` whitelist (from `init --agent`) also gates CLI built-in skills/rules/agents and team instruction blocks: an already-installed tool outside the list is neither written to nor deleted from, even if its root directory already exists. `teamai remove` respects the same whitelist for agents, rules, and skills, `teamai push` reads no rules or agents from a tool outside it, and `teamai pull` / `teamai mcp inject` respect it for MCP servers. Editing `enabledAgents` without `init` still invalidates the last-pull skip cache for newly added tools.
 
 To rejoin after uninstalling:
 

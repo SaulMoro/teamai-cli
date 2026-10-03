@@ -836,6 +836,12 @@ export const StateSchema = z.object({
    * inputs still match skips spawning `codex app-server`. Absent = run it.
    */
   codexTrustFingerprint: z.string().optional(),
+  /**
+   * OpenCode configs whose `instructions` entry for teamai's context file
+   * teamai added, as `{ config, entry }`, so uninstall removes the entry even
+   * after the member stripped the markers from that file (#945).
+   */
+  opencodeContextEntries: z.array(z.object({ config: z.string(), entry: z.string() })).optional(),
   lastUpdateCheck: z.string().nullable().default(null),
   availableUpdate: z.string().nullable().default(null),
 });

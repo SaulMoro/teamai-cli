@@ -20,7 +20,6 @@ import {
   writeJson,
   writeJsonAtomic,
 } from './utils/fs.js';
-import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { RulesHandler, SkillsHandler } from './resources/index.js';
 import { injectHooksToAllTools, applyAgentHook, removeAgentHook, isAgentHookSupportedTool, isAgentHookEvent, OPENCLAW_TOOLS } from './hooks.js';
 import { parseHookEvent } from './dashboard-collector.js';
@@ -52,7 +51,12 @@ import {
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
-import { injectClaudeMdSection, removeClaudeMdSection } from './utils/claudemd.js';
+import {
+  applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
+  instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  retiredFilesOfReached, nativeProjectInstructions,
+} from './instruction-targets.js';
+import { opencodeClaudeFallback } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
   resolveBaseDir,
@@ -62,7 +66,6 @@ import {
   resolveToolRootDir,
   CLAUDE_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
-  COPILOT_TOOL_ID,
   getTokenPath,
   TEAMAI_CLAUDEMD_START,
   TEAMAI_CLAUDEMD_END,
@@ -701,6 +704,11 @@ async function createResourceLocalConfig(
     // User-scope paths resolve under $HOME here, so a tool the member relocated
     // must be addressed at its recorded root — the same one `teamai pull` uses.
     ...(projectScope ? {} : { toolRoots: await memberToolRoots(workspacePath) }),
+    // State a sync records (OpenCode's instructions entry) goes to the
+    // project's data home, where uninstall reads it.
+    ...(projectScope && workspacePath
+      ? { dataHome: await (await import('./config.js')).resolveDataHomeForScope('project', workspacePath) }
+      : {}),
   };
 }
 
@@ -1999,8 +2007,17 @@ async function installDownloadedResource(input: {
       const mdFile = await resolveMarkdownFromDownload(downloadedPath, input.slug);
       const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
       await fse.ensureDir(path.dirname(dest));
+      const previous = await readFileSafe(dest);
       await fse.copyFile(mdFile, dest);
-      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath);
+      try {
+        await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+      } catch (error) {
+        // Session hooks read the cache directly: a prompt that was not
+        // delivered must not reach them, nor push out the ones that were.
+        if (previous === null) await remove(dest);
+        else await fse.writeFile(dest, previous);
+        throw error;
+      }
     }
 
     const version = commandVersion(input.command, input.kind);
@@ -2049,38 +2066,23 @@ async function uninstallResource(input: {
   } else if (input.kind === 'rule') {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
-    await remove(path.join(repoPath, 'claudemd', `${input.slug}.md`));
-    await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath);
+    const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
+    const previous = await readFileSafe(dest);
+    await remove(dest);
+    try {
+      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+    } catch (error) {
+      if (previous !== null) await fse.writeFile(dest, previous);
+      throw error;
+    }
   }
 
   delete scopeManifest[manifestKind(input.kind)][input.slug];
   await saveManifest(manifest);
 }
 
-async function resolveHermesUserBaseDir(): Promise<string | undefined> {
-  try {
-    const envWs = process.env.TEAMAI_HERMES_WORKSPACE;
-    if (envWs && path.isAbsolute(envWs)) return envWs;
-    const cfg = await readJson<LocalAgentConfig>(getConfigPath());
-    const bindings = cfg?.workspaceBindings;
-    if (bindings && typeof bindings === 'object') {
-      const entries = Object.entries(bindings)
-        .filter(([p, v]) => path.isAbsolute(p) && v?.ideType === 'hermes')
-        .sort((a, b) => (b[1].boundAt ?? '').localeCompare(a[1].boundAt ?? ''));
-      for (const [p] of entries) {
-        if (await pathExists(path.join(p, '.hermes'))) return p;
-      }
-    }
-  } catch { /* fall through */ }
-  return undefined;
-}
-
-async function syncClaudemd(
-  teamConfig: TeamaiConfig,
-  localConfig: LocalConfig,
-  repoPath: string,
-  workspacePath?: string,
-): Promise<void> {
+/** The claudemd fragments in an HTTP resource cache, compiled into one block. */
+async function cachedClaudemdBlock(repoPath: string): Promise<{ files: string[]; block: string | null }> {
   const claudemdDir = path.join(repoPath, 'claudemd');
   const files = (await pathExists(claudemdDir))
     ? (await fse.readdir(claudemdDir)).filter((file) => file.endsWith('.md')).sort()
@@ -2090,11 +2092,58 @@ async function syncClaudemd(
     const content = await readFileSafe(path.join(claudemdDir, file));
     if (content) contents.push(content);
   }
-  const block = compileClaudemdBlock(contents);
+  return { files, block: compileClaudemdBlock(contents) };
+}
+
+/**
+ * The HTTP agent's claudemd instructions for the project at `cwd`, as text a
+ * session hook adds (#945): Pi, OMP and Hermes have no project file of their
+ * own. Empty outside a project the agent delivered to.
+ */
+export async function localAgentInstructionText(cwd: string, tool = ''): Promise<string> {
+  const workspacePath = await resolveWorkspacePath(cwd);
+  if (!workspacePath) return '';
+  const native = await nativeProjectInstructions(tool, workspacePath);
+  if (native.includes(TEAMAI_CLAUDEMD_START) || native.includes(TEAMAI_CLAUDEMD_END)) return '';
+  const { block } = await cachedClaudemdBlock(await getResourceRepoPath('project', workspacePath));
+  return block ? instructionHookText({ claudemd: block }, false) : '';
+}
+
+/**
+ * Deliver the HTTP agent's claudemd block to `teamConfig`'s one tool, and
+ * strip the blocks earlier releases left in files no installed tool of
+ * `fullTeamConfig` reads now, as pull does (#945).
+ */
+async function syncClaudemd(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  repoPath: string,
+  workspacePath: string | undefined,
+  fullTeamConfig: TeamaiConfig,
+): Promise<void> {
+  const { files, block } = await cachedClaudemdBlock(repoPath);
   let syncedAny = false;
+  // Why each tool got nothing, for the ACK when none did.
+  const skipped: string[] = [];
+  const reached: string[] = [];
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (!toolPath.claudemd) continue;
+    // Pi, OMP and Hermes in a project take the cache from their extension or
+    // plugin through `hook-dispatch instructions` (localAgentInstructionText).
+    if (deliversInstructionsByHook(tool, localConfig.scope)) {
+      const problem = await hookDeliveryProblem(teamConfig, localConfig, tool, block);
+      if (problem) {
+        log.debug(`local-agent: skipped CLAUDE.md sync for ${tool}: ${problem}`);
+        skipped.push(problem);
+        continue;
+      }
+      log.debug(`local-agent: ${tool} adds the CLAUDE.md instructions through its extension`);
+      syncedAny = true;
+      reached.push(tool);
+      continue;
+    }
+    const targetFile = instructionTargetFile(tool, toolPath, localConfig.scope);
+    if (!targetFile) continue;
 
     let baseDir = resolveToolBaseDir(tool, localConfig);
     let resolvedAbsPath: string | null = null;
@@ -2102,47 +2151,137 @@ async function syncClaudemd(
     if (tool === 'openclaw' && localConfig.scope !== 'project') {
       const openclawWs = await resolveOpenclawWorkspaceDir(workspacePath);
       if (openclawWs) {
-        resolvedAbsPath = path.join(openclawWs, path.basename(toolPath.claudemd));
-      }
-    } else if (tool === 'hermes' && localConfig.scope !== 'project') {
-      const hermesBase = workspacePath ?? await resolveHermesUserBaseDir();
-      if (hermesBase) {
-        baseDir = hermesBase;
-        log.debug(`local-agent: hermes user-scope baseDir resolved to ${baseDir}`);
+        resolvedAbsPath = path.join(openclawWs, path.basename(targetFile));
       }
     }
 
+    // Probed through the tool's own paths, as pull does: WorkBuddy's project
+    // target sits under .codebuddy, which says nothing about WorkBuddy.
     const toolInstalled = resolvedAbsPath
       ? await pathExists(resolvedAbsPath)
-      : tool === COPILOT_TOOL_ID && localConfig.scope === 'user'
-        ? await isToolInstalledForConfig(tool, toolPath.claudemd, localConfig)
-      : toolPath.claudemd.includes('/')
-        ? await ResourceHandler.isToolInstalled(toolPath.claudemd, baseDir)
-        : await pathExists(path.join(baseDir, `.${tool}`));
+      : await isInstructionToolInstalled(tool, toolPath, localConfig);
     if (!toolInstalled) {
       log.debug(`Skipped CLAUDE.md sync for ${tool}: target not found`);
       continue;
     }
 
-    const claudeMdPath = resolvedAbsPath ?? path.join(baseDir, toolPath.claudemd);
-    try {
-      if (block) {
-        await injectClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END, block);
-        log.debug(`local-agent: synced CLAUDE.md instructions to ${tool}`);
-        syncedAny = true;
-      } else {
-        await removeClaudeMdSection(claudeMdPath, TEAMAI_CLAUDEMD_START, TEAMAI_CLAUDEMD_END);
-        log.debug(`local-agent: removed CLAUDE.md instructions from ${tool}`);
-        syncedAny = true;
-      }
-    } catch (e) {
-      log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${(e as Error).message}`);
+    const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
+    // OpenCode's Claude fallback already carries the blocks, as in pull (#945).
+    const claudeUserFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
+    if (tool === 'opencode' && localConfig.scope === 'user'
+      && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START)
+      && await opencodeClaudeFallback(getUserHome(), [claudeUserFile])) {
+      log.debug(`local-agent: OpenCode reads the team instructions from ${claudeUserFile}; skipped`);
+      continue;
     }
+    const target = instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath);
+    const plan = await planInstructionFiles([target], { claudemd: block });
+    // A warning means the file was left as it was: nothing reached the tool.
+    if (plan.warnings.length > 0) {
+      for (const warning of plan.warnings) log.warn(warning);
+      skipped.push(...plan.warnings);
+      continue;
+    }
+    const { failures, files } = await applyInstructionPlan(plan, { dryRun: false });
+    if (failures.length > 0) {
+      log.warn(`Failed to sync CLAUDE.md instructions to ${tool}: ${failures.join(' ')}`);
+      skipped.push(...failures);
+      continue;
+    }
+    if (tool === 'opencode') {
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false, files);
+      // OpenCode reads the file only through its `instructions` entry.
+      if (block) {
+        const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+        const { config, entry } = opencodeContextReference(claudeMdPath, localConfig.scope, baseDir);
+        if (!(await readOpencodeInstructionList(config))?.includes(entry)) {
+          const problem = `OpenCode does not load ${claudeMdPath}: teamai could not add "${entry}" to the instructions of ${config} `
+            + '(the file is missing, unreadable or not plain JSON). Add the entry by hand, or run `teamai doctor`.';
+          log.warn(problem);
+          skipped.push(problem);
+          continue;
+        }
+      }
+    }
+    log.debug(`local-agent: ${block ? 'synced' : 'removed'} CLAUDE.md instructions for ${tool}`);
+    syncedAny = true;
+    reached.push(tool);
   }
 
-  if (files.length > 0 && !syncedAny) {
-    throw new Error('CLAUDE.md sync landed on no tool: every configured target was skipped');
+  // Commands deliver to one tool at a time, but earlier commands may already
+  // have reached the other writers. Verify current destinations rather than
+  // forgetting those deliveries or trusting a receipt for an older prompt.
+  const resolved = await resolveInstructionTargets(fullTeamConfig, localConfig);
+  for (const hook of resolved.hooks) {
+    if (!reached.includes(hook.tool) && !await hookDeliveryProblem(fullTeamConfig, localConfig, hook.tool, block)) {
+      reached.push(hook.tool);
+    }
   }
+  for (const target of resolved.targets) {
+    if (target.tools.every((tool) => reached.includes(tool))) continue;
+    // A failed write in this command cannot become a previous delivery.
+    if (target.tools.some((tool) => teamConfig.toolPaths[tool] && !reached.includes(tool))) continue;
+    try {
+      await readFileIfExists(target.path);
+    } catch (error) {
+      log.debug(`local-agent: retained retired instructions because ${target.path} could not be verified: ${(error as Error).message}`);
+      continue;
+    }
+    const verification = await planInstructionFiles([target], { claudemd: block });
+    if (verification.files[0]?.status !== 'current') continue;
+    for (const tool of target.tools) {
+      if (tool === 'opencode' && block) {
+        const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+        const { config, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir(tool, localConfig));
+        if (!(await readOpencodeInstructionList(config))?.includes(entry)) continue;
+      }
+      reached.push(tool);
+    }
+  }
+  const cleanup = await planInstructionFiles([], {}, await retiredFilesOfReached(fullTeamConfig, localConfig, reached), { claudemd: block });
+  for (const warning of cleanup.warnings) log.warn(warning);
+  const { report, failures } = await applyInstructionPlan(cleanup, { dryRun: false });
+  for (const line of report) log.info(`${line}: no installed tool loads them from this file`);
+  for (const failure of failures) log.warn(failure);
+
+  if (cleanup.warnings.length > 0 || failures.length > 0) {
+    throw new Error(['CLAUDE.md sync could not remove the retired instructions. Repair the files and retry.',
+      ...cleanup.warnings, ...failures].join(' '));
+  }
+
+  // Removing the last prompt fails too when a target kept it.
+  if (!syncedAny && (files.length > 0 || skipped.length > 0)) {
+    throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
+  }
+}
+
+/**
+ * Why a hook tool cannot add the HTTP agent's instructions in this scope, or
+ * null when it can: not installed, its extension or plugin not ready, or the
+ * text over its prompt section's limit. The text counts the team's blocks the
+ * same hook adds for this project, when a team repo governs it.
+ */
+async function hookDeliveryProblem(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  tool: string,
+  block: string | null,
+): Promise<string | null> {
+  const hook = (await resolveInstructionTargets(teamConfig, localConfig)).hooks.find((entry) => entry.tool === tool);
+  if (!hook) return `${tool} is not installed here.`;
+  const channel = await instructionHookChannel(tool, { teamConfig, localConfig });
+  if (!channel.ready) return channel.fix;
+  if (hook.limit === undefined) return null;
+  const parts = [block ? instructionHookText({ claudemd: block }, false) : ''];
+  const { loadTeamConfig, resolveConfigForDir } = await import('./config.js');
+  const memberConfig = localConfig.projectRoot ? await resolveConfigForDir(localConfig.projectRoot) : null;
+  const memberTeam = memberConfig ? await loadTeamConfig(memberConfig.repo.localPath) : null;
+  if (memberConfig && memberTeam) parts.unshift(await instructionHookTextFor(memberTeam, memberConfig, tool));
+  const length = parts.filter(Boolean).join('\n\n').length;
+  return length > hook.limit
+    ? `${tool} cannot load this project's instructions: with the HTTP prompts they are ${length} characters, over the `
+      + `${hook.limit}-character limit of its prompt section, so ${tool} skips them. Shorten the prompts for this project.`
+    : null;
 }
 
 async function ackCommand(

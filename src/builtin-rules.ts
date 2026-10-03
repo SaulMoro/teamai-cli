@@ -32,12 +32,19 @@ export const BUILTIN_RULE_NAMES = new Set<string>(['teamai-recall']);
 export const LEGACY_RULE_NAMES: string[] = [];
 
 /**
+ * The rule file a pull writes the culture, claudemd and recall blocks into
+ * for tools whose rules directory is their instruction target (#945).
+ */
+export const TEAMAI_CONTEXT_RULE_NAME = 'teamai-context';
+
+/**
  * Names that scanLocalForPush and stale-cleanup should skip.
  * Includes both current built-in rules and legacy rules (being cleaned up).
  */
 export const EXCLUDED_RULE_NAMES = new Set<string>([
     ...BUILTIN_RULE_NAMES,
     ...LEGACY_RULE_NAMES,
+    TEAMAI_CONTEXT_RULE_NAME,
 ]);
 
 /**

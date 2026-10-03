@@ -883,7 +883,7 @@ teamai push
 
 大多数工具在自己的 rules 目录中为每条 rule 得到一个文件。Codex、`codex-internal` 和 `tcodex` 不读取 rules 目录（`.codex/rules/` 存放的是 Codex 自己的 `*.rules` 命令策略文件），因此 `pull` 不为它们写任何 rule 文件。user scope 下，团队 rule 写入该工具自己的 `AGENTS.md`（`~/.codex/AGENTS.md`、`~/.codex-internal/AGENTS.md`、`~/.tcodex/AGENTS.md`；`toolRoots` 条目可改变其位置）中的 `<!-- [teamai:team-rules:start] -->` 区块，只有该工具读取这个文件。在项目中，改由它们的 session-start hook 把项目的团队 rule 加入每个会话：项目 `AGENTS.md` 属于项目维护者，其他拥有自己 rules 格式的工具也会读取它。Hermes 的 `SOUL.md` 区块得到同样的内容。frontmatter 会被去掉，所以带 `paths:` 的 rule 在这里对所有文件生效，并以一行 `Applies to files matching: <globs>` 开头。Codex 在压缩上下文或 clear 之后会再次运行该 hook；恢复会话时不添加任何内容，因为会话中已包含这些 rule。Codex 启动的子 agent 通过 `SubagentStart` hook 获得它们。公开版 Codex 只运行已信任的 hook。teamai 会自动信任它写入的 hooks；如果自动信任被禁用或失败，请在 `/hooks` 中批准它们以获得项目的 rule。
 
-culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。hook 会省略项目当前生效的指令文件中已有的区块。Codex 在 `AGENTS.override.md` 存在时读取它，否则读取 `AGENTS.md`，因此被遮蔽的 `AGENTS.md` 中的区块仍会通过 hook 送达。
+culture、共享指令和 recall 区块采用同样的划分。user scope 下它们写入同一个 `AGENTS.md`，标记之外你自己的内容保持不变。在项目中，session-start hook 把它们与 rule 一起加入会话，`pull` 不改动项目 `AGENTS.md`。
 
 > 团队 `teamai.yaml` 中的 `toolPaths` 会整体替换内置默认值。设置了它的团队应为每个 Codex 系条目加上 `userScope.claudemd: .codex/AGENTS.md`（`.codex-internal/…`、`.tcodex/…`），用于 user scope 的 rule 和区块，并去掉其 `rules` 路径，因为 Codex 从不读取该目录。顶层的 `claudemd` 会把区块重新写进项目 `AGENTS.md`，所以不要设置。在项目中，hook 只需要该条目的 `settings` 路径，它安装在那里。
 
@@ -1303,7 +1303,7 @@ teamai recall status     # 查看当前生效状态（团队默认 + 用户覆�
 
 在 `enable` 或 `disable` 后添加 `--dry-run`，可预览配置和托管文件的变化，不会写入磁盘。
 
-关闭后，`teamai pull` 将跳过部署 recall subagent、recall rules 注入块和 TodoWrite 提醒 hook。手动执行 `teamai recall <query>` 搜索不受此开关影响。
+关闭后，`teamai pull` 将跳过部署 recall subagent 和 TodoWrite 提醒 hook，并从团队指令中移除 recall 块。手动执行 `teamai recall <query>` 搜索不受此开关影响。
 
 ### 知识库维护
 
@@ -1493,7 +1493,7 @@ team:
 | `team.mission` | string | 团队使命 |
 | `team.goals` | string[] | 团队目标 |
 
-frontmatter 之后的 markdown body 部分会作为团队文化指引的正文内容，整体注入到 CLAUDE.md 中。
+frontmatter 之后的 markdown body 部分会作为团队文化指引的正文内容，整体注入到各 AI 工具的指令目标文件（见[这些块写到哪里](#这些块写到哪里)）。
 
 ### 工作原理
 
@@ -1510,19 +1510,78 @@ teamai pull
     │  ├─ frontmatter → 结构化公司/团队信息
     │  └─ body → 团队文化指引正文
     │
-    ▼  编译为 CLAUDE.md 注入块
+    ▼  编译为注入块
     │
-    ▼  注入到各 AI 工具的 CLAUDE.md
-       ├─ ~/.claude/CLAUDE.md
-       ├─ ~/.cursor/CLAUDE.md
+    ▼  写入每个已安装 AI 工具的指令目标
+       ├─ ~/.claude/CLAUDE.md                       （用户范围）
+       ├─ <project>/.claude/rules/teamai-context.md （项目范围）
        └─ ...
 ```
 
 注入的内容位于 `<!-- [teamai:culture:start] -->` 和 `<!-- [teamai:culture:end] -->` 标记之间，每次 pull 时自动更新，不会影响文件中的其他内容。
 
+pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的文件；块内容未变化时不改写文件。早期版本把这些块写进了如今由多个工具共用或会遮蔽其他指令的文件（见[这些块写到哪里](#这些块写到哪里)）；只要没有已安装的工具读取这类文件，下一次 pull 就会移除其中的 teamai 块，并在输出中列出该文件。工具当前的目标文件不会被单独清理：`teamai uninstall --agent <tool>` 会移除其中的块。文件中没有其他内容时一并删除该文件，但 git 跟踪的文件不会被删除。标记缺失或重复的块保持原样，并提示手动修复。`teamai pull --dry-run` 只列出将要修改的文件，不写入。recall 关闭时，pull 会移除 recall 块。
+
+#### 这些块写到哪里
+
+同一项目的两名成员可能角色不同，因此他们的共享指令（`claudemd/`）可能不同。项目根目录的 `AGENTS.md` 存放项目为所有人编写的指令，所以 teamai 不会把这些块写入它，也不会写入 `~/AGENTS.md`、`~/.agents/AGENTS.md` 或其他工具读取的文件。每个工具通过自己的文件或会话钩子获得这些块：
+
+| 工具 | 用户范围 | 项目范围 |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
+| claude-internal、tclaude | 各自主目录下的 `.claude-internal/CLAUDE.md`、`.tclaude/CLAUDE.md`（未改变） | 项目下的相同路径（未改变，未验证） |
+| Codex、codex-internal、tcodex | `$CODEX_HOME/AGENTS.md`（以及各变体的主目录），位于团队规则旁 | 由 session-start 和 subagent-start hook 加入，位于项目团队规则旁；恢复会话时不重复加入 |
+| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md`（未改变） | `.github/copilot-instructions.md`（未改变） |
+| Cursor | `~/.cursor/rules/teamai-context.mdc`（未验证） | `.cursor/rules/teamai-context.mdc`（未验证） |
+| CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份（未验证） |
+| WorkBuddy | `~/.workbuddy/rules/teamai-context.md`（未验证） | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份（未验证） |
+| OpenCode | `~/.config/opencode/teamai-context.md`，以绝对路径列在 `~/.config/opencode/opencode.json` 的 `instructions` 中 | `.opencode/teamai-context.md`，列在 `.opencode/opencode.json` 的 `instructions` 中 |
+| Oh My Pi | `~/.omp/agent/RULES.md` | 由 teamai 的 OMP 扩展加入每轮的系统提示 |
+| Pi | `~/.pi/agent/AGENTS.md` | 由 teamai 的 Pi 扩展加入每次运行的系统提示 |
+| Hermes | `$HERMES_HOME/SOUL.md` 中的一个块，位于团队规则块旁（未验证） | teamai 的 Hermes 插件提供的系统提示段落（未验证） |
+
+团队 `toolPaths` 中没有 `rules` 的条目，Claude Code、Cursor、CodeBuddy 和 WorkBuddy 继续使用其配置的 `claudemd`，因为它们没有可放置 `teamai-context` 文件的 rules 目录。只有 `claudemd` 的条目在该文件所在目录存在时视为已安装；对 `AGENTS.md` 这类不在目录中的文件则始终视为已安装。
+
+*未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。多个工具共用的文件只有在每个工具都有该 subagent 时才获得 subagent 块。
+
+Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
+
+这两个 `teamai-context.mdc` 文件都带有 `alwaysApply: true`，Cursor 的规则加载器将其视为始终应用。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
+
+CodeBuddy 和 WorkBuddy 的规则文件带有 `alwaysApply: true`，CodeBuddy 的规则解析器将其视为始终应用。卸载其中一个工具时，只要另一个仍已安装，项目中共用的那份文件就会保留。
+
+在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。同名但并非 teamai 写入的插件保持不变，卸载时也一样，`teamai pull` 和 `teamai doctor` 会指出这一点。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
+
+OpenCode 只加载配置中 `instructions` 列出的文件。仅当目标已包含所需的块或更新成功时，teamai 才添加该条目；标记不完整或写入失败时，不会激活旧块。编辑失败会保留已有的 instructions 条目，recall 标记不完整导致切换失败时也一样。TeamAI 在添加配置条目之前保存所有权；状态写入失败时不会激活条目，配置写入失败时可以重试。你已列出的条目仍属于你。teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode 已经获得它们，因此 teamai 不会为 OpenCode 再写一份用户副本，并在 pull 输出中说明。被排除的 Claude Code 留在那里的块同样算数，因为 OpenCode 照样读取它们；此时 pull 会警告没有任何工具再更新它们。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
+
+Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。HTTP local agent 为项目下发的 prompt 也以同样方式，通过扩展或插件到达 Pi、Oh My Pi 和 Hermes，并通过 session-start 和 subagent-start hook 到达 Codex 系列。Pi 和 Oh My Pi 会等待前台 session-start 派发（包括 HTTP prompt 同步）完成，再为首个 prompt 缓存项目指令。Codex 也会在该同步完成后读取 HTTP prompt 缓存，再返回 SessionStart 上下文。
+
+早期版本的 pull 可能把这些块留在下列文件中。只有某个区块的替代内容已成功解析并投递给曾写入该文件的每个已安装工具后，pull 才移除该旧区块。文化源文件不可读或无效时，即使共享指令和 recall 已成功同步，旧文化区块仍会保留。目标写入失败、文件并非 teamai 所有、扩展缺失或插件被禁用时，旧块保留以便重试。被排除工具的当前和旧指令文件保持不变，并且不纳入 doctor 的旧指令检查。
+
+HTTP prompt 命令会检查所有已安装的旧写入工具的当前目标，包括先前命令的投递结果，确认后才移除旧共享指令区块。目标仍含旧 prompt 时不算投递成功。HTTP 清理保留文化和 recall 区块，因为这些命令不替换它们。
+
+当原生项目指令文件仍含 TeamAI 区块时，会话 hook 跳过该区块，包括缓存的 HTTP prompt，避免同时加入另一个成员的选择。其他区块仍通过 hook 投递，保留的区块清理后恢复投递。Codex 遵循 `AGENTS.override.md` 的优先级，Oh My Pi 遵循 `.omp/AGENTS.md` 的优先级。Doctor 会报告旧文件中不完整或重复的标记；修复标记后再运行 pull。
+
+pull 会列出所修改的每个文件：
+
+- Claude Code，项目范围：`.claude/CLAUDE.md`
+- CodeBuddy，项目范围：`.codebuddy/CODEBUDDY.md`
+- WorkBuddy：`~/AGENTS.md` 和项目 `AGENTS.md`
+- Hermes：`~/AGENTS.md`
+- Oh My Pi：`~/.omp/agent/AGENTS.md` 和 `.omp/AGENTS.md`。Oh My Pi 每一层只读取一个上下文文件，因此它们会遮蔽 `~/.agents/AGENTS.md` 和项目的 `AGENTS.md`。
+- Pi：项目 `AGENTS.md`
+- Codex 系列：项目 `AGENTS.md`（当团队的 `toolPaths` 或早期构建把 Codex 指向那里时）
+- 目标文件已改变的任一工具：团队 `toolPaths` 为它设置的 `claudemd` 路径，除非现在另一个工具的块写在那里
+
+`teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件，Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
+
+若请求更新的块存在不完整或重复的标记，整个文件保持不变，包括其他托管块。修复提示中的标记后，再运行 `teamai pull`。
+
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
+
 ### 查看效果
 
-pull 后可以直接查看 AI 工具的 CLAUDE.md：
+pull 后可以直接查看 AI 工具的指令文件，例如 Claude Code 的用户文件：
 
 ```bash
 teamai pull
@@ -1576,6 +1635,8 @@ cat ~/.claude/CLAUDE.md
   "commands": [{ "id": 1, "type": "install_skill", "skill_slug": "x", "skill_version": "1.0.0", "download_url": "https://signed-url/..." }]
 }
 ```
+
+删除最后一个 HTTP prompt 时，若目标无法更新，回执为 `failed`。缓存中的 prompt 和 manifest 记录均予以保留，修复标记或文件权限后可重试。
 
 后端可下发 **`apply_model_config`** 任务，其 `cmd` 为 JSON。客户端同时兼容设计文档中的候选集结构和
 旧版单模型结构：`{"models":[...]}` 按完整快照处理，直接模型对象按增量 upsert 处理。
@@ -2019,8 +2080,8 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) 通过其公开的 Skills、指令文件和扩展机制接入：
 
 - **作用域。** 项目级 Skills 和 TeamAI 管理的 Rules 写入 `.pi/skills/`、`.pi/rules/`；用户级副本写入 `~/.pi/agent/skills/`、`~/.pi/agent/rules/`。
-- **指令文件。** 项目级使用 `AGENTS.md`，用户级使用 `~/.pi/agent/AGENTS.md`。Pi 也接受项目级 `CLAUDE.md`，但 TeamAI 将规范的 TeamAI 区块保留在 `AGENTS.md`。
-- **Hooks。** TeamAI 只在用户级 `~/.pi/agent/extensions/` 生成一份 `teamai-hooks.ts`，把 `session_start` 映射为 session-start、`before_agent_start` 映射为 prompt-submit、`agent_settled` 映射为 stop；`tool_execution_start` 缓存工具输入，`tool_execution_end` 派发 post-tool-use 时把缓存的输入转发为 `tool_input`，并附上结果文本 `tool_response` 和根据错误标志得出的 `tool_status`。每个事件都携带 Pi 会话 id（`ctx.sessionManager.getSessionId()`），与 Pi 的 bash 工具导出的 `PI_SESSION_ID` 相同，因此在其中运行的 `teamai recall` 会归入其 hooks 携带的同一会话，upvote **采纳（adoption）**在 Pi 上同样生效。Pi 会同时加载用户级与项目级扩展目录，因此 TeamAI 不创建项目副本——第二份副本会导致每个事件被派发两次，这与 OMP 适配器的单副本策略一致。早期版本遗留且带 TeamAI 标记的项目副本会在下次同步时移除，注入逻辑也不会覆盖没有 TeamAI 标记的同名文件。Pi 没有可供 self mode 提交的设置文件，所以 fresh clone 仍需在该机器上手动跑一次 `teamai init`/`pull` 才能激活 Pi hooks。任何一次显式移除——`teamai hooks remove`，或者某个 scope 下的 `teamai uninstall --agent pi`——都会直接删除这份共享扩展，和 OMP 适配器的单文件删除语义完全一致：Pi 没有办法把一份共享文件限定在某一个项目里，所以不会假装"为其他项目保留"却让这份扩展继续对当前项目触发；没有 TeamAI 标记的同名文件不会被删除。`teamai hooks list` 始终显示这个全局路径。Pi 的 profile 覆盖项（`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）在 hooks 中暂不支持，与 OMP 适配器一致，使用默认的 `~/.pi/agent/` 布局。模型配置是另一回事，会读取 `PI_CODING_AGENT_DIR`。由于这份扩展是机器级共享的单个文件而非按项目隔离，某个 scope 下的移除在多项目场景中并不持久：只要 Pi 在其他任意 scope 仍处于启用状态，下一次在那里执行 `teamai init`/`pull` 就会把它重新生成，而 hook 派发本身没有按项目排除的检查，因此刚被卸载的项目里 hooks 仍可能重新触发。这与 OMP 适配器早已上线的取舍完全一致。
+- **指令文件。** Pi 读取项目自己的 `AGENTS.md`（或 `CLAUDE.md`），TeamAI 不修改它。用户范围的团队指令写入 `~/.pi/agent/AGENTS.md`。在项目中，TeamAI 的 Pi 扩展在会话开始时向 `teamai` 获取成员的团队指令，并加入每次运行的系统提示。
+- **Hooks。** TeamAI 只在用户级 `~/.pi/agent/extensions/` 生成一份 `teamai-hooks.ts`，把 `session_start` 映射为 session-start、`before_agent_start` 映射为 prompt-submit、`agent_settled` 映射为 stop；`tool_execution_start` 缓存工具输入，`tool_execution_end` 派发 post-tool-use 时把缓存的输入转发为 `tool_input`，并附上结果文本 `tool_response` 和根据错误标志得出的 `tool_status`。每个事件都携带 Pi 会话 id（`ctx.sessionManager.getSessionId()`），与 Pi 的 bash 工具导出的 `PI_SESSION_ID` 相同，因此在其中运行的 `teamai recall` 会归入其 hooks 携带的同一会话，upvote **采纳（adoption）**在 Pi 上同样生效。Pi 会同时加载用户级与项目级扩展目录，因此 TeamAI 不创建项目副本——第二份副本会导致每个事件被派发两次，这与 OMP 适配器的单副本策略一致。早期版本遗留且带 TeamAI 标记的项目副本会在下次同步时移除，注入逻辑也不会覆盖没有 TeamAI 标记的同名文件。Pi 没有可供 self mode 提交的设置文件，所以 fresh clone 仍需在该机器上手动跑一次 `teamai init`/`pull` 才能激活 Pi hooks。显式执行 `teamai hooks remove` 或用户级 `teamai uninstall --agent pi` 会删除这份共享扩展。项目级卸载为其他项目保留它，并移除旧的项目副本；没有 TeamAI 标记的同名文件不会被删除。`teamai hooks list` 始终显示这个全局路径。Pi 的 profile 覆盖项（`PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）在 hooks 中暂不支持，与 OMP 适配器一致，使用默认的 `~/.pi/agent/` 布局。模型配置是另一回事，会读取 `PI_CODING_AGENT_DIR`。项目级卸载后共享扩展仍已安装；指令派发会先检查此项目对该工具的排除设置。
 - **团队 Hooks 边界。** Pi 适配器只安装内置生命周期桥接。`hooks/hooks.yaml` 声明的自定义团队 Hooks 和内置 Hook 覆盖会被跳过并给出警告。完整团队 Hooks 与逐项目归属语义需要单独的跨适配器设计，留待后续 PR。
 - **服务端下发的 Agent Hooks。** HTTP source hooks 会以同一用户级扩展目录中的 `teamai-agent-<slug>.ts` 形式安装。不支持的生命周期事件会警告并跳过。
 - **MCP（Pi 0.99.0+）。** 支持 stdio 和 streamable HTTP；SSE 会跳过。用户级写入 `~/.pi/agent/mcp.json`，项目级写入 `.pi/mcp.json`；项目配置需要 Pi 信任项目后才加载。保留原生 `codemode` 默认值，不强制 direct；`mcp.yaml` 的 timeout 从毫秒转换成秒。受管条目的本地 exposure/启用状态在团队定义不变时保留，团队定义更新时会被替换；doctor 按完整条目比较，会报告这些本地差异。接管 `/mcp` 的扩展可能禁用内置 MCP；使用内置支持需移除此类扩展。
@@ -2048,7 +2109,7 @@ ZCode 已作为内置目标支持。Skills 下发到 `.zcode/skills/`（ZCode �
 
 ### Oh My Pi
 
-Oh My Pi（OMP）已作为内置目标支持。TeamAI 将 Skills、Rules 和 Subagents 下发到 OMP 的原生目录——项目级为 `.omp/skills/`、`.omp/rules/` 和 `.omp/agents/`，用户级为 `~/.omp/agent/skills/`、`~/.omp/agent/rules/` 和 `~/.omp/agent/agents/`（用户级资源位于 agent 目录 `~/.omp/agent/` 下，与项目级前缀不同，TeamAI 会随作用域自动切换）。指令（`claudemd`）下发到对应的 `AGENTS.md`；MCP Server 合并进 `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json`（Claude `mcpServers` 结构，见上文 MCP 章节）。Skills 采用一层 `<name>/SKILL.md` 目录结构，TeamAI 在同步时补全 `description`——OMP 原生 skill 发现要求该字段。以上路径遵循 OMP 官方文档的发现布局（对照 OMP 18.2.5 验证）。Hooks 走 OMP 的 extension runner：`teamai pull` 会生成唯一的 extension 写入 `~/.omp/agent/extensions/teamai-hooks.ts`（绝不写项目副本——OMP 会同时加载两个根并导致每个事件双派发），它把 OMP 的 `session_start` / `session_stop` / `before_agent_start` / `tool_result` 事件转发给所有 agent 共用的 `teamai hook-dispatch` 入口，并按会话 `cwd` 做项目门控。每个事件都携带 OMP 会话 id（`ctx.sessionManager.getSessionId()`；subagent 有自己的会话），`tool_result` 还带上工具的文本输出和根据 `isError` 得出的状态，因此 upvote **采纳（adoption）**在 OMP 主 agent 上生效：OMP 不在其 shell 中设置会话变量，所以 recall 归入运行它的那次 `bash` 调用所在的会话；带行选择器的 `read`（`x.md:50-200`、`x.md:raw`）计为对该文件的读取。从 OMP 18.3.2 起，subagent 的事件还会携带其 `ctx.agent` 的 id 和名称，因此 `teamai-recall` subagent 自身的读取从不计入。subagent 的会话文件位于父会话文件之下，父会话文件的头部写明父会话 id，因此 extension 会在 subagent 的工具调用中关联这两个会话，主 agent 在 subagent recall 之后打开的文档会被 upvote（对照 OMP 18.4.8 验证）。`session_stop` 处理器不返回任何值，分发绝不会强制会话继续；由于 OMP 的工具名是小写（`bash`、`read` 等）且没有 `Skill` / `TodoWrite` 工具，post-tool-use 不做 matcher 定向分发。`teamai uninstall` 会移除该 extension。OMP 的 profile（`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）暂不支持，使用默认的 `~/.omp/agent/` 布局。
+Oh My Pi（OMP）已作为内置目标支持。TeamAI 将 Skills、Rules 和 Subagents 下发到 OMP 的原生目录——项目级为 `.omp/skills/`、`.omp/rules/` 和 `.omp/agents/`，用户级为 `~/.omp/agent/skills/`、`~/.omp/agent/rules/` 和 `~/.omp/agent/agents/`（用户级资源位于 agent 目录 `~/.omp/agent/` 下，与项目级前缀不同，TeamAI 会随作用域自动切换）。团队指令在用户范围写入 `~/.omp/agent/RULES.md`，在项目范围由下文的 extension 加入每轮的系统提示（见[这些块写到哪里](#这些块写到哪里)）；MCP Server 合并进 `~/.omp/agent/mcp.json` / `<project>/.omp/mcp.json`（Claude `mcpServers` 结构，见上文 MCP 章节）。Skills 采用一层 `<name>/SKILL.md` 目录结构，TeamAI 在同步时补全 `description`——OMP 原生 skill 发现要求该字段。以上路径遵循 OMP 官方文档的发现布局（对照 OMP 18.2.5 验证）。Hooks 走 OMP 的 extension runner：`teamai pull` 会生成唯一的 extension 写入 `~/.omp/agent/extensions/teamai-hooks.ts`（绝不写项目副本——OMP 会同时加载两个根并导致每个事件双派发），它把 OMP 的 `session_start` / `session_stop` / `before_agent_start` / `tool_result` 事件转发给所有 agent 共用的 `teamai hook-dispatch` 入口，并按会话 `cwd` 做项目门控。在项目会话中，它还会在 `session_start` 时获取成员的团队指令，并在 `before_agent_start` 中追加到系统提示。每个事件都携带 OMP 会话 id（`ctx.sessionManager.getSessionId()`；subagent 有自己的会话），`tool_result` 还带上工具的文本输出和根据 `isError` 得出的状态，因此 upvote **采纳（adoption）**在 OMP 主 agent 上生效：OMP 不在其 shell 中设置会话变量，所以 recall 归入运行它的那次 `bash` 调用所在的会话；带行选择器的 `read`（`x.md:50-200`、`x.md:raw`）计为对该文件的读取。从 OMP 18.3.2 起，subagent 的事件还会携带其 `ctx.agent` 的 id 和名称，因此 `teamai-recall` subagent 自身的读取从不计入。subagent 的会话文件位于父会话文件之下，父会话文件的头部写明父会话 id，因此 extension 会在 subagent 的工具调用中关联这两个会话，主 agent 在 subagent recall 之后打开的文档会被 upvote（对照 OMP 18.4.8 验证）。`session_stop` 处理器不返回任何值，分发绝不会强制会话继续；由于 OMP 的工具名是小写（`bash`、`read` 等）且没有 `Skill` / `TodoWrite` 工具，post-tool-use 不做 matcher 定向分发。用户级 `teamai uninstall` 会移除该 extension；项目级卸载为其他项目保留它。与 Pi 一样，不带 TeamAI 标记的同名文件绝不会被覆盖或删除。OMP 的 profile（`OMP_PROFILE` / `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`，会迁移 agent 目录）暂不支持，使用默认的 `~/.omp/agent/` 布局。
 
 ### DeepSeek Harness
 
@@ -2520,7 +2581,10 @@ profiles:
 teamai models list                     # 全部配置：来源文件、密钥来源、网关、模型、Agent 及生效位置
 teamai models list tokenhub            # 只看一个配置
 teamai models switch tokenhub          # 首次使用时提示输入密钥
+teamai models switch                   # 列出全部配置，询问使用哪一个
 ```
+
+`switch` 不带配置名时会列出全部配置（团队配置在前），并切换到你所选的那个；输入 `none` 可取消。它一次只接受一个配置，因此填了多个会重新询问，而不会静默取第一个。没有终端时无处可选，因此此时必须给出配置名。
 
 `switch` 会更新所有已安装且兼容的 Agent。可以用 `--agent claude`（可重复）缩小范围，用 `--model deepseek-v4-flash` 指定默认模型，用 `--dry-run` 预览。
 
@@ -2591,6 +2655,8 @@ teamai models remove local:my-gateway  # Agent 保留当前配置，restore 仍�
 
 `teamai uninstall` 会智能清理所有 teamai 管理的资源，**保留用户自建内容**。
 
+即使没有本地文件需要删除，排除项目中的指定工具也需要确认或 `--force`。`--dry-run` 或拒绝确认不会修改项目配置。
+
 ```bash
 # 预览将要移除的每个受管路径（不做实际变更）
 teamai uninstall --dry-run
@@ -2608,7 +2674,7 @@ teamai uninstall --agent claude
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
 - AI 工具 settings 中的 teamai hooks
-- CLAUDE.md 和 AGENTS.md 中的 teamai 块（保留用户自写内容）
+- 各工具指令文件中的 teamai 块（文化、共享指令、recall 以及 Codex 的团队规则），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
@@ -2617,15 +2683,21 @@ teamai uninstall --agent claude
 
 ### 只卸载单个工具（`--agent <tool>`）
 
-`--agent <tool>` 只移除该工具的 teamai 资源（hooks、CLAUDE.md 块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
+`--agent <tool>` 只移除该工具的 teamai 资源（hooks、团队指令块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
-多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是项目 `AGENTS.md`：Pi 仍启用时，`--agent workbuddy` 会移除 recall 区块，保留 Pi 写入的 culture 和共享指令区块。Codex 系工具不会在那里写入任何内容。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。
+多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
 
-跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。（因此，定向卸载一个自身没有任何 teamai 资源的工具是 no-op，即便它恰好是唯一的工具，也不会删除共享资源。）
+跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
 
-该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、CLAUDE.md 块或 hooks 重新装回。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+已启用且已安装的 Pi、Oh My Pi、Hermes 或项目级 Codex 通过全局投递通道继续使用项目状态，即使项目中没有该工具的本地目录。卸载其他工具时会保留此状态，以便剩余工具继续投递该项目的指令。
 
-同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及 CLAUDE.md 类注入：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
+若删除 teamai 添加的 OpenCode 条目失败，卸载以错误状态退出，并保留共享数据目录和所有权记录，即使 OpenCode 是最后一个工具。修复配置或权限后，重试同一卸载命令。
+
+项目级卸载保留 Pi 和 Oh My Pi 的全局扩展、Hermes 的全局插件和配置、Codex 系列的用户级 hooks 以及服务端下发的 agent hooks，因为本机的用户级安装、HTTP agent 或其他项目可能仍在使用它们，并在摘要中列出。若没有其他安装使用它们，请在卸载前于该项目中运行 `teamai hooks remove`，它会移除这些内容。定向项目级 Codex 卸载保留项目配置以记录排除设置，仅清理项目拥有的资源和旧 hook 副本。单工具卸载在项目配置仍保留时，将该工具加入此项目的排除列表。用户级卸载才移除这些全局投递通道。
+
+该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步和缓存 HTTP prompt 注入。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+
+同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及团队指令块：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
 
 卸载后如需重新加入：
 
