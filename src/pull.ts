@@ -23,7 +23,7 @@ import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
-import { flatStemsOfRemoved, ruleFileExtensionForTool } from './resources/rule-format.js';
+import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
   forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
@@ -513,8 +513,12 @@ async function cleanupTombstonedResources(
       const baseDir = resolveToolBaseDir(tool, localConfig);
       // OMP's copy of a namespaced rule is flat (#946). A file of that name
       // may be the member's own, so only its record makes it teamai's.
-      const flatStems = type === 'rules'
-        ? flatStemsOfRemoved(tool, tombstones, (await handler.scanTeamForPull(freshConfig, localConfig)).map((rule) => rule.name))
+      const teamNames = type === 'rules' ? (await handler.scanTeamForPull(freshConfig, localConfig)).map((rule) => rule.name) : [];
+      const flatStems = type === 'rules' ? flatStemsOfRemoved(tool, tombstones, teamNames) : new Set<string>();
+      // A removed root rule's name can be the flat name a live namespaced rule
+      // is written under (`fe.style` for `fe/style`): that file is not the removed rule's.
+      const liveFlatStems = type === 'rules' && ruleFormatForTool(tool)?.flat
+        ? new Set([...ruleStemsForTool(tool, teamNames)].filter(([name]) => name.includes('/')).map(([, stem]) => stem))
         : new Set<string>();
       for (const stem of flatStems) {
         const localPath = path.join(baseDir, dir, `${stem}${ruleFileExtensionForTool(tool)}`);
@@ -536,6 +540,7 @@ async function cleanupTombstonedResources(
           // now (#945): a tombstone of a team rule by that name, from before,
           // does not reach it. A copy without the blocks is reclaimed by rules sync.
           if (type === 'rules' && name === TEAMAI_CONTEXT_RULE_NAME) continue;
+          if (liveFlatStems.has(name)) continue;
           // Even an upstream (tombstone) removal must not blow away a local
           // repo's stash/unpushed history inside a skill directory. Keep
           // + warn; the user can delete it manually once backed up.

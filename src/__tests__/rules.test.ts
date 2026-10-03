@@ -1787,6 +1787,8 @@ describe('RulesHandler.pullAllRules — Hermes SOUL.md (#938)', () => {
   // Hermes has no project rules channel: SOUL.md is global, so only a
   // user-scope pull may write its block (#946).
   it('leaves the SOUL.md block as the user-scope pull wrote it after a project pull, with or without project rules', async () => {
+    // Model the user installation that owns the global rules block.
+    await fse.outputFile(path.join(tmpDir, 'home', '.teamai', 'config.yaml'), JSON.stringify(localConfig));
     await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'user-rule.md'), 'USER RULE\n');
     await new RulesHandler().pullAllRules(teamConfig, localConfig);
     const soulPath = path.join(hermesHome, 'SOUL.md');

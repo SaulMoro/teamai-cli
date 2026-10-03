@@ -5,7 +5,7 @@ import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileConten
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
 import { warnOnce } from '../utils/warn-once.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
 import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
@@ -87,6 +87,7 @@ export class RulesHandler extends ResourceHandler {
     // into a namespaced local directory, so a root-level local rule that only
     // shares a basename with one, and has no record, is unrelated and stays new.
     const placedRules = (await loadStateForScope(localConfig)).placedRules;
+    const delivered = await (await import('../pull.js')).deliveredHashes(localConfig);
 
     // Collect the best candidate for each rule name across all tool directories
     const candidates = new Map<string, {
@@ -133,6 +134,9 @@ export class RulesHandler extends ResourceHandler {
         if (EXCLUDED_RULE_NAMES.has(name)) continue; // Skip CLI built-in and legacy rules
 
         const localFilePath = path.join(rulesDir, file);
+        // A flat name teamai has no record of writing is the member's own
+        // file, which pull keeps rather than overwrite (#946).
+        if (name !== file.slice(0, -ext.length) && delivered?.[localFilePath] === undefined) continue;
         // Team repo always stores `.md`, keyed by rule name.
         let teamFileName = `${name}.md`;
         // The record comes first. A shared-root rule that appears later with
@@ -876,6 +880,27 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
+   * An older project pull wrote the project's rules into Hermes' global
+   * SOUL.md (#946). On a machine with no user-scope install nothing else
+   * refreshes or removes that block, so Hermes would keep applying rules the
+   * team may have deleted: a project pull removes it there.
+   */
+  private async removeStaleProjectSoulRules(localConfig: LocalConfig): Promise<void> {
+    if (isAgentExcluded(localConfig, 'hermes')) return;
+    // An unreadable user config still represents an install whose rules we must keep.
+    if (await pathExists(getUserConfigPath())) return;
+    const { getHermesSoulPath, readSoulRules, removeSoulRules } = await import('../hermes-config.js');
+    if (await readSoulRules() === null) return;
+    try {
+      await removeSoulRules();
+      log.info(`Removed the team rules an older project pull wrote to ${getHermesSoulPath()}: Hermes gets no project rules`);
+    } catch (e) {
+      log.warn(`Could not remove the team rules an older project pull wrote to ${getHermesSoulPath()}: ${(e as Error).message}. `
+        + 'Hermes keeps applying them until this succeeds; run `teamai pull` again once the cause above is fixed.');
+    }
+  }
+
+  /**
    * The user-scope part of a rules sync for each tool with no rules format:
    * the team rules go into a file only that tool reads (`userRulesFile`: the
    * Codex family's AGENTS.md, ZCode, DeepSeek Harness, the OpenClaw
@@ -889,7 +914,10 @@ export class RulesHandler extends ResourceHandler {
     localConfig: LocalConfig,
     rules: ResourceItem[],
   ): Promise<void> {
-    if (localConfig.scope !== 'user') return;
+    if (localConfig.scope !== 'user') {
+      await this.removeStaleProjectSoulRules(localConfig);
+      return;
+    }
     // Hermes: inline all team rules into a teamai-managed block in SOUL.md
     // (user-level standing instructions). Only when Hermes is actually
     // installed — never create ~/.hermes for users who don't use it. SOUL.md

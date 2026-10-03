@@ -127,7 +127,9 @@ a recorded version's generated copy; locally edited headers are kept.
 The copies push refreshes are recorded, so a later `teamai pull` still updates them.
 Oh My Pi and Kiro read only the top of their rules directories, so a namespaced
 rule is written flat there (`rules/fe/style.md` as `fe.style.md`); an edit of that file
-pushes back to `rules/fe/style.md`.
+pushes back to `rules/fe/style.md`. Push requires a delivery record for the flat copy.
+A personal file with that name is neither refreshed before push nor offered as
+an edit of the team rule.
 
 A new file in the rules directory of a tool with a rules format of its own
 (Cursor, JoyCode, Copilot, Kiro, Qoder, CodeBuddy, WorkBuddy, Oh My Pi) is the

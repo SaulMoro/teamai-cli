@@ -1198,6 +1198,38 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(cursorRules, 'my-own-rule.mdc'))).toBe(true);
   });
 
+  it.each([
+    ['omp', true],
+    ['claude', false],
+  ])('names an edited flat OMP copy as kept only when uninstalling %s (#946)', async (agent, named) => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), 'Frontend rule.\n');
+    const flat = path.join(homeDir, '.omp', 'agent', 'rules', 'fe.style.md');
+    await fse.outputFile(flat, '---\nalwaysApply: true\n---\n\nFrontend rule.\n');
+    await fse.ensureDir(path.join(homeDir, '.claude', 'rules'));
+    const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['omp', 'claude'] });
+    const { checkoutKey } = await import('../pull.js');
+    const delivered: Record<string, string> = {};
+    const { recordDelivered } = await import('../resources/delivered-copies.js');
+    await recordDelivered(delivered, flat);
+    await saveStateForScope({
+      ...await loadStateForScope(localConfig),
+      lastPullByWorkspace: { [await checkoutKey(homeDir)]: { rev: 'r1', targets: [], delivered } },
+    }, localConfig);
+    await fse.writeFile(flat, '---\nalwaysApply: true\n---\n\nMy own wording.\n');
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { omp: defaults.omp, claude: defaults.claude } }) });
+    const warn = vi.mocked(log.warn);
+    warn.mockClear();
+
+    await uninstall({ force: true, agent });
+
+    expect(await fse.readFile(flat, 'utf8')).toContain('My own wording.');
+    expect(warn.mock.calls.some(([message]) => String(message).startsWith(`Kept ${flat}`))).toBe(named);
+  });
+
   it("removes the flat OMP copy of a namespaced team rule on uninstall, not a member's file of that name (#946)", async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

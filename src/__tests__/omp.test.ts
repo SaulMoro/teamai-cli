@@ -12,6 +12,7 @@ import { AgentsHandler } from '../resources/agents.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
 import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { RulesHandler } from '../resources/rules.js';
+import { checkoutKey } from '../pull.js';
 import { openLedger, recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
 import { log } from '../utils/logger.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
@@ -316,7 +317,13 @@ describe('OMP gets its own rule render, namespaced rules flat (#946)', () => {
   });
 
   it('pushes an edit of a flat copy into rules/<ns>/<name>.md, without the OMP frontmatter', async () => {
-    await handler.pullAllRules(teamConfig, localConfig);
+    // As a pull does: the delivery record proves the flat copy is teamai's (#946).
+    const ledger = openLedger({});
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+    await saveStateForScope({
+      ...await loadStateForScope(localConfig),
+      lastPullByWorkspace: { [await checkoutKey(homeDir)]: { rev: 'r1', targets: [], delivered: ledger.hashes } },
+    }, localConfig);
     // Only the OMP copy is edited; Claude's stays as delivered.
     const copy = path.join(userRules(), 'fe.style.md');
     await fse.writeFile(copy, OMP_NS.replace('Namespaced rule.', 'Edited namespaced rule.'));

@@ -15,6 +15,9 @@ import { AgentsHandler } from '../resources/agents.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
 import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { RulesHandler } from '../resources/rules.js';
+import { openLedger } from '../resources/delivered-copies.js';
+import { loadStateForScope, saveStateForScope } from '../config.js';
+import { checkoutKey } from '../pull.js';
 import { TeamaiConfigSchema } from '../types.js';
 import type { LocalConfig } from '../types.js';
 import { resolveHookCwd } from '../utils/hook-cwd.js';
@@ -240,7 +243,13 @@ describe('Kiro gets namespaced team rules flat, as it reads one level of steerin
   });
 
   it('pushes an edit of the flat file into rules/fe/style.md, without the Kiro frontmatter', async () => {
-    await handler.pullAllRules(teamConfig, localConfig);
+    // As a pull does: the delivery record proves the flat copy is teamai's (#946).
+    const ledger = openLedger({});
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], ledger);
+    await saveStateForScope({
+      ...await loadStateForScope(localConfig),
+      lastPullByWorkspace: { [await checkoutKey(homeDir)]: { rev: 'r1', targets: [], delivered: ledger.hashes } },
+    }, localConfig);
     const copy = path.join(userSteering(), 'fe.style.md');
     await fse.writeFile(copy, KIRO_NS.replace('Namespaced rule.', 'Edited namespaced rule.'));
 

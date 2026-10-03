@@ -29,6 +29,7 @@ vi.mock('../utils/git.js', () => ({
 
 import { syncTeamUpdatesToLocal } from '../utils/pre-push-sync.js';
 import { fileHash } from '../utils/fs.js';
+import { recordDelivered } from '../resources/delivered-copies.js';
 import { teamRuleToCopilotInstructions } from '../resources/copilot-instructions.js';
 import { teamRuleToOmpRule } from '../resources/omp-rule.js';
 import { teamRuleToKiroSteering } from '../resources/kiro-steering.js';
@@ -467,6 +468,22 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     expect(await fse.readFile(localFile, 'utf-8')).toBe(teamRuleToKiroSteering(newRule));
   });
 
+  it('leaves a member flat-name file alone even when its body matches an older team rule (#946)', async () => {
+    await fse.ensureDir(path.join(homeDir, '.omp', 'agent', 'rules'));
+    teamConfig.toolPaths.omp = { rules: '.omp/rules', userScope: { rules: '.omp/agent/rules' } };
+    await fse.outputFile(path.join(repoPath, 'rules', 'fe', 'style.md'), 'v2 content\n');
+    const localFile = path.join(homeDir, '.omp/agent/rules', 'fe.style.md');
+    const personal = teamRuleToOmpRule('v1 content\n');
+    await fse.writeFile(localFile, personal);
+    mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 content\n'));
+    const delivered = {};
+
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234', undefined, delivered);
+
+    expect(await fse.readFile(localFile, 'utf-8')).toBe(personal);
+    expect(delivered).toEqual({});
+  });
+
   it('refreshes an unedited flat OMP copy of a namespaced rule from rules/<ns>/<name>.md (#946)', async () => {
     await fse.ensureDir(path.join(homeDir, '.omp', 'agent', 'rules'));
     teamConfig.toolPaths.omp = { rules: '.omp/rules', userScope: { rules: '.omp/agent/rules' } };
@@ -475,7 +492,9 @@ describe('syncTeamUpdatesToLocal — rules', () => {
     await fse.writeFile(localFile, teamRuleToOmpRule('v1 content\n'));
     mockGetFileContentAtRev.mockResolvedValue(Buffer.from('v1 content\n'));
 
-    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234');
+    const delivered = {};
+    await recordDelivered(delivered, localFile);
+    await syncTeamUpdatesToLocal(teamConfig, localConfig, 'abc1234', undefined, delivered);
 
     expect(await fse.readFile(localFile, 'utf-8')).toBe(teamRuleToOmpRule('v2 content\n'));
   });

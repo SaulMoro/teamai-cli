@@ -117,6 +117,8 @@ async function syncRulesToLocal(
       if (name === undefined || EXCLUDED_RULE_NAMES.has(name)) continue;
 
       const localFilePath = path.join(rulesDir, file);
+      // A flat-name file without a delivery record belongs to the member (#946).
+      if (name !== file.slice(0, -ext.length) && delivered?.[localFilePath] === undefined) continue;
       // The team repo always stores the tool-neutral `.md`.
       let teamRelPath = `rules/${name}.md`;
       let teamFilePath = path.join(teamRulesDir, `${name}.md`);

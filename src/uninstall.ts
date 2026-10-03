@@ -757,7 +757,6 @@ async function buildRemovalPlan(
   const teamRules = await rulesHandler.scanTeamForPull(teamConfig, localConfig);
   const flatCopies = await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig));
   for (const { tool, file } of flatCopies.owned) perTool.get(tool)?.ruleFiles.push(file);
-  const keptFlatCopies = flatCopies.edited.filter(({ tool }) => perTool.has(tool)).map(({ file }) => file);
 
   // (b) continued: the team-rules block in the user file a tool with no
   // rules format reads them from (#938, #946), when that is not its
@@ -841,7 +840,8 @@ async function buildRemovalPlan(
     skillDirs: [],
     ruleFiles: [],
     keptRuleFiles: [],
-    keptFlatCopies,
+    // Only the tools being uninstalled: another tool's copy is not touched, so not "kept".
+    keptFlatCopies: flatCopies.edited.filter(({ tool }) => toolsToMerge.includes(tool)).map(({ file }) => file),
     opencodeOwnedGlobs: [],
     agentFiles: [],
     mcpServers: [],
