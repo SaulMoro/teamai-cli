@@ -15,6 +15,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn(),
+  listFilesAtRev: vi.fn(async () => []),
   pushRepoBranch: vi.fn().mockResolvedValue(true),
   generateBranchName: vi.fn().mockReturnValue('teamai/push/test/20260305-120000'),
 }));
@@ -1113,6 +1114,29 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
     // `fe/` stays in the team repo; this member's selection leaves it out.
     const selected = (await handler.scanTeamForPull(teamConfig, localConfig)).filter((rule) => rule.name === 'root-rule');
     await handler.pullAllRules(teamConfig, localConfig, selected);
+
+    expect((await fse.readJson(ocConfig())).instructions).toEqual([`${ocRules()}/*.md`]);
+  });
+
+  it('drops the glob of a namespace the team deleted since the last pull (#946)', async () => {
+    const teamRules = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRules, 'root-rule.md'), 'root');
+    await fse.ensureDir(path.join(teamRules, 'fe'));
+    await fse.writeFile(path.join(teamRules, 'fe', 'style.md'), 'fe style');
+    await handler.pullAllRules(teamConfig, localConfig);
+    expect((await fse.readJson(ocConfig())).instructions).toContain(`${ocRules()}/fe/*.md`);
+
+    // The team deletes `fe/`; the last pull's revision still has it.
+    await fse.remove(path.join(teamRules, 'fe'));
+    const { listFilesAtRev } = await import('../utils/git.js');
+    vi.mocked(loadStateForScope).mockResolvedValueOnce({ lastPullRev: 'r1' } as State);
+    vi.mocked(listFilesAtRev).mockImplementation(async (_repo, rev) => (rev === 'r1' ? ['rules/root-rule.md', 'rules/fe/style.md'] : []));
+    try {
+      await handler.pullAllRules(teamConfig, localConfig);
+    } finally {
+      vi.mocked(listFilesAtRev).mockReset();
+      vi.mocked(listFilesAtRev).mockResolvedValue([]);
+    }
 
     expect((await fse.readJson(ocConfig())).instructions).toEqual([`${ocRules()}/*.md`]);
   });

@@ -116,6 +116,8 @@ interface RemovalPlan {
   ruleFiles: string[];
   /** Copies in a tool's legacy rules directory the member edited, by directory: never removed, only named. */
   keptRuleFiles: { files: string[]; entry: LegacyRuleDir }[];
+  /** OMP's flat copies of namespaced rules the member edited after delivery: never removed, only named (#946). */
+  keptFlatCopies: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -750,12 +752,12 @@ async function buildRemovalPlan(
   }
 
   // (d) continued: OMP's flat copies of namespaced rules (`fe.style.md`),
-  // which a member's own file can share a name with: only those on record or
-  // holding the render go (#946).
+  // which a member's own file can share a name with: only those holding what
+  // was recorded or the render go; an edited one stays, named (#946).
   const teamRules = await rulesHandler.scanTeamForPull(teamConfig, localConfig);
-  for (const { tool, file } of await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig))) {
-    perTool.get(tool)?.ruleFiles.push(file);
-  }
+  const flatCopies = await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig));
+  for (const { tool, file } of flatCopies.owned) perTool.get(tool)?.ruleFiles.push(file);
+  const keptFlatCopies = flatCopies.edited.filter(({ tool }) => perTool.has(tool)).map(({ file }) => file);
 
   // (b) continued: the team-rules block in the user file a tool with no
   // rules format reads them from (#938, #946), when that is not its
@@ -839,6 +841,7 @@ async function buildRemovalPlan(
     skillDirs: [],
     ruleFiles: [],
     keptRuleFiles: [],
+    keptFlatCopies,
     opencodeOwnedGlobs: [],
     agentFiles: [],
     mcpServers: [],
@@ -1520,6 +1523,11 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
     // Uninstall never removes these, so they are named whatever happens next.
     for (const { files, entry } of plan.keptRuleFiles) log.warn(keptLegacyCopiesWarning(files, entry));
+    if (plan.keptFlatCopies.length > 0) {
+      const one = plan.keptFlatCopies.length === 1;
+      log.warn(`Kept ${plan.keptFlatCopies.join(', ')}: you edited ${one ? 'it' : 'them'} after teamai delivered ${one ? 'it' : 'them'}. `
+        + `Delete ${one ? 'it' : 'them'} once you have saved what you need.`);
+    }
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
       && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);

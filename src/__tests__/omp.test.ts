@@ -352,6 +352,18 @@ describe('OMP gets its own rule render, namespaced rules flat (#946)', () => {
     expect(await fse.readFile(path.join(userRules(), 'be.api.md'), 'utf8')).toBe('---\nalwaysApply: true\n---\n\nBackend rule.\n');
   });
 
+  it('does not own a flat copy on record that the member edited since (#946)', async () => {
+    await handler.pullAllRules(teamConfig, localConfig);
+    const flat = path.join(userRules(), 'fe.style.md');
+    const previous: DeliveredHashes = {};
+    await recordDelivered(previous, flat);
+    await fse.writeFile(flat, OMP_NS.replace('Namespaced rule.', 'My own wording.'));
+
+    const copies = await handler.ownedFlatCopies(teamConfig, localConfig, await handler.scanTeamForPull(teamConfig, localConfig), previous);
+
+    expect(copies).toEqual({ owned: [], edited: [{ tool: 'omp', file: flat }] });
+  });
+
   it('removes the flat copy when the namespaced rule is removed', async () => {
     await handler.pullAllRules(teamConfig, localConfig);
 

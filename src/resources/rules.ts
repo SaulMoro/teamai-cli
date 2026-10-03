@@ -15,7 +15,7 @@ import { assertWithinRoot } from '../utils/path-safety.js';
 import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { deliversEveryNamespace } from '../resource-namespaces.js';
-import { getFileContentAtRev, isPastVersionOf } from '../utils/git.js';
+import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
 import {
   adoptRecord, contentHash, forgetDelivered, keepsEditedCopy, recordDelivered, recordedUnchanged, removedCopyChanged,
   type DeliveredHashes, type DeliveryLedger,
@@ -50,6 +50,12 @@ export interface LegacyRuleCopies {
   owned: string[];
   /** The copies the member edited, or that teamai cannot prove it wrote. */
   edited: string[];
+}
+
+/** A tool's flat copy of a namespaced rule (`ownedFlatCopies`). */
+interface FlatCopy {
+  readonly tool: string;
+  readonly file: string;
 }
 
 export class RulesHandler extends ResourceHandler {
@@ -532,9 +538,12 @@ export class RulesHandler extends ResourceHandler {
       await remove(teamFile);
       removed.push(teamFile);
     }
-    for (const { file } of flatCopies) {
+    for (const { file } of flatCopies.owned) {
       await remove(file);
       removed.push(file);
+    }
+    for (const { file } of flatCopies.edited) {
+      log.warn(`Kept ${file}: you edited it after teamai delivered it. Delete it once you have saved what you need.`);
     }
 
     // The author's own copy is at the rules root under the bare name, whatever
@@ -627,26 +636,32 @@ export class RulesHandler extends ResourceHandler {
 
   /**
    * The flat copies of `rules` (OMP's `fe.style.md` for `fe/style`) that are
-   * teamai's: on record in `previous`, or holding the render. A file there
-   * with neither is the member's own, whose name only happens to match.
-   * Read-only and public so `uninstall` removes what `remove` would.
+   * teamai's: holding what `previous` records teamai wrote, or the render.
+   * One on record that holds neither is `edited`: the member changed it. A
+   * file with no record and no render is the member's own, whose name only
+   * happens to match. Read-only and public so `uninstall` removes what
+   * `remove` would.
    */
   async ownedFlatCopies(
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: readonly ResourceItem[],
     previous: DeliveredHashes | undefined,
-  ): Promise<Array<{ tool: string; file: string }>> {
-    const owned: Array<{ tool: string; file: string }> = [];
+  ): Promise<{ owned: FlatCopy[]; edited: FlatCopy[] }> {
+    const owned: FlatCopy[] = [];
+    const edited: FlatCopy[] = [];
     for (const rule of rules) {
       for (const { tool, dest, content, movedFrom } of await this.deliveryTargets(teamConfig, localConfig, rule)) {
         if (movedFrom === undefined || !await pathExists(dest)) continue;
-        if (previous?.[dest] !== undefined || (content !== undefined && await fileHash(dest) === contentHash(content))) {
+        const hash = await fileHash(dest);
+        if (previous?.[dest] === hash || (content !== undefined && hash === contentHash(content))) {
           owned.push({ tool, file: dest });
+        } else if (previous?.[dest] !== undefined) {
+          edited.push({ tool, file: dest });
         }
       }
     }
-    return owned;
+    return { owned, edited };
   }
 
   /**
@@ -1160,9 +1175,16 @@ export class RulesHandler extends ResourceHandler {
       }
     }
     // Every directory a team rule can land in, so a namespace this member no
-    // longer receives still has its glob reclaimed.
+    // longer receives still has its glob reclaimed; and every one a rule landed
+    // in at a revision this checkout pulled, so does a namespace the team deleted.
     const teamDirs = (await this.scanTeamForPull(teamConfig, localConfig))
       .map((rule) => path.dirname(path.join(rulesDir, `${rule.name}.md`)));
+    const { revs } = await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig));
+    for (const rev of revs) {
+      for (const file of await listFilesAtRev(localConfig.repo.localPath, rev, 'rules')) {
+        if (file.endsWith('.md')) teamDirs.push(path.dirname(path.join(rulesDir, path.posix.relative('rules', file))));
+      }
+    }
     return { configFile, ...opencodeRuleGlobs(configFile, rulesDir, ruleDirs, teamDirs), retired: null };
   }
 
