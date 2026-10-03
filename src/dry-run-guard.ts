@@ -10,7 +10,6 @@ import type { Command } from 'commander';
  * guards its writes) or only reads.
  */
 export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
-  'init', // multi-repo preview; `--http` and `--self` / `.` are refused below
   'push',
   'pull',
   'status',
@@ -96,6 +95,7 @@ export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
  * on a command that is in neither.
  */
 export const NO_DRY_RUN_PREVIEW: Readonly<Record<string, string>> = {
+  init: 'no preview; clones, saves config and injects hooks (single-repo: bootstraps the clone)',
   'models add': 'writes the personal profile and its key',
   'models configure': 'writes the key or the personal profile',
   'models remove': 'deletes the personal profile and its key',
@@ -127,13 +127,6 @@ export function dryRunRefusal(command: Command): string | undefined {
   const names: string[] = [];
   for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
   const path = names.join(' ');
-  const opts = command.opts();
-  if (path === 'codebase' && opts.extract !== undefined) return noDryRunPreview('codebase --extract');
-  if (path === 'init' && opts.http !== undefined) return noDryRunPreview('init --http');
-  // As init() reads it: the positional wins over --repo. initSelfRepo refuses too,
-  // for callers that bypass the CLI; refusing here also skips the migration step.
-  if (path === 'init' && (opts.self || (command.args[0] ?? opts.repo ?? '').trim() === '.')) {
-    return noDryRunPreview('init --self');
-  }
+  if (path === 'codebase' && command.opts().extract !== undefined) return noDryRunPreview('codebase --extract');
   return DRY_RUN_PREVIEW.has(path) ? undefined : noDryRunPreview(path);
 }

@@ -718,7 +718,7 @@ teamai pull              # Manual pull
 teamai pull --dry-run    # Dry run, no actual changes
 ```
 
-A command with no `--dry-run` preview, such as `teamai hooks remove`, `teamai models add` / `configure` / `remove`, `teamai bind-project`, `teamai codebase --extract`, `teamai init --http` or single-repo `teamai init .`, refuses the flag: it prints `teamai <command> has no --dry-run preview, nothing was run` and exits 1.
+A command with no `--dry-run` preview, such as `teamai init`, `teamai hooks remove`, `teamai models add` / `configure` / `remove`, `teamai bind-project` or `teamai codebase --extract`, refuses the flag: it prints `teamai <command> has no --dry-run preview, nothing was run` and exits 1.
 
 A manual `teamai pull` ends by running the `teamai doctor` checks and printing each one that failed, with its fix — including whether the skills it just reported syncing are readable on disk for every enabled tool. It prints nothing when they all pass, and the exit code is unchanged. The SessionStart hook path and `--dry-run` run no checks at all, so session startup stays as fast as before. Provider checks (`gh`/`gf` authentication) are left to `teamai doctor`: the pull just used the provider.
 
