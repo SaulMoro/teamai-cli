@@ -737,7 +737,8 @@ async function buildRemovalPlan(
   // directory, before its rules moved into its instructions file, which a pull
   // may not have reclaimed yet. A name is no proof there: only the copies a
   // pull would reclaim go, and the ones the member edited stay, named.
-  const legacyCopies = await new RulesHandler()
+  const rulesHandler = new RulesHandler();
+  const legacyCopies = await rulesHandler
     .legacyRuleCopies(teamConfig, localConfig, await deliveredHashes(localConfig));
   for (const { entry, owned, edited } of legacyCopies) {
     // A directory the tool reads is its rules directory, collected above.
@@ -751,7 +752,6 @@ async function buildRemovalPlan(
   // (d) continued: OMP's flat copies of namespaced rules (`fe.style.md`),
   // which a member's own file can share a name with: only those on record or
   // holding the render go (#946).
-  const rulesHandler = new RulesHandler();
   const teamRules = await rulesHandler.scanTeamForPull(teamConfig, localConfig);
   for (const { tool, file } of await rulesHandler.ownedFlatCopies(teamConfig, localConfig, teamRules, await deliveredHashes(localConfig))) {
     perTool.get(tool)?.ruleFiles.push(file);
@@ -770,7 +770,7 @@ async function buildRemovalPlan(
   // (d) continued: OpenCode loads its rules through globs in opencode.json,
   // which would point at nothing once the copies go (#946).
   const opencodeTarget = opencodeRes
-    ? await new RulesHandler().opencodeInstructionsTarget(teamConfig, localConfig, [])
+    ? await rulesHandler.opencodeInstructionsTarget(teamConfig, localConfig, [])
     : null;
   if (opencodeRes && opencodeTarget) {
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');

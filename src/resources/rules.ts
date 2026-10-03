@@ -1425,7 +1425,8 @@ export async function teamRulesContext(teamConfig: TeamaiConfig, localConfig: Lo
  */
 export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string[]> {
   const notes: string[] = [];
-  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'hermes')) {
+  if (localConfig.scope !== 'project') return notes;
+  if (!isAgentExcluded(localConfig, 'hermes')) {
     const { getHermesHome } = await import('../hermes-home.js');
     if (await pathExists(getHermesHome())) {
       notes.push(
@@ -1437,7 +1438,7 @@ export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string
       );
     }
   }
-  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'openclaw')) {
+  if (!isAgentExcluded(localConfig, 'openclaw')) {
     const { resolveOpenclawWorkspaceDir } = await import('../openclaw-hooks.js');
     if (await resolveOpenclawWorkspaceDir() !== null) {
       notes.push(
@@ -1449,14 +1450,14 @@ export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string
   }
   // Their session-start hook carries a project's rules (#946); doctor checks
   // that it is registered, but cannot see these limits.
-  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'zcode') && await pathExists(path.join(getUserHome(), '.zcode'))) {
+  if (!isAgentExcluded(localConfig, 'zcode') && await pathExists(path.join(getUserHome(), '.zcode'))) {
     notes.push(
       'ZCode gets the project\'s team rules from teamai\'s SessionStart hook, and drops that text when it compacts '
       + 'a session: the rules come back in the next session.',
     );
   }
   const { isDshInstalled, resolveDshPatchPath } = await import('../dsh-hooks.js');
-  if (localConfig.scope === 'project' && !isAgentExcluded(localConfig, 'dsh') && await isDshInstalled()) {
+  if (!isAgentExcluded(localConfig, 'dsh') && await isDshInstalled()) {
     notes.push(
       'DeepSeek Harness gets the project\'s team rules from teamai\'s session-start hook only when dsh runs with '
       + `\`--patch "${resolveDshPatchPath()}"\`. It runs that hook detached, so the first request can miss the rules, `

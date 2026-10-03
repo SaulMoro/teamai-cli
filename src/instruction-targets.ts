@@ -636,8 +636,9 @@ export async function retiredFilesOfReached(
   const writers = new Map<string, string[]>();
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     if (!hooks.some((hook) => hook.tool === tool) && !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
-    // A tool with no file and no hook here (OpenClaw in a project, #946) has no replacement to wait for.
-    if (!hooks.some((hook) => hook.tool === tool) && await instructionTargetPath(tool, paths, localConfig) === undefined) continue;
+    // A tool with no file and no hook channel here (OpenClaw in a project, #946)
+    // has no replacement to wait for; a hook tool whose hook is not installed does.
+    if (!entryFor(tool, localConfig.scope)?.hook && await instructionTargetPath(tool, paths, localConfig) === undefined) continue;
     for (const file of await retiredInstructionFiles(tool, paths, localConfig.scope)) {
       const absolute = path.resolve(resolveToolBaseDir(tool, localConfig), file);
       writers.set(absolute, [...writers.get(absolute) ?? [], tool]);

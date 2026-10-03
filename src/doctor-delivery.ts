@@ -1465,11 +1465,13 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     });
   }
 
+  // Pi's extension also carries the project's team rules (#946).
   const { teamRulesContext } = await import('./resources/rules.js');
+  let hasTeamRules: boolean | undefined;
   for (const hook of hooks) {
     const text = instructionHookText(blocks, hook.recall);
-    // Pi's extension also carries the project's team rules (#946).
-    if (!text && !(getsRulesFromExtension(hook.tool) && await teamRulesContext(teamConfig, localConfig) !== null)) continue;
+    if (!text && !getsRulesFromExtension(hook.tool)) continue;
+    if (!text && !(hasTeamRules ??= await teamRulesContext(teamConfig, localConfig) !== null)) continue;
     const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
     const overLimit = hookLimitProblem(hook, text);
     checks.push({

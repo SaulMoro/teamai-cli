@@ -1378,7 +1378,7 @@ async function pullForScope(
             try {
               ({ items } = await resolveDesiredRules(freshConfig, localConfig, roleContext));
             } catch (error) {
-              log.warn(`[${scopeLabel}] Could not resolve the team rules, so no tool's own user rules file (such as ~/.codex/AGENTS.md or ~/.zcode/AGENTS.md), OpenCode rules glob or older rule copy was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
+              log.warn(`[${scopeLabel}] Could not resolve the team rules, so no OpenCode rules glob, older rule copy or, in user scope, tool's own rules file (such as ~/.codex/AGENTS.md) was updated: ${(error as Error).message}. Run \`teamai pull\` to retry.`);
             }
             if (items !== undefined) {
               try {
