@@ -98,24 +98,32 @@ describe('--dry-run on a command with no preview', () => {
     expect(snapshot(home)).toEqual(before);
   });
 
-  // A fresh clone of a single-repo team carries `.teamai/teamai.yaml` with
-  // `mode: self`: loading its config bootstraps the machine side (#852).
-  it('init . --dry-run on a single-repo clone writes nothing', () => {
+  /** A fresh clone of a single-repo team: `.teamai/teamai.yaml` says `mode: self`, no local config. */
+  function selfClone(): string {
     const repo = path.join(sandbox, 'repo');
+    const env = { ...process.env, ...GIT_ENV };
     fs.mkdirSync(path.join(repo, '.teamai'), { recursive: true });
-    execFileSync('git', ['init', '-q', '-b', 'main', repo], { env: { ...process.env, ...GIT_ENV } });
+    execFileSync('git', ['init', '-q', '-b', 'main', repo], { env });
     fs.writeFileSync(path.join(repo, '.teamai', 'teamai.yaml'),
       ['team: self-e2e', 'repo: local/self-e2e', 'provider: git', 'mode: self', ''].join('\n'));
-    execFileSync('git', ['add', '-A'], { cwd: repo, env: { ...process.env, ...GIT_ENV } });
-    execFileSync('git', ['commit', '-qm', 'team'], { cwd: repo, env: { ...process.env, ...GIT_ENV } });
+    execFileSync('git', ['add', '-A'], { cwd: repo, env });
+    execFileSync('git', ['commit', '-qm', 'team'], { cwd: repo, env });
     execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/example/self-e2e.git'], { cwd: repo });
+    return repo;
+  }
+
+  // Loading the config of a single-repo clone bootstraps the machine side (#852).
+  it('init . --dry-run on a single-repo clone writes nothing', () => {
+    const repo = selfClone();
     const repoBefore = snapshot(repo);
     const homeBefore = snapshot(home);
 
-    for (const args of [['init', '.', '--dry-run'], ['init', '--self', '--dry-run']]) {
+    for (const args of [['init', '.', '--dry-run'], ['init', '--self', '--dry-run'], ['init', '--repo', '.', '--dry-run']]) {
       const result = cli([...args, '--agent', 'claude', '--force'], repo);
       expect(result.code, result.output).toBe(1);
       expect(result.output).toContain('teamai init --self has no --dry-run preview, nothing was run');
+      // Refused before the migration step, which would preview a bootstrap first.
+      expect(result.output).not.toContain('Would bootstrap');
     }
 
     expect(snapshot(repo)).toEqual(repoBefore);
