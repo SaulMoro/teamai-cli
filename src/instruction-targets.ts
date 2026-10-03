@@ -271,6 +271,8 @@ export async function instructionTargetFile(tool: string, paths: ToolPaths, scop
 export async function retiredInstructionFiles(tool: string, paths: ToolPaths, scope: Scope): Promise<readonly string[]> {
   const entry = entryFor(tool, scope);
   if (!entry) return [];
+  // OpenClaw's default workspace stays read by its default profile (#946).
+  if (tool === 'openclaw') return entry.retired;
   const previous = paths.claudemd === await instructionTargetFile(tool, paths, scope) ? undefined : paths.claudemd;
   return previous === undefined || entry.retired.includes(previous) ? entry.retired : [...entry.retired, previous];
 }
@@ -634,6 +636,8 @@ export async function retiredFilesOfReached(
   const writers = new Map<string, string[]>();
   for (const [tool, paths] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     if (!hooks.some((hook) => hook.tool === tool) && !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
+    // A tool with no file and no hook here (OpenClaw in a project, #946) has no replacement to wait for.
+    if (!hooks.some((hook) => hook.tool === tool) && await instructionTargetPath(tool, paths, localConfig) === undefined) continue;
     for (const file of await retiredInstructionFiles(tool, paths, localConfig.scope)) {
       const absolute = path.resolve(resolveToolBaseDir(tool, localConfig), file);
       writers.set(absolute, [...writers.get(absolute) ?? [], tool]);

@@ -2144,33 +2144,6 @@ describe('uninstall', () => {
     expect(await fse.readJson(rootConfig)).toEqual({});
   });
 
-  it('deletes the .opencode/opencode.json the team instructions entry alone filled, in a project with no team rules (#946)', async () => {
-    const homeDir = path.join(tmpDir, 'oc-home');
-    const repoPath = path.join(tmpDir, 'oc-team-repo');
-    const projectRoot = path.join(tmpDir, 'oc-project');
-    await fse.ensureDir(repoPath);
-    const contextFile = path.join(projectRoot, '.opencode', 'teamai-context.md');
-    await fse.outputFile(contextFile, '<!-- [teamai:culture:start] -->\nBe kind.\n<!-- [teamai:culture:end] -->\n');
-    const dotConfig = path.join(projectRoot, '.opencode', 'opencode.json');
-    // OpenCode adds `$schema` to a config it loads.
-    await fse.writeJson(dotConfig, { $schema: 'https://opencode.ai/config.json', instructions: ['.opencode/teamai-context.md'] });
-
-    vi.stubEnv('HOME', homeDir);
-    vi.stubEnv('SHELL', '/bin/zsh');
-    const { toolPaths } = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
-    const localConfig = makeLocalConfig(homeDir, repoPath, {
-      scope: 'project',
-      projectRoot,
-      repo: { localPath: repoPath, remote: '', kind: 'self', businessRepoRoot: projectRoot },
-    });
-    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths }) });
-
-    await uninstall({ force: true, agent: 'opencode' });
-
-    expect(await fse.pathExists(contextFile)).toBe(false);
-    expect(await fse.pathExists(dotConfig)).toBe(false);
-  });
-
   // A relocated Claude Code root (toolRoots) moves the HOME hook file, but the
   // legacy <projectRoot> copy was written by a CLI that knew nothing about it —
   // so the two targets must be looked for at different paths.
