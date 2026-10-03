@@ -36,8 +36,13 @@ function quoteYamlUnsafeScalars(block: string): string {
   return block
     .split(/\r?\n/)
     .map((line) => {
-      const m = line.match(/^(\s*(?:-\s+|[A-Za-z0-9_.-]+:[ \t]+))([*&][^"']*)$/);
-      return m ? `${m[1]}"${m[2].trimEnd()}"` : line;
+      const m = line.match(/^(\s*(?:-\s+|[A-Za-z0-9_.-]+:[ \t]+))([*&].*)$/);
+      if (!m) return line;
+      // YAML comments begin at a whitespace-separated #; a # inside a glob is literal.
+      const commentAt = m[2].search(/[ \t]+#/);
+      const scalar = (commentAt === -1 ? m[2] : m[2].slice(0, commentAt)).trimEnd();
+      const comment = commentAt === -1 ? '' : m[2].slice(commentAt);
+      return /["']/.test(scalar) ? line : `${m[1]}${JSON.stringify(scalar)}${comment}`;
     })
     .join('\n');
 }

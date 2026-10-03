@@ -164,6 +164,19 @@ describe('Copilot instructions render', () => {
 });
 
 describe('team rule paths, shared by every render', () => {
+  it.each([
+    'paths: **/*.ts # TypeScript files',
+    'paths: **/*.ts # TypeScript\'s "source" files',
+    'paths:\n  - **/*.ts  # TypeScript files',
+    'paths: **/*#draft.ts # TypeScript files',
+  ])('keeps a YAML comment outside the repaired glob: %s', (frontmatter) => {
+    const source = `---\n${frontmatter}\n---\n\nUse named exports.\n`;
+    const glob = frontmatter.includes('#draft') ? '**/*#draft.ts' : '**/*.ts';
+    const quoted = `---\npaths: ${JSON.stringify(glob)}\n---\n\nUse named exports.\n`;
+    expect(teamRuleToKiroSteering(source)).toBe(teamRuleToKiroSteering(quoted));
+    expect(teamRuleToOmpRule(source)).toBe(teamRuleToOmpRule(quoted));
+  });
+
   // gray-matter caches a parse by content, failures included: the retry that
   // quotes `**/*.ts` must not lose to a cached failure on the next render.
   it('scopes an unquoted alias-like glob on every render, not just the first', () => {

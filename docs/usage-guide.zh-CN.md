@@ -908,6 +908,8 @@ teamai push --role pm
 
 ### Rules（规则）
 
+带作用范围的 rule 中，YAML 注释不属于 glob：`paths: **/*.ts # TypeScript files` 的原生规则只匹配 `**/*.ts`，内联渠道也得到同样的路径提示。`paths:` 下的块列表条目同样如此。
+
 ```bash
 # 创建 rule
 cat > ~/.claude/rules/code-review-guide.md << 'EOF'
@@ -2235,7 +2237,11 @@ teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 
 除了托管平台、clone、配置和 hook 检查之外，`doctor` 还会验证落到本机上的内容。`<tool> is installed` 在 `enabledAgents` 列出了不会收到任何内容的工具时失败——这正是 pull 报告成功、而该工具什么都没收到的情况。它使用与同步相同的解析逻辑，因此像 OpenClaw 这样把 skills 放在 workspace 目录而非工具根目录的工具，会在同步真正写入的位置被判断。工具已安装时也会作为通过项报告，因此 `--json` 无论哪种情况都会为每个已启用工具给出一条记录。pull 结束时的检查只覆盖它从当前目录解析出的那个 scope；其他 scope 请在对应目录下运行 `teamai doctor`。`Skills delivered to <tool>` 会把角色命名空间、标签订阅与排除规则解析出的 skill 集合，与每个已安装工具磁盘上的内容比对：从未送达的 skill 与送达但不可读的 skill 会分别报告——后者指 `SKILL.md` 缺失、frontmatter 无法解析，或其 `name` 与目录名不一致，导致 agent 永远发现不了它。`Team docs delivered` 将你应收到的文档（不含未激活的 docs namespace）与 `sharing.docs.localDir` 比对（它只有一个目标目录，而非每个工具一个）；每个应有的文档都必须是可读取的文件，因此占用了该名字的目录或断链接也算缺失。它还会将本地多余的非隐藏文件报告为过期文档，即使团队文档已经删空也会检查；本地隐藏文件会保留，不会使检查失败，未激活 namespace 中团队文档的本地副本也不会：pull 会删除未修改的副本，并点名你修改过的副本。`doctor` 还会输出提示，它们只是信息，不是失败的检查。每条提示指出一个在本机替换了根目录条目的 namespace skill、agent、rule、共享指令文件、env 变量、hook、MCP server 或团队模型配置（`rules: "style" from rules/checkout/style.md replaces rules/style.md`）。当某个 namespace 提供了 env 变量、hook、MCP server 或团队模型配置时，还会有一条提示按来源统计该类型的条目（`env: 3 received here (2 root, 1 checkout)`）。未配置角色或项目时，提示改为列出团队仓库中重复定义的每个文件，以及在根文件中重复出现的每个 env 变量、hook 或 MCP server 名称。
 
+对于 Oh My Pi 和 Kiro，即使所有收到的 rule 都发生平铺名称冲突、无法写入任何文件，`doctor` 也会报告冲突。在团队仓库中重命名其中一条 rule，然后运行 `teamai pull`。
+
 `Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`（JoyCode 的不加引号）、`.instructions.md` 带 `applyTo`、Kiro 平铺的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：`globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：旧版 spec 留下的副本（普通 pull 会跳过团队仓库未变化的 scope，它可能一直留在那里）报告为 `delivered from an older spec`，而不是当作已送达。`Every team agent reaches a tool` 会指出在任何已安装工具上都无法渲染的 agent，通常是 spec 解析失败，或 `targets:` 只列了本机没有的工具。这两项仅在 `doctor` 中运行：它们会按工具读取每条 rule、解析每个 agent，放进 pull 结束时的检查会耗尽其时间预算。
+
+删除最后一条团队 rule 后，`doctor` 仍会报告清理失败留下的 teamai 所拥有的 OpenCode glob 或内联区块。运行 `teamai pull` 可移除它们。
 
 有几个工具并不读取 rules 目录，按文件比对的检查无法代表它们，因此各自单列一项。`Team rules are active in opencode` 检查 `opencode.json`（项目中为 `.opencode/opencode.json`）的 `instructions` 中是否列着 teamai 所拥有的每条 glob，且没有过时的条目（如旧版本写入的相对 `rules/*.md`）：OpenCode 不会自动扫描 `.opencode/rules`，缺了它，已送达的每个 `.md` 都不会生效，而按文件比对的检查依旧通过。user scope 下，`Team rules are inlined in Hermes SOUL.md` 把 `SOUL.md` 中 teamai 管理的代码块与团队 rule 内联后的内容比对——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in <file>`（`Codex AGENTS.md`、`ZCode AGENTS.md`、`DeepSeek Harness AGENTS.md`、`OpenClaw workspace AGENTS.md`、`Pi AGENTS.md`、`JoyCode rules.txt`）把该工具所读文件中的 team-rules 区块与团队 rule 内联后的内容比对；对 Codex，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：没有它，Codex 对较大的内容只保留开头和结尾。在项目中，当 `~/.zcode/cli/config.json` 没有 teamai 的 `SessionStart` 条目或没有设置 `hooks.enabled: true` 时，`Project rules reach zcode through its SessionStart hook` 会失败；当 `~/.teamai/dsh/` 下的 patch 或 hook 配置缺失时，`Project rules reach dsh through its session-start hook` 会失败，doctor 无法看到 dsh 是否带 `--patch` 运行。对 Pi，teamai 的 Pi 扩展缺失或过期时，`pi adds the team instructions and rules to its prompt` 会失败。Codex、ZCode、DeepSeek Harness 和 Pi 没有 `Rules delivered to <tool>` 检查。
 

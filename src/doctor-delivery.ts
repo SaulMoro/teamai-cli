@@ -9,7 +9,7 @@ import {
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
-import type { ResourceHandler } from './resources/base.js';
+import { isToolInstalledForConfig, type ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
 import type { DesiredMcpContext } from './mcp-reconcile.js';
 import type { ResolvedMcpFile } from './mcp-resolved-files.js';
@@ -271,16 +271,13 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
 
   const roleContext = await buildRolePullContext(localConfig);
   const { items } = await resolveDesiredRules(teamConfig, localConfig, roleContext);
+  const activation = await buildRulesActivationChecks(ctx, items);
   if (items.length === 0) {
-    // No rule reaches this member, but a team-rules block a failed removal
-    // left in a tool's own user file is still read: report that and nothing else.
-    const userFiles = await buildUserRulesFileChecks(ctx, items);
+    // Failed cleanup can leave an active glob or inline block after the last rule goes.
     const failing: Check[] = [];
-    for (const check of userFiles) if (!await check.check()) failing.push(check);
+    for (const check of activation) if (!await check.check()) failing.push(check);
     return failing;
   }
-
-  const activation = await buildRulesActivationChecks(ctx, items);
 
   // `pullItem` writes the handler's render byte for byte, so anything else at
   // that path is a stale or hand-edited copy. A tool with its own rules format
@@ -303,10 +300,18 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   );
   // A tool that reads only the top of its rules directory gets no file for a
   // namespaced rule whose flat name another rule has (`deliveryTargets`).
-  for (const [tool, delivery] of byTool) {
-    if (!ruleFormatForTool(tool)?.flat) continue;
+  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    if (!toolPath.rules || !ruleFormatForTool(tool)?.flat || isAgentExcluded(localConfig, tool)) continue;
+    if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) continue;
     const stems = ruleStemsForTool(tool, items.map((item) => item.name));
-    for (const item of items) if (!stems.has(item.name)) appendTo(delivery.problems, FLAT_NAME_TAKEN, item.name);
+    const collisions = items.filter((item) => !stems.has(item.name));
+    if (collisions.length === 0) continue;
+    let delivery = byTool.get(tool);
+    if (!delivery) {
+      delivery = { tool, dir: path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules), problems: new Map() };
+      byTool.set(tool, delivery);
+    }
+    for (const item of collisions) appendTo(delivery.problems, FLAT_NAME_TAKEN, item.name);
   }
   const { unreadRulesDir } = await import('./resources/rules.js');
   const perTool: Check[] = [];
@@ -393,9 +398,10 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
     // A missing file just lists nothing yet; null is one the pull cannot parse.
     const instructions = await pathExists(opencode.configFile) ? await readOpencodeInstructionList(opencode.configFile) : [];
-    const missing = opencode.globs.filter((glob) => !instructions?.includes(glob));
+    const globs = items.length > 0 ? opencode.globs : [];
+    const missing = globs.filter((glob) => !instructions?.includes(glob));
     const stale = (instructions ?? []).filter((entry): entry is string =>
-      typeof entry === 'string' && opencode.owns(entry) && !opencode.globs.includes(entry));
+      typeof entry === 'string' && opencode.owns(entry) && !globs.includes(entry));
     const relativeStale = stale.filter((entry) => !path.isAbsolute(entry));
     const namespaceStale = stale.filter((entry) => path.isAbsolute(entry));
     const quoted = (entries: string[]): string => entries.map((entry) => `\`${entry}\``).join(', ');
@@ -407,7 +413,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
       check: async () => instructions !== null && missing.length === 0 && stale.length === 0,
       fix: instructions === null
         ? `${opencode.configFile} could not be read as a JSON object, so the pull left it alone `
-          + `and never added ${quoted(opencode.globs)} to \`instructions\`. Fix the file, then run `
+          + 'without updating `instructions`. Fix the file, then run '
           + '`teamai pull`.'
         : [
           ...(missing.length > 0
@@ -421,7 +427,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
               + 'that directory\'s rules instead of the team rules.']
             : []),
           ...(namespaceStale.length > 0
-            ? [`${opencode.configFile} still lists ${quoted(namespaceStale)}, for a namespace whose rules `
+            ? [`${opencode.configFile} still lists ${quoted(namespaceStale)}, for team rules that `
               + 'no longer reach this scope, so OpenCode loads whatever copy is left there.']
             : []),
           rerun,
@@ -440,7 +446,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
     checks.push({
       name: 'Team rules are inlined in Hermes SOUL.md',
       source: 'local',
-      check: async () => delivered !== null && delivered === expected.trim(),
+      check: async () => (items.length === 0 && delivered === null) || delivered === expected.trim(),
       fix: delivered === null
         ? `${getHermesSoulPath()} carries no teamai rules block, so Hermes reads none of the `
           + 'team rules. Run `teamai pull` to restore it.'
@@ -451,7 +457,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   }
 
   checks.push(...await buildUserRulesFileChecks(ctx, items));
-  checks.push(...await buildProjectRulesHookChecks(ctx));
+  if (items.length > 0) checks.push(...await buildProjectRulesHookChecks(ctx));
   return checks;
 }
 

@@ -130,13 +130,19 @@ rule is written flat there (`rules/fe/style.md` as `fe.style.md`); an edit of th
 pushes back to `rules/fe/style.md`. Push requires a delivery record for the flat copy.
 A personal file with that name is neither refreshed before push nor offered as
 an edit of the team rule.
+If two namespaced rules flatten to the same name, neither is written; `teamai doctor`
+reports the collision even when no other rule reaches that tool. Rename one in the
+team repo, then run `teamai pull`. Doctor also reports team-owned OpenCode globs
+or inline blocks left after the last rule is removed.
 
 A new file in the rules directory of a tool with a rules format of its own
 (Cursor, JoyCode, Copilot, Kiro, Qoder, CodeBuddy, WorkBuddy, Oh My Pi) is the
 member's own rule in that tool's format: push never offers it, and pull leaves
 it. To author a new team rule, write it as a plain `.md` in `.claude/rules/`
 (scope it with `paths:` frontmatter, which teamai renders into each tool's
-format), then run `teamai push`.
+format), then run `teamai push`. A YAML comment after an unquoted glob stays
+outside its scope: `paths: **/*.ts # TypeScript files` matches `**/*.ts`, including
+when written as a block-list entry under `paths:`.
 
 ## If push is denied
 

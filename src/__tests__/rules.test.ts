@@ -1731,6 +1731,15 @@ describe('inlinedRulesText — rules inlined into one instructions file (#938)',
     expect(await inlinedRulesText(rules)).toBe('Applies to files matching: **/*.ts\nUse strict types.');
   });
 
+  it.each([
+    'paths: **/*.ts # TypeScript files',
+    'paths:\n  - **/*.ts # TypeScript files',
+  ])('keeps comments out of the inline path hint: %s', async (frontmatter) => {
+    const rules = [await rule('ts', `---\n${frontmatter}\n---\n\nUse strict types.\n`)];
+
+    expect(await inlinedRulesText(rules)).toBe('Applies to files matching: **/*.ts\nUse strict types.');
+  });
+
   it('skips a rule whose body is empty once its frontmatter is gone', async () => {
     const rules = [
       await rule('only-frontmatter', '---\npaths:\n  - "src/**"\n---\n\n'),

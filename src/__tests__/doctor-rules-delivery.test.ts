@@ -288,6 +288,30 @@ describe('doctor — rules delivered on disk', () => {
     expect(check.fix).toContain('rename one of them in the team repo');
   });
 
+  it.each([
+    ['omp', '.omp/agent/rules'],
+    ['kiro', '.kiro/steering'],
+  ])('reports %s collisions when every desired rule has the same flat filename', async (tool, rules) => {
+    await fse.remove(path.join(repoPath, 'rules'));
+    await writeTeamRule('fe.style/x');
+    await writeTeamRule('fe/style.x');
+    teamConfig.toolPaths = { [tool]: { rules } };
+    await fse.ensureDir(path.join(homeDir, rules));
+
+    const check = await rulesCheck(tool);
+    expect(await check.check()).toBe(false);
+    expect(check.fix).toContain('not written, as another team rule has its flat name');
+    expect(check.fix).toContain('fe.style/x');
+    expect(check.fix).toContain('fe/style.x');
+    expect(check.fix).toContain('rename one of them in the team repo');
+
+    localConfig.disabledAgents = [tool];
+    expect((await checks()).some((c) => c.name === `Rules delivered to ${tool}`)).toBe(false);
+    localConfig.disabledAgents = [];
+    await fse.remove(path.join(homeDir, rules.split('/')[0]));
+    expect((await checks()).some((c) => c.name === `Rules delivered to ${tool}`)).toBe(false);
+  });
+
   it('checks a project\'s .joycode/rules against JoyCode\'s render, not Cursor\'s quoted one (#946)', async () => {
     const projectRoot = path.join(tempDir, 'project');
     Object.assign(localConfig, { scope: 'project', projectRoot });
@@ -468,6 +492,30 @@ describe('doctor — rules delivered on disk', () => {
 
     await fse.writeJson(path.join(projectRoot, '.opencode', 'opencode.json'), { instructions: ['.opencode/rules/**/*.md'] });
     expect(await (await namedCheck('Team rules are active in opencode'))!.check()).toBe(true);
+  });
+
+  it.each(['user', 'project'] as const)('reports stale OpenCode activation after the last %s rule is removed', async (scope) => {
+    await installOpencode();
+    let configFile = path.join(homeDir, OPENCODE_CONFIG);
+    let glob = `${path.join(homeDir, OPENCODE_RULES)}/*.md`;
+    if (scope === 'project') {
+      const projectRoot = path.join(tempDir, 'project');
+      Object.assign(localConfig, { scope, projectRoot });
+      await fse.ensureDir(path.join(projectRoot, '.opencode', 'rules'));
+      configFile = path.join(projectRoot, '.opencode', 'opencode.json');
+      glob = '.opencode/rules/**/*.md';
+    }
+    await fse.remove(path.join(repoPath, 'rules'));
+    await fse.writeJson(configFile, { instructions: ['CONVENTIONS.md', glob] });
+
+    const active = await namedCheck('Team rules are active in opencode');
+    expect(active).toBeDefined();
+    expect(await active!.check()).toBe(false);
+    expect(active!.fix).toContain(`\`${glob}\``);
+    expect(active!.fix).toContain('Run `teamai pull`.');
+
+    await fse.writeJson(configFile, { instructions: ['CONVENTIONS.md'] });
+    expect(await namedCheck('Team rules are active in opencode')).toBeUndefined();
   });
 
   it('emits no opencode activation check while opencode is not installed here', async () => {
