@@ -2045,7 +2045,7 @@ teamai hooks remove    # Remove
 
 The inject and remove commands only touch tools you actually have installed (i.e. whose `~/.<tool>/` root directory already exists). They never create root directories for tools listed in `toolPaths` but not installed. Existing Claude/Codex main-checkout hook files also count as installed targets when the HOME and current worktree tool roots are missing. Injection and pull update those team hooks and restore HOME built-ins; removal clears the managed main-checkout hooks without recreating HOME roots.
 
-`hooks inject` still attempts to trust the written Codex hooks if Git-hook installation fails. It preserves the installation error and does not report overall injection success.
+`hooks inject` and self-repo bootstrap still attempt to trust the written Codex hooks if Git-hook installation fails. Injection preserves the installation error and does not report overall success. Bootstrap records that error in the debug log and continues local setup.
 
 In non-self project scope, `hooks remove` removes this checkout's gated team hooks from HOME and Claude/Codex team hooks from the main checkout. Other projects' gated team hooks stay in HOME; shared built-in hooks are removed.
 

@@ -273,16 +273,20 @@ export async function bootstrapSelfRepo(
     // Inject hooks so session-start pull/report fire from now on.
     try {
       const { describeUnappliedTeamHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } = await import('./hooks.js');
-      const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {});
-      if (!reconciled.ok) {
-        // A session-start bootstrap is silent, so debug.log is the only trace.
-        const message = describeUnappliedTeamHooks(reconciled);
-        if (silent) log.persist(message);
-        else log.warn(message);
+      try {
+        const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {});
+        if (!reconciled.ok) {
+          // A session-start bootstrap is silent, so debug.log is the only trace.
+          const message = describeUnappliedTeamHooks(reconciled);
+          if (silent) log.persist(message);
+          else log.warn(message);
+        }
+      } finally {
+        // Git-hook installation can fail after the Codex hooks were written.
+        const codexTrust = await trustCodexForScope(teamConfig, localConfig);
+        if (!silent) reportCodexTrust(codexTrust, 'all');
+        else if (codexTrust) log.debug(`[bootstrap] Codex trust: ${codexTrust.kind}`);
       }
-      const codexTrust = await trustCodexForScope(teamConfig, localConfig);
-      if (!silent) reportCodexTrust(codexTrust, 'all');
-      else if (codexTrust) log.debug(`[bootstrap] Codex trust: ${codexTrust.kind}`);
     } catch (e) {
       log.debug(`[bootstrap] hook injection failed (non-blocking): ${(e as Error).message}`);
     }

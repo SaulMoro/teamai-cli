@@ -15,6 +15,8 @@ vi.mock('../providers/index.js', async (importOriginal) => ({
 import { installFakeCodex, readFakeCodexState } from './helpers/fake-codex.js';
 import { bootstrapSelfRepo } from '../bootstrap.js';
 import { detectProjectConfig } from '../config.js';
+import * as gitHook from '../git-hook.js';
+import { log } from '../utils/logger.js';
 
 let tmpDir: string;
 
@@ -44,7 +46,11 @@ describe('bootstrapSelfRepo', () => {
     expect(result).toBe('skip');
   });
 
-  it('trusts self project hooks during a silent bootstrap', async () => {
+  it.each([
+    { silent: true, gitHookFailure: false },
+    { silent: true, gitHookFailure: true },
+    { silent: false, gitHookFailure: true },
+  ])('trusts self project hooks during bootstrap, silent=$silent, gitHookFailure=$gitHookFailure', async ({ silent, gitHookFailure }) => {
     tmpDir = fs.realpathSync.native(tmpDir);
     const home = path.join(tmpDir, 'home');
     const project = path.join(tmpDir, 'project');
@@ -59,13 +65,21 @@ describe('bootstrapSelfRepo', () => {
       team: 'test', mode: 'self', repo: 'https://github.com/acme/app.git', provider: 'github',
       toolPaths: { codex: { skills: '.codex/skills', settings: '.codex/hooks.json' } },
     }));
+    const failure = new Error('EACCES: read-only .git/config');
+    const install = vi.spyOn(gitHook, 'installGitHook');
+    if (gitHookFailure) install.mockRejectedValueOnce(failure);
+    const debug = vi.spyOn(log, 'debug').mockImplementation(() => {});
     try {
-      expect(await bootstrapSelfRepo(project, { silent: true })).toBe('bootstrapped');
+      expect(await bootstrapSelfRepo(project, { silent })).toBe('bootstrapped');
+      if (gitHookFailure) expect(debug).toHaveBeenCalledWith(expect.stringContaining(failure.message));
       const state = readFakeCodexState(codexHome);
       expect(state.projects[project]).toEqual({ trust_level: 'trusted' });
       expect(Object.keys(state.hooksState).length).toBeGreaterThan(0);
+      expect(Object.keys(state.hooksState).some((key) => key.includes(':session_start:'))).toBe(true);
       expect(Object.keys(state.hooksState).every((key) => key.startsWith(path.join(project, '.codex', 'hooks.json')))).toBe(true);
     } finally {
+      install.mockRestore();
+      debug.mockRestore();
       fs.rmSync(fakeBin, { recursive: true, force: true });
     }
   });
