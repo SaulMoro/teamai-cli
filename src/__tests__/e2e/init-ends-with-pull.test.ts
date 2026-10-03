@@ -212,7 +212,9 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
     };
     expect(Object.keys(mcp.mcpServers ?? {})).toContain('team-api');
     expect(fs.readFileSync(path.join(project, '.claude', 'agents', 'team-agent.md'), 'utf8')).toContain('Team agent v1');
-    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v1');
+    expect(fs.readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8')).toContain('echo team-hook-v1');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('teamai hook-dispatch');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).not.toContain('echo team-hook-v1');
     // Only the chosen tool's root, although Codex is installed too.
     expect(fs.existsSync(path.join(project, '.codex'))).toBe(false);
   }, 90_000);
@@ -228,7 +230,8 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
     expect(fs.existsSync(path.join(project, '.claude', 'skills', 'team-skill', 'SKILL.md')), second.output).toBe(true);
   }, 120_000);
 
-  it('project scope without a terminal and without --agent: no tool root is created', async () => {
+  it('project scope without a terminal, --agent or installed tools: no tool root is created', async () => {
+    for (const root of TOOL_ROOTS) fs.rmSync(path.join(home, root), { recursive: true, force: true });
     const project = makeBusinessRepo(`app-${Math.random().toString(36).slice(2)}`);
     const result = await runCLI(['init', FAKE_URL, '--scope', 'project', '--force'], project);
     expect(result.code, result.output).toBe(0);

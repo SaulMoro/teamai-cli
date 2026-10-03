@@ -87,15 +87,18 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     return { dir, ...git(['worktree', 'add', '-q', dir], repo, extra) };
   };
 
-  const delivered = (dir: string) => ({
-    skill: fs.existsSync(path.join(dir, '.claude', 'skills', 'team-skill', 'SKILL.md')),
-    agent: fs.existsSync(path.join(dir, '.claude', 'agents', 'team-agent.md')),
-    hook: fs.existsSync(path.join(home, '.claude', 'settings.json'))
-      && fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').includes(`echo team-hook-v1`)
-      && fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').includes(dir),
-    rule: fs.existsSync(path.join(dir, '.claude', 'rules', 'team-rule.md')),
-    mcp: fs.existsSync(path.join(dir, '.mcp.json')) && fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8').includes('team-api'),
-  });
+  const delivered = (dir: string) => {
+    const main = path.dirname(gitOk(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir));
+    const teamHooks = path.join(main, '.claude', 'settings.local.json');
+    return {
+      skill: fs.existsSync(path.join(dir, '.claude', 'skills', 'team-skill', 'SKILL.md')),
+      agent: fs.existsSync(path.join(dir, '.claude', 'agents', 'team-agent.md')),
+      hook: fs.existsSync(teamHooks)
+        && fs.readFileSync(teamHooks, 'utf8').includes('echo team-hook-v1'),
+      rule: fs.existsSync(path.join(dir, '.claude', 'rules', 'team-rule.md')),
+      mcp: fs.existsSync(path.join(dir, '.mcp.json')) && fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8').includes('team-api'),
+    };
+  };
   const ALL = { skill: true, agent: true, hook: true, rule: true, mcp: true };
   const NOTHING = { skill: false, agent: false, hook: false, rule: false, mcp: false };
 
@@ -160,6 +163,9 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     expect(wt.code).toBe(0);
     expect(wt.output).toBe('');
     expect(delivered(wt.dir)).toEqual(ALL);
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('teamai hook-dispatch');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).not.toContain('echo team-hook-v1');
+    expect(fs.existsSync(path.join(wt.dir, '.claude', 'settings.local.json'))).toBe(false);
     expect(fs.existsSync(path.join(wt.dir, '.codex'))).toBe(false);
   });
 
@@ -285,7 +291,8 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
     // repo, and the team clone's pull must not act on it.
     const dir = path.join(sandbox, 'wt-git-dir');
     gitOk(['-c', 'hook.teamai-post-checkout.enabled=false', 'worktree', 'add', '-q', dir], claudeProject);
-    expect(delivered(dir)).toEqual(NOTHING);
+    // Team hooks are shared from the main checkout before this worktree is prepared.
+    expect(delivered(dir)).toEqual({ ...NOTHING, hook: true });
     const head = gitOk(['rev-parse', 'HEAD'], dir);
 
     const r = teamai(['hook-dispatch', 'post-checkout', '--tool', 'git', ZERO_OID, head, '1'], dir, {
@@ -442,7 +449,7 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       expect(fs.readFileSync(path.join(repo, '.claude', 'agents', 'team-agent.md'), 'utf8')).toContain('Team agent v2');
       expect(fs.readFileSync(path.join(repo, '.claude', 'rules', 'team-rule.md'), 'utf8')).toContain('Team rule v2');
       expect(fs.readFileSync(path.join(repo, '.mcp.json'), 'utf8')).toContain('https://team-v2.example.com/mcp');
-      expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v2');
+      expect(fs.readFileSync(path.join(repo, '.claude', 'settings.local.json'), 'utf8')).toContain('echo team-hook-v2');
       await settle(repo);
     });
 
@@ -644,6 +651,9 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
   });
 
   it('with no enabledAgents, creates the tool roots the main checkout has, and only those', () => {
+    // Earlier fixtures installed HOME roots. Start with no installed tools so
+    // init does not create main-checkout hooks before the explicit Codex seed.
+    for (const root of ['.claude', '.codex']) fs.rmSync(path.join(home, root), { recursive: true, force: true });
     const codexProject = project('codex-project', []);
     fs.mkdirSync(path.join(codexProject, '.codex'));
 
