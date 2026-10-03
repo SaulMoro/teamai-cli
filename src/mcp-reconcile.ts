@@ -301,8 +301,8 @@ export async function resolveMcpTargets(
 
     // No fallback between scopes: a tool's project-scope location is a
     // different thing from its user-scope one, not a default for it. Absent
-    // `mcpProject` means the tool has no project-scope MCP support (codex), or
-    // is already covered by a sibling target writing the shared file (tclaude
+    // `mcpProject` means the tool has no project-scope MCP support, or is
+    // already covered by a sibling target writing the shared file (tclaude
     // reads the <root>/.mcp.json that `claude` writes).
     const rel = projectScope ? paths.mcpProject : paths.mcp;
     if (!rel) continue;

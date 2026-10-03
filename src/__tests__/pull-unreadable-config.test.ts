@@ -187,3 +187,18 @@ describe('pull in a project whose config cannot be read (#784)', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 });
+
+describe('a pull a git hook started', () => {
+  it('does not hand TEAMAI_GIT_HOOK on to what it runs (postPull scripts)', async () => {
+    const cwd = path.join(tmp, 'plain');
+    fs.mkdirSync(cwd);
+    process.chdir(cwd);
+    process.env.TEAMAI_GIT_HOOK = 'post-merge';
+    try {
+      await pull({ silent: true });
+      expect(process.env.TEAMAI_GIT_HOOK).toBeUndefined();
+    } finally {
+      delete process.env.TEAMAI_GIT_HOOK;
+    }
+  });
+});

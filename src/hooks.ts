@@ -2320,6 +2320,7 @@ export async function reconcileTeamHooksForConfig(
   // pass would actually reach, which is what hookToolPaths decides below too.
   const hookToolPaths = scopedToolPaths(teamConfig, { ...localConfig, scope: hookScope });
   if (opts.dryRun) {
+    if (!opts.removeAll) await installProjectGitHook(localConfig, { dryRun: true });
     if (!opts.removeAll && 'pi' in hookToolPaths && (!filterAgents || filterAgents.includes('pi'))) {
       await reportPiSkippedTeamHooks(teamDefs, baseDir, localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined, builtin);
     }
@@ -2365,9 +2366,35 @@ export async function reconcileTeamHooksForConfig(
       );
     }
   }
+  if (!builtinsOnly) await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
+  // Last, so a repository whose hooks cannot be written still gets the agent
+  // hooks above; the error then reaches the caller.
+  if (!opts.removeAll) await installProjectGitHook(localConfig);
   if (builtinsOnly) return { ok: false, builtins: builtinsOnly };
-  await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
   return { ok: true, defs: teamDefs };
+}
+
+/**
+ * Project scope: install teamai's git hook (git-hook.ts) in the repository, so
+ * a new worktree gets the team's resources before `git worktree add` returns.
+ * User scope installs none: its resources live in HOME, which a new worktree
+ * does not change. Installation errors propagate to the caller.
+ */
+async function installProjectGitHook(localConfig: LocalConfig, opts: { dryRun?: boolean } = {}): Promise<void> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return;
+  const { installGitHook } = await import('./git-hook.js');
+  let result: Awaited<ReturnType<typeof installGitHook>>;
+  try {
+    result = await installGitHook(localConfig.projectRoot, opts);
+  } catch (e) {
+    throw new Error(`Could not install the teamai git hook in ${localConfig.projectRoot}: ${(e as Error).message}. `
+      + 'New worktrees and `git pull` get the team\'s resources only at the next session. '
+      + 'Fix the cause, then run `teamai pull` to install it.', { cause: e });
+  }
+  if (opts.dryRun && result.installed && result.changed) {
+    log.info(`Would install or update the teamai git hook (post-checkout, post-merge) in ${localConfig.projectRoot}`);
+  }
+  if (!result.installed) log.debug(`git hook: not installed in ${localConfig.projectRoot} (${result.reason})`);
 }
 
 /**

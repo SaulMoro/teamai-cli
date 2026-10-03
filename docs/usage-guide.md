@@ -162,10 +162,72 @@ there stops if it finds a team rule or skill that differs from the team repo, si
 cannot tell a teammate's update from your edit. `teamai pull` replaces those files, so
 copy any you edited somewhere safe, pull, put your edits back and push again. Per-agent
 project roots (`.claude/`, `.cursor/`, `.codebuddy/`, …) are still created inside the
-workspace on **SessionStart** for the tool that just opened. For example, opening
-Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull` still
-skips tools whose project root does not exist, so it never invents agent directories
-for tools you have not opened in this project.
+workspace. `teamai init` creates the root of each tool you choose, then ends with a
+pull that fills it: name the tools with `--agent <tool>`, or, in a terminal without
+`--agent`, pick them from the same picker single-repo mode uses (option 1, **Auto**,
+is the tools installed under your home dir and the Enter default). The choice is
+added to `enabledAgents`, so a re-run adds tools without dropping earlier ones.
+Otherwise **SessionStart** creates the root of the tool that just opened: opening
+Claude Code creates `.claude/`, then pull writes into it. A bare `teamai pull`, and a
+non-interactive `init` without `--agent`, still skip tools whose project root does
+not exist, so they never invent agent directories for tools you have not
+chosen or opened in this project.
+
+A new worktree does not wait for that first session. In project scope, `teamai init`
+and `teamai pull` install a git hook in the repository's local git config, shared by
+every worktree: `hook.teamai-post-checkout` and `hook.teamai-post-merge` (Git 2.54 or
+later). Git runs it beside any `core.hooksPath` hook
+manager and any `.git/hooks` script. When `git worktree add`, or an app that runs
+the same checkout hooks, makes a new checkout, the hook creates the project roots of
+`enabledAgents` (when that is empty, the roots the main checkout has) and pulls into
+the worktree before the command returns, so the first session there already has the
+team's skills, rules and MCP servers. That pull reads the team clone as it is when it
+was fetched in the last 24 hours (and fetches it first otherwise), and subscribed
+sources from their cached clones; a full `teamai pull --silent` then runs in the
+background to fetch the team repo, sources, learnings and reports. A branch switch does nothing.
+Hosts that skip checkout hooks need a setup step that finishes `teamai pull` before
+the AI tool starts. For Codex CLI 0.160.0, create the checkout with `git worktree add`, run
+`teamai pull` there, then launch `codex exec -C <worktree>`; its native
+`codex exec --worktree` path skips `post-checkout`.
+After `git pull` (`post-merge`), the hook fetches the team repo, waiting at most 5 seconds,
+and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
+learnings and reports, the same background pull takes over. In single-repo mode it
+delivers the knowledge `git pull` just brought, with no network. The hook prints nothing and always exits 0, so a failed pull never
+fails the git command. A failure inside it (the team repo fetch failed, or stopped at the
+5-second cap and the background pull did not finish it; another teamai process held the
+project's sync lock longer than the hook waits, 5 seconds after `git pull` (including
+single-repo mode) and 60 seconds for a new worktree; incomplete resource, hook or MCP
+delivery) is written to `~/.teamai/debug.log` and recorded: `teamai doctor`
+names it with its fix, and each interactive `teamai pull` mentions it until one completes. The
+background pull retries, and a hook or interactive pull clears the record only after all startup delivery
+stages succeed. `teamai doctor`
+also reports whether the hook is installed and, when it is not, why. It follows the scope rules below: no project config, or one
+that cannot be read, means no sync; an unreadable config's reason is kept in
+`~/.teamai/debug.log`. The command is one `sh` line that runs
+`teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
+through `~/.teamai/bin` as the agent hooks do.
+
+With Git older than 2.54 and no `core.hooksPath`, teamai instead adds a block between
+`# >>> teamai git hook` and `# <<< teamai git hook <<<` markers to `.git/hooks/post-checkout`
+and `.git/hooks/post-merge`, right after the shebang, creating the script when there is
+none; the script's other lines are kept. The block runs the same command, silently, and
+does not change the script's exit status. With `core.hooksPath` set (a hook manager), or
+a hook script that is a symlink or not an executable shell script, teamai writes nothing, and `teamai doctor`
+advises: upgrade Git to 2.54 or later; or, if the team agrees to commit it, run
+`command -v teamai >/dev/null 2>&1 && teamai hook-dispatch <event> --tool git "$@" >/dev/null 2>&1 || true`
+from the post-checkout and post-merge hooks your manager defines (with `post-checkout` or
+`post-merge` as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
+That line does nothing on a machine without teamai.
+Existing hook contents and permissions are preserved. Reading or writing a hook can
+fail: `init` and `hooks inject` propagate that error; a Git-started pull records it
+and the next `teamai pull` retries.
+
+Once Git is 2.54 or later, the next `teamai pull` installs the config hook and takes the
+block out, so the hook does not run twice. `teamai pull --dry-run` says when it would
+install or update the hook and writes nothing. `teamai uninstall` in the project removes
+the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries and the marked
+blocks; other hooks and script lines stay. A script left with only its shebang is the
+one teamai created, and is deleted.
 
 > **Upgrading from an older teamai?** The first `teamai init` / `pull` / `push` /
 > `contribute` (or `import --from-mr`) after upgrading automatically migrates an existing `<repo>/.teamai/` into the partition
@@ -645,7 +707,7 @@ resolve: `teamai skill get team-wiki-codebase` serves `wiki`.
 
 ### Auto-sync
 
-`teamai init` already injected Hooks into your AI tools. **`teamai pull` runs automatically every time you start an AI session** — no manual action needed. In project scope, that SessionStart hook first creates the current agent's project root (e.g. `<project>/.claude` when Claude Code opens the repo) if it is missing, then pulls.
+`teamai init` already injected Hooks into your AI tools and ended with a pull, so your first session has the team's skills, rules and MCP servers. **`teamai pull` runs automatically every time you start an AI session** — no manual action needed. In project scope, that SessionStart hook first creates the current agent's project root (e.g. `<project>/.claude` when Claude Code opens the repo) if it is missing, then pulls.
 
 *(Note: Automatic sync on session start requires an agent that supports lifecycle hooks, such as [CC], Codex, GitHub Copilot CLI, Cursor, CodeBuddy, WorkBuddy, Qoder, Kiro, OpenCode, Oh My Pi, Pi, Hermes, or OpenClaw. Kiro runs the hook when a TeamAI-rendered custom agent is activated in an interactive CLI session; its in-memory built-in default agent is not writable, and non-interactive mode does not fire `agentSpawn`. For tools without a teamai-writable hooks surface such as JoyCode or Gemini CLI, run `teamai pull` manually.)*
 
@@ -964,7 +1026,7 @@ Most tools get one file per rule in their rules directory. Codex, `codex-interna
 
 The culture, shared-instructions and recall blocks follow the same split. In user scope they go to that same `AGENTS.md`, and your own content outside the markers is kept. In a project the session-start hook adds them with the rules, and `pull` leaves the project `AGENTS.md` unchanged.
 
-> A `toolPaths` in the team `teamai.yaml` replaces the built-in defaults whole. A team that sets it should give each Codex-family entry `userScope.claudemd: .codex/AGENTS.md` (`.codex-internal/…`, `.tcodex/…`) for the user-scope rules and blocks, and drop its `rules` path, since Codex never reads that directory. A top-level `claudemd` would put the blocks back in the project `AGENTS.md`, so leave it out. In a project the hook needs only the entry's `settings` path, where it is installed.
+> A `toolPaths` in the team `teamai.yaml` replaces the built-in defaults whole. A team that sets it should give each Codex-family entry `userScope.claudemd: .codex/AGENTS.md` (`.codex-internal/…`, `.tcodex/…`) for the user-scope rules and blocks, and drop its `rules` path, since Codex never reads that directory. A top-level `claudemd` would put the blocks back in the project `AGENTS.md`, so leave it out. In a project the hook needs only the entry's `settings` path, where it is installed. The `codex` entry also needs `mcpProject: .codex/config.toml` for the project's team MCP servers.
 
 > Upgrading from a release that copied rules to `.codex/rules/`: the next `pull` removes the `.md` copies teamai delivered there, including `teamai-recall.md`. Cleanup follows the recorded `toolRoots` location and checks both a publisher's bare local filename and its namespaced copy. A copy you edited is kept and named in a warning, and the `*.rules` files are never touched. A copy of a rule the team has since removed is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. The same pull adds `additionalContextLimit: 0` and a `SubagentStart` entry to the teamai hooks in `hooks.json`, which teamai then trusts again in the public Codex (see [Hooks](#hooks)).
 
@@ -1249,13 +1311,15 @@ Where each tool's servers land:
 | codebuddy | `~/.codebuddy/mcp.json` | `<project>/.mcp.json` |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
-| codex | `~/.codex/config.toml` | not supported |
+| codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
 | qoder | `~/.qoder/settings.json` | `<project>/.qoder/settings.json` |
 | qoder-cn | `~/.qoder-cn/settings.json` | `<project>/.qoder/settings.json` |
 | kiro | `~/.kiro/settings/mcp.json` | `<project>/.kiro/settings/mcp.json` |
 | opencode | `~/.config/opencode/opencode.json` | `<project>/opencode.json` |
 | omp | `~/.omp/agent/mcp.json` | `<project>/.omp/mcp.json` |
 | pi | `~/.pi/agent/mcp.json` | `<project>/.pi/mcp.json` |
+
+Codex reads `<project>/.codex/config.toml` only in a trusted project. After writing team MCP servers, `teamai pull` trusts the main checkout automatically, unless `codexTrustEnabled: false` is set or the project was explicitly marked untrusted. If automatic trust is disabled or fails, add a `[projects."<main checkout real path>"]` table with `trust_level = "trusted"` to `~/.codex/config.toml`; trusting the main checkout covers every worktree of the repository. `teamai doctor` reports an untrusted project whose file holds team servers.
 
 
 CodeBuddy Code's [MCP documentation](https://www.codebuddy.ai/docs/cli/mcp)
@@ -1987,7 +2051,7 @@ On Windows, the built-in hook dispatch commands that shell out through bash (e.g
 
 Cursor also loads `~/.claude/settings.json`, and Copilot CLI loads a trusted project's `.claude/settings.json` (self mode writes hooks there; Copilot does not load `~/.claude/settings.json`). `hook-dispatch --tool claude` exits only when that other host's own teamai hooks are on disk: `~/.cursor/hooks.json` or `$CURSOR_PROJECT_DIR/.cursor/hooks.json` contains `--tool cursor`, or `$COPILOT_PROJECT_DIR/.github/hooks/teamai.json` contains `--tool copilot`. Team hook commands written for `claude` use the same check. A setup with only Claude keeps running inside Cursor, because there is no second copy. `COPILOT_CLI` is not a signal: Copilot sets it on every subprocess, including a Claude session started from its shell. Claude Code sets neither `CURSOR_VERSION` nor `COPILOT_PROJECT_DIR`. Run `teamai pull` or `teamai hooks inject` again so an already installed team hook picks up the guard.
 
-> **Codex hook trust** — Codex (the OpenAI / ChatGPT Codex app, tool id `codex`) runs a non-managed hook only once it is trusted, and skips an untrusted or changed one without a word; it reads a project's `.codex/` only when the project is trusted. So after every write of a Codex hooks file (`init`, every `pull` including the session-start one, `teamai hooks inject`) teamai trusts exactly the hooks it wrote, through `codex app-server` — the same call Codex's `/hooks` trust prompt makes. Your own hooks in the same file are left alone, even when their commands equal a team hook. Codex ownership records include the event, position and complete generated entry; trust selects that exact Codex key. If unrelated entries move it, teamai recovers ownership only when the complete definition matches uniquely. Legacy manifests recorded only event, matcher and command, so a unique match on those fields recovers ownership even with `timeout` or `additionalContextLimit`. For pre-#370 project Codex hooks, teamai imports ownership from the main checkout's `.teamai/managed-hooks.json` before reconciling the same file with the new manifest, including direct removal. Unrecorded or ambiguous legacy team-hook copies are preserved. In a project, teamai also trusts the main checkout when Codex has to read teamai's hooks or MCP servers from its `.codex/`; for a bare repository, teamai writes and trusts the current worktree instead. A project you marked untrusted in Codex stays so, and teamai says so. Trust written by a session-start pull applies from the next Codex session: the running one already loaded its hooks. A linked worktree reads the main checkout's `.codex/hooks.json` only once it has a `.codex/` directory, which the Codex session-start hook creates, so a new worktree gets the team hooks from its second Codex session; the built-in hooks live in `~/.codex/hooks.json` and run from the first. To trust them yourself, set `codexTrustEnabled: false` in `config.yaml`. `init` and `hooks inject` print a reminder to trust them in `/hooks` or Settings → Hooks when `codex` is absent or its app-server fails. An interactive pull warns on app-server failure and stays quiet when `codex` is absent; silent pulls record the result in the debug log. `teamai doctor` asks Codex which teamai hooks it will not run and names them.
+> **Codex hook trust** — Codex (the OpenAI / ChatGPT Codex app, tool id `codex`) runs a non-managed hook only once it is trusted, and skips an untrusted or changed one without a word; it reads a project's `.codex/` only when the project is trusted. So after every write of a Codex hooks file (`init`, every `pull` including the session-start one, `teamai hooks inject`) teamai trusts exactly the hooks it wrote, through `codex app-server` — the same call Codex's `/hooks` trust prompt makes. Your own hooks in the same file are left alone, even when their commands equal a team hook. Codex ownership records include the event, position and complete generated entry; trust selects that exact Codex key. If unrelated entries move it, teamai recovers ownership only when the complete definition matches uniquely. Legacy manifests recorded only event, matcher and command, so a unique match on those fields recovers ownership even with `timeout` or `additionalContextLimit`. For pre-#370 project Codex hooks, teamai imports ownership from the main checkout's `.teamai/managed-hooks.json` before reconciling the same file with the new manifest, including direct removal. Unrecorded or ambiguous legacy team-hook copies are preserved. In a project, teamai also trusts the main checkout when Codex has to read teamai's hooks or MCP servers from its `.codex/`; for a bare repository, teamai writes and trusts the current worktree instead. A project you marked untrusted in Codex stays so, and teamai says so. Trust written by a session-start pull applies from the next Codex session: the running one already loaded its hooks. A linked worktree reads the main checkout's `.codex/hooks.json` only once it has a `.codex/` directory. The post-checkout preparation creates that directory and runs pull before the first session for selected Codex tools. Hosts that skip checkout hooks must finish that preparation before starting Codex. If only SessionStart creates the directory, the team hooks load from the next Codex session; built-in hooks live in `~/.codex/hooks.json` and run from the first. To trust them yourself, set `codexTrustEnabled: false` in `config.yaml`. `init` and `hooks inject` print a reminder to trust them in `/hooks` or Settings → Hooks when `codex` is absent or its app-server fails. An interactive pull warns on app-server failure and stays quiet when `codex` is absent; silent pulls record the result in the debug log. `teamai doctor` asks Codex which teamai hooks it will not run and names them.
 
 ### Team Hooks Declaration
 
@@ -2309,6 +2373,8 @@ Besides the provider, clone, config and hook checks, `doctor` verifies what reac
 Three tools do not read a rules directory, so a per-file check cannot speak for them and each gets one of its own. `Team rules are active in opencode` checks that `opencode.json` still lists the glob the pull owns under `instructions`: OpenCode does not auto-scan `.opencode/rules`, so without it every delivered `.md` is inert while the per-file check keeps passing. `Team rules are inlined in Hermes SOUL.md` compares the teamai-managed block of `SOUL.md` with what the team rules inline to, since Hermes reads standing instructions from that one file rather than from a directory — a deleted block, or one left on an older rule set, is a tool reading the wrong rules with nothing on disk to show for it. In user scope, `Team rules are inlined in Codex AGENTS.md` compares the team-rules block of the tool's `AGENTS.md` with what the team rules inline to, and fails when an `AGENTS.override.md` beside it shadows the file. In a project, `Project rules and instructions reach <tool> whole through its session hooks` fails when the teamai `SessionStart` or `SubagentStart` entry in that tool's `hooks.json` is missing or does not set `additionalContextLimit: 0`, without which Codex keeps only the start and end of a large set. Codex has no `Rules delivered to <tool>` check.
 
 `MCP servers delivered to <tool>` compares each server the team's `mcp.yaml` resolves for that tool against the entry in the tool's own config, and names any the reconcile skipped with its reason. The comparison is the entry, not the name: reconciliation leaves an entry teamai does not own alone, so a server of your own under a team name holds the key while the team's definition never arrives, and a stale copy is just as undelivered. Both are reported as `not the team's definition`, and only `teamai pull --force` replaces an entry teamai did not write. An unresolved `${VAR}` is reported here with the variable's name, which is otherwise said once during a pull and never again. A declared secret with no value is not a failure: doctor prints it as a note (`notes` in `--json`) with the command that sets it, and the exit code stays as it would be without it; a note also says when an entry kept for it may hold an old value, and when a key is declared as a secret and also set in `env.yaml`. An `mcp.yaml` that does not parse is not a team without MCP: it is reported as `Team MCP servers can be read` with the parse error, since it injects nothing into any tool and every run after the first is silent about it. Team hooks and team model profiles that cannot be resolved (a file that does not parse, a name defined twice in one file, or one name in two active namespaces) fail `Team hooks can be resolved` and `Team model profiles can be resolved` with the reason pull logs once; `teamai status` points here when it counts them as 0. `Env variables injected in shell profile` no longer stops at finding the marker comment: it checks that `env/env.yaml` parses and declares its variables under the `variables:` key (a plain `KEY: value` mapping parses as none, while an explicit `variables: []` is a configuration with nothing to deliver and fails nothing), that each one reached `env.sh` with the value `env.yaml` declares, or your value for this team (one set with `--from-env` is not written there) — a key left over from an older value exports it to every shell and MCP server until the next pull, and the comparison reads `env.sh` back through the generator's own inverse, so a multiline value quoted across several lines is matched rather than called stale — and that this scope's injected block (the one sourcing its own `env.sh`, since a profile can also carry another scope's) would actually load it — an unquoted Windows path degrades to something a POSIX shell cannot read, so `source` never runs and nothing says so. `No stale env blocks left behind` is a separate check: which file `pull` prefers has changed over time (Windows Git Bash's login shell reads `.bash_profile`/`.bash_login`/`.profile`, never `.bashrc`), and a pull only ever adds a block, never migrates an old one away, so a dead block from an earlier install or platform change can sit in another candidate file indefinitely. It names every such file (checking `.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login` and `.profile`, current and legacy spellings alike) and points at `teamai uninstall` to remove them — separately from delivery, so a working env block never reads as broken just because an old one is still lying around.
+
+`Codex trusts this project, so it loads its team MCP servers` is built in project scope while the project's `.codex/config.toml` holds a server this worktree's `managed-mcp.json` records for Codex: Codex loads that file only in a trusted project, and skips an untrusted one without saying so. It reads the `projects` table of the Codex user config (`~/.codex/config.toml`, or the one under `toolRoots.codex`) as Codex does, taking the first `projects."<dir>"` entry that sets a `trust_level` for the checkout, then for its main checkout, each by real path (`/private/tmp/...`, not `/tmp/...`). It fails, naming the file and its servers, until that entry sets `trust_level = "trusted"`, and a pull reports the failure in its closing checks too. Trust the project when Codex asks, or add the entry for the main checkout yourself, which covers every worktree. doctor only reads that file.
 
 `Contributed learnings are published` fails while `teamai contribute` has notes queued that could not be pushed. A manual `teamai pull` does not repeat it at the end when the pull has already said it: the pull tries to publish the queue and reports the outcome itself, with the push error that made it fail — more than this check can tell you. If the pull never got that far, because the team repo failed to refresh, the check is printed as usual.
 
@@ -2868,6 +2934,7 @@ What gets removed:
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, also of rules the team has since removed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
+- In a project, teamai's git hook: the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout` and `post-merge` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
 - The `~/.teamai/` directory
 
 ### Uninstall a single tool (`--agent <tool>`)
@@ -2892,7 +2959,6 @@ To rejoin after uninstalling:
 
 ```bash
 teamai init --repo https://github.com/yourorg/yourrepo --scope user --role <role_id> --force
-teamai pull
 ```
 
 ---
@@ -2913,7 +2979,7 @@ teamai init --repo https://github.com/yourorg/yourrepo --force
 
 **Q: After `teamai init` in a project, there is no `.claude/` (or `.cursor/`, `.codebuddy/`) directory?**
 
-That is expected for a built-in tool: `init` does not know which agent you will open. Open Claude Code / Cursor / CodeBuddy in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
+That is expected for a built-in tool when `init` ran without `--agent` and without a terminal (no picker): it does not know which agent you will open. Run `teamai init <repo> --agent claude` (or `cursor`, `codebuddy`, …) to create that tool's root and fill it before init exits, or open the tool in the project: the SessionStart hook creates that tool's project root and then pulls. A bare `teamai pull` will not create missing agent roots. The exception is a custom agent defined only in `teamai.yaml`'s `toolPaths` (not one of the built-in tools) — `init --agent <id>` creates that agent's root itself, since nothing else ever would. This only works for git-backed init (default or `--self`): an HTTP init (`--http`) never clones a local `teamai.yaml`, so it has no custom paths to seed from and only ever creates roots for built-in tools that are already installed.
 
 **Q: Hooks aren't firing automatically?**
 

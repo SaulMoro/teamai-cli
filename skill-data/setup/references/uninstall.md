@@ -85,6 +85,10 @@ and give it your team repo URL."*
   and neither should you.
 - If the user only wants to stop auto-sync for one tool but keep TeamAI otherwise,
   that is the `--agent <tool>` form, not a full uninstall.
+- In a project, uninstall also removes teamai's git hook: the
+  `hook.teamai-post-checkout` / `hook.teamai-post-merge` entries in the repo's git
+  config and the `# >>> teamai git hook` block in `.git/hooks/post-checkout` and
+  `post-merge`. Other hooks stay; a script left with only its shebang is deleted.
 - In a project, uninstall also takes teamai's lines out of `.git/info/exclude`
   (the `# [teamai:mcp-exclude:start]` block) for MCP configs it proves hold no
   resolved `${VAR}` value. A line names the path a write lands in: for a config

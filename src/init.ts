@@ -788,7 +788,15 @@ async function reconcileHooksForInit(
   localConfig: LocalConfig,
   filterAgents: string[] | undefined,
 ): Promise<void> {
-  const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
+  try {
+    reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+  } catch (e) {
+    // The agent hooks are in place; the rest of init (its pull) still runs.
+    log.error((e as Error).message);
+    process.exitCode = 1;
+    return;
+  }
   if (!reconciled.ok) log.warn(describeUnappliedTeamHooks(reconciled));
   reportCodexTrust(await trustCodexForScope(teamConfig, localConfig, { filterAgents, force: true }), 'all');
   // The hooks install the extensions and plugins that add team instructions
@@ -1021,6 +1029,8 @@ export async function promptForSelfModeAgents(options: {
   agent?: string | string[];
   silent?: boolean;
   force?: boolean;
+  /** Project-scope init: asks which tools the member uses here, commits nothing. */
+  projectScope?: boolean;
 }): Promise<string[]> {
   const explicit = normalizeAgentList(options.agent);
   if (explicit.length > 0) return explicit;
@@ -1047,8 +1057,13 @@ export async function promptForSelfModeAgents(options: {
     : 'Auto — none detected (will set up Claude Code)';
 
   console.log('');
-  console.log('Which AI tools should teamai set up in this repo?');
-  console.log('(creates the skills dir, injects hooks, commits settings to main)');
+  if (options.projectScope) {
+    console.log('Which AI tools do you use in this project?');
+    console.log('(creates their tool dirs here and syncs the team\'s resources into them)');
+  } else {
+    console.log('Which AI tools should teamai set up in this repo?');
+    console.log('(creates the skills dir, injects hooks, commits settings to main)');
+  }
   console.log('');
   console.log(`  1. ${autoLabel}`);
   tools.forEach((t, i) => {
@@ -2012,6 +2027,13 @@ export async function init(options: GlobalOptions & {
 
   // Persist --agent into enabledAgents (additive across runs)
   const requestedAgents = normalizeAgentList(options.agent);
+  // Interactive project init without --agent asks which tools the member uses.
+  // Non-interactive runs skip this on purpose: the picker's own non-TTY branch
+  // mirrors HOME tools, while project init then creates no root.
+  if (scope === 'project' && requestedAgents.length === 0
+    && !options.silent && !options.force && isInteractive()) {
+    requestedAgents.push(...await promptForSelfModeAgents({ projectScope: true }));
+  }
   if (requestedAgents.length > 0) {
     // As loaded before the clone: that config may have been moved aside since.
     const prev = carriedConfig?.enabledAgents ?? [];
@@ -2064,6 +2086,16 @@ export async function init(options: GlobalOptions & {
     // Non-critical: state file may not exist yet on first init
   }
 
+  // Step 6.6: project scope creates the roots of the tools the member chose
+  // (`--agent`), so the stub below and the closing pull have somewhere to
+  // write. Runs after the config is saved: createProjectToolRoots filters by
+  // the saved enabledAgents, which now includes this run's choice. Without
+  // `--agent` no root is invented, as before.
+  if (scope === 'project' && requestedAgents.length > 0) {
+    const { createProjectToolRoots } = await import('./project-agent-root.js');
+    await createProjectToolRoots({ cwd: projectRoot, tools: requestedAgents });
+  }
+
   // Step 7: Inject built-in + team hooks into AI tools
   const reloadedTeamConfig = await loadTeamConfig(localPath);
   // Only a stub that actually landed is announced as ready in the IDE.
@@ -2080,7 +2112,8 @@ export async function init(options: GlobalOptions & {
     // installed" (#867). Built-in tools are left untouched here: their root
     // already existing is exactly what doctor's "is installed" check verifies
     // (#598), so seeding them outside self mode would silently manufacture a
-    // directory for software that was never actually installed.
+    // directory for software that was never actually installed. Only the
+    // project roots of tools named with `--agent` are created (Step 6.6).
     try {
       const { seedSelfModeToolDirs } = await import('./known-agents.js');
       const seeded = await seedSelfModeToolDirs(localConfig, reloadedTeamConfig);
@@ -2104,6 +2137,14 @@ export async function init(options: GlobalOptions & {
       log.warn(`The built-in teamai skill was not deployed: ${(e as Error).message}`);
     }
   }
+
+  // Step 8: deliver the team's resources now. Rules and MCP are read once at
+  // session start, before the SessionStart hook syncs, so without this the
+  // first session after init runs without them. Failures are reported by pull
+  // in its own words; init itself has succeeded.
+  const { pull } = await import('./pull.js');
+  // Inside a project checkout, a bare pull would detect that project instead.
+  await pull({ verbose: options.verbose, interactive: true, userScopeOnly: localConfig.scope === 'user' });
 
   log.success('teamai initialized successfully!');
   if (stubDeployed > 0) {

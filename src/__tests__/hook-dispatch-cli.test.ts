@@ -57,6 +57,25 @@ describe('deriveDispatchSessionId', () => {
 });
 
 describe('hookDispatchCli', () => {
+  it('records why a Git hook cannot sync an unreadable project config, without dispatching', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'git-hook-broken-config-'));
+    const previousCwd = process.cwd();
+    const persist = vi.spyOn(log, 'persist').mockImplementation(() => {});
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      fs.mkdirSync(path.join(root, '.teamai'));
+      fs.writeFileSync(path.join(root, '.teamai', 'config.yaml'), 'repo: [invalid');
+      process.chdir(root);
+      mockDispatcher.dispatch.mockClear();
+      await hookDispatchCli('post-merge', 'git', '*');
+      expect(mockDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(persist).toHaveBeenCalledWith(expect.stringMatching(/Nothing was synced:.*config.yaml/s));
+    } finally {
+      process.chdir(previousCwd);
+      fs.rmSync(root, { recursive: true, force: true });
+      persist.mockRestore();
+    }
+  });
   it('skips claude hooks only when the other host has its own teamai hooks', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-hooks-'));
     const home = path.join(root, 'home');

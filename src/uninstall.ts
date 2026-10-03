@@ -124,6 +124,8 @@ interface RemovalPlan {
   docsDir: string | null;
   /** The .git/info/exclude files holding teamai's MCP config block (#882), each with its patterns and the paths each protects. */
   gitExcludes: Map<string, Array<{ pattern: string; files: string[] }>>;
+  /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
+  gitHook: { repoDir: string; entries: string[] } | null;
   /** The .teamai home directory path. */
   teamaiHome: string;
   /** Whether teamaiHome exists on disk. */
@@ -786,6 +788,7 @@ async function buildRemovalPlan(
     shellProfiles: [],
     docsDir: null,
     gitExcludes: new Map(),
+    gitHook: null,
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
     unpublishedQueues: includeShared ? await listQueuesIn(teamaiHome) : [],
@@ -926,6 +929,12 @@ async function buildRemovalPlan(
         for (const file of Object.keys((await readResolvedMcpFiles(cfg)).files)) dirs.push(path.dirname(file));
       }
       plan.gitExcludes = await findMcpGitExcludes(dirs);
+      // (h) teamai's git hook, in the config every worktree shares.
+      if (localConfig.projectRoot) {
+        const { removeGitHook } = await import('./git-hook.js');
+        const entries = await removeGitHook(localConfig.projectRoot, { dryRun: true }).catch(() => []);
+        if (entries.length > 0) plan.gitHook = { repoDir: localConfig.projectRoot, entries };
+      }
     }
   }
 
@@ -951,6 +960,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.shellProfiles.length === 0 &&
     plan.docsDir === null &&
     plan.gitExcludes.size === 0 &&
+    plan.gitHook === null &&
     !plan.teamaiHomeExists
   );
 }
@@ -1077,6 +1087,12 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('');
   }
 
+  if (plan.gitHook) {
+    console.log(`   Git hook in ${plan.gitHook.repoDir} (teamai's entries and blocks):`);
+    for (const entry of plan.gitHook.entries) console.log(`     ${entry}`);
+    console.log('');
+  }
+
   if (plan.teamaiHomeExists) {
     console.log('   TeamAI home directory:');
     console.log(`     ${plan.teamaiHome}/`);
@@ -1118,6 +1134,18 @@ async function teardownPlugins(): Promise<void> {
 
 async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeInstructions']> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
+  if (plan.gitHook) {
+    const { removeGitHook } = await import('./git-hook.js');
+    try {
+      await removeGitHook(plan.gitHook.repoDir);
+      log.info(`Removed the teamai git hook from ${plan.gitHook.repoDir}`);
+    } catch (e) {
+      log.warn(`Could not remove the teamai git hook from ${plan.gitHook.repoDir}: ${(e as Error).message}. `
+        + 'Remove it yourself: `git config --local --remove-section hook.teamai-post-checkout` (and hook.teamai-post-merge), '
+        + 'and the `# >>> teamai git hook` block in .git/hooks/post-checkout and post-merge.');
+    }
+  }
+
   // (a) Remove hooks from tool settings (built-in A + team B via the manifest).
   // Each settings entry carries the manifest for its own location (HOME/user
   // or a legacy <projectRoot>/project copy), so team hooks are stripped at the

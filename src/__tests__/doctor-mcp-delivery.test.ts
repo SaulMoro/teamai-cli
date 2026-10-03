@@ -876,4 +876,130 @@ describe('doctor — MCP servers delivered on disk', () => {
       });
     });
   });
+
+  // Codex loads a project's .codex/config.toml only in a trusted project, by
+  // the first `projects` entry for the checkout or its main checkout (#954).
+  describe('Codex project trust for team MCP servers (#954)', () => {
+    const NAME = 'Codex trusts this project, so it loads its team MCP servers';
+    let projectRoot: string;
+
+    async function useCheckout(root: string): Promise<void> {
+      projectRoot = root;
+      Object.assign(localConfig, { scope: 'project', projectRoot: root });
+      await fse.outputFile(path.join(root, '.codex', 'config.toml'), '[mcp_servers.docs]\ncommand = "docs-server"\nargs = []\n');
+      await fse.ensureDir(path.join(root, '.codex', 'skills'));
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), root), {
+        [managedMcpManifestKey('codex', true)]: [{ name: 'docs', hash: 'h' }],
+      });
+    }
+
+    async function trustCheck(): Promise<Check | undefined> {
+      return (await checks()).find((c) => c.name === NAME);
+    }
+
+    async function writeCodexConfig(toml: string, root = '.codex'): Promise<string> {
+      const file = path.join(homeDir, root, 'config.toml');
+      await fse.outputFile(file, toml);
+      return file;
+    }
+
+    const trusted = (dir: string, level = 'trusted'): string => `[projects.${JSON.stringify(dir)}]\ntrust_level = "${level}"\n`;
+
+    beforeEach(async () => {
+      const root = path.join(tempDir, 'codex-repo');
+      await fse.ensureDir(root);
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      teamConfig.toolPaths = { codex: { skills: '.codex/skills', mcp: '.codex/config.toml', mcpProject: '.codex/config.toml' } };
+      await useCheckout(root);
+    });
+
+    it('fails while Codex has no entry for the project, and gives the lines that trust it', async () => {
+      const codexConfig = await writeCodexConfig('model = "gpt-5"\n');
+      const real = await fse.realpath(projectRoot);
+
+      const check = await trustCheck();
+      if (!check) throw new Error('no Codex trust check');
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain(path.join(projectRoot, '.codex', 'config.toml'));
+      expect(check.fix).toContain('docs');
+      expect(check.fix).toContain(codexConfig);
+      expect(check.fix).toContain(`add a [projects.${JSON.stringify(real)}] table holding trust_level = "trusted"`);
+    });
+
+    it('passes once Codex trusts the project by its real path', async () => {
+      await writeCodexConfig(trusted(await fse.realpath(projectRoot)));
+
+      expect(await (await trustCheck())?.check()).toBe(true);
+    });
+
+    it('fails when Codex marks the project untrusted, and says which entry decides', async () => {
+      const real = await fse.realpath(projectRoot);
+      await writeCodexConfig(trusted(real, 'untrusted'));
+
+      const check = await trustCheck();
+      expect(await check?.check()).toBe(false);
+      expect(check?.fix).toContain(`[projects.${JSON.stringify(real)}]`);
+      expect(check?.fix).toContain('"untrusted"');
+    });
+
+    describe('in a linked worktree', () => {
+      let main: string;
+
+      beforeEach(async () => {
+        main = await fse.realpath(projectRoot);
+        const git = (...args: string[]): void => {
+          execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: main });
+        };
+        git('commit', '-q', '--allow-empty', '-m', 'init');
+        const worktree = path.join(tempDir, 'codex-wt');
+        git('worktree', 'add', '-q', worktree);
+        await useCheckout(worktree);
+      });
+
+      it('passes once Codex trusts the main checkout', async () => {
+        await writeCodexConfig(trusted(main));
+
+        expect(await (await trustCheck())?.check()).toBe(true);
+      });
+
+      it('passes over a worktree entry without a trust_level, which decides nothing', async () => {
+        await writeCodexConfig(`[projects.${JSON.stringify(await fse.realpath(projectRoot))}]\n${trusted(main)}`);
+
+        expect(await (await trustCheck())?.check()).toBe(true);
+      });
+
+      it('fails when the worktree entry is untrusted, whatever the main checkout says', async () => {
+        const worktree = await fse.realpath(projectRoot);
+        await writeCodexConfig(trusted(worktree, 'untrusted') + trusted(main));
+
+        const check = await trustCheck();
+        expect(await check?.check()).toBe(false);
+        expect(check?.fix).toContain(`[projects.${JSON.stringify(worktree)}]`);
+      });
+    });
+
+    it('reads the Codex config of the recorded CODEX_HOME root', async () => {
+      Object.assign(localConfig, { toolRoots: { codex: path.join(homeDir, '.codex-alt') } });
+      await writeCodexConfig(trusted(await fse.realpath(projectRoot)));
+      const altConfig = await writeCodexConfig('', '.codex-alt');
+
+      const check = await trustCheck();
+      expect(await check?.check()).toBe(false);
+      expect(check?.fix).toContain(altConfig);
+    });
+
+    it('fails with the parse error when the Codex config does not parse', async () => {
+      const codexConfig = await writeCodexConfig('[projects\n');
+
+      const check = await trustCheck();
+      expect(await check?.check()).toBe(false);
+      expect(check?.fix).toContain(`${codexConfig} could not be parsed`);
+    });
+
+    it('is not built while the project config holds no team server', async () => {
+      await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {});
+
+      expect(await trustCheck()).toBeUndefined();
+    });
+  });
 });

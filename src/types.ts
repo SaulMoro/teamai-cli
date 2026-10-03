@@ -337,11 +337,13 @@ export const TeamaiConfigSchema = z.object({
     // which only Codex reads. In project scope they come from the session-start
     // hook, since the project AGENTS.md is the owners' file and other tools
     // read it too (#938, #945); so the entry has no project `claudemd`.
+    // Codex reads the project MCP config only in a trusted project (#954).
     codex: {
       skills: '.codex/skills',
       settings: '.codex/hooks.json',
       agents: '.codex/agents',
       mcp: '.codex/config.toml',
+      mcpProject: '.codex/config.toml',
       userScope: { claudemd: '.codex/AGENTS.md' },
     },
     // codex-internal and tcodex run the same Codex from their own home root, so
@@ -1083,6 +1085,30 @@ export interface GlobalOptions {
    * the confirmation prompt (`remove`).
    */
   force?: boolean;
+  /**
+   * Internal (the new-worktree git hook, `pull` only): deliver what the next
+   * session reads, without network when the team clone was fetched within
+   * SOURCE_PULL_TTL_MS; sources come from their cached clones. Learnings,
+   * reports, usage reporting and post-pull scripts are left to a full pull.
+   */
+  inline?: boolean;
+  /**
+   * Internal (the post-merge git hook, with `inline`): fetch the team repo
+   * whatever its fetch stamp says, and give up after this many ms; the scope
+   * is then not delivered and the detached pull after the hook does it.
+   */
+  fetchTimeoutMs?: number;
+  /**
+   * Internal (`pull` only): the git hook event that started this pull, inline
+   * or detached (`TEAMAI_GIT_HOOK` in the environment). Its failures are
+   * recorded for `doctor` and the next interactive pull; its success clears them.
+   */
+  gitHook?: 'post-checkout' | 'post-merge';
+  /**
+   * Internal (`init --scope user`, `pull` only): pull the user scope even when
+   * the current directory is a project-scoped checkout.
+   */
+  userScopeOnly?: boolean;
   /** Push a specific skill by path. */
   skill?: string;
   /** Target role namespace (overrides detected namespace). */

@@ -127,6 +127,24 @@ changed since, or push says so for that copy, merge that change into the copy fi
 the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
+In project scope, `init` and `pull` also install a git hook in the repository's
+local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`; Git
+2.54+; older Git without `core.hooksPath` gets a marked block in `.git/hooks/`
+scripts, and with it `teamai doctor` advises), beside any `core.hooksPath` manager or `.git/hooks` script. When a
+worktree is created by `git worktree add` or an app that runs checkout hooks, it creates the project roots
+of `enabledAgents` (else the ones the main checkout has) and pulls into it before
+the command returns, from the team clone as last fetched when that was within
+24 h; a full pull then runs in the background. A branch switch does nothing.
+After `git pull` it fetches the team repo (5 s cap, then the background pull) and
+delivers; in single-repo mode it delivers what `git pull` brought, offline. It prints nothing and always
+exits 0; a failure inside it is recorded, and `teamai doctor` names it (`Last git
+hook run failed: ...`) with its fix, as does the next interactive `teamai pull`, once.
+`teamai doctor` also reports whether the hook is installed, and why not.
+`pull --dry-run` says when it would install or update the hook, writing nothing;
+`teamai uninstall` removes only teamai's hook entries and blocks. For hosts that
+skip checkout hooks, prepare the worktree before launch; see the new-worktree
+section in `references/troubleshooting.md`.
+
 A team agent (`agents/<name>.yaml`) can set `model: strong`, `model: fast`, or an
 alias the team defines, instead of one tool's model. The team maps each alias per
 tool in `models/aliases.yaml`, in that tool's own model value, with an optional effort:

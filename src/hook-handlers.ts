@@ -140,6 +140,122 @@ const pullHandler: HookHandler = {
   },
 };
 
+/**
+ * `post-checkout` from the git hook: a new checkout (a linked worktree) of a
+ * project-scope repository gets its tool roots and the team's resources. A
+ * branch switch, user scope (whose resources live in HOME), and checkouts
+ * teamai itself creates (its knowledge and reports worktrees, under the scope's
+ * data home or team clone) do nothing.
+ */
+const newWorktreeHandler: HookHandler = {
+  name: 'new-worktree',
+  async execute(stdin, _tool, config) {
+    const { isNewCheckout } = await import('./git-hook.js');
+    const args = Array.isArray(stdin.git_args) ? stdin.git_args.map(String) : [];
+    if (!config || config.scope !== 'project' || !isNewCheckout(args)) return null;
+    const cwd = resolveHookCwd(stdin) ?? process.cwd();
+    const { getDataHome } = await import('./types.js');
+    if (await isWithin(cwd, [getDataHome(config), config.repo.localPath, ...await ownCheckoutsDir(cwd)])) return null;
+
+    await recordingFailure(config, 'post-checkout', async () => {
+      const { createProjectToolRoots } = await import('./project-agent-root.js');
+      await createProjectToolRoots({ cwd });
+      const { pull } = await import('./pull.js');
+      await pull({ silent: true, inline: true, gitHook: 'post-checkout' });
+    });
+    // Learnings, reports, sources and the team repo itself refresh after
+    // `git worktree add` returns; it also retries what failed above.
+    await spawnDetachedPull(cwd, 'post-checkout');
+    return null;
+  },
+};
+
+/** How long `git pull` waits for the post-merge hook's team repo fetch. */
+const POST_MERGE_FETCH_CAP_MS = 5_000;
+
+/**
+ * `post-merge` from the git hook (`git pull`): the next session gets what
+ * changed. With a separate team repo, the team repo is fetched inline within
+ * POST_MERGE_FETCH_CAP_MS and delivered when its revision moved (the rev fast
+ * path skips it otherwise); past the cap, and for learnings, reports and
+ * sources, a detached pull takes over. In single-repo (self) mode the team
+ * repo is the working tree `git pull` just updated: delivered with no network.
+ */
+const gitPullHandler: HookHandler = {
+  name: 'git-pull',
+  async execute(stdin, _tool, config) {
+    if (!config || config.scope !== 'project') return null;
+    const cwd = resolveHookCwd(stdin) ?? process.cwd();
+    const { getDataHome, isSelfMode } = await import('./types.js');
+    const self = isSelfMode(config);
+    // teamai's own checkouts; in self mode the team repo is the member's.
+    const own = [getDataHome(config), ...await ownCheckoutsDir(cwd)];
+    if (await isWithin(cwd, self ? own : [...own, config.repo.localPath])) return null;
+
+    const { pull } = await import('./pull.js');
+    await recordingFailure(config, 'post-merge', () => pull({
+      silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS,
+    }));
+    if (!self) await spawnDetachedPull(cwd, 'post-merge');
+    return null;
+  },
+};
+
+/**
+ * Run the inline pass of a git hook; what it throws is recorded (the hook is
+ * silent), not raised.
+ */
+async function recordingFailure(
+  config: LocalConfig,
+  event: 'post-checkout' | 'post-merge',
+  pass: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await pass();
+  } catch (e) {
+    const { recordGitHookFailure } = await import('./git-hook.js');
+    await recordGitHookFailure(config, { kind: 'hook-error', event, at: new Date().toISOString(), error: (e as Error).message });
+  }
+}
+
+/**
+ * Start a full `teamai pull --silent` in `cwd` that this process does not wait
+ * for. TEAMAI_GIT_HOOK makes it record its failure, and clear the record when it
+ * succeeds.
+ */
+async function spawnDetachedPull(cwd: string, event: 'post-checkout' | 'post-merge'): Promise<void> {
+  const { resolveCliEntry } = await import('./builtin-hooks.js');
+  const { spawn } = await import('node:child_process');
+  spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
+    cwd, detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, TEAMAI_GIT_HOOK: event },
+  }).on('error', (e) => log.debug(`git hook: detached pull failed to start: ${e.message}`)).unref();
+}
+
+/**
+ * The main checkout's `.teamai/`, where teamai creates its knowledge worktree.
+ * Detection run from inside that worktree resolves the worktree as its own
+ * project root, so the config alone cannot tell it is teamai's.
+ */
+async function ownCheckoutsDir(cwd: string): Promise<string[]> {
+  // Git refuses to open a directory that no longer exists.
+  if (!await pathExists(cwd)) return [];
+  const { resolveAnchors } = await import('./utils/git.js');
+  const anchors = await resolveAnchors(cwd);
+  return anchors ? [path.join(anchors.projectAnchor, '.teamai')] : [];
+}
+
+/** Whether `dir` is one of `parents` or inside one (real paths). */
+async function isWithin(dir: string, parents: string[]): Promise<boolean> {
+  const { realpath } = await import('node:fs/promises');
+  const real = (p: string) => realpath(p).catch(() => path.resolve(p));
+  const target = await real(dir);
+  for (const parent of parents) {
+    const rel = path.relative(await real(parent), target);
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  }
+  return false;
+}
+
 const updateHandler: HookHandler = {
   name: 'update',
   async execute(_stdin, _tool) {
@@ -978,6 +1094,13 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'prompt-submit', matcher: '*', handler: trackSlashHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'prompt-submit', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'prompt-submit', matcher: '*', handler: localAgentHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
+
+    // ─── Git (`--tool git`, see git-hook.ts) ──────────
+    // Inline: the delivery has to land before `git worktree add` returns. Git
+    // has no hook timeout, so the budget is the detached pull's; post-merge
+    // caps its own fetch.
+    { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
+    { event: 'post-merge', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
   ];
 }
 

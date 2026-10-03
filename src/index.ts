@@ -997,15 +997,16 @@ program
   });
 
 program
-  .command('hook-dispatch <event>', { hidden: true })
+  .command('hook-dispatch <event> [hookArgs...]', { hidden: true })
   .description('Unified hook dispatcher — handles all teamai hooks for a given event in one process')
   .option('--stdin', 'Read hook data from STDIN (accepted for forward compat, always reads STDIN)')
   .option('--tool <name>', 'Tool identifier (e.g. codebuddy, workbuddy, claude)')
   .option('--matcher <matcher>', 'Hook matcher for PostToolUse (e.g. Skill, Bash)')
   .option('--bg-only', 'Internal: run only fire-and-forget background handlers (used by the detached child)')
   .option('--stdin-file <path>', 'Internal: read the hook payload from this file instead of STDIN')
-  .action(async (event: string, cmdOpts: { stdin?: boolean; tool?: string; matcher?: string; bgOnly?: boolean; stdinFile?: string }) => {
+  .action(async (event: string, hookArgs: string[], cmdOpts: { stdin?: boolean; tool?: string; matcher?: string; bgOnly?: boolean; stdinFile?: string }) => {
     const bgOnly = cmdOpts.bgOnly ?? false;
+    const tool = cmdOpts.tool ?? 'claude';
 
     // Hard wall-clock safety net for the FOREGROUND (parent) hook process, which
     // blocks the host IDE's hook. The host aborts a hook at ~10s regardless of
@@ -1018,15 +1019,17 @@ program
     // The detached `--bg-only` child is unref'd and not awaited by the host, so
     // it is exempt and keeps its full budget to finish real syncs/downloads.
     const HOOK_HARD_EXIT_MS = 7_000;
+    // Git (`--tool git`) has no hook timeout to stay under, and a cut here
+    // would stop the inline delivery mid-write; its handler bounds itself.
     let hardExit: NodeJS.Timeout | undefined;
-    if (!bgOnly) {
+    if (!bgOnly && tool !== 'git') {
       hardExit = setTimeout(() => process.exit(0), HOOK_HARD_EXIT_MS);
       hardExit.unref();
     }
 
     const { hookDispatchCli } = await import('./hook-dispatch-cli.js');
     try {
-      await hookDispatchCli(event, cmdOpts.tool ?? 'claude', cmdOpts.matcher ?? '*', cmdOpts);
+      await hookDispatchCli(event, tool, cmdOpts.matcher ?? '*', { ...cmdOpts, hookArgs });
     } finally {
       if (hardExit) clearTimeout(hardExit);
       // Hook subprocesses must exit promptly: a hung/unreachable backend fetch can

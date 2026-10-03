@@ -222,6 +222,12 @@ describe('hooksInject', () => {
         }
     });
 
+    it('fails, without the success line, when the git hook cannot be installed', async () => {
+        mockedReconcileForConfig.mockRejectedValue(new Error('Could not install the teamai git hook in /repo: EACCES'));
+        await expect(hooksInject({})).rejects.toThrow('Could not install the teamai git hook');
+        expect(mockedLog.success).not.toHaveBeenCalled();
+    });
+
     it('propagates error when not initialized', async () => {
         mockedAutoDetectInit.mockRejectedValue(new Error('teamai is not initialized'));
         await expect(hooksInject({})).rejects.toThrow('not initialized');

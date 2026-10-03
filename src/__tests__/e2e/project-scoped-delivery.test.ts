@@ -19,9 +19,8 @@ import { fileURLToPath } from 'node:url';
 //      the guarantee that makes the filter safe to change your mind about.
 //
 // Both MCP render paths are covered: Claude's JSON in project scope, and — in a
-// second user-scope leg — Codex's TOML, since Codex has no project-scope MCP
-// location. A filter that drops a server before rendering has to drop it from
-// both.
+// second user-scope leg — Codex's TOML. A filter that drops a server before
+// rendering has to drop it from both.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -405,10 +404,9 @@ describe('project-scoped hooks, MCP servers and env variables via the real CLI (
   }, 60_000);
 });
 
-// Codex has no project-scope MCP location (no `mcpProject` in toolPaths), so its
-// TOML renderer is only reachable from user scope. It is the second of the two
-// MCP render paths: a filter that drops a server before rendering has to drop it
-// from the TOML file as much as from Claude's JSON.
+// Codex's TOML renderer is the second of the two MCP render paths, exercised
+// here from user scope: a filter that drops a server before rendering has to
+// drop it from the TOML file as much as from Claude's JSON.
 describe('project-scoped MCP reaches the Codex TOML renderer too (issue #668)', () => {
   let sandbox: string;
   let home: string;

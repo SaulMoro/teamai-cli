@@ -26,7 +26,8 @@ import { createDispatcher, type Dispatcher } from './hook-dispatch.js';
 import { buildHandlerRegistry, filterHandlersForConfig } from './hook-handlers.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { windowsPowerShell } from './utils/powershell.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setSilent, setStderrOnly } from './utils/logger.js';
+import { clearGitHookRepositoryEnv, GIT_HOOK_TOOL } from './git-hook.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { claudeHookRunsInAnotherHost } from './claude-hook-host.js';
 
@@ -414,7 +415,7 @@ export async function hookDispatchCli(
   event: string,
   tool: string,
   matcher: string,
-  options: { bgOnly?: boolean; stdinFile?: string } = {},
+  options: { bgOnly?: boolean; stdinFile?: string; hookArgs?: string[] } = {},
 ): Promise<void> {
   const { bgOnly = false, stdinFile } = options;
   setStderrOnly(true);
@@ -422,8 +423,19 @@ export async function hookDispatchCli(
     log.debug('hook-dispatch: skipping claude hooks because Cursor or Copilot CLI has its own teamai hooks');
     return;
   }
+  // A git hook (see git-hook.ts) prints nothing, and runs with the business
+  // repo exported in GIT_DIR and friends, which every git child would inherit.
+  const fromGit = tool === GIT_HOOK_TOOL;
+  if (fromGit) {
+    setSilent(true);
+    clearGitHookRepositoryEnv();
+  }
   try {
-    const raw = stdinFile ? readStdinFile(stdinFile) : await readStdin();
+    // Git sends no payload: its arguments and the checkout it runs in are the
+    // payload. The detached child gets them back through the STDIN file.
+    const raw = stdinFile ? readStdinFile(stdinFile)
+      : fromGit ? JSON.stringify({ cwd: process.cwd(), git_args: options.hookArgs ?? [] })
+        : await readStdin();
     const stdin = parseStdin(raw, event);
 
     // Config gates: a directory without teamai runs no team handlers (#748), and
@@ -440,6 +452,14 @@ export async function hookDispatchCli(
         process.chdir(cwd);
       } catch (e) {
         log.debug(`hook-dispatch: chdir to ${cwd} failed: ${(e as Error).message}`);
+      }
+    }
+    if (fromGit) {
+      const { findUnreadableProjectConfig, describeUnreadableConfig } = await import('./config.js');
+      const problem = await findUnreadableProjectConfig(cwd);
+      if (problem !== null) {
+        log.persist(`git hook: Nothing was synced: ${describeUnreadableConfig(problem)}`);
+        return;
       }
     }
     const localConfig = await resolveHookConfig(stdin, tool);
