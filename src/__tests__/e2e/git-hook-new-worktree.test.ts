@@ -556,6 +556,20 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       expect(teamai(['doctor'], repo).output).toContain('✔ No git hook failure recorded');
     });
 
+    it('an interactive pull that fails too keeps the recorded failure for doctor', async () => {
+      const repo = project('fail-again-project', ['--agent', 'claude']);
+      await settle(repo);
+      const restore = failNextHook(repo);
+      try {
+        const wt = worktreeAdd(repo, 'wt-fail-again');
+        await settle(repo);
+        expect(teamai(['pull'], wt.dir).output).toMatch(/Last git hook run failed/);
+      } finally {
+        restore();
+      }
+      expect(teamai(['doctor'], repo).output).toMatch(/✖ Last git hook run failed/);
+    });
+
     it('a partition lock another pull holds: post-merge waits no longer than its cap and records why it skipped', async () => {
       const repo = project('locked-project', ['--agent', 'claude']);
       const bare = `${repo}.git`;

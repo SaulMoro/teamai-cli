@@ -2184,16 +2184,15 @@ async function reinjectLegacyHooks(localConfig: LocalConfig): Promise<void> {
   log.debug('Hooks migrated to dispatch format');
 }
 
-/** Say the failure the git hook recorded, then drop it: an interactive pull says it once. */
+/** Say the failure the git hook recorded. A pull that then completes clears it (see pull()). */
 async function mentionGitHookFailure(config: LocalConfig, reported: Set<string>): Promise<void> {
-  const { readGitHookFailure, clearGitHookFailure, describeGitHookFailure } = await import('./git-hook.js');
+  const { readGitHookFailure, describeGitHookFailure } = await import('./git-hook.js');
   const failure = await readGitHookFailure(config);
   if (!failure) return;
   const { message, fix } = describeGitHookFailure(failure);
   log.warn(`Last git hook run failed: ${message}`);
   log.dim(`  → ${fix}`);
   reported.add('git-hook-failure');
-  await clearGitHookFailure(config);
 }
 
 /**
@@ -2308,14 +2307,16 @@ export async function pull(
   //    processed at all (issue #73: project install isolates from user).
   let projectConfig: LocalConfig | null = null;
   const unreadable: string[] = [];
-  try {
-    projectConfig = await detectProjectConfig(
-      undefined,
-      (configPath, error) => { unreadable.push(`${configPath}: ${error}`); },
-      { dryRun: options.dryRun },
-    );
-  } catch (e) {
-    log.warn(`Project-scope detection error: ${(e as Error).message}`);
+  if (!options.userScopeOnly) {
+    try {
+      projectConfig = await detectProjectConfig(
+        undefined,
+        (configPath, error) => { unreadable.push(`${configPath}: ${error}`); },
+        { dryRun: options.dryRun },
+      );
+    } catch (e) {
+      log.warn(`Project-scope detection error: ${(e as Error).message}`);
+    }
   }
   // Detection skips a project config it cannot read and answers with what
   // loads next — a legacy `.teamai/` that may name another team, or the user
@@ -2541,15 +2542,17 @@ export async function pull(
   }
 
   // Fetching alone is not success: every startup delivery stage must finish
-  // before a hook retry may erase the previous failure. Preserve the more
-  // specific fetch/lock records those stages already wrote.
-  if (options.gitHook && !options.dryRun && reconcileProject && !syncResult.teamRepoFailed) {
+  // before a hook retry, or the interactive pull that mentioned the failure,
+  // may erase it. Preserve the more specific fetch/lock records those stages
+  // already wrote.
+  const retriesHookFailure = Boolean(options.gitHook) || reported.has('git-hook-failure');
+  if (retriesHookFailure && !options.dryRun && reconcileProject && !syncResult.teamRepoFailed) {
     if (syncResult.docsSyncFailed) startupErrors.push('Docs delivery failed');
     if (syncResult.agentModelsHeld) startupErrors.push('Agent models could not be resolved');
     if (syncResult.resourceSyncFailed) startupErrors.push('Resource delivery did not complete');
     const { clearGitHookFailure, recordGitHookFailure } = await import('./git-hook.js');
     if (startupErrors.length > 0) {
-      await recordGitHookFailure(reconcileProject, {
+      if (options.gitHook) await recordGitHookFailure(reconcileProject, {
         kind: 'hook-error', event: options.gitHook, at: new Date().toISOString(), error: startupErrors.join('; '),
       });
     } else {

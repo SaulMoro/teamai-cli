@@ -2142,7 +2142,8 @@ export async function init(options: GlobalOptions & {
   // first session after init runs without them. Failures are reported by pull
   // in its own words; init itself has succeeded.
   const { pull } = await import('./pull.js');
-  await pull({ verbose: options.verbose, interactive: true });
+  // Inside a project checkout, a bare pull would detect that project instead.
+  await pull({ verbose: options.verbose, interactive: true, userScopeOnly: localConfig.scope === 'user' });
 
   log.success('teamai initialized successfully!');
   if (stubDeployed > 0) {

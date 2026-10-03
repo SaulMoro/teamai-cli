@@ -83,7 +83,7 @@ in the checkout (after a stuck pull ends, or once the team repo is reachable);
 worktrees and git pull` as failing, follow its fix: `teamai pull` installs it.
 Git older than 2.54 has no config hooks: teamai then adds a marked block to
 `.git/hooks/post-checkout` and `post-merge`, unless `core.hooksPath` is set (or a
-hook there is not an executable shell script), in which case doctor's fix says to upgrade Git
+hook there is a symlink or not an executable shell script), in which case doctor's fix says to upgrade Git
 or, if the team agrees, to commit its guarded `command -v teamai ... || true`
 line into the manager's post-checkout and post-merge hooks.
 Existing hook contents and permissions stay unchanged; read/write errors propagate

@@ -188,6 +188,17 @@ describe.skipIf(process.platform === 'win32')('teamai init ends with a pull', ()
     expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('echo team-hook-v1');
   }, 90_000);
 
+  it('user scope run inside a project-scoped checkout pulls the user scope it just configured', async () => {
+    const project = makeBusinessRepo(`app-${Math.random().toString(36).slice(2)}`);
+    const first = await runCLI(['init', FAKE_URL, '--scope', 'project', '--agent', 'codex', '--force'], project);
+    expect(first.code, first.output).toBe(0);
+
+    const result = await runCLI(['init', FAKE_URL, '--scope', 'user', '--agent', 'claude', '--force'], project);
+    expect(result.code, result.output).toBe(0);
+    expect(fs.existsSync(path.join(home, '.claude', 'skills', 'team-skill', 'SKILL.md')), result.output).toBe(true);
+    expect(fs.readFileSync(path.join(home, '.claude', 'rules', 'team-rule.md'), 'utf8')).toContain('Team rule');
+  }, 120_000);
+
   it('project scope with --agent claude: .claude/ is created and filled, .mcp.json holds the team server', async () => {
     const project = makeBusinessRepo(`app-${Math.random().toString(36).slice(2)}`);
     const result = await runCLI(['init', FAKE_URL, '--scope', 'project', '--agent', 'claude', '--force'], project);

@@ -125,7 +125,7 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
     case 'other-hook': {
       const where = status.reason === 'hooks-path'
         ? 'core.hooksPath is set, so teamai leaves the hook manager\'s files alone'
-        : 'a post-checkout or post-merge hook in .git/hooks is not an executable shell script, so teamai leaves it alone';
+        : 'a post-checkout or post-merge hook in .git/hooks is a symlink or not an executable shell script, so teamai leaves it alone';
       const owner = status.reason === 'hooks-path' ? 'your hook manager defines' : 'in .git/hooks';
       return `${status.gitVersion || 'This git'} has no config-based hooks (Git 2.54 or later) and ${where}: new `
         + 'worktrees and `git pull` get the team\'s resources only at the next session. Either: '
@@ -179,6 +179,8 @@ async function scriptsToWrite(git: Git, repoDir: string): Promise<ScriptPlan> {
   const stale: { file: string; text: string }[] = [];
   for (const event of GIT_HOOK_EVENTS) {
     const file = path.join(dir, event);
+    // A symlink usually points at a hook manager's script, possibly shared by other repositories.
+    if (await isSymlink(file)) return { blocked: 'other-hook', stale: [] };
     const current = await readFileIfExists(file);
     if (current !== null && process.platform !== 'win32' && ((await fs.stat(file)).mode & 0o111) === 0) {
       return { blocked: 'other-hook', stale: [] };
@@ -222,6 +224,7 @@ async function removeHookScriptBlocks(git: Git, repoDir: string, opts: { dryRun?
   for (const dir of dirs) {
     for (const event of GIT_HOOK_EVENTS) {
       const file = path.join(dir, event);
+      if (await isSymlink(file)) continue;
       const current = await readFileIfExists(file);
       if (current === null) continue;
       const text = withoutScriptBlock(current);
@@ -254,6 +257,15 @@ export async function removeGitHook(repoDir: string, opts: { dryRun?: boolean } 
   }
   removed.push(...await removeHookScriptBlocks(git, repoDir, opts));
   return removed;
+}
+
+async function isSymlink(file: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(file)).isSymbolicLink();
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw e;
+  }
 }
 
 async function ok(result: ReturnType<typeof execCommand>, key: string): Promise<void> {

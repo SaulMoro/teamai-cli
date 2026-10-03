@@ -239,6 +239,17 @@ describe('teamai hook script on a Git without config hooks', () => {
     expect(run(['worktree', 'add', '-q', path.join(sandbox, 'disabled-wt')]).status).toBe(0);
   });
 
+  it.skipIf(process.platform === 'win32')('leaves a symlinked hook and the script it points to untouched', async () => {
+    const shared = path.join(sandbox, 'shared-post-checkout');
+    const original = '#!/bin/sh\nexit 0\n';
+    fs.writeFileSync(shared, original, { mode: 0o755 });
+    fs.symlinkSync(shared, hookFile('post-checkout'));
+    expect(await installGitHook(repo)).toEqual({ installed: false, reason: 'other-hook' });
+    expect(fs.readFileSync(shared, 'utf8')).toBe(original);
+    expect(fs.lstatSync(hookFile('post-checkout')).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(hookFile('post-merge'))).toBe(false);
+  });
+
   it.skipIf(process.platform === 'win32')('preserves the permissions of an executable owner hook', async () => {
     fs.writeFileSync(hookFile('post-checkout'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     await installGitHook(repo);

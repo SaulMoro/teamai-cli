@@ -1091,6 +1091,11 @@ export interface GlobalOptions {
    * recorded for `doctor` and the next interactive pull; its success clears them.
    */
   gitHook?: 'post-checkout' | 'post-merge';
+  /**
+   * Internal (`init --scope user`, `pull` only): pull the user scope even when
+   * the current directory is a project-scoped checkout.
+   */
+  userScopeOnly?: boolean;
   /** Push a specific skill by path. */
   skill?: string;
   /** Target role namespace (overrides detected namespace). */
