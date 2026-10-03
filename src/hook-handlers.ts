@@ -851,9 +851,10 @@ const teamRulesHandler: HookHandler = {
     const { loadTeamConfig } = await import('./config.js');
     const teamConfig = await loadTeamConfig(config.repo.localPath);
     if (!teamConfig) return null;
-    const { sessionInstructionBlocks } = await import('./pull.js');
+    const { instructionHookTextFor } = await import('./instruction-targets.js');
     const { teamRulesContext } = await import('./resources/rules.js');
-    const parts = await sessionInstructionBlocks(teamConfig, config, tool);
+    const text = await instructionHookTextFor(teamConfig, config, tool);
+    const parts = text ? [text] : [];
     const rules = await teamRulesContext(teamConfig, config);
     if (rules !== null) parts.push(rules);
     if (parts.length === 0) return null;
@@ -863,12 +864,68 @@ const teamRulesHandler: HookHandler = {
   },
 };
 
+/**
+ * `instructions`: the culture, claudemd and recall blocks for a tool whose
+ * extension adds them to the prompt instead of reading a file (#945). Resolved
+ * for the member, project and scope of the session's cwd, as a pull would.
+ * Nothing when the tool reads a file in that scope, or is excluded.
+ */
+const instructionsHandler: HookHandler = {
+  name: 'instructions',
+  async execute(_stdin, tool, config) {
+    if (!config) return null;
+    const { deliversInstructionsByHook, instructionHookTextFor } = await import('./instruction-targets.js');
+    const { isAgentExcluded } = await import('./types.js');
+    if (!deliversInstructionsByHook(tool, config.scope) || isAgentExcluded(config, tool)) return null;
+    const { loadTeamConfig } = await import('./config.js');
+    const teamConfig = await loadTeamConfig(config.repo.localPath);
+    if (!teamConfig) return null;
+    const text = await instructionHookTextFor(teamConfig, config, tool);
+    if (!text) return null;
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
+  },
+};
+
+/**
+ * The HTTP local agent's prompts from its resource cache for the session's
+ * project (#945), for a tool with no project file the agent could write to.
+ * Pi, OMP and Hermes ask through `instructions`; the Codex family gets them
+ * at SessionStart and SubagentStart, beside the team rules. Runs without a
+ * teamai config, since an HTTP-only machine has none.
+ */
+const localAgentInstructionsHandler: HookHandler = {
+  name: 'http-prompt-instructions',
+  async execute(stdin, tool, config) {
+    const { isAgentExcluded } = await import('./types.js');
+    if (config && isAgentExcluded(config, tool)) return null;
+    const { deliversInstructionsByHook } = await import('./instruction-targets.js');
+    const { getsRulesFromSessionHook } = await import('./resources/rule-format.js');
+    if (!deliversInstructionsByHook(tool, 'project')) return null;
+    const sessionEvent = stdin.hook_event_name === 'SessionStart' || stdin.hook_event_name === 'SubagentStart';
+    // Each tool through its own channel only; a resumed Codex session holds them already.
+    if (getsRulesFromSessionHook(tool) !== sessionEvent || stdin.source === 'resume') return null;
+    const { localAgentInstructionText } = await import('./local-agent.js');
+    const text = await localAgentInstructionText(resolveHookCwd(stdin) ?? process.cwd(), tool);
+    if (!text) return null;
+    const hookEventName = stdin.hook_event_name === 'SubagentStart' ? 'SubagentStart' : 'SessionStart';
+    return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: text } });
+  },
+};
+
 /** HTTP local-agent report/sync + workspace binding prompts. */
 const localAgentHandler: HookHandler = {
   name: 'local-agent-sync',
-  async execute(stdin, tool) {
+  async execute(stdin, tool, config) {
+    const { isAgentExcluded } = await import('./types.js');
+    if (config && isAgentExcluded(config, tool)) return null;
     const { reportAndSyncFromHook } = await import('./local-agent.js');
-    return reportAndSyncFromHook(stdin, tool);
+    const output = await reportAndSyncFromHook(stdin, tool);
+    // Codex's first prompt must read the cache after this sync, rather than
+    // racing it in another handler. SubagentStart reads the parent's cache.
+    if (stdin.hook_event_name === 'SessionStart') {
+      return await localAgentInstructionsHandler.execute(stdin, tool, config) ?? output;
+    }
+    return output;
   },
 };
 
@@ -979,6 +1036,9 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-start', matcher: '*', handler: packageHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: secretsHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: localAgentHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
+    // Asked for by the Pi and OMP extensions and the Hermes plugin, which add the result to the prompt.
+    { event: 'instructions', matcher: '*', handler: instructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    { event: 'instructions', matcher: '*', handler: localAgentInstructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
     { event: 'session-start', matcher: '*', handler: webhookHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, background: true, requiresConfig: true },
 
     // Copilot emits SessionEnd after its final turn (not Stop), so the webhook
@@ -1011,6 +1071,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // ─── SubagentStart ────────────────────────────────
     // Codex only (SUBAGENT_START_SPEC): a fresh subagent fires no SessionStart (#938).
     { event: 'subagent-start', matcher: '*', handler: teamRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    { event: 'subagent-start', matcher: '*', handler: localAgentInstructionsHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS },
 
     // ─── SubagentStop ─────────────────────────────────
     // A subagent can finish after the session's last Stop (a background

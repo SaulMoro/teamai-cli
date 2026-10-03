@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe } from './utils/fs.js';
-import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey } from './types.js';
+import { getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, resolveToolBaseDir, scopedToolPaths } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
@@ -325,7 +325,8 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
 
   const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig);
   if (opencode !== null) {
-    const instructions = await readOpencodeInstructions(opencode.configFile);
+    const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+    const instructions = await readOpencodeInstructionList(opencode.configFile);
     const active = instructions !== null && instructions.includes(opencode.glob);
     checks.push({
       name: 'Team rules are active in opencode',
@@ -435,24 +436,6 @@ async function buildCodexUserRulesChecks(ctx: DoctorContext, items: ResourceItem
   return checks;
 }
 
-/**
- * The `instructions` entries of an opencode.json, or null when the file is
- * missing or is not a JSON object — the two cases in which the pull leaves it
- * strictly alone and the glob never lands.
- */
-async function readOpencodeInstructions(configFile: string): Promise<unknown[] | null> {
-  const raw = await readFileSafe(configFile);
-  if (raw === null) return null;
-  if (raw.trim() === '') return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-    const { instructions } = parsed as { instructions?: unknown };
-    return Array.isArray(instructions) ? instructions : [];
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Build one delivery check per tool that receives agents.
@@ -1160,4 +1143,85 @@ function listed(sources: string[]): string {
   return sources.length <= 2
     ? sources.join(' and ')
     : `${sources.slice(0, -1).join(', ')} and ${sources[sources.length - 1]}`;
+}
+
+/**
+ * Team instructions (#945): whether each installed tool can load this
+ * member's culture, claudemd and recall blocks, not only whether a file was
+ * written. A file target must hold the current blocks, and OpenCode's must be
+ * listed in its `instructions`; a hook target needs teamai's extension or
+ * plugin as this build writes it, and room in its channel; and no file an
+ * earlier release wrote may still hold blocks.
+ */
+export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const {
+    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookText, instructionTargetPath,
+    planInstructionFiles, resolveInstructionTargets,
+  } = await import('./instruction-targets.js');
+  const { resolveInstructionBlocks } = await import('./pull.js');
+  const { buildRolePullContext } = await import('./resources/desired.js');
+  const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
+  const { blocks } = await resolveInstructionBlocks(teamConfig, localConfig, await buildRolePullContext(localConfig));
+  const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+  const pullNow = 'Run `teamai pull`.';
+  const checks: Check[] = [];
+
+  for (const target of targets) {
+    const plan = await planInstructionFiles([target], blocks);
+    checks.push({
+      name: `Team instructions are current for ${target.tools.join(', ')}`,
+      source: 'local',
+      check: async () => plan.changes.length === 0 && plan.warnings.length === 0,
+      fix: plan.warnings.length > 0
+        ? plan.warnings.join(' ')
+        : `${target.path} does not hold this member's current team instructions. ${pullNow}`,
+    });
+  }
+
+  const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
+  const opencodeFile = opencodePaths && instructionTargetPath('opencode', opencodePaths, localConfig);
+  // Only a file holding the blocks needs listing; pull registers it once it writes them.
+  if (opencodeFile && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile)) {
+    const { config, entry } = opencodeContextReference(opencodeFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
+    const instructions = await readOpencodeInstructionList(config);
+    checks.push({
+      name: 'Team instructions are listed in opencode instructions',
+      source: 'local',
+      check: async () => instructions !== null && instructions.includes(entry),
+      fix: instructions === null
+        ? `${config} could not be read as a JSON object, so the pull left it alone and OpenCode never loads ${opencodeFile}. `
+          + `Fix the file or add "${entry}" to its "instructions" by hand, then run \`teamai pull\`.`
+        : `${config} does not list "${entry}" under "instructions", and OpenCode reads no file it is not told about. ${pullNow}`,
+    });
+  }
+
+  for (const hook of hooks) {
+    const text = instructionHookText(blocks, hook.recall);
+    if (!text) continue;
+    const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+    const overLimit = hookLimitProblem(hook, text);
+    checks.push({
+      name: `${hook.tool} adds the team instructions to its prompt`,
+      source: 'local',
+      check: async () => channel.ready && overLimit === null,
+      fix: channel.ready ? overLimit ?? '' : channel.fix,
+    });
+  }
+
+  const leftovers: string[] = [];
+  const warnings: string[] = [];
+  for (const file of stale) {
+    const plan = await planInstructionFiles([], {}, [file]);
+    if (plan.changes.length > 0 || plan.warnings.length > 0) leftovers.push(file.path);
+    warnings.push(...plan.warnings);
+  }
+  checks.push({
+    name: 'No team instruction blocks are left in files no tool loads them from',
+    source: 'local',
+    check: async () => leftovers.length === 0,
+    fix: [...warnings, `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`].join(' '),
+  });
+  return checks;
 }

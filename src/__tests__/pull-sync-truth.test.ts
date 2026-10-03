@@ -175,6 +175,33 @@ describe('pull reports what reached the tool directory (#585)', () => {
     return vi.mocked(log.success).mock.calls.map(([msg]) => String(msg));
   }
 
+  it('retains unresolved culture during migration while retiring delivered instruction blocks (#945)', async () => {
+    const projectRoot = path.join(tmpDir, 'project');
+    localConfig.scope = 'project';
+    localConfig.projectRoot = projectRoot;
+    localConfig.enabledAgents = ['claude'];
+    teamConfig.toolPaths.claude.claudemd = '.claude/CLAUDE.md';
+    vi.mocked(detectProjectConfig).mockResolvedValue(localConfig);
+    const legacy = path.join(projectRoot, '.claude/CLAUDE.md');
+    await fse.outputFile(legacy, '# Mine\n<!-- [teamai:culture:start] -->\nworking culture\n<!-- [teamai:culture:end] -->\n<!-- [teamai:claudemd:start] -->\nold prompt\n<!-- [teamai:claudemd:end] -->\n');
+    // A directory makes the read fail deterministically, including as root.
+    await fse.ensureDir(path.join(repoPath, 'culture.md'));
+    await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'new prompt');
+
+    await pull({ force: true });
+
+    const retained = await fse.readFile(legacy, 'utf8');
+    expect(retained).toContain('working culture');
+    expect(retained).not.toContain('old prompt');
+    expect(await fse.readFile(path.join(projectRoot, '.claude/rules/teamai-context.md'), 'utf8')).toContain('new prompt');
+
+    await fse.remove(path.join(repoPath, 'culture.md'));
+    await fse.writeFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nrestored culture');
+    await pull({ force: true });
+    expect(await fse.readFile(legacy, 'utf8')).toBe('# Mine\n');
+    expect(await fse.readFile(path.join(projectRoot, '.claude/rules/teamai-context.md'), 'utf8')).toContain('restored culture');
+  });
+
   it.each(['copy', 'prune', 'unsafe destination', 'unreadable source', 'realpath'])(
     'does not report a successful docs sync after %s fails, and retries on the next pull', async (failure) => {
       // Simulate a force-pull of an already-synced revision: failure must clear

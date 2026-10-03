@@ -4,7 +4,7 @@ import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, Lo
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
-import { EXCLUDED_RULE_NAMES, isDeployedRecallRule } from '../builtin-rules.js';
+import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { teamRuleToCursorMdc, mergeCursorBodyIntoTeamMd, cursorMdcBodyEqualsTeamMd } from './cursor-mdc.js';
 import {
   copilotInstructionsBodyEqualsTeamMd,
@@ -201,7 +201,9 @@ export class RulesHandler extends ResourceHandler {
 
     const files = await listFilesRecursive(rulesDir);
     return files
-      .filter((f) => f.endsWith('.md'))
+      // teamai-context is the file pull writes the team instructions to; a team
+      // rule of that name would land on it (#945). pullAllRules names it.
+      .filter((f) => f.endsWith('.md') && f !== `${TEAMAI_CONTEXT_RULE_NAME}.md`)
       .map((f) => ({
         name: f.replace(/\.md$/, ''),
         type: 'rules' as const,
@@ -297,7 +299,9 @@ export class RulesHandler extends ResourceHandler {
    */
   private async localNameFor(teamName: string, localConfig: LocalConfig): Promise<string> {
     const bareName = path.basename(teamName);
-    if (bareName === teamName) return teamName;
+    // teamai-context at the root is teamai's instruction file (#945), so a
+    // placed rule of that name keeps its namespaced path.
+    if (bareName === teamName || bareName === TEAMAI_CONTEXT_RULE_NAME) return teamName;
     const placed = placedResourcePath(
       (await loadStateForScope(localConfig)).placedRules, 'rules', bareName,
     );
@@ -430,6 +434,41 @@ export class RulesHandler extends ResourceHandler {
   }
 
   /**
+   * Remove the copy of a team rule named teamai-context an earlier release
+   * delivered to a rules directory (#945): that path is teamai's own
+   * instruction file now. A copy goes only without teamai's blocks and when
+   * the record shows it unchanged or it matches what pull rendered for the
+   * team's rule; any other is kept, and the instruction sync names it.
+   */
+  async reclaimReservedRuleCopies(
+    teamConfig: TeamaiConfig,
+    localConfig: LocalConfig,
+    ledger: DeliveryLedger | undefined,
+  ): Promise<void> {
+    const { holdsInstructionBlocks } = await import('../instruction-targets.js');
+    const relativePath = `rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
+    const rule: ResourceItem = {
+      name: TEAMAI_CONTEXT_RULE_NAME, type: 'rules', relativePath, sourcePath: path.join(localConfig.repo.localPath, relativePath),
+    };
+    let deliveredRevs: readonly string[] | undefined;
+    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+      if (!toolPath.rules || isAgentExcluded(localConfig, tool)) continue;
+      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules, `${TEAMAI_CONTEXT_RULE_NAME}${ruleFileExtensionForTool(tool)}`);
+      if (!await pathExists(file) || await holdsInstructionBlocks(file)) continue;
+      const recorded = ledger?.previous?.[file];
+      deliveredRevs ??= (
+        await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
+      ).revs;
+      const delivered = (recorded !== undefined && recorded === await fileHash(file))
+        || await isDeliveredRender(tool, file, rule, localConfig.repo.localPath, deliveredRevs);
+      if (!delivered) continue;
+      await remove(file);
+      if (ledger) forgetDelivered(ledger.hashes, file);
+      log.info(`Removed ${file}, the copy of the team rule ${TEAMAI_CONTEXT_RULE_NAME} an earlier release delivered: the team instructions go there now`);
+    }
+  }
+
+  /**
    * Distribute rule files to each tool's rules/ directory, then update
    * CLAUDE.md with a lightweight reference list instead of inlining content.
    *
@@ -447,6 +486,11 @@ export class RulesHandler extends ResourceHandler {
     ledger?: DeliveryLedger,
   ): Promise<void> {
     const rules = filteredRules ?? await this.scanTeamForPull(teamConfig, localConfig);
+    if (await pathExists(path.join(localConfig.repo.localPath, 'rules', `${TEAMAI_CONTEXT_RULE_NAME}.md`))) {
+      log.warn(`rules/${TEAMAI_CONTEXT_RULE_NAME}.md is not delivered: ${TEAMAI_CONTEXT_RULE_NAME} is the name of teamai's own instruction file `
+        + 'in each rules directory. Rename the rule in the team repo, for example with `git mv`, and push the change.');
+    }
+    await this.reclaimReservedRuleCopies(teamConfig, localConfig, ledger);
 
     // Hermes: inline all team rules into a teamai-managed block in SOUL.md
     // (user-level standing instructions). Only when Hermes is actually
@@ -623,6 +667,10 @@ export class RulesHandler extends ResourceHandler {
     const block = await teamRulesBlock(rules);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!writesInstructionBlock(tool, toolPath, 'team-rules')) continue;
+      // Its session hook carries the rules in this scope, and a project file
+      // such as AGENTS.md belongs to the project (#945).
+      const { deliversInstructionsByHook } = await import('../instruction-targets.js');
+      if (deliversInstructionsByHook(tool, localConfig.scope)) continue;
       const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.claudemd);
       const probe = instructionFileInstallProbe(tool, toolPath);
       const active = !isAgentExcluded(localConfig, tool)

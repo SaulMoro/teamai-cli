@@ -127,18 +127,22 @@ projects:
     expect(text).not.toContain('Billing instructions.');
   });
 
-  it('skips a block another tool already wrote into the project AGENTS.md, which Codex reads', async () => {
+  it('skips shared instructions still read natively from a retained project AGENTS.md (#945)', async () => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
     await fse.outputFile(path.join(repoPath, 'claudemd', 'shared.md'), 'Shared team instructions.\n');
     await fse.outputFile(
       path.join(tmpDir, 'project', 'AGENTS.md'),
-      '# Notes\n\n<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n',
+      '# Notes\n\n<!-- [teamai:claudemd:start] -->\nAnother member\'s selection.\n<!-- [teamai:claudemd:end] -->\n',
     );
 
     const text = (await context({ hook_event_name: 'SessionStart', source: 'startup' }))!;
 
-    expect(text).not.toContain('Be kind to teammates.');
-    expect(text).toContain('Shared team instructions.');
+    expect(text).toContain('Be kind to teammates.');
+    expect(text).not.toContain('Shared team instructions.');
+    expect(text).not.toContain('Another member');
+    expect(text).not.toContain('[teamai:');
+    await fse.writeFile(path.join(tmpDir, 'project', 'AGENTS.md'), '# Notes\n');
+    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).toContain('Shared team instructions.');
   });
 
   it.each(['# Owners\n', ''])('adds blocks from a shadowed AGENTS.md when AGENTS.override.md contains %j', async (override) => {
@@ -162,12 +166,17 @@ projects:
     expect(await fse.readFile(path.join(tmpDir, 'project', 'AGENTS.override.md'), 'utf8')).toBe(override);
   });
 
-  it('skips a block already present in the active AGENTS.override.md', async () => {
+  it('skips culture still read natively from AGENTS.override.md until cleanup (#945)', async () => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
     await fse.outputFile(path.join(tmpDir, 'project', 'AGENTS.override.md'),
-      '<!-- [teamai:culture:start] -->\nBe kind to teammates.\n<!-- [teamai:culture:end] -->\n');
+      '<!-- [teamai:culture:start] -->\nAnother member\'s culture.\n<!-- [teamai:culture:end] -->\n');
 
-    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).not.toContain('Be kind to teammates.');
+    const text = await context({ hook_event_name: 'SessionStart', source: 'startup' });
+
+    expect(text).not.toContain('Be kind to teammates.');
+    expect(text).not.toContain('Another member');
+    await fse.writeFile(path.join(tmpDir, 'project', 'AGENTS.override.md'), '# Notes\n');
+    expect(await context({ hook_event_name: 'SessionStart', source: 'startup' })).toContain('Be kind to teammates.');
   });
 
   it('adds no rules from a scope that does not enable the tool', async () => {

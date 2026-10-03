@@ -18,7 +18,7 @@ export interface ExtensionContext {
   agent?: { kind: 'main' | 'sub'; id: string; name: string; depth?: number; parentId?: string };
 }
 
-export type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<void>;
+export type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 
 export interface LoadedExtension {
   /** The handler the extension registered for each host event. */
@@ -37,14 +37,19 @@ function register(source: string, context: Record<string, unknown>): Record<stri
 }
 
 /** The generated Pi extension, whose `child_process.spawn` records each dispatch instead of running `teamai`. */
-export function loadPiExtension(): LoadedExtension {
+export function loadPiExtension(stdoutFor: (args: string[]) => string = () => ''): LoadedExtension {
   const dispatches: ExtensionDispatch[] = [];
   const spawn = (_command: string, args: string[]) => {
-    const child = new EventEmitter() as EventEmitter & { stdin: EventEmitter & { end: (s: string) => void }; kill: () => void };
+    const child = new EventEmitter() as EventEmitter & { stdin: EventEmitter & { end: (s: string) => void }; stdout: EventEmitter; kill: () => void };
+    child.stdout = new EventEmitter();
     child.stdin = Object.assign(new EventEmitter(), {
       end: (stdin: string) => {
         dispatches.push({ args, payload: JSON.parse(stdin) as Record<string, unknown> });
-        queueMicrotask(() => child.emit('close', 0));
+        queueMicrotask(() => {
+          const stdout = stdoutFor(args);
+          if (stdout) child.stdout.emit('data', stdout);
+          child.emit('close', 0);
+        });
       },
     });
     child.kill = () => undefined;
@@ -59,13 +64,15 @@ export function loadPiExtension(): LoadedExtension {
  * instead of running `teamai`: the argv is the template's first value, the
  * STDIN the Response redirected into it.
  */
-export function loadOmpExtension(): LoadedExtension {
+export function loadOmpExtension(stdoutFor: (args: string[]) => string = () => ''): LoadedExtension {
   const dispatches: ExtensionDispatch[] = [];
   const $ = (_strings: TemplateStringsArray, args: string[], stdin: Response) => {
     const run = (async () => {
       dispatches.push({ args, payload: JSON.parse(await stdin.text()) as Record<string, unknown> });
+      return stdoutFor(args);
     })();
-    return { quiet: () => ({ nothrow: () => run }) };
+    const output = Object.assign(run, { text: async () => run });
+    return { quiet: () => ({ nothrow: () => output }) };
   };
   const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer });
   return { on, dispatches };

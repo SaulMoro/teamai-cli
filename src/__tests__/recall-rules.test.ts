@@ -19,7 +19,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-import { compileRecallRulesBlock } from '../pull.js';
+import { compileDirectRecallRulesBlock, compileRecallRulesBlock } from '../pull.js';
 import { injectClaudeMdSection } from '../utils/claudemd.js';
 import { TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END } from '../types.js';
 
@@ -35,6 +35,18 @@ describe('compileRecallRulesBlock', () => {
 
   it('is idempotent (same input produces same output)', () => {
     expect(compileRecallRulesBlock()).toBe(compileRecallRulesBlock());
+  });
+});
+
+describe('compileDirectRecallRulesBlock (#945)', () => {
+  it('tells a tool without the recall subagent to run teamai recall itself, inside the same markers', () => {
+    const block = compileDirectRecallRulesBlock();
+    expect(block.startsWith(TEAMAI_RECALL_RULES_START)).toBe(true);
+    expect(block.endsWith(TEAMAI_RECALL_RULES_END)).toBe(true);
+    expect(block).toContain('teamai recall "');
+    expect(block).toMatch(/Before/);
+    expect(block).not.toContain('teamai-recall');
+    expect(block).not.toMatch(/[\u4e00-\u9fff]/);
   });
 });
 

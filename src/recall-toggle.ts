@@ -2,22 +2,19 @@ import path from 'node:path';
 import { autoDetectInit, saveLocalConfigForScope } from './config.js';
 import { log } from './utils/logger.js';
 import { remove, pathExists } from './utils/fs.js';
-import { removeClaudeMdSection } from './utils/claudemd.js';
-import { isToolInstalledForConfig } from './resources/base.js';
+import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets } from './instruction-targets.js';
 import {
   ALL_SUPPORTED_TOOLS,
   agentFileExtensionForTool,
   type ToolName,
 } from './resources/agent-format.js';
-import { ruleFileExtensionForTool, writesInstructionBlock } from './resources/rule-format.js';
+import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
   resolveToolBaseDir,
   isRecallEnabled,
   isAgentExcluded,
   scopedToolPaths,
-  TEAMAI_RECALL_RULES_START,
-  TEAMAI_RECALL_RULES_END,
   type GlobalOptions,
   type TeamaiConfig,
   type LocalConfig,
@@ -65,15 +62,29 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
         }
       }
     }
-
-    // Remove recall block from CLAUDE.md
-    if (toolPath.claudemd) {
-      const claudeMdPath = path.join(baseDir, toolPath.claudemd);
-      if (await removeClaudeMdSection(claudeMdPath, TEAMAI_RECALL_RULES_START, TEAMAI_RECALL_RULES_END, { deleteIfEmpty: true })) {
-        log.debug(`Removed recall rules block from ${tool} CLAUDE.md`);
-      }
-    }
   }
+
+  // Remove the recall block from every file teamai may have written it to.
+  await writeRecallBlock(teamConfig, localConfig, null);
+}
+
+/** Set or remove (`null`) the recall blocks wherever teamai delivers instruction blocks. */
+async function writeRecallBlock(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  blocks: { recall: string; directRecall: string } | null,
+): Promise<void> {
+  const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+  const { targets, stale } = resolved;
+  // Removal also reaches files no installed tool reads any more, but leaves
+  // their other blocks to the next pull's cleanup.
+  const files = blocks === null ? [...targets, ...stale] : targets;
+  const plan = await planInstructionFiles(files, blocks ?? { recall: null, directRecall: null });
+  for (const warning of plan.warnings) log.warn(warning);
+  const { report, failures, files: results } = await applyInstructionPlan(plan, { dryRun: false });
+  for (const line of report) log.debug(line);
+  for (const failure of failures) log.warn(failure);
+  await registerOpencodeContext(teamConfig, localConfig, resolved, false, results);
 }
 
 async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
@@ -85,29 +96,8 @@ async function deployRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
   await deployBuiltinAgents(teamConfig, localConfig, { skipRecall: false });
   await deployBuiltinSkills(teamConfig, localConfig);
 
-  // Inject recall rules block into CLAUDE.md for Tier-1 tools
-  const { injectClaudeMdSection } = await import('./utils/claudemd.js');
-  const { compileRecallRulesBlock } = await import('./pull.js');
-  const recallBlock = compileRecallRulesBlock();
-
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (isAgentExcluded(localConfig, tool)) continue;
-    if (!writesInstructionBlock(tool, toolPath, 'recall')) continue;
-    if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) continue;
-
-    const baseDir = resolveToolBaseDir(tool, localConfig);
-    const claudeMdPath = path.join(baseDir, toolPath.claudemd);
-    try {
-      await injectClaudeMdSection(
-        claudeMdPath,
-        TEAMAI_RECALL_RULES_START,
-        TEAMAI_RECALL_RULES_END,
-        recallBlock,
-      );
-    } catch {
-      // best-effort
-    }
-  }
+  const { compileDirectRecallRulesBlock, compileRecallRulesBlock } = await import('./pull.js');
+  await writeRecallBlock(teamConfig, localConfig, { recall: compileRecallRulesBlock(), directRecall: compileDirectRecallRulesBlock() });
 }
 
 export async function recallDisable(opts: GlobalOptions): Promise<void> {

@@ -573,8 +573,10 @@ describe('doctor — rules delivered on disk', () => {
 
     expect(forDoctor.filter((n) => !forPull.includes(n)).sort()).toEqual([
       'Agents delivered to claude',
+      'No team instruction blocks are left in files no tool loads them from',
       'Rules delivered to claude',
       'Rules delivered to cursor',
+      'Team instructions are current for cursor',
     ]);
     // Everything the pull stage keeps is also in the doctor stage.
     expect(forPull.filter((n) => !forDoctor.includes(n))).toEqual([]);

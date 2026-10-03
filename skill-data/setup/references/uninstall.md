@@ -14,11 +14,13 @@ machine** (all tools)?"*
 
 - **Just this tool** → `--agent <tool>` (use the tool this conversation runs in,
   e.g. `claude`). Shared resources are removed only if it is the last tool using
-  them. An instructions file several tools read (the project `AGENTS.md` of Pi,
-  Hermes and WorkBuddy) is cleaned block by block: a teamai block stays while
-  a remaining tool on that file still writes it, so `--agent workbuddy` with Pi
-  still enabled removes the recall block and keeps the rest. A file teamai
-  created goes with its last block; one the user had before stays, even if empty.
+  them. An instructions file several tools read (CodeBuddy and WorkBuddy share
+  `.codebuddy/rules/teamai-context.md`) is cleaned block by block: a teamai
+  block stays while a remaining tool on that file still writes it, so
+  `--agent workbuddy` keeps that file while CodeBuddy is installed. A file an
+  earlier release wrote the blocks to, such as the project `AGENTS.md`, loses
+  its teamai blocks, since no tool reads them there now. A file teamai created
+  goes with its last block; one the user had before stays, even if empty.
 - **Whole machine** → no `--agent` flag.
 
 Reassure them (in their language): *"This only removes things from your computer.
@@ -26,6 +28,8 @@ Your team's repo on the website is untouched — you can rejoin any time with
 `/teamai` and the repo URL."*
 
 ## Step 2 — Run it (you run it)
+
+A targeted project exclusion needs the same confirmation even when there are no local files to remove. `--dry-run` and declining confirmation leave the project config unchanged.
 
 Whole machine:
 
@@ -61,6 +65,22 @@ and give it your team repo URL."*
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any
   changes you need, then delete the copy manually.
+- If an OpenCode config entry cannot be removed, repair its config or permissions
+  and retry the same uninstall command. Uninstall reports failure and keeps
+  its ownership record and shared data directory, even for the last tool.
+- Project uninstall keeps the global Pi and Oh My Pi extensions, Hermes
+  plugin and config, and the Codex family's user-level hooks, which the user
+  scope, the HTTP agent or another project may use, and names them. If none
+  does, run `teamai hooks remove` in the project first: it removes them.
+  Targeted project Codex uninstall keeps project config and records its
+  exclusion, even without local resources. Legacy project hook copies go.
+  User-scope uninstall removes these global channels.
+  The retained adapters respect project exclusions, including cached HTTP
+  prompt injection and HTTP sync. An excluded tool does not download its
+  resources again on the next session start.
+- An enabled, installed Pi, Oh My Pi, Hermes or project Codex also keeps the
+  project's shared state in use without a local tool directory. Uninstalling
+  another tool preserves that state and the remaining tool's instructions.
 - Do **not** delete the team repo on the Git platform — uninstall never touches it,
   and neither should you.
 - If the user only wants to stop auto-sync for one tool but keep TeamAI otherwise,

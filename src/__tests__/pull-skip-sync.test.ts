@@ -689,7 +689,7 @@ describe('pull skip-sync refreshes CLAUDE.md recall block (CLI upgrade)', () => 
     expect(updated.split(TEAMAI_RECALL_RULES_END).length - 1).toBe(1);
   });
 
-  it('does not touch CLAUDE.md when recall is disabled for the scope', async () => {
+  it('removes the recall block when recall is disabled for the scope (#945)', async () => {
     vi.mocked(loadLocalConfigForScope).mockResolvedValue({
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser',
@@ -704,8 +704,8 @@ describe('pull skip-sync refreshes CLAUDE.md recall block (CLI upgrade)', () => 
     await pull({});
 
     const after = await fse.readFile(claudeMdPath, 'utf8');
-    // Untouched: the stale block remains exactly as seeded.
-    expect(after).toContain('you **MUST** first invoke the `teamai-recall` subagent');
+    expect(after).not.toContain(TEAMAI_RECALL_RULES_START);
+    expect(after).toContain('# CLAUDE.md');
   });
 
   it('refreshes Copilot recall instructions under a custom COPILOT_HOME', async () => {
@@ -1035,8 +1035,7 @@ describe('enabledAgents whitelist on pull inject, skip-sync, and cleanup (#510)'
 
     await pull({ silent: true });
 
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to inject culture into copilot'));
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to inject shared instructions into copilot'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`Could not update ${instructionPath}`));
     expect((await fse.stat(instructionPath)).isDirectory()).toBe(true);
   });
 
