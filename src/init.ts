@@ -1108,7 +1108,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   // No preview yet, and loading the config below already bootstraps a clone
   // whose teamai.yaml says `mode: self` (#852), so stop before anything (#900).
   if (options.dryRun) {
-    log.error(noDryRunPreview('init --self'));
+    log.error(noDryRunPreview('init'));
     process.exit(1);
     return;
   }

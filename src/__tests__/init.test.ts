@@ -1051,7 +1051,7 @@ describe('init', () => {
       await init({ ...target, dryRun: true });
 
       expect(mockExit).toHaveBeenCalledWith(1);
-      expect(log.error).toHaveBeenCalledWith('teamai init --self has no --dry-run preview, nothing was run');
+      expect(log.error).toHaveBeenCalledWith('teamai init has no --dry-run preview, nothing was run');
       expect(loadLocalConfigForScope).not.toHaveBeenCalled();
       expect(saveLocalConfigForScope).not.toHaveBeenCalled();
     });
