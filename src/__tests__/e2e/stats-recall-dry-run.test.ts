@@ -199,6 +199,21 @@ describe('stats --dry-run writes no local state (#900 C6)', () => {
   });
 });
 
+// A plain `stats` is a read, so it loads its own scope as `status` and `list`
+// do (#901): a legacy role config is not migrated in place (#972).
+describe('stats leaves a legacy role config as it is (#972)', () => {
+  it('a plain run reads the config without migrating it', async () => {
+    const team = setupTeam('teamai-972-');
+    sandboxes.push(team.sandbox);
+    const before = fs.readFileSync(team.configPath);
+
+    const { code } = await runCLI(['stats'], team.homeDir, team.cwd);
+
+    expect(code).toBe(0);
+    expect(fs.readFileSync(team.configPath)).toEqual(before);
+  });
+});
+
 // `recall <query> --dry-run` recorded the session's recall quality and, with
 // no index or a legacy one, rebuilt the index and saved it (#900, C9).
 describe('recall <query> --dry-run writes no local state (#900 C9)', () => {

@@ -50,7 +50,8 @@ export function aggregateUsage(events: UsageEvent[]): SkillStats[] {
  */
 async function loadReportedStats(dryRun = false): Promise<UserStats | null> {
   try {
-    const config = await resolveConfigForDir(undefined, undefined, { dryRun });
+    // A read: loaded as `status` and `list` load it, never migrated (#972).
+    const config = await resolveConfigForDir(undefined, undefined, { dryRun: true });
     if (!config) return null;
     // Non-HTTP: stats live on the teamai-reports orphan branch worktree.
     // Leftover stats/ on the default-branch clone is ignored. Read-only: never
@@ -216,7 +217,7 @@ export interface ShowStatsOptions {
   byRepo?: boolean;
   /** Add a time-of-day activity breakdown. */
   byTime?: boolean;
-  /** Write nothing: no config migration, no owners seed, no reports refresh. */
+  /** Write nothing: no owners seed, no reports refresh. The config is never migrated. */
   dryRun?: boolean;
 }
 
@@ -228,7 +229,8 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // The same scope loadReportedStats reads, so local and reported totals match;
   // a directory without teamai has no usage of its own (#748).
   const dryRun = !!options.dryRun;
-  const config = await resolveConfigForDir(undefined, undefined, { dryRun });
+  // A read: loaded as `status` and `list` load it, never migrated (#972).
+  const config = await resolveConfigForDir(undefined, undefined, { dryRun: true });
   const events = config ? await readUsageEvents(config) : [];
   const localStats = aggregateUsage(events);
   const reported = await loadReportedStats(dryRun);
