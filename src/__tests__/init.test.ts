@@ -123,8 +123,6 @@ vi.mock('../local-agent.js', async (importOriginal) => ({
 }));
 vi.mock('../hooks.js', async (importOriginal) => ({
   describeUnappliedTeamHooks: (await importOriginal<typeof import('../hooks.js')>()).describeUnappliedTeamHooks,
-  codexTrustReminder: (await importOriginal<typeof import('../hooks.js')>()).codexTrustReminder,
-  hasInstalledCodexTrustGatedTool: (await importOriginal<typeof import('../hooks.js')>()).hasInstalledCodexTrustGatedTool,
   injectHooksToAllTools: vi.fn(),
   reconcileTeamHooksForConfig: vi.fn(async () => ({ ok: true, defs: [] })),
   hasTeamaiHooks: vi.fn(async () => true),
@@ -819,9 +817,8 @@ describe('init', () => {
     });
   });
 
-  // #946: a project's team rules reach Codex only through its hooks, which
-  // Codex runs once the member trusts them.
-  describe('the Codex trust reminder', () => {
+  // #946 project rules use the hooks automatically trusted by #955.
+  describe('the Codex trust result', () => {
     async function initWithCodex(enabledAgents: string[]): Promise<string> {
       const { log } = await import('../utils/logger.js');
       const { TeamaiConfigSchema } = await import('../types.js');
@@ -844,11 +841,13 @@ describe('init', () => {
       return vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).join('\n');
     }
 
-    it('is printed when Codex is installed, and says a project\'s team rules wait on it', async () => {
+    it('reports automatic trust without an unconditional manual-trust warning', async () => {
+      const { reportCodexTrust, trustCodexForScope } = await import('../hooks.js');
       const warned = await initWithCodex(['codex', 'claude']);
 
-      expect(warned).toContain('open /hooks');
-      expect(warned).toContain('team rules');
+      expect(trustCodexForScope).toHaveBeenCalledWith(expect.anything(), expect.anything(), { filterAgents: ['codex', 'claude'], force: true });
+      expect(reportCodexTrust).toHaveBeenCalledWith(undefined, 'all');
+      expect(warned).not.toContain('open /hooks');
     });
 
     it('is not printed when Codex is not enabled', async () => {
