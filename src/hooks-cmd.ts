@@ -99,23 +99,22 @@ export async function hooksInject(options: GlobalOptions): Promise<void> {
     const { localConfig, teamConfig } = await autoDetectInit();
 
     // Explicit user action → not gated by sharing.hooks.autoApply (auto: false).
-    const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
-        auto: false,
-        silent: options.silent,
-    });
+    let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
+    try {
+        reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
+            auto: false,
+            silent: options.silent,
+        });
+    } finally {
+        // Git-hook installation can fail after the Codex hooks were written.
+        const codexTrust = await trustCodexForScope(teamConfig, localConfig, { force: true });
+        if (!options.silent) reportCodexTrust(codexTrust, 'all');
+    }
     // The reason is already reported; the installed team hooks were left as they were.
     if (!reconciled.ok) {
         process.exitCode = 1;
     }
-    // The public Codex skips a hook it does not trust, so trust what was just
-    // written (#955). An explicit inject always asks Codex, whatever the last
-    // pass recorded.
-    const codexTrust = await trustCodexForScope(teamConfig, localConfig, { force: true });
-
-    if (!options.silent) {
-        if (reconciled.ok) log.success('Hooks injected into all AI tool settings');
-        reportCodexTrust(codexTrust, 'all');
-    }
+    if (!options.silent && reconciled.ok) log.success('Hooks injected into all AI tool settings');
 }
 
 /**

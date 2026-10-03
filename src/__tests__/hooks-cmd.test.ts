@@ -222,6 +222,19 @@ describe('hooksInject', () => {
         }
     });
 
+    it.each([false, true])('trusts written Codex hooks while preserving git-hook installation failure, silent=%s', async (silent) => {
+        const failure = new Error('Could not install the teamai git hook in /repo: EACCES');
+        mockedReconcileForConfig.mockRejectedValue(failure);
+        mockedTrustCodex.mockResolvedValue({ kind: 'trusted', hooks: 8 });
+
+        await expect(hooksInject({ silent })).rejects.toBe(failure);
+
+        expect(mockedTrustCodex).toHaveBeenCalledWith(mockTeamConfig, mockLocalConfig, { force: true });
+        expect(mockedLog.success).not.toHaveBeenCalledWith(expect.stringContaining('Hooks injected'));
+        if (silent) expect(mockedLog.success).not.toHaveBeenCalled();
+        else expect(mockedLog.success).toHaveBeenCalledWith('Trusted 8 teamai hook(s) in Codex');
+    });
+
     it('fails, without the success line, when the git hook cannot be installed', async () => {
         mockedReconcileForConfig.mockRejectedValue(new Error('Could not install the teamai git hook in /repo: EACCES'));
         await expect(hooksInject({})).rejects.toThrow('Could not install the teamai git hook');
