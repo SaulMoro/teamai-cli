@@ -10,7 +10,7 @@ import type { Command } from 'commander';
  * guards its writes) or only reads.
  */
 export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
-  'init', // multi-repo preview; `--http` is refused below, `--self` in init.ts
+  'init', // multi-repo preview; `--http` and `--self` / `.` are refused below
   'push',
   'pull',
   'status',
@@ -130,5 +130,10 @@ export function dryRunRefusal(command: Command): string | undefined {
   const opts = command.opts();
   if (path === 'codebase' && opts.extract !== undefined) return noDryRunPreview('codebase --extract');
   if (path === 'init' && opts.http !== undefined) return noDryRunPreview('init --http');
+  // As init() reads it: the positional wins over --repo. initSelfRepo refuses too,
+  // for callers that bypass the CLI; refusing here also skips the migration step.
+  if (path === 'init' && (opts.self || (command.args[0] ?? opts.repo ?? '').trim() === '.')) {
+    return noDryRunPreview('init --self');
+  }
   return DRY_RUN_PREVIEW.has(path) ? undefined : noDryRunPreview(path);
 }
