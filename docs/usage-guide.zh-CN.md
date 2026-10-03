@@ -1844,7 +1844,7 @@ teamai hooks remove    # 移除
 
 `hooks list` 按工具分别列出内置 hooks，因为各工具的集合并不相同：Copilot 额外有 `SessionEnd`，Claude Code、Codex、CodeBuddy 和 Qoder 额外有 `SubagentStop`，Codex 系工具还额外有 `SubagentStart`（为其启动的子 agent 提供项目的团队 rule 和指令），OMP 扩展覆盖四个事件且没有 `Skill` / `TodoWrite` matcher，OpenClaw 只映射 `SessionStart` + `UserPromptSubmit`，Hermes 只有 `SessionStart`。hook 注入流程不会为其安装任何内置 hook 的工具（如 JoyCode）不会列出；Kiro 也不列出——它的 `SessionStart` 由 agent 同步以 `hooks.agentSpawn` 形式内嵌，只存在于你实际同步过的 agent 中。
 
-inject 和 remove 只会操作你实际已安装的工具（即 `~/.<tool>/` 根目录已存在的工具）。对于 `toolPaths` 中已配置但未安装的工具，命令不会为其凭空创建根目录。HOME 根目录缺失或已迁移时，remove 仍会检查主 checkout 中现存的 Claude/Codex hook 文件。
+inject 和 remove 只会操作你实际已安装的工具（即 `~/.<tool>/` 根目录已存在的工具）。对于 `toolPaths` 中已配置但未安装的工具，命令不会为其凭空创建根目录。HOME 和当前 worktree 的工具根目录缺失时，主 checkout 中现存的 Claude/Codex hook 文件也视为已安装的目标。inject 和 pull 会更新这些团队 hooks 并恢复 HOME 中的内置 hooks；remove 会清理主 checkout 中的托管 hooks，而不重建 HOME 根目录。
 
 非-self 的 project scope 中，`hooks remove` 会移除 HOME 中当前 checkout 的门控团队 hooks，以及主 checkout 中 Claude/Codex 的团队 hooks。其他项目的门控团队 hooks 保留在 HOME；共享的内置 hooks 会被移除。
 

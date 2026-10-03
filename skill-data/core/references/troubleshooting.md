@@ -32,8 +32,10 @@ This is the #1 onboarding issue. In order:
    settings (e.g. `~/.claude/settings.json`), not the project folder; the team's own
    hooks for Claude Code and Codex go to the main checkout
    (`.claude/settings.local.json`, `.codex/hooks.json`). That is intentional.
-   Removal also checks existing Claude/Codex main-checkout hook files when the
-   HOME tool root is missing or relocated.
+   Existing Claude/Codex main-checkout hook files count as installed targets
+   even when HOME and current worktree tool roots are missing. Injection and
+   pull update team hooks and restore HOME built-ins; removal clears managed
+   main-checkout hooks without recreating HOME roots.
    In project scope, `teamai hooks remove` preserves other projects' gated team
    hooks in HOME, while removing the shared built-in hooks.
    If you initialized project scope but expected machine-wide resources, re-run

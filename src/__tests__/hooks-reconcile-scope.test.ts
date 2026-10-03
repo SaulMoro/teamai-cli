@@ -725,6 +725,50 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     expect(await read()).toEqual(before);
   });
 
+  it.each(['claude', 'codex'])('refreshes existing %s main hooks and restores HOME built-ins when both tool roots are missing', async (tool) => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const cfg = { ...localConfig(), projectRoot: worktree };
+    const file = path.join(main, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+    const homeFile = path.join(home, tool === 'claude' ? '.claude/settings.json' : '.codex/hooks.json');
+    try {
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      const member = { hooks: [{ type: 'command', command: 'echo member' }] };
+      const json = await fse.readJson(file);
+      json.hooks.Stop.push(member);
+      await fse.writeJson(file, json);
+      await fse.remove(path.join(home, `.${tool}`));
+      await writeYaml(STOP_LINT.replace('npm run lint', 'npm run lint:fix'));
+
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+
+      const entries = (await fse.readJson(file)).hooks.Stop;
+      expect(entries).toHaveLength(2);
+      expect(entries).toContainEqual(member);
+      expect(entries.some((entry: { hooks: Array<{ command: string }> }) => entry.hooks[0].command.includes('npm run lint:fix'))).toBe(true);
+      expect((await fse.readJson(homeFile)).hooks.SessionStart).toHaveLength(1);
+      expect(await fse.pathExists(path.join(worktree, `.${tool}`))).toBe(false);
+      const before = await fse.readFile(file, 'utf8');
+      await reconcileTeamHooksForConfig(teamConfig, cfg);
+      expect(await fse.readFile(file, 'utf8')).toBe(before);
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
+  it('does not install absent tools without an existing main-checkout hook file', async () => {
+    await writeYaml(STOP_LINT);
+    await fse.remove(path.join(home, '.claude'));
+    await fse.remove(path.join(home, '.codex'));
+
+    await reconcileTeamHooksForConfig(teamConfig, localConfig());
+
+    for (const root of [home, project]) {
+      expect(await fse.pathExists(path.join(root, '.claude'))).toBe(false);
+      expect(await fse.pathExists(path.join(root, '.codex'))).toBe(false);
+    }
+  });
+
   it('removes main-checkout hooks without recreating missing HOME roots', async () => {
     await writeYaml(STOP_LINT);
     const { main, worktree } = await mainWithWorktree();

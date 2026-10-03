@@ -1957,8 +1957,9 @@ export async function reconcileHooksToAllTools(
     const installedRoot = opts.installedBaseDir
       ? path.join(opts.installedBaseDir, toolInstallRoot(paths.settings))
       : toolRoot;
-    const installed = await pathExists(toolRoot) || await pathExists(installedRoot);
     const mainFile = mainCheckoutHookFile(opts.mainCheckout, tool);
+    const installed = await pathExists(toolRoot) || await pathExists(installedRoot)
+      || (!opts.removeAll && mainFile !== null && await pathExists(mainFile));
     // Existing main-checkout hooks can be removed after HOME was deleted or
     // relocated. Do not recreate the missing HOME root just to remove them.
     if (!installed && !(opts.removeAll && mainFile)) continue;
