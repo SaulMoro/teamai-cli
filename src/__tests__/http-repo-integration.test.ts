@@ -4,6 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import YAML from 'yaml';
 import { startMockServer, type MockServerHandle } from './helpers/mock-server.js';
+import { installFakeCodex, readFakeCodexState } from './helpers/fake-codex.js';
+import * as gitHook from '../git-hook.js';
+import { log } from '../utils/logger.js';
 
 let tmpDir: string;
 let originalHome: string;
@@ -40,6 +43,51 @@ function writeApiKey(): void {
 }
 
 describe('teamai init --http (read-only onboarding)', () => {
+  it.each([false, true])('trusts written Codex SessionStart hooks after project HTTP init, gitHookFailure=%s', async (gitHookFailure) => {
+    writeApiKey();
+    server = await startMockServer({ apiKey: API_KEY });
+    const project = path.join(tmpDir, 'project');
+    const codexHome = path.join(tmpDir, '.codex');
+    fs.mkdirSync(project);
+    fs.mkdirSync(codexHome);
+    const fakeBin = installFakeCodex();
+    const oldPath = process.env.PATH;
+    const oldCwd = process.cwd();
+    const oldExitCode = process.exitCode;
+    process.env.PATH = `${fakeBin}${path.delimiter}${oldPath ?? ''}`;
+    process.chdir(project);
+    const failure = new Error('EACCES: read-only .git/config');
+    const install = vi.spyOn(gitHook, 'installGitHook');
+    if (gitHookFailure) install.mockRejectedValueOnce(failure);
+    const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+    try {
+      const { init } = await import('../init.js');
+      await init({ http: server.url, force: true, scope: 'project', agent: ['codex'] });
+      expect(fs.existsSync(path.join(codexHome, 'hooks.json'))).toBe(true);
+      if (gitHookFailure) {
+        expect(error).toHaveBeenCalledWith(expect.stringContaining(failure.message));
+        expect(process.exitCode).toBe(1);
+      }
+      const state = readFakeCodexState(codexHome);
+      expect(Object.keys(state.hooksState).some((key) => key.includes(':session_start:'))).toBe(true);
+      const { loadLocalConfigForScope, loadTeamConfig } = await import('../config.js');
+      const config = await loadLocalConfigForScope('project', project);
+      if (!config) throw new Error('HTTP init did not write its project config');
+      const teamConfig = await loadTeamConfig(config.repo.localPath);
+      if (!teamConfig) throw new Error('HTTP init did not write its team config');
+      const { readCodexHookTrustForScope } = await import('../hooks.js');
+      expect(await readCodexHookTrustForScope(teamConfig, config)).toMatchObject({ kind: 'listed', notTrusted: [] });
+    } finally {
+      process.exitCode = oldExitCode;
+      process.chdir(oldCwd);
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      install.mockRestore();
+      error.mockRestore();
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+
   it('writes a kind:http local config and a teamai.yaml stub (no repo clone)', async () => {
     writeApiKey();
     server = await startMockServer({ apiKey: API_KEY });

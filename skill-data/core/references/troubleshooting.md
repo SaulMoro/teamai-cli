@@ -39,10 +39,12 @@ This is the #1 onboarding issue. In order:
    even when HOME and current worktree tool roots are missing. Injection and
    pull update team hooks and restore HOME built-ins; removal clears managed
    main-checkout hooks without recreating HOME roots.
-   If Git-hook installation fails after writing agent hooks, `hooks inject`
-   and self-repo bootstrap still attempt Codex trust. Injection preserves the
-   installation error without reporting overall success; bootstrap records
-   the error in the debug log and continues local setup.
+   If Git-hook installation fails after writing agent hooks, `hooks inject`,
+   `init` and self-repo bootstrap still attempt Codex trust. Injection preserves
+   the installation error without reporting overall success. Init reports the
+   error and retains exit code 1 while completing local setup, including HTTP
+   initialization. Bootstrap records the error in the debug log and continues
+   local setup.
    In project scope, `teamai hooks remove` preserves other projects' gated team
    hooks in HOME, while removing the shared built-in hooks.
    If you initialized project scope but expected machine-wide resources, re-run
