@@ -435,6 +435,20 @@ describe('OMP gets its own rule render, namespaced rules flat (#946)', () => {
     ]);
   });
 
+  it('keeps a file of the author\'s own that has the flat name of a rule they placed in a namespace (#946)', async () => {
+    const state = await loadStateForScope(localConfig);
+    state.placedRules = { style: 'rules/fe/style.md' };
+    await saveStateForScope(state, localConfig);
+    // Not on record and not the render: the member wrote it.
+    const own = path.join(userRules(), 'fe.style.md');
+    await fse.outputFile(own, 'My own frontend notes.\n');
+
+    await handler.pullAllRules(teamConfig, localConfig, undefined, [], openLedger({}));
+
+    expect(await fse.readFile(path.join(userRules(), 'style.md'), 'utf8')).toBe(OMP_NS);
+    expect(await fse.readFile(own, 'utf8')).toBe('My own frontend notes.\n');
+  });
+
   it('reclaims an unrecorded nested copy an older teamai wrote verbatim, on a machine with no delivery record', async () => {
     const nested = path.join(userRules(), 'fe', 'style.md');
     await fse.outputFile(nested, NS);

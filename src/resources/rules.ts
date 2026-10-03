@@ -7,8 +7,7 @@ import { getUserHome } from '../utils/home.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
-import { splitFrontmatter } from '../utils/frontmatter.js';
-import { rulePaths } from './team-rule.js';
+import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
 import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
 import type { OpencodeRulesTarget } from './opencode-config.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
@@ -433,7 +432,22 @@ export class RulesHandler extends ResourceHandler {
         if (dest !== legacyCopy) await remove(legacyCopy);
         // The namespaced copy an earlier pull wrote beside the author's root
         // copy: the same rule twice, for a tool that loads rules recursively.
-        if (supersedes) await remove(supersedes);
+        // A flat name (OMP's, Kiro's `fe.style.md`) may be the member's own
+        // file or an edited copy: only one holding what was recorded or the
+        // render goes (#946).
+        if (supersedes && ruleFormatForTool(tool)?.flat) {
+          const disk = await fileHash(supersedes);
+          const recorded = ledger?.previous?.[supersedes];
+          if (disk !== null && (disk === recorded || disk === contentHash(content))) {
+            await remove(supersedes);
+            if (ledger) forgetDelivered(ledger.hashes, supersedes);
+          } else if (disk !== null && recorded !== undefined) {
+            warnOnce(`Kept ${supersedes}: you edited it after teamai delivered it, and ${tool} also reads ${dest}, the same rule. `
+              + 'Delete it once you have saved what you need.');
+          }
+        } else if (supersedes) {
+          await remove(supersedes);
+        }
         log.debug(`Synced rule ${item.name} → ${tool}`);
       } catch (e) {
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
@@ -1385,11 +1399,12 @@ export async function inlinedRulesText(rules: ResourceItem[]): Promise<string> {
   for (const rule of rules) {
     const content = await readFileSafe(rule.sourcePath);
     if (!content) continue;
-    const { data, body } = splitFrontmatter(content);
-    if (body.trim() === '') continue;
-    const paths = rulePaths(data);
+    // The tolerant parse the native renders use, so `paths: **/*.ts` keeps its hint (#946).
+    const body = teamRuleBody(content);
+    if (body === '') continue;
+    const paths = rulePaths(teamRuleData(content));
     const scope = paths.length > 0 ? `Applies to files matching: ${paths.join(', ')}\n` : '';
-    bodies.push(`${scope}${body.trim()}`);
+    bodies.push(`${scope}${body}`);
   }
   return bodies.join('\n\n');
 }

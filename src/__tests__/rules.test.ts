@@ -1725,6 +1725,12 @@ describe('inlinedRulesText — rules inlined into one instructions file (#938)',
     );
   });
 
+  it('keeps the path hint of a rule scoped with an unquoted glob (#946)', async () => {
+    const rules = [await rule('ts', '---\npaths: **/*.ts\n---\n\nUse strict types.\n')];
+
+    expect(await inlinedRulesText(rules)).toBe('Applies to files matching: **/*.ts\nUse strict types.');
+  });
+
   it('skips a rule whose body is empty once its frontmatter is gone', async () => {
     const rules = [
       await rule('only-frontmatter', '---\npaths:\n  - "src/**"\n---\n\n'),
