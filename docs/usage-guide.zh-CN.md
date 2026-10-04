@@ -568,6 +568,7 @@ teamai init --http https://your-team-host/api --token <api-key>
 - 只读模式：`push` / `contribute` / `remove` 不可用，`import --from-mr` 无法发布其 learning（`--dry-run` 和 `--output` 仍可用）。
 - 无需 git clone——skills/rules 通过 report/sync/ack 生命周期按 session 下发。
 - 支持的 agent 在 session 启动时自动上报已安装 skill 状态，并拉取服务端管理的安装/更新/卸载指令。
+- OpenClaw 的 HTTP prompt 在已存在且已解析的用户工作区中创建缺失的 `AGENTS.md`，并保留文件中已有的个人内容。
 - API key 存储为 `0600` 权限，也可通过 `TEAMAI_API_TOKEN` 环境变量传入。
 
 **验证：**

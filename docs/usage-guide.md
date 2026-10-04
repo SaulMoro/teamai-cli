@@ -656,6 +656,7 @@ teamai init --http https://your-team-host/api --token <api-key>
 - Read-only mode: `push` / `contribute` / `remove` are not available, and `import --from-mr` cannot publish its learning (`--dry-run` and `--output` still work).
 - No git clone required — skills/rules are delivered via a report/sync/ack lifecycle on a per-session basis.
 - Supported agents automatically report their installed skill state at session start, and pull install/update/uninstall commands managed by the server.
+- OpenClaw HTTP prompts create `AGENTS.md` in an existing resolved user workspace when the file is absent; existing personal text is preserved.
 - The API key is stored with `0600` permissions, or can be passed via the `TEAMAI_API_TOKEN` environment variable.
 
 **Verify:**

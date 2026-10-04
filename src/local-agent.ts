@@ -2160,7 +2160,7 @@ async function syncClaudemd(
     // Probed through the tool's own paths, as pull does: WorkBuddy's project
     // target sits under .codebuddy, which says nothing about WorkBuddy.
     const toolInstalled = resolvedAbsPath
-      ? await pathExists(resolvedAbsPath)
+      ? await pathExists(path.dirname(resolvedAbsPath))
       : await isInstructionToolInstalled(tool, toolPath, localConfig);
     if (!toolInstalled) {
       log.debug(`Skipped CLAUDE.md sync for ${tool}: target not found`);
