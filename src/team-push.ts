@@ -24,6 +24,7 @@ import {
   creditedPrompts, interventionsEntry, promptTokensEntry, readOwnerCredits, recordSessionOwners, reportedBeyondShared, reportedSize,
   sharedSnapshotPath, snapshotPathIn,
   type ReportedInterventions, type ReportedPromptTokens, type ReportedSegments, type ReportedSnapshotName,
+  type OwnerCredit, type SessionOwnerState,
 } from './session-owners.js';
 import {
   aggregateDailySessions,
@@ -177,13 +178,14 @@ async function readSnapshot<T>(
   config: LocalConfig | undefined,
   split: (events: DashboardEvent[]) => Promise<{ current: Record<string, T>; take: TakeReported<T> }>,
   persist = true,
+  ownerState?: SessionOwnerState,
 ): Promise<Record<string, T> | null> {
   const own = scopeSnapshotPath(name, config);
   if (!config || await pathExists(own)) return readJson<Record<string, T>>(own);
   const shared = await readJson<Record<string, T>>(sharedSnapshotPath(name));
   const logged = await readEvents();
   const all = await runsOfLog(logged);
-  const events = await filterEventsByScope(logged, config);
+  const events = await filterEventsByScope(logged, config, { owners: ownerState?.owners, dryRun: !persist, suppressMigrationNotice: !persist });
   const { current, take } = await split(all);
   const adopted = adoptBareKeys(shared ?? {}, all, current, take, 'shared');
   // A tool's own session ID is one session, so its entry is copied whole, as
@@ -210,11 +212,11 @@ async function readSnapshot<T>(
   return seed;
 }
 
-export async function readReportedInterventions(config: LocalConfig | undefined, persist = true): Promise<ReportedInterventions> {
+export async function readReportedInterventions(config: LocalConfig | undefined, persist = true, ownerState?: SessionOwnerState): Promise<ReportedInterventions> {
   const parsed = await readSnapshot('interventions', config, async (events) => ({
     current: Object.fromEntries(interventionCounts(aggregateSessionMetrics(events))),
     take: takeInterventions(await sharedCoverage(events)),
-  }), persist);
+  }), persist, ownerState);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -346,11 +348,11 @@ function hasInterventionDelta(d: UserInterventionStats): boolean {
 //  Separate snapshot from interventions so each metric stays independently idempotent.
 //
 
-export async function readReportedPromptTokens(config: LocalConfig | undefined, persist = true): Promise<ReportedPromptTokens> {
+export async function readReportedPromptTokens(config: LocalConfig | undefined, persist = true, ownerState?: SessionOwnerState): Promise<ReportedPromptTokens> {
   const parsed = await readSnapshot('prompt-tokens', config, async (events) => ({
     current: computePromptTokenDelta(aggregateSessionMetrics(events), {}).nextReported,
     take: takePromptTokens,
-  }), persist);
+  }), persist, ownerState);
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -593,11 +595,11 @@ function hasPromptTokenDelta(d: PromptTokenDelta): boolean {
     || d.tokens.cacheRead > 0 || d.tokens.cacheCreation > 0;
 }
 
-async function readReportedDailySessions(config: LocalConfig | undefined, persist = true): Promise<ReportedDailySessions> {
+async function readReportedDailySessions(config: LocalConfig | undefined, persist = true, ownerState?: SessionOwnerState): Promise<ReportedDailySessions> {
   return (await readSnapshot('daily-sessions', config, async (events) => ({
     current: computeDailyStatsDelta(aggregateDailySessions(events), {}).nextReported,
     take: takeDaily(await sharedCoverage(events)),
-  }), persist)) ?? {};
+  }), persist, ownerState)) ?? {};
 }
 
 async function writeReportedDailySessions(data: ReportedDailySessions, config: LocalConfig | undefined): Promise<void> {
@@ -629,6 +631,7 @@ function hasDailyDelta(delta: ReturnType<typeof computeDailyStatsDelta>['delta']
 async function creditSplitRuns(
   events: DashboardEvent[],
   reported: { interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions },
+  ownerCredits?: ReadonlyMap<string, OwnerCredit>,
 ): Promise<{
   interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions; changed: boolean;
 }> {
@@ -638,7 +641,7 @@ async function creditSplitRuns(
     interventions: { ...reported.interventions }, promptTokens: { ...reported.promptTokens }, daily: { ...reported.daily },
     changed: false,
   };
-  const credits = await readOwnerCredits();
+  const credits = ownerCredits ?? await readOwnerCredits();
   for (const [runId, runEvents] of byRun) {
     const homes = new Set(runEvents.flatMap((e) => (typeof e.dataHome === 'string' ? [e.dataHome] : [])));
     // Its parts' events are gone: the credit the owners file seeded from their snapshots.
@@ -783,14 +786,15 @@ export async function reportedBaselines(
   currentDaily: Map<string, DailySessionSnapshot>,
   config: LocalConfig | undefined,
   persist: boolean,
+  ownerState?: SessionOwnerState,
 ): Promise<{ interventions: ReportedInterventions; promptTokens: ReportedPromptTokens; daily: ReportedDailySessions }> {
   const adopt = async <T>(
-    read: (config: LocalConfig | undefined, persist: boolean) => Promise<Record<string, T>>,
+    read: (config: LocalConfig | undefined, persist: boolean, ownerState?: SessionOwnerState) => Promise<Record<string, T>>,
     write: (data: Record<string, T>, config: LocalConfig | undefined) => Promise<void>,
     current: Record<string, T>,
     take: TakeReported<T>,
   ): Promise<Record<string, T>> => {
-    const stored = await read(config, persist);
+    const stored = await read(config, persist, ownerState);
     const adopted = adoptBareKeys(stored, events, current, take);
     if (persist && adopted !== stored) await write(adopted, config);
     return adopted;
@@ -807,7 +811,7 @@ export async function reportedBaselines(
     readReportedDailySessions, writeReportedDailySessions, computeDailyStatsDelta(currentDaily, {}).nextReported,
     takeDaily(covered),
   );
-  const credited = await creditSplitRuns(events, { interventions, promptTokens, daily });
+  const credited = await creditSplitRuns(events, { interventions, promptTokens, daily }, ownerState?.credits);
   if (persist && credited.changed) {
     await writeReportedInterventions(credited.interventions, config);
     await writeReportedPromptTokens(credited.promptTokens, config);

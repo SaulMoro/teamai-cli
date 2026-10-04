@@ -250,9 +250,13 @@ async function ownersFromSnapshots(options: { suppressMigrationNotice?: boolean 
 
 /** The credits the file's first line for each ID carries (see {@link creditOf}). */
 export async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
+  return parseOwnerCredits(await readFileSafe(sessionOwnersPath()));
+}
+
+function parseOwnerCredits(content: string | null): Map<string, OwnerCredit> {
   const credits = new Map<string, OwnerCredit>();
   const seen = new Set<string>();
-  for (const line of ((await readFileSafe(sessionOwnersPath())) ?? '').split('\n')) {
+  for (const line of (content ?? '').split('\n')) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -287,8 +291,23 @@ export async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
  * With `dryRun`, a missing file is not written: the seed is read in memory.
  */
 export async function readSessionOwners(options: { dryRun?: boolean; suppressMigrationNotice?: boolean } = {}): Promise<Map<string, string>> {
+  return parseSessionOwners(await readSessionOwnersContent(options));
+}
+
+/** One read of owners and credits, including the same in-memory seed for a preview. */
+export interface SessionOwnerState {
+  owners: Map<string, string>;
+  credits: Map<string, OwnerCredit>;
+}
+
+export async function readSessionOwnerState(options: { dryRun?: boolean; suppressMigrationNotice?: boolean } = {}): Promise<SessionOwnerState> {
+  const content = await readSessionOwnersContent(options);
+  return { owners: parseSessionOwners(content), credits: parseOwnerCredits(content) };
+}
+
+async function readSessionOwnersContent(options: { dryRun?: boolean; suppressMigrationNotice?: boolean }): Promise<string | null> {
   if (!(await pathExists(sessionOwnersPath()))) {
-    if (options.dryRun) return parseSessionOwners(await ownersFromSnapshots(options));
+    if (options.dryRun) return ownersFromSnapshots(options);
     try {
       await ensureDir(path.dirname(sessionOwnersPath()));
       // Exclusive: a report in another scope may be writing it too.
@@ -297,7 +316,7 @@ export async function readSessionOwners(options: { dryRun?: boolean; suppressMig
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') log.debug(`Could not seed session owners: ${(e as Error).message}`);
     }
   }
-  return parseSessionOwners(await readFileSafe(sessionOwnersPath()));
+  return readFileSafe(sessionOwnersPath());
 }
 
 function parseSessionOwners(content: string | null): Map<string, string> {

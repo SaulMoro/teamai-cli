@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { readSessionOwnerState, type SessionOwnerState } from './session-owners.js';
 import path from 'node:path';
 import { readUsageEvents } from './usage-tracker.js';
 import { readFileSafe } from './utils/fs.js';
@@ -158,6 +159,7 @@ async function unreportedDashboardStats(
   events: DashboardEvent[],
   metrics: Map<string, SessionMetrics>,
   config: LocalConfig,
+  ownerState: SessionOwnerState | undefined,
 ): Promise<AggregatedDashboardStats> {
   const {
     computeInterventionDelta, computePromptTokenDelta, droppedRollouts, interventionCounts, metricsAsOf, reportedBaselines,
@@ -167,7 +169,7 @@ async function unreportedDashboardStats(
   // The scope's own snapshots, compared as its report compares them (#786).
   const writtenAt = await snapshotWrittenAt(config);
   const currentDaily = aggregateDailySessions(events);
-  const { promptTokens, interventions, daily } = await reportedBaselines(events, metrics, currentDaily, config, false);
+  const { promptTokens, interventions, daily } = await reportedBaselines(events, metrics, currentDaily, config, false, ownerState);
   const dropped = droppedRollouts(metrics, promptTokens, interventions, daily, writtenAt, metricsAsOf(events, writtenAt));
   const currentInterventions = withDroppedRollouts(interventionCounts(metrics), currentDaily, dropped).interventions;
 
@@ -243,7 +245,10 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // count each one twice and pull in other projects' sessions). Same filter,
   // same scope config as the report path (#785).
   const { filterEventsByScope } = await import('./dashboard-scope.js');
-  const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined, { dryRun, suppressMigrationNotice: !dryRun });
+  const ownerState = config ? await readSessionOwnerState({ dryRun, suppressMigrationNotice: !dryRun }) : undefined;
+  const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined, {
+    dryRun, suppressMigrationNotice: !dryRun, owners: ownerState?.owners,
+  });
   const metricsMap = aggregateSessionMetrics(scopedEvents);
   // Only subtract what the team already holds. Two guards, because a scope's
   // snapshot is first seeded from the machine-wide one, so it can name sessions
@@ -264,7 +269,7 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
     || totalTokens(reported.tokens ?? emptyTokenUsage()) > 0
   );
   const localDashboard = config && teamHasReported
-    ? await unreportedDashboardStats(scopedEvents, metricsMap, config)
+    ? await unreportedDashboardStats(scopedEvents, metricsMap, config, ownerState)
     : aggregateDashboardStats(metricsMap);
   const dashboard = mergeDashboardAndReported(localDashboard, reported);
   const hasDashboardData =

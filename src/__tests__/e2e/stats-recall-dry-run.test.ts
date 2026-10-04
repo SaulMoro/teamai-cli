@@ -174,6 +174,54 @@ describe('stats --dry-run writes no local state (#900 C6)', () => {
     expect(output).toContain('[dry-run] Would migrate legacy teamai config');
   });
 
+  it.each([false, true])('credits a legacy split session like real stats, missing other snapshots=%s', async (missingSnapshots) => {
+    const team = setupTeam('teamai-c6-split-');
+    sandboxes.push(team.sandbox);
+    // Materialize only the reports checkout, before any snapshots can seed owners.
+    expect((await runCLI(['stats'], team.homeDir, team.cwd)).code).toBe(0);
+    const dataHome = path.join(team.homeDir, '.teamai');
+    const dashboard = path.join(dataHome, 'dashboard');
+    fs.mkdirSync(dashboard, { recursive: true });
+    fs.rmSync(path.join(dashboard, 'session-owners.jsonl'), { force: true });
+    if (!missingSnapshots) {
+      for (const name of ['interventions', 'daily-sessions']) {
+        fs.writeFileSync(path.join(dashboard, `user-reported-${name}.json`), '{}');
+      }
+    }
+    const otherDashboard = path.join(dataHome, 'projects', 'legacy-scope', 'dashboard');
+    fs.mkdirSync(otherDashboard, { recursive: true });
+    const tokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    const id = 'legacy-split-session';
+    // Three prompts here, two in another scope, all already in team totals.
+    fs.writeFileSync(path.join(dashboard, 'user-reported-prompt-tokens.json'),
+      JSON.stringify({ [id]: { prompts: 3, tokens } }));
+    fs.writeFileSync(path.join(otherDashboard, 'reported-prompt-tokens.json'),
+      JSON.stringify({ [id]: { prompts: 2, tokens } }));
+    const report = reportedStats(3) + 'prompts: 5\ninterventions: { sessions: 1, interrupt: 0, toolReject: 0, correction: 0 }\n';
+    fs.writeFileSync(path.join(dataHome, 'reports-wt', 'stats', 'alice.yaml'), report);
+    fs.writeFileSync(path.join(team.work, 'stats', 'alice.yaml'), report);
+    git(['commit', '-qam', 'split session totals'], team.work);
+    git(['push', '-q', 'origin', 'teamai-reports'], team.work);
+    fs.writeFileSync(path.join(dashboard, 'events.jsonl'), Array.from({ length: 6 }, (_, i) => JSON.stringify({
+      type: 'prompt_submit', sessionId: id, cwd: team.cwd, tool: 'claude',
+      timestamp: `2026-06-01T10:0${i}:00.000Z`,
+    })).join('\n') + '\n');
+    const before = snapshotTree(team.sandbox);
+
+    const preview = await runCLI(['stats', '--dry-run'], team.homeDir, team.cwd);
+
+    expect(preview.code, preview.output).toBe(0);
+    expect(snapshotTree(team.sandbox)).toEqual(before);
+    expect(fs.existsSync(path.join(dashboard, 'session-owners.jsonl'))).toBe(false);
+    const real = await runCLI(['stats'], team.homeDir, team.cwd);
+    expect(real.code, real.output).toBe(0);
+    expect(real.output).not.toContain('[dry-run]');
+    expect(real.output).toMatch(/Conversation turns: 6\b/);
+    const totals = (output: string) => output.split('\n').filter((line) => /Sessions:|Conversation turns:|Tokens \(total\):/.test(line));
+    expect(totals(preview.output)).toEqual(totals(real.output));
+    expect(fs.existsSync(path.join(dashboard, 'session-owners.jsonl'))).toBe(true);
+  });
+
   it('with a stale reports checkout: reads it as it is and says so', async () => {
     const team = setupTeam('teamai-c6-');
     sandboxes.push(team.sandbox);

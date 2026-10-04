@@ -627,7 +627,7 @@ teamai pull --dry-run    # 试运行，不实际修改
 
 没有 `--dry-run` 预览的命令（如 `teamai init`、`teamai hooks remove`、`teamai models add` / `configure` / `remove`、`teamai bind-project` 和 `teamai codebase --extract`）会拒绝该参数：打印 `teamai <command> has no --dry-run preview, nothing was run` 并以退出码 1 结束。
 
-`remove`、`roles init/add/remove/update`、`projects add/update/remove` 和 `import --from-repo/--from-repo-list` 支持 `--dry-run`。远程导入源优先于较低优先级的 iWiki 或 Claude 参数。在 #970 合并前，`stats` 和 `recall <query>` 拒绝该参数。`digest`、`import --from-claude` 和 `import --from-iwiki` 尚无安全预览，也拒绝该参数。`import --from-org`、`--from-mr`、`--dir` 和 `recall feedback` 的预览仍可使用。后合并的 PR 必须恢复已修复命令的 guard 分类。
+`remove`、`roles init/add/remove/update`、`projects add/update/remove` 和 `import --from-repo/--from-repo-list` 支持 `--dry-run`。远程导入源优先于较低优先级的 iWiki 或 Claude 参数。`digest`、`import --from-claude` 和 `import --from-iwiki` 尚无安全预览，也拒绝该参数。`stats`、`recall <query>`、`import --from-org`、`--from-mr`、`--dir` 和 `recall feedback` 的预览仍可使用。
 
 手动执行 `teamai pull` 会在结束时运行 `teamai doctor` 的检查，并逐条打印失败项及其修复建议——包括它刚刚报告同步的 skill 是否真的落到每个启用工具的磁盘上、且可被读取。全部通过时不会有任何额外输出，退出码也不变。SessionStart hook 路径和 `--dry-run` 完全不运行检查，会话启动速度保持不变。托管平台相关的检查（`gh`/`gf` 认证）留给 `teamai doctor`：这次 pull 刚刚用过该平台。
 
@@ -2254,7 +2254,7 @@ teamai remove mcp <name>
 teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 ```
 
-`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计；当该 scope 的 recall 日志中有 run 时，还会显示一个 recall 小节（见 [Recall 采纳与 upvote](#recall-采纳与-upvote)）。普通的 `teamai stats` 在内存中解析旧版角色，不保存 config，也不打印 dry-run 迁移提示。`teamai stats --dry-run` 保留迁移预览提示且不写入任何内容：它按现状读取 reports checkout，不刷新也不创建，并会说明这一点。
+`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计；当该 scope 的 recall 日志中有 run 时，还会显示一个 recall 小节（见 [Recall 采纳与 upvote](#recall-采纳与-upvote)）。普通的 `teamai stats` 在内存中解析旧版角色，不保存 config，也不打印 dry-run 迁移提示。`teamai stats --dry-run` 保留迁移预览提示且不写入任何内容：它按现状读取 reports checkout，不刷新也不创建，并会说明这一点。当 session owners 文件缺失时，预览在内存中使用同一份推断的归属与已上报额度，包括旧版本拆分到多个 scope 的会话。
 
 仅当所有检查通过时，`teamai doctor` 才以状态码 0 退出；任一检查失败时以状态码 1 退出。尚未初始化时，它只报告缺少配置，不会臆测 Git 托管平台。手动执行 `teamai pull` 结束时会运行同一批检查（不含托管平台相关的检查，也不含本次 pull 已经自行报告过的检查）。被标记为 informational 的检查——目前只有 `No stale env blocks left behind`——仍会计入 `doctor` 的退出码，但 pull 不会把它的失败并入 `Pull finished, but N check(s) failed`：早期安装留下的遗留文件属于清理事项，不代表这次 pull 弄坏了什么，因此依旧会被点名，只是单独用一行更轻的提示呈现。
 

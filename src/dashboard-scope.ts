@@ -33,7 +33,7 @@ import { REPORTED_SNAPSHOTS, readSessionOwners, snapshotPathIn } from './session
 export async function filterEventsByScope(
   events: DashboardEvent[],
   config?: LocalConfig,
-  options: { dryRun?: boolean; suppressMigrationNotice?: boolean } = {},
+  options: { dryRun?: boolean; suppressMigrationNotice?: boolean; owners?: ReadonlyMap<string, string> } = {},
 ): Promise<DashboardEvent[]> {
   if (!config) return events;
   const ownKey = await dataHomeKey(getDataHome(config));
@@ -60,7 +60,7 @@ export async function filterEventsByScope(
   };
   const eventKeys = await keysOf(events);
   const { runOf, runIds, deciding } = splitRuns(events, eventKeys);
-  const owners = await readSessionOwners(options);
+  const owners = options.owners ?? await readSessionOwners(options);
   const transcripts = new Map<number, string[]>();
   events.forEach((e, i) => {
     const run = runOf[i];
