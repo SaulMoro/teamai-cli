@@ -51,7 +51,7 @@ export function aggregateUsage(events: UsageEvent[]): SkillStats[] {
 async function loadReportedStats(dryRun = false): Promise<UserStats | null> {
   try {
     // A read: loaded as `status` and `list` load it, never migrated (#972).
-    const config = await resolveConfigForDir(undefined, undefined, { dryRun: true });
+    const config = await resolveConfigForDir(undefined, undefined, { dryRun: true, suppressMigrationNotice: !dryRun });
     if (!config) return null;
     // Non-HTTP: stats live on the teamai-reports orphan branch worktree.
     // Leftover stats/ on the default-branch clone is ignored. Read-only: never
@@ -230,7 +230,7 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // a directory without teamai has no usage of its own (#748).
   const dryRun = !!options.dryRun;
   // A read: loaded as `status` and `list` load it, never migrated (#972).
-  const config = await resolveConfigForDir(undefined, undefined, { dryRun: true });
+  const config = await resolveConfigForDir(undefined, undefined, { dryRun: true, suppressMigrationNotice: !dryRun });
   const events = config ? await readUsageEvents(config) : [];
   const localStats = aggregateUsage(events);
   const reported = await loadReportedStats(dryRun);
@@ -243,7 +243,7 @@ export async function showStats(options: ShowStatsOptions = {}): Promise<void> {
   // count each one twice and pull in other projects' sessions). Same filter,
   // same scope config as the report path (#785).
   const { filterEventsByScope } = await import('./dashboard-scope.js');
-  const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined, { dryRun });
+  const scopedEvents = await filterEventsByScope(await readEvents(), config ?? undefined, { dryRun, suppressMigrationNotice: !dryRun });
   const metricsMap = aggregateSessionMetrics(scopedEvents);
   // Only subtract what the team already holds. Two guards, because a scope's
   // snapshot is first seeded from the machine-wide one, so it can name sessions

@@ -171,6 +171,7 @@ describe('stats --dry-run writes no local state (#900 C6)', () => {
     expect(fs.existsSync(path.join(team.homeDir, '.teamai', 'dashboard', 'session-owners.jsonl'))).toBe(false);
     expect(fs.readFileSync(team.configPath, 'utf-8')).not.toContain('primaryRole');
     expect(output).toContain('Sessions:');
+    expect(output).toContain('[dry-run] Would migrate legacy teamai config');
   });
 
   it('with a stale reports checkout: reads it as it is and says so', async () => {
@@ -202,15 +203,25 @@ describe('stats --dry-run writes no local state (#900 C6)', () => {
 // A plain `stats` is a read, so it loads its own scope as `status` and `list`
 // do (#901): a legacy role config is not migrated in place (#972).
 describe('stats leaves a legacy role config as it is (#972)', () => {
-  it('a plain run reads the config without migrating it', async () => {
+  it.each([false, true])('a plain run reads silently without migrating, with events=%s', async (withEvents) => {
     const team = setupTeam('teamai-972-');
     sandboxes.push(team.sandbox);
     const before = fs.readFileSync(team.configPath);
+    if (withEvents) {
+      const dashboard = path.join(team.homeDir, '.teamai', 'dashboard');
+      fs.mkdirSync(dashboard, { recursive: true });
+      fs.writeFileSync(path.join(dashboard, 'events.jsonl'), JSON.stringify({
+        type: 'session_start', sessionId: 'legacy-stats', timestamp: '2026-06-01T10:00:00Z',
+        cwd: team.cwd, tool: 'claude',
+      }) + '\n');
+    }
 
-    const { code } = await runCLI(['stats'], team.homeDir, team.cwd);
+    const { code, output } = await runCLI(['stats'], team.homeDir, team.cwd);
 
     expect(code).toBe(0);
     expect(fs.readFileSync(team.configPath)).toEqual(before);
+    expect(output).not.toContain('[dry-run]');
+    if (withEvents) expect(output).toContain('Sessions:');
   });
 });
 

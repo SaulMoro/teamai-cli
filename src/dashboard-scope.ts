@@ -33,7 +33,7 @@ import { REPORTED_SNAPSHOTS, readSessionOwners, snapshotPathIn } from './session
 export async function filterEventsByScope(
   events: DashboardEvent[],
   config?: LocalConfig,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; suppressMigrationNotice?: boolean } = {},
 ): Promise<DashboardEvent[]> {
   if (!config) return events;
   const ownKey = await dataHomeKey(getDataHome(config));
@@ -45,7 +45,7 @@ export async function filterEventsByScope(
   }
   // Read paths: another directory's config is loaded, never migrated.
   const { resolveConfigForDir: resolve } = await import('./config.js');
-  const resolveConfigForDir = (dir: string) => resolve(dir, undefined, { dryRun: true });
+  const resolveConfigForDir = (dir: string) => resolve(dir, undefined, { dryRun: true, suppressMigrationNotice: options.suppressMigrationNotice });
   const resolvesHere = new Map<string, Promise<boolean>>();
   const ownsCwd = (cwd: string): Promise<boolean> => {
     let owns = resolvesHere.get(cwd);

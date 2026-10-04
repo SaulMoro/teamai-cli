@@ -2368,7 +2368,7 @@ teamai remove mcp <name>
 teamai remove rules <name> --force   # Skip the prompt, for scripts and CI
 ```
 
-`teamai stats` shows the current scope's skill usage and session totals, and a recall section when that scope's recall log has runs (see [Recall adoption and upvotes](#recall-adoption-and-upvotes)). `teamai stats --dry-run` writes nothing: it reads the reports checkout as it is, without refreshing or creating it, and says so.
+`teamai stats` shows the current scope's skill usage and session totals, and a recall section when that scope's recall log has runs (see [Recall adoption and upvotes](#recall-adoption-and-upvotes)). A plain `teamai stats` resolves legacy roles in memory without saving the config or printing dry-run migration notices. `teamai stats --dry-run` retains migration preview notices and writes nothing: it reads the reports checkout as it is, without refreshing or creating it, and says so.
 
 `teamai doctor` exits with code 0 only when every check passes, and code 1 when any check fails. Before initialization, it reports the missing configuration without assuming a Git provider. The same checks run at the end of a manual `teamai pull`, minus the provider ones and minus any check that pull already reported in its own words on that run. A check marked informational — currently only `No stale env blocks left behind` — still counts toward `doctor`'s exit code, but a pull does not fold its failure into `Pull finished, but N check(s) failed`: a leftover file from an earlier install is cleanup, not a sign this pull broke anything, so it is still named but on its own, gentler line.
 

@@ -71,7 +71,7 @@ function sessionOwnersPath(): string {
 }
 
 /** The data homes whose snapshots an earlier release may have written. */
-async function knownDataHomes(): Promise<string[]> {
+async function knownDataHomes(options: { suppressMigrationNotice?: boolean } = {}): Promise<string[]> {
   const slugs = await fs.promises.readdir(projectsRootDir()).catch(() => []);
   const homes = [getTeamaiHomeDir(), ...[...slugs].sort().map((slug) => path.join(projectsRootDir(), slug))];
   // A project whose data home is in its workspace is under no partition; a
@@ -80,7 +80,7 @@ async function knownDataHomes(): Promise<string[]> {
   const cwds = new Set((await readEvents()).flatMap((e) => (typeof e.cwd === 'string' ? [e.cwd] : [])));
   for (const cwd of cwds) {
     // A read: the config is loaded, never migrated.
-    const config = (await pathExists(cwd)) ? await resolveConfigForDir(cwd, undefined, { dryRun: true }) : null;
+    const config = (await pathExists(cwd)) ? await resolveConfigForDir(cwd, undefined, { dryRun: true, suppressMigrationNotice: options.suppressMigrationNotice }) : null;
     if (config) homes.push(getDataHome(config));
   }
   return [...new Set(homes.map((home) => path.resolve(home)))];
@@ -218,10 +218,10 @@ function creditOf(held: Array<{ key: string; snapshots: ScopeSnapshots }>, id: s
  * it with the greatest total, and, when several did, the credit of their parts.
  * A tie names no owner.
  */
-async function ownersFromSnapshots(): Promise<string> {
+async function ownersFromSnapshots(options: { suppressMigrationNotice?: boolean } = {}): Promise<string> {
   const shared = await readSnapshotsIn(undefined);
   const parts = new Map<string, Array<{ key: string; snapshots: ScopeSnapshots }>>();
-  for (const dataHome of await knownDataHomes()) {
+  for (const dataHome of await knownDataHomes(options)) {
     const snapshots = await readSnapshotsIn(dataHome);
     const ids = new Set([snapshots.interventions, snapshots.promptTokens, snapshots.daily].flatMap((snapshot) =>
       (snapshot && typeof snapshot === 'object' ? Object.keys(snapshot) : [])));
@@ -286,13 +286,13 @@ export async function readOwnerCredits(): Promise<Map<string, OwnerCredit>> {
  * The owner of each tool's own session ID, the file seeded first when missing.
  * With `dryRun`, a missing file is not written: the seed is read in memory.
  */
-export async function readSessionOwners(options: { dryRun?: boolean } = {}): Promise<Map<string, string>> {
+export async function readSessionOwners(options: { dryRun?: boolean; suppressMigrationNotice?: boolean } = {}): Promise<Map<string, string>> {
   if (!(await pathExists(sessionOwnersPath()))) {
-    if (options.dryRun) return parseSessionOwners(await ownersFromSnapshots());
+    if (options.dryRun) return parseSessionOwners(await ownersFromSnapshots(options));
     try {
       await ensureDir(path.dirname(sessionOwnersPath()));
       // Exclusive: a report in another scope may be writing it too.
-      await fs.promises.writeFile(sessionOwnersPath(), await ownersFromSnapshots(), { flag: 'wx' });
+      await fs.promises.writeFile(sessionOwnersPath(), await ownersFromSnapshots(options), { flag: 'wx' });
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') log.debug(`Could not seed session owners: ${(e as Error).message}`);
     }

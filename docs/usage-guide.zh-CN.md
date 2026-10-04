@@ -2211,7 +2211,7 @@ teamai remove mcp <name>
 teamai remove rules <name> --force   # 跳过确认，用于脚本和 CI
 ```
 
-`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计；当该 scope 的 recall 日志中有 run 时，还会显示一个 recall 小节（见 [Recall 采纳与 upvote](#recall-采纳与-upvote)）。`teamai stats --dry-run` 不写入任何内容：它按现状读取 reports checkout，不刷新也不创建，并会说明这一点。
+`teamai stats` 显示当前 scope 的 skill 使用情况与会话统计；当该 scope 的 recall 日志中有 run 时，还会显示一个 recall 小节（见 [Recall 采纳与 upvote](#recall-采纳与-upvote)）。普通的 `teamai stats` 在内存中解析旧版角色，不保存 config，也不打印 dry-run 迁移提示。`teamai stats --dry-run` 保留迁移预览提示且不写入任何内容：它按现状读取 reports checkout，不刷新也不创建，并会说明这一点。
 
 仅当所有检查通过时，`teamai doctor` 才以状态码 0 退出；任一检查失败时以状态码 1 退出。尚未初始化时，它只报告缺少配置，不会臆测 Git 托管平台。手动执行 `teamai pull` 结束时会运行同一批检查（不含托管平台相关的检查，也不含本次 pull 已经自行报告过的检查）。被标记为 informational 的检查——目前只有 `No stale env blocks left behind`——仍会计入 `doctor` 的退出码，但 pull 不会把它的失败并入 `Pull finished, but N check(s) failed`：早期安装留下的遗留文件属于清理事项，不代表这次 pull 弄坏了什么，因此依旧会被点名，只是单独用一行更轻的提示呈现。
 
