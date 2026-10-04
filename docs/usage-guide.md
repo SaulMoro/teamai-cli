@@ -1416,6 +1416,8 @@ teamai recall "GPU out of memory"
 
 ### Recall adoption and upvotes
 
+Manual feedback uses `teamai recall feedback --positive <docId>` or `--negative <docId>` in the current scope. Add the global `--dry-run` before or after the command to preview the requested feedback without changing votes or migrating config or vote files. The preview validates the scope's config but does not check whether a negative vote can reduce the count; ordinary diagnostic logging still applies.
+
 Recall counts every doc it returns (`recalled_count`). A returned doc is **adopted**, and upvoted once (`upvoted_count`), when the session that ran the recall opens it within 24 hours after the run. Adoption means opening the doc: when the `teamai-recall` subagent summarizes a doc and the main agent works from that summary alone, nothing is opened and no vote follows. Only the opt-in judge (`TEAMAI_UPVOTE_JUDGE=1`, see [Enabling / Disabling Recall](#enabling--disabling-recall)) can credit that use.
 
 **The recall log.** Each run goes to the active scope's local recall log, `<data home>/dashboard/recall.jsonl`, which is owner-only and never pushed. The run holds the agent session from the environment and, for each returned doc, its id, scope and printed `File:` path; a search with no hits is recorded too. The PostToolUse hook adds the shell call that ran `teamai recall` and each read of a file under the team knowledge roots. The log never holds the query, the prompt, tool output or file content. `teamai pull` prunes it: lines older than 30 days go, then the oldest beyond 5,000, but never a read from the last 24 hours that has not voted yet, nor what it needs to vote. `--check`, `--dry-run` and `TEAMAI_RECALL_DISABLED=1` record nothing.
@@ -1920,6 +1922,8 @@ If core graph extraction or writing fails, the import reports an error without m
 When the draft overlaps existing learnings, from the shared root or your active projects' namespaces, the command names them (`Possible duplicate: this learning overlaps N existing learning(s): <files>.`), with `--all` too. It is a notice only: nothing is marked or replaced. When `manifest/projects.yaml` cannot be read, the check compares the shared root only and says so.
 
 AI-backed steps (`--deep-enrich`, knowledge enrichment) shell out to an AI coding CLI already installed on the machine instead of calling a model API directly. teamai probes `claude` → `claude-internal` → `codex` → `codex-internal` → `codebuddy` → `workbuddy` → `openclaw` and uses the first one it finds. On macOS and Linux the probe runs through a login shell, so a CLI installed under `~/.nvm/` is found too. On Windows it uses the native `where`, which returns the npm shim (`%APPDATA%\npm\claude.cmd`) that Windows can actually launch — a Git Bash or WSL `bash` only reports MSYS paths such as `/c/Users/...`, which Windows cannot start.
+
+With `--from-org --dry-run`, the CLI lists the repositories selected by this request's filters and previews the whitelist destination. It does not read an older draft, write the whitelist, clone repositories, acquire import locks or run AI enrichment. `--skip-import` previews only the whitelist entries. Normal CLI diagnostic logging still applies.
 
 For GitLab behind an API gateway, set `GITLAB_URL` and `GITLAB_API_PREFIX=api/gitlab` before running `teamai import --from-org https://gitlab.example.com/myorg`. Organization listing uses the configured prefix on every page; an unset or blank prefix defaults to `api/v4`.
 

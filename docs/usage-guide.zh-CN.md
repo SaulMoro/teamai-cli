@@ -1274,6 +1274,8 @@ teamai recall "GPU 内存不足"
 
 ### Recall 采纳与 upvote
 
+手动反馈使用 `teamai recall feedback --positive <docId>` 或 `--negative <docId>`，作用于当前 scope。在命令前后添加全局参数 `--dry-run`，只预览请求的反馈，不修改投票，也不迁移配置或投票文件。预览会验证当前 scope 的配置，但不检查负面反馈能否减少票数；普通诊断日志仍会记录。
+
 recall 会为返回的每篇文档计数（`recalled_count`）。运行 recall 的会话在 run 之后 24 小时内打开某篇返回的文档，该文档即被**采纳**，并获得一次 upvote（`upvoted_count`）。采纳指打开文档：如果 `teamai-recall` subagent 总结了某篇文档，而主 agent 只依据这段总结工作，就没有打开任何文档，也不会投票。只有可选开启的评判（`TEAMAI_UPVOTE_JUDGE=1`，见[开启 / 关闭 Recall](#开启--关闭-recall)）能为这种使用计分。
 
 **recall 日志。** 每次 run 都写入当前 scope 的本地 recall 日志 `<data home>/dashboard/recall.jsonl`，该日志仅所有者可读写，从不推送。run 记录环境中的 agent 会话，以及每篇返回文档的 id、scope 和打印出的 `File:` 路径；没有命中的搜索也会记录。PostToolUse hook 追加运行 `teamai recall` 的 shell 调用，以及每次读取团队知识根目录下文件的调用。日志从不包含查询词、prompt、工具输出或文件内容。`teamai pull` 会清理日志：先删除超过 30 天的行，再从最旧的开始删到只剩 5,000 行，但从不删除最近 24 小时内尚未投票的读取，也不删除它投票所需的行。`--check`、`--dry-run` 和 `TEAMAI_RECALL_DISABLED=1` 不记录任何内容。
@@ -1765,6 +1767,8 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 如果草稿与已有经验（共享根目录或当前激活项目的 namespace 中的）高度重叠，命令会列出这些文件（`Possible duplicate: this learning overlaps N existing learning(s): <files>.`），使用 `--all` 时同样如此。这只是提示：不会标记或替换任何已有经验。`manifest/projects.yaml` 无法读取时，只与共享根目录比较，并给出提示。
 
 需要 AI 的步骤（`--deep-enrich`、知识增强）复用本机已安装的 AI 编码 CLI，而不是直接调用模型 API。teamai 按 `claude` → `claude-internal` → `codex` → `codex-internal` → `codebuddy` → `workbuddy` → `openclaw` 的顺序探测，取第一个可用者。macOS / Linux 上探测经由 login shell，因此装在 `~/.nvm/` 下的 CLI 也能找到；Windows 上改用原生命令 `where`，拿到的是 Windows 真正能启动的 npm shim（`%APPDATA%\npm\claude.cmd`）——Git Bash 或 WSL 的 `bash` 只会返回 `/c/Users/...` 这类 MSYS 路径，Windows 无法启动。
+
+使用 `--from-org --dry-run` 时，CLI 展示本次过滤条件选中的仓库及白名单目标路径，不读取旧草稿、不写入白名单、不克隆仓库、不获取导入锁，也不运行 AI 增强。`--skip-import` 只预览白名单条目。CLI 原有的诊断日志记录仍会执行。
 
 对于 API 网关后的 GitLab，先设置 `GITLAB_URL` 和 `GITLAB_API_PREFIX=api/gitlab`，再运行 `teamai import --from-org https://gitlab.example.com/myorg`。组织仓库列表的每一页请求都会使用配置的前缀；未设置或为空时默认使用 `api/v4`。
 
