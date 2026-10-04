@@ -243,6 +243,30 @@ describe('recall <query> --dry-run writes no local state (#900 C9)', () => {
     expect(snapshotTree(team.sandbox)).toEqual(before);
   });
 
+  it('with a shrunken corpus: searches the retained legacy index like a real run', async () => {
+    const team = setupTeam('teamai-c9-shrink-');
+    sandboxes.push(team.sandbox);
+    withLearning(team);
+    const entries = Array.from({ length: 6 }, (_, i) => ({
+      author: 'alice', date: '2026-06-01', type: 'learnings', title: `Retained deployment timeout ${i}`,
+      filename: `retained-${i}.md`, tags: ['deployment', 'timeout'],
+      tokens: ['title:deployment', 'title:timeout', 'tag:deployment', 'tag:timeout'], votes: 0,
+    }));
+    fs.writeFileSync(indexPath(team), JSON.stringify({ version: 1, builtAt: '2026-01-01T00:00:00Z', entries }));
+    const before = snapshotTree(team.sandbox);
+
+    const preview = await runCLI(['recall', 'deployment timeout', '--dry-run'], team.homeDir, team.cwd);
+
+    expect(preview.code).toBe(0);
+    expect(snapshotTree(team.sandbox)).toEqual(before);
+    expect(preview.output).toContain('Retained deployment timeout');
+    const real = await runCLI(['recall', 'deployment timeout'], team.homeDir, team.cwd);
+    expect(real.code).toBe(0);
+    const hits = (output: string) => output.split('\n').filter((line) => line.includes('Retained deployment timeout'));
+    expect(hits(preview.output)).toEqual(hits(real.output));
+    expect(fs.readFileSync(indexPath(team), 'utf-8')).toBe(JSON.stringify({ version: 1, builtAt: '2026-01-01T00:00:00Z', entries }));
+  });
+
   it('with a legacy index: searches a fresh build and leaves the file as it was', async () => {
     const team = setupTeam('teamai-c9-');
     sandboxes.push(team.sandbox);

@@ -742,11 +742,7 @@ export async function buildIndex(
   // Guard: don't overwrite a healthy index with a significantly smaller one
   const targetPath = opts.indexPath ?? getSearchIndexPath();
   const existingIndex = await loadIndex(targetPath);
-  const { entries } = index;
-  if (!opts.partial && existingIndex && existingIndex.entries.length > 5 && entries.length < existingIndex.entries.length * 0.2) {
-    log.warn(`Index rebuild skipped: new index (${entries.length}) is <20% of existing (${existingIndex.entries.length}), likely partial failure`);
-    return elapsed;
-  }
+  if (guardIndexShrink(index, existingIndex, opts.partial) !== index) return elapsed;
 
   // A torn in-place write parses as null on the next loadIndex, which silently
   // wipes recall until the next rebuild — same shape as the votes file (#854).
@@ -757,6 +753,15 @@ export async function buildIndex(
   }
 
   return elapsed;
+}
+
+/** Keep the existing index when a rebuild unexpectedly loses most of its corpus. */
+export function guardIndexShrink(index: SearchIndex, existing: SearchIndex | null, partial = false): SearchIndex {
+  if (!partial && existing && existing.entries.length > 5 && index.entries.length < existing.entries.length * 0.2) {
+    log.warn(`Index rebuild skipped: new index (${index.entries.length}) is <20% of existing (${existing.entries.length}), likely partial failure`);
+    return existing;
+  }
+  return index;
 }
 
 /**

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
-import { loadIndex, buildIndex, indexInMemory, search, isLegacyIndex } from './utils/search-index.js';
+import { loadIndex, buildIndex, indexInMemory, guardIndexShrink, search, isLegacyIndex } from './utils/search-index.js';
 import type { BuildIndexOptions, SearchResult } from './utils/search-index.js';
 import { ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
@@ -482,7 +482,7 @@ async function loadOrBuildScopeIndex(
         partial,
       };
       if (dryRun) {
-        index = await indexInMemory(buildOptions);
+        index = guardIndexShrink(await indexInMemory(buildOptions), index, partial);
       } else {
         await buildIndex(buildOptions);
         index = await loadIndex(indexPath);
