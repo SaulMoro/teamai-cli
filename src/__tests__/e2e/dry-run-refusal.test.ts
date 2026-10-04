@@ -45,9 +45,9 @@ describe('--dry-run on a command with no preview', () => {
   let sandbox: string;
   let home: string;
 
-  function cli(args: string[], cwd = sandbox) {
+  function cli(args: string[], cwd = sandbox, extraEnv: Record<string, string> = {}) {
     const env: Record<string, string | undefined> = {
-      ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, TEAMAI_E2E_KEY: 'sk-e2e', FORCE_COLOR: '0', GIT_CONFIG_NOSYSTEM: '1',
+      ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, TEAMAI_E2E_KEY: 'sk-e2e', FORCE_COLOR: '0', GIT_CONFIG_NOSYSTEM: '1', ...extraEnv,
     };
     // A run that is not refused must not reach the developer's own tool roots.
     delete env.CLAUDE_CONFIG_DIR;
@@ -57,6 +57,7 @@ describe('--dry-run on a command with no preview', () => {
       env,
       encoding: 'utf8',
       input: '',
+      timeout: 10_000,
     });
     return { code: result.status, output: `${result.stdout}${result.stderr}` };
   }
@@ -215,6 +216,43 @@ describe('--dry-run on a command with no preview', () => {
     expect(result.output).toContain('teamai roles add has no --dry-run preview, nothing was run');
     expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' })).toBe(head);
     expect(snapshot(home)).toEqual(before);
+  });
+
+  it('refuses CI artifact output before provider access and preserves no-output previews', () => {
+    const project = path.join(sandbox, 'project');
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(project, 'keep.txt'), 'unchanged');
+    const output = path.join(project, 'artifacts');
+    const marker = path.join(sandbox, 'provider-access');
+    const preload = path.join(sandbox, 'block-provider.mjs');
+    fs.writeFileSync(preload, [
+      "import fs from 'node:fs';",
+      `globalThis.fetch = async () => { fs.writeFileSync(${JSON.stringify(marker)}, 'called'); throw new Error('provider access blocked by test'); };`,
+    ].join('\n'));
+    const bin = path.join(sandbox, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\nprintf called > '${marker}'\nexit 1\n`, { mode: 0o755 });
+    const env = { NODE_OPTIONS: `--import=${preload}`, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    const beforeHome = snapshot(home);
+    const beforeProject = snapshot(project);
+    const args = ['ci', 'extract-mr', '--url', 'https://github.com/example/team/pull/1', '--dry-run'];
+
+    const result = cli([...args, '--output', output], project, env);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('teamai ci extract-mr --output has no --dry-run preview, nothing was run');
+    expect(fs.existsSync(output)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(snapshot(home)).toEqual(beforeHome);
+    expect(snapshot(project)).toEqual(beforeProject);
+
+    // Positive control: without --output the action reaches the intercepted
+    // provider request, proving the refusal did not merely mask a broken URL.
+    const preview = cli(args, project, env);
+    expect(preview.output).not.toContain('has no --dry-run preview');
+    expect(fs.readFileSync(marker, 'utf8')).toBe('called');
+    expect(snapshot(home)).toEqual(beforeHome);
+    expect(snapshot(project)).toEqual(beforeProject);
   });
 
   it('bind-project --dry-run exits 1 and writes nothing', () => {

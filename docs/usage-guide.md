@@ -2543,6 +2543,8 @@ path, a missing file or a failed spawn is a line in `~/.teamai/debug.log`
 
 ### CI Integration
 
+`teamai ci extract-mr --output <dir> --dry-run` refuses before provider access or artifact creation. It prints `teamai ci extract-mr --output has no --dry-run preview, nothing was run` and exits 1. Omit `--output` to preview, or omit `--dry-run` to write artifacts.
+
 `teamai ci extract-mr` plugs into your CI pipeline, automatically extracting knowledge from every MR/PR:
 
 ```bash

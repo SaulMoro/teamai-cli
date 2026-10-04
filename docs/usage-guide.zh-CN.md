@@ -2354,6 +2354,8 @@ exited / timed out`），绝不会让 pull 失败。
 
 ### CI 集成
 
+`teamai ci extract-mr --output <dir> --dry-run` 在访问 provider 或创建 artifacts 前拒绝执行，打印 `teamai ci extract-mr --output has no --dry-run preview, nothing was run` 并以退出码 1 结束。省略 `--output` 可执行预览；去掉 `--dry-run` 可写入 artifacts。
+
 `teamai ci extract-mr` 接入 CI 流水线，从每个 MR/PR 自动提取知识：
 
 ```bash

@@ -41,6 +41,7 @@ describe('--dry-run guard decisions', () => {
   function command(path: string, args: string[] = []): Command {
     let current = new Command('teamai');
     for (const name of path.split(' ')) current = current.command(name);
+    if (path === 'ci extract-mr') current.option('--output <dir>');
     if (path === 'import') {
       current.option('--from-org <org>').option('--from-repo <url>').option('--from-repo-list <yaml>')
         .option('--from-iwiki <id>').option('--from-mr <url>').option('--dir <path>').option('--from-claude');
@@ -72,6 +73,12 @@ describe('--dry-run guard decisions', () => {
   it('refuses iWiki when it takes precedence over MR', () => {
     expect(dryRunRefusal(command('import', ['--from-iwiki', 'page', '--from-mr', 'url'])))
       .toBe('teamai import --from-iwiki has no --dry-run preview, nothing was run');
+  });
+
+  it('refuses CI artifact output but preserves the no-output preview', () => {
+    expect(dryRunRefusal(command('ci extract-mr', ['--output', 'out'])))
+      .toBe('teamai ci extract-mr --output has no --dry-run preview, nothing was run');
+    expect(dryRunRefusal(command('ci extract-mr'))).toBeUndefined();
   });
 
   it('keeps the merged feedback preview reachable independently of recall queries', () => {
