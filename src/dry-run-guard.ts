@@ -25,23 +25,15 @@ export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
   'skill exclude remove',
   'members',
   'members list',
-  'remove',
   'packages',
   'packages install',
   'doctor',
   'roles',
-  'roles init',
   'roles list',
   'roles set',
-  'roles add',
-  'roles remove',
-  'roles update',
   'projects',
   'projects list',
   'projects set',
-  'projects add',
-  'projects update',
-  'projects remove',
   'projects members',
   'tags',
   'tags list',
@@ -73,17 +65,15 @@ export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
   'models list',
   'models switch',
   'models restore',
-  'stats',
   'session save',
-  'digest',
   'contribute',
-  'recall',
+  'recall feedback',
   'recall disable',
   'recall enable',
   'recall status',
   'recall maintenance',
   'recall promote',
-  'import',
+  'import', // source-specific refusals below
   'codebase', // `--extract` is refused below
   'review',
   'ci extract-mr',
@@ -95,6 +85,17 @@ export const DRY_RUN_PREVIEW: ReadonlySet<string> = new Set([
  * on a command that is in neither.
  */
 export const NO_DRY_RUN_PREVIEW: Readonly<Record<string, string>> = {
+  'remove': 'pulls the team repo before its preview until #971 lands',
+  'roles init': 'pulls the team repo before its preview until #971 lands',
+  'roles add': 'pulls the team repo before its preview until #971 lands',
+  'roles remove': 'pulls the team repo before its preview until #971 lands',
+  'roles update': 'pulls the team repo before its preview until #971 lands',
+  'projects add': 'pulls the team repo before its preview until #971 lands',
+  'projects update': 'pulls the team repo before its preview until #971 lands',
+  'projects remove': 'pulls the team repo before its preview until #971 lands',
+  stats: 'creates or refreshes the reports worktree until #970 lands',
+  recall: 'writes recall quality and the search index until #970 lands',
+  digest: 'creates or refreshes the reports worktree; #900 C11',
   init: 'no preview; clones, saves config and injects hooks (single-repo: bootstraps the clone)',
   'models add': 'writes the personal profile and its key',
   'models configure': 'writes the key or the personal profile',
@@ -103,7 +104,6 @@ export const NO_DRY_RUN_PREVIEW: Readonly<Record<string, string>> = {
   'hooks remove': 'edits every AI tool settings file',
   'hooks inject': 'no preview until #949 lands',
   update: 'no preview until #951 lands',
-  'recall feedback': 'no preview until #965 lands',
   dashboard: 'a long-running server that creates its events file',
   'deep-enrich': 'hidden; writes the docs that `codebase --deep-enrich` previews',
   // Hidden commands that hooks run, never with --dry-run.
@@ -128,5 +128,15 @@ export function dryRunRefusal(command: Command): string | undefined {
   for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
   const path = names.join(' ');
   if (path === 'codebase' && command.opts().extract !== undefined) return noDryRunPreview('codebase --extract');
+  if (path === 'import') {
+    const opts = command.opts();
+    // Match importCmd's source precedence. #960 made --from-org preview-safe.
+    if (!opts.fromOrg) {
+      if (opts.fromRepo) return noDryRunPreview('import --from-repo'); // clones/fetches the cache until #971 lands
+      if (opts.fromRepoList) return noDryRunPreview('import --from-repo-list'); // same cache writes until #971 lands
+      if (opts.fromIwiki) return noDryRunPreview('import --from-iwiki'); // persists the review session
+      if (!opts.fromMr && !opts.dir && opts.fromClaude) return noDryRunPreview('import --from-claude'); // persists the review session
+    }
+  }
   return DRY_RUN_PREVIEW.has(path) ? undefined : noDryRunPreview(path);
 }

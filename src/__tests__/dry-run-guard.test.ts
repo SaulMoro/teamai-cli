@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { Command } from 'commander';
-import { DRY_RUN_PREVIEW, NO_DRY_RUN_PREVIEW } from '../dry-run-guard.js';
+import { Command } from 'commander';
+import { DRY_RUN_PREVIEW, NO_DRY_RUN_PREVIEW, dryRunRefusal } from '../dry-run-guard.js';
 
 /**
  * Every command path that runs an action. A group without its own action
@@ -34,5 +34,47 @@ describe('--dry-run guard classification', () => {
     const refused = Object.keys(NO_DRY_RUN_PREVIEW);
     expect(refused.filter((path) => DRY_RUN_PREVIEW.has(path))).toEqual([]);
     expect([...DRY_RUN_PREVIEW, ...refused].filter((path) => !paths.has(path))).toEqual([]);
+  });
+});
+
+describe('--dry-run guard decisions', () => {
+  function command(path: string, args: string[] = []): Command {
+    let current = new Command('teamai');
+    for (const name of path.split(' ')) current = current.command(name);
+    if (path === 'import') {
+      current.option('--from-org <org>').option('--from-repo <url>').option('--from-repo-list <yaml>')
+        .option('--from-iwiki <id>').option('--from-mr <url>').option('--dir <path>').option('--from-claude');
+    }
+    current.parse(args, { from: 'user' });
+    return current;
+  }
+
+  it.each([
+    'remove', 'roles init', 'roles add', 'roles remove', 'roles update',
+    'projects add', 'projects update', 'projects remove', 'stats', 'digest', 'recall',
+  ])('refuses %s until its writes have a preview', (path) => {
+    expect(dryRunRefusal(command(path))).toBe(`teamai ${path} has no --dry-run preview, nothing was run`);
+  });
+
+  it.each(['--from-repo', '--from-repo-list', '--from-iwiki', '--from-claude'])('refuses import %s', (flag) => {
+    const args = flag === '--from-claude' ? [flag] : [flag, 'source'];
+    expect(dryRunRefusal(command('import', args))).toBe(`teamai import ${flag} has no --dry-run preview, nothing was run`);
+  });
+
+  it.each([
+    [], ['--from-org', 'team'], ['--from-mr', 'url'], ['--dir', '.'],
+    ['--from-org', 'team', '--from-repo', 'url'],
+    ['--from-mr', 'url', '--from-claude'], ['--dir', '.', '--from-claude'],
+  ].map((args) => [args]))('preserves safe import source precedence for %j', (args) => {
+    expect(dryRunRefusal(command('import', args))).toBeUndefined();
+  });
+
+  it('refuses iWiki when it takes precedence over MR', () => {
+    expect(dryRunRefusal(command('import', ['--from-iwiki', 'page', '--from-mr', 'url'])))
+      .toBe('teamai import --from-iwiki has no --dry-run preview, nothing was run');
+  });
+
+  it('keeps the merged feedback preview reachable independently of recall queries', () => {
+    expect(dryRunRefusal(command('recall feedback'))).toBeUndefined();
   });
 });

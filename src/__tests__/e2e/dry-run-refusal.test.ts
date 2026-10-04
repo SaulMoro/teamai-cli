@@ -176,6 +176,47 @@ describe('--dry-run on a command with no preview', () => {
     expect(snapshot(home)).toEqual(homeBefore);
   });
 
+  it.each([
+    ['stats'], ['digest'], ['recall', 'query'],
+    ['import', '--from-repo', TEAM_URL], ['import', '--from-repo-list', 'repos.yaml'],
+    ['import', '--from-iwiki', 'page', '--from-mr', 'url'], ['import', '--from-claude'],
+  ])('refuses unsafe preview %j before writing', (...args) => {
+    const before = snapshot(home);
+    const result = cli([...args, '--dry-run']);
+    const command = args[0] === 'import' ? `import ${args[1]}` : args[0];
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain(`teamai ${command} has no --dry-run preview, nothing was run`);
+    expect(snapshot(home)).toEqual(before);
+  });
+
+  it('roles add --dry-run leaves a remote-ahead team clone unchanged', () => {
+    teamRemote();
+    const env = { ...process.env, ...GIT_ENV };
+    const remote = path.join(sandbox, 'team.git');
+    const repo = path.join(home, '.teamai', 'team-repo');
+    execFileSync('git', ['clone', '-q', remote, repo], { env });
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), [
+      'repo:', `  localPath: ${repo}`, `  remote: ${TEAM_URL}`,
+      'username: tester', 'scope: user', 'provider: git', '',
+    ].join('\n'));
+    const seed = path.join(sandbox, 'seed');
+    fs.writeFileSync(path.join(seed, 'remote-ahead.txt'), 'new commit\n');
+    execFileSync('git', ['add', '-A'], { cwd: seed, env });
+    execFileSync('git', ['commit', '-qm', 'remote ahead'], { cwd: seed, env });
+    execFileSync('git', ['push', '-q', remote, 'main'], { cwd: seed, env });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' });
+    const remoteHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: seed, encoding: 'utf8' });
+    expect(head).not.toBe(remoteHead);
+    const before = snapshot(home);
+
+    const result = cli(['roles', 'add', 'x', '--namespaces', 'x', '--dry-run']);
+
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('teamai roles add has no --dry-run preview, nothing was run');
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' })).toBe(head);
+    expect(snapshot(home)).toEqual(before);
+  });
+
   it('bind-project --dry-run exits 1 and writes nothing', () => {
     const before = snapshot(home);
     const result = cli(['bind-project', '--skip', '--dry-run']);
