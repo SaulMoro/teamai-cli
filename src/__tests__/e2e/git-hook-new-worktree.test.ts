@@ -3,7 +3,7 @@
  * returns. `teamai init` (project scope) installs a named hook in the
  * repository's git config; real git runs it on `post-checkout`, and it calls
  * the real CLI's dispatcher, which creates the tool roots and pulls into the
- * new worktree. `git pull` (`post-merge`) brings the team's change the same way.
+ * new worktree. `git pull` (`post-merge` or `post-rewrite`) brings the team's change the same way.
  *
  * The team remote is a local bare repo reached through a synthetic HTTPS URL
  * (`url.<path>.insteadOf` in the sandbox HOME), as in init-project-all.test.ts.

@@ -171,13 +171,13 @@ const newWorktreeHandler: HookHandler = {
   },
 };
 
-/** How long `git pull` waits for the post-merge hook's team repo fetch. */
-const POST_MERGE_FETCH_CAP_MS = 5_000;
+/** How long `git pull` waits for its hook's team repo fetch. */
+const GIT_PULL_FETCH_CAP_MS = 5_000;
 
 /**
  * `post-merge` or `post-rewrite` after a rebase (`git pull`): the next session gets what
  * changed. With a separate team repo, the team repo is fetched inline within
- * POST_MERGE_FETCH_CAP_MS and delivered when its revision moved (the rev fast
+ * GIT_PULL_FETCH_CAP_MS and delivered when its revision moved (the rev fast
  * path skips it otherwise); past the cap, and for learnings, reports and
  * sources, a detached pull takes over. In single-repo (self) mode the team
  * repo is the working tree `git pull` just updated: delivered with no network.
@@ -197,7 +197,7 @@ const gitPullHandler: HookHandler = {
 
     const { pull } = await import('./pull.js');
     await recordingFailure(config, event, () => pull({
-      silent: true, inline: true, gitHook: event, fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS,
+      silent: true, inline: true, gitHook: event, fetchTimeoutMs: GIT_PULL_FETCH_CAP_MS,
     }));
     if (!self) await spawnDetachedPull(cwd, event);
     return null;
@@ -1109,8 +1109,8 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
 
     // ─── Git (`--tool git`, see git-hook.ts) ──────────
     // Inline: the delivery has to land before `git worktree add` returns. Git
-    // has no hook timeout, so the budget is the detached pull's; post-merge
-    // caps its own fetch.
+    // has no hook timeout, so the budget is the detached pull's; git-pull hooks
+    // cap their own fetch.
     { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-merge', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-rewrite', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },

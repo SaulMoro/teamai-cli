@@ -89,7 +89,7 @@ through merge or a completed rebase (`post-rewrite`, including `pull.rebase=true
 A conflicting rebase syncs only on completion; `git commit --amend` does not sync. It runs
 silently and always exits 0, so its failures surface only here: `teamai doctor`
 names the last one with its fix, and the next interactive `teamai pull` says it
-once. The causes are a team repo fetch that failed or hit the 5 s post-merge
+once. The causes are a team repo fetch that failed or hit the 5 s git-pull hook
 cap without the background pull finishing it, and another teamai process
 holding the project's sync lock longer than the hook waits, or incomplete resource,
 hook or MCP delivery. Only a complete startup sync clears the recorded failure.

@@ -169,7 +169,7 @@ async function refreshTeamRepo(
     const version = await getHeadRev(localConfig.repo.localPath).catch(() => null);
     return { label: 'fetched within the TTL, not refetched', version, submodulesFailed: false, submodulesChanged: false };
   }
-  // The post-merge hook caps the fetch: git pull is waiting on it.
+  // The git-pull hook caps the fetch: git pull is waiting on it.
   const cap = options.fetchTimeoutMs === undefined ? undefined : AbortSignal.timeout(options.fetchTimeoutMs);
   const result = await pullRepo(localConfig.repo.localPath, cap).catch((e: unknown) => {
     if (cap?.aborted) {
@@ -2360,7 +2360,7 @@ export async function pull(
     // Inline (new-worktree hook), a skipped scope is a worktree without the
     // team's resources, and the holder is often the detached pull of the
     // worktree created just before: wait for it, within the hook's budget.
-    // Post-merge caps it like its fetch: `git pull` waits on it, and the holder
+    // Git-pull hooks cap it like their fetch: `git pull` waits on them, and the holder
     // may be a detached pull hung on the network.
     const lockWaitMs = options.fetchTimeoutMs ?? INLINE_LOCK_WAIT_MS;
     const waitUntil = options.inline ? Date.now() + lockWaitMs : 0;
