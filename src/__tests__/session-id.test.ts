@@ -102,6 +102,7 @@ describe('agentSessionIdFromEnv', () => {
             'COPILOT_AGENT_SESSION_ID',
             'CURSOR_CONVERSATION_ID',
             'CLAUDE_SESSION_ID',
+            'OPENCODE_SESSION_ID',
             'TEAMAI_AGENT_SESSION_ID',
             'PI_SESSION_ID',
         ]);
@@ -137,6 +138,11 @@ describe('agentSessionIdFromEnv', () => {
 
     // The OpenCode plugin sets TEAMAI_AGENT_SESSION_ID in its bash tool's
     // environment, and its hooks carry that session (#884).
+    it('reads the native V2 OpenCode shell session', async () => {
+        vi.stubEnv('OPENCODE_SESSION_ID', 'ses_v2');
+        expect(await agentSessionFromEnv()).toEqual({ id: 'ses_v2', agent: 'opencode', unambiguous: true });
+    });
+
     it('reads the OpenCode session from TEAMAI_AGENT_SESSION_ID in an OpenCode shell', async () => {
         vi.stubEnv('OPENCODE', '1');
         vi.stubEnv('TEAMAI_AGENT_SESSION_ID', 'ses_opencode');

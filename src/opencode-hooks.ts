@@ -4,8 +4,8 @@
  * Unlike every other agent teamai targets, OpenCode has no settings.json-style
  * shell-command hook list. Instead it auto-loads JS/TS *plugins* — the config
  * loader scans `{plugin,plugins}/*.{ts,js}` under each `.opencode` dir (project
- * scope) and `~/.config/opencode` (user scope). A plugin is a module exporting a
- * function that returns a `Hooks` object; teamai subscribes to OpenCode's own
+ * scope) and `~/.config/opencode` (user scope). A plugin default-exports a
+ * definition with `server` (V1) and `setup` (V2); teamai subscribes to OpenCode's own
  * events and shells out to the same `teamai hook-dispatch` entry point every
  * other agent uses.
  *
@@ -70,7 +70,8 @@ export function resolveOpencodePluginDir(baseDir: string, scope: 'project' | 'us
  *     `session_id`, and PostToolUse the tool's output (`tool_response`), a
  *     normalized `tool_status`, and for a `task` call the `session_link` from
  *     the subagent's child session to its parent. `shell.env` names the session
- *     in the bash tool's environment (`TEAMAI_AGENT_SESSION_ID`).
+ *     in V1's bash environment (`TEAMAI_AGENT_SESSION_ID`); V2's shell supplies
+ *     its native `OPENCODE_SESSION_ID`, read by the same session resolver.
  *   - Tool-id casing: OpenCode passes lowercase tool ids (`skill`, `todowrite`),
  *     but the handler registry keys matchers on Claude's PascalCase names
  *     (`Skill`, `TodoWrite`). We map the id back before dispatching a
@@ -97,7 +98,7 @@ const TOOL_MATCHER = { skill: 'Skill', todowrite: 'TodoWrite' };
 const nonEmpty = (value) => (typeof value === 'string' && value ? value : undefined);
 
 /** @param {{ directory?: string, worktree?: string }} ctx */
-export const TeamaiHooks = async ({ directory, worktree }) => {
+const TeamaiHooks = async ({ directory, worktree }) => {
   const cwd = directory || worktree;
   // Dispatch one hook event, forwarding a JSON payload on STDIN. \`payload\`
   // fields (cwd / tool_name / tool_input / prompt) match what hook-dispatch's
@@ -172,7 +173,7 @@ export const TeamaiHooks = async ({ directory, worktree }) => {
         tool_name: matcher || tool,
         tool_input: (input && input.args) || {},
         tool_response: typeof (output && output.output) === 'string' ? output.output : undefined,
-        tool_status: typeof exit === 'number' ? (exit === 0 ? 'success' : 'failure') : 'unknown',
+        tool_status: typeof exit === 'number' ? (exit === 0 ? 'success' : 'failure') : (output && output.status) || 'unknown',
       };
       const child = tool === 'task' ? nonEmpty(metadata.sessionId) : undefined;
       const parent = nonEmpty(metadata.parentSessionId) || payload.session_id;
@@ -194,7 +195,62 @@ export const TeamaiHooks = async ({ directory, worktree }) => {
     },
   };
 };
+
+${buildDualPluginDefinition('teamai.hooks', 'TeamaiHooks')}
+
 `;
+}
+
+/** Both hosts load one definition, but call only their own entrypoint. */
+function buildDualPluginDefinition(id: string, factory: string): string {
+  return `export default {
+  id: ${JSON.stringify(id)},
+  server: ${factory},
+  async setup(ctx) {
+    const hooks = await ${factory}({ directory: ctx.location.directory });
+    const registrations = [];
+    if (hooks['chat.message']) {
+      registrations.push(await ctx.session.hook('prompt', async (event) => {
+        await hooks['chat.message']({ sessionID: event.sessionID }, { parts: [{ type: 'text', text: event.prompt.text }] });
+      }));
+    }
+    if (hooks['tool.execute.after']) {
+      registrations.push(await ctx.tool.hook('execute.after', async (event) => {
+        const result = event.status === 'completed' ? event.result : event.error;
+        const content = result && result.content;
+        const output = event.status === 'error' ? result.message : typeof content === 'string' ? content :
+          Array.isArray(content) ? content.filter((part) => part.type === 'text').map((part) => part.text).join('\\n') : undefined;
+        const metadata = (result && result.metadata) || {};
+        await hooks['tool.execute.after']({
+          tool: event.tool === 'shell' ? 'bash' : event.tool === 'subagent' ? 'task' : event.tool,
+          sessionID: event.sessionID,
+          args: event.input,
+        }, {
+          output,
+          status: event.status === 'error' ? 'failure' : 'success',
+          metadata: { ...metadata, sessionId: metadata.sessionID },
+        });
+      }));
+    }
+    const controller = new AbortController();
+    const events = hooks.event ? (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          const location = event.location || (event.data && event.data.location);
+          if (!location || location.directory !== ctx.location.directory) continue;
+          await hooks.event({ event: { type: event.type, properties: event.data } });
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) console.error('[teamai] OpenCode event subscription failed', error);
+      }
+    })() : Promise.resolve();
+    return async () => {
+      controller.abort();
+      await Promise.all(registrations.map((registration) => registration.dispose()));
+      await events;
+    };
+  },
+};`;
 }
 
 /**
@@ -284,20 +340,34 @@ export function buildAgentHookPluginSource(
     },
   };`;
   }
+  const factory = `TeamaiAgentHook_${slug.replace(/[^A-Za-z0-9_]/g, '_')}`;
   return `// ${TEAMAI_MARKER} agent hook [${slug}] — generated by teamai, do not edit by hand.
-/** @param {{ $: any }} ctx */
-export const TeamaiAgentHook_${slug.replace(/[^A-Za-z0-9_]/g, '_')} = async ({ $ }) => {
+const ${factory} = async ({ directory, worktree }) => {
   const run = async () => {
     try {
-      // .quiet() suppresses output; .nothrow() keeps a non-zero exit from
-      // throwing into the agent session. Fire-and-forget — never blocks.
-      await $\`sh -c \${${JSON.stringify(command)}}\`.quiet().nothrow();
+      const { spawn } = await import('node:child_process');
+      await new Promise((resolve) => {
+        const child = spawn('sh', ['-c', ${JSON.stringify(command)}], {
+          cwd: directory || worktree,
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        const finish = () => {
+          child.removeListener('error', finish);
+          child.removeListener('close', finish);
+          resolve();
+        };
+        child.once('error', finish);
+        child.once('close', finish);
+      });
     } catch {
       // never block the agent
     }
   };
 ${body}
 };
+
+${buildDualPluginDefinition(`teamai.agent.${slug}`, factory)}
 `;
 }
 

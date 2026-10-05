@@ -277,6 +277,14 @@ session's runs, recalled docs and adopted docs. Per agent:
 A read after the session's last Stop is credited at SubagentStop, at Copilot CLI's
 SessionEnd, or at the next `teamai pull`.
 
+## OpenCode V2 rejects the hooks plugin
+
+If OpenCode reports “Plugin must export a default definition”, upgrade TeamAI,
+run `teamai hooks inject` or `teamai pull`, and restart OpenCode. The generated
+built-in and enterprise plugins support both OpenCode 1.18.23 (`server`) and V2
+(`setup`). V1 shell recall uses `TEAMAI_AGENT_SESSION_ID`; V2 supplies its native
+`OPENCODE_SESSION_ID`.
+
 ## Still stuck
 
 - Re-run the failing command with `-v` / `--verbose` for detail.
