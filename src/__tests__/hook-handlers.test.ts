@@ -244,6 +244,24 @@ describe('hook-handlers registry', () => {
     expect(mockPull).toHaveBeenCalledWith({ silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: 5000 });
   });
 
+  it.each(['rebase', 'amend'])('post-rewrite syncs only a completed rebase, not amend (%s)', async (rewrite) => {
+    const { createDispatcher } = await import('../hook-dispatch.js');
+    const dispatcher = createDispatcher({
+      handlers: buildHandlerRegistry(),
+      localConfig: {
+        scope: 'project', projectRoot: '/tmp/self-project', username: 'test', additionalRoles: [],
+        repo: { kind: 'self', localPath: '/tmp/self-project', remote: '' },
+      },
+    });
+    const result = await dispatcher.dispatch('post-rewrite', '*', {
+      cwd: '/tmp/self-project', hook_event_name: 'post-rewrite', git_args: [rewrite],
+    }, 'git');
+    expect(result.errors).toEqual([]);
+    expect(result.output).toBeNull();
+    if (rewrite === 'amend') expect(mockPull).not.toHaveBeenCalled();
+    else expect(mockPull).toHaveBeenCalledWith({ silent: true, inline: true, gitHook: 'post-rewrite', fetchTimeoutMs: 5000 });
+  });
+
   it('does not sync teamai\'s own knowledge worktree on post-checkout or post-merge', async () => {
     const { execFileSync } = await import('node:child_process');
     const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'git-hook-own-wt-')));
@@ -266,6 +284,7 @@ describe('hook-handlers registry', () => {
       await registry.find(r => r.event === 'post-checkout')!.handler.execute(
         { cwd: wt, git_args: ['0'.repeat(40), 'abc', '1'] }, 'git', config);
       await registry.find(r => r.event === 'post-merge')!.handler.execute({ cwd: wt, git_args: ['0'] }, 'git', config);
+      await registry.find(r => r.event === 'post-rewrite')!.handler.execute({ cwd: wt, hook_event_name: 'post-rewrite', git_args: ['rebase'] }, 'git', config);
       expect(mockPull).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(main, { recursive: true, force: true });

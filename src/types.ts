@@ -1126,7 +1126,7 @@ export interface GlobalOptions {
    */
   inline?: boolean;
   /**
-   * Internal (the post-merge git hook, with `inline`): fetch the team repo
+   * Internal (post-merge/post-rewrite git hooks, with `inline`): fetch the team repo
    * whatever its fetch stamp says, and give up after this many ms; the scope
    * is then not delivered and the detached pull after the hook does it.
    */
@@ -1136,7 +1136,7 @@ export interface GlobalOptions {
    * or detached (`TEAMAI_GIT_HOOK` in the environment). Its failures are
    * recorded for `doctor` and the next interactive pull; its success clears them.
    */
-  gitHook?: 'post-checkout' | 'post-merge';
+  gitHook?: 'post-checkout' | 'post-merge' | 'post-rewrite';
   /**
    * Internal (`init --scope user`, `pull` only): pull the user scope even when
    * the current directory is a project-scoped checkout.

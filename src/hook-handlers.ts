@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import type { HookHandler } from './hook-dispatch.js';
 import type { LocalConfig } from './types.js';
+import type { GitHookEvent } from './git-hook.js';
 import { deriveDispatchSessionId, deriveSessionId } from './utils/session-id.js';
 import { log } from './utils/logger.js';
 import { normalizeToolName } from './utils/tool-names.js';
@@ -174,7 +175,7 @@ const newWorktreeHandler: HookHandler = {
 const POST_MERGE_FETCH_CAP_MS = 5_000;
 
 /**
- * `post-merge` from the git hook (`git pull`): the next session gets what
+ * `post-merge` or `post-rewrite` after a rebase (`git pull`): the next session gets what
  * changed. With a separate team repo, the team repo is fetched inline within
  * POST_MERGE_FETCH_CAP_MS and delivered when its revision moved (the rev fast
  * path skips it otherwise); past the cap, and for learnings, reports and
@@ -185,6 +186,8 @@ const gitPullHandler: HookHandler = {
   name: 'git-pull',
   async execute(stdin, _tool, config) {
     if (!config || config.scope !== 'project') return null;
+    const event = stdin.hook_event_name === 'post-rewrite' ? 'post-rewrite' : 'post-merge';
+    if (event === 'post-rewrite' && (!Array.isArray(stdin.git_args) || stdin.git_args[0] !== 'rebase')) return null;
     const cwd = resolveHookCwd(stdin) ?? process.cwd();
     const { getDataHome, isSelfMode } = await import('./types.js');
     const self = isSelfMode(config);
@@ -193,10 +196,10 @@ const gitPullHandler: HookHandler = {
     if (await isWithin(cwd, self ? own : [...own, config.repo.localPath])) return null;
 
     const { pull } = await import('./pull.js');
-    await recordingFailure(config, 'post-merge', () => pull({
-      silent: true, inline: true, gitHook: 'post-merge', fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS,
+    await recordingFailure(config, event, () => pull({
+      silent: true, inline: true, gitHook: event, fetchTimeoutMs: POST_MERGE_FETCH_CAP_MS,
     }));
-    if (!self) await spawnDetachedPull(cwd, 'post-merge');
+    if (!self) await spawnDetachedPull(cwd, event);
     return null;
   },
 };
@@ -207,7 +210,7 @@ const gitPullHandler: HookHandler = {
  */
 async function recordingFailure(
   config: LocalConfig,
-  event: 'post-checkout' | 'post-merge',
+  event: GitHookEvent,
   pass: () => Promise<unknown>,
 ): Promise<void> {
   try {
@@ -223,7 +226,7 @@ async function recordingFailure(
  * for. TEAMAI_GIT_HOOK makes it record its failure, and clear the record when it
  * succeeds.
  */
-async function spawnDetachedPull(cwd: string, event: 'post-checkout' | 'post-merge'): Promise<void> {
+async function spawnDetachedPull(cwd: string, event: GitHookEvent): Promise<void> {
   const { resolveCliEntry } = await import('./builtin-hooks.js');
   const { spawn } = await import('node:child_process');
   spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {
@@ -1110,6 +1113,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // caps its own fetch.
     { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-merge', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
+    { event: 'post-rewrite', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
   ];
 }
 

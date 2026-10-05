@@ -85,6 +85,8 @@ This is the #1 onboarding issue. In order:
 ## "Last git hook run failed: ..." / a new worktree lacks team resources
 
 In project scope, teamai's git hook syncs on `git worktree add` and `git pull`
+through merge or a completed rebase (`post-rewrite`, including `pull.rebase=true`).
+A conflicting rebase syncs only on completion; `git commit --amend` does not sync. It runs
 silently and always exits 0, so its failures surface only here: `teamai doctor`
 names the last one with its fix, and the next interactive `teamai pull` says it
 once. The causes are a team repo fetch that failed or hit the 5 s post-merge
@@ -96,10 +98,14 @@ in the checkout (after a stuck pull ends, or once the team repo is reachable);
 `~/.teamai/debug.log` has the details. If doctor reports `Git hook syncs new
 worktrees and git pull` as failing, follow its fix: `teamai pull` installs it.
 Git older than 2.54 has no config hooks: teamai then adds a marked block to
-`.git/hooks/post-checkout` and `post-merge`, unless `core.hooksPath` is set (or a
+`.git/hooks/post-checkout`, `post-merge` and `post-rewrite`, unless `core.hooksPath` is set (or a
 hook there is a symlink or not an executable shell script), in which case doctor's fix says to upgrade Git
 or, if the team agrees, to commit its guarded `command -v teamai ... || true`
-line into the manager's post-checkout and post-merge hooks.
+line into the manager's post-checkout, post-merge and post-rewrite hooks.
+Doctor also detects hooks disabled by name (Git 2.54+) or event (Git 2.55+)
+in effective global or local config. Follow its `git config --local <key> true` command to
+enable the named hook or event, then run `teamai pull` to sync. Pull preserves
+explicit disable settings, so reinstalling alone does not enable a disabled hook.
 Existing hook contents and permissions stay unchanged; read/write errors propagate
 from `init` and `hooks inject`, and Git-started pulls record them. An unreadable
 project config prevents sync and keeps its reason in `~/.teamai/debug.log`.

@@ -1,7 +1,7 @@
 /**
  * teamai's git hook: a named hook in a repository's local git config that runs
- * `teamai hook-dispatch <event> --tool git` on `post-checkout` and
- * `post-merge`, so a new worktree gets the team's resources before
+ * `teamai hook-dispatch <event> --tool git` on `post-checkout`, `post-merge`
+ * and `post-rewrite`, so a new worktree gets the team's resources before
  * `git worktree add` returns.
  *
  * Config hooks (`hook.<name>.command` + `hook.<name>.event`, Git >= 2.54) live
@@ -29,7 +29,7 @@ import { execCommand } from './utils/exec.js';
 import { readFileIfExists, readJson, remove, writeJson } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
-export const GIT_HOOK_EVENTS = ['post-checkout', 'post-merge'] as const;
+export const GIT_HOOK_EVENTS = ['post-checkout', 'post-merge', 'post-rewrite'] as const;
 export type GitHookEvent = (typeof GIT_HOOK_EVENTS)[number];
 
 /** The `--tool` value of a dispatch git runs. */
@@ -50,8 +50,8 @@ export function gitHookCommand(event: GitHookEvent): string {
 }
 
 /**
- * The line a team may commit into its own hook manager's post-checkout and
- * post-merge hooks when teamai cannot install its hook: a no-op that exits 0
+ * The line a team may commit into its own hook manager's Git hooks when
+ * teamai cannot install its hook: a no-op that exits 0
  * on a machine without teamai.
  */
 export function guardedGitHookLine(event: GitHookEvent): string {
@@ -88,6 +88,7 @@ export type GitHookInstall =
 
 export type GitHookStatus =
   | { installed: true }
+  | { installed: false; reason: 'disabled'; event: GitHookEvent; disabledBy: 'hook' | 'event' }
   | { installed: false; reason: 'hooks-path' | 'other-hook'; gitVersion: string }
   | { installed: false; reason: 'not-a-repository' | 'not-configured' };
 
@@ -115,25 +116,44 @@ export async function gitHookStatus(repoDir: string): Promise<GitHookStatus> {
     if (scripts.blocked) return { installed: false, reason: scripts.blocked, gitVersion: version };
     return scripts.stale.length === 0 ? { installed: true } : { installed: false, reason: 'not-configured' };
   }
-  return (await eventsToWrite(git)).length === 0 ? { installed: true } : { installed: false, reason: 'not-configured' };
+  if ((await eventsToWrite(git)).length > 0) return { installed: false, reason: 'not-configured' };
+  for (const event of GIT_HOOK_EVENTS) {
+    const { code, stdout, stderr } = await git(['hook', 'list', event]);
+    if (code !== 0) throw new Error(`Could not inspect the ${event} hook: ${stderr.trim() || `exit ${code}`}`);
+    const entries = stdout.trim().split('\n');
+    if (entries.includes(`event-disabled\t${hookName(event)}`)) {
+      return { installed: false, reason: 'disabled', event, disabledBy: 'event' };
+    }
+    if (entries.includes(`disabled\t${hookName(event)}`)) {
+      return { installed: false, reason: 'disabled', event, disabledBy: 'hook' };
+    }
+  }
+  return { installed: true };
 }
 
 /** What `doctor` says about a hook that is not installed: the cause, then the next step. */
 export function describeMissingGitHook(status: Exclude<GitHookStatus, { installed: true }>): string {
   switch (status.reason) {
+    case 'disabled': {
+      const key = `hook.${status.disabledBy === 'event' ? status.event : hookName(status.event)}.enabled`;
+      return `Git disables ${hookName(status.event)} through ${key}=false, so it will not sync resources. `
+        + `Run \`git config --local ${key} true\` to enable it for this repository, then \`teamai pull\` to sync. `
+        + 'Teamai pull preserves explicit hook disable settings.';
+    }
     case 'hooks-path':
     case 'other-hook': {
       const where = status.reason === 'hooks-path'
         ? 'core.hooksPath is set, so teamai leaves the hook manager\'s files alone'
-        : 'a post-checkout or post-merge hook in .git/hooks is a symlink or not an executable shell script, so teamai leaves it alone';
+        : 'a post-checkout, post-merge or post-rewrite hook in .git/hooks is a symlink or not an executable shell script, so teamai leaves it alone';
       const owner = status.reason === 'hooks-path' ? 'your hook manager defines' : 'in .git/hooks';
       return `${status.gitVersion || 'This git'} has no config-based hooks (Git 2.54 or later) and ${where}: new `
         + 'worktrees and `git pull` get the team\'s resources only at the next session. Either: '
         + '1. Upgrade Git to 2.54 or later, then run `teamai pull`. '
         + `2. If the team agrees to commit it, run this line from the post-checkout hook ${owner}, `
         + `\`${guardedGitHookLine('post-checkout')}\`, and this one from the post-merge hook, `
-        + `\`${guardedGitHookLine('post-merge')}\`; wrap each in \`sh -c '...'\` when the hook config is not a `
-        + 'shell script. Both do nothing on a machine without teamai.';
+        + `\`${guardedGitHookLine('post-merge')}\`, and this one from the post-rewrite hook, `
+        + `\`${guardedGitHookLine('post-rewrite')}\`; wrap each in \`sh -c '...'\` when the hook config is not a `
+        + 'shell script. All do nothing on a machine without teamai.';
     }
     case 'not-a-repository':
       return 'The project root is not a git repository, so there is no git event to hook.';
@@ -207,7 +227,7 @@ async function installHookScripts(git: Git, repoDir: string, opts: { dryRun?: bo
 }
 
 /**
- * Take teamai's block out of the post-checkout and post-merge scripts in the
+ * Take teamai's block out of the post-checkout, post-merge and post-rewrite scripts in the
  * repository's own hooks directory (and in core.hooksPath's, should a block
  * predate it). A script left with only the shebang is the one teamai created
  * when there was none, so it goes too. Returns the files changed.

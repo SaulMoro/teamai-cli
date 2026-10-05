@@ -2393,7 +2393,7 @@ async function installProjectGitHook(localConfig: LocalConfig, opts: { dryRun?: 
       + 'Fix the cause, then run `teamai pull` to install it.', { cause: e });
   }
   if (opts.dryRun && result.installed && result.changed) {
-    log.info(`Would install or update the teamai git hook (post-checkout, post-merge) in ${localConfig.projectRoot}`);
+    log.info(`Would install or update the teamai git hook (post-checkout, post-merge, post-rewrite) in ${localConfig.projectRoot}`);
   }
   if (!result.installed) log.debug(`git hook: not installed in ${localConfig.projectRoot} (${result.reason})`);
 }

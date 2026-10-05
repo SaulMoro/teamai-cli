@@ -1216,8 +1216,8 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
       log.info(`Removed the teamai git hook from ${plan.gitHook.repoDir}`);
     } catch (e) {
       log.warn(`Could not remove the teamai git hook from ${plan.gitHook.repoDir}: ${(e as Error).message}. `
-        + 'Remove it yourself: `git config --local --remove-section hook.teamai-post-checkout` (and hook.teamai-post-merge), '
-        + 'and the `# >>> teamai git hook` block in .git/hooks/post-checkout and post-merge.');
+        + 'Remove it yourself: `git config --local --remove-section hook.teamai-post-checkout` (and hook.teamai-post-merge and hook.teamai-post-rewrite), '
+        + 'and the `# >>> teamai git hook` block in .git/hooks/post-checkout, post-merge and post-rewrite.');
     }
   }
 

@@ -128,18 +128,20 @@ the copy and run `teamai pull --force`. The first pull after upgrading, and a
 new worktree's first pull, still overwrite: nothing is recorded yet.
 
 In project scope, `init` and `pull` also install a git hook in the repository's
-local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`; Git
+local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`, `hook.teamai-post-rewrite`; Git
 2.54+; older Git without `core.hooksPath` gets a marked block in `.git/hooks/`
 scripts, and with it `teamai doctor` advises), beside any `core.hooksPath` manager or `.git/hooks` script. When a
 worktree is created by `git worktree add` or an app that runs checkout hooks, it creates the project roots
 of `enabledAgents` (else the ones the main checkout has) and pulls into it before
 the command returns, from the team clone as last fetched when that was within
 24 h; a full pull then runs in the background. A branch switch does nothing.
-After `git pull` it fetches the team repo (5 s cap, then the background pull) and
+After `git pull` (merge or a completed rebase) it fetches the team repo (5 s cap, then the background pull) and
 delivers; in single-repo mode it delivers what `git pull` brought, offline. It prints nothing and always
 exits 0; a failure inside it is recorded, and `teamai doctor` names it (`Last git
 hook run failed: ...`) with its fix, as does the next interactive `teamai pull`, once.
-`teamai doctor` also reports whether the hook is installed, and why not.
+`teamai doctor` also reports whether the hooks are installed and enabled, with a
+reactivation command when Git disables a hook or event. Pull preserves explicit
+disablement. A conflicting rebase syncs only on completion; commit amend does not sync.
 `pull --dry-run` says when it would install or update the hook, writing nothing;
 `teamai uninstall` removes only teamai's hook entries and blocks. For hosts that
 skip checkout hooks, prepare the worktree before launch; see the new-worktree

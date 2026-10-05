@@ -175,7 +175,8 @@ chosen or opened in this project.
 
 A new worktree does not wait for that first session. In project scope, `teamai init`
 and `teamai pull` install a git hook in the repository's local git config, shared by
-every worktree: `hook.teamai-post-checkout` and `hook.teamai-post-merge` (Git 2.54 or
+every worktree: `hook.teamai-post-checkout`, `hook.teamai-post-merge` and
+`hook.teamai-post-rewrite` (Git 2.54 or
 later). Git runs it beside any `core.hooksPath` hook
 manager and any `.git/hooks` script. When `git worktree add`, or an app that runs
 the same checkout hooks, makes a new checkout, the hook creates the project roots of
@@ -189,10 +190,12 @@ Hosts that skip checkout hooks need a setup step that finishes `teamai pull` bef
 the AI tool starts. For Codex CLI 0.160.0, create the checkout with `git worktree add`, run
 `teamai pull` there, then launch `codex exec -C <worktree>`; its native
 `codex exec --worktree` path skips `post-checkout`.
-After `git pull` (`post-merge`), the hook fetches the team repo, waiting at most 5 seconds,
+After `git pull` (`post-merge`, or `post-rewrite` for a completed rebase, including
+`pull.rebase=true`), the hook fetches the team repo, waiting at most 5 seconds,
 and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
 learnings and reports, the same background pull takes over. In single-repo mode it
-delivers the knowledge `git pull` just brought, with no network. The hook prints nothing and always exits 0, so a failed pull never
+delivers the knowledge `git pull` just brought, with no network. A conflicting rebase
+syncs only when completed; `git commit --amend` does not sync. The hook prints nothing and always exits 0, so a failed pull never
 fails the git command. A failure inside it (the team repo fetch failed, or stopped at the
 5-second cap and the background pull did not finish it; another teamai process held the
 project's sync lock longer than the hook waits, 5 seconds after `git pull` (including
@@ -201,7 +204,11 @@ delivery) is written to `~/.teamai/debug.log` and recorded: `teamai doctor`
 names it with its fix, and each interactive `teamai pull` mentions it until one completes. The
 background pull retries, and a hook or interactive pull clears the record only after all startup delivery
 stages succeed. `teamai doctor`
-also reports whether the hook is installed and, when it is not, why. It follows the scope rules below: no project config, or one
+also reports whether the hooks are installed and enabled. Git 2.54+ can disable a
+named hook (`hook.teamai-<event>.enabled=false`); Git 2.55+ can also disable the
+whole event (`hook.<event>.enabled=false`). Both settings can be global or local. Doctor checks the effective
+Git setting and gives a local reactivation command; `teamai pull` preserves an explicit
+disablement. After enabling it, run `teamai pull` to sync. It follows the scope rules below: no project config, or one
 that cannot be read, means no sync; an unreadable config's reason is kept in
 `~/.teamai/debug.log`. The command is one `sh` line that runs
 `teamai hook-dispatch <event> --tool git` with Git's arguments, finding `teamai`
@@ -209,14 +216,15 @@ through `~/.teamai/bin` as the agent hooks do.
 
 With Git older than 2.54 and no `core.hooksPath`, teamai instead adds a block between
 `# >>> teamai git hook` and `# <<< teamai git hook <<<` markers to `.git/hooks/post-checkout`
-and `.git/hooks/post-merge`, right after the shebang, creating the script when there is
+along with `.git/hooks/post-merge` and `.git/hooks/post-rewrite`, right after the
+shebang, creating the script when there is
 none; the script's other lines are kept. The block runs the same command, silently, and
 does not change the script's exit status. With `core.hooksPath` set (a hook manager), or
 a hook script that is a symlink or not an executable shell script, teamai writes nothing, and `teamai doctor`
 advises: upgrade Git to 2.54 or later; or, if the team agrees to commit it, run
 `command -v teamai >/dev/null 2>&1 && teamai hook-dispatch <event> --tool git "$@" >/dev/null 2>&1 || true`
-from the post-checkout and post-merge hooks your manager defines (with `post-checkout` or
-`post-merge` as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
+from the post-checkout, post-merge and post-rewrite hooks your manager defines (with the
+corresponding event as `<event>`), wrapped in `sh -c '...'` when its config is not a shell script.
 That line does nothing on a machine without teamai.
 Existing hook contents and permissions are preserved. Reading or writing a hook can
 fail: `init` and `hooks inject` propagate that error; a Git-started pull records it
@@ -225,7 +233,7 @@ and the next `teamai pull` retries.
 Once Git is 2.54 or later, the next `teamai pull` installs the config hook and takes the
 block out, so the hook does not run twice. `teamai pull --dry-run` says when it would
 install or update the hook and writes nothing. `teamai uninstall` in the project removes
-the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries and the marked
+the `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries and the marked
 blocks; other hooks and script lines stay. A script left with only its shebang is the
 one teamai created, and is deleted.
 
@@ -2990,7 +2998,7 @@ What gets removed:
 - Team-synced rules, including the copies older releases left in `.codex/rules/`, a project's `.workbuddy/rules/` and `.pi/rules/`, `.openclaw/rules/`, `~/.pi/agent/rules/` and `~/.joycode/rules/`, also of rules the team has since removed. A copy in a project's `.codebuddy/rules/` stays while the other of CodeBuddy and WorkBuddy is still installed. Cleanup follows the recorded `toolRoots` location and the publisher's local filenames. A copy there you edited is kept and named in a warning. A removed rule's copy is deleted only if it matches its recorded delivery hash; without that record, it is kept and named too. Codex's `*.rules` files are kept
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
-- In a project, teamai's git hook: the `hook.teamai-post-checkout` and `hook.teamai-post-merge` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout` and `post-merge` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
+- In a project, teamai's git hook: the `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout`, `post-merge` and `post-rewrite` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
 - The `~/.teamai/` directory
 
 ### Uninstall a single tool (`--agent <tool>`)
