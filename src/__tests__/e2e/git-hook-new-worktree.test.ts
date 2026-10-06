@@ -3,7 +3,7 @@
  * returns. `teamai init` (project scope) installs a named hook in the
  * repository's git config; real git runs it on `post-checkout`, and it calls
  * the real CLI's dispatcher, which creates the tool roots and pulls into the
- * new worktree. `git pull` (`post-merge` or `post-rewrite`) brings the team's change the same way.
+ * new worktree. `git pull` (`post-merge`, `post-rewrite`, or a fast-forward rebase's `post-checkout`) brings the team's change the same way.
  *
  * The team remote is a local bare repo reached through a synthetic HTTPS URL
  * (`url.<path>.insteadOf` in the sandbox HOME), as in init-project-all.test.ts.
@@ -511,7 +511,10 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       await settle(repo);
     });
 
-    it.each(['merge', 'rebase', 'configured-rebase', 'conflicting-rebase'])('self mode: git pull with %s delivers a changed rule without hook network', async (mode) => {
+    // Fast-forward with autostash: Git 2.33+ merges (post-merge); Git 2.14–2.32 runs
+    // `git rebase` under the pull's GIT_REFLOG_ACTION, which only checks out the
+    // upstream (post-checkout). The legacy mode runs that step as old Git does.
+    it.each(['merge', 'rebase', 'configured-rebase', 'conflicting-rebase', 'autostash-fast-forward', 'legacy-autostash-fast-forward'])('self mode: git pull with %s delivers a changed rule without hook network', async (mode) => {
       const repo = path.join(sandbox, `self-project-${mode}`);
       fs.mkdirSync(repo);
       fs.writeFileSync(path.join(repo, 'README'), 'x\n');
@@ -531,16 +534,22 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       gitOk(['add', '-A'], mate);
       gitOk(['commit', '-q', '-m', 'rule'], mate);
       gitOk(['push', '-q', 'origin', 'HEAD:main'], mate);
-      if (mode !== 'merge') {
+      const fastForward = mode.endsWith('autostash-fast-forward');
+      if (fastForward) fs.writeFileSync(path.join(repo, 'README'), 'dirty\n');
+      if (mode !== 'merge' && !fastForward) {
         const localFile = mode === 'conflicting-rebase' ? 'README' : 'local.txt';
         fs.writeFileSync(path.join(repo, localFile), 'local\n');
         gitOk(['add', localFile], repo);
         gitOk(['commit', '-q', '-m', 'local change'], repo);
       }
       if (mode === 'configured-rebase') gitOk(['config', 'pull.rebase', 'true'], repo);
+      if (mode === 'autostash-fast-forward') gitOk(['config', 'rebase.autoStash', 'true'], repo);
+      if (mode === 'legacy-autostash-fast-forward') gitOk(['fetch', '-q', 'origin'], repo);
       const trace = path.join(sandbox, `self-trace-${mode}.log`);
 
-      let r = git(['pull', '-q', ...(['rebase', 'conflicting-rebase'].includes(mode) ? ['--rebase'] : [])], repo, { GIT_TRACE: trace });
+      let r = mode === 'legacy-autostash-fast-forward'
+        ? git(['rebase', '-q', '--autostash', 'origin/main'], repo, { GIT_TRACE: trace, GIT_REFLOG_ACTION: 'pull --rebase --autostash' })
+        : git(['pull', '-q', ...(['rebase', 'conflicting-rebase', 'autostash-fast-forward'].includes(mode) ? ['--rebase'] : [])], repo, { GIT_TRACE: trace });
       if (mode === 'conflicting-rebase') {
         expect(r.code).not.toBe(0);
         expect(fs.existsSync(path.join(repo, '.claude', 'rules', 'self-rule.md'))).toBe(false);
@@ -550,11 +559,14 @@ describe.skipIf(!configHooks)('git hook: a new worktree gets the team\'s resourc
       }
 
       expect(r.code, r.output).toBe(0);
-      if (mode !== 'conflicting-rebase') expect(r.output).toBe('');
-      else expect(r.output).not.toContain('teamai');
+      // Autostash and a resolved conflict print git's own lines; the hook still prints nothing.
+      if (mode === 'conflicting-rebase' || fastForward) expect(r.output).not.toContain('teamai');
+      else expect(r.output).toBe('');
+      if (fastForward) expect(fs.readFileSync(path.join(repo, 'README'), 'utf8')).toBe('dirty\n');
       expect(fs.readFileSync(path.join(repo, '.claude', 'rules', 'self-rule.md'), 'utf8')).toContain('# Self rule');
       const traced = fs.readFileSync(trace, 'utf8');
-      const event = mode === 'merge' ? 'post-merge' : 'post-rewrite';
+      const event = mode === 'legacy-autostash-fast-forward' ? 'post-checkout'
+        : ['merge', 'autostash-fast-forward'].includes(mode) ? 'post-merge' : 'post-rewrite';
       const fromHook = traced.slice(traced.indexOf(`hook-dispatch ${event}`));
       expect(fromHook).toContain(`hook-dispatch ${event}`);
       expect(fromHook).not.toMatch(/\b(fetch|upload-pack|ls-remote|push|pull)\b/);

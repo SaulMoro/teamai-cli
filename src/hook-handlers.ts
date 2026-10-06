@@ -175,7 +175,8 @@ const newWorktreeHandler: HookHandler = {
 const GIT_PULL_FETCH_CAP_MS = 5_000;
 
 /**
- * `post-merge` or `post-rewrite` after a rebase (`git pull`): the next session gets what
+ * `post-merge`, `post-rewrite` after a rebase, or `post-checkout` from a rebase
+ * that only fast-forwarded (`git pull`, see isRebaseFastForward): the next session gets what
  * changed. With a separate team repo, the team repo is fetched inline within
  * GIT_PULL_FETCH_CAP_MS and delivered when its revision moved (the rev fast
  * path skips it otherwise); past the cap, and for learnings, reports and
@@ -186,9 +187,15 @@ const gitPullHandler: HookHandler = {
   name: 'git-pull',
   async execute(stdin, _tool, config) {
     if (!config || config.scope !== 'project') return null;
-    const event = stdin.hook_event_name === 'post-rewrite' ? 'post-rewrite' : 'post-merge';
-    if (event === 'post-rewrite' && (!Array.isArray(stdin.git_args) || stdin.git_args[0] !== 'rebase')) return null;
+    const event = stdin.hook_event_name === 'post-rewrite' || stdin.hook_event_name === 'post-checkout'
+      ? stdin.hook_event_name : 'post-merge';
+    const args = Array.isArray(stdin.git_args) ? stdin.git_args.map(String) : [];
+    if (event === 'post-rewrite' && args[0] !== 'rebase') return null;
     const cwd = resolveHookCwd(stdin) ?? process.cwd();
+    if (event === 'post-checkout') {
+      const { isRebaseFastForward } = await import('./git-hook.js');
+      if (!await isRebaseFastForward(args, process.env.GIT_REFLOG_ACTION, cwd)) return null;
+    }
     const { getDataHome, isSelfMode } = await import('./types.js');
     const self = isSelfMode(config);
     // teamai's own checkouts; in self mode the team repo is the member's.
@@ -1112,6 +1119,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     // has no hook timeout, so the budget is the detached pull's; git-pull hooks
     // cap their own fetch.
     { event: 'post-checkout', matcher: '*', handler: newWorktreeHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
+    { event: 'post-checkout', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-merge', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
     { event: 'post-rewrite', matcher: '*', handler: gitPullHandler, timeoutMs: PULL_TIMEOUT_MS, requiresConfig: true },
   ];

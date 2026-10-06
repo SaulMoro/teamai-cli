@@ -175,7 +175,7 @@ checkout hook 的应用，新建一个检出时，该 hook 会创建 `enabledAge
 切换分支不会触发任何操作。跳过 checkout hook 的宿主需要在 AI 工具启动前完成 `teamai pull` 的准备步骤。
 Codex CLI 0.160.0 请先用 `git worktree add` 创建检出，在其中执行 `teamai pull`，再用
 `codex exec -C <worktree>` 启动；原生 `codex exec --worktree` 路径会跳过 `post-checkout`。
-`git pull` 之后（`post-merge`，或 rebase 完成后的 `post-rewrite`，包括 `pull.rebase=true`），该 hook 会 fetch 团队仓库（最多等待 5 秒），
+`git pull` 之后（`post-merge`，或 rebase 完成后的 `post-rewrite`，包括 `pull.rebase=true`；Git 2.32 及更早版本中，开启 autostash 的快进 rebase 只运行 `post-checkout`，同样会同步），该 hook 会 fetch 团队仓库（最多等待 5 秒），
 并在 `git pull` 返回前交付其变更；超过 5 秒时，以及 source、learnings 与 reports，交给同样的后台 pull。
 单仓库模式下，它交付 `git pull` 刚带来的知识，不访问网络。有冲突的 rebase 仅在完成后同步；
 `git commit --amend` 不触发同步。该 hook 不输出任何内容且始终以 0 退出，

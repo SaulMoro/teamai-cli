@@ -85,7 +85,8 @@ This is the #1 onboarding issue. In order:
 ## "Last git hook run failed: ..." / a new worktree lacks team resources
 
 In project scope, teamai's git hook syncs on `git worktree add` and `git pull`
-through merge or a completed rebase (`post-rewrite`, including `pull.rebase=true`).
+through merge or a completed rebase (`post-rewrite`, including `pull.rebase=true`; on Git 2.32
+and older, a fast-forward rebase with autostash syncs on `post-checkout`).
 A conflicting rebase syncs only on completion; `git commit --amend` does not sync. It runs
 silently and always exits 0, so its failures surface only here: `teamai doctor`
 names the last one with its fix, and the next interactive `teamai pull` says it

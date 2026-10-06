@@ -2,7 +2,7 @@
  * teamai's git hook: a named hook in a repository's local git config that runs
  * `teamai hook-dispatch <event> --tool git` on `post-checkout`, `post-merge`
  * and `post-rewrite`, so a new worktree gets the team's resources before
- * `git worktree add` returns.
+ * `git worktree add` returns, and `git pull` before it returns.
  *
  * Config hooks (`hook.<name>.command` + `hook.<name>.event`, Git >= 2.54) live
  * in the common config every worktree shares, and run beside `core.hooksPath`
@@ -308,6 +308,28 @@ function supportsConfigHooks(versionOutput: string): boolean {
 export function isNewCheckout(args: readonly string[]): boolean {
   const [oldRef, , branchFlag] = args;
   return !!oldRef && ZERO_OID.test(oldRef) && branchFlag === '1';
+}
+
+const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+/**
+ * Whether a `post-checkout` is a pull or rebase that fast-forwarded HEAD. Git
+ * 2.14–2.32 runs a fast-forward `git pull --rebase` with autostash as a rebase
+ * that only checks out the upstream, so neither post-merge nor post-rewrite
+ * runs. A divergent rebase checks out first too, but its old HEAD is no
+ * ancestor of the new one: it syncs on post-rewrite. GIT_REFLOG_ACTION names
+ * the command; any other action is not one.
+ */
+export async function isRebaseFastForward(
+  args: readonly string[],
+  reflogAction: string | undefined,
+  cwd: string,
+): Promise<boolean> {
+  const [oldRef, newRef, branchFlag] = args;
+  if (branchFlag !== '1' || !oldRef || !newRef || oldRef === newRef) return false;
+  if (![oldRef, newRef].every(ref => OID.test(ref) && !ZERO_OID.test(ref))) return false;
+  if (!/^(?:pull|rebase)(?:\s|$)/.test(reflogAction ?? '')) return false;
+  return (await gitIn(cwd)(['merge-base', '--is-ancestor', oldRef, newRef])).code === 0;
 }
 
 /**

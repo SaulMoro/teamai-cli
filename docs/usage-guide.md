@@ -191,7 +191,8 @@ the AI tool starts. For Codex CLI 0.160.0, create the checkout with `git worktre
 `teamai pull` there, then launch `codex exec -C <worktree>`; its native
 `codex exec --worktree` path skips `post-checkout`.
 After `git pull` (`post-merge`, or `post-rewrite` for a completed rebase, including
-`pull.rebase=true`), the hook fetches the team repo, waiting at most 5 seconds,
+`pull.rebase=true`; on Git 2.32 and older, a fast-forward rebase with autostash runs
+only `post-checkout`, which syncs the same way), the hook fetches the team repo, waiting at most 5 seconds,
 and delivers its changes before `git pull` returns; past 5 seconds, and for sources,
 learnings and reports, the same background pull takes over. In single-repo mode it
 delivers the knowledge `git pull` just brought, with no network. A conflicting rebase
