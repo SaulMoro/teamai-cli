@@ -99,7 +99,7 @@ describe.skipIf(!configHooks)('teamai git hook in the repository config', () => 
     git(['config', '--local', 'hook.teamai-post-checkout.enabled', 'false']);
 
     expect(await gitHookStatus(repo)).toEqual({
-      installed: false, reason: 'disabled', event: 'post-checkout', disabledBy: 'hook',
+      installed: false, reason: 'disabled', event: 'post-checkout', disabledBy: 'hook', scope: 'local',
     });
     await installGitHook(repo);
     expect(git(['config', '--get', 'hook.teamai-post-checkout.enabled']).stdout.trim()).toBe('false');
@@ -119,7 +119,7 @@ describe.skipIf(!configHooks)('teamai git hook in the repository config', () => 
       const key = `hook.${disabledBy === 'hook' ? 'teamai-post-rewrite' : 'post-rewrite'}.enabled`;
       expect(git(['config', scope, key, 'false']).status).toBe(0);
       const status = await gitHookStatus(repo);
-      expect(status).toEqual({ installed: false, reason: 'disabled', event: 'post-rewrite', disabledBy });
+      expect(status).toEqual({ installed: false, reason: 'disabled', event: 'post-rewrite', disabledBy, scope: scope.slice(2) });
       if (!status.installed) {
         const advice = describeMissingGitHook(status);
         expect(advice).toContain(`${key}=false`);
@@ -133,6 +133,29 @@ describe.skipIf(!configHooks)('teamai git hook in the repository config', () => 
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('advises unsetting a disable set in per-worktree config, which --local cannot override', async () => {
+    await installGitHook(repo);
+    git(['config', 'extensions.worktreeConfig', 'true']);
+    const key = 'hook.teamai-post-checkout.enabled';
+    expect(git(['config', '--worktree', key, 'false']).status).toBe(0);
+    const status = await gitHookStatus(repo);
+    expect(status).toEqual({ installed: false, reason: 'disabled', event: 'post-checkout', disabledBy: 'hook', scope: 'worktree' });
+    const advice = describeMissingGitHook(status as Exclude<typeof status, { installed: true }>);
+    expect(advice).toContain(`Run \`git config --worktree --unset ${key}\``);
+    expect(advice).not.toContain('git config --local');
+    expect(advice).toContain('Teamai pull preserves explicit hook disable settings.');
+    expect(git(['config', '--worktree', '--unset', key]).status).toBe(0);
+    expect(await gitHookStatus(repo)).toEqual({ installed: true });
+  });
+
+  it('names a scope teamai cannot point at, and asks to unset or override it there', () => {
+    const advice = describeMissingGitHook({ installed: false, reason: 'disabled', event: 'post-merge', disabledBy: 'hook', scope: 'command' });
+    expect(advice).toContain('hook.teamai-post-merge.enabled=false in command config');
+    expect(advice).toContain('Unset or override it there');
+    expect(advice).not.toContain('git config --local');
+    expect(advice).toContain('Teamai pull preserves explicit hook disable settings.');
   });
 
   it('passes the event and Git\'s arguments to the dispatcher, silently', async () => {

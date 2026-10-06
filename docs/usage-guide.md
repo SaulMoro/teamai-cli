@@ -207,8 +207,8 @@ background pull retries, and a hook or interactive pull clears the record only a
 stages succeed. `teamai doctor`
 also reports whether the hooks are installed and enabled. Git 2.54+ can disable a
 named hook (`hook.teamai-<event>.enabled=false`); Git 2.55+ can also disable the
-whole event (`hook.<event>.enabled=false`). Both settings can be global or local. Doctor checks the effective
-Git setting and gives a local reactivation command; `teamai pull` preserves an explicit
+whole event (`hook.<event>.enabled=false`). Both settings can be global, local or per-worktree. Doctor checks the effective
+Git setting and gives the reactivation command for its scope (a local override, or unsetting a worktree setting, which a local one cannot override); `teamai pull` preserves an explicit
 disablement. After enabling it, run `teamai pull` to sync. It follows the scope rules below: no project config, or one
 that cannot be read, means no sync; an unreadable config's reason is kept in
 `~/.teamai/debug.log`. The command is one `sh` line that runs

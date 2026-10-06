@@ -88,7 +88,7 @@ export type GitHookInstall =
 
 export type GitHookStatus =
   | { installed: true }
-  | { installed: false; reason: 'disabled'; event: GitHookEvent; disabledBy: 'hook' | 'event' }
+  | { installed: false; reason: 'disabled'; event: GitHookEvent; disabledBy: 'hook' | 'event'; scope: string }
   | { installed: false; reason: 'hooks-path' | 'other-hook'; gitVersion: string }
   | { installed: false; reason: 'not-a-repository' | 'not-configured' };
 
@@ -121,11 +121,13 @@ export async function gitHookStatus(repoDir: string): Promise<GitHookStatus> {
     const { code, stdout, stderr } = await git(['hook', 'list', event]);
     if (code !== 0) throw new Error(`Could not inspect the ${event} hook: ${stderr.trim() || `exit ${code}`}`);
     const entries = stdout.trim().split('\n');
-    if (entries.includes(`event-disabled\t${hookName(event)}`)) {
-      return { installed: false, reason: 'disabled', event, disabledBy: 'event' };
-    }
-    if (entries.includes(`disabled\t${hookName(event)}`)) {
-      return { installed: false, reason: 'disabled', event, disabledBy: 'hook' };
+    const disabledBy = entries.includes(`event-disabled\t${hookName(event)}`) ? 'event'
+      : entries.includes(`disabled\t${hookName(event)}`) ? 'hook' : null;
+    if (disabledBy) {
+      // Where the effective `false` lives decides how to undo it: `--local` cannot override worktree config.
+      const key = `hook.${disabledBy === 'event' ? event : hookName(event)}.enabled`;
+      const scope = (await git(['config', '--show-scope', '--get', key])).stdout.split('\t')[0].trim();
+      return { installed: false, reason: 'disabled', event, disabledBy, scope };
     }
   }
   return { installed: true };
@@ -136,9 +138,18 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
   switch (status.reason) {
     case 'disabled': {
       const key = `hook.${status.disabledBy === 'event' ? status.event : hookName(status.event)}.enabled`;
-      return `Git disables ${hookName(status.event)} through ${key}=false, so it will not sync resources. `
-        + `Run \`git config --local ${key} true\` to enable it for this repository, then \`teamai pull\` to sync. `
-        + 'Teamai pull preserves explicit hook disable settings.';
+      const preserved = 'Teamai pull preserves explicit hook disable settings.';
+      if (status.scope === 'worktree') {
+        return `Git disables ${hookName(status.event)} through ${key}=false in this worktree's config, so it will not sync resources. `
+          + `Run \`git config --worktree --unset ${key}\` to enable it, then \`teamai pull\` to sync. ${preserved}`;
+      }
+      // Local config overrides global and system; an unreadable scope gets the same advice.
+      if (!status.scope || ['local', 'global', 'system'].includes(status.scope)) {
+        return `Git disables ${hookName(status.event)} through ${key}=false, so it will not sync resources. `
+          + `Run \`git config --local ${key} true\` to enable it for this repository, then \`teamai pull\` to sync. ${preserved}`;
+      }
+      return `Git disables ${hookName(status.event)} through ${key}=false in ${status.scope} config, so it will not sync resources. `
+        + `Unset or override it there, then run \`teamai pull\` to sync. ${preserved}`;
     }
     case 'hooks-path':
     case 'other-hook': {

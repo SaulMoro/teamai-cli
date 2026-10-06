@@ -185,8 +185,8 @@ Codex CLI 0.160.0 请先用 `git worktree add` 创建检出，在其中执行 `t
 都会提示，直到某次完成为止。后台 pull 会重试，只有所有启动交付阶段都成功后，hook pull 或交互式 pull 才会清除该记录。`teamai doctor` 还会报告 hook
 是否已安装并启用。Git 2.54+ 可禁用指定 hook
 （`hook.teamai-<event>.enabled=false`）；Git 2.55+ 还可禁用整个事件
-（`hook.<event>.enabled=false`）。两种设置均可写在全局或本地配置中。
-doctor 检查 Git 的实际生效配置，并提供本地重新启用命令；`teamai pull` 保留显式禁用设置。
+（`hook.<event>.enabled=false`）。两种设置均可写在全局、本地或 worktree 配置中。
+doctor 检查 Git 的实际生效配置，并按其作用域给出重新启用命令（本地覆盖，或删除本地配置无法覆盖的 worktree 设置）；`teamai pull` 保留显式禁用设置。
 启用后运行 `teamai pull` 完成同步。它遵循下文的 scope 规则：没有项目配置，或项目配置无法读取，
 都不会同步；无法读取配置的原因保留在 `~/.teamai/debug.log` 中。其命令是一行 `sh`，带着 Git 传入的参数运行 `teamai hook-dispatch <event> --tool git`，
 与 Agent hook 一样通过 `~/.teamai/bin` 找到 `teamai`。

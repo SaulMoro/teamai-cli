@@ -104,8 +104,8 @@ hook there is a symlink or not an executable shell script), in which case doctor
 or, if the team agrees, to commit its guarded `command -v teamai ... || true`
 line into the manager's post-checkout, post-merge and post-rewrite hooks.
 Doctor also detects hooks disabled by name (Git 2.54+) or event (Git 2.55+)
-in effective global or local config. Follow its `git config --local <key> true` command to
-enable the named hook or event, then run `teamai pull` to sync. Pull preserves
+in effective global, local or worktree config. Follow its command (`git config --local <key> true`,
+or `git config --worktree --unset <key>` for a worktree setting) to enable the named hook or event, then run `teamai pull` to sync. Pull preserves
 explicit disable settings, so reinstalling alone does not enable a disabled hook.
 Existing hook contents and permissions stay unchanged; read/write errors propagate
 from `init` and `hooks inject`, and Git-started pulls record them. An unreadable
