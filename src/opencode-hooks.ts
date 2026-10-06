@@ -347,7 +347,8 @@ const ${factory} = async ({ directory, worktree }) => {
     try {
       const { spawn } = await import('node:child_process');
       await new Promise((resolve) => {
-        const child = spawn('sh', ['-c', ${JSON.stringify(command)}], {
+        const windows = process.platform === 'win32';
+        const child = spawn(windows ? 'cmd.exe' : 'sh', windows ? ['/d', '/s', '/c', ${JSON.stringify(command)}] : ['-c', ${JSON.stringify(command)}], {
           cwd: directory || worktree,
           windowsHide: true,
           stdio: 'ignore',

@@ -464,6 +464,21 @@ describe('enterprise dual-host dispatch', () => {
     }
   });
 
+  it('runs the command through cmd.exe on Windows', async () => {
+    const spawn = vi.fn(() => {
+      const child = new EventEmitter();
+      void Promise.resolve().then(() => child.emit('close', 0));
+      return child;
+    });
+    const plugin = loadPluginDefinition(buildAgentHookPluginSource('win', 'chat.message', 'echo enterprise'), {
+      __childProcess: { spawn },
+      process: { platform: 'win32' },
+    });
+    const hooks = await plugin.server({ directory: 'C:\\work\\proj' });
+    await hooks['chat.message']({});
+    expect(spawn).toHaveBeenCalledExactlyOnceWith('cmd.exe', ['/d', '/s', '/c', 'echo enterprise'], expect.objectContaining({ cwd: 'C:\\work\\proj', windowsHide: true }));
+  });
+
   it.each([undefined, '*', 'BaSh'])('matches V2 tools with matcher %s', async (matcher) => {
     const spawn = vi.fn(() => {
       const child = new EventEmitter();
