@@ -105,7 +105,7 @@ npm run test:e2e -- src/__tests__/e2e/git-hook-new-worktree.test.ts
 npm run test:e2e -- <test-file> -t "<test-name>"
 ```
 
-`npm run test:e2e` builds once before starting Vitest. Test files run with up to four workers locally and two in CI. On a resource-constrained machine, pass `--maxWorkers=2` after `--`. E2E tests must use the prepared build rather than rebuild it while other files use the CLI.
+`npm run test:e2e` builds once before starting Vitest. Test files run with up to four workers locally and two in CI. On a resource-constrained machine, pass `--maxWorkers=2` after `--`. E2E tests must use the prepared build rather than rebuild it while other files use the CLI. Vitest prepares the shared OpenCode binary once before workers start; tests must not reinstall it.
 
 Most cases use local fixtures. Cases requiring remote credentials skip when those credentials are absent; see [CI E2E setup](../docs/ci-e2e-setup.md) for the live fixture configuration.
 

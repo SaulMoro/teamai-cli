@@ -8,6 +8,8 @@ export default defineConfig({
       'validation/*.test.ts',
     ],
     setupFiles: ['src/__tests__/helpers/clear-agent-session-env.ts'],
+    // OpenCode's installer replaces a shared binary. Run it before workers.
+    globalSetup: ['src/__tests__/helpers/prepare-opencode-e2e.ts'],
     testTimeout: 60_000,
     hookTimeout: 30_000,
     // Build before the runner: rebuilding inside a test would delete dist

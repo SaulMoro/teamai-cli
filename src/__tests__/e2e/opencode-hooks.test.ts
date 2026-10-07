@@ -25,7 +25,6 @@ async function freePort(): Promise<number> {
 // V2 is distributed separately; CI can opt in with its installed binary.
 describe.each([{ version: 'V1', binary: V1 }, { version: 'V2', binary: V2 }])('real OpenCode $version hooks', ({ version, binary }) => {
   it.skipIf(!binary)('loads the CLI-generated plugin and dispatches session start once', async () => {
-    if (version === 'V1') execFileSync(process.execPath, ['node_modules/opencode-ai/postinstall.mjs'], { cwd: ROOT, stdio: 'pipe' });
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-oc-hooks-e2e-')));
     const home = path.join(sandbox, 'home');
     const work = path.join(sandbox, 'work');

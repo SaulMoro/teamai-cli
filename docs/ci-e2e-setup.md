@@ -16,7 +16,7 @@ GitHub Actions 上的 `e2e` job 跑全量端到端测试（init / push / pull / 
 
 Fork PR 运行 `fork-e2e` job，无需配置上述 Variable，也不会获得 fixture token；需要远程凭证的用例会自行跳过。`prepare-build` 与 lint / unit test 矩阵同时启动，e2e job 等待 `prepare-build` 完成。原有的 `Build` 检查仍等待矩阵和 build preparation 都通过。
 
-测试文件在 CI 中最多使用 2 个 worker，在本地最多使用 4 个。CLI 必须在启动 Vitest 前编译；测试内不得重新编译，否则会清空其他测试正在使用的 `dist/`。已编译或下载 build artifact 的 CI step 直接调用 Vitest，避免重复编译。
+测试文件在 CI 中最多使用 2 个 worker，在本地最多使用 4 个。CLI 必须在启动 Vitest 前编译；测试内不得重新编译，否则会清空其他测试正在使用的 `dist/`。已编译或下载 build artifact 的 CI step 直接调用 Vitest，避免重复编译。Vitest 的 global setup 会在启动 worker 前统一准备一次共享的 OpenCode binary；测试内不得重新安装该 binary。
 
 ---
 
