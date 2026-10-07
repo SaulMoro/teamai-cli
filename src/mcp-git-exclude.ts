@@ -249,9 +249,19 @@ export async function ensureExcludedFromGit(
   const pattern = `/${location.prefix}${rel}`.replace(/[\\*?[\]!#]/g, '\\$&');
   const retry = `Make it writable, or add \`${pattern}\` to it yourself, then ${rerun}.`;
   // A read-only exclude file is the member's choice; the atomic write would replace it all the same.
-  for (const writable of [path.dirname(excludeFile), ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
-    const denied = await fse.access(writable, fse.constants.W_OK).then(() => false, () => true);
-    if (denied) return { kind: 'failed', reason: `${writable} is not writable`, fix: retry };
+  // A missing `info/` (`git init --template=`) is created by the write, so its closest existing directory is checked (#993).
+  for (const writable of [await existingAncestor(excludeFile), ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
+    const denied = await fse.access(writable, fse.constants.W_OK).then(
+      () => false,
+      (e: NodeJS.ErrnoException) => ['EACCES', 'EPERM', 'EROFS'].includes(e.code ?? ''),
+    );
+    if (!denied) continue;
+    if (writable === excludeFile) return { kind: 'failed', reason: `${excludeFile} is not writable`, fix: retry };
+    return {
+      kind: 'failed',
+      reason: `${excludeFile} is not writable, as ${writable} is not`,
+      fix: `Make ${writable} writable, or add \`${pattern}\` to ${excludeFile} yourself, then ${rerun}.`,
+    };
   }
   const add = (content: string): string | null => {
     const block = splitBlock(content);
