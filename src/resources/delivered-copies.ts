@@ -317,12 +317,15 @@ export async function judgeRemoval(
  * because the repository it sits in tracks it (#915): deleting it would be a
  * change in the member's repository. Asked right before the deletion, after
  * whatever proved the copy teamai's, so no proof deletes it. Named once per
- * pull. A path git cannot answer for (no repository) is not kept.
+ * run. A path git cannot answer for (no repository) is not kept. `movedTo` is
+ * where a layout migration writes the resource now: the tool may then load
+ * both copies, and the message says so.
  */
-export async function keepsTrackedCopy(dest: string): Promise<boolean> {
+export async function keepsTrackedCopy(dest: string, movedTo?: string): Promise<boolean> {
   if ((await gitTracks(dest)).kind !== 'tracked') return false;
   warnOnce(`Kept ${dest}: this repository tracks it, so teamai does not delete it. `
-    + `Run \`git rm -r ${dest}\` and commit if the repository no longer needs it.`);
+    + `Run \`git rm -r ${dest}\` and commit if the repository no longer needs it.`
+    + (movedTo === undefined ? '' : ` The resource now lives at ${movedTo}, and the tool may load both until the repository removes this copy.`));
   return true;
 }
 

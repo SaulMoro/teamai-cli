@@ -17,7 +17,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, judgeCopy, keepsEditedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, judgeCopy, keepsEditedCopy, keepsTrackedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -73,8 +73,10 @@ export async function resolveSkillDestination(
     if (!sourcePath) return sharedDestination;
     if (await pathExists(configuredDestination)) {
       if (await dirContentEqual(sharedDestination, configuredDestination) && await dirContentEqual(configuredDestination, sourcePath)) {
-        await remove(configuredDestination);
-        log.debug(`Removed identical TeamAI skill ${skillName} from ${configuredSkillsPath}`);
+        if (!await keepsTrackedCopy(configuredDestination, sharedDestination)) {
+          await remove(configuredDestination);
+          log.debug(`Removed identical TeamAI skill ${skillName} from ${configuredSkillsPath}`);
+        }
       } else {
         log.warn(`Codex skill conflict for ${skillName}: keeping different copies in ${SHARED_AGENT_SKILLS_PATH} and ${configuredSkillsPath}`);
       }
@@ -485,6 +487,7 @@ async function removeLeftoverVersionFiles(
       );
       continue;
     }
+    if (await keepsTrackedCopy(installed)) continue;
     await remove(installed);
     removed = true;
   }
@@ -897,6 +900,7 @@ export class SkillsHandler extends ResourceHandler {
     await this.addTombstone(name, localConfig);
 
     for (const { tool, skillDir } of owned) {
+      if (await keepsTrackedCopy(skillDir)) continue;
       await remove(skillDir);
       removed.push(skillDir);
       log.debug(`Removed skill ${name} from ${tool}`);

@@ -1,19 +1,22 @@
 /**
- * E2E (#915 ticket 02): with `sharing.gitExclude.enabled` on, or the member's
+ * E2E (#915): with `sharing.gitExclude.enabled` on, or the member's
  * `gitExcludeEnabled` override in the partition config, a pull keeps the
  * skills the skills handler delivered out of `git status`, through teamai's
  * `delivered` block in the clone's `.git/info/exclude`, while a file the member
  * owns stays visible and addable. The setting takes effect on the next pull,
  * fast path included; off, the next pull removes only that block.
  *
- * Ticket 03: every writer of a pull reports what it delivered (rules one file
- * per line, agents, `teamai-context` files, the team hooks in
+ * Every writer of a pull reports what it delivered (rules one file per line,
+ * agents, `teamai-context` files, the team hooks in
  * `.claude/settings.local.json` and Copilot's hook file, the co-author entry,
  * the `teamai` skill and the `teamai-recall` rule and agent, source skills,
  * Codex skills in `.agents/skills`), so after init, pull and a session start
- * `git status` shows only an allowlist of paths later tickets still move, and
+ * `git status` shows only an allowlist of paths that stay visible for now, and
  * every file of the member's stays visible and addable. A copy pull keeps
  * because the member changed it, and one no longer delivered, leave the block.
+ *
+ * teamai never deletes a file the business repo tracks: not in a removal pass,
+ * a layout migration, `teamai remove` or `uninstall`.
  *
  * Each case gets its own HOME, team remote (a local bare repo reached through
  * a synthetic HTTPS URL) and business repo.
@@ -443,7 +446,7 @@ describe('delivered team skills stay out of git (#915)', () => {
 });
 
 
-// ─── Ticket 03: every writer reports ────────────────────────────────────────
+// ─── Every writer reports what it delivered ─────────────────────────────────
 
 const rule = (title: string): string => `# ${title}\n\n${title} rule.\n`;
 const agentYaml = (name: string): string => `name: ${name}\ndescription: ${name} agent\ninstructions: Act as ${name}.\n`;
@@ -501,18 +504,18 @@ const MEMBERS_CURSOR_RULE = '---\ndescription: mine\nalwaysApply: true\n---\nMY 
 const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md'];
 
 /**
- * What git may still show: paths later tickets move or keep out of git (MCP
- * and OpenCode configs, `.codex/hooks.json`, the docs mirror). Nothing this
- * ticket's writers deliver is on it.
+ * What git may still show: paths the delivered block does not cover yet (MCP
+ * and OpenCode configs, `.codex/hooks.json`, the docs mirror). Nothing the
+ * writers above deliver is on it.
  */
-const LATER_TICKETS = [
+const STILL_VISIBLE = [
   /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
   /^opencode\.json$/, /^\.opencode\/opencode\.json$/,
   /^\.codex\/hooks\.json$/,
   /^\.teamai\/docs\//, /^\.teamai\/\.ignore$/,
 ];
 const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
-/** A delivered path of each writer and kind this ticket covers, as the member's tools read them. */
+/** A delivered path of each writer and kind, as the member's tools read them. */
 const DELIVERED = [
   '.claude/rules/fe/fe-rule.md', '.cursor/rules/fe/fe-rule.mdc', '.kiro/steering/fe.fe-rule.md', '.kiro/steering/checkout.checkout-rule.md',
   '.github/instructions/fe/fe-rule.instructions.md', '.codebuddy/rules/team-rule.md',
@@ -529,7 +532,7 @@ const DELIVERED = [
 function unexpected(m: Machine): string[] {
   return m.status().filter((line) => {
     const file = line.slice(3);
-    return !line.startsWith(' M ') && !MEMBERS_FILES.includes(file) && !LATER_TICKETS.some((later) => later.test(file));
+    return !line.startsWith(' M ') && !MEMBERS_FILES.includes(file) && !STILL_VISIBLE.some((visible) => visible.test(file));
   });
 }
 
@@ -560,7 +563,7 @@ function fullMachine(base: string, opts: Partial<MachineOptions> = {}): Machine 
   });
 }
 
-describe('every writer keeps what it delivered out of git (#915 ticket 03)', () => {
+describe('every writer keeps what it delivered out of git (#915)', () => {
   it('after init, pull and a session start, git status lists only the allowlist, and every file of the member\'s stays visible and addable', async () => {
     const m = fullMachine('acceptance');
     const steps: Array<[string, () => Promise<Run> | Run | null]> = [
@@ -595,7 +598,7 @@ describe('every writer keeps what it delivered out of git (#915 ticket 03)', () 
 
     m.git(['add', '-A']);
     const staged = m.git(['diff', '--cached', '--name-only']).split('\n').filter(Boolean);
-    expect(staged.filter((file) => !LATER_TICKETS.some((later) => later.test(file))).sort())
+    expect(staged.filter((file) => !STILL_VISIBLE.some((visible) => visible.test(file))).sort())
       .toEqual([...MEMBERS_FILES, '.claude/skills/tracked-skill/SKILL.md'].sort());
 
     // Cleaning the tree leaves teamai's copies where they are.
@@ -940,5 +943,82 @@ describe('removals keep the copies the business repo tracks, and sweep Codex\'s 
     }
     expect(m.status().filter((line) => /(fe|other|ext)-skill/.test(line)), pulled.output).toEqual([]);
     expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'ext-two', 'SKILL.md'))).toBe(true);
+  });
+});
+
+// ─── Explicit commands and layout migrations keep tracked copies too ───────
+
+/** The tracked-copy line for a path teamai now writes elsewhere: the resource lives at `movedTo`. */
+function trackedMoved(m: Machine, rel: string, movedTo: string): string {
+  return `${trackedKept(m, rel)} The resource now lives at ${path.join(m.dir, movedTo)}, and the tool may load both until the repository removes this copy.`;
+}
+
+describe('explicit commands and layout migrations never delete a file the business repo tracks (#915)', () => {
+  it('teamai remove keeps a committed copy of the removed skill and rule, names each, and removes the untracked copies', () => {
+    const m = machine('tracked-remove', {
+      team: ON,
+      files: { ...TEAM_SKILLS, 'rules/team-rule.md': rule('Team'), 'rules/keep-rule.md': rule('Keep') },
+    });
+    const tracked = ['.claude/skills/fe-skill', '.claude/rules/team-rule.md'];
+    for (const rel of tracked) expect(fs.existsSync(path.join(m.dir, rel)), rel).toBe(true);
+    m.git(['add', '-f', ...tracked]);
+    m.git(['commit', '-q', '-m', 'commit the delivered copies']);
+
+    const skill = m.ok(['remove', 'skills', 'fe-skill', '--force']);
+    const ruleRemoved = m.ok(['remove', 'rules', 'team-rule', '--force']);
+    expect(deletions(m), `${skill.output}\n${ruleRemoved.output}`).toEqual([]);
+    expect(times(skill.output, trackedKept(m, '.claude/skills/fe-skill')), skill.output).toBe(1);
+    expect(times(ruleRemoved.output, trackedKept(m, '.claude/rules/team-rule.md')), ruleRemoved.output).toBe(1);
+    for (const rel of tracked) expect(fs.existsSync(path.join(m.dir, rel)), rel).toBe(true);
+    // Codex's untracked copy of the skill goes.
+    expect(fs.existsSync(path.join(m.dir, '.codex', 'skills', 'fe-skill')), skill.output).toBe(false);
+  });
+
+  it('uninstall keeps a committed rule copy, names it and counts it as kept (tracked), and removes the rest', () => {
+    const m = machine('tracked-uninstall', {
+      team: ON,
+      files: { ...TEAM_SKILLS, 'rules/team-rule.md': rule('Team') },
+    });
+    const ruleCopy = '.claude/rules/team-rule.md';
+    m.git(['add', '-f', ruleCopy]);
+    m.git(['commit', '-q', '-m', 'commit the delivered rule']);
+
+    const uninstalled = m.ok(['uninstall', '--force']);
+    expect(deletions(m), uninstalled.output).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, ruleCopy)), uninstalled.output).toBe(true);
+    expect(times(uninstalled.output, trackedKept(m, ruleCopy)), uninstalled.output).toBe(1);
+    expect(uninstalled.output).toContain(`Kept (tracked): 1 path this repository tracks, which uninstall does not delete:\n     ${path.join(m.dir, ruleCopy)}`);
+    // Everything else teamai delivered is gone.
+    expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'fe-skill')), uninstalled.output).toBe(false);
+    expect(m.status().filter((line) => line.includes('.claude/')), uninstalled.output).toEqual([]);
+  });
+
+  it('a layout migration keeps the tracked old copy, writes the new path, and says the tool may load both', () => {
+    const legacy = '.cursor/rules/team-rule.md';
+    const m = machine('tracked-migration', {
+      team: ON,
+      files: { ...TEAM_SKILLS, 'rules/team-rule.md': rule('Team') },
+      agents: 'claude,cursor',
+      // The verbatim copy an older layout wrote for Cursor, which reads only .mdc now.
+      committed: { [legacy]: rule('Team') },
+    });
+    const pulled = m.ok(['pull', '--force']);
+    expect(deletions(m), pulled.output).toEqual([]);
+    expect(read(path.join(m.dir, legacy))).toBe(rule('Team'));
+    expect(fs.existsSync(path.join(m.dir, '.cursor', 'rules', 'team-rule.mdc')), pulled.output).toBe(true);
+    expect(times(pulled.output, trackedMoved(m, legacy, '.cursor/rules/team-rule.mdc')), pulled.output).toBe(1);
+  });
+
+  it('removes the copies of the team\'s last rule once the team deletes it, and keeps the member\'s own rule visible', () => {
+    const mine = '.claude/rules/my-rule.md';
+    const m = machine('last-rule', { team: ON, files: { ...TEAM_SKILLS, 'rules/only-rule.md': rule('Only') }, business: { [mine]: rule('Mine') } });
+    const copy = path.join(m.dir, '.claude', 'rules', 'only-rule.md');
+    expect(fs.existsSync(copy)).toBe(true);
+    m.teamCommit({ 'rules/only-rule.md': null });
+    const pulled = m.ok(['pull']);
+    expect(fs.existsSync(copy), pulled.output).toBe(false);
+    expect(m.status().filter((line) => line.includes('only-rule')), pulled.output).toEqual([]);
+    expect(read(path.join(m.dir, mine))).toBe(rule('Mine'));
+    expect(m.status()).toContain(`?? ${mine}`);
   });
 });

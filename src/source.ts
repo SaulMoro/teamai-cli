@@ -442,7 +442,10 @@ async function sourceRemoveLocked(name: string, options: GlobalOptions, localCon
         retainedPaths[skill] = getRetainedSkillPaths(skill, manifest, baseDir);
         continue;
       }
-      const plan = await getSkillRemovalPaths(skill, baseDir, otherOwners, manifest.installedPaths?.[skill], manifest.installedPhysicalPaths, keepLegacy(skill));
+      // A copy the repository tracks stays too, on record like a kept legacy copy (#915).
+      const keepLegacyCopy = keepLegacy(skill);
+      const plan = await getSkillRemovalPaths(skill, baseDir, otherOwners, manifest.installedPaths?.[skill], manifest.installedPhysicalPaths,
+        async (skillDir) => await keepLegacyCopy(skillDir) || await keepsTrackedCopy(skillDir));
       cleanupPaths.push(...plan.removals);
       if (plan.kept.length > 0) keptPaths[skill] = plan.kept;
     }

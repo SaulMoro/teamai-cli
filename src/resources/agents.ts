@@ -884,7 +884,7 @@ export class AgentsHandler extends ResourceHandler {
             log.warn(describeMembersDirLeft(filePath, resource, 'remove'));
             continue;
           }
-          if (await pathExists(filePath)) {
+          if (await pathExists(filePath) && !await keepsTrackedCopy(filePath)) {
             await remove(filePath);
             removed.push(filePath);
             log.debug(`Removed agent ${localName} from ${tool}`);
@@ -1744,6 +1744,7 @@ async function removeStaleAgentSiblings(
       warnOnce(describeMembersDirLeft(sibling, `agents/${stem}`, 'pull'));
       continue;
     }
+    if (await keepsTrackedCopy(sibling, path.join(agentsDir, `${stem}${targetExt}`))) continue;
     await remove(sibling);
     if (ledger) forgetDelivered(ledger.hashes, sibling);
     log.debug(`Removed stale agent sibling ${file} for ${stem}`);

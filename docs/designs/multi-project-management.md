@@ -550,6 +550,14 @@ delivered (inactive namespaces, Step 3b, tombstones, the rules sweep and
 unselected rules, inactive agents, a source dropping a skill), so a later pull
 that proves the copy teamai's keeps it too. Each pull names it once, with
 `git rm -r <path>`; a source's kept copy stays on its installation's record.
+The same check guards layout migrations (a rule's legacy `.md`, the copy a
+namespaced rule supersedes, legacy rule directories, moved nested copies,
+agent format siblings, Codex's configured copy of a skill in `.agents/skills`,
+leftover files of another team version of a skill), whose message adds where
+the resource lives now, and the explicit commands: `teamai remove`,
+`teamai source remove` and `uninstall`, whose summary counts them as
+`Kept (tracked)`. A team repo with no rules left still runs the rules sweep,
+so the copies of a last rule the team deleted go, on the same ownership proof.
 
 ### Known gaps
 

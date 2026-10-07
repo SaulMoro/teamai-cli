@@ -7,6 +7,7 @@ import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { getUserHome } from './utils/home.js';
+import { keepsTrackedCopy } from './resources/delivered-copies.js';
 import { ALL_SUPPORTED_TOOLS, agentStemFromFilename, renderForTool, reverseFromClaude } from './resources/agent-format.js';
 import type { ToolName } from './resources/agent-format.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
@@ -82,6 +83,7 @@ async function removeStaleAgentSiblings(targetAgentsDir: string, stem: string, t
     if (agentStemFromFilename(file) !== stem) continue;
     if (file === `${stem}${targetExt}`) continue;
     try {
+      if (await keepsTrackedCopy(path.join(targetAgentsDir, file), path.join(targetAgentsDir, `${stem}${targetExt}`))) continue;
       await remove(path.join(targetAgentsDir, file));
       log.debug(`Removed stale agent sibling ${file} for ${stem}`);
     } catch {
