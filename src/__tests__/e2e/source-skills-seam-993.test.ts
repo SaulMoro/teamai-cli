@@ -339,7 +339,9 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
 
     const initRun = w.ok(init(w, ['claude', 'codex', 'cursor']), dir);
     expect(read(path.join(claude, 'SKILL.md'))).toBe(MINE);
-    expect(initRun.output).toContain(`Kept ${claude}: it is not teamai's`);
+    // A source repo has no team version: the line names the source's.
+    expect(initRun.output).toContain(`Kept ${claude}: it is not teamai's (no delivery record, and it matches no source version of other/other-skill). `
+      + 'Rename or delete it, then run teamai pull, to receive the source version.');
     expect(read(path.join(dir, '.agents', 'skills', 'other-skill', 'SKILL.md'))).toBe(MINE);
     expect(read(path.join(dir, '.codex', 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
     expect(initRun.output).toContain(conflictLine('other-skill'));

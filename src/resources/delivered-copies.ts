@@ -154,18 +154,23 @@ export async function isTeamaiCopy(file: string, origin: CopyOrigin): Promise<bo
   return false;
 }
 
-/** Why a file at `resource`'s path is the member's (#993), for every line that names one. */
-export function notTeamaisReason(resource: string): string {
-  return `it is not teamai's (no delivery record, and it matches no team version of ${resource})`;
+/**
+ * Why a file at `resource`'s path is the member's (#993), for every line that
+ * names one. `origin` names whose versions it was compared with: a source
+ * repo has no team version.
+ */
+export function notTeamaisReason(resource: string, origin: 'team' | 'source' = 'team'): string {
+  return `it is not teamai's (no delivery record, and it matches no ${origin} version of ${resource})`;
 }
 
 /**
  * The line for a file pull keeps because it is not teamai's (#993), for
- * pull and doctor alike: `resource` is the team file it holds back.
+ * pull and doctor alike: `resource` is the team file it holds back, or the
+ * `<source>/<skill>` a source skill's copy holds back.
  */
-export function describeMembersFile(file: string, resource: string): string {
-  return `Kept ${file}: ${notTeamaisReason(resource)}. `
-    + 'Rename or delete it, then run teamai pull, to receive the team version.';
+export function describeMembersFile(file: string, resource: string, origin: 'team' | 'source' = 'team'): string {
+  return `Kept ${file}: ${notTeamaisReason(resource, origin)}. `
+    + `Rename or delete it, then run teamai pull, to receive the ${origin} version.`;
 }
 
 /**

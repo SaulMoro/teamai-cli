@@ -836,7 +836,7 @@ async function pullSingleSource(
       } else if (![...previousTargets, ...otherOwners].some((owned) => pathsOverlap(owned.path, physical))
         && await pathExists(target) && !await isSourcesCopy(target, skill)) {
         // An existing copy no source record touches is the member's unless proven (#993).
-        log.warn(`[source:${source.name}] ${describeMembersFile(target, `${source.name}/${skill.name}`)}`);
+        log.warn(`[source:${source.name}] ${describeMembersFile(target, `${source.name}/${skill.name}`, 'source')}`);
         continue;
       }
       if (tool === CODEX_TOOL && target !== path.join(baseDir, toolPath.skills, skill.name)) codexSkillsPath = toolPath.skills;
