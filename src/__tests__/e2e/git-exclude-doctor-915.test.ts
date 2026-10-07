@@ -346,6 +346,20 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(fs.existsSync(path.dirname(exclude))).toBe(false);
   }, 120_000);
 
+  it('notes, with pull\'s own line and without failing, a copy no longer delivered that pull keeps because the repository tracks it', () => {
+    const m = member('kept-tracked');
+    const app = m.project(path.join(caseDir('kept-tracked'), 'app'), { before: (dir) => write(path.join(dir, '.claude/skills/fe-skill/SKILL.md'), skillMd('fe-skill')) });
+    m.teamai(['roles', 'set', 'be'], app);
+    const skillDir = path.join(app, '.claude/skills/fe-skill');
+    const kept = `Kept ${skillDir}: this repository tracks it, so teamai does not delete it. Run \`git rm -r ${skillDir}\` and commit if the repository no longer needs it.`;
+    expect(m.teamai(['pull'], app)).toContain(kept);
+
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain(kept);
+    expect(doctor).toContain('✔ Delivered team resources are kept out of git');
+    expect(status(m, app)).toEqual([]);
+  }, 120_000);
+
   it('notes, with pull\'s own line and without failing, a file pull keeps where the team removed a doc', () => {
     const m = member('kept-doc');
     m.teamCommit({ 'docs/guide.md': '# Guide\n', 'docs/other.md': '# Other\n' });

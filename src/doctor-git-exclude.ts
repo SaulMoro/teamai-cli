@@ -93,7 +93,14 @@ async function keptTrackedCopies(projectRoot: string, delivered: Record<string, 
   }).catch(() => null);
   if (result?.code !== 0) return [];
   const tracked = new Set(result.stdout.split('\0').filter(Boolean));
-  return inside.filter((file) => tracked.has(path.relative(projectRoot, file).split(path.sep).join('/')));
+  // A skill is kept, and named, as its directory (`<tool>/skills/<name>`), as pull names it.
+  const named = (file: string): string => {
+    for (let dir = path.dirname(file); dir.startsWith(`${projectRoot}${path.sep}`); dir = path.dirname(dir)) {
+      if (path.basename(path.dirname(dir)) === 'skills') return dir;
+    }
+    return file;
+  };
+  return [...new Set(inside.filter((file) => tracked.has(path.relative(projectRoot, file).split(path.sep).join('/'))).map(named))].sort();
 }
 
 const FIRST = 5;
