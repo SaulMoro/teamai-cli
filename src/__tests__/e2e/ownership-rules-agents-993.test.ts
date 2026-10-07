@@ -262,6 +262,24 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
   });
 
+  it('updates an unrecorded agent copy an older CLI rendered with another tool\'s extras (0.26.0, before #830)', () => {
+    const t = team('old-agent-render', {
+      'agents/reviewer.yaml': [
+        'name: reviewer', 'description: Reviews code', 'targets:', '  - claude', '  - qoder',
+        'instructions: |', '  Review the change.', 'tool_extras:', '  claude:', '    color: blue', '',
+      ].join('\n'),
+    });
+    // What teamai 0.26.0 wrote for Qoder: Claude's extras (`color`), and no delivery record.
+    const old = '---\nname: reviewer\ndescription: Reviews code\ncolor: blue\n---\nReview the change.\n';
+    const dir = business('old-agent-render-biz', { '.qoder/agents/reviewer.md': old, '.claude/agents/.keep': '' });
+    const qoder = path.join(dir, '.qoder', 'agents', 'reviewer.md');
+
+    const initRun = teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude,qoder', '--scope', 'project', '--force'], dir);
+
+    expect(initRun.output).not.toContain('not teamai\'s');
+    expect(read(qoder)).toBe('---\nname: reviewer\ndescription: Reviews code\n---\nReview the change.\n');
+  });
+
   it('keeps a member\'s own .md in .cursor/rules through pull, remove and uninstall, and removes a legacy teamai copy', () => {
     const t = team('cursor-legacy', {
       'rules/old-layout.md': '# Old layout v1\n',
