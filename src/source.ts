@@ -24,7 +24,7 @@ import { getHandler } from './resources/index.js';
 import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
-import { describeMembersFile, isTeamaiSkillCopy } from './resources/delivered-copies.js';
+import { describeMembersFile, isTeamaiSkillCopy, keepsTrackedCopy } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -981,8 +981,10 @@ async function pullSingleSource(
       if (retained.has(oldSkill) || isLocalTeamSkill(oldSkill, localTeamSkills)) continue;
       const previousPaths = oldManifest?.installedPaths?.[oldSkill];
       // Any installation with unrecorded claims already stopped above.
+      // A copy the repository tracks stays too, on record like a kept legacy copy (#915).
+      const keepLegacyCopy = keepLegacy(oldSkill, skillsToDeploy.find((skill) => skill.name === oldSkill)?.sourcePath);
       const kept = await removeSkillFromToolPaths(oldSkill, baseDir, [...otherOwners, ...currentOwners], previousPaths, oldManifest?.installedPhysicalPaths,
-        keepLegacy(oldSkill, skillsToDeploy.find((skill) => skill.name === oldSkill)?.sourcePath));
+        async (skillDir) => await keepLegacyCopy(skillDir) || await keepsTrackedCopy(skillDir));
       for (const target of kept) {
         (installedPaths[oldSkill] ??= []).push(target);
         installedPhysicalPaths[target] = getSourcePhysicalPin(oldManifest!, baseDir, target);
