@@ -511,7 +511,7 @@ async function retireOtherCodexCopy(
  * - A tool's skills directory is not configured
  */
 export async function deployBuiltinSkills(
-  teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { recorder?: DeliveryRecorder },
+  teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { recorder?: DeliveryRecorder; dryRun?: boolean },
 ): Promise<number> {
   const builtinDir = packagedSkillRoots().deployRoot;
 
@@ -581,6 +581,13 @@ export async function deployBuiltinSkills(
           log.warn(`Skipped ${skillName} (${tool}): ${destDir} is reached through a symlink, and TeamAI does not write through one. Remove the link to let the skill deploy.`);
           continue;
         }
+        // A dry run writes and prunes nothing: it reports where the skill would land (#915).
+        if (options?.dryRun) {
+          options.recorder?.report('builtin', destDir);
+          deployed++;
+          deployedHere++;
+          continue;
+        }
         // The stub first: if it cannot be written, the pre-stub SKILL.md and the
         // references it points at stay together, a working old skill rather
         // than an old skill whose references are gone.
@@ -615,6 +622,7 @@ export async function deployBuiltinSkills(
     // The legacy trees go only once their replacement is in place: pruning first
     // and then failing to write the stub (a link, a read-only directory) would
     // leave the agent with no discoverable TeamAI skill at all.
+    if (options?.dryRun) continue;
     if (deployedHere === skillNames.length) {
       await pruneLegacyBuiltinSkills(tool, target);
     } else {

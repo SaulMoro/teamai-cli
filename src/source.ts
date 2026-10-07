@@ -942,6 +942,8 @@ async function pullSingleSource(
     if (options.dryRun) {
       const label = oldInstalled.has(skill.name) ? 'update' : 'new';
       log.info(`[dry-run] [source:${source.name}] Would pull ${skill.name} (${label})`);
+      // Where it would land, for the preview of the delivered git exclude block (#915).
+      for (const targetDir of targets) recorder?.report('sources', targetDir);
       deployed.push(skill.name);
       continue;
     }

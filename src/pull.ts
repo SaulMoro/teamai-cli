@@ -57,7 +57,7 @@ import {
 import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
-import { resetWarnOnce } from './utils/warn-once.js';
+import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
 import type { EnvVariable } from './resources/env.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
@@ -68,9 +68,12 @@ import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
 import {
-  applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, warnForeign,
+  applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, describeForeign,
   type DeliveryRecorder, type GitExcludePaths, type ListedCheckout,
 } from './git-exclude-delivered.js';
+import {
+  clearGitExcludeFailure, isBackgroundPull, noticeGitExclude, recordGitExcludeFailure, sayGitExcludeNotices,
+} from './git-exclude-notices.js';
 
 // A timed-out report still owns its success bookkeeping. Do not start another
 // batch in this process until it settles and finishes consuming its events.
@@ -372,7 +375,11 @@ async function getExistingLocalNames(
   return existing;
 }
 
-/** `--dry-run`: name each copy the sync would keep because the member changed it (#822). */
+/**
+ * `--dry-run`: name each copy the sync would keep because the member changed
+ * it (#822), and report each copy it would write to the ledger's recorder
+ * (#915), for the preview of the `delivered` block.
+ */
 async function reportWouldKeep(
   handler: ResourceHandler,
   items: readonly ResourceItem[],
@@ -380,6 +387,7 @@ async function reportWouldKeep(
   localConfig: LocalConfig,
   ledger: DeliveryLedger,
   scopeLabel: string,
+  writer?: 'skills' | 'rules' | 'agents',
 ): Promise<void> {
   const received = items.map((item) => item.name);
   for (const item of items) {
@@ -389,6 +397,8 @@ async function reportWouldKeep(
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: you changed it since teamai delivered it.`);
       } else if (verdict.kind === 'member') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: ${notTeamaisReason(item.relativePath)}.`);
+      } else if (writer) {
+        ledger.recorder?.report(writer, target.dest);
       }
     }
   }
@@ -1490,9 +1500,10 @@ async function pullForScope(
 
   // What teamai last wrote into this checkout: a copy changed since is kept,
   // and this pull's writes are recorded when the state is saved (#822).
-  const ledger = await openCheckoutLedger(localConfig, undefined, options.dryRun ? undefined : policy.recorder);
+  // A dry run's writers report what they would write, for its preview of the block.
+  const ledger = await openCheckoutLedger(localConfig, undefined, policy.recorder);
   // Not the fast path: each writer's report replaces its delivered paths (#915).
-  if (!options.dryRun) policy.recorder?.fullSync();
+  policy.recorder?.fullSync();
 
   // Step 2: Sync each resource type
   let totalSynced = 0;
@@ -1528,7 +1539,8 @@ async function pullForScope(
         if (items.length > 0) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
-        await reportWouldKeep(rulesHandler, items, freshConfig, localConfig, ledger, scopeLabel);
+        await reportWouldKeep(rulesHandler, items, freshConfig, localConfig, ledger, scopeLabel, 'rules');
+        ledger.recorder?.succeeded('rules');
       } else {
         // Always call pullAllRules, even with an empty set: it also cleans up
         // stale local rule files and deactivates the OpenCode instructions glob
@@ -1666,7 +1678,14 @@ async function pullForScope(
           log.dim(`  ${item.name}`);
         }
       }
-      await reportWouldKeep(handler, items, freshConfig, localConfig, ledger, scopeLabel);
+      if (type === 'skills' || type === 'agents') {
+        await reportWouldKeep(handler, items, freshConfig, localConfig, ledger, scopeLabel, type);
+        // A held agent keeps the copies it has: the preview keeps their lines.
+        if (held > 0) ledger.recorder?.failed(type);
+        ledger.recorder?.succeeded(type);
+      } else {
+        await reportWouldKeep(handler, items, freshConfig, localConfig, ledger, scopeLabel);
+      }
     } else {
       // Skills and agents land in a tool's own directory, which a brand-new
       // member may not have yet. The handler skips such a tool by design and
@@ -1825,50 +1844,46 @@ async function pullForScope(
 
   // Step 4: Deploy CLI built-in skills
   // What they write is delivered too (#915); a deployment that failed says so.
+  // A dry run only reports what they would write, for the block's preview.
   const { recorder } = ledger;
-  if (!options.dryRun) {
-    try {
-      const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const deployed = await deployBuiltinSkills(freshConfig, localConfig, { recorder });
-      if (deployed > 0) {
-        log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
-      }
-    } catch (e) {
-      recorder?.failed('builtin');
-      warnStubNotDeployed(scopeLabel, e);
+  const { dryRun } = options;
+  try {
+    const { deployBuiltinSkills } = await import('./builtin-skills.js');
+    const deployed = await deployBuiltinSkills(freshConfig, localConfig, { recorder, dryRun });
+    if (deployed > 0 && !dryRun) {
+      log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
     }
+  } catch (e) {
+    recorder?.failed('builtin');
+    if (!dryRun) warnStubNotDeployed(scopeLabel, e);
   }
 
   // Step 4.5: Deploy CLI built-in rules
-  if (!options.dryRun) {
-    try {
-      const { deployBuiltinRules } = await import('./builtin-rules.js');
-      const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder });
-      if (deployed > 0) {
-        log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
-      }
-    } catch (e) {
-      recorder?.failed('builtin');
-      log.debug(`[${scopeLabel}] Built-in rules deployment skipped: ${(e as Error).message}`);
+  try {
+    const { deployBuiltinRules } = await import('./builtin-rules.js');
+    const skipRecall = !isRecallEnabled(localConfig, freshConfig);
+    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun });
+    if (deployed > 0 && !dryRun) {
+      log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
     }
+  } catch (e) {
+    recorder?.failed('builtin');
+    log.debug(`[${scopeLabel}] Built-in rules deployment skipped: ${(e as Error).message}`);
   }
 
   // Step 4.6: Deploy CLI built-in agents (e.g. teamai-recall subagent)
-  if (!options.dryRun) {
-    try {
-      const { deployBuiltinAgents } = await import('./builtin-agents.js');
-      const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinAgents(freshConfig, localConfig, { skipRecall, recorder });
-      if (deployed > 0) {
-        log.debug(`[${scopeLabel}] Deployed built-in agents to ${deployed} location(s)`);
-      }
-    } catch (e) {
-      recorder?.failed('builtin');
-      log.debug(`[${scopeLabel}] Built-in agents deployment skipped: ${(e as Error).message}`);
+  try {
+    const { deployBuiltinAgents } = await import('./builtin-agents.js');
+    const skipRecall = !isRecallEnabled(localConfig, freshConfig);
+    const deployed = await deployBuiltinAgents(freshConfig, localConfig, { skipRecall, recorder, dryRun });
+    if (deployed > 0 && !dryRun) {
+      log.debug(`[${scopeLabel}] Deployed built-in agents to ${deployed} location(s)`);
     }
-    recorder?.succeeded('builtin');
+  } catch (e) {
+    recorder?.failed('builtin');
+    log.debug(`[${scopeLabel}] Built-in agents deployment skipped: ${(e as Error).message}`);
   }
+  recorder?.succeeded('builtin');
 
   // Record the revision only after every resource and knowledge phase has had
   // a chance to run. Inherited pulls use an independent marker so a partial,
@@ -2232,7 +2247,9 @@ async function reportInstructionFiles(
   for (const file of files) {
     if (file.status === 'failed') recorder.failed('instructions');
     const target = targets.find((candidate) => candidate.path === file.path);
-    if (target?.owned && (file.status === 'written' || file.status === 'current') && await holdsInstructionBlocks(file.path)) {
+    if (!target?.owned) continue;
+    // A dry run's `would-write` is the file it would write with its blocks (#915).
+    if (file.status === 'would-write' || (file.status === 'written' || file.status === 'current') && await holdsInstructionBlocks(file.path)) {
       recorder.report('instructions', file.path);
     }
   }
@@ -2764,12 +2781,27 @@ export async function pull(
   // 5a. Keep what this pull delivered into the project out of git (#915),
   //     after its last writer and still under the scope's sync lock. A
   //     contended scope is skipped: the lock's holder syncs.
+  //     A background pull keeps what it has to say; the next interactive one
+  //     says it first, once.
   if (reconcileProject && !options.dryRun) {
+    if (!isBackgroundPull(options) && await sayGitExcludeNotices(reconcileProject)) reported.add('git-exclude-failure');
     try {
-      await syncDeliveredGitExclude(reconcileProject, deliveryRecorder);
+      if (!await syncDeliveredGitExclude(reconcileProject, deliveryRecorder, options)) reported.add('git-exclude-sync');
+      // It named every path another checkout's own file leaves visible.
+      reported.add('git-exclude-foreign');
     } catch (e) {
-      log.warn(`Could not update teamai's delivered git exclude block: ${(e as Error).message}. Fix the cause, then run \`teamai pull\` again.`);
+      await failGitExcludeSync(reconcileProject, [
+        `Could not update teamai's delivered git exclude block: ${(e as Error).message}. Fix the cause, then run \`teamai pull\` again.`,
+      ], options);
+      reported.add('git-exclude-sync');
       startupErrors.push(`Git exclude: ${(e as Error).message}`);
+    }
+  }
+  if (reconcileProject && options.dryRun) {
+    try {
+      await previewDeliveredGitExclude(reconcileProject, deliveryRecorder);
+    } catch (e) {
+      log.info(`[dry-run] Could not preview teamai's delivered git exclude block: ${(e as Error).message}`);
     }
   }
 
@@ -2835,11 +2867,16 @@ export async function pull(
  * list (deliveredUnion) while the resolved `sharing.gitExclude` is on, naming
  * each path left out as foreign in another checkout, or remove the blocks
  * when it is off. The list is kept either way. Runs on every pull, fast path
- * included.
+ * included. A background pull (`options`, see isBackgroundPull) keeps what it
+ * has to say for the next interactive pull and `doctor` instead of saying it.
+ * Returns whether the blocks are as they should be; a failure is said (or
+ * kept) here, and a success clears the one a background pull kept.
  */
-export async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
+export async function syncDeliveredGitExclude(
+  localConfig: LocalConfig, recorder: DeliveryRecorder, options: Pick<GlobalOptions, 'silent' | 'gitHook'> = {},
+): Promise<boolean> {
   const key = await checkoutRecordKey(localConfig);
-  if (!key || !localConfig.projectRoot) return;
+  if (!key || !localConfig.projectRoot) return true;
   const state = await loadStateForScope(localConfig);
   const record = state.lastPullByWorkspace?.[key];
   const paths = await recorder.merge(record?.gitExcludePaths);
@@ -2850,8 +2887,38 @@ export async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
   const enabled = isGitExcludeEnabled(localConfig, teamConfig ?? {});
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
-  if (enabled) warnForeign(union.foreign);
-  await applyDeliveredGitExclude(localConfig, enabled, union.paths);
+  const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths);
+  for (const notice of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices]) await noticeGitExclude(localConfig, notice, options);
+  if (outcome.failures.length === 0) {
+    await clearGitExcludeFailure(localConfig);
+    return true;
+  }
+  await failGitExcludeSync(localConfig, outcome.failures, options);
+  return false;
+}
+
+/** Say a failed `delivered` sync, or, in a background pull, keep it in place of the last one. */
+async function failGitExcludeSync(localConfig: LocalConfig, failures: string[], options: Pick<GlobalOptions, 'silent' | 'gitHook'>): Promise<void> {
+  if (isBackgroundPull(options)) await recordGitExcludeFailure(localConfig, failures.join(' '));
+  else for (const failure of failures) warnOnce(failure);
+}
+
+/**
+ * `pull --dry-run`: one line per `delivered` block, saying what the pull
+ * would list there and drop, from the paths this run's writers would write
+ * and every other live checkout's list. Writes nothing: no state, no exclude
+ * file, no `info/`, no lock file.
+ */
+async function previewDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
+  const key = await checkoutRecordKey(localConfig);
+  if (!key || !localConfig.projectRoot) return;
+  const state = await loadStateForScope(localConfig);
+  const paths = await recorder.merge(state.lastPullByWorkspace?.[key]?.gitExcludePaths);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const enabled = isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
+  const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths, { dryRun: true });
+  for (const message of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices, ...outcome.failures]) log.info(`[dry-run] ${message}`);
 }
 
 /**
@@ -2988,7 +3055,7 @@ async function reconcileHooksAllScopes(
   // inside reconcileTeamHooksForConfig (#822).
   const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
   for (const localConfig of scopes) {
-    const scopeRecorder = localConfig === projectConfig && !options.dryRun ? recorder : undefined;
+    const scopeRecorder = localConfig === projectConfig ? recorder : undefined;
     try {
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
       if (!teamConfig) {
@@ -3011,7 +3078,8 @@ async function reconcileHooksAllScopes(
           for (const file of await deliveredHookFiles(teamConfig, localConfig)) scopeRecorder.report('hooks', file);
         }
       }
-      scopeRecorder?.succeeded('hooks');
+      // A dry run wrote nothing: its preview keeps the files that held entries before, too.
+      if (!options.dryRun) scopeRecorder?.succeeded('hooks');
       if (!reconciled.ok) errors.push(`[${localConfig.scope}] Team hooks could not be resolved`);
       if (reconciled.ok && reconciled.defs.length > 0) {
         // Same preview rule as the user-facing line: a dry run resolved and
@@ -3189,7 +3257,23 @@ async function reconcileCoAuthorAllScopes(
   /** The project scope's (#915). */
   recorder?: DeliveryRecorder,
 ): Promise<void> {
-  if (options.dryRun) return;
+  if (options.dryRun) {
+    // Nothing is written: the file that holds teamai's co-author entry now
+    // stands in the preview of the delivered git exclude block (#915).
+    if (projectConfig && recorder) {
+      try {
+        const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
+        const { coAuthorLocalSettingsFile } = await import('./coauthor-reconcile.js');
+        const owned = teamConfig
+          ? await coAuthorLocalSettingsFile(teamConfig, projectConfig, (await loadStateForScope(projectConfig)).coAuthorManaged ?? {})
+          : undefined;
+        if (owned) recorder.report('coauthor', owned);
+      } catch (e) {
+        log.debug(`[dry-run] co-author preview skipped: ${(e as Error).message}`);
+      }
+    }
+    return;
+  }
   const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
   for (const localConfig of scopes) {
     const scopeRecorder = localConfig === projectConfig ? recorder : undefined;
