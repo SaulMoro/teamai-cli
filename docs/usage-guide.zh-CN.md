@@ -1179,7 +1179,7 @@ namespace 文件；只有当根文件未定义、而多个 namespace 文件都�
 |---|---|---|
 | claude | `~/.claude.json` | `<project>/.mcp.json` |
 | cursor | `~/.cursor/mcp.json` | `<project>/.cursor/mcp.json` |
-| codebuddy | `~/.codebuddy/mcp.json` | `<project>/.mcp.json` |
+| codebuddy | `~/.codebuddy/.mcp.json`、`~/.codebuddy/mcp.json`、`~/.codebuddy.json` 中第一个存在的文件（见下文） | `<project>/.mcp.json` |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
 | codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
@@ -1193,9 +1193,18 @@ namespace 文件；只有当根文件未定义、而多个 namespace 文件都�
 Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。写入团队 MCP servers 后，`teamai pull` 会自动信任主 checkout，除非设置了 `codexTrustEnabled: false`，或该项目已被明确标记为不信任。自动信任被禁用或失败时，可在 `~/.codex/config.toml` 中加入 `[projects."<主 checkout 的真实路径>"]` 表并设置 `trust_level = "trusted"`；信任主 checkout 即覆盖该仓库的所有 worktree。项目未受信任、而其文件含有团队 server 时，`teamai doctor` 会报告。
 
 
+在用户级，CodeBuddy 只读取一个 MCP 文件：`~/.codebuddy/.mcp.json`、`~/.codebuddy/mcp.json`、
+`~/.codebuddy.json` 中第一个存在的文件，不会合并它们。pull 会把 teamai 的 server 写入该文件，
+与你自己的 server 并存；只有这几个文件都不存在时，才会创建 `~/.codebuddy/.mcp.json`。
+如果你之后创建了排在更前面的文件（`codebuddy mcp add -s user` 会创建 `~/.codebuddy/.mcp.json`），
+下一次 `teamai pull` 会把 teamai 自己的 server 移入该文件，你自己的 server 保持原处；
+在此之前，`teamai doctor` 会给出警告，`teamai mcp list` 会指出它们所在的文件。
+`teamai mcp remove` 和 `teamai uninstall` 会从实际存放它们的文件中移除。
+HTTP 模式团队的本地 agent 仍写入 `~/.codebuddy/mcp.json`。
+
 CodeBuddy Code 的 [MCP 文档](https://www.codebuddy.cn/docs/cli/mcp)
 明确将项目根目录的 `.mcp.json` 列为首选项目配置。
-该路径与 TeamAI 的用户级目标 `~/.codebuddy/mcp.json` 相互独立。
+该路径与上文 TeamAI 的用户级 CodeBuddy 文件相互独立。
 `teamai.yaml` 中显式设置的 `toolPaths.codebuddy.mcpProject` 仍然优先生效。
 已有团队若固定使用 `.codebuddy/mcp.json`，请先在对应工作区执行
 `teamai mcp remove`，再将该值改为 `.mcp.json`，最后运行
