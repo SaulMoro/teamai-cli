@@ -1512,6 +1512,7 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     // Re-create the legacy copy to prove `remove` sweeps both extensions.
     await fse.writeFile(path.join(homeDir, '.cursor/rules/both.md'), 'bye');
 
+    commitTeamRepo(repoPath);
     await handler.removeItem('both', teamConfig, localConfig);
 
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/both.mdc'))).toBe(false);
@@ -1565,6 +1566,7 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     await handler.pullAllRules(teamConfig, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/gone.mdc'))).toBe(true);
 
+    commitTeamRepo(repoPath);
     await handler.removeItem('gone', teamConfig, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/gone.mdc'))).toBe(false);
   });

@@ -260,4 +260,22 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     // The member's renamed rule was never a team rule: the sweep leaves it alone.
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
   });
+
+  it('keeps a member\'s own rules through teamai remove, the removed rule\'s name included', () => {
+    const t = team('own-remove', { 'rules/doomed.md': '# Doomed\n', 'rules/keeper.md': '# Keeper\n' });
+    const dir = business('own-remove-biz', {
+      '.claude/rules/doomed.md': 'MY DOOMED\n',
+      '.claude/rules/keeper.md': 'MY KEEPER\n',
+    });
+    const doomed = path.join(dir, '.claude', 'rules', 'doomed.md');
+    const keeper = path.join(dir, '.claude', 'rules', 'keeper.md');
+    init(t, dir);
+
+    const removed = teamaiOk(['remove', 'rules', 'doomed', '--force'], dir);
+
+    expect(read(doomed)).toBe('MY DOOMED\n');
+    expect(read(keeper)).toBe('MY KEEPER\n');
+    expect(removed.output).toContain(`Kept ${doomed}: it is not teamai's`);
+    expect(removed.output).toContain(`Kept ${keeper}: it is not teamai's`);
+  });
 });
