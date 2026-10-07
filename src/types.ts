@@ -791,9 +791,15 @@ export const StateSchema = z.object({
    * tool when teamai last wrote that copy, by agent stem (copies deploy
    * flattened, one file per stem) and tool (#830). An older CLI drops it too,
    * which the next pull reads as agents it has to redeploy.
+   * `root` is the project checkout the record belongs to, the path its key
+   * was computed from, written by that checkout's full pulls. A full pull in
+   * another checkout drops the record once that root is no longer a checkout
+   * of the repository under the same key; a record without one, from an older
+   * CLI, is kept (#993).
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),
+    root: z.string().optional(),
     targets: z.array(z.string()),
     pushBaseRevs: z.array(z.string()).optional(),
     delivered: z.record(z.string(), z.string()).optional(),
