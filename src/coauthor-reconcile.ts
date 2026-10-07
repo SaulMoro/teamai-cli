@@ -12,6 +12,7 @@ import {
   readJson,
   writeJson,
   readFileSafe,
+  readJsonObject,
   writeFile,
   pathExists,
 } from './utils/fs.js';
@@ -32,7 +33,9 @@ import { log } from './utils/logger.js';
 //  Write-only, never delete (issue: team may later drop the policy). The intent
 //  we last wrote per file is recorded in state.coAuthorManaged so the pass stays
 //  idempotent; when neither user nor team has an opinion we leave every file
-//  untouched rather than removing a trailer the user may now depend on.
+//  untouched rather than removing a trailer the user may now depend on. The one
+//  exception keeps that trailer: a value an earlier release wrote to Claude's
+//  shared project settings.json moves to settings.local.json (#993).
 //
 //  The three tool families express the same intent differently:
 //
@@ -64,8 +67,11 @@ export interface CoAuthorChange {
   file: string;
   /** The intent applied: true = keep trailer, false = strip it. */
   enabled: boolean;
-  /** `removed`: a pre-#993 value taken out of a shared project settings file. */
-  action: 'updated' | 'removed' | 'skipped';
+  /**
+   * `removed`: a pre-#993 value taken out of a shared project settings file;
+   * `moved`: the same, with no co-author choice, so it went to settings.local.json.
+   */
+  action: 'updated' | 'removed' | 'moved' | 'skipped';
   reason?: string;
 }
 
@@ -179,27 +185,38 @@ function preFixSharedTargets(teamConfig: TeamaiConfig, localConfig: LocalConfig)
 }
 
 /**
- * Remove a pre-#993 `attribution` from a shared settings file when it is
- * exactly what teamai wrote (`{"commit": "", "pr": ""}`), deleting only that
- * member's text so every other byte, formatting included, stays as it was.
- * Returns true when the file changed.
+ * A shared settings file's text without its pre-#993 `attribution`, when that
+ * is exactly what teamai wrote (`{"commit": "", "pr": ""}`): only that
+ * member's text goes, so every other byte, formatting included, stays as it
+ * was. Null when there is nothing of teamai's to remove.
  */
-async function removePreFixAttribution(file: string): Promise<boolean> {
+async function withoutPreFixAttribution(file: string): Promise<string | null> {
   const source = await readFileSafe(file);
-  if (source === null) return false;
+  if (source === null) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
   } catch {
-    return false;
+    return null;
   }
   const attribution = (parsed as Record<string, unknown> | null)?.attribution as Record<string, unknown> | undefined;
-  if (typeof attribution !== 'object' || attribution === null) return false;
+  if (typeof attribution !== 'object' || attribution === null) return null;
   const keys = Object.keys(attribution);
-  if (keys.length !== 2 || attribution.commit !== '' || attribution.pr !== '') return false;
-  const next = removeTopLevelJsonMember(source, 'attribution');
-  if (next === null) return false;
-  await writeFile(file, next);
+  if (keys.length !== 2 || attribution.commit !== '' || attribution.pr !== '') return null;
+  return removeTopLevelJsonMember(source, 'attribution');
+}
+
+/**
+ * Write teamai's "strip" value to a member-local settings file, unless the
+ * member already set `attribution` there (theirs wins). Throws when the file is
+ * not a JSON object, so the caller leaves the shared value in place. Returns
+ * true when teamai wrote the value.
+ */
+async function writeStripUnlessSet(file: string): Promise<boolean> {
+  const read = await readJsonObject(file);
+  if (read.kind === 'invalid') throw new Error(`${file} is not a JSON object (${read.error})`);
+  if (read.kind === 'ok' && 'attribution' in read.value) return false;
+  await applyClaude(file, false);
   return true;
 }
 
@@ -396,26 +413,41 @@ export async function reconcileCoAuthorForConfig(
   const changes: CoAuthorChange[] = [];
 
   const intent = resolveCoAuthor(localConfig, teamConfig);
-  // No opinion from user or team → write-only means touch nothing.
-  if (intent === undefined) {
-    return { changes, managed };
-  }
+  const claudeSettings = scopedToolPaths(teamConfig, localConfig).claude?.settings;
+  const claudeShared = claudeSettings ? path.join(resolveBaseDir(localConfig), claudeSettings) : undefined;
 
   // Settle each shared project file an earlier release wrote into: remove the
   // value only when the record says teamai wrote "strip" there and it is still
-  // exactly that; either way the file is no longer teamai's to manage.
+  // exactly that; either way the file is no longer teamai's to manage. With no
+  // choice, the value moves to Claude's settings.local.json so the member's
+  // trailer stays as it was; a file with no such place waits for a choice.
   for (const [file, tool] of preFixSharedTargets(teamConfig, localConfig)) {
     if (!(file in managed)) continue;
-    const wroteStrip = managed[file] === false;
+    const moveTo = intent === undefined && file === claudeShared
+      ? path.join(path.dirname(file), 'settings.local.json')
+      : undefined;
+    if (intent === undefined && !moveTo) continue;
+    const recorded = managed[file];
+    const wroteStrip = recorded === false;
     delete managed[file];
     try {
-      const removed = wroteStrip && await removePreFixAttribution(file);
-      changes.push(removed
-        ? { tool, file, enabled: false, action: 'removed' }
-        : { tool, file, enabled: false, action: 'skipped', reason: 'not teamai\'s value' });
+      const next = wroteStrip ? await withoutPreFixAttribution(file) : null;
+      if (next === null) {
+        changes.push({ tool, file, enabled: false, action: 'skipped', reason: 'not teamai\'s value' });
+        continue;
+      }
+      if (moveTo && await writeStripUnlessSet(moveTo)) managed[moveTo] = false;
+      await writeFile(file, next);
+      changes.push({ tool, file, enabled: false, action: moveTo ? 'moved' : 'removed' });
     } catch (e) {
+      managed[file] = recorded;
       changes.push({ tool, file, enabled: false, action: 'skipped', reason: (e as Error).message });
     }
+  }
+
+  // No opinion from user or team → write-only means touch nothing else.
+  if (intent === undefined) {
+    return { changes, managed };
   }
 
   const targets = await resolveTargets(teamConfig, localConfig);
