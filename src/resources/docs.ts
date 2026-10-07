@@ -165,7 +165,9 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
       if (!await isPrunableDoc(target, entryRel, repoPath)) {
-        log.warn(entry.isSymbolicLink()
+        // A link at a path the team never had is said as such; any other entry kept is at a removed doc's path.
+        const neverTeams = entry.isSymbolicLink() && (await historicalVersions(repoPath, `docs/${entryRel}`))?.length === 0;
+        log.warn(neverTeams
           ? `[${scope}] Kept ${target}: it is a link of yours, and the team does not have docs/${entryRel}. `
             + 'Delete it when you no longer need it.'
           : `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this copy matches no team version of it. `
