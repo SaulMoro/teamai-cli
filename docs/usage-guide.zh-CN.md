@@ -1569,7 +1569,7 @@ MCP 与 OpenCode 的配置文件、`.codex/hooks.json` 以及文档镜像不会�
 - 某个路径在另一个 checkout 中是你自己的文件（teamai 没有在那里分发它）时，该路径不写入任何行，因为这一行也会把那个文件隐藏：pull 会指出该路径，git 在每个 checkout 中都会显示它。linked worktree 中你自己的 `.claude/settings.local.json` 不在此列。某个 checkout 跟踪、而另一个 checkout 中由 teamai 分发且未被跟踪的文件仍会列出；被跟踪的那份的改动 git 照样显示。
 - 本身是 submodule 或嵌套克隆的工具目录（例如用 `git submodule add` 加入的 `.claude`），以及纳入 git 管理的工具 home（Hermes 的 `~/.hermes/skills`），其行写入那个仓库自己的 `.git/info/exclude`，放在以项目命名的块中（`# [teamai:delivered/<id>:start]`）。superproject 不再把该 submodule 显示为已修改，共用同一工具 home 的各项目只管理自己的块。
 - 切换角色或项目后，下一次 pull 会移除原选择对应的行。pull 未重写但仍归 teamai 所有的副本（因模型无法解析而暂缓的 agent、团队 hook 文件无法解析时的 hook 文件）仍会列出。
-- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用），无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.``
+- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用），无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.`` teamai 绝不删除 git 跟踪的文件。布局迁移改在别处写入该资源时（例如 Cursor rule 旧的 `.md` 副本），会保留已跟踪的旧副本，并补充一句：``The resource now lives at <new path>, and the tool may load both until the repository removes this copy.`` `teamai remove`、`teamai source remove` 和 `teamai uninstall` 会删除其余内容，并以同样方式指出每个已跟踪的路径；uninstall 的摘要把它们列在 `Kept (tracked)` 下。
 - 关闭后，下一次 pull 只移除该项目的 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
 - pull 无法更新该块时（exclude 文件不可写或不可读，或另一个 teamai 命令占用着它），会保持其原样并给出警告；排除原因后再运行 `teamai pull`。因另一个 pull 或 push 持有项目同步锁而跳过的 pull 同样不改动它，由持锁者或下一次 pull 更新。
@@ -2883,6 +2883,8 @@ teamai uninstall --agent claude
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
 - `~/.teamai/` 目录
+
+git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
 
 ### 只卸载单个工具（`--agent <tool>`）
 

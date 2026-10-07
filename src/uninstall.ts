@@ -58,7 +58,7 @@ import {
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
-import { describeMembersDirLeft, ownsSkillDir } from './resources/delivered-copies.js';
+import { describeMembersDirLeft, keepsTrackedCopy, ownsSkillDir } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
@@ -157,6 +157,8 @@ interface RemovalPlan {
   globalAdapters: boolean;
   /** Machine-wide adapters a project uninstall keeps for other installs; `teamai hooks remove` takes them. */
   keptGlobal: string[];
+  /** Skill, rule and agent copies git tracks: never deleted, only named (#915). */
+  keptTracked: string[];
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
@@ -921,6 +923,7 @@ async function buildRemovalPlan(
     scope: localConfig.scope,
     globalAdapters,
     keptGlobal: [],
+    keptTracked: [],
   };
 
   // A single instruction file can be the target of several agents (for
@@ -1255,6 +1258,33 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('   If none of them uses these, cancel and run `teamai hooks remove` here first: it removes them.');
     console.log('');
   }
+
+  if (plan.keptTracked.length > 0) {
+    const count = plan.keptTracked.length;
+    console.log(`ℹ  Kept (tracked): ${count} ${count === 1 ? 'path' : 'paths'} this repository tracks, which uninstall does not delete:`);
+    for (const file of plan.keptTracked) console.log(`     ${file}`);
+    console.log('');
+  }
+}
+
+/**
+ * Take the copies git tracks out of the plan's deletions (#915): uninstall
+ * removes the rest and names each of these. A path git cannot answer for (no
+ * repository, as with a plain HOME) is deleted as before.
+ */
+async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
+  const untracked = async (file: string): Promise<boolean> => {
+    if (!await keepsTrackedCopy(file)) return true;
+    plan.keptTracked.push(file);
+    return false;
+  };
+  const skillDirs: SkillDirEntry[] = [];
+  for (const entry of plan.skillDirs) if (await untracked(entry.dir)) skillDirs.push(entry);
+  const ruleFiles: string[] = [];
+  for (const file of plan.ruleFiles) if (await untracked(file)) ruleFiles.push(file);
+  const agentFiles: string[] = [];
+  for (const file of plan.agentFiles) if (await untracked(file)) agentFiles.push(file);
+  Object.assign(plan, { skillDirs, ruleFiles, agentFiles });
 }
 
 // ─── Execution ─────────────────────────────────────────
@@ -1590,6 +1620,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     if (!opts.dryRun) await migrateLegacyManagedHooks(localConfig);
     const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
     // Uninstall never removes these, so they are named whatever happens next.
+    await keepTrackedCopies(plan);
     for (const { files, entry } of plan.keptRuleFiles) log.warn(keptLegacyCopiesWarning(files, entry));
     if (plan.keptFlatCopies.length > 0) {
       const one = plan.keptFlatCopies.length === 1;

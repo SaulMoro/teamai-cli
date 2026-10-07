@@ -85,6 +85,9 @@ and give it your team repo URL."*
   is teamai's (on the delivery record, or a team version by the history). The
   user's own file or skill of that name stays, and uninstall names it in a
   warning.
+- A copy git tracks is never deleted: uninstall names it and lists it in its
+  summary under `Kept (tracked)`. If the repository no longer needs it, have
+  the user run `git rm -r <path>` and commit.
 - If an OpenCode config entry cannot be removed, repair its config or permissions
   and retry the same uninstall command. Uninstall reports failure and keeps
   its ownership record and shared data directory, even for the last tool.
