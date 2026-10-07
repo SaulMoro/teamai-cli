@@ -1,0 +1,47 @@
+{
+  "label": "after",
+  "sha": "b7f0bef81fb31fd27aac15c049a5b39227176c4c",
+  "node": "v24.21.0",
+  "npm": "11.19.0",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "cpus": 12,
+  "ci": false,
+  "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
+  "root": "/workspace/after",
+  "commands": [
+    [
+      "npm",
+      "run",
+      "test:e2e",
+      "--",
+      "--retry=0",
+      "--cache=false",
+      "--reporter=default",
+      "--reporter=json",
+      "--outputFile.json=/private/results/after.json"
+    ]
+  ],
+  "started_at": "2026-10-07T18:42:17.111192+00:00",
+  "retry": 0,
+  "cache": false,
+  "remote_credentials": false,
+  "load_start": [
+    2.1318359375,
+    2.30712890625,
+    2.625
+  ],
+  "seconds": 293.51357629100676,
+  "exit_code": 1,
+  "completed_at": "2026-10-07T18:47:10.625835+00:00",
+  "load_end": [
+    2.59375,
+    3.35107421875,
+    3.09130859375
+  ],
+  "counts": {
+    "numTotalTests": 656,
+    "numPassedTests": 627,
+    "numFailedTests": 2,
+    "numPendingTests": 27
+  }
+}
