@@ -563,7 +563,7 @@ async function settleOrphanQueue(): Promise<void> {
  */
 export async function queueKeptInCheckout(
   migration: MigrationResult | undefined,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; selfHeal?: boolean } = {},
 ): Promise<string | null> {
   switch (migration) {
     case 'dry-run':

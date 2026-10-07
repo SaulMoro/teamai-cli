@@ -85,6 +85,33 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     return repo;
   };
 
+  /**
+   * A teammate's fresh clone of a repo already in single-repo mode: the
+   * committed `.teamai/teamai.yaml` says `mode: self`, and there is no local
+   * config yet. Cloned from a local seed, then origin is set to an https URL
+   * on a closed local port, as in `project()`.
+   */
+  const clone = (): string => {
+    const name = `clone-${++counter}`;
+    const url = `https://127.0.0.1:9/team/${name}.git`;
+    const seed = path.join(sandbox, `${name}-seed`);
+    fs.mkdirSync(path.join(seed, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'README.md'), '# project\n');
+    fs.writeFileSync(path.join(seed, '.teamai', 'teamai.yaml'), YAML.stringify({
+      team: name,
+      mode: 'self',
+      repo: url,
+      provider: 'git',
+    }));
+    gitOk(['init', '-q', '-b', 'main'], seed);
+    gitOk(['add', '-A'], seed);
+    gitOk(['commit', '-q', '-m', 'team'], seed);
+    const repo = path.join(sandbox, name);
+    gitOk(['clone', '-q', seed, repo], sandbox);
+    gitOk(['remote', 'set-url', 'origin', url], repo);
+    return repo;
+  };
+
   /** The tools saved in the member's project config, as `teamai` reads them. */
   const enabledAgents = (repo: string): string[] => {
     const configPath = path.join(home, '.teamai', 'projects', projectSlug(repo), 'config.yaml');
@@ -135,5 +162,33 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     for (const dir of ['.cursor', '.codebuddy', '.github']) {
       expect(fs.existsSync(path.join(repo, dir)), dir).toBe(false);
     }
+  });
+
+  // A fresh clone self-heals on its first command (#198), but not on `init`,
+  // which sets the project up itself and must honour --agent.
+  it.each([[[]], [['--force']]])('in a fresh clone of a single-repo project, init . --agent claude %j saves only claude', (extra: string[]) => {
+    const repo = clone();
+
+    const init = teamai(['init', '.', '--provider', 'git', '--agent', 'claude', '--verbose', ...extra], repo);
+
+    expect(init.code, init.output).toBe(0);
+    expect(init.output).not.toContain('[bootstrap]');
+    expect(init.output).not.toContain('already initialized');
+    const hookWrites = init.output.split('\n').filter((line) => line.includes('Updated teamai hooks in'));
+    expect(hookWrites.length, init.output).toBeGreaterThan(0);
+    for (const line of hookWrites) expect(line).toContain(path.join(repo, '.claude', 'settings.json'));
+    expect(enabledAgents(repo)).toEqual(['claude']);
+    expect(gitOk(['status', '--porcelain', '-uall'], repo)).toBe('');
+    for (const dir of ['.codex', '.cursor', '.codebuddy', '.github']) {
+      expect(fs.existsSync(path.join(repo, dir)), dir).toBe(false);
+    }
+  });
+
+  it('in a fresh clone, any other command still self-heals with the tools found in HOME', () => {
+    const repo = clone();
+
+    teamai(['pull'], repo);
+
+    expect([...enabledAgents(repo)].sort()).toEqual(['claude', 'codebuddy', 'codex', 'copilot', 'cursor']);
   });
 });
