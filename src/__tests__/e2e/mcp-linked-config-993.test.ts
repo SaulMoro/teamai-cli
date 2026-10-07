@@ -188,6 +188,44 @@ describe('an MCP config that is a symlink (#993)', () => {
     expect(toml).not.toContain('https://team.example.com/v1');
   });
 
+  it('keeps linked OpenCode configs as links when a pull writes rule instructions and MCP servers into them, and through uninstall', () => {
+    const rule = (text: string): string => `---\ndescription: Team rule\n---\n${text}\n`;
+    const t = team('linked-opencode', { 'mcp/mcp.yaml': plainYaml('https://team.example.com/v1'), 'rules/team-rule.md': rule('v1') });
+    const dotfiles = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'dotfiles-')));
+    const rootTarget = path.join(dotfiles, 'opencode-root.json');
+    const projectTarget = path.join(dotfiles, 'opencode-project.json');
+    writeFile(rootTarget, JSON.stringify({ theme: 'member-root' }, null, 2));
+    // Only the `$schema` OpenCode adds: uninstall deletes such a file teamai created, never a link.
+    const schema = { $schema: 'https://opencode.ai/config.json' };
+    writeFile(projectTarget, JSON.stringify(schema, null, 2));
+    const dir = repo('linked-opencode-biz', {});
+    const rootLink = path.join(dir, 'opencode.json');
+    const projectLink = path.join(dir, '.opencode', 'opencode.json');
+    link(rootLink, rootTarget);
+    link(projectLink, projectTarget);
+
+    init(t, dir, 'opencode');
+    t.publish({ 'mcp/mcp.yaml': plainYaml('https://team.example.com/v2'), 'rules/other-rule.md': rule('other') }, 'v2');
+    pull(dir);
+
+    for (const [file, target] of [[rootLink, rootTarget], [projectLink, projectTarget]]) {
+      expect(fs.lstatSync(file).isSymbolicLink(), file).toBe(true);
+      expect(fs.readlinkSync(file)).toBe(target);
+    }
+    expect(readJson(rootTarget)).toMatchObject({ theme: 'member-root', mcp: { 'plain-api': { url: 'https://team.example.com/v2' } } });
+    expect(readJson(projectTarget)).toEqual({ ...schema, instructions: ['.opencode/rules/**/*.md'] });
+
+    const uninstall = teamai(['uninstall', '--force'], dir);
+
+    expect(uninstall.code, uninstall.output).toBe(0);
+    for (const [file, target] of [[rootLink, rootTarget], [projectLink, projectTarget]]) {
+      expect(fs.lstatSync(file).isSymbolicLink(), file).toBe(true);
+      expect(fs.readlinkSync(file)).toBe(target);
+    }
+    expect(readJson(projectTarget)).toEqual(schema);
+    expect(readJson(rootTarget).mcp?.['plain-api']).toBeUndefined();
+  });
+
   it('withholds a resolved value from a link into a repository that tracks its target, naming the target', () => {
     const t = team('tracked-target', secretFiles);
     const original = JSON.stringify({ mcpServers: { mine: memberServer } }, null, 2);
