@@ -227,7 +227,10 @@ unique full-definition match. Legacy records recover only a unique event, matche
 and command match; `timeout` and `additionalContextLimit` were not recorded.
 Pre-#370 project Codex ownership is imported from the main checkout's
 `.teamai/managed-hooks.json` before reconciliation or direct removal.
-Unrecorded or ambiguous legacy team-hook copies are preserved. Project hook paths follow `toolPaths`;
+An unrecorded entry equal to teamai's entry for exactly one team hook (current or
+any earlier team-repo revision) is adopted, so a lost manifest adds no second copy.
+Other unrecorded copies are preserved; pull and doctor name the ambiguous ones.
+Project hook paths follow `toolPaths`;
 Claude uses `settings.local.json` beside its configured settings file. A custom
 Codex path that Codex does not load is reported as `not loaded` by doctor.
 

@@ -58,8 +58,9 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     base.NODE_OPTIONS = [base.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' ');
     return base;
   };
-  const run = (command: string, args: string[], cwd: string): Run => {
-    const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env() });
+  /** stdin is a pipe, never a terminal. A run past `timeout` ms is killed and reports code null. */
+  const run = (command: string, args: string[], cwd: string, timeout?: number): Run => {
+    const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env(), input: '', timeout });
     return { code: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
   };
   const gitOk = (args: string[], cwd: string): string => {
@@ -67,7 +68,7 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.output}`);
     return r.output;
   };
-  const teamai = (args: string[], cwd: string): Run => run('node', [CLI, ...args], cwd);
+  const teamai = (args: string[], cwd: string, timeout?: number): Run => run('node', [CLI, ...args], cwd, timeout);
 
   /**
    * A business repo with one commit. init only parses the origin; nothing it
@@ -82,6 +83,33 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     gitOk(['add', '-A'], repo);
     gitOk(['commit', '-q', '-m', 'project'], repo);
     gitOk(['remote', 'add', 'origin', `https://127.0.0.1:9/team/self-${counter}.git`], repo);
+    return repo;
+  };
+
+  /**
+   * A teammate's fresh clone of a repo already in single-repo mode: the
+   * committed `.teamai/teamai.yaml` says `mode: self`, and there is no local
+   * config yet. Cloned from a local seed, then origin is set to an https URL
+   * on a closed local port, as in `project()`.
+   */
+  const clone = (): string => {
+    const name = `clone-${++counter}`;
+    const url = `https://127.0.0.1:9/team/${name}.git`;
+    const seed = path.join(sandbox, `${name}-seed`);
+    fs.mkdirSync(path.join(seed, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'README.md'), '# project\n');
+    fs.writeFileSync(path.join(seed, '.teamai', 'teamai.yaml'), YAML.stringify({
+      team: name,
+      mode: 'self',
+      repo: url,
+      provider: 'git',
+    }));
+    gitOk(['init', '-q', '-b', 'main'], seed);
+    gitOk(['add', '-A'], seed);
+    gitOk(['commit', '-q', '-m', 'team'], seed);
+    const repo = path.join(sandbox, name);
+    gitOk(['clone', '-q', seed, repo], sandbox);
+    gitOk(['remote', 'set-url', 'origin', url], repo);
     return repo;
   };
 
@@ -135,5 +163,47 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     for (const dir of ['.cursor', '.codebuddy', '.github']) {
       expect(fs.existsSync(path.join(repo, dir)), dir).toBe(false);
     }
+  });
+
+  // A fresh clone self-heals on its first command (#198), but not on `init`,
+  // which sets the project up itself and must honour --agent.
+  it.each([[[]], [['--force']]])('in a fresh clone of a single-repo project, init . --agent claude %j saves only claude', (extra: string[]) => {
+    const repo = clone();
+
+    const init = teamai(['init', '.', '--provider', 'git', '--agent', 'claude', '--verbose', ...extra], repo);
+
+    expect(init.code, init.output).toBe(0);
+    expect(init.output).not.toContain('[bootstrap]');
+    expect(init.output).not.toContain('already initialized');
+    const hookWrites = init.output.split('\n').filter((line) => line.includes('Updated teamai hooks in'));
+    expect(hookWrites.length, init.output).toBeGreaterThan(0);
+    for (const line of hookWrites) expect(line).toContain(path.join(repo, '.claude', 'settings.json'));
+    expect(enabledAgents(repo)).toEqual(['claude']);
+    expect(gitOk(['status', '--porcelain', '-uall'], repo)).toBe('');
+    for (const dir of ['.codex', '.cursor', '.codebuddy', '.github']) {
+      expect(fs.existsSync(path.join(repo, dir)), dir).toBe(false);
+    }
+  });
+
+  // Scripts and CI run `init .` with no terminal: with no config in the clone
+  // yet, init must take the non-interactive default rather than wait on the
+  // tool picker.
+  it('in a fresh clone, init . with no --agent and no terminal sets up the tools found in HOME without prompting', () => {
+    const repo = clone();
+
+    const init = teamai(['init', '.', '--provider', 'git'], repo, 60_000);
+
+    expect(init.code, `timed out or failed:\n${init.output}`).toBe(0);
+    expect(init.output).not.toContain('Which AI tools');
+    expect(init.output).not.toContain('already initialized');
+    expect([...enabledAgents(repo)].sort()).toEqual(['claude', 'codebuddy', 'codex', 'copilot', 'cursor']);
+  });
+
+  it('in a fresh clone, any other command still self-heals with the tools found in HOME', () => {
+    const repo = clone();
+
+    teamai(['pull'], repo);
+
+    expect([...enabledAgents(repo)].sort()).toEqual(['claude', 'codebuddy', 'codex', 'copilot', 'cursor']);
   });
 });

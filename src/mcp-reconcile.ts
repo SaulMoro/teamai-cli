@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   LocalConfig,
   TeamaiConfig,
@@ -33,13 +34,14 @@ import {
   sameServerKey,
   type McpFormat,
 } from './resources/mcp-format.js';
-import { mcpEntryReader, teamMcpToDef } from './resources/mcp.js';
+import { mcpEntryReader, parseTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
+import { historicalContents } from './utils/team-history.js';
 import { envName, envTable } from './resources/env-key.js';
 import { declaredSecretKeys, type SecretDeclarations } from './resources/secrets.js';
 import { resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
 import { isEnvShMarker } from './env-sh-exports.js';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
+import { entryLayout, reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
 import {
   readJson,
   writeJsonAtomic,
@@ -112,6 +114,21 @@ export interface McpChange {
   server: string;
   action: 'added' | 'updated' | 'removed' | 'skipped';
   reason?: string;
+  /** Skipped because `file` holds the member's own server of this name (#993). */
+  member?: true;
+  file?: string;
+}
+
+const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
+
+/**
+ * The line naming a member's own server a reconcile kept (#993): one with a
+ * team server's name that teamai has no record of and that matches no team
+ * version of it.
+ */
+export function describeKeptMemberServer(server: string, file: string): string {
+  return `Kept MCP server ${server} in ${file}: it is not teamai's (no delivery record, and it matches no team version of ${server}). `
+    + 'Rename or delete it, then run teamai pull, to receive the team version.';
 }
 
 export interface McpReconcileResult {
@@ -589,40 +606,143 @@ export function desiredMcpForTarget(
       continue;
     }
 
-    // Pass ${VAR} through where the tool expands it itself, so the secret
-    // never lands on disk; otherwise resolve and require every var to exist.
-    // A resolved value is written verbatim into the target file; a project
-    // file gets one only once it is kept out of git (#882, reconcileTargets).
-    const passthrough = supportsEnvExpansion(target.format, target.projectScope, raw);
-    let def = raw;
-    if (!passthrough) {
-      const { def: resolved, missing } = resolvePlaceholders(raw, ctx.vars);
-      if (missing.length > 0) {
-        skipped.push({
-          tool: target.tool,
-          server: raw.name,
-          action: 'skipped',
-          reason: `unresolved variable(s): ${missing.join(', ')}`,
-        });
-        if (missing.every((key) => declared?.has(key) ?? true)) kept.add(raw.name);
-        continue;
-      }
-      def = resolved;
-    } else if (referencedVars(raw).length > 0) {
+    const rendered = renderMcpEntry(target, raw, ctx.vars);
+    if ('missing' in rendered) {
+      const { missing } = rendered;
+      skipped.push({
+        tool: target.tool,
+        server: raw.name,
+        action: 'skipped',
+        reason: `unresolved variable(s): ${missing.join(', ')}`,
+      });
+      if (missing.every((key) => declared?.has(key) ?? true)) kept.add(raw.name);
+      continue;
+    }
+    if (rendered.passthrough && referencedVars(raw).length > 0) {
       log.debug(`${raw.name}: passing ${referencedVars(raw).join(', ')} through to ${target.tool}`);
     }
-
-    const resolvedValue = !passthrough && referencedVars(raw).length > 0;
-    if (target.format === 'codex') {
-      const block = renderCodexBlock(def);
-      desired.set(raw.name, { entry: block, hash: entryHash(block), block, resolvedValue });
-    } else {
-      const entry = renderJsonEntry(target.format, def);
-      desired.set(raw.name, { entry, hash: entryHash(entry), resolvedValue });
-    }
+    desired.set(raw.name, rendered.entry);
   }
 
   return { desired, skipped, kept };
+}
+
+/**
+ * `raw` rendered as it lands in `target`'s config, or the variables it needs
+ * that `vars` has no value for.
+ *
+ * Pass ${VAR} through where the tool expands it itself, so the secret never
+ * lands on disk; otherwise resolve and require every var to exist. A resolved
+ * value is written verbatim into the target file; a project file gets one only
+ * once it is kept out of git (#882, reconcileTargets).
+ */
+function renderMcpEntry(
+  target: McpTarget,
+  raw: McpServerDef,
+  vars: Record<string, string>,
+): { entry: DesiredMcpEntry; passthrough: boolean } | { missing: string[] } {
+  const passthrough = supportsEnvExpansion(target.format, target.projectScope, raw);
+  let def = raw;
+  if (!passthrough) {
+    const { def: resolved, missing } = resolvePlaceholders(raw, vars);
+    if (missing.length > 0) return { missing };
+    def = resolved;
+  }
+  const resolvedValue = !passthrough && referencedVars(raw).length > 0;
+  if (target.format === 'codex') {
+    const block = renderCodexBlock(def);
+    return { entry: { entry: block, hash: entryHash(block), block, resolvedValue }, passthrough };
+  }
+  const entry = renderJsonEntry(target.format, def);
+  return { entry: { entry, hash: entryHash(entry), resolvedValue }, passthrough };
+}
+
+/** Whose an entry is that `target`'s own MCP record does not claim (#993). */
+export type UnrecordedMcpOwner = 'teamai' | 'another tool' | 'member';
+
+/**
+ * The names the MCP records of the other tools reading `target`'s file under
+ * the same key claim: an entry one of them wrote is not the member's, and is
+ * left to that tool, as before #993.
+ */
+function claimedByOtherTools(
+  targets: readonly McpTarget[],
+  target: McpTarget,
+  manifest: Readonly<Record<string, ManagedMcpRecord[]>>,
+): Set<string> {
+  return new Set(targets
+    .filter((t) => t.tool !== target.tool && t.file === target.file && sameServerKey(t.format, target.format))
+    .flatMap((t) => manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? [])
+    .map((record) => record.name));
+}
+
+/**
+ * Whose an entry is that `target`'s record does not claim, `entry` under
+ * `name` in `target`'s file (#993): another tool's when that tool's record
+ * claims it (`claimed`); teamai's when it equals what teamai renders there for
+ * the team server `name` today (`desired`) or at any revision in the team
+ * repo's history of its MCP files, rendered with today's variables; otherwise
+ * the member's. The history is read once per target, for the first entry
+ * today's render does not prove; when it cannot be read, nothing more is
+ * proven.
+ */
+function judgeUnrecordedMcpEntry(
+  localConfig: LocalConfig,
+  target: McpTarget,
+  desired: ReadonlyMap<string, DesiredMcpEntry>,
+  vars: Record<string, string>,
+  claimed: ReadonlySet<string>,
+): McpEntryJudge {
+  const renders = once(async (): Promise<Map<string, unknown[]> | null> => {
+    if (localConfig.repo.kind === 'http') return null;
+    const layout = entryLayout('mcp');
+    const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
+    if (versions === null) return null;
+    const entries = new Map<string, unknown[]>();
+    for (const version of versions) {
+      if (path.posix.basename(version.path) !== layout.file) continue;
+      for (const server of parseTeamMcpServers(version.content.toString('utf8')) ?? []) {
+        if (server.tools && !server.tools.includes(target.tool)) continue;
+        const def = teamMcpToDef(server);
+        if (!supportsTransport(target.format, def.transport)) continue;
+        const rendered = renderMcpEntry(target, def, vars);
+        if (!('missing' in rendered)) entries.set(def.name, [...entries.get(def.name) ?? [], rendered.entry.entry]);
+      }
+    }
+    return entries;
+  });
+  // Equal as values, as doctor compares them: key order is not ownership.
+  return async (name, entry) => {
+    if (claimed.has(name)) return 'another tool';
+    if (desired.has(name) && isDeepStrictEqual(desired.get(name)?.entry, entry)) return 'teamai';
+    return (await renders())?.get(name)?.some((rendered) => isDeepStrictEqual(rendered, entry)) ? 'teamai' : 'member';
+  };
+}
+
+/**
+ * The servers of `desired` that `target`'s file holds as the member's own
+ * (#993): no record in teamai's MCP manifest, and an entry no team version of
+ * the server renders to (`judgeUnrecordedMcpEntry`). A pull keeps them and
+ * does not write the team's server there. Read-only, for `doctor`.
+ */
+export async function memberMcpServers(
+  localConfig: LocalConfig,
+  targets: readonly McpTarget[],
+  target: McpTarget,
+  desired: ReadonlyMap<string, DesiredMcpEntry>,
+  vars: Record<string, string>,
+): Promise<string[]> {
+  const installed = await installedMcpEntries(target, { underKeyOnly: true });
+  if (!installed) return [];
+  const { manifest } = await loadMcpManifest(localConfig, true);
+  const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []).map((r) => r.name));
+  const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, claimedByOtherTools(targets, target, manifest));
+  const member: string[] = [];
+  for (const name of desired.keys()) {
+    const entry = installed.get(name);
+    if (entry !== undefined && !owned.has(name) && await judge(name, entry) === 'member') member.push(name);
+  }
+  return member;
 }
 
 /**
@@ -1688,9 +1808,10 @@ async function reconcileTargets(
       }
     }
 
+    const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, desiredContext.vars, claimedByOtherTools(targets, target, manifest));
     const wroteTarget = target.format === 'codex'
-      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, options, restoreConfigs)
-      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, options, restoreConfigs);
+      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, judge, options, restoreConfigs)
+      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, judge, options, restoreConfigs);
     if (wroteTarget) written.add(target.file);
     wrote = wroteTarget || wrote;
     // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
@@ -1831,6 +1952,19 @@ export function ownsJsonMcpEntry(
 
 // ─── Appliers ────────────────────────────────────────────────
 
+/** `judgeUnrecordedMcpEntry` for one target. */
+type McpEntryJudge = (name: string, entry: unknown) => Promise<UnrecordedMcpOwner>;
+
+/**
+ * A server this tool's record does not claim, left as it is: another tool's,
+ * or the member's own under a team server's name, whose team server is then
+ * not written to that file (#993).
+ */
+function unrecordedServerKept(target: McpTarget, name: string, owner: Exclude<UnrecordedMcpOwner, 'teamai'>): McpChange {
+  const change: McpChange = { tool: target.tool, server: name, action: 'skipped', reason: UNRECORDED_SERVER_REASON };
+  return owner === 'member' ? { ...change, file: target.file, member: true } : change;
+}
+
 /** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
 async function applyJson(
   target: McpTarget,
@@ -1840,6 +1974,7 @@ async function applyJson(
   ownedNames: Set<string>,
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
+  judge: McpEntryJudge,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean | null> {
@@ -1861,13 +1996,11 @@ async function applyJson(
 
   for (const [name, { entry, hash, resolvedValue }] of desired) {
     const existing = doc.servers[name];
-    if (existing !== undefined && !ownsJsonMcpEntry(doc, name, owned, allowBare) && !options.force) {
-      changes.push({
-        tool: target.tool,
-        server: name,
-        action: 'skipped',
-        reason: 'a server with this name already exists and is not managed by teamai',
-      });
+    // An entry with no record is teamai's when it equals a team render of `name` (#993), and is adopted.
+    const unrecorded = existing !== undefined && !ownsJsonMcpEntry(doc, name, owned, allowBare) && !options.force;
+    const owner = unrecorded ? await judge(name, existing) : 'teamai';
+    if (owner !== 'teamai') {
+      changes.push(unrecordedServerKept(target, name, owner));
       const previous = owned.find((record) => record.name === name);
       if (previous) nextRecords.push(previous);
       continue;
@@ -1882,7 +2015,7 @@ async function applyJson(
       delete doc.data[name];
       dirty = true;
     }
-    if (existing !== undefined && ownedHash.get(name) === hash) continue;
+    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) continue;
     doc.servers[name] = entry;
     if (doc.bare) record.bare = true;
     dirty = true;
@@ -1936,6 +2069,7 @@ async function applyCodex(
   ownedNames: Set<string>,
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
+  judge: McpEntryJudge,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
@@ -1946,13 +2080,10 @@ async function applyCodex(
   let holdsResolvedValue = false;
 
   for (const [name, { hash, block, resolvedValue }] of desired) {
-    if (present.has(name) && !ownedNames.has(name) && !options.force) {
-      changes.push({
-        tool: target.tool,
-        server: name,
-        action: 'skipped',
-        reason: 'a server with this name already exists and is not managed by teamai',
-      });
+    // An entry with no record is teamai's when it equals a team render of `name` (#993), and is adopted.
+    const owner = present.has(name) && !ownedNames.has(name) && !options.force ? await judge(name, codexBlockIn(source, name)) : 'teamai';
+    if (owner !== 'teamai') {
+      changes.push(unrecordedServerKept(target, name, owner));
       continue;
     }
     nextRecords.push({ name, hash });

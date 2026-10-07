@@ -55,6 +55,7 @@ vi.mock('../hooks.js', () => ({
 }));
 vi.mock('../mcp-reconcile.js', () => ({
   reconcileMcpForConfig: vi.fn().mockResolvedValue({ changes: [], wrote: false }),
+  describeKeptMemberServer: vi.fn(() => ''),
 }));
 vi.mock('../team-push.js', () => ({ reportUsageToTeam: vi.fn().mockResolvedValue(true) }));
 vi.mock('../usage-tracker.js', () => ({

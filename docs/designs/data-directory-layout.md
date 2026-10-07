@@ -488,7 +488,10 @@ stays in the checkout's `.teamai/`.
   in memory, and prints `[dry-run] Would bootstrap ...` without locking, writing,
   injecting hooks or registering the member. It makes no provider auth call
   either (a stale token can send `authenticate()` into an interactive login), so
-  the preview names the provider but not the username.
+  the preview names the provider but not the username. `init` detects with
+  `selfHeal: false` (in its `preAction` queue check and in `initSelfRepo`): it
+  sets the project up itself, and a self-heal there would enable every tool in
+  HOME before `--agent` chose them (#993).
 - **migration** (`migrate.ts`, `mode: 'self'`): self CANNOT use the git-mode whole
   directory copy→rename (that would carry the knowledge off and rename `.teamai` to
   `.bak`, breaking "knowledge on main"). Instead it selectively relocates the A1
