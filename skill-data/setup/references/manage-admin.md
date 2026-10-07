@@ -192,9 +192,10 @@ necessarily the project's manifest id.
 ## Keep delivered files out of git
 
 With `sharing.gitExclude.enabled: true` in `teamai.yaml`, each member's pull lists
-the skills it delivered into a project in teamai's `delivered` block in the
-clone's `.git/info/exclude` (local to the clone, never committed), so `git add -A`
-does not commit them; a member's own files stay visible. `init` writes it for a
+the skills, rules (one file per line), agents, `teamai-context` files and hook
+files it delivered into a project in teamai's `delivered` block in the clone's
+`.git/info/exclude` (local to the clone, never committed), so `git add -A` does
+not commit them; a member's own files, and copies they edited, stay visible. `init` writes it for a
 new team; an existing team adds the line and commits it through the normal
 review flow. A member overrides it on their machine with `gitExcludeEnabled:
 true|false` in the project's `config.yaml` (`~/.teamai/projects/<slug>/config.yaml`).

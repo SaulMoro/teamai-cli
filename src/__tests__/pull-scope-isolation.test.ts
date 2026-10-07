@@ -51,6 +51,7 @@ vi.mock('../source.js', () => ({
 vi.mock('../hooks.js', () => ({
   injectHooksToAllTools: vi.fn().mockResolvedValue(undefined),
   reconcileTeamHooksForConfig: vi.fn().mockResolvedValue({ ok: true, defs: [] }),
+  deliveredHookFiles: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../mcp-reconcile.js', () => ({

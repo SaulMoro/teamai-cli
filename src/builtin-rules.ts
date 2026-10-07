@@ -8,6 +8,7 @@ import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { getUserHome } from './utils/home.js';
+import type { DeliveryRecorder } from './git-exclude-delivered.js';
 
 // ─── Built-in rules deployment ──────────────────────────
 //
@@ -56,7 +57,7 @@ export const EXCLUDED_RULE_NAMES = new Set<string>([
 export async function deployBuiltinRules(
     teamConfig: TeamaiConfig,
     localConfig?: LocalConfig,
-    options?: { skipRecall?: boolean },
+    options?: { skipRecall?: boolean; recorder?: DeliveryRecorder },
 ): Promise<number> {
     const defaultBaseDir = getUserHome();
     let deployed = 0;
@@ -93,6 +94,7 @@ export async function deployBuiltinRules(
                 const destFile = path.join(rulesDir, `${rule.name}${ext}`);
                 const content = renderRuleForTool(tool, rule.content);
                 await writeFile(destFile, content);
+                options?.recorder?.report('builtin', destFile);
                 log.debug(`Deployed built-in rule ${rule.name} → ${tool}`);
 
                 // Drop the `.md` copy an older layout left in an `.mdc` rules dir.
@@ -121,6 +123,7 @@ export async function deployBuiltinRules(
 
             deployed++;
         } catch (e) {
+            options?.recorder?.failed('builtin');
             log.error(`Failed to deploy built-in rules to ${tool}: ${(e as Error).message}`);
         }
     }

@@ -400,6 +400,27 @@ async function applyCursor(file: string, enabled: boolean): Promise<boolean> {
   return true;
 }
 
+/**
+ * The project's `.claude/settings.local.json` while teamai has its entry there
+ * (#915): the record says teamai wrote "strip" (`managed` false) and the file
+ * still holds an empty trailer. teamai owns `attribution` only then; the file
+ * may hold anything else too.
+ */
+export async function coAuthorLocalSettingsFile(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  managed: Readonly<Record<string, boolean>>,
+): Promise<string | undefined> {
+  const settings = scopedToolPaths(teamConfig, localConfig).claude?.settings;
+  if (localConfig.scope !== 'project' || !settings) return undefined;
+  const file = path.join(resolveBaseDir(localConfig), path.dirname(settings), 'settings.local.json');
+  if (managed[file] !== false) return undefined;
+  const attribution = (await readJson<{ attribution?: unknown }>(file))?.attribution;
+  if (typeof attribution !== 'object' || attribution === null) return undefined;
+  const { commit, pr } = attribution as Record<string, unknown>;
+  return commit === '' || pr === '' ? file : undefined;
+}
+
 // ─── Main entry ──────────────────────────────────────────────
 
 /**

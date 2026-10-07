@@ -430,6 +430,7 @@ export class RulesHandler extends ResourceHandler {
         if (!ledger || !await keepsEditedCopy(ledger, item, target)) {
           await writeFile(dest, content);
           if (ledger) await recordDelivered(ledger.hashes, dest);
+          ledger?.recorder?.report('rules', dest);
         } else {
           await warnIfKeptCopyIsInert(target);
         }
@@ -466,6 +467,7 @@ export class RulesHandler extends ResourceHandler {
         }
         log.debug(`Synced rule ${item.name} → ${tool}`);
       } catch (e) {
+        ledger?.recorder?.failed('rules');
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
       }
     }
@@ -502,6 +504,7 @@ export class RulesHandler extends ResourceHandler {
           await ensureDir(path.dirname(dest));
           await writeFile(dest, content);
           await recordDelivered(ledger.hashes, dest);
+          ledger.recorder?.report('rules', dest);
           await reclaimMovedCopy({ ...target, movedFrom }, item, ledger, localConfig.repo.localPath);
           rewritten.add(item.name);
           continue;
@@ -523,6 +526,7 @@ export class RulesHandler extends ResourceHandler {
         }
         await writeFile(dest, content);
         await recordDelivered(ledger.hashes, dest);
+        ledger.recorder?.report('rules', dest);
         rewritten.add(item.name);
       }
     }
@@ -1032,6 +1036,7 @@ export class RulesHandler extends ResourceHandler {
       await ensureDir(path.dirname(dest));
       await writeFile(dest, content);
       if (ledger) await recordDelivered(ledger.hashes, dest);
+      ledger?.recorder?.report('rules', dest);
       changed++;
     };
     for (const { entry, dir, copiedFrom, owned, edited } of await this.legacyRuleCopies(teamConfig, localConfig, ledger?.previous)) {
