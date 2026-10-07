@@ -58,6 +58,8 @@ import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManif
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
+// A team skill's copy goes only when it is teamai's (#993): the team clone needs history.
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -245,6 +247,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true });
 
     // hooks: reconcileHooks(removeAll) was called for the tool settings file,
@@ -2011,6 +2014,7 @@ describe('uninstall', () => {
       opencodeContextEntries: [{ config, entry }, { config: siblingConfig, entry }],
     }, localConfig);
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'opencode' });
 
     expect((await fse.readJson(config)).instructions).toBeUndefined();
@@ -2054,6 +2058,7 @@ describe('uninstall', () => {
       });
     }
     const previousExitCode = process.exitCode;
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, ...(scenario !== 'full uninstall' ? { agent: 'opencode' } : {}) });
     expect(process.exitCode).toBe(1);
     process.exitCode = previousExitCode;
@@ -2382,7 +2387,8 @@ describe('uninstall', () => {
       'my-own-skill',
     );
     await fse.ensureDir(openclawManagedSkill);
-    await fse.writeFile(path.join(openclawManagedSkill, 'SKILL.md'), '# Managed skill');
+    // What pull delivered: the team skill's bytes, so teamai's by the history (#993).
+    await fse.writeFile(path.join(openclawManagedSkill, 'SKILL.md'), '# Former Role Skill');
     await fse.ensureDir(openclawUserSkill);
     await fse.writeFile(path.join(openclawUserSkill, 'SKILL.md'), '# User skill');
 
@@ -2405,6 +2411,7 @@ describe('uninstall', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(' '));
     });
+    commitTeamRepo(repoPath);
     await uninstall({ dryRun: true, force: true });
     spy.mockRestore();
 
@@ -2562,6 +2569,7 @@ describe('uninstall', () => {
     expect((await switchModelProfile(profile, ['claude']))[0].status).toBe('switched');
     const active = await fse.readJson(globalSettings);
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true });
 
     // Project-scope skill removed
@@ -2774,6 +2782,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true });
 
     // Both flat and namespaced team skills removed
@@ -3201,6 +3210,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'claude' });
 
     // claude team-skill removed
@@ -3257,6 +3267,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['copilot'] });
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'copilot' });
 
     expect(await fse.pathExists(path.join(copilotHome, 'skills', 'team-skill'))).toBe(false);
@@ -3298,6 +3309,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'claude' });
 
     // claude team-skill removed
@@ -3341,6 +3353,7 @@ describe('uninstall', () => {
     localConfig.enabledAgents = ['claude', 'codex'];
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'claude' });
 
     expect(mockSaveLocalConfig).toHaveBeenCalledTimes(1);
@@ -3415,6 +3428,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'codex' });
 
     // codex team-skill removed
@@ -3561,6 +3575,7 @@ describe('uninstall', () => {
     const localConfig = makeLocalConfig(homeDir, repoPath);
     mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
 
+    commitTeamRepo(repoPath);
     await uninstall({ force: true, agent: 'Claude' });
 
     // Should have matched 'claude' and removed team-skill

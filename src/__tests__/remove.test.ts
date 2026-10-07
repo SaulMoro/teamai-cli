@@ -345,6 +345,8 @@ scope: 'user',
     const codexSkill = path.join(homeDir, '.codex', 'skills', 'my-skill');
     await fse.ensureDir(codexSkill);
     await fse.writeFile(path.join(codexSkill, 'SKILL.md'), '# My Skill');
+    // The copies hold a team version: teamai's by the history (#993).
+    commitTeamRepo(localConfig.repo.localPath);
 
     const removed = await handler.removeItem('my-skill', teamConfig, localConfig);
 
@@ -367,6 +369,8 @@ scope: 'user',
     const codexSkill = path.join(homeDir, '.codex', 'skills', 'my-skill');
     await fse.ensureDir(codexSkill);
     await fse.writeFile(path.join(codexSkill, 'SKILL.md'), '# My Skill');
+    // The copies hold a team version: teamai's by the history (#993).
+    commitTeamRepo(localConfig.repo.localPath);
 
     const removed = await handler.removeItem('my-skill', teamConfig, { ...localConfig, enabledAgents: ['claude'] });
 
