@@ -70,6 +70,8 @@ interface World {
   business(label: string, files?: Record<string, string>): string;
   /** This installation's source manifest: the one recording `destinationRoot`. */
   manifestPath(destinationRoot: string): string;
+  /** Commit `files` (null deletes) to the source repo and push them to its remote. */
+  publishSource(files: Record<string, string | null>): void;
 }
 
 function world(base: string): World {
@@ -134,6 +136,16 @@ function world(base: string): World {
       gitOk(['commit', '-q', '-m', 'app'], dir);
       for (const [rel, content] of Object.entries(files)) writeFile(path.join(dir, rel), content);
       return fs.realpathSync.native(dir);
+    },
+    publishSource: (files) => {
+      const seed = path.join(root, 'source-seed');
+      for (const [rel, content] of Object.entries(files)) {
+        if (content === null) fs.rmSync(path.join(seed, rel), { recursive: true, force: true });
+        else writeFile(path.join(seed, rel), content);
+      }
+      gitOk(['add', '-A'], seed);
+      gitOk(['commit', '-q', '-m', 'update'], seed);
+      gitOk(['push', '-q', path.join(root, 'source.git'), 'main'], seed);
     },
     manifestPath: (destinationRoot) => {
       const dir = path.join(home, '.teamai', 'sources', 'other', 'installations');
@@ -368,5 +380,61 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(pulled.output).toContain(`Kept ${cursor}: it is not teamai's`);
     expect(read(path.join(codebuddy, 'SKILL.md'))).toBe(SOURCE_SKILL);
     expect(pulled.output).not.toContain(`Kept ${codebuddy}`);
+  });
+
+  /**
+   * Follow-up 06b: a legacy copy the member changed stays on record, so the
+   * record must never be what deletes it. Every command that releases source
+   * copies leaves it while its content is no version of the source skill.
+   */
+  const CHANGED = `${SOURCE_SKILL}\nMy notes.\n`;
+  function changedLegacyCopy(label: string): { w: World; dir: string; copy: string } {
+    const w = world(label);
+    fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true });
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude', 'hermes']), dir);
+    // What an earlier release left and recorded, then the member changed.
+    const copy = path.join(dir, '.hermes', 'skills', 'other-skill');
+    writeFile(path.join(copy, 'SKILL.md'), CHANGED);
+    const manifestPath = w.manifestPath(dir);
+    const manifest = JSON.parse(read(manifestPath));
+    manifest.installedPaths['other-skill'].push('.hermes/skills/other-skill');
+    manifest.installedPhysicalPaths['.hermes/skills/other-skill'] = copy;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    return { w, dir, copy };
+  }
+
+  it('uninstall leaves a changed legacy copy that is on record', () => {
+    const { w, dir, copy } = changedLegacyCopy('legacy-uninstall');
+    const uninstalled = w.ok(['uninstall', '--force'], dir);
+    expect(read(path.join(copy, 'SKILL.md')), uninstalled.output).toBe(CHANGED);
+    // Uninstall did run: teamai's team skill copies are gone.
+    expect(fs.existsSync(path.join(dir, '.claude', 'skills', 'fe-skill'))).toBe(false);
+  });
+
+  it('remove skills and source remove leave a changed legacy copy that is on record', () => {
+    const { w, dir, copy } = changedLegacyCopy('legacy-remove');
+    const removedSkill = w.run(['remove', 'skills', 'other-skill', '--force'], dir);
+    expect(read(path.join(copy, 'SKILL.md')), removedSkill.output).toBe(CHANGED);
+    const removed = w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'SKILL.md')), removed.output).toBe(CHANGED);
+    expect(removed.output).toContain(keptLegacyLine(copy));
+    expect(fs.existsSync(path.join(w.home, '.hermes', 'skills', 'other-skill'))).toBe(false);
+  });
+
+  it('a pull after the source drops the skill leaves a changed legacy copy that is on record', () => {
+    const { w, dir, copy } = changedLegacyCopy('legacy-dropped');
+    w.publishSource({
+      'teamai.yaml': ['team: other', 'repo: x', 'provider: git', 'reviewers: []', 'publicSkills: []', ''].join('\n'),
+      'skills/other-skill': null,
+    });
+    const pulled = w.ok(['pull', '--force'], dir);
+    expect(read(path.join(copy, 'SKILL.md')), pulled.output).toBe(CHANGED);
+    expect(pulled.output).toContain(keptLegacyLine(copy));
+    expect(fs.existsSync(path.join(dir, '.claude', 'skills', 'other-skill'))).toBe(false);
+    expect(fs.existsSync(path.join(w.home, '.hermes', 'skills', 'other-skill'))).toBe(false);
+    // Still named, and still left, on the next pull.
+    expect(w.ok(['pull', '--force'], dir).output).toContain(keptLegacyLine(copy));
+    expect(read(path.join(copy, 'SKILL.md'))).toBe(CHANGED);
   });
 });
