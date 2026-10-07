@@ -16,7 +16,7 @@ import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import {
-  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, recordedUnchanged, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
@@ -693,6 +693,7 @@ export class AgentsHandler extends ResourceHandler {
     // Determine format: explicit flag takes precedence; fall back to extension detection
     const content = await readFileSafe(item.sourcePath);
     if (content === null) {
+      ledger?.recorder?.failed('agents');
       log.warn(`agents: cannot read ${item.sourcePath}`);
       return;
     }
@@ -705,6 +706,7 @@ export class AgentsHandler extends ResourceHandler {
     if (!isLegacyAgent(agentItem)) {
       const parseResult: ParseResult = parseAgentYaml(content, `${item.name}.yaml`);
       if (!parseResult.ok) {
+        ledger?.recorder?.failed('agents');
         log.warn(`[agents] Skipped ${item.name}.yaml: ${parseResult.reason}`);
         return;
       }
@@ -746,9 +748,31 @@ export class AgentsHandler extends ResourceHandler {
           await recordDelivered(ledger.hashes, dest);
           recordAgentModel(ledger.agentModels, item.name, tool, render.model?.recorded);
         }
+        ledger?.recorder?.report('agents', dest);
         log.debug(`Rendered agent ${item.name} → ${tool} (${render.ext})`);
       } catch (e) {
+        ledger?.recorder?.failed('agents');
         log.warn(`Failed to sync agent ${item.name} to ${tool}: ${(e as Error).message}`);
+      }
+    }
+    if (ledger?.recorder) await this.reportHeldCopies(agentItem, teamConfig, localConfig, aliases, ledger);
+  }
+
+  /**
+   * A tool held for its model keeps the copy teamai delivered there before
+   * (#830): still teamai's while it holds what the record says, so it stays
+   * in what this pull delivered (#915).
+   */
+  private async reportHeldCopies(
+    item: AgentResourceItem, teamConfig: TeamaiConfig, localConfig: LocalConfig, aliases: ModelAliases, ledger: DeliveryLedger,
+  ): Promise<void> {
+    for (const { tool, dir } of await this.agentToolDirs(teamConfig, localConfig)) {
+      if (!await this.heldForTool(item, tool, aliases)) continue;
+      for (const file of await listFiles(dir)) {
+        const copy = path.join(dir, file);
+        if (agentStemFromFilename(file) === item.name && await recordedUnchanged(ledger.previous, copy)) {
+          ledger.recorder?.report('agents', copy);
+        }
       }
     }
   }

@@ -1529,15 +1529,31 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 ## 让分发的文件不进入 git
 
-在项目 scope 下，`teamai pull` 会把团队的 skill 写入业务仓库的工具目录（`.claude/skills/<name>/`、`.agents/skills/<name>/` 等），`git status` 会显示它们，一次 `git add -A` 就会把它们提交。开启此选项后，teamai 会把它分发的每个 skill 列在本地克隆 `.git/info/exclude` 中一个由它管理的块里：
+在项目 scope 下，`teamai pull` 会把团队的资源写入业务仓库的工具目录（`.claude/skills/<name>/`、`.cursor/rules/`、`.github/agents/` 等），`git status` 会显示它们，一次 `git add -A` 就会把它们提交。开启此选项后，teamai 会把它分发的每个路径列在本地克隆 `.git/info/exclude` 中一个由它管理的块里：
 
 ```
 # [teamai:delivered:start]
+/.claude/agents/reviewer.md
+/.claude/rules/fe/style.md
+/.claude/rules/teamai-context.md
+/.claude/settings.local.json
 /.claude/skills/code-review/
 # [teamai:delivered:end]
 ```
 
-该文件只属于你的本地克隆，由各 worktree 共用，永远不会被提交。teamai 从不修改 `.gitignore` 或 git 索引。被排除的 skill 仍会被 AI 工具加载：只有 git 忽略它们。
+该文件只属于你的本地克隆，由各 worktree 共用，永远不会被提交。teamai 从不修改 `.gitignore` 或 git 索引。
+
+该块列出：
+
+- skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本；
+- rule 每个文件一行，从不列目录，因此你放在旁边的自己的文件仍然可见：包括命名空间子目录（`.cursor/rules/fe/style.mdc`）、扁平化的文件名（`.kiro/steering/fe.style.md`）以及 `.github/instructions/**/*.instructions.md`；
+- agent，以及 `teamai-recall` rule 和 agent；
+- 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`）；
+- Copilot 的 `.github/hooks/teamai.json`，以及 teamai 在其中有条目（团队 hook 或 co-author 设置）时的 `.claude/settings.local.json`，无论其中还有什么。
+
+MCP 与 OpenCode 的配置文件、`.codex/hooks.json`、`.github/copilot-instructions.md` 以及文档镜像不会列出。
+
+被排除的 skill、rule 和 agent 仍会被 AI 工具加载：只有 git 忽略它们。遵循 git 忽略规则的搜索（ripgrep、大多数编辑器的搜索、agent 的搜索工具）会跳过它们，因此请按路径打开被排除的文件；`teamai skill path <name>` 会输出 CLI 内置 skill 所在的位置。
 
 该选项采用与 recall 相同的两级配置：
 
@@ -1547,7 +1563,8 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 | 成员覆盖 | 项目的 `config.yaml`（`~/.teamai/projects/<slug>/config.yaml`） | `gitExcludeEnabled` | `true` / `false`，手动编辑；优先级高于团队默认 |
 
 - 改动在下一次 `teamai pull` 生效，包括会话开始时的 pull，即使该 pull 发现团队仓库未变（"Already synced"）也一样：无需 `--force`。单仓模式下，对 `.teamai/teamai.yaml` 未提交的修改同样生效。
-- 只列出 teamai 写入且仍归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。
+- 只列出 teamai 在本 checkout 中写入、或确认归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。因你改过而被 pull 保留的副本，以及 teamai 不再分发、但仍留在磁盘上的副本（例如团队移除最后一个 source 之后的 source skill）同样如此。
+- 切换角色或项目后，下一次 pull 会移除原选择对应的行。pull 未重写但仍归 teamai 所有的副本（因模型无法解析而暂缓的 agent、团队 hook 文件无法解析时的 hook 文件）仍会列出。
 - 关闭后，下一次 pull 只移除 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
 - pull 无法更新该块时（exclude 文件不可写或不可读，或另一个 teamai 命令占用着它），会保持其原样并给出警告；排除原因后再运行 `teamai pull`。因另一个 pull 或 push 持有项目同步锁而跳过的 pull 同样不改动它，由持锁者或下一次 pull 更新。
@@ -1693,7 +1710,7 @@ pull 会列出所修改的每个文件：
 
 若请求更新的块存在不完整或重复的标记，整个文件保持不变，包括其他托管块。修复提示中的标记后，再运行 `teamai pull`。
 
-与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 从不修改 `.gitignore` 或 git 索引；它在 `.git/info/exclude` 中列出哪些内容，见[让分发的文件不进入 git](#让分发的文件不进入-git)。
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 从不修改 `.gitignore` 或 git 索引；它在 `.git/info/exclude` 中列出哪些内容，见[让分发的文件不进入 git](#让分发的文件不进入-git)。该选项开启时，你的 `teamai-context` 文件也在其中：工具仍会加载它，遵循 git 忽略规则的搜索会跳过它（与被排除的 skill 和 rule 一样）；请按路径打开它。
 
 ### 查看效果
 

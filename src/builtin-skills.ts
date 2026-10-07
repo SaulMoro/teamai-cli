@@ -11,6 +11,7 @@ import { CODEX_TOOL, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDi
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
 import { PACKAGED_SKILL_DIGESTS } from './packaged-skill-digests.js';
+import type { DeliveryRecorder } from './git-exclude-delivered.js';
 
 // ─── Built-in skills deployment ──────────────────────────
 //
@@ -509,7 +510,9 @@ async function retireOtherCodexCopy(
  * - Built-in skills directory doesn't exist (dev environment without build)
  * - A tool's skills directory is not configured
  */
-export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?: LocalConfig): Promise<number> {
+export async function deployBuiltinSkills(
+  teamConfig: TeamaiConfig, localConfig?: LocalConfig, options?: { recorder?: DeliveryRecorder },
+): Promise<number> {
   const builtinDir = packagedSkillRoots().deployRoot;
 
   if (!await pathExists(builtinDir)) {
@@ -599,10 +602,12 @@ export async function deployBuiltinSkills(teamConfig: TeamaiConfig, localConfig?
           log.warn(`Archived but could not delete ${result.notRemoved.length} file(s) under ${destDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
         }
         if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
+        options?.recorder?.report('builtin', destDir);
 
         deployed++;
         deployedHere++;
       } catch (e) {
+        options?.recorder?.failed('builtin');
         log.error(`Failed to deploy built-in skill ${skillName} to ${toolPath.skills}: ${(e as Error).message}`);
       }
     }

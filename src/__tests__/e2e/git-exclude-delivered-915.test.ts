@@ -6,8 +6,14 @@
  * owns stays visible and addable. The setting takes effect on the next pull,
  * fast path included; off, the next pull removes only that block.
  *
- * The CLI-owned `teamai` skill and source skills are ticket 03's, so the
- * assertions name the team skills only.
+ * Ticket 03: every writer of a pull reports what it delivered (rules one file
+ * per line, agents, `teamai-context` files, the team hooks in
+ * `.claude/settings.local.json` and Copilot's hook file, the co-author entry,
+ * the `teamai` skill and the `teamai-recall` rule and agent, source skills,
+ * Codex skills in `.agents/skills`), so after init, pull and a session start
+ * `git status` shows only an allowlist of paths later tickets still move, and
+ * every file of the member's stays visible and addable. A copy pull keeps
+ * because the member changed it, and one no longer delivered, leave the block.
  *
  * Each case gets its own HOME, team remote (a local bare repo reached through
  * a synthetic HTTPS URL) and business repo.
@@ -18,6 +24,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trackDetachedProcesses } from '../helpers/detached-processes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -35,6 +42,8 @@ interface Run { code: number | null; output: string }
 let sandbox: string;
 /** Keeps a retried case off the directories its first attempt left. */
 let attempt = 0;
+/** The session-start hook leaves a detached pass behind: joined before HOME goes. */
+let detached: ReturnType<typeof trackDetachedProcesses>;
 
 function env(home: string): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {
@@ -84,12 +93,30 @@ interface Machine {
   partitionConfig(): string;
   statePath(): string;
   excludeFile(): string;
-  /** Commit `files` to the team remote, as a teammate would. */
-  teamCommit(files: Record<string, string>): void;
+  /** Commit `files` to the team remote, as a teammate would; a null content deletes the file. */
+  teamCommit(files: Record<string, string | null>): void;
   setOverride(value: boolean | null): void;
+  /** A Claude Code session starting in the business repo, with the pass it leaves behind joined. */
+  sessionStart(): Promise<Run>;
+  /** The lines of teamai's `delivered` block in the clone's exclude file. */
+  deliveredLines(): string[];
 }
 
-function machine(base: string, opts: { team?: string; files?: Record<string, string>; business?: Record<string, string>; init?: boolean } = {}): Machine {
+interface MachineOptions {
+  team?: string;
+  files?: Record<string, string>;
+  /** Untracked files in the business repo. */
+  business?: Record<string, string>;
+  /** Files the business repo commits before teamai is set up. */
+  committed?: Record<string, string>;
+  /** Source repositories the team lists, by name: their files (a `teamai.yaml` with `publicSkills`, skills). */
+  sources?: Record<string, Record<string, string>>;
+  agents?: string;
+  initArgs?: string[];
+  init?: boolean;
+}
+
+function machine(base: string, opts: MachineOptions = {}): Machine {
   const name = `${base}-${++attempt}`;
   const home = path.join(sandbox, `${name}-home`);
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
@@ -106,7 +133,21 @@ function machine(base: string, opts: { team?: string; files?: Record<string, str
   const url = `https://git.example.com/team/${name}.git`;
   const seed = path.join(sandbox, `${name}-seed`);
   const remote = path.join(sandbox, `${name}.git`);
-  writeFile(path.join(seed, 'teamai.yaml'), [`team: ${name}`, `repo: ${url}`, 'provider: git', 'reviewers: []', opts.team ?? ''].join('\n'));
+  const sources = Object.entries(opts.sources ?? {}).map(([source, files]) => {
+    const sourceSeed = path.join(sandbox, `${name}-${source}-seed`);
+    const sourceRemote = path.join(sandbox, `${name}-${source}.git`);
+    const sourceUrl = `https://git.example.com/sources/${name}-${source}.git`;
+    for (const [rel, content] of Object.entries(files)) writeFile(path.join(sourceSeed, rel), content);
+    gitOk(['init', '-q', '-b', 'main'], sourceSeed);
+    gitOk(['add', '-A'], sourceSeed);
+    gitOk(['commit', '-q', '-m', 'source'], sourceSeed);
+    gitOk(['clone', '-q', '--bare', sourceSeed, sourceRemote], sandbox);
+    gitOk(['config', '--global', `url.${sourceRemote}.insteadOf`, sourceUrl], sandbox);
+    return `  - name: ${source}\n    repo: ${sourceUrl}`;
+  });
+  writeFile(path.join(seed, 'teamai.yaml'), [
+    `team: ${name}`, `repo: ${url}`, 'provider: git', 'reviewers: []', ...(sources.length > 0 ? ['sources:', ...sources] : []), opts.team ?? '',
+  ].join('\n'));
   for (const [rel, content] of Object.entries(opts.files ?? TEAM_SKILLS)) writeFile(path.join(seed, rel), content);
   gitOk(['init', '-q', '-b', 'main'], seed);
   gitOk(['add', '-A'], seed);
@@ -119,6 +160,7 @@ function machine(base: string, opts: { team?: string; files?: Record<string, str
 
   const dir = path.join(sandbox, `${name}-biz`);
   writeFile(path.join(dir, 'README.md'), '# app\n');
+  for (const [rel, content] of Object.entries(opts.committed ?? {})) writeFile(path.join(dir, rel), content);
   gitOk(['init', '-q', '-b', 'main'], dir);
   gitOk(['add', '-A'], dir);
   gitOk(['commit', '-q', '-m', 'app'], dir);
@@ -152,7 +194,10 @@ function machine(base: string, opts: { team?: string; files?: Record<string, str
     statePath: () => path.join(partitionDir(), 'state.json'),
     excludeFile: () => path.join(realDir, '.git', 'info', 'exclude'),
     teamCommit: (files) => {
-      for (const [rel, content] of Object.entries(files)) writeFile(path.join(seed, rel), content);
+      for (const [rel, content] of Object.entries(files)) {
+        if (content === null) fs.rmSync(path.join(seed, rel), { force: true });
+        else writeFile(path.join(seed, rel), content);
+      }
       gitOk(['add', '-A'], seed);
       gitOk(['commit', '-q', '-m', 'team change'], seed);
       gitOk(['push', '-q', 'origin', 'main'], seed);
@@ -163,8 +208,26 @@ function machine(base: string, opts: { team?: string; files?: Record<string, str
       if (value !== null) lines.splice(lines.length - 1, 0, `gitExcludeEnabled: ${value}`);
       fs.writeFileSync(config, lines.join('\n'));
     },
+    sessionStart: async () => {
+      const r = spawnSync(process.execPath, [CLI, 'hook-dispatch', 'session-start', '--tool', 'claude'], {
+        cwd: realDir,
+        encoding: 'utf8',
+        env: { ...env(home), NODE_OPTIONS: [process.env.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' ') },
+        input: JSON.stringify({ cwd: realDir, session_id: `${name}-session`, hook_event_name: 'SessionStart', source: 'startup' }),
+      });
+      await detached.waitForExit();
+      return { code: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    },
+    deliveredLines: () => {
+      const lines = fs.existsSync(m.excludeFile()) ? read(m.excludeFile()).split('\n') : [];
+      const start = lines.indexOf('# [teamai:delivered:start]');
+      const end = lines.indexOf('# [teamai:delivered:end]');
+      return start < 0 || end < start ? [] : lines.slice(start + 1, end);
+    },
   };
-  if (opts.init !== false) ok(['init', url, '--provider', 'git', '--agent', 'claude,codex', '--scope', 'project', '--force']);
+  if (opts.init !== false) {
+    ok(['init', url, '--provider', 'git', '--agent', opts.agents ?? 'claude,codex', '--scope', 'project', '--force', ...opts.initArgs ?? []]);
+  }
   return m;
 }
 
@@ -175,16 +238,18 @@ function asOlderCliState(statePath: string): void {
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+beforeAll(() => {
+  if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+  sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-git-exclude-e2e-')));
+  detached = trackDetachedProcesses(sandbox);
+});
+
+afterAll(async () => {
+  if (detached) await detached.waitForExit();
+  if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
 describe('delivered team skills stay out of git (#915)', () => {
-  beforeAll(() => {
-    if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
-    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-git-exclude-e2e-')));
-  });
-
-  afterAll(() => {
-    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
-  });
-
   it('with the team setting on, keeps every delivered team skill out of git status, and a member\'s own skill of a team skill\'s name visible and addable', () => {
     const m = machine('team-on', { team: ON, business: { '.claude/skills/fe-skill/SKILL.md': MY_SKILL, 'notes.md': 'mine\n' } });
     expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'other-skill', 'SKILL.md'))).toBe(true);
@@ -368,5 +433,269 @@ describe('delivered team skills stay out of git (#915)', () => {
     });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     expect(m.git(['show', 'HEAD:teamai.yaml'], remote)).toMatch(/gitExclude:\n\s+enabled: true/);
+  });
+});
+
+
+// ─── Ticket 03: every writer reports ────────────────────────────────────────
+
+const rule = (title: string): string => `# ${title}\n\n${title} rule.\n`;
+const agentYaml = (name: string): string => `name: ${name}\ndescription: ${name} agent\ninstructions: Act as ${name}.\n`;
+const FE_SKILL = skillMd('fe-skill', 'Front-end skill.');
+const TRACKED_V1 = skillMd('tracked-skill', 'Version one.');
+const TRACKED_V2 = skillMd('tracked-skill', 'Version two.');
+const ROLES = [
+  'version: 1', 'roles:',
+  '  - id: fe', '    resources:', '      knowledge: [fe]', '      skills: [fe]', '      agents: [fe]',
+  '  - id: be', '    resources:', '      knowledge: [be]', '      skills: [be]', '      agents: [be]', '',
+].join('\n');
+const PROJECTS = [
+  'version: 1', 'projects:',
+  '  - id: checkout', '    name: Checkout', '    resources:', '      knowledge: [checkout]', '      skills: [checkout]', '      agents: [checkout]', '',
+].join('\n');
+const TEAM_HOOKS = 'hooks:\n  - id: team-stop\n    description: Team stop\n    event: Stop\n    command: echo team-stop\n';
+/** What a team delivers in project scope: roles, a project, hooks, MCP with and without a resolved value, docs, culture. */
+const FULL_TEAM = {
+  'manifest/roles.yaml': ROLES,
+  'manifest/projects.yaml': PROJECTS,
+  'skills/fe/fe-skill/SKILL.md': FE_SKILL,
+  'skills/fe/tracked-skill/SKILL.md': TRACKED_V1,
+  'skills/be/be-skill/SKILL.md': skillMd('be-skill', 'Back-end skill.'),
+  'skills/checkout/checkout-skill/SKILL.md': skillMd('checkout-skill', 'Checkout skill.'),
+  'rules/team-rule.md': rule('Team'),
+  'rules/fe/fe-rule.md': rule('Front-end'),
+  'rules/be/be-rule.md': rule('Back-end'),
+  'rules/checkout/checkout-rule.md': rule('Checkout'),
+  'agents/reviewer.yaml': agentYaml('reviewer'),
+  'agents/fe/fe-agent.yaml': agentYaml('fe-agent'),
+  'agents/be/be-agent.yaml': agentYaml('be-agent'),
+  'hooks/hooks.yaml': TEAM_HOOKS,
+  'mcp/mcp.yaml': [
+    'servers:',
+    '  - name: plain-api', '    transport: http', '    url: https://plain.example.com/mcp',
+    '  - name: secret-api', '    transport: http', '    url: https://api.example.com/mcp',
+    '    headers:', '      Authorization: "Bearer ${LAB_TOKEN}"', '',
+  ].join('\n'),
+  'env/env.yaml': 'variables:\n  - key: LAB_TOKEN\n    value: "lab-token-915"\n',
+  'docs/guide.md': '# Guide\n',
+  'culture.md': '# Culture\n\nBe kind.\n',
+};
+const FULL_SHARING = [
+  'sharing:', '  gitExclude:', '    enabled: true', '  recall:', '    enabled: true',
+  '  mcp:', '    autoApply: true', '  hooks:', '    autoApply: true', '    requireTeamScripts: false', '',
+].join('\n');
+const EXT_SOURCE = {
+  'teamai.yaml': 'team: ext\nrepo: https://git.example.com/sources/ext.git\nprovider: git\nreviewers: []\npublicSkills:\n  - ext-skill\n',
+  'skills/ext-skill/SKILL.md': skillMd('ext-skill', 'Source skill.'),
+};
+/** Copilot and six other agents; Kiro writes namespaced rules flat. */
+const AGENTS = 'claude,codex,cursor,codebuddy,opencode,kiro,copilot';
+const MEMBERS_CURSOR_RULE = '---\ndescription: mine\nalwaysApply: true\n---\nMY OWN TEAM RULE\n';
+/** The member's files: their own, one at the path of a team rule (#993 keeps it), one in Codex's shared skills directory. */
+const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md'];
+
+/**
+ * What git may still show: paths later tickets move or keep out of git (MCP
+ * and OpenCode configs, `.codex/hooks.json`, Copilot's instructions, the docs
+ * mirror). Nothing this ticket's writers deliver is on it.
+ */
+const LATER_TICKETS = [
+  /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
+  /^opencode\.json$/, /^\.opencode\/opencode\.json$/,
+  /^\.codex\/hooks\.json$/,
+  /^\.github\/copilot-instructions\.md$/,
+  /^\.teamai\/docs\//, /^\.teamai\/\.ignore$/,
+];
+const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
+/** A delivered path of each writer and kind this ticket covers, as the member's tools read them. */
+const DELIVERED = [
+  '.claude/rules/fe/fe-rule.md', '.cursor/rules/fe/fe-rule.mdc', '.kiro/steering/fe.fe-rule.md', '.kiro/steering/checkout.checkout-rule.md',
+  '.github/instructions/fe/fe-rule.instructions.md', '.codebuddy/rules/team-rule.md',
+  '.claude/agents/fe-agent.md', '.codex/agents/reviewer.toml', '.github/agents/reviewer.agent.md',
+  '.claude/rules/teamai-context.md', '.cursor/rules/teamai-context.mdc', '.codebuddy/rules/teamai-context.md', '.opencode/teamai-context.md',
+  '.claude/settings.local.json', '.github/hooks/teamai.json',
+  '.claude/skills/teamai/SKILL.md', '.claude/rules/teamai-recall.md', '.claude/agents/teamai-recall.md', '.cursor/rules/teamai-recall.mdc',
+  '.claude/skills/ext-skill/SKILL.md', '.agents/skills/fe-skill/SKILL.md', '.claude/skills/checkout-skill/SKILL.md',
+  '.claude/skills/tracked-skill/extra.md',
+];
+
+/** Status entries that are neither the member's files, a tracked file's change, nor on the allowlist. */
+function unexpected(m: Machine): string[] {
+  return m.status().filter((line) => {
+    const file = line.slice(3);
+    return !line.startsWith(' M ') && !MEMBERS_FILES.includes(file) && !LATER_TICKETS.some((later) => later.test(file));
+  });
+}
+
+/** `files` that git does not ignore in `m`'s business repo (`check-ignore`, the rule git applies to them). */
+function notIgnored(m: Machine, files: string[]): string[] {
+  const ignored = spawnSync('git', ['check-ignore', '--stdin'], {
+    cwd: m.dir, encoding: 'utf8', env: env(m.home), input: files.join('\n'),
+  }).stdout.split('\n');
+  return files.filter((file) => !ignored.includes(file));
+}
+
+function fullMachine(base: string, opts: Partial<MachineOptions> = {}): Machine {
+  return machine(base, {
+    team: FULL_SHARING,
+    files: FULL_TEAM,
+    sources: { ext: EXT_SOURCE },
+    agents: AGENTS,
+    initArgs: ['--role', 'fe', '--project', 'checkout'],
+    committed: { '.claude/skills/tracked-skill/SKILL.md': TRACKED_V1 },
+    business: {
+      'notes.md': 'mine\n',
+      '.cursor/rules/team-rule.mdc': MEMBERS_CURSOR_RULE,
+      '.agents/skills/my-own/SKILL.md': skillMd('my-own', 'Mine.'),
+      // A copy of a team skill another teamai run left in Codex's shared directory: Codex's copy goes there.
+      '.agents/skills/fe-skill/SKILL.md': FE_SKILL,
+    },
+    ...opts,
+  });
+}
+
+describe('every writer keeps what it delivered out of git (#915 ticket 03)', () => {
+  it('after init, pull and a session start, git status lists only the allowlist, and every file of the member\'s stays visible and addable', async () => {
+    const m = fullMachine('acceptance');
+    const steps: Array<[string, () => Promise<Run> | Run | null]> = [
+      ['init', () => null],
+      // A newer team version of the skill the business repo committed long ago, with a file it never had.
+      ['pull', () => {
+        m.teamCommit({ 'skills/fe/tracked-skill/SKILL.md': TRACKED_V2, 'skills/fe/tracked-skill/extra.md': 'Extra.\n' });
+        return m.ok(['pull']);
+      }],
+      ['fast-path pull', () => m.ok(['pull'])],
+      ['session start', () => m.sessionStart()],
+    ];
+    for (const [step, act] of steps) {
+      const output = (await act())?.output ?? '';
+      expect(unexpected(m), `${step}:\n${m.status().join('\n')}\n${output}`).toEqual([]);
+      expect(m.status(), step).toEqual(expect.arrayContaining(MEMBERS_FILES.map((file) => `?? ${file}`)));
+      for (const file of DELIVERED.filter((f) => step !== 'init' || !f.endsWith('extra.md'))) {
+        expect(fs.existsSync(path.join(m.dir, file)), `${step}: ${file}`).toBe(true);
+      }
+      expect(notIgnored(m, DELIVERED), step).toEqual([]);
+    }
+
+    // The tracked SKILL.md's change is visible; the file the team added beside it is not.
+    expect(m.status()).toContain(' M .claude/skills/tracked-skill/SKILL.md');
+    expect(m.git(['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean).sort()).toEqual(
+      expect.arrayContaining(MEMBERS_FILES),
+    );
+    // One line per rule file, never a directory under a rules directory, never `/*`.
+    const lines = m.deliveredLines();
+    expect(lines).toEqual(expect.arrayContaining(['/.cursor/rules/fe/fe-rule.mdc', '/.kiro/steering/fe.fe-rule.md', '/.agents/skills/fe-skill/']));
+    expect(lines.filter((line) => line.endsWith('/*') || (line.endsWith('/') && RULES_DIRS.some((dir) => line.startsWith(dir))))).toEqual([]);
+
+    m.git(['add', '-A']);
+    const staged = m.git(['diff', '--cached', '--name-only']).split('\n').filter(Boolean);
+    expect(staged.filter((file) => !LATER_TICKETS.some((later) => later.test(file))).sort())
+      .toEqual([...MEMBERS_FILES, '.claude/skills/tracked-skill/SKILL.md'].sort());
+
+    // Cleaning the tree leaves teamai's copies where they are.
+    m.git(['stash', '-u']);
+    expect(DELIVERED.filter((file) => !fs.existsSync(path.join(m.dir, file)))).toEqual([]);
+    m.git(['stash', 'pop']);
+    m.git(['reset', '-q']);
+    m.git(['clean', '-fd']);
+    expect(DELIVERED.filter((file) => !fs.existsSync(path.join(m.dir, file)))).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, 'notes.md'))).toBe(false);
+  });
+
+  it('drops the old role\'s and project\'s lines on the next pull, and a copy pull keeps for the member\'s edit becomes visible', () => {
+    // Without the committed skill and the copy in Codex's shared directory: the
+    // switch removes what it no longer delivers, but neither a tracked file's
+    // deletion nor a copy left in `.agents/skills` is this case's subject.
+    const m = fullMachine('switch', {
+      committed: {},
+      business: { 'notes.md': 'mine\n', '.cursor/rules/team-rule.mdc': MEMBERS_CURSOR_RULE, '.agents/skills/my-own/SKILL.md': skillMd('my-own', 'Mine.') },
+    });
+    const listed = (pattern: RegExp): string[] => m.deliveredLines().filter((line) => pattern.test(line));
+    expect(listed(/fe-(skill|rule|agent)/)).not.toEqual([]);
+    expect(listed(/checkout-(skill|rule)/)).not.toEqual([]);
+
+    m.ok(['roles', 'set', 'be']);
+    m.ok(['projects', 'set']);
+    const switched = m.ok(['pull']);
+    expect(listed(/fe-(skill|rule|agent)|checkout-(skill|rule)/), switched.output).toEqual([]);
+    expect(listed(/be-(skill|rule|agent)/)).not.toEqual([]);
+    expect(unexpected(m), switched.output).toEqual([]);
+
+    // The member edits one copy of a rule; the team changes the rule, so pull keeps that copy.
+    const edited = path.join(m.dir, '.claude', 'rules', 'team-rule.md');
+    fs.writeFileSync(edited, `${read(edited)}\nMy note.\n`);
+    m.teamCommit({ 'rules/team-rule.md': rule('Team, revised') });
+    const kept = m.ok(['pull']);
+    expect(kept.output).toContain('team-rule');
+    expect(m.status(), kept.output).toContain('?? .claude/rules/team-rule.md');
+    expect(notIgnored(m, ['.codebuddy/rules/team-rule.md'])).toEqual([]);
+  });
+
+  it('lists .claude/settings.local.json for a co-author choice alone, while teamai\'s entry is in it', () => {
+    const m = machine('coauthor', { team: `${ON}  coAuthor:\n    enabled: false\n`, agents: 'claude' });
+    const local = path.join(m.dir, '.claude', 'settings.local.json');
+    expect(JSON.parse(read(local)).attribution).toEqual({ commit: '', pr: '' });
+    expect(m.status().filter((line) => line.includes('settings.local.json'))).toEqual([]);
+    // A full sync finds the choice already applied, and reads the file to keep it listed.
+    m.ok(['pull', '--force']);
+    expect(m.status().filter((line) => line.includes('settings.local.json'))).toEqual([]);
+
+    // Once teamai's entry is gone from it, the file is the member's alone.
+    fs.writeFileSync(local, `${JSON.stringify({ model: 'mine' }, null, 2)}\n`);
+    m.ok(['pull', '--force']);
+    expect(m.status()).toContain('?? .claude/settings.local.json');
+  });
+
+  it('keeps listing the hook files whose team entries a pull cannot resolve', () => {
+    const m = fullMachine('hooks-unresolved');
+    m.teamCommit({ 'hooks/hooks.yaml': 'hooks: [broken\n' });
+    const pulled = m.ok(['pull']);
+    expect(notIgnored(m, ['.claude/settings.local.json', '.github/hooks/teamai.json']), pulled.output).toEqual([]);
+    expect(unexpected(m), pulled.output).toEqual([]);
+  });
+
+  it('keeps listing an agent copy a full sync holds for its model', () => {
+    const m = machine('held-full', {
+      team: ON,
+      files: {
+        'models/aliases.yaml': 'aliases:\n  strong:\n    claude: { model: opus }\n    codex: { model: gpt-6-sol }\n',
+        'agents/implementer.yaml': 'name: implementer\ndescription: Implements a change\ninstructions: Make the change.\nmodel: strong\n',
+        'agents/helper.yaml': agentYaml('helper'),
+      },
+    });
+    const copies = ['.claude/agents/implementer.md', '.codex/agents/implementer.toml', '.claude/agents/helper.md'];
+    expect(notIgnored(m, copies)).toEqual([]);
+    writeFile(path.join(m.home, '.teamai', 'models', 'aliases.yaml'), 'aliases: [broken\n');
+
+    const held = m.ok(['pull', '--force']);
+    expect(held.output).toContain('Held implementer');
+    expect(notIgnored(m, copies), held.output).toEqual([]);
+  });
+
+  it('a pull with no configured source drops the source lines and leaves the copies visible; a failed source keeps them', () => {
+    const m = fullMachine('sources');
+    const copy = path.join(m.dir, '.claude', 'skills', 'ext-skill');
+    expect(notIgnored(m, ['.claude/skills/ext-skill/SKILL.md'])).toEqual([]);
+
+    if (process.getuid?.() !== 0) {
+      // A source that cannot write its copy keeps what it delivered before.
+      fs.chmodSync(copy, 0o555);
+      try {
+        const failed = m.ok(['pull', '--force']);
+        expect(failed.output).toContain('[source:ext] Pull failed');
+        expect(notIgnored(m, ['.claude/skills/ext-skill/SKILL.md']), failed.output).toEqual([]);
+      } finally {
+        fs.chmodSync(copy, 0o755);
+      }
+    }
+
+    // The team withdraws its last source: the copies stay on disk, and are the member's to keep or delete.
+    m.teamCommit({ 'teamai.yaml': read(path.join(m.seed, 'teamai.yaml')).replace(/^sources:\n(?: {2}.*\n)+/m, '') });
+    const withdrawn = m.ok(['pull']);
+    expect(withdrawn.output).not.toContain('[source:ext]');
+    expect(fs.existsSync(path.join(copy, 'SKILL.md'))).toBe(true);
+    expect(m.status(), withdrawn.output).toContain('?? .claude/skills/ext-skill/SKILL.md');
+    m.git(['add', '-A']);
+    expect(m.git(['diff', '--cached', '--name-only'])).toContain('.claude/skills/ext-skill/SKILL.md');
   });
 });

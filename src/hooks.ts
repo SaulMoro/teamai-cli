@@ -2547,6 +2547,31 @@ export async function reconcileTeamHooksForConfig(
 }
 
 /**
+ * The project files holding teamai's hook entries, as a pull delivered them
+ * (#915): the main checkout's `.claude/settings.local.json` while its manifest
+ * records team hooks there, and Copilot's hook file while it holds teamai's
+ * entries. Read from disk after the reconcile, so a file the pass left as it
+ * was (team hooks unresolved, built-ins already installed) counts too. Self
+ * mode's tracked settings and `.codex/hooks.json` are not among them.
+ */
+export async function deliveredHookFiles(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  if (localConfig.scope !== 'project') return [];
+  const files: string[] = [];
+  const main = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
+  const claudeFile = mainCheckoutHookFile(main, 'claude');
+  if (main && claudeFile && ((await readManifest(main.manifestPath)).claude?.length ?? 0) > 0
+    && await hasTeamaiHooks(claudeFile, 'claude', main.manifestPath)) {
+    files.push(claudeFile);
+  }
+  const copilotHooks = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID]?.hooks;
+  if (copilotHooks) {
+    const file = path.join(resolveToolBaseDir(COPILOT_TOOL_ID, localConfig), copilotHooks);
+    if (await hasTeamaiHooks(file, COPILOT_TOOL_ID, getManagedHooksPath(localConfig))) files.push(file);
+  }
+  return files;
+}
+
+/**
  * Project scope: install teamai's git hook (git-hook.ts) in the repository, so
  * a new worktree gets the team's resources before `git worktree add` returns.
  * User scope installs none: its resources live in HOME, which a new worktree

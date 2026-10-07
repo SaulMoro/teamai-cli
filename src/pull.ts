@@ -15,8 +15,8 @@ import { log, spinner } from './utils/logger.js';
 import { pathExists, readJson, writeJson, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import {
-  applyInstructionPlan, hookLimitProblem, instructionHookChannel, instructionHookChannelInstallable, instructionHookText, planInstructionFiles,
-  registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks,
+  applyInstructionPlan, holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookChannelInstallable, instructionHookText,
+  planInstructionFiles, registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks, type InstructionTarget,
 } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
@@ -901,11 +901,12 @@ async function rerenderOutdatedRules(
   localConfig: LocalConfig,
   items: ResourceItem[],
   scopeLabel: string,
+  recorder?: DeliveryRecorder,
 ): Promise<void> {
   try {
     const key = await checkoutRecordKey(localConfig);
     const state = await loadStateForScope(localConfig);
-    const ledger = await openCheckoutLedger(localConfig, state);
+    const ledger = await openCheckoutLedger(localConfig, state, recorder);
     const handler = getHandler('rules') as RulesHandler;
     const reclaimed = await handler.reclaimLegacyRuleCopies(freshConfig, localConfig, items, ledger);
     // With no record yet, it still rewrites a copy its bytes prove teamai's.
@@ -944,6 +945,7 @@ async function redeployAgentsWithChangedModels(
   scopeLabel: string,
   revisionField: 'lastPullRev' | 'lastInheritedPullRev',
   reported: Set<string>,
+  recorder?: DeliveryRecorder,
 ): Promise<boolean> {
   try {
     const key = await checkoutRecordKey(localConfig);
@@ -952,7 +954,7 @@ async function redeployAgentsWithChangedModels(
     // The full sync that met this collision said so and kept the installed agents.
     if (desired.kind === 'conflict') return false;
     const state = await loadStateForScope(localConfig);
-    const ledger = await openCheckoutLedger(localConfig, state);
+    const ledger = await openCheckoutLedger(localConfig, state, recorder);
     const handler = getHandler('agents') as AgentsHandler;
     const redeploy = await handler.agentsToRedeploy(desired.items, freshConfig, localConfig, ledger);
     for (const { item } of redeploy) await handler.pullItem(item, freshConfig, localConfig, ledger);
@@ -1386,11 +1388,13 @@ async function pullForScope(
           log.success(`[${scopeLabel}] Already synced at ${currentRev}, skipping`);
           // 即使 repo 未变化，仍部署 CLI 内置资源（确保 CLI 升级后新版本 agent/rules 生效）
           const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-          try { const { deployBuiltinAgents } = await import('./builtin-agents.js'); await deployBuiltinAgents(freshConfig, localConfig, { skipRecall }); } catch {}
-          try { const { deployBuiltinRules } = await import('./builtin-rules.js'); await deployBuiltinRules(freshConfig, localConfig, { skipRecall }); } catch {}
+          // The fast path's writers add what they write to the delivered paths (#915).
+          const { recorder } = policy;
+          try { const { deployBuiltinAgents } = await import('./builtin-agents.js'); await deployBuiltinAgents(freshConfig, localConfig, { skipRecall, recorder }); } catch {}
+          try { const { deployBuiltinRules } = await import('./builtin-rules.js'); await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder }); } catch {}
           try {
             const { deployBuiltinSkills } = await import('./builtin-skills.js');
-            await deployBuiltinSkills(freshConfig, localConfig);
+            await deployBuiltinSkills(freshConfig, localConfig, { recorder });
           } catch (e) {
             warnStubNotDeployed(scopeLabel, e);
           }
@@ -1408,7 +1412,7 @@ async function pullForScope(
               log.warn(`[${scopeLabel}] The earlier copy of the team rule teamai-context was not reclaimed: ${(error as Error).message}. Run \`teamai pull --force\` to retry.`);
             }
           }
-          const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel);
+          const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel, false, recorder);
           instructions?.set(localConfig, delivery);
           // Same reason: a machine that already pulled a tombstone with an older
           // CLI keeps the copies that CLI failed to delete, and its stored rev
@@ -1443,12 +1447,12 @@ async function pullForScope(
               // Same reason: a CLI that gives a tool its own rules format must
               // re-render the copies an older one wrote verbatim, and reclaim the
               // ones it left where the tool does not read them (#938, #946).
-              await rerenderOutdatedRules(freshConfig, localConfig, items, scopeLabel);
+              await rerenderOutdatedRules(freshConfig, localConfig, items, scopeLabel, recorder);
             }
           }
           // The repo has not moved, but an agent's model may have (#830).
           if (resourceTypes.includes('agents')) {
-            if (await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel, revisionField, reported) && result) {
+            if (await redeployAgentsWithChangedModels(freshConfig, localConfig, roleContext, scopeLabel, revisionField, reported, recorder) && result) {
               result.agentModelsHeld = true;
             }
           }
@@ -1528,6 +1532,8 @@ async function pullForScope(
         // when the team's last rule is removed. Guarding on items.length > 0
         // would leak those artifacts on the machine after upstream deletion.
         await rulesHandler.pullAllRules(freshConfig, localConfig, items, replaced, ledger);
+        // A rule it failed to write has said so already (see DeliveryRecorder).
+        ledger.recorder?.succeeded('rules');
         if (items.length > 0) {
           log.success(`[${scopeLabel}] Synced ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
@@ -1618,6 +1624,7 @@ async function pullForScope(
         // and leaves them alone too.
         log.warn(`[${scopeLabel}] ${describeDeliveryConflict(desired)}. Agents were not updated this run; the installed ones are kept.`);
         agentsHeld = true;
+        ledger.recorder?.failed('agents');
         if (result) result.resourceSyncFailed = true;
         continue;
       }
@@ -1626,7 +1633,7 @@ async function pullForScope(
       items = await handler.scanTeamForPull(freshConfig, localConfig);
     }
     if (items.length === 0) {
-      if (type === 'skills') ledger.recorder?.succeeded('skills');
+      if (type === 'skills' || type === 'agents') ledger.recorder?.succeeded(type);
       continue;
     }
 
@@ -1673,7 +1680,7 @@ async function pullForScope(
         await handler.pullItem(item, freshConfig, localConfig, ledger);
       }
       // A copy it failed to write has said so already (see DeliveryRecorder).
-      if (type === 'skills') ledger.recorder?.succeeded('skills');
+      if (type === 'skills' || type === 'agents') ledger.recorder?.succeeded(type);
       // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
       if (ledger.held.length > 0) agentModelsHeld = true;
       const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;
@@ -1810,18 +1817,21 @@ async function pullForScope(
   await syncLearningsAndRebuildIndex();
 
   // Steps 3.6-3.8: Deliver team culture, shared instructions and the recall block.
-  const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel, options.dryRun);
+  const delivery = await syncManagedInstructions(freshConfig, localConfig, roleContext, scopeLabel, options.dryRun, ledger.recorder);
   instructions?.set(localConfig, delivery);
 
   // Step 4: Deploy CLI built-in skills
+  // What they write is delivered too (#915); a deployment that failed says so.
+  const { recorder } = ledger;
   if (!options.dryRun) {
     try {
       const { deployBuiltinSkills } = await import('./builtin-skills.js');
-      const deployed = await deployBuiltinSkills(freshConfig, localConfig);
+      const deployed = await deployBuiltinSkills(freshConfig, localConfig, { recorder });
       if (deployed > 0) {
         log.debug(`[${scopeLabel}] Deployed ${deployed} built-in skill(s)`);
       }
     } catch (e) {
+      recorder?.failed('builtin');
       warnStubNotDeployed(scopeLabel, e);
     }
   }
@@ -1831,11 +1841,12 @@ async function pullForScope(
     try {
       const { deployBuiltinRules } = await import('./builtin-rules.js');
       const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall });
+      const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder });
       if (deployed > 0) {
         log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
       }
     } catch (e) {
+      recorder?.failed('builtin');
       log.debug(`[${scopeLabel}] Built-in rules deployment skipped: ${(e as Error).message}`);
     }
   }
@@ -1845,13 +1856,15 @@ async function pullForScope(
     try {
       const { deployBuiltinAgents } = await import('./builtin-agents.js');
       const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-      const deployed = await deployBuiltinAgents(freshConfig, localConfig, { skipRecall });
+      const deployed = await deployBuiltinAgents(freshConfig, localConfig, { skipRecall, recorder });
       if (deployed > 0) {
         log.debug(`[${scopeLabel}] Deployed built-in agents to ${deployed} location(s)`);
       }
     } catch (e) {
+      recorder?.failed('builtin');
       log.debug(`[${scopeLabel}] Built-in agents deployment skipped: ${(e as Error).message}`);
     }
+    recorder?.succeeded('builtin');
   }
 
   // Record the revision only after every resource and knowledge phase has had
@@ -2152,6 +2165,7 @@ async function syncManagedInstructions(
   roleContext: RolePullContext | null,
   scopeLabel: string,
   dryRun = false,
+  recorder?: DeliveryRecorder,
 ): Promise<InstructionDelivery> {
   const { blocks, claudemdFiles } = await resolveInstructionBlocks(config, localConfig, roleContext);
   const resolved = await resolveInstructionTargets(config, localConfig);
@@ -2172,6 +2186,7 @@ async function syncManagedInstructions(
     else log.debug(line);
   }
   for (const failure of failures) log.warn(`[${scopeLabel}] ${failure}`);
+  if (recorder) await reportInstructionFiles(recorder, targets, files);
   let opencodeReady = true;
   try {
     const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, files);
@@ -2198,6 +2213,27 @@ async function syncManagedInstructions(
   if (blocks.culture) log.success('Synced team culture');
   if (blocks.claudemd) log.success(`[${scopeLabel}] Synced shared instructions (${claudemdFiles} file(s))`);
   return { blocks, reached };
+}
+
+/**
+ * The `teamai-context` files teamai owns and that hold its blocks after this
+ * pass, as delivered (#915). An owned path with no blocks, a file of the
+ * member's teamai left alone (`blocked`) and a configured `claudemd` (the
+ * team's file) are not; a write that failed fails the writer.
+ */
+async function reportInstructionFiles(
+  recorder: DeliveryRecorder,
+  targets: readonly InstructionTarget[],
+  files: readonly { path: string; status: string }[],
+): Promise<void> {
+  for (const file of files) {
+    if (file.status === 'failed') recorder.failed('instructions');
+    const target = targets.find((candidate) => candidate.path === file.path);
+    if (target?.owned && (file.status === 'written' || file.status === 'current') && await holdsInstructionBlocks(file.path)) {
+      recorder.report('instructions', file.path);
+    }
+  }
+  recorder.succeeded('instructions');
 }
 
 /**
@@ -2596,7 +2632,7 @@ export async function pull(
   // what self-heals new built-in hooks and applies hooks.yaml changes on every
   // session start. In project mode user is null, even when safe resources are
   // inherited, so executable hook configuration is never composed implicitly.
-  startupErrors.push(...await reconcileHooksAllScopes(reconcileUser, reconcileProject, options, instructions));
+  startupErrors.push(...await reconcileHooksAllScopes(reconcileUser, reconcileProject, options, instructions, deliveryRecorder));
 
   // 3.6. Reconcile team MCP servers. Outside pullForScope for the same reason as
   // hooks. User-scope MCP remains isolated in project mode.
@@ -2617,7 +2653,7 @@ export async function pull(
   // Co-Authored-By / attribution trailer on its commits?). Outside pullForScope
   // for the same reason as hooks/MCP; write-only, so it self-heals but never
   // strips a trailer once the team drops the policy.
-  await reconcileCoAuthorAllScopes(reconcileUser, reconcileProject, options);
+  await reconcileCoAuthorAllScopes(reconcileUser, reconcileProject, options, deliveryRecorder);
 
   // 4. Auto-report usage data to all active scopes. Skill usage lives in each
   //    scope's own file (`<dataHome>/usage.jsonl`, the user scope's
@@ -2714,7 +2750,8 @@ export async function pull(
   if (sourceConfig) {
     try {
       const { pullSources } = await import('./source.js');
-      await pullSources(sourceConfig, options);
+      // Only what the project scope delivers is kept out of git (#915).
+      await pullSources(sourceConfig, options, sourceConfig === reconcileProject ? deliveryRecorder : undefined);
     } catch (e) {
       log.debug(`Source pull skipped: ${(e as Error).message}`);
       startupErrors.push(`Source skills: ${(e as Error).message}`);
@@ -2911,6 +2948,8 @@ async function reconcileHooksAllScopes(
   projectConfig: LocalConfig | null,
   options: GlobalOptions,
   instructions: Map<LocalConfig, InstructionDelivery>,
+  /** The project scope's (#915). */
+  recorder?: DeliveryRecorder,
 ): Promise<string[]> {
   const errors: string[] = [];
   // A dry run still resolves the entries, so the warnings a maintainer runs
@@ -2919,19 +2958,30 @@ async function reconcileHooksAllScopes(
   // inside reconcileTeamHooksForConfig (#822).
   const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
   for (const localConfig of scopes) {
+    const scopeRecorder = localConfig === projectConfig && !options.dryRun ? recorder : undefined;
     try {
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
       if (!teamConfig) {
+        scopeRecorder?.failed('hooks');
         errors.push(`[${localConfig.scope}] Hooks: team config could not be loaded`);
         continue;
       }
-      const { reconcileTeamHooksForConfig } = await import('./hooks.js');
-      const reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
-        auto: true,
-        silent: options.silent,
-        filterAgents: localConfig.enabledAgents,
-        dryRun: options.dryRun,
-      });
+      const { deliveredHookFiles, reconcileTeamHooksForConfig } = await import('./hooks.js');
+      let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
+      try {
+        reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
+          auto: true,
+          silent: options.silent,
+          filterAgents: localConfig.enabledAgents,
+          dryRun: options.dryRun,
+        });
+      } finally {
+        // What holds teamai's hook entries now, a file this pass left alone included (#915).
+        if (scopeRecorder) {
+          for (const file of await deliveredHookFiles(teamConfig, localConfig)) scopeRecorder.report('hooks', file);
+        }
+      }
+      scopeRecorder?.succeeded('hooks');
       if (!reconciled.ok) errors.push(`[${localConfig.scope}] Team hooks could not be resolved`);
       if (reconciled.ok && reconciled.defs.length > 0) {
         // Same preview rule as the user-facing line: a dry run resolved and
@@ -2969,6 +3019,7 @@ async function reconcileHooksAllScopes(
         }
       }
     } catch (e) {
+      scopeRecorder?.failed('hooks');
       log.debug(`[${localConfig.scope}] Hook reconcile skipped: ${(e as Error).message}`);
       errors.push(`[${localConfig.scope}] Hooks: ${(e as Error).message}`);
     }
@@ -3105,16 +3156,28 @@ async function reconcileCoAuthorAllScopes(
   userConfig: LocalConfig | null,
   projectConfig: LocalConfig | null,
   options: GlobalOptions,
+  /** The project scope's (#915). */
+  recorder?: DeliveryRecorder,
 ): Promise<void> {
   if (options.dryRun) return;
   const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
   for (const localConfig of scopes) {
+    const scopeRecorder = localConfig === projectConfig ? recorder : undefined;
     try {
       const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-      if (!teamConfig) continue;
-      const { reconcileCoAuthorForConfig } = await import('./coauthor-reconcile.js');
+      if (!teamConfig) {
+        scopeRecorder?.failed('coauthor');
+        continue;
+      }
+      const { coAuthorLocalSettingsFile, reconcileCoAuthorForConfig } = await import('./coauthor-reconcile.js');
       const state = await loadStateForScope(localConfig);
       const { changes, managed } = await reconcileCoAuthorForConfig(teamConfig, localConfig, state);
+      if (scopeRecorder) {
+        // Read back from the file: the "already applied" skip does not read it.
+        const owned = await coAuthorLocalSettingsFile(teamConfig, localConfig, managed);
+        if (owned) scopeRecorder.report('coauthor', owned);
+        scopeRecorder.succeeded('coauthor');
+      }
 
       const applied = changes.filter((c) => c.action === 'updated');
       for (const c of changes) {
@@ -3138,6 +3201,7 @@ async function reconcileCoAuthorAllScopes(
         log.info(`Co-author trailer ${verb} for ${tools.join(', ')}. Restart your AI tool session to apply.`);
       }
     } catch (e) {
+      scopeRecorder?.failed('coauthor');
       log.debug(`[${localConfig.scope}] co-author reconcile skipped: ${(e as Error).message}`);
     }
   }

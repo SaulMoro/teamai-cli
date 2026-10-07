@@ -9,6 +9,7 @@ import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { getUserHome } from './utils/home.js';
 import { ALL_SUPPORTED_TOOLS, agentStemFromFilename, renderForTool, reverseFromClaude } from './resources/agent-format.js';
 import type { ToolName } from './resources/agent-format.js';
+import type { DeliveryRecorder } from './git-exclude-delivered.js';
 
 // ─── Built-in agents deployment ──────────────────────────
 //
@@ -92,7 +93,7 @@ async function removeStaleAgentSiblings(targetAgentsDir: string, stem: string, t
 export async function deployBuiltinAgents(
   teamConfig: TeamaiConfig,
   localConfig?: LocalConfig,
-  options?: { skipRecall?: boolean },
+  options?: { skipRecall?: boolean; recorder?: DeliveryRecorder },
 ): Promise<number> {
   const builtinDir = getBuiltinAgentsDir();
   if (!await pathExists(builtinDir)) {
@@ -141,6 +142,7 @@ export async function deployBuiltinAgents(
     try {
       await ensureDir(targetAgentsDir);
     } catch (e) {
+      options?.recorder?.failed('builtin');
       log.warn(`Failed to create agents dir for ${tool}: ${(e as Error).message}`);
       continue;
     }
@@ -163,8 +165,10 @@ export async function deployBuiltinAgents(
         await removeStaleAgentSiblings(targetAgentsDir, stem, rendered.ext);
         const dest = path.join(targetAgentsDir, `${stem}${rendered.ext}`);
         await writeFile(dest, rendered.content);
+        options?.recorder?.report('builtin', dest);
         deployed++;
       } catch (e) {
+        options?.recorder?.failed('builtin');
         log.warn(`Failed to deploy built-in agent ${file} to ${tool}: ${(e as Error).message}`);
       }
     }
