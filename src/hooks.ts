@@ -493,7 +493,7 @@ export async function migrateLegacyManagedHooks(localConfig: LocalConfig): Promi
     await writeJson(manifestPath, manifest);
   }
   if (Object.keys(legacy).length === 0) {
-    const { gitTracks } = await import('./mcp-git-exclude.js');
+    const { gitTracks } = await import('./git-exclude.js');
     if ((await gitTracks(legacyPath)).kind === 'untracked') {
       await rm(legacyPath, { force: true });
       return;

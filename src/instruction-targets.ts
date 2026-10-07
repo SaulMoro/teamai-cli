@@ -7,7 +7,7 @@ import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import {
   opencodeClaudeFallback, opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructions,
 } from './resources/opencode-config.js';
-import { gitTracking, gitTracks } from './mcp-git-exclude.js';
+import { gitTracking, gitTracks } from './git-exclude.js';
 import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { getHermesHome } from './hermes-home.js';
 import { getHermesSoulPath } from './hermes-config.js';

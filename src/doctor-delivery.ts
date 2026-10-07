@@ -998,7 +998,7 @@ export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<C
   if (names.length === 0) return [];
 
   const { resolveAnchors } = await import('./utils/git.js');
-  const { realFilePath } = await import('./mcp-git-exclude.js');
+  const { realFilePath } = await import('./git-exclude.js');
   const root = await realFilePath(projectRoot);
   const anchors = await resolveAnchors(projectRoot);
   const main = anchors?.projectAnchor ?? root;
@@ -1034,7 +1034,7 @@ export async function buildMcpGitExcludeCheck(ctx: DoctorContext): Promise<Check
     earlierMappedMcpTargets, earlierMappedMcpFileEvidence, ownedByMappers, unrecordedMcpTool, unmappedMcpDefaults, unrecordedUnmappedMcpDefaults, unclaimedMcpServers,
   } = await import('./mcp-reconcile.js');
   const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
-  const { gitPathOf, gitTracking, gitTracks } = await import('./mcp-git-exclude.js');
+  const { gitPathOf, gitTracking, gitTracks } = await import('./git-exclude.js');
   const { sameServerKey } = await import('./resources/mcp-format.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
   const { resolveEntriesFor } = await import('./namespaced-entries.js');

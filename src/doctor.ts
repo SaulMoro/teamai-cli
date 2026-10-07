@@ -620,7 +620,7 @@ async function buildGitHookChecks(localConfig: LocalConfig, stage: CheckStage): 
 async function buildTrackedHookIndexCheck(localConfig: LocalConfig): Promise<Check[]> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return [];
   const root = localConfig.projectRoot;
-  const { gitTracks } = await import('./mcp-git-exclude.js');
+  const { gitTracks } = await import('./git-exclude.js');
   const legacyFiles = [
     { file: legacyManagedHooksPath(root), what: 'hook index', after: 'teamai pull deletes it once nothing in it is needed' },
     { file: path.join(root, '.teamai', 'teamai.lock'), what: 'package lock', after: 'the next `teamai packages install` or session start deletes it' },
