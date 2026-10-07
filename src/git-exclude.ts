@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { execCommand, type ExecResult } from './utils/exec.js';
-import { pathExists, readFileSafe, writeFileAtomic } from './utils/fs.js';
+import { pathExists, readFileIfExists, readFileSafe, writeFileAtomic } from './utils/fs.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
 
 // ─── Git exclude blocks ──────────────────────────────────────
@@ -314,13 +314,40 @@ export class NotWritableError extends Error {
 }
 
 /**
+ * `file` exists but could not be read. Never taken for an empty file: a
+ * rewrite from empty would drop every line the member wrote there.
+ */
+export class NotReadableError extends Error {
+  constructor(readonly file: string, readonly error: string) {
+    super(`${file} cannot be read (${error})`);
+    this.name = 'NotReadableError';
+  }
+}
+
+/**
+ * `file`'s content, or null when it does not exist (ENOENT, or ENOTDIR: a
+ * parent is a file). Throws `NotReadableError` for any other read failure.
+ */
+async function readExisting(file: string): Promise<string | null> {
+  try {
+    return await readFileIfExists(file);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOTDIR') return null;
+    throw new NotReadableError(file, code ?? (e instanceof Error ? e.message : String(e)));
+  }
+}
+
+/**
  * Rewrite `file` with `edit` (null: leave it as it is), holding a lock
  * across the read and an atomic write: the worktrees of a repository share
  * `.git/info/exclude`, so two commands adding different paths must not drop each other's.
  * A lock still held after the wait writes nothing: an unlocked write could drop
  * the holder's pattern, leaving that path unprotected. `mode` forces the file's
  * mode; without it the file keeps its own. Throws `NotWritableError`, without
- * waiting, when the file's directory cannot be created.
+ * waiting, when the file's directory cannot be created, and `NotReadableError`,
+ * writing nothing, when the file exists but cannot be read. A missing file is
+ * created.
  */
 export async function updateFileLocked(
   file: string,
@@ -341,7 +368,7 @@ export async function updateFileLocked(
   }
   if (!held) return 'locked';
   try {
-    const next = edit((await readFileSafe(file)) ?? '');
+    const next = edit((await readExisting(file)) ?? '');
     if (next === null) return 'unchanged';
     await writeFileAtomic(file, next, options);
     return 'written';
@@ -471,6 +498,7 @@ class GitContext {
 export type GitExcludeWrite =
   | { kind: 'written' | 'unchanged' | 'locked' | 'pending' }
   | { kind: 'notWritable'; path: string; message: string }
+  | { kind: 'notReadable'; path: string; message: string }
   | { kind: 'writeFailed'; error: string };
 
 /** A checkout where git could not say what it tracks or ignores: its paths keep their lines (the safe direction). */
@@ -556,7 +584,13 @@ async function writeOwnerLines(
   next: (current: string[]) => string[] | null,
   dryRun = false,
 ): Promise<{ write: GitExcludeWrite; added: string[]; dropped: string[]; damaged: DamagedMarker[] }> {
-  const before = (await readFileSafe(excludeFile)) ?? '';
+  let before: string;
+  try {
+    before = (await readExisting(excludeFile)) ?? '';
+  } catch (e) {
+    if (!(e instanceof NotReadableError)) throw e;
+    return { write: { kind: 'notReadable', path: excludeFile, message: e.message }, added: [], dropped: [], damaged: [] };
+  }
   const parsed = parseExclude(before);
   const damaged = parsed.damaged.filter((d) => d.owner === owner);
   const diff = (current: string[], lines: string[]): { added: string[]; dropped: string[] } => ({
@@ -586,6 +620,7 @@ async function writeOwnerLines(
     return { write: { kind: write }, ...changes, damaged };
   } catch (e) {
     if (e instanceof NotWritableError) return { write: { kind: 'notWritable', path: e.blocker, message: e.message }, ...changes, damaged };
+    if (e instanceof NotReadableError) return { write: { kind: 'notReadable', path: excludeFile, message: e.message }, ...changes, damaged };
     return { write: { kind: 'writeFailed', error: e instanceof Error ? e.message : String(e) }, ...changes, damaged };
   }
 }
@@ -656,6 +691,7 @@ export type GitExcludeEnsure =
   | ({ kind: 'tracked' } & Explained)
   | ({ kind: 'reincluded'; rule: ReincludingRule | null } & Explained)
   | ({ kind: 'notWritable'; path: string } & Explained)
+  | ({ kind: 'notReadable'; path: string; error: string } & Explained)
   | ({ kind: 'locked' } & Explained)
   | ({ kind: 'gitFailed'; error: string } & Explained)
   | ({ kind: 'writeFailed'; error: string } & Explained)
@@ -741,7 +777,7 @@ async function ensureOne(
   let write: ExcludeUpdate;
   try {
     if (options.dryRun) {
-      if (addLine(ownerLines(parseExclude((await readFileSafe(excludeFile)) ?? ''), owner) ?? []) !== null) {
+      if (addLine(ownerLines(parseExclude((await readExisting(excludeFile)) ?? ''), owner) ?? []) !== null) {
         // A negated rule in a .gitignore outranks .git/info/exclude: the line would change nothing.
         const rule = await reincludingRule(landed, placement.placed.root);
         return { result: rule && path.basename(rule.source) === '.gitignore' ? reincluded(await gitPathOf(file), rule, rerun) : { kind: 'pending' } };
@@ -755,6 +791,9 @@ async function ensureOne(
     }
   } catch (e) {
     if (e instanceof NotWritableError) return { result: notWritable(e.blocker, e.notDirectory) };
+    if (e instanceof NotReadableError) {
+      return { result: { kind: 'notReadable', path: excludeFile, error: e.error, reason: e.message, fix: `Make ${excludeFile} readable, then ${rerun}.` } };
+    }
     const error = e instanceof Error ? e.message : String(e);
     return { result: { kind: 'writeFailed', error, reason: `adding it to ${excludeFile} failed: ${error}`, fix: retry } };
   }
@@ -824,7 +863,14 @@ export async function remove(
   const results: GitExcludeFileRemoval[] = [];
   const drop: string[] = [];
   for (const excludeFile of files) {
-    const content = await readFileSafe(excludeFile);
+    let content: string | null;
+    try {
+      content = await readExisting(excludeFile);
+    } catch (e) {
+      if (!(e instanceof NotReadableError)) throw e;
+      results.push({ excludeFile, write: { kind: 'notReadable', path: excludeFile, message: e.message }, removed: [], kept: [], damaged: [] });
+      continue;
+    }
     if (content === null) {
       results.push({ excludeFile, write: { kind: 'missing' }, removed: [], kept: [], damaged: [] });
       drop.push(excludeFile);
@@ -869,7 +915,9 @@ export async function remove(
             (kind): GitExcludeWrite => ({ kind }),
             (e: unknown): GitExcludeWrite => e instanceof NotWritableError
               ? { kind: 'notWritable', path: e.blocker, message: e.message }
-              : { kind: 'writeFailed', error: e instanceof Error ? e.message : String(e) },
+              : e instanceof NotReadableError
+                ? { kind: 'notReadable', path: excludeFile, message: e.message }
+                : { kind: 'writeFailed', error: e instanceof Error ? e.message : String(e) },
           ),
       });
     }

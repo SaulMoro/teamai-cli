@@ -422,6 +422,65 @@ describe('git exclude blocks (#915)', () => {
     });
   });
 
+  // A write-only file passes the writability check, so only the read can tell it is there.
+  describe.skipIf(process.getuid?.() === 0)('an exclude file that exists but cannot be read', () => {
+    const member = 'mine/\n# [teamai:delivered:start]\n/old.md\n# [teamai:delivered:end]\n';
+
+    beforeEach(async () => {
+      await fse.outputFile(excludeFile, member);
+      await fse.outputFile(inRepo('a.md'), 'a\n');
+      await fse.chmod(excludeFile, 0o200);
+    });
+
+    afterEach(async () => {
+      await fse.chmod(excludeFile, 0o644);
+    });
+
+    it('fails ensure explicitly and leaves the member\'s lines in place', async () => {
+      const owner = memoryOwner('credentials');
+
+      const [{ result }] = await ensure(owner, [inRepo('models.json')]);
+
+      expect(result).toMatchObject({
+        kind: 'notReadable',
+        path: excludeFile,
+        reason: expect.stringContaining(`${excludeFile} cannot be read`),
+        fix: `Make ${excludeFile} readable, then run \`teamai pull\` again.`,
+      });
+      expect(owner.files).toEqual([]);
+      await fse.chmod(excludeFile, 0o644);
+      expect(await read()).toBe(member);
+    });
+
+    it('fails a dry-run ensure the same way', async () => {
+      const [{ result }] = await ensure({ name: 'credentials' }, [inRepo('models.json')], { dryRun: true });
+
+      expect(result).toMatchObject({ kind: 'notReadable', path: excludeFile });
+    });
+
+    it('syncs nothing into it, says why, and keeps it recorded', async () => {
+      const owner = memoryOwner('delivered', [excludeFile]);
+
+      const result = await sync(owner, [inRepo('a.md')]);
+
+      expect(result.files[0].write).toEqual({ kind: 'notReadable', path: excludeFile, message: expect.stringContaining(`${excludeFile} cannot be read`) });
+      expect(owner.files).toEqual([excludeFile]);
+      await fse.chmod(excludeFile, 0o644);
+      expect(await read()).toBe(member);
+    });
+
+    it('removes nothing from it, and does not take it for a missing file', async () => {
+      const owner = memoryOwner('delivered', [excludeFile]);
+
+      const [removal] = await remove(owner);
+
+      expect(removal.write).toMatchObject({ kind: 'notReadable', path: excludeFile });
+      expect(owner.files).toEqual([excludeFile]);
+      await fse.chmod(excludeFile, 0o644);
+      expect(await read()).toBe(member);
+    });
+  });
+
   describe('two owners in one exclude file', () => {
     const provider = `providers/http/${encodeOwnerSegment('x')}`;
 
