@@ -853,6 +853,8 @@ export class AgentsHandler extends ResourceHandler {
       for (const localName of localNames) {
         for (const ext of AGENT_FILE_EXTENSIONS) {
           const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
+          // A link is the member's, whatever the records say: teamai never deletes one (#993).
+          if (await isLink(filePath)) continue;
           // The author's root copy is this agent's by the placement record, which proves it here.
           if (localName === name && await pathExists(filePath)
             && !await ownsAgentCopy(localConfig, filePath, stem, tool, previous)) {
@@ -1008,6 +1010,8 @@ export class AgentsHandler extends ResourceHandler {
         const expected = await this.renderedForTool(item, tool, aliases);
         if (!expected || activeDestinations.has(`${item.name}${expected.ext}`)) continue;
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
+        // A link is the member's, whatever its target holds (#993).
+        if (await isLink(deployed)) continue;
         const current = await readFileSafe(deployed);
         if (current === null) continue;
         const recorded = records[item.name]?.[tool];

@@ -274,6 +274,34 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(pulled.output).toContain(`Kept ${link}: the team removed docs/guide.md`);
   });
 
+  it('uninstall removes teamai\'s docs from the mirror and keeps the member\'s files, directories and links, naming them', () => {
+    const t = team('docs-uninstall', { 'docs/guide.md': '# Guide\n', 'docs/sub/deep.md': '# Deep\n', 'docs/old.md': '# Old\n' });
+    const dir = business('docs-uninstall-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    t.publish({ 'docs/old.md': null }, 'remove old');
+    teamaiOk(['pull'], dir);
+    // At a removed doc's path, at paths the team never had, and a link to a file of the member's.
+    writeFile(path.join(docs, 'old.md'), 'MY OLD NOTES\n');
+    writeFile(path.join(docs, 'notes.md'), 'MY NOTES\n');
+    writeFile(path.join(docs, 'mine', 'draft.md'), 'MY DRAFT\n');
+    const external = path.join(sandbox, `docs-uninstall-${attempt}.md`);
+    writeFile(external, '# Guide\n');
+    fs.symlinkSync(external, path.join(docs, 'linked.md'));
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+
+    expect(fs.existsSync(path.join(docs, 'guide.md')), uninstalled.output).toBe(false);
+    expect(fs.existsSync(path.join(docs, 'sub'))).toBe(false);
+    expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
+    expect(read(path.join(docs, 'notes.md'))).toBe('MY NOTES\n');
+    expect(read(path.join(docs, 'mine', 'draft.md'))).toBe('MY DRAFT\n');
+    expect(fs.lstatSync(path.join(docs, 'linked.md')).isSymbolicLink()).toBe(true);
+    expect(read(external)).toBe('# Guide\n');
+    expect(uninstalled.output).toContain(`Kept ${path.join(docs, 'old.md')}: it is not teamai's (no delivery record, `
+      + 'and it matches no team version of docs/old.md), so uninstall left it.');
+  });
+
   it('keeps a member\'s directory holding a link where the team deleted a doc file, without following it', () => {
     const t = team('docs-dir-link', { 'docs/guide': '# Guide file\n', 'docs/keep.md': '# Keep\n' });
     const dir = business('docs-dir-link-biz');
@@ -306,7 +334,8 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     const initRun = init(t, dir);
     expect(fs.lstatSync(path.join(skillDir, 'SKILL.md')).isSymbolicLink()).toBe(true);
     expect(read(external)).toBe(skillMd('team-skill', 'Team.'));
-    expect(initRun.output).toContain(`Kept ${skillDir}: it is not teamai's`);
+    // Named by the link itself (#993).
+    expect(initRun.output).toContain(`Kept ${path.join(skillDir, 'SKILL.md')}: it is a link of yours, so teamai does not replace it.`);
   });
 
   it('keeps a member\'s link in place of a team skill directory through pull, remove and uninstall, and names it', () => {

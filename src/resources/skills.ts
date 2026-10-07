@@ -5,6 +5,7 @@ import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, Team
 import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { warnOnce } from '../utils/warn-once.js';
 import { getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { isCliOwnedSkillName } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
@@ -17,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, describeMembersLink, isLink, judgeCopy, keepsEditedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -829,7 +830,13 @@ export class SkillsHandler extends ResourceHandler {
       const { tool, dest } = target;
       try {
         if (ledger && await keepsEditedCopy(ledger, item, target)) continue;
-        await copyDir(item.sourcePath, dest);
+        // With no ledger (the local agent's install), nothing else judges a link of the member's there (#993).
+        const membersLink = ledger ? null : await membersLinkAt(dest);
+        if (membersLink !== null) {
+          warnOnce(describeMembersLink(membersLink, item.relativePath));
+          continue;
+        }
+        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)));
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
@@ -880,7 +887,8 @@ export class SkillsHandler extends ResourceHandler {
       }
       for (const skillDir of skillDirs) {
         if (!await pathExists(skillDir)) continue;
-        if (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources)) {
+        // A link is the member's even at a built-in's name, so it is judged before the name.
+        if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
           owned.push({ tool, skillDir });
         } else {
           log.warn(describeMembersDirLeft(skillDir, `skills/${name}`, 'remove'));

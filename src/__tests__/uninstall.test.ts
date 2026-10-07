@@ -200,6 +200,8 @@ async function setupFixture(tmpDir: string) {
   // ~/.teamai/ directory
   await fse.ensureDir(path.join(teamaiHome, 'docs'));
   await fse.writeFile(path.join(teamaiHome, 'docs', 'guide.md'), '# Guide');
+  // The team doc that copy mirrors: its history proves the copy teamai's (#993).
+  await fse.outputFile(path.join(repoPath, 'docs', 'guide.md'), '# Guide');
   await fse.writeFile(path.join(teamaiHome, 'config.yaml'), 'repo: test');
   await fse.writeFile(path.join(teamaiHome, 'state.json'), '{}');
   await fse.writeFile(path.join(teamaiHome, 'usage.jsonl'), '');

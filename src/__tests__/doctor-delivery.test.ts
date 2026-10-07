@@ -505,7 +505,8 @@ describe('doctor — skills delivered on disk', () => {
       expect(await docsCheck()).toBeUndefined();
     });
 
-    it('reports a stale directory link without traversing its target', async () => {
+    // Changed in #993 from reporting it as stale: pull keeps a member's link at a path the team never had.
+    it('does not call a member\'s directory link at a path the team never had stale, nor traverse its target (#993)', async () => {
       const outside = path.join(tempDir, 'outside');
       await fse.outputFile(path.join(outside, 'keep.md'), 'outside');
       await fse.ensureDir(path.join(homeDir, 'team-docs'));
@@ -513,9 +514,9 @@ describe('doctor — skills delivered on disk', () => {
       // The history shows the team never had docs/linked (#993).
       commitTeamRepo(repoPath);
       const check = await docsCheck();
-      expect(await check!.check()).toBe(false);
-      expect(check!.fix).toContain('linked');
-      expect(check!.fix).not.toContain('keep.md');
+      expect(await check!.check()).toBe(true);
+      expect(check!.fix ?? '').not.toContain('linked');
+      expect(check!.fix ?? '').not.toContain('keep.md');
       expect(await fse.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('outside');
     });
 

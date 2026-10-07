@@ -506,7 +506,13 @@ that name (root or any namespace, SKILL.md also with its frontmatter repaired),
 so one file of the member's makes it the member's, whole. The docs mirror keeps
 no record: a file at a team doc's path is teamai's only when it is a version
 of that doc (`membersDocs`), and the mirror prune deletes a file at a removed
-team doc's path only on the same proof (`isPrunableDoc`). A forced
+team doc's path only on the same proof (`isPrunableDoc`). teamai writes files,
+never links: a link at any delivered path (skill directory, rule or agent file,
+docs mirror entry, source skill destination), or anywhere inside a delivered
+skill directory, is the member's, never followed, written through, replaced or
+deleted by pull, `remove`, `uninstall` or a cleanup sweep, and pull names it
+(`describeMembersLink`). The mirror prune keeps a link at a path the team never
+had, and delivery skips a link inside a team or source skill. A forced
 full sync elsewhere keeps each checkout's `delivered`.
 `doctor` does not fail on a kept copy; next to another problem it lists one
 as "changed by you (kept by pull)". A member's own file fails the delivery
@@ -532,7 +538,10 @@ same rule in every tool's skills root (#993): `teamai remove skills <name>` and
 `uninstall` delete a directory only when a file under it is on the checkout's
 record (edited or not) or `isTeamaiSkillCopy` proves it (`ownsSkillDir`), and
 name each one they leave; uninstall also deletes a built-in's name and a name
-the local agent's manifest lists. Pull's sweep of the namespace-nested copies
+the local agent's manifest lists. `uninstall` removes from the docs mirror only
+what the history proves teamai's (`removeTeamDocs`: a file or link at `<rel>`
+that is a version of `docs/<rel>`), keeps and names the rest, and leaves the
+directories holding it, inside the data home too. Pull's sweep of the namespace-nested copies
 earlier releases left of an excluded skill deletes one only when
 `judgeRemoval` returns `remove`, and leaves the rest silently, as pull never
 delivers there. `judgeRemoval` sorts a copy of a resource no longer
