@@ -830,8 +830,10 @@ export class SkillsHandler extends ResourceHandler {
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
+        ledger?.recorder?.report('skills', dest);
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {
+        ledger?.recorder?.failed('skills');
         log.warn(`Failed to sync skill ${item.name} to ${tool}: ${(e as Error).message}`);
       }
     }

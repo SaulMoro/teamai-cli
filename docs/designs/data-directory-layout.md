@@ -95,6 +95,10 @@ and takes the unchanged-repo fast path only when the shared `lastPullRev` and th
 checkout's own revision and tool targets all match. A worktree added after the
 last pull therefore gets a full sync on its first pull, and two checkouts with
 different tool directories no longer force a full sync on each other (#807).
+The fast path also needs the entry's `gitExcludePaths`, what each writer of
+the pull delivered into the checkout (the paths teamai's `delivered` git
+exclude block lists, #915). An entry saved by an older CLI has none, so the
+first pull after the upgrade is a full sync, whatever `sharing.gitExclude` says.
 Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
 roles, projects, init and bootstrap apply their changes: the pull that finds
 `lastPullRev` cleared resets every other checkout's entry to an empty `rev`,

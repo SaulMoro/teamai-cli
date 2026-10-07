@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
+import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -81,6 +82,12 @@ export interface DeliveryLedger {
    * `everyTool` when no tool the agent targets received it.
    */
   readonly held: { name: string; reason: string; tools?: string[]; everyTool: boolean }[];
+  /**
+   * Where a writer reports the paths it delivered into the project checkout
+   * and whether it delivered all it meant to (#915). Only pull's project
+   * scope sets it; a ledger without one (another command) reports nothing.
+   */
+  readonly recorder?: DeliveryRecorder;
 }
 
 export function openLedger(

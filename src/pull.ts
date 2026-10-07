@@ -46,6 +46,7 @@ import {
   getDataHome,
   getProjectSearchIndexPath,
   isRecallEnabled,
+  isGitExcludeEnabled,
   isAgentExcluded,
   scopedToolPaths,
   SYNC_LOCK_FILENAME,
@@ -66,6 +67,7 @@ import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
+import { applyDeliveredGitExclude, createDeliveryRecorder, type DeliveryRecorder } from './git-exclude-delivered.js';
 
 // A timed-out report still owns its success bookkeeping. Do not start another
 // batch in this process until it settles and finishes consuming its events.
@@ -865,8 +867,8 @@ function setAgentModels(record: CheckoutRecord, agentModels: AgentModelRecords):
   else delete record.agentModels;
 }
 
-/** The ledger a pull of that checkout starts from (see DeliveryLedger). */
-async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Promise<DeliveryLedger> {
+/** The ledger a pull of that checkout starts from (see DeliveryLedger), carrying the pull's `recorder` when it has one. */
+async function openCheckoutLedger(localConfig: LocalConfig, state?: State, recorder?: DeliveryRecorder): Promise<DeliveryLedger> {
   const key = await checkoutRecordKey(localConfig);
   const records = (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
   const record = key ? records[key] : undefined;
@@ -874,7 +876,8 @@ async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Prom
   const otherRecords: DeliveredHashes = Object.assign({}, ...Object.entries(records)
     .filter(([other]) => other !== key)
     .map(([, other]) => other.delivered ?? {}));
-  return openLedger(record?.delivered, record?.agentModels, otherRecords);
+  const ledger = openLedger(record?.delivered, record?.agentModels, otherRecords);
+  return recorder ? { ...ledger, recorder } : ledger;
 }
 
 /**
@@ -1023,6 +1026,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
       targets: record.targets,
       ...(record.delivered ? { delivered: record.delivered } : {}),
       ...(record.agentModels ? { agentModels: record.agentModels } : {}),
+      ...(record.gitExcludePaths ? { gitExcludePaths: record.gitExcludePaths } : {}),
     };
     return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
   }));
@@ -1041,6 +1045,8 @@ async function pullForScope(
   policy: {
     resourceTypes?: readonly ResourceType[];
     revisionField?: 'lastPullRev' | 'lastInheritedPullRev';
+    /** What this scope's writers deliver into the project checkout (#915): the project scope's alone. */
+    recorder?: DeliveryRecorder;
   } = {},
   /** Set to `{ completed: true }` on a real (non-dry-run) sync. See pull(). */
   result?: { completed: boolean; docsSyncFailed: boolean; agentModelsHeld: boolean; teamRepoFailed?: boolean; resourceSyncFailed?: boolean },
@@ -1363,7 +1369,12 @@ async function pullForScope(
       const recorded = workspaceKey
         ? state.lastPullByWorkspace?.[workspaceKey]
         : { rev: state[revisionField], targets: state[targetsField] };
-      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev) {
+      // A checkout record without `gitExcludePaths`, from an older CLI, has no
+      // list of what pull delivered into it yet: only a full sync writes one (#915).
+      const listed = !workspaceKey || !policy.recorder
+        || state.lastPullByWorkspace?.[workspaceKey]?.gitExcludePaths !== undefined;
+      if (!listed) log.debug(`[${scopeLabel}] No record of the delivered paths yet, syncing`);
+      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev && listed) {
         currentTargets = await getInstalledResourceTargets(freshConfig, localConfig);
         const previousTargets = recorded.targets;
         const syncedTargets = new Set(previousTargets ?? []);
@@ -1472,7 +1483,9 @@ async function pullForScope(
 
   // What teamai last wrote into this checkout: a copy changed since is kept,
   // and this pull's writes are recorded when the state is saved (#822).
-  const ledger = await openCheckoutLedger(localConfig);
+  const ledger = await openCheckoutLedger(localConfig, undefined, options.dryRun ? undefined : policy.recorder);
+  // Not the fast path: each writer's report replaces its delivered paths (#915).
+  if (!options.dryRun) policy.recorder?.fullSync();
 
   // Step 2: Sync each resource type
   let totalSynced = 0;
@@ -1588,6 +1601,7 @@ async function pullForScope(
         // Only skills stop: nothing is installed or swept for them this run.
         log.warn(`[${scopeLabel}] ${describeDeliveryConflict(desired)}. Skills were not updated this run; the installed ones are kept.`);
         skillsHeld = true;
+        ledger.recorder?.failed('skills');
         if (result) result.resourceSyncFailed = true;
         continue;
       }
@@ -1611,7 +1625,10 @@ async function pullForScope(
     } else {
       items = await handler.scanTeamForPull(freshConfig, localConfig);
     }
-    if (items.length === 0) continue;
+    if (items.length === 0) {
+      if (type === 'skills') ledger.recorder?.succeeded('skills');
+      continue;
+    }
 
     // Collect existing local resource names before pulling
     const existingNames = await getExistingLocalNames(type, items, freshConfig, localConfig);
@@ -1655,6 +1672,8 @@ async function pullForScope(
       for (const item of items) {
         await handler.pullItem(item, freshConfig, localConfig, ledger);
       }
+      // A copy it failed to write has said so already (see DeliveryRecorder).
+      if (type === 'skills') ledger.recorder?.succeeded('skills');
       // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
       if (ledger.held.length > 0) agentModelsHeld = true;
       const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;
@@ -1904,11 +1923,15 @@ async function pullForScope(
         ? await liveCheckoutRecords(localConfig.projectRoot, state.lastPullByWorkspace)
         : undefined;
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
+      // The delivered paths are rewritten after the last writer of this pull
+      // (see syncDeliveredGitExclude): until then, the checkout's previous ones.
+      const gitExcludePaths = state.lastPullByWorkspace?.[recordKey]?.gitExcludePaths;
       const record: CheckoutRecord = {
         rev: deliveredRev,
         ...(localConfig.scope === 'project' && localConfig.projectRoot ? { root: localConfig.projectRoot } : {}),
         targets: syncedTargets,
         delivered: ledger.hashes,
+        ...(gitExcludePaths ? { gitExcludePaths } : {}),
       };
       setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {
@@ -2382,6 +2405,8 @@ export async function pull(
   // Each scope's env, resolved once by its env stage (resolvePullEnv).
   const teamEnvs = new Map<LocalConfig, TeamEnv>();
   const instructions = new Map<LocalConfig, InstructionDelivery>();
+  // What this pull's writers deliver into the project checkout (#915).
+  const deliveryRecorder = createDeliveryRecorder();
 
   // Whether HOME's settings.json still has the pre-dispatch hook format. Read now
   // (HOME-only, no shared clone), but the actual reinject runs later under the
@@ -2526,7 +2551,7 @@ export async function pull(
     if (!options.silent && !options.dryRun) await mentionGitHookFailure(projectConfig, reported);
     try {
       if (await lockScope(projectConfig)) {
-        await pullForScope(projectConfig, options, reported, {}, syncResult, teamEnvs, instructions);
+        await pullForScope(projectConfig, options, reported, { recorder: deliveryRecorder }, syncResult, teamEnvs, instructions);
       }
     } catch (e) {
       log.warn(`Project-scope pull error: ${(e as Error).message}`);
@@ -2696,6 +2721,18 @@ export async function pull(
     }
   }
 
+  // 5a. Keep what this pull delivered into the project out of git (#915),
+  //     after its last writer and still under the scope's sync lock. A
+  //     contended scope is skipped: the lock's holder syncs.
+  if (reconcileProject && !options.dryRun) {
+    try {
+      await syncDeliveredGitExclude(reconcileProject, deliveryRecorder);
+    } catch (e) {
+      log.warn(`Could not update teamai's delivered git exclude block: ${(e as Error).message}. Fix the cause, then run \`teamai pull\` again.`);
+      startupErrors.push(`Git exclude: ${(e as Error).message}`);
+    }
+  }
+
   // Fetching alone is not success: every startup delivery stage must finish
   // before a hook retry, or the interactive pull that mentioned the failure,
   // may erase it. Preserve the more specific fetch/lock records those stages
@@ -2748,6 +2785,28 @@ export async function pull(
   if (!options.dryRun && !options.inline && postPullRepo) {
     await runDeclaredPostPull(postPullRepo, { interactive: options.interactive === true });
   }
+}
+
+/**
+ * Store what this pull's writers delivered into the project checkout on its
+ * record (`gitExcludePaths`, see DeliveryRecorder for how reports replace it),
+ * changing nothing else on the record earlier stages saved, then list those
+ * paths in teamai's `delivered` git exclude block while the resolved
+ * `sharing.gitExclude` is on, or remove the block when it is off. The list is
+ * kept either way. Runs on every pull, fast path included.
+ */
+async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
+  const key = await checkoutRecordKey(localConfig);
+  if (!key) return;
+  const state = await loadStateForScope(localConfig);
+  const record = state.lastPullByWorkspace?.[key];
+  const paths = await recorder.merge(record?.gitExcludePaths);
+  if (record) {
+    record.gitExcludePaths = paths;
+    await saveStateForScope(state, localConfig);
+  }
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  await applyDeliveredGitExclude(localConfig, isGitExcludeEnabled(localConfig, teamConfig ?? {}), Object.values(paths).flat());
 }
 
 /** Post-pull diagnostics are a courtesy, not the job. Do not wait forever. */
