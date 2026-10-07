@@ -208,6 +208,24 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(path.join(destination, 'guide', 'personal.md'), 'utf8')).toBe('mine');
   });
 
+  it('keeps a member\'s link that replaced a team doc when the team deletes that doc (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'guide.md'), 'team');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const outside = path.join(root, 'mine.md');
+    await fse.outputFile(outside, 'mine');
+    const link = path.join(destination, 'guide.md');
+    await fse.remove(link);
+    await fse.symlink(outside, link);
+    await fse.remove(path.join(source, 'guide.md'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(outside, 'utf8')).toBe('mine');
+  });
+
   it('keeps a directory containing hidden local entries at a team doc file\'s path (#993)', async () => {
     // No team version holds `.keep`: the directory is the member's, so pull leaves it whole.
     await fse.outputFile(path.join(destination, 'guide', 'nested', '.keep'), 'private');
@@ -261,6 +279,8 @@ describe('DocsHandler pruning (#794)', () => {
     const outside = path.join(root, 'outside');
     await fse.outputFile(path.join(outside, 'keep.md'), 'local');
     await fse.symlink(outside, path.join(destination, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    // The history shows the team never had docs/linked (#993).
+    commitTeamRepo(path.join(root, 'repo'));
     await sync();
     expect(await fse.pathExists(path.join(destination, 'linked'))).toBe(false);
     expect(await fse.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('local');

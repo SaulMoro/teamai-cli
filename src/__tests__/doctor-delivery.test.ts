@@ -498,6 +498,8 @@ describe('doctor — skills delivered on disk', () => {
       await fse.outputFile(path.join(outside, 'keep.md'), 'outside');
       await fse.ensureDir(path.join(homeDir, 'team-docs'));
       await fse.symlink(outside, path.join(homeDir, 'team-docs', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+      // The history shows the team never had docs/linked (#993).
+      commitTeamRepo(repoPath);
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('linked');
