@@ -7,7 +7,12 @@ export default defineConfig({
       'src/__tests__/*-e2e.test.ts',
       'validation/*.test.ts',
     ],
-    setupFiles: ['src/__tests__/helpers/clear-agent-session-env.ts'],
+    // isolate-e2e-env first: the other setup file imports modules that build
+    // home paths at load time.
+    setupFiles: [
+      'src/__tests__/helpers/isolate-e2e-env.ts',
+      'src/__tests__/helpers/clear-agent-session-env.ts',
+    ],
     testTimeout: 60_000,
     hookTimeout: 30_000,
     // E2E tests spawn child processes and touch the real filesystem.
