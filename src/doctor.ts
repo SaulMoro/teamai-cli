@@ -611,25 +611,34 @@ async function buildGitHookChecks(localConfig: LocalConfig, stage: CheckStage): 
 }
 
 /**
- * Project scope: the hook index a release before #993 kept in the working
- * tree, when git tracks it. Pull moves its records to the data home but
- * leaves a tracked file for the member to untrack (`migrateLegacyManagedHooks`).
+ * Project scope: the hook index and the package lock a release before #993
+ * kept in the working tree, when git tracks them. Pull moves the index's
+ * records to the data home, and the lock is copied there, but a tracked file
+ * is left for the member to untrack (`migrateLegacyManagedHooks`,
+ * `packageLockDir`).
  */
 async function buildTrackedHookIndexCheck(localConfig: LocalConfig): Promise<Check[]> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return [];
-  const file = legacyManagedHooksPath(localConfig.projectRoot);
-  if (!await pathExists(file)) return [];
+  const root = localConfig.projectRoot;
   const { gitTracks } = await import('./mcp-git-exclude.js');
-  if ((await gitTracks(file)).kind !== 'tracked') return [];
-  return [{
-    name: `${file} is tracked by git`,
-    source: 'local',
-    informational: true,
-    check: async () => false,
-    fix: 'teamai keeps its hook index in its data home now; this copy is left over from an older release. '
-      + `Run \`git rm --cached .teamai/managed-hooks.json\` in ${localConfig.projectRoot} and commit, `
-      + 'so it leaves the repository; teamai pull deletes it once nothing in it is needed.',
-  }];
+  const legacyFiles = [
+    { file: legacyManagedHooksPath(root), what: 'hook index', after: 'teamai pull deletes it once nothing in it is needed' },
+    { file: path.join(root, '.teamai', 'teamai.lock'), what: 'package lock', after: 'the next `teamai packages install` or session start deletes it' },
+  ];
+  const checks: Check[] = [];
+  for (const { file, what, after } of legacyFiles) {
+    if (!await pathExists(file) || (await gitTracks(file)).kind !== 'tracked') continue;
+    const rel = path.relative(root, file).split(path.sep).join('/');
+    checks.push({
+      name: `${file} is tracked by git`,
+      source: 'local',
+      informational: true,
+      check: async () => false,
+      fix: `teamai keeps its ${what} in its data home now; this copy is left over from an older release. `
+        + `Run \`git rm --cached ${rel}\` in ${root} and commit, so it leaves the repository; ${after}.`,
+    });
+  }
+  return checks;
 }
 
 /**

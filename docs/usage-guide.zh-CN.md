@@ -696,7 +696,7 @@ teamai packages --dry-run   # 预览底层命令，不安装也不写文件
 teamai doctor              # 检查运行环境、声明的包/marketplace/插件状态，以及磁盘上实际落地的资源；任一检查失败时退出码为 1
 ```
 
-安装成功后，TeamAI 会在当前 scope 的数据目录（项目为 `~/.teamai/projects/<slug>/`，user scope 为 `~/.teamai/`）写入本地快照 `teamai.lock`，不会写入工作区。旧版本写在 `.teamai/teamai.lock` 的文件会在下次安装或会话启动时移到这里，旧版本为隐藏它而创建的 `.teamai/.gitignore` 也会删除。该文件记录已安装版本，以及供 SessionStart 提示比对的声明哈希，不会写入团队仓库。在 user scope 下，全局 npm 工具和 Claude 插件只需确认一次；项目 npm 依赖会按工作目录分别确认，避免在一个仓库安装后错误关闭另一个仓库的提示。
+安装成功后，TeamAI 会在当前 scope 的数据目录（项目为 `~/.teamai/projects/<slug>/`，user scope 为 `~/.teamai/`）写入本地快照 `teamai.lock`，不会写入工作区。旧版本写在 `.teamai/teamai.lock` 的文件会在下次安装或会话启动时移到这里，旧版本为隐藏它而创建的 `.teamai/.gitignore` 也会删除。如果仓库跟踪了该文件，它会留在原处（移走会在 `git status` 中留下一条删除记录）：teamai 在数据目录有自己的副本之前从原处读取它，`teamai doctor` 会指出它，并给出停止跟踪的命令 `git rm --cached .teamai/teamai.lock`。该文件记录已安装版本，以及供 SessionStart 提示比对的声明哈希，不会写入团队仓库。在 user scope 下，全局 npm 工具和 Claude 插件只需确认一次；项目 npm 依赖会按工作目录分别确认，避免在一个仓库安装后错误关闭另一个仓库的提示。
 
 **声明格式：**
 

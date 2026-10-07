@@ -529,7 +529,7 @@ every checkout, so that is where they live now:
 │                                              Codex records event, matcher-group position and complete rendered entry; unique definitions recover moved entries
 │                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
-├── teamai.lock                                packageLockDir: installed package versions (#993; an older <root>/.teamai/teamai.lock is moved here,
+├── teamai.lock                                packageLockDir: installed package versions (#993; an older <root>/.teamai/teamai.lock is moved here, or copied while git tracks it,
 │                                              and a <root>/.teamai/.gitignore holding only `teamai.lock` is removed outside self mode)
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── root                                   the checkout's path, written by its full pulls; liveness is probed from it (#993)
