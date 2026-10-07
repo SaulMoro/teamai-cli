@@ -36,6 +36,7 @@ import {
 } from './resources/mcp-format.js';
 import { mcpEntryReader, parseTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
 import { historicalContents } from './utils/team-history.js';
+import { describeMembersFile } from './resources/delivered-copies.js';
 import { envName, envTable } from './resources/env-key.js';
 import { declaredSecretKeys, type SecretDeclarations } from './resources/secrets.js';
 import { resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
@@ -127,8 +128,7 @@ const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is 
  * version of it.
  */
 export function describeKeptMemberServer(server: string, file: string): string {
-  return `Kept MCP server ${server} in ${file}: it is not teamai's (no delivery record, and it matches no team version of ${server}). `
-    + 'Rename or delete it, then run teamai pull, to receive the team version.';
+  return describeMembersFile(`MCP server ${server} in ${file}`, server);
 }
 
 export interface McpReconcileResult {
@@ -322,7 +322,7 @@ export async function userMcpFile(tool: string, rel: string, baseDir: string): P
 }
 
 /** The file `record` holds its server in: for a lookup target, the one it recorded, or the mapped one. */
-export function recordedFileOf(target: McpTarget, record: ManagedMcpRecord): string {
+export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, record: ManagedMcpRecord): string {
   return target.mappedFile ? record.file ?? target.mappedFile : target.file;
 }
 

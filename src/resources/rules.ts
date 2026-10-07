@@ -17,7 +17,7 @@ import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
 import { historicalVersions } from '../utils/team-history.js';
 import {
-  adoptRecord, contentHash, forgetDelivered, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
+  adoptRecord, contentHash, describeMembersDirLeft, forgetDelivered, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
   removedCopyChanged, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
@@ -455,8 +455,14 @@ export class RulesHandler extends ResourceHandler {
             warnOnce(`Kept ${supersedes}: you edited it after teamai delivered it, and ${tool} also reads ${dest}, the same rule. `
               + 'Delete it once you have saved what you need.');
           }
-        } else if (supersedes) {
-          await remove(supersedes);
+        } else if (supersedes && await pathExists(supersedes)) {
+          // Teamai's only on record or proof, like any copy (#993).
+          if (ledger?.previous?.[supersedes] !== undefined || await isTeamaiCopy(supersedes, ruleOrigin(tool, localConfig.repo.localPath, item.relativePath))) {
+            await remove(supersedes);
+            if (ledger) forgetDelivered(ledger.hashes, supersedes);
+          } else {
+            warnOnce(describeMembersDirLeft(supersedes, item.relativePath, 'pull'));
+          }
         }
         log.debug(`Synced rule ${item.name} → ${tool}`);
       } catch (e) {
@@ -612,7 +618,7 @@ export class RulesHandler extends ResourceHandler {
           // The author's root copy is this rule's by the placement record, which proves it here.
           if (localName === name && await pathExists(filePath) && ledger.previous?.[filePath] === undefined
             && !await isTeamaiCopy(filePath, ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`))) {
-            log.warn(`Kept ${filePath}: it is not teamai's (no delivery record, and it matches no team version of rules/${name}.md), so remove left it.`);
+            log.warn(describeMembersDirLeft(filePath, `rules/${name}.md`, 'remove'));
             continue;
           }
           if (await pathExists(filePath)) {
@@ -1409,6 +1415,21 @@ export function ruleOrigin(tool: string, repoPath: string, relativePath: string)
     pathspec: relativePath,
     ...(renders.length > 0 ? { renders: renders.map((render) => (content: Buffer) => render(content.toString('utf-8'))) } : {}),
   };
+}
+
+/**
+ * Whether `file`, a copy of the team rule at `relativePath` in `tool`'s rules
+ * directory, is teamai's to delete in a command the member ran (`uninstall`;
+ * #993): a built-in rule's name, on `previous`, the checkout's record, edited
+ * since or not, or a version of that rule by the team history (`ruleOrigin`).
+ * Read-only.
+ */
+export async function ownsRuleCopy(
+  file: string, tool: string, relativePath: string, repoPath: string, previous: DeliveredHashes | undefined,
+): Promise<boolean> {
+  if (previous?.[file] !== undefined) return true;
+  if (EXCLUDED_RULE_NAMES.has(relativePath.replace(/^rules\//, '').replace(/\.md$/, ''))) return true;
+  return isTeamaiCopy(file, ruleOrigin(tool, repoPath, relativePath));
 }
 
 /**

@@ -27,7 +27,7 @@ import { skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  forgetDelivered, judgeCopy, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
+  forgetDelivered, judgeCopy, notTeamaisReason, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import type { AgentModelRecords, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
@@ -383,7 +383,7 @@ async function reportWouldKeep(
       if (verdict.kind === 'keep') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: you changed it since teamai delivered it.`);
       } else if (verdict.kind === 'member') {
-        log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: it is not teamai's (no delivery record, and it matches no team version of ${item.relativePath}).`);
+        log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: ${notTeamaisReason(item.relativePath)}.`);
       }
     }
   }
@@ -1554,7 +1554,7 @@ async function pullForScope(
         if (options.dryRun) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs and remove stale local docs`);
           for (const file of await membersDocs(desired, destination, localConfig.repo.localPath)) {
-            log.info(`[${scopeLabel}] [dry-run] Would keep ${path.join(destination, file)}: it is not teamai's (no delivery record, and it matches no team version of docs/${file}).`);
+            log.info(`[${scopeLabel}] [dry-run] Would keep ${path.join(destination, file)}: ${notTeamaisReason(`docs/${file}`)}.`);
           }
         } else {
           if (await docsHandler.pullDocs(desired, freshConfig, localConfig) > 0) membersFilesKept = true;

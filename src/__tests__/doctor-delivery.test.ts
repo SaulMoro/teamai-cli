@@ -20,6 +20,7 @@ vi.mock('../utils/logger.js', () => ({
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { log } from '../utils/logger.js';
 import { buildChecks, resolveDoctorContext, type Check } from '../doctor.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 /**
@@ -426,6 +427,8 @@ describe('doctor — skills delivered on disk', () => {
       localConfig.projects = ['alpha'];
       await writeTeamDoc('beta', 'billing.md');
       await fse.outputFile(path.join(homeDir, 'team-docs', 'beta', 'billing.md'), '# my notes\n');
+      // The history proves which local files a pull may prune (#993).
+      commitTeamRepo(repoPath);
 
       expect(await (await docsCheck())!.check()).toBe(true);
 
@@ -440,6 +443,8 @@ describe('doctor — skills delivered on disk', () => {
       await writeTeamDoc('guide.md');
       const stale = path.join(homeDir, 'team-docs', 'old', 'retired.md');
       await fse.outputFile(stale, 'stale');
+      // The history shows the team never had docs/old/retired.md (#993).
+      commitTeamRepo(repoPath);
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('Missing from');
@@ -453,6 +458,9 @@ describe('doctor — skills delivered on disk', () => {
       if (state === 'empty') await fse.ensureDir(path.join(repoPath, 'docs'));
       if (state === 'hidden-only') await writeTeamDoc('.keep');
       await fse.outputFile(path.join(homeDir, 'team-docs', 'old.md'), 'stale');
+      // The history shows the team never had docs/old.md (#993).
+      await fse.ensureDir(repoPath);
+      commitTeamRepo(repoPath);
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('Stale docs');

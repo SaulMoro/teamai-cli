@@ -275,6 +275,39 @@ describe('no machine state in the working tree (#993 bug 4)', () => {
     expect(teamaiStatus(dir)).toBe('');
   });
 
+  it('leaves a tracked older package lock in place, reads it there, and doctor names it with the untrack command', () => {
+    const t = team('tracked-lock', {}, ['packages:', '  npm:', '    - name: left-pad', '      version: "1.3.0"']);
+    const dir = business('tracked-lock-biz', { 'package.json': '{"name":"app","version":"1.0.0"}\n' });
+    init(t, dir, 'claude');
+    const lock = path.join(home, '.teamai', 'projects', projectSlug(dir), 'teamai.lock');
+    const legacyLock = path.join(dir, '.teamai', 'teamai.lock');
+    const packageHint = (): string => {
+      const r = teamai(['hook-dispatch', 'session-start', '--tool', 'claude'], dir,
+        JSON.stringify({ cwd: dir, session_id: 'tracked-lock', hook_event_name: 'SessionStart', source: 'startup' }));
+      expect(r.code, r.output).toBe(0);
+      return r.stdout;
+    };
+    teamaiOk(['packages', 'install'], dir);
+    // An older release's lock, committed by mistake.
+    fs.mkdirSync(path.dirname(legacyLock), { recursive: true });
+    fs.renameSync(lock, legacyLock);
+    gitOk(['add', '-f', '.teamai/teamai.lock'], dir);
+    gitOk(['commit', '-q', '-m', 'commit the package lock by mistake'], dir);
+    const trackedStatus = (): string => gitOk(['status', '--porcelain', '--', '.teamai'], dir);
+
+    // Read where it is: the packages count as installed, and git sees no change.
+    expect(packageHint()).not.toContain('1 npm package');
+    expect(fs.existsSync(legacyLock)).toBe(true);
+    expect(trackedStatus()).toBe('');
+
+    teamaiOk(['packages', 'install'], dir);
+    expect(fs.existsSync(legacyLock)).toBe(true);
+    expect(trackedStatus()).toBe('');
+
+    const doctor = teamai(['doctor'], dir);
+    expect(doctor.output).toContain('git rm --cached .teamai/teamai.lock');
+  });
+
   it('leaves a tracked older hook index in place and doctor names it with the untrack command', () => {
     const t = team('tracked-index', { 'hooks/hooks.yaml': hooksYaml('team-stop', 'echo team-stop') });
     const dir = business('tracked-index-biz', legacyTree());

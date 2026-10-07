@@ -226,6 +226,28 @@ describe('Codex skills in the shared .agents/skills directory (#993 bug 3)', () 
     expect(fs.existsSync(shared)).toBe(false);
   });
 
+  it('updates in place an unrecorded older team copy in .agents/skills, with no copy in .codex/skills', () => {
+    const m = machine('older', TEAM);
+    m.publish({
+      'skills/fe-skill/SKILL.md': skillMd('fe-skill', 'Version two.'),
+      'skills/fe-skill/scripts/run.sh': 'echo two\n',
+    }, 'v2');
+    // What an earlier release left in the shared directory: the team's first version, with no record.
+    const dir = m.business({
+      '.agents/skills/fe-skill/SKILL.md': TEAM['skills/fe-skill/SKILL.md'],
+      '.agents/skills/fe-skill/scripts/run.sh': TEAM['skills/fe-skill/scripts/run.sh'],
+    });
+    const shared = path.join(dir, '.agents', 'skills', 'fe-skill');
+
+    const initRun = m.ok(initArgs(m, 'project'), dir);
+
+    expect(read(path.join(shared, 'SKILL.md'))).toBe(skillMd('fe-skill', 'Version two.'));
+    expect(read(path.join(shared, 'scripts', 'run.sh'))).toBe('echo two\n');
+    expect(fs.existsSync(path.join(dir, '.codex', 'skills', 'fe-skill'))).toBe(false);
+    expect(initRun.output).not.toContain('Codex skill conflict');
+    expect(initRun.output).not.toContain('not teamai\'s');
+  });
+
   it('protects the member\'s skill in ~/.agents/skills in user scope', () => {
     const m = machine('user', TEAM);
     const shared = path.join(m.home, '.agents', 'skills', 'fe-skill');

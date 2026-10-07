@@ -295,6 +295,16 @@ describe('co-author reconcile', () => {
       expect(managed).toEqual({ [codebuddyShared]: false });
     });
 
+    it('reports a recorded file that does not parse as unreadable, naming it, not as a value of the member\'s', async () => {
+      const before = '{"attribution": {"commit": "", "pr": ""},';
+      await fse.writeFile(shared(), before);
+      const { changes } = await reconcileCoAuthorForConfig(team({ enabled: false }), local, preFix({ [shared()]: false }));
+      expect(await fse.readFile(shared(), 'utf8')).toBe(before);
+      const skipped = changes.find((c) => c.file === shared());
+      expect(skipped?.action).toBe('skipped');
+      expect(skipped?.reason).toBe(`${shared()} is not valid JSON, so teamai could not read it`);
+    });
+
     it('leaves a value with keys teamai never writes alone', async () => {
       const before = '{"attribution": {"commit": "", "pr": "", "extra": true}}';
       await fse.writeFile(shared(), before);

@@ -55,6 +55,7 @@ vi.mock('../update.js', () => ({
 }));
 
 import { pull } from '../pull.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig } from '../config.js';
 import { log } from '../utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
@@ -188,6 +189,8 @@ describe('pull: docs by namespace', () => {
     expect(await exists('frontend/components.md')).toBe(true);
     await fse.outputFile(local('frontend/styling.md'), '# Styling, my notes\n');
     await fse.outputFile(local('frontend/mine.md'), '# Only mine\n');
+    // The history shows the team never had docs/frontend/mine.md (#993).
+    commitTeamRepo(repoPath);
 
     as('devops');
     await pull({});
