@@ -514,10 +514,12 @@ teamai's (kept by pull)" with pull's line for each file.
 
 ### Known gaps
 
-- `teamai remove`'s rules refresh and local-agent installs deliver rules and
-  skills as before: they overwrite a changed copy and record nothing. If the
-  team changes a copy they wrote before the next pull, that pull keeps it as an
-  edit.
+- `teamai remove`'s rules refresh judges copies against the checkout's record
+  and the team history as pull does (#993), and deletes a copy of the removed
+  rule only when it is on record or proven teamai's (the author's root copy by
+  its placement record); it records nothing. Local-agent installs deliver rules
+  and skills as before: they overwrite a changed copy and record nothing. The
+  next pull judges a skill, rule or agent copy either wrote by the team history.
 - Step 3b and the inactive-namespace cleanup of skills and agents still compare
   with the team source, not the record, so an untouched copy delivered at an
   older revision stays there with a warning.
