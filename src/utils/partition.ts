@@ -5,6 +5,7 @@ import YAML from 'yaml';
 import { getUserHome } from './home.js';
 import { readFileSafe, writeFileAtomic, expandHome } from './fs.js';
 import { managedMcpWorkspaceId } from '../types.js';
+import { gitCommonDir, isLiveCheckout } from './git.js';
 
 /**
  * Per-project data partition identity (issue #374 P1).
@@ -343,16 +344,36 @@ export async function readAnchorFile(partitionDir: string): Promise<string | nul
 }
 
 /**
+ * The file in `<dataHome>/workspaces/<id>/` naming the checkout the directory
+ * belongs to: its root, the exact path whose hash is `<id>`
+ * (managedMcpWorkspaceId), with no trailing newline (#993).
+ */
+const WORKSPACE_ROOT_FILE = 'root';
+
+/** Record `root` as the checkout of its `<dataHome>/workspaces/<id>/`, creating the directory. */
+export async function writeWorkspaceRoot(dataHome: string, root: string): Promise<void> {
+  const dir = path.join(dataHome, 'workspaces', managedMcpWorkspaceId(root));
+  const file = path.join(dir, WORKSPACE_ROOT_FILE);
+  if (await readFileSafe(file) === root) return;
+  await fs.promises.mkdir(dir, { recursive: true });
+  await writeFileAtomic(file, root);
+}
+
+/**
  * Remove `<dataHome>/workspaces/<id>/` for every checkout that no longer
  * exists: its search index, managed-MCP record and resource cache belong to a
- * removed worktree (#808). `worktrees` are the repo's live checkouts, realpath'd
- * as detection keys them (listWorktrees); an empty list proves nothing, so it
- * removes nothing. Only directories named like a workspace id are touched.
- * Returns the removed directories.
+ * removed worktree (#808). A directory goes only when its `root` file names a
+ * checkout that is no longer one of this repository's (isLiveCheckout, from
+ * `currentRoot`'s common directory). One an older teamai created has no
+ * `root` file and is kept until its own checkout's pull writes one; nothing is
+ * removed when git cannot name `currentRoot`'s common directory (#993). Only
+ * directories named like a workspace id are touched. Returns the removed
+ * directories.
  */
-export async function pruneWorkspaceDirs(dataHome: string, worktrees: readonly string[]): Promise<string[]> {
-  if (worktrees.length === 0) return [];
-  const live = new Set(worktrees.map(managedMcpWorkspaceId));
+export async function pruneWorkspaceDirs(dataHome: string, currentRoot: string): Promise<string[]> {
+  const commonDir = await gitCommonDir(currentRoot);
+  if (!commonDir) return [];
+  const current = managedMcpWorkspaceId(currentRoot);
   const workspaces = path.join(dataHome, 'workspaces');
   let entries: fs.Dirent[];
   try {
@@ -360,9 +381,13 @@ export async function pruneWorkspaceDirs(dataHome: string, worktrees: readonly s
   } catch {
     return [];
   }
-  const stale = entries
-    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{12}$/.test(entry.name) && !live.has(entry.name))
+  const candidates = entries
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{12}$/.test(entry.name) && entry.name !== current)
     .map((entry) => path.join(workspaces, entry.name));
+  const stale = (await Promise.all(candidates.map(async (dir) => {
+    const root = await readFileSafe(path.join(dir, WORKSPACE_ROOT_FILE));
+    return root !== null && !await isLiveCheckout(root, commonDir) ? dir : null;
+  }))).filter((dir): dir is string => dir !== null);
   await Promise.all(stale.map((dir) => fs.promises.rm(dir, { recursive: true, force: true })));
   return stale;
 }

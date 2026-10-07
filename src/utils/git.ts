@@ -907,30 +907,89 @@ async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
   }
 }
 
+/** One entry of `git worktree list --porcelain -z`. */
+export interface WorktreeListEntry {
+  path: string;
+  bare: boolean;
+  prunable: boolean;
+}
+
+/**
+ * Parse `git worktree list --porcelain -z`: each attribute ends with NUL and
+ * each entry with an extra NUL, so a path (or a lock reason) holding a newline
+ * stays whole (#993).
+ */
+export function parseWorktreeList(output: string): WorktreeListEntry[] {
+  const entries: WorktreeListEntry[] = [];
+  let entry: WorktreeListEntry | null = null;
+  for (const field of output.split('\0')) {
+    if (field.startsWith('worktree ')) {
+      entry = { path: field.slice('worktree '.length), bare: false, prunable: false };
+      entries.push(entry);
+    } else if (entry && field === 'bare') {
+      entry.bare = true;
+    } else if (entry && (field === 'prunable' || field.startsWith('prunable '))) {
+      entry.prunable = true;
+    }
+  }
+  return entries;
+}
+
+/**
+ * The realpath of the git common directory of the repository containing
+ * `cwd`, shared by its main checkout and every linked worktree, or null when
+ * git cannot tell (no repository, a missing directory, a worktree whose git
+ * directory was pruned).
+ */
+export async function gitCommonDir(cwd: string): Promise<string | null> {
+  try {
+    // Inside the try: simple-git throws at once for a directory that does not exist.
+    const out = await createGit(cwd).revparse(['--git-common-dir']);
+    return await realpath(path.resolve(cwd, out.replace(/\r?\n$/, '')));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `root` is still a checkout of the repository whose common directory
+ * is `commonDir` (see gitCommonDir): it holds a `.git` entry, and git there
+ * names the same common directory. A removed worktree fails the first test, a
+ * pruned one the second. Probed per checkout because `git worktree list` does
+ * not list the main checkout of a `--separate-git-dir` repo or a submodule
+ * (#993).
+ */
+export async function isLiveCheckout(root: string, commonDir: string): Promise<boolean> {
+  if (!await fse.pathExists(path.join(root, '.git'))) return false;
+  return await gitCommonDir(root) === commonDir;
+}
+
 /**
  * List the realpath'd top-level directory of every worktree of the repo that
  * contains `cwd` (main checkout + all linked worktrees), from
- * `git worktree list --porcelain`. Returns [] outside a git repo, or when `cwd`
- * does not exist. Used by a project-wide uninstall to clean each worktree's
- * managed resources before the shared partition is deleted (issue #374 P1-2C).
+ * `git worktree list --porcelain -z`. Bare and prunable entries are left out,
+ * and so is the git directory itself, which a `--separate-git-dir` repo or a
+ * submodule lists in place of its main checkout (#993): that checkout is then
+ * missing, so liveness is never read from this list (see isLiveCheckout).
+ * Returns [] outside a git repo, when `cwd` does not exist, or when git is
+ * older than 2.36 and has no `-z`; output is never split on newlines.
  */
 export async function listWorktrees(cwd?: string): Promise<string[]> {
   let list: string;
   try {
     // Inside the try: simple-git throws at once for a directory that does not exist.
-    list = await createGit(cwd).raw(['worktree', 'list', '--porcelain']);
+    list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', '-z']);
   } catch {
     return [];
   }
-  const roots = list
-    .split('\n')
-    .filter((l) => l.startsWith('worktree '))
-    .map((l) => l.slice('worktree '.length).trim())
-    .filter(Boolean);
+  const commonDir = await gitCommonDir(path.resolve(cwd ?? process.cwd()));
+  const roots = parseWorktreeList(list)
+    .filter((entry) => !entry.bare && !entry.prunable && entry.path)
+    .map((entry) => entry.path);
   const resolved = await Promise.all(
     roots.map((r) => realpath(r).catch(() => r)),
   );
-  return Array.from(new Set(resolved));
+  return Array.from(new Set(resolved.filter((root) => root !== commonDir)));
 }
 
 /**

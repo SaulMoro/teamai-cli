@@ -24,6 +24,8 @@ vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
   listWorktrees: vi.fn().mockResolvedValue([]),
+  // Git cannot name the repository: every other checkout's record is kept.
+  gitCommonDir: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -284,7 +286,7 @@ describe('pull reports what reached the tool directory (#585)', () => {
     // The marker stays cleared for a retry, and the record keeps its rev.
     expect(state.lastPullRev).toBeNull();
     // It also records what the pull delivered, docs failure or not (#822).
-    expect(state.lastPullByWorkspace?.[key]).toEqual({ rev: 'old1234', targets: [], pushBaseRevs: ['abc1234'], delivered: {} });
+    expect(state.lastPullByWorkspace?.[key]).toEqual({ rev: 'old1234', root: projectRoot, targets: [], pushBaseRevs: ['abc1234'], delivered: {} });
   });
 
   it.each(['empty', 'missing'])('prunes only stale empty directories when the team bundle is %s', async (state) => {

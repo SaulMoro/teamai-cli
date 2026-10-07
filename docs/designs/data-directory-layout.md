@@ -138,9 +138,16 @@ cleared, so when the scan lists a team rule or skill as modified, push stops
 before creating a branch and asks the member to save any edits to them and run
 `teamai pull` in the checkout. A rule this machine placed (`placedRules`) is the
 author's own copy and does not count; config-only pushes and new resources go
-through. Every full sync keeps only the
-entries of checkouts `git worktree list` still reports, so a deleted or
-re-created worktree's entry goes with the next full sync in any checkout. A
+through. Each project checkout's full sync records its `root` in its entry,
+and every full sync drops the entries whose `root` is no longer a checkout of
+the repository (it has no `.git`, or `git rev-parse --git-common-dir` there
+names another common directory) or is one under another key, so a deleted or
+re-created worktree's entry goes with the next full sync in any checkout. It
+does not read `git worktree list`, which names the git directory instead of
+the main checkout in a `--separate-git-dir` repo or a submodule (#993). An
+entry an older CLI wrote without `root` is kept until its checkout's own full
+sync adds one, and every entry is kept when git cannot name this checkout's
+common directory. A
 state.json written before this field has no entry, so each checkout does one
 full sync after the upgrade. The user scope's pull records its one checkout,
 HOME, the same way, for push's bases alone: its fast path still reads the
@@ -520,6 +527,7 @@ every checkout, so that is where they live now:
 │                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
 └── workspaces/<managedMcpWorkspaceId(root)>/
+    ├── root                                   the checkout's path, written by its full pulls; liveness is probed from it (#993)
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
@@ -756,9 +764,12 @@ how many unpublished learnings each queue in the data home holds, set-aside ones
 included, so the member can publish or copy them first.
 
 Every checkout keeps its `workspaces/<id>/` (search index, managed MCP and
-the MCP configs it wrote a resolved value to, resource cache) in the shared data home. A full `pull` removes those of
-checkouts `git worktree list` no longer shows; the fast path does not list
-worktrees.
+the MCP configs it wrote a resolved value to, resource cache) in the shared data home. A full `pull` writes its
+checkout's path to the directory's `root` file, then removes the directories
+whose `root` is no longer a checkout of the repository, probed as for the
+`lastPullByWorkspace` entries above (#993). A directory without `root`, from
+an older CLI, stays until its checkout's own full pull writes one. The fast
+path probes nothing.
 
 `import --from-mr` queues its learning in `pendingLearningsDir` and publishes
 it as `contribute` does (#823), so in self mode it lands in the partition queue

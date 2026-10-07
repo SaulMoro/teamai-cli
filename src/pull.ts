@@ -7,7 +7,7 @@ import {
 } from './resources/desired.js';
 import type { IndexedSkills } from './utils/search-index.js';
 import { detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit, getDefaultBranch, listWorktrees } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch, gitCommonDir, isLiveCheckout } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
@@ -681,22 +681,31 @@ export async function checkoutKey(projectRoot: string): Promise<string> {
 }
 
 /**
- * The records of `records` whose checkout still exists: one `git worktree
- * list` per full sync, so a removed or re-created worktree's entry does not
- * stay in state.json forever. A repository always lists its main checkout, so
- * an empty list means git failed (or there is no repository) and every record
- * is kept: a stale key matches no checkout, while a dropped one sends push
- * back to the shared revision (#812).
+ * The records of `records` to keep, probed once per full sync so a removed or
+ * re-created worktree's entry does not stay in state.json forever. A record
+ * goes when its `root` is no longer a checkout of this repository
+ * (isLiveCheckout), or is one under another key: a worktree re-created at the
+ * same path starts fresh (#807). It is not read from `git worktree list`,
+ * which does not list the main checkout of a `--separate-git-dir` repo or a
+ * submodule (#993). A record without `root`, from an older CLI, is kept until
+ * its own checkout's pull writes one, and so is every record when git cannot
+ * name this repository's common directory: a stale key matches no checkout,
+ * while a dropped one sends push back to the shared revision (#812).
  */
 async function liveCheckoutRecords(
   projectRoot: string,
   records: State['lastPullByWorkspace'],
 ): Promise<State['lastPullByWorkspace']> {
   if (!records) return undefined;
-  const roots = await listWorktrees(projectRoot);
-  if (roots.length === 0) return records;
-  const live = new Set(await Promise.all(roots.map(checkoutKey)));
-  return Object.fromEntries(Object.entries(records).filter(([key]) => live.has(key)));
+  const commonDir = await gitCommonDir(projectRoot);
+  if (!commonDir) return records;
+  const kept = await Promise.all(Object.entries(records).map(async ([key, record]) => {
+    const { root } = record;
+    const live = root === undefined
+      || (await isLiveCheckout(root, commonDir) && await checkoutKey(root) === key);
+    return live ? [key, record] as const : null;
+  }));
+  return Object.fromEntries(kept.filter((entry) => entry !== null));
 }
 
 export type CheckoutRecord = NonNullable<State['lastPullByWorkspace']>[string];
@@ -990,6 +999,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
     const pushBaseRevs = checkoutBaseRevs(record).slice(0, MAX_PUSH_BASE_REVS);
     const reset: CheckoutRecord = {
       rev: FORCED_FULL_SYNC_REV,
+      ...(record.root !== undefined ? { root: record.root } : {}),
       targets: record.targets,
       ...(record.delivered ? { delivered: record.delivered } : {}),
       ...(record.agentModels ? { agentModels: record.agentModels } : {}),
@@ -1835,6 +1845,7 @@ async function pullForScope(
       const record = localConfig.scope === 'user'
         ? await userScopeRecord(state)
         : state.lastPullByWorkspace?.[recordKey] ?? { rev: FORCED_FULL_SYNC_REV, targets: syncedTargets };
+      if (localConfig.scope === 'project' && localConfig.projectRoot) record.root = localConfig.projectRoot;
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
       setAgentModels(record, ledger.agentModels);
@@ -1851,7 +1862,12 @@ async function pullForScope(
         ? await liveCheckoutRecords(localConfig.projectRoot, state.lastPullByWorkspace)
         : undefined;
       const others = previousRev === null && live ? awaitingFullSync(live) : live;
-      const record: CheckoutRecord = { rev: deliveredRev, targets: syncedTargets, delivered: ledger.hashes };
+      const record: CheckoutRecord = {
+        rev: deliveredRev,
+        ...(localConfig.scope === 'project' && localConfig.projectRoot ? { root: localConfig.projectRoot } : {}),
+        targets: syncedTargets,
+        delivered: ledger.hashes,
+      };
       setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {
         ...others,
@@ -1896,12 +1912,13 @@ async function pullForScope(
 
   // Every checkout of the repo keeps `workspaces/<id>/` in the shared data home
   // (search index, managed MCP, resource cache), and a removed worktree's stays
-  // behind. A full sync drops those; the fast path never lists worktrees (#808).
+  // behind. A full sync records its own root there and drops the directories of
+  // checkouts that are gone; the fast path probes none (#808, #993).
   if (localConfig.scope === 'project' && localConfig.projectRoot && !options.dryRun) {
     try {
-      const { listWorktrees } = await import('./utils/git.js');
-      const { pruneWorkspaceDirs } = await import('./utils/partition.js');
-      const removed = await pruneWorkspaceDirs(getDataHome(localConfig), await listWorktrees(localConfig.projectRoot));
+      const { pruneWorkspaceDirs, writeWorkspaceRoot } = await import('./utils/partition.js');
+      await writeWorkspaceRoot(getDataHome(localConfig), localConfig.projectRoot);
+      const removed = await pruneWorkspaceDirs(getDataHome(localConfig), localConfig.projectRoot);
       if (removed.length > 0) log.debug(`[${scopeLabel}] removed ${removed.length} directory(ies) of removed worktrees`);
     } catch (e) {
       log.debug(`[${scopeLabel}] workspace prune skipped: ${e instanceof Error ? e.message : String(e)}`);
