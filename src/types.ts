@@ -960,7 +960,8 @@ export interface DeliveryTarget {
  * A resource's file in the repo it comes from, and how teamai renders one
  * version of it (`DeliveryTarget.origin`). A file is teamai's when its bytes
  * equal a version `pathspec` held in `repoPath`'s history, or one of
- * `renders` of such a version.
+ * `renders` of such a version. For a skill, `pathspec` names the skill
+ * directory, and `renders` apply to its SKILL.md (`isTeamaiSkillCopy`).
  */
 export interface CopyOrigin {
   /** The team clone (`repo.localPath`), or a source repo. */

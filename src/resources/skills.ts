@@ -1,7 +1,7 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { isToolInstalledForConfig, ResourceHandler } from './base.js';
-import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
+import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -133,6 +133,21 @@ export async function skillTargetForTool(
   }
 
   return path.join(skillsDir, skillName);
+}
+
+/**
+ * Where a copy of team skill `name` comes from, for the ownership proof
+ * (#993): that name's directory at the root of `skills/` or in any namespace
+ * of the team repo at `repoPath`, so a copy of the root skill still proves
+ * teamai's after the team moved it into a namespace. SKILL.md also counts as
+ * pull delivers it, with its frontmatter repaired.
+ */
+export function skillOrigin(repoPath: string, name: string): CopyOrigin {
+  return {
+    repoPath,
+    pathspec: `:(glob)skills/**/${name}`,
+    renders: [(content) => withSkillFrontmatter(content.toString('utf-8'), name)],
+  };
 }
 
 /** Add fields immediately before the closing delimiter without reformatting existing YAML. */
@@ -750,7 +765,7 @@ export class SkillsHandler extends ResourceHandler {
       if (isAgentExcluded(localConfig, tool)) continue;
 
       const dest = await skillTargetForTool(tool, toolPath.skills, localConfig, item.name, sourcePath);
-      if (dest) targets.push({ tool, dest });
+      if (dest) targets.push({ tool, dest, origin: skillOrigin(localConfig.repo.localPath, item.name) });
     }
     return targets;
   }
