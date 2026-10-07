@@ -210,8 +210,8 @@ describe('source physical destination ownership', () => {
     expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Unrelated leaf target\n');
   });
 
-  it('records the post-copy destination when copyDir replaces a leaf symlink', async () => {
-    // The link leads to a copy of the source skill: the source's, so it is replaced.
+  // Changed in #993 from replacing the leaf link with a copy: a member's link is never replaced or deleted.
+  it('keeps a member\'s leaf link at the destination, records nothing for it, and never writes through it', async () => {
     const external = path.join(root, 'copied-leaf');
     await fse.outputFile(path.join(external, 'SKILL.md'), '# Original source: foo\n');
     const target = path.join(config.projectRoot!, relativePath);
@@ -219,14 +219,11 @@ describe('source physical destination ownership', () => {
     await publish();
     await pullSources(config, { force: true });
 
-    expect((await fse.lstat(target)).isSymbolicLink()).toBe(false);
-    expect((await pinManifest()).installedPhysicalPaths?.[relativePath]).toBe(target);
-    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
+    expect((await fse.lstat(target)).isSymbolicLink()).toBe(true);
+    expect((await pinManifest()).installedPhysicalPaths?.[relativePath]).toBeUndefined();
     await publish(producer, ['foo'], 'Updated source');
     await pullSources(config, { force: true });
-    expect(await fse.readFile(path.join(target, 'SKILL.md'), 'utf8')).toBe('# Updated source: foo\n');
-    await removeSource();
-    expect(await fse.pathExists(target)).toBe(false);
+    expect((await fse.lstat(target)).isSymbolicLink()).toBe(true);
     expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
   });
 

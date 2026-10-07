@@ -198,12 +198,12 @@ async function differingCopyLabel(
   item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig, memberLines: string[], recordedLabel?: string,
 ): Promise<string> {
   const { deliveredHashes } = await import('./pull.js');
-  const { describeMembersFile, judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry, judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
   const previous = await deliveredHashes(localConfig);
   const verdict = await judgeCopy(previous, item, target);
   if (verdict.kind === 'keep') return CHANGED_BY_YOU;
   if (verdict.kind === 'member') {
-    memberLines.push(describeMembersFile(target.dest, item.relativePath));
+    memberLines.push(await describeKeptEntry(target.dest, item.relativePath));
     return MEMBERS_OWN;
   }
   return recordedLabel !== undefined && await recordedUnchanged(previous, target.dest) ? recordedLabel : olderLabel;
@@ -266,12 +266,12 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
   // Pull's line for each skill directory of the member's own, by the tool it is in.
   const memberLines = new Map<string, string[]>();
   const { deliveredHashes } = await import('./pull.js');
-  const { describeMembersFile, judgeCopy } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry, judgeCopy } = await import('./resources/delivered-copies.js');
   const previous = await deliveredHashes(localConfig);
   const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async (target, item) => {
     if (!await pathExists(target.dest)) return labels[0];
     if ((await judgeCopy(previous, item, target)).kind === 'member') {
-      linesFor(memberLines, target.tool).push(describeMembersFile(target.dest, item.relativePath));
+      linesFor(memberLines, target.tool).push(await describeKeptEntry(target.dest, item.relativePath));
       return MEMBERS_OWN;
     }
     return await skillIsDiscoverable(target.dest, item.name) ? null : labels[1];
@@ -1434,7 +1434,8 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   }
   // Files at a team doc's path that hold no team version of it: pull keeps them (#993).
   const members = await membersDocs(desired, dest, localConfig.repo.localPath);
-  const { describeMembersFile } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry } = await import('./resources/delivered-copies.js');
+  const memberLines = await Promise.all(members.map((file) => describeKeptEntry(path.join(dest, file), `docs/${file}`)));
 
   return [{
     name: 'Team docs delivered',
@@ -1446,7 +1447,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
       ...(missing.length || stale.length
         ? ['Run `teamai pull --force` to restore the docs mirror; a plain pull skips an already-synced revision.']
         : []),
-      ...members.map((file) => describeMembersFile(path.join(dest, file), `docs/${file}`)),
+      ...memberLines,
     ].join(' '),
   }];
 }

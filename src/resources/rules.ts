@@ -17,7 +17,7 @@ import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
 import { historicalVersions } from '../utils/team-history.js';
 import {
-  adoptRecord, contentHash, describeMembersDirLeft, forgetDelivered, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
+  adoptRecord, contentHash, describeMembersDirLeft, forgetDelivered, isLink, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
   judgeRemoval, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
@@ -457,7 +457,8 @@ export class RulesHandler extends ResourceHandler {
           }
         } else if (supersedes && await pathExists(supersedes)) {
           // Teamai's only on record or proof, like any copy (#993).
-          if (ledger?.previous?.[supersedes] !== undefined || await isTeamaiCopy(supersedes, ruleOrigin(tool, localConfig.repo.localPath, item.relativePath))) {
+          if (!await isLink(supersedes) && (ledger?.previous?.[supersedes] !== undefined
+            || await isTeamaiCopy(supersedes, ruleOrigin(tool, localConfig.repo.localPath, item.relativePath)))) {
             await remove(supersedes);
             if (ledger) forgetDelivered(ledger.hashes, supersedes);
           } else {

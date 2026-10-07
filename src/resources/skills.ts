@@ -17,7 +17,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, judgeCopy, keepsEditedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, describeMembersLink, isLink, judgeCopy, keepsEditedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -72,7 +72,10 @@ export async function resolveSkillDestination(
     // on every skill, for copies the write path treats as identical.
     if (!sourcePath) return sharedDestination;
     if (await pathExists(configuredDestination)) {
-      if (await dirContentEqual(sharedDestination, configuredDestination) && await dirContentEqual(configuredDestination, sourcePath)) {
+      // A link there is the member's: never deleted as a duplicate (#993).
+      if (await isLink(configuredDestination)) {
+        log.warn(describeMembersLink(configuredDestination, `skills/${skillName}`));
+      } else if (await dirContentEqual(sharedDestination, configuredDestination) && await dirContentEqual(configuredDestination, sourcePath)) {
         await remove(configuredDestination);
         log.debug(`Removed identical TeamAI skill ${skillName} from ${configuredSkillsPath}`);
       } else {

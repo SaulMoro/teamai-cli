@@ -8,7 +8,7 @@ import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
-import { describeMembersFile, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
+import { describeKeptEntry, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
 import { blobIdOf, historicalVersions } from '../utils/team-history.js';
 
 /**
@@ -459,7 +459,7 @@ export class DocsHandler extends ResourceHandler {
     }
     const members = await membersDocs(desired, localDocsDir, localConfig.repo.localPath);
     for (const file of members) {
-      log.warn(`[${localConfig.scope}] ${describeMembersFile(path.join(localDocsDir, file), `docs/${file}`)}`);
+      log.warn(`[${localConfig.scope}] ${await describeKeptEntry(path.join(localDocsDir, file), `docs/${file}`)}`);
     }
     if (entries.length > 0) {
       await copyDocs(src, localDocsDir, new Set(desired.withheld.map(({ dir }) => dir)), new Set(members));

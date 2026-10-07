@@ -309,6 +309,26 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(initRun.output).toContain(`Kept ${skillDir}: it is not teamai's`);
   });
 
+  it('keeps a member\'s link in place of a team skill directory through pull, remove and uninstall, and names it', () => {
+    const t = team('skill-leaf-link', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const mine = path.join(sandbox, 'skill-leaf-link-mine');
+    writeFile(path.join(mine, 'SKILL.md'), skillMd('team-skill', 'Team.'));
+    const dir = business('skill-leaf-link-biz', { '.claude/skills/.keep': '' });
+    const link = path.join(dir, '.claude', 'skills', 'team-skill');
+    fs.symlinkSync(mine, link, 'dir');
+
+    const initRun = init(t, dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(initRun.output).toContain(
+      `Kept ${link}: it is a link of yours, so teamai does not replace it. Remove the link to receive skills/team-skill from the team.`,
+    );
+    teamai(['remove', 'skills', 'team-skill', '--force'], dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    teamai(['uninstall', '--force'], dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(path.join(mine, 'SKILL.md'))).toBe(skillMd('team-skill', 'Team.'));
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

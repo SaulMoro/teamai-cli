@@ -24,7 +24,7 @@ import { getHandler } from './resources/index.js';
 import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
-import { describeMembersFile, isTeamaiSkillCopy } from './resources/delivered-copies.js';
+import { describeKeptEntry, describeMembersLink, isLink, isTeamaiSkillCopy } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -786,6 +786,8 @@ async function pullSingleSource(
     const key = `${skill.name}\0${dir}`;
     if (!ownership.has(key)) {
       ownership.set(key, (async () => {
+        // teamai never creates a link: one at the destination is the member's, whatever records say (#993).
+        if (await isLink(dir)) return false;
         if (previousTargets.some((owned) => owned.skillName === skill.name && path.resolve(baseDir, owned.relative) === dir)) return true;
         const physical = await resolveSourcePhysicalPath(dir);
         if (otherOwners.some((owner) => owner.repositoryId === repositoryId && owner.skillName === skill.name && owner.path === physical)) return true;
@@ -829,6 +831,11 @@ async function pullSingleSource(
       // Planned even when it turns out to be the member's: the boundary checks
       // below must see every destination this skill resolves to.
       plannedTargets.push({ path: physical, skillName: skill.name, lexicalPath: target, replacesSymlink: destination.replacesSymlink });
+      // A link at the destination is the member's: never replaced, written through or deleted (#993).
+      if (await isLink(target)) {
+        log.warn(`[source:${source.name}] ${describeMembersLink(target, `${source.name}/${skill.name}`, 'source')}`);
+        continue;
+      }
       const owner = otherOwners.find((candidate) => candidate.repositoryId !== repositoryId && pathsOverlap(candidate.path, physical));
       if (owner) {
         conflictingPath = target;
@@ -836,7 +843,7 @@ async function pullSingleSource(
       } else if (![...previousTargets, ...otherOwners].some((owned) => pathsOverlap(owned.path, physical))
         && await pathExists(target) && !await isSourcesCopy(target, skill)) {
         // An existing copy no source record touches is the member's unless proven (#993).
-        log.warn(`[source:${source.name}] ${describeMembersFile(target, `${source.name}/${skill.name}`, 'source')}`);
+        log.warn(`[source:${source.name}] ${await describeKeptEntry(target, `${source.name}/${skill.name}`, 'source')}`);
         continue;
       }
       if (tool === CODEX_TOOL && target !== path.join(baseDir, toolPath.skills, skill.name)) codexSkillsPath = toolPath.skills;

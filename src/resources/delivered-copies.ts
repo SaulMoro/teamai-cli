@@ -61,7 +61,7 @@ export interface DeliveryLedger {
   readonly hashes: DeliveredHashes;
   readonly kept: { dest: string; teamRelPath: string; teamChanged: boolean }[];
   /** Files with no record that pull left as the member's, and the team resource each holds back (#993). */
-  readonly members: { dest: string; teamRelPath: string }[];
+  readonly members: { dest: string; teamRelPath: string; link?: true }[];
   /**
    * What the state's other checkout records say teamai wrote at each path. A
    * record lost to a new key (a restored or copied `.git`, #993) still names
@@ -176,6 +176,20 @@ export function describeMembersFile(file: string, resource: string, origin: 'tea
 }
 
 /**
+ * The line for a link of the member's at a delivered path (#993): teamai never writes,
+ * follows or deletes it. `resource` is the team resource held back, or `<source>/<skill>`.
+ */
+export function describeMembersLink(file: string, resource: string, origin: 'team' | 'source' = 'team'): string {
+  return `Kept ${file}: it is a link of yours, so teamai does not replace it. `
+    + `Remove the link to receive ${resource} from ${origin === 'team' ? 'the team' : 'its source'}.`;
+}
+
+/** `describeMembersLink` for a link at `file`, else `describeMembersFile`. */
+export async function describeKeptEntry(file: string, resource: string, origin: 'team' | 'source' = 'team'): Promise<string> {
+  return await isLink(file) ? describeMembersLink(file, resource, origin) : describeMembersFile(file, resource, origin);
+}
+
+/**
  * Whether the skill directory `dir` is teamai's copy (#993): it exists, and
  * every file in it but CONTRIBUTORS is either what pull writes there now
  * (`current`, by absolute path) or a version of that file of the skill in the
@@ -188,9 +202,8 @@ export function describeMembersFile(file: string, resource: string, origin: 'tea
 export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
 ): Promise<boolean> {
-  // A link (or any non-regular entry) inside it is the member's: copying the skill over it would write through it.
-  // A link in place of the directory itself is replaced whole by copyDir, never written through.
-  if (!await isDirectory(dir) || await holdsNonRegular(dir)) return false;
+  // A link in place of the directory, or any non-regular entry inside it, is the member's.
+  if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir)) return false;
   for (const rel of await listFilesRecursive(dir)) {
     if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
     const file = path.join(dir, rel);
@@ -217,6 +230,7 @@ export async function isTeamaiSkillCopy(
 export async function ownsSkillDir(
   previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin, sources: readonly ResourceItem[] = [],
 ): Promise<boolean> {
+  if (await isLink(dir)) return false;
   if (recordedUnder(previous ?? {}, dir).length > 0) return true;
   if (sources.length === 0) return isTeamaiSkillCopy(dir, origin);
   for (const source of sources) {
@@ -230,7 +244,8 @@ export function describeMembersDirLeft(dir: string, resource: string, command: s
   return `Kept ${dir}: ${notTeamaisReason(resource)}, so ${command} left it.`;
 }
 
-async function isLink(file: string): Promise<boolean> {
+/** Whether `file` is a symbolic link itself (never followed). */
+export async function isLink(file: string): Promise<boolean> {
   return (await fse.lstat(file).catch(() => null))?.isSymbolicLink() ?? false;
 }
 
@@ -261,8 +276,8 @@ async function isDirectory(dir: string): Promise<boolean> {
  */
 async function isMembersCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<boolean> {
   if (target.origin === undefined) return false;
-  // A link in place of a file is the member's: writing would go through it to whatever it points at.
-  if (item.type !== 'skills' && await isLink(target.dest)) return true;
+  // A link at the delivered path is the member's: teamai never writes through, replaces or deletes it.
+  if (await isLink(target.dest)) return true;
   if (item.type === 'skills') {
     if (recordedUnder(previous ?? {}, target.dest).length > 0 || !await isDirectory(target.dest)) return false;
     return !await isTeamaiSkillCopy(target.dest, target.origin, await nextHashes({}, item, target));
@@ -293,7 +308,9 @@ export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem
     ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: verdict.teamChanged });
     return true;
   }
-  if (recordedUnder(ledger.otherRecords, target.dest).length > 0) {
+  if (await isLink(target.dest)) {
+    ledger.members.push({ dest: target.dest, teamRelPath: item.relativePath, link: true });
+  } else if (recordedUnder(ledger.otherRecords, target.dest).length > 0) {
     const next = await nextHashes(ledger.otherRecords, item, target);
     const teamChanged = [...next].some(([file, hash]) => hash !== (ledger.otherRecords[file] ?? null));
     ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged });
@@ -355,7 +372,7 @@ export async function recordDelivered(hashes: DeliveredHashes, dest: string, ski
  */
 export async function recordedUnchanged(previous: DeliveredHashes | undefined, file: string, recordAt: string = file): Promise<boolean> {
   const recorded = previous?.[recordAt];
-  return recorded !== undefined && recorded === await fileHash(file);
+  return recorded !== undefined && !await isLink(file) && recorded === await fileHash(file);
 }
 
 /**
@@ -384,10 +401,10 @@ export function forgetDelivered(hashes: DeliveredHashes, dest: string): void {
  */
 export function reportKept(ledger: DeliveryLedger, scopeLabel: string): number {
   const members = new Set<string>();
-  for (const { dest, teamRelPath } of ledger.members.splice(0)) {
+  for (const { dest, teamRelPath, link } of ledger.members.splice(0)) {
     if (members.has(dest)) continue;
     members.add(dest);
-    log.warn(`[${scopeLabel}] ${describeMembersFile(dest, teamRelPath)}`);
+    log.warn(`[${scopeLabel}] ${link ? describeMembersLink(dest, teamRelPath) : describeMembersFile(dest, teamRelPath)}`);
   }
   const named = new Set<string>();
   for (const { dest, teamRelPath, teamChanged } of ledger.kept.splice(0)) {

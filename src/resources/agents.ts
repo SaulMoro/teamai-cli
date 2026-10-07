@@ -16,7 +16,7 @@ import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import {
-  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, forgetDelivered, isLink, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
@@ -1572,6 +1572,7 @@ export async function removedAgentOrigin(localConfig: LocalConfig, stem: string,
 export async function ownsAgentCopy(
   localConfig: LocalConfig, file: string, stem: string, tool: string, previous: DeliveredHashes | undefined,
 ): Promise<boolean> {
+  if (await isLink(file)) return false;
   if (BUILTIN_AGENT_NAMES.has(stem) || previous?.[file] !== undefined) return true;
   const origin = await removedAgentOrigin(localConfig, stem, tool)
     ?? { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };

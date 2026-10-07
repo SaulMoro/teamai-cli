@@ -291,7 +291,9 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     const initRun = init(t, dir);
     expect(fs.lstatSync(rule).isSymbolicLink()).toBe(true);
     expect(read(external)).toBe('Old team rule.\n');
-    expect(initRun.output).toContain(`Kept ${rule}: it is not teamai's`);
+    expect(initRun.output).toContain(
+      `Kept ${rule}: it is a link of yours, so teamai does not replace it. Remove the link to receive rules/team-rule.md from the team.`,
+    );
     teamaiOk(['pull', '--force'], dir);
     expect(read(external)).toBe('Old team rule.\n');
   });
