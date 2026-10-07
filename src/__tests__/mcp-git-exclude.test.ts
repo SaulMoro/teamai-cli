@@ -111,6 +111,40 @@ describe('teamai block in .git/info/exclude (#882)', () => {
     });
   });
 
+  // `git init --template=` leaves no info/ (#993).
+  describe('in a repository without .git/info/', () => {
+    beforeEach(async () => {
+      await fse.remove(path.join(repo, '.git', 'info'));
+    });
+
+    it('creates it and lists the file', async () => {
+      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toEqual({ kind: 'excluded', added: true });
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe(`${MCP_EXCLUDE_START}\n/.mcp.json\n${MCP_EXCLUDE_END}\n`);
+    });
+
+    it('finds nothing in the way on a dry run, and creates nothing', async () => {
+      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'), { dryRun: true })).toEqual({ kind: 'pending' });
+      expect(await fse.pathExists(path.join(repo, '.git', 'info'))).toBe(false);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('names the exclude file, and the directory that denies the write, when .git is read-only', async () => {
+      const gitDir = path.join(await fse.realpath(repo), '.git');
+      const realExclude = path.join(gitDir, 'info', 'exclude');
+      await fse.chmod(gitDir, 0o555);
+
+      try {
+        expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toEqual({
+          kind: 'failed',
+          reason: `${realExclude} is not writable, as ${gitDir} is not`,
+          fix: `Make ${gitDir} writable, or add \`/.mcp.json\` to ${realExclude} yourself, then run \`teamai pull\` again.`,
+        });
+      } finally {
+        await fse.chmod(gitDir, 0o755);
+      }
+      expect(await fse.pathExists(path.join(repo, '.git', 'info'))).toBe(false);
+    });
+  });
+
   it('keeps every pattern when several writers add to the same exclude file at once', async () => {
     const files = ['a', 'b', 'c', 'd', 'e'].map((name) => path.join(repo, `${name}.json`));
     for (const file of files) await fse.writeJson(file, {});

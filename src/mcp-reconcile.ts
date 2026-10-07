@@ -280,6 +280,57 @@ export interface McpTarget {
   builtinFallback?: true;
   /** Added by `includeUndetected`: a tool not installed on this machine, so no pull of this checkout delivers to it. */
   undetected?: true;
+  /**
+   * Set when `file` is the first existing of the files the tool reads
+   * (`USER_MCP_LOOKUP`): the file its mapping names, where a record with no
+   * `file` has its server (every teamai before #993 wrote there).
+   */
+  mappedFile?: string;
+}
+
+/**
+ * The user MCP files CodeBuddy looks for, in order. It reads only the first
+ * that exists and does not merge them (#993), so teamai writes there, and
+ * creates the first only when none exists.
+ */
+export const USER_MCP_LOOKUP: Readonly<Record<string, readonly string[]>> = {
+  codebuddy: ['.codebuddy/.mcp.json', '.codebuddy/mcp.json', '.codebuddy.json'],
+};
+
+/**
+ * The user MCP file `tool` reads, for a mapping `rel` under `baseDir`: the
+ * first existing file of its lookup order when `rel` is one of them, the
+ * first of them when none exists; otherwise the mapped file.
+ */
+export async function userMcpFile(tool: string, rel: string, baseDir: string): Promise<string> {
+  const lookup = USER_MCP_LOOKUP[tool];
+  if (!lookup?.includes(path.normalize(rel).replace(/\\/g, '/'))) return path.join(baseDir, rel);
+  for (const candidate of lookup) {
+    if (await pathExists(path.join(baseDir, candidate))) return path.join(baseDir, candidate);
+  }
+  return path.join(baseDir, lookup[0]);
+}
+
+/** The file `record` holds its server in: for a lookup target, the one it recorded, or the mapped one. */
+export function recordedFileOf(target: McpTarget, record: ManagedMcpRecord): string {
+  return target.mappedFile ? record.file ?? target.mappedFile : target.file;
+}
+
+/**
+ * For a target whose tool reads the first of several files (#993): teamai's
+ * servers its records place in another file, which the tool does not read,
+ * by file. Read-only; for `doctor` and `teamai mcp list`.
+ */
+export async function shadowedMcpRecords(localConfig: LocalConfig, target: McpTarget): Promise<Map<string, string[]>> {
+  const shadowed = new Map<string, string[]>();
+  if (!target.mappedFile) return shadowed;
+  const { manifest } = await loadMcpManifest(localConfig, true);
+  for (const record of manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []) {
+    const file = recordedFileOf(target, record);
+    if (file === target.file || !(await installedMcpEntries({ ...target, file }))?.has(record.name)) continue;
+    shadowed.set(file, [...shadowed.get(file) ?? [], record.name]);
+  }
+  return shadowed;
 }
 
 /**
@@ -325,7 +376,8 @@ export async function resolveMcpTargets(
     if (!rel) continue;
 
     const baseDir = resolveToolBaseDir(tool, localConfig);
-    const file = path.join(baseDir, rel);
+    const mappedFile = path.join(baseDir, rel);
+    const file = projectScope ? mappedFile : await userMcpFile(tool, rel, baseDir);
 
     const probe = paths.skills ?? paths.settings ?? paths.agents;
     if (!probe) continue;
@@ -339,6 +391,7 @@ export async function resolveMcpTargets(
       tool, format, file, projectScope,
       ...builtinFallback ? { builtinFallback: true as const } : {},
       ...installed ? {} : { undetected: true as const },
+      ...!projectScope && USER_MCP_LOOKUP[tool] ? { mappedFile } : {},
     });
   }
   return targets;
@@ -735,7 +788,8 @@ export async function memberMcpServers(
   const installed = await installedMcpEntries(target, { underKeyOnly: true });
   if (!installed) return [];
   const { manifest } = await loadMcpManifest(localConfig, true);
-  const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []).map((r) => r.name));
+  const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? [])
+    .filter((r) => recordedFileOf(target, r) === target.file).map((r) => r.name));
   const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, claimedByOtherTools(targets, target, manifest));
   const member: string[] = [];
   for (const name of desired.keys()) {
@@ -1777,7 +1831,9 @@ async function reconcileTargets(
     // and `removeAll` (uninstall) still reaches every tool.
     if (!removeAll && mcpTargetExcluded(localConfig, target)) continue;
     const manifestKey = managedMcpManifestKey(target.tool, target.projectScope);
-    const owned = manifest[manifestKey] ?? [];
+    // Records of servers in another file the tool does not read (#993) are moved out of it below.
+    const owned = (manifest[manifestKey] ?? []).filter((r) => recordedFileOf(target, r) === target.file);
+    const elsewhere = (manifest[manifestKey] ?? []).filter((r) => recordedFileOf(target, r) !== target.file);
     const ownedNames = new Set(owned.map((r) => r.name));
     const nextRecords: ManagedMcpRecord[] = [];
 
@@ -1816,6 +1872,11 @@ async function reconcileTargets(
     wrote = wroteTarget || wrote;
     // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
     if (wroteTarget === null) continue;
+    if (target.mappedFile) {
+      for (const record of nextRecords) record.file = target.file;
+      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judge, options, restoreConfigs);
+      wrote = moved || wrote;
+    }
 
     // The unnoted mark stays until a note of what else is in the file lands.
     const marked = manifest[manifestKey]?.some((record) => record.unnoted) ?? false;
@@ -2060,6 +2121,46 @@ async function applyJson(
       : () => fs.promises.rm(target.file, { force: true }));
   }
   return true;
+}
+
+/**
+ * Take teamai's servers out of the files its records `elsewhere` place them
+ * in, which `target`'s tool does not read (#993): a pull writes them to the
+ * file it reads, uninstall and `teamai mcp remove` remove them. Only entries
+ * those records claim are touched. A file that does not parse keeps them, and
+ * their records (`nextRecords`). Whether it wrote a file.
+ */
+async function removeFromOtherFiles(
+  target: McpTarget,
+  elsewhere: ManagedMcpRecord[],
+  nextRecords: ManagedMcpRecord[],
+  changes: McpChange[],
+  judge: McpEntryJudge,
+  options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
+): Promise<boolean> {
+  const byFile = new Map<string, ManagedMcpRecord[]>();
+  for (const record of elsewhere) {
+    const file = recordedFileOf(target, record);
+    byFile.set(file, [...byFile.get(file) ?? [], record]);
+  }
+  let wrote = false;
+  for (const [file, records] of byFile) {
+    const names = new Set(records.map((r) => r.name));
+    const removed: McpChange[] = [];
+    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, judge, options, restoreConfigs);
+    if (result === null) {
+      nextRecords.push(...records);
+      continue;
+    }
+    wrote ||= result;
+    changes.push(...removed);
+    if (!options.removeAll && removed.length > 0) {
+      log.info(`${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${target.tool} (${[...names].join(', ')}) out of ${file}: `
+        + `${target.tool} reads only ${target.file}, the first of its user MCP files that exists.`);
+    }
+  }
+  return wrote;
 }
 
 async function applyCodex(

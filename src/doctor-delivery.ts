@@ -879,6 +879,35 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
   return checks;
 }
 
+/**
+ * CodeBuddy reads only the first of its user MCP files that exists (#993).
+ * Once the member creates an earlier one (`codebuddy mcp add -s user`
+ * creates ~/.codebuddy/.mcp.json), teamai's servers in a later one are not
+ * loaded, until a pull moves them. Built only while a file teamai's records
+ * name holds them. Read-only.
+ */
+export async function buildMcpReadFileChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  // An HTTP-backed team's servers arrive through the local agent, which a pull does not run.
+  if (!teamConfig || localConfig.scope !== 'user' || localConfig.repo.kind === 'http') return [];
+  const { resolveMcpTargets, shadowedMcpRecords, USER_MCP_LOOKUP } = await import('./mcp-reconcile.js');
+  const checks: Check[] = [];
+  for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
+    const shadowed = await shadowedMcpRecords(localConfig, target);
+    if (shadowed.size === 0) continue;
+    const lookup = (USER_MCP_LOOKUP[target.tool] ?? []).map((rel) => `~/${rel}`);
+    checks.push({
+      name: `${target.tool} reads the file holding teamai's MCP servers`,
+      source: 'local',
+      check: async () => false,
+      fix: [...shadowed].map(([file, names]) => `teamai's MCP servers for ${target.tool} (${nameList(names)}) are in ${file}, `
+        + `which ${target.tool} does not read: it reads only ${target.file}, the first of ${lookup.join(', ')} that exists.`).join(' ')
+        + ' Run `teamai pull` to move them there.',
+    });
+  }
+  return checks;
+}
+
 /** Codex's verdict on a project, from the `projects` table of its user config. */
 type CodexProjectTrust =
   | { kind: 'trusted' }

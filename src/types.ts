@@ -1059,6 +1059,12 @@ export interface ManagedMcpRecord {
    * notes them, the file counts as having no record.
    */
   unnoted?: true;
+  /**
+   * User scope, a tool that reads the first of several files (CodeBuddy,
+   * #993): the file holding this server. Absent in records an older teamai
+   * wrote, whose server is in the tool's mapped file (`McpTarget.mappedFile`).
+   */
+  file?: string;
 }
 
 /** ~/.teamai/managed-mcp.json — team MCP servers injected per tool+scope key. */
