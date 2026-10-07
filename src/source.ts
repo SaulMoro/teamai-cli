@@ -24,7 +24,9 @@ import { getHandler } from './resources/index.js';
 import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
-import { describeKeptEntry, describeMembersLink, isLink, isTeamaiSkillCopy } from './resources/delivered-copies.js';
+import {
+  describeKeptEntry, describeMembersLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
+} from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -831,9 +833,10 @@ async function pullSingleSource(
       // Planned even when it turns out to be the member's: the boundary checks
       // below must see every destination this skill resolves to.
       plannedTargets.push({ path: physical, skillName: skill.name, lexicalPath: target, replacesSymlink: destination.replacesSymlink });
-      // A link at the destination is the member's: never replaced, written through or deleted (#993).
-      if (await isLink(target)) {
-        log.warn(`[source:${source.name}] ${describeMembersLink(target, `${source.name}/${skill.name}`, 'source')}`);
+      // A link at the destination, or inside the copy there, is the member's: never replaced, written through or deleted (#993).
+      const membersLink = await membersLinkAt(target);
+      if (membersLink !== null) {
+        log.warn(`[source:${source.name}] ${describeMembersLink(membersLink, `${source.name}/${skill.name}`, 'source')}`);
         continue;
       }
       const owner = otherOwners.find((candidate) => candidate.repositoryId !== repositoryId && pathsOverlap(candidate.path, physical));
@@ -1290,7 +1293,8 @@ async function getSkillRemovalPaths(skillName: string, baseDir: string, otherOwn
       if (owner.manifestPath) log.info(`Kept "${skillDir}" because another source installation owns it. Ownership record: ${owner.manifestPath}`);
       continue;
     }
-    if (keep && await keep(skillDir)) {
+    // A link the member put inside the copy is theirs: deleting the directory would take it (#993).
+    if (await holdsNonRegular(skillDir) || (keep && await keep(skillDir))) {
       plan.kept.push(recorded);
       continue;
     }
