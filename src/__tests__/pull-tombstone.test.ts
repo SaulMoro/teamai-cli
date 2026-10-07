@@ -228,6 +228,11 @@ describe('pull role-aware sync and cleanup', () => {
   });
 
   it('should clean up local skill directories that are tombstoned', async () => {
+    // The skill teamai delivered, before the team removed it: with no record
+    // of the copies, the history proves them teamai's (#993).
+    await fse.outputFile(path.join(repoPath, 'skills', 'old-skill', 'SKILL.md'), '# Old');
+    commitTeamRepo(repoPath, 'old-skill');
+    await fse.remove(path.join(repoPath, 'skills', 'old-skill'));
     // Tombstone for "old-skill"
     await fse.writeFile(path.join(repoPath, 'skills', '.removed'), 'old-skill\n');
 
