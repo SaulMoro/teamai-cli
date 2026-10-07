@@ -19,7 +19,8 @@ import {
   registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks,
 } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
-import { reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
+import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
+import { ruleOrigin } from './resources/rules.js';
 import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
@@ -378,8 +379,11 @@ async function reportWouldKeep(
   const received = items.map((item) => item.name);
   for (const item of items) {
     for (const target of await handler.deliveryTargets(freshConfig, localConfig, item, received)) {
-      if ((await judgeCopy(ledger.previous, item, target)).kind === 'keep') {
+      const verdict = await judgeCopy(ledger.previous, item, target);
+      if (verdict.kind === 'keep') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: you changed it since teamai delivered it.`);
+      } else if (verdict.kind === 'member') {
+        log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: it is not teamai's (no delivery record, and it matches no team version of ${item.relativePath}).`);
       }
     }
   }
@@ -548,7 +552,11 @@ async function cleanupTombstonedResources(
             log.warn(`[${scopeLabel}] Kept tombstoned skill "${name}" (${tool}): it has local VCS metadata (.git) that may hold unpushed history. Back it up, then delete it manually.`);
             continue;
           }
-          if (await removedCopyChanged(ledger.previous, localPath)) {
+          // With no record, a rule or agent copy goes only on proof that it is teamai's (#993).
+          const origin = type === 'rules' ? ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`)
+            : type === 'agents' ? await removedAgentOrigin(localConfig, name, tool)
+              : undefined;
+          if (await removedCopyChanged(ledger.previous, localPath, origin)) {
             log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed ${name}, but you changed this copy. Delete it when you no longer need it.`);
             continue;
           }
@@ -853,8 +861,14 @@ function setAgentModels(record: CheckoutRecord, agentModels: AgentModelRecords):
 
 /** The ledger a pull of that checkout starts from (see DeliveryLedger). */
 async function openCheckoutLedger(localConfig: LocalConfig, state?: State): Promise<DeliveryLedger> {
-  const record = await deliveringCheckoutRecord(localConfig, state);
-  return openLedger(record?.delivered, record?.agentModels);
+  const key = await checkoutRecordKey(localConfig);
+  const records = (state ?? await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
+  const record = key ? records[key] : undefined;
+  // Only words a kept copy (#993): a record lost to a new key is not this checkout's.
+  const otherRecords: DeliveredHashes = Object.assign({}, ...Object.entries(records)
+    .filter(([other]) => other !== key)
+    .map(([, other]) => other.delivered ?? {}));
+  return openLedger(record?.delivered, record?.agentModels, otherRecords);
 }
 
 /**
@@ -1468,6 +1482,9 @@ async function pullForScope(
   // which they fix without a new team revision, so the next pull must sync
   // again to deliver what was held.
   let agentModelsHeld = false;
+  // Set when a file of the member's own holds a team rule or agent back (#993):
+  // the next pull must sync again, so it delivers once the file is gone.
+  let membersFilesKept = false;
   let knownRepoSkillNames: Set<string> | null = null;
   // name → team-repo source dir, for the data-safety check in Step 3b cleanup.
   let knownRepoSkillSources: Map<string, string> | null = null;
@@ -1495,7 +1512,7 @@ async function pullForScope(
         if (items.length > 0) {
           log.success(`[${scopeLabel}] Synced ${items.length} rule(s)${skippedByTags > 0 ? ` (skipped ${skippedByTags} by tags)` : ''}`);
         }
-        reportKept(ledger, scopeLabel);
+        if (reportKept(ledger, scopeLabel) > 0) membersFilesKept = true;
       }
       totalSynced += items.length;
       continue;
@@ -1643,7 +1660,7 @@ async function pullForScope(
           log.success(`[${scopeLabel}] Synced ${items.length} ${type}`);
         }
       }
-      reportKept(ledger, scopeLabel);
+      if (reportKept(ledger, scopeLabel) > 0) membersFilesKept = true;
     }
 
     totalSynced += items.length;
@@ -1832,11 +1849,12 @@ async function pullForScope(
         state.lastPull = new Date().toISOString();
       }
       // A failed submodule update keeps the previous rev so the next pull
-      // retries the update (see refreshTeamRepo); so does a held agent.
-      if (!submodulesFailed && !agentModelsHeld) state[revisionField] = deliveredRev;
+      // retries the update (see refreshTeamRepo); so does a held agent, or a
+      // team resource a member's own file holds back.
+      if (!submodulesFailed && !agentModelsHeld && !membersFilesKept) state[revisionField] = deliveredRev;
       state[targetsField] = syncedTargets;
     }
-    const complete = !docsSyncFailed && !submodulesFailed && !agentModelsHeld;
+    const complete = !docsSyncFailed && !submodulesFailed && !agentModelsHeld && !membersFilesKept;
     if (recordKey && deliveredRev && (!complete || revisionField === 'lastInheritedPullRev')) {
       // An inherited pull moves HOME's skills, rules and agents, not the rest,
       // and an incomplete one keeps its marker for a retry, yet both delivered

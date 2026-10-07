@@ -1,15 +1,19 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
-import type { AgentModelRecords, DeliveryTarget, ResourceItem } from '../types.js';
+import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { matchesHistory } from '../utils/team-history.js';
 
 /**
  * What teamai last wrote at each skill, rule and agent file it delivered into
  * one checkout, and what pull does with a copy that no longer has those bytes
  * (#822). A copy is the member's edit only when it has a record and differs
- * from it: without a record, pull writes as it always has.
+ * from it. A file with no record is teamai's only on proof (#993): it holds
+ * teamai's render of the resource at some revision of the team repo's history
+ * (`isTeamaiCopy`). Otherwise it is the member's, and pull neither writes nor
+ * deletes it. Where no file exists, pull writes.
  */
 
 /** sha256 of the bytes teamai last wrote, by absolute destination file path. */
@@ -28,7 +32,9 @@ export interface DeliveredFile {
 
 export type CopyVerdict =
   | { kind: 'write' }
-  | { kind: 'keep'; teamChanged: boolean };
+  | { kind: 'keep'; teamChanged: boolean }
+  /** A file with no record that teamai cannot prove its own (#993). */
+  | { kind: 'member' };
 
 /** Push does not count a skill's CONTRIBUTORS as a change, so neither does this. */
 const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
@@ -53,6 +59,15 @@ export interface DeliveryLedger {
   /** What the pull leaves on record: `previous` with its writes and removals applied. */
   readonly hashes: DeliveredHashes;
   readonly kept: { dest: string; teamRelPath: string; teamChanged: boolean }[];
+  /** Files with no record that pull left as the member's, and the team resource each holds back (#993). */
+  readonly members: { dest: string; teamRelPath: string }[];
+  /**
+   * What the state's other checkout records say teamai wrote at each path. A
+   * record lost to a new key (a restored or copied `.git`, #993) still names
+   * this checkout's paths. It only words a kept copy as the member's edit; it
+   * never makes a file teamai's, and is never carried over to this record.
+   */
+  readonly otherRecords: DeliveredHashes;
   /**
    * The model each agent copy received (#830): the record the pull started
    * from until it writes that copy, then what it wrote. A copy pull kept or
@@ -67,11 +82,15 @@ export interface DeliveryLedger {
   readonly held: { name: string; reason: string; tools?: string[]; everyTool: boolean }[];
 }
 
-export function openLedger(previous: DeliveredHashes | undefined, agentModels?: AgentModelRecords): DeliveryLedger {
+export function openLedger(
+  previous: DeliveredHashes | undefined, agentModels?: AgentModelRecords, otherRecords: DeliveredHashes = {},
+): DeliveryLedger {
   return {
     previous,
     hashes: { ...previous },
     kept: [],
+    members: [],
+    otherRecords,
     held: [],
     agentModels: Object.fromEntries(Object.entries(agentModels ?? {}).map(([stem, byTool]) => [stem, { ...byTool }])),
   };
@@ -115,27 +134,84 @@ async function withDisk(previous: DeliveredHashes, next: Iterable<[string, strin
   return Promise.all([...next].map(async ([file, hash]) => ({ disk: await fileHash(file), recorded: previous[file], next: hash })));
 }
 
+/**
+ * Whether the file at `file`, which has no delivery record, is teamai's
+ * (#993): its bytes are a version of `origin.pathspec` in the history of
+ * `origin.repoPath`, or one of `origin.renders` of such a version, compared
+ * by git blob id. False when there is no file, or git cannot read the history:
+ * without proof, it is the member's. Read-only; run it only for a file that
+ * exists without a record, as it reads the history.
+ */
+export async function isTeamaiCopy(file: string, origin: CopyOrigin): Promise<boolean> {
+  const bytes = await fse.readFile(file).catch(() => null);
+  if (bytes === null) return false;
+  if (await matchesHistory(origin.repoPath, origin.pathspec, bytes)) return true;
+  for (const render of origin.renders ?? []) {
+    if (await matchesHistory(origin.repoPath, origin.pathspec, bytes, render)) return true;
+  }
+  log.debug(`${file} has no delivery record and matches no team version of ${origin.pathspec}: it is the member's`);
+  return false;
+}
+
+/**
+ * The line for a file pull keeps because it is not teamai's (#993), for
+ * pull and doctor alike: `resource` is the team file it holds back.
+ */
+export function describeMembersFile(file: string, resource: string): string {
+  return `Kept ${file}: it is not teamai's (no delivery record, and it matches no team version of ${resource}). `
+    + 'Rename or delete it, then run teamai pull, to receive the team version.';
+}
+
+/** Whether `target.dest` holds a file with no record, other than the render, that its origin does not prove teamai's. */
+async function isMembersFile(previous: DeliveredHashes | undefined, target: DeliveryTarget): Promise<boolean> {
+  if (target.origin === undefined || previous?.[target.dest] !== undefined) return false;
+  const disk = await fileHash(target.dest);
+  if (disk === null || (target.content !== undefined && disk === contentHash(target.content))) return false;
+  return !await isTeamaiCopy(target.dest, target.origin);
+}
+
 /** What pull does with `target`'s copy of `item`. Read-only. */
 export async function judgeCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<CopyVerdict> {
+  if (await isMembersFile(previous, target)) return { kind: 'member' };
   if (previous === undefined) return { kind: 'write' };
   return classifyCopy(await withDisk(previous, await nextHashes(previous, item, target)));
 }
 
-/** Whether pull leaves `target`'s copy as the member changed it; a kept copy is named by reportKept. */
+/**
+ * Whether pull leaves `target`'s copy alone: the member changed it, or it is
+ * not teamai's. reportKept names it: as an edit when another checkout record
+ * shows teamai wrote that path (a record lost to a new key), else as the
+ * member's own file.
+ */
 export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem, target: DeliveryTarget): Promise<boolean> {
   const verdict = await judgeCopy(ledger.previous, item, target);
   if (verdict.kind === 'write') return false;
-  ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: verdict.teamChanged });
+  if (verdict.kind === 'keep') {
+    ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: verdict.teamChanged });
+    return true;
+  }
+  const delivered = ledger.otherRecords[target.dest];
+  if (delivered !== undefined) {
+    const next = target.content === undefined ? null : contentHash(target.content);
+    ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: next !== delivered });
+  } else {
+    ledger.members.push({ dest: target.dest, teamRelPath: item.relativePath });
+  }
   return true;
 }
 
 /**
- * Whether the copy at `dest` of a resource the team removed has changed since
- * teamai delivered it. Without a record it has not, and is removed as before.
+ * Whether the copy at `dest` of a resource no longer delivered there must
+ * stay: on record and changed since teamai delivered it, or, with no record,
+ * not proven teamai's by `origin` (#993). Without a record and an origin, it
+ * is removed as before.
  */
-export async function removedCopyChanged(previous: DeliveredHashes | undefined, dest: string): Promise<boolean> {
-  if (previous === undefined) return false;
-  const files = await withDisk(previous, recordedUnder(previous, dest).map((file) => [file, null]));
+export async function removedCopyChanged(previous: DeliveredHashes | undefined, dest: string, origin?: CopyOrigin): Promise<boolean> {
+  const recorded = previous === undefined ? [] : recordedUnder(previous, dest);
+  if (recorded.length === 0) {
+    return origin !== undefined && await fileHash(dest) !== null && !await isTeamaiCopy(dest, origin);
+  }
+  const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
   return classifyCopy(files).kind === 'keep';
 }
 
@@ -184,10 +260,19 @@ export function forgetDelivered(hashes: DeliveredHashes, dest: string): void {
 
 /**
  * Name each copy pull kept, with the step that shares it or takes the team
- * version. The step is `pull --force`: this pull has recorded the team
- * revision, so a plain pull after it would skip the sync.
+ * version. The step for an edited copy is `pull --force`: this pull has
+ * recorded the team revision, so a plain pull after it would skip the sync.
+ * A member's own file holds a team resource back, so a full pull that met one
+ * does not count as synced (see the caller), and a plain pull delivers the
+ * team version once the file is gone. Returns how many such files it named.
  */
-export function reportKept(ledger: DeliveryLedger, scopeLabel: string): void {
+export function reportKept(ledger: DeliveryLedger, scopeLabel: string): number {
+  const members = new Set<string>();
+  for (const { dest, teamRelPath } of ledger.members.splice(0)) {
+    if (members.has(dest)) continue;
+    members.add(dest);
+    log.warn(`[${scopeLabel}] ${describeMembersFile(dest, teamRelPath)}`);
+  }
   const named = new Set<string>();
   for (const { dest, teamRelPath, teamChanged } of ledger.kept.splice(0)) {
     if (named.has(dest)) continue;
@@ -206,4 +291,5 @@ export function reportKept(ledger: DeliveryLedger, scopeLabel: string): void {
       );
     }
   }
+  return members.size;
 }

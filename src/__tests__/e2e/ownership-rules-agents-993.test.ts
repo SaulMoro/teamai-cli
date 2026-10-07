@@ -1,0 +1,263 @@
+/**
+ * E2E (#993 bugs 2 and 12): ownership of rule and agent files teamai has no
+ * delivery record of.
+ *
+ * A file at a rule or agent destination with no record in the checkout's
+ * ledger is teamai's only when it equals teamai's render of that resource at
+ * some revision of the team repo's history; an older team copy is then
+ * updated as before. Anything else is kept: an edited copy whose record was
+ * lost (a restored or copied checkout gives `.git` a new inode, so the record
+ * key changes) with the kept-edit wording, a member's own file at a team
+ * resource's path with its own message, which `doctor` repeats.
+ *
+ * Each case gets its own team remote: a local bare repo reached through a
+ * synthetic HTTPS URL (`url.<path>.insteadOf` in the sandbox HOME).
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..', '..', '..');
+const CLI = path.join(ROOT, 'dist', 'index.js');
+
+const GIT_ENV = {
+  GIT_AUTHOR_NAME: 'TeamAI CI',
+  GIT_AUTHOR_EMAIL: 'ci@teamai.test',
+  GIT_COMMITTER_NAME: 'TeamAI CI',
+  GIT_COMMITTER_EMAIL: 'ci@teamai.test',
+};
+
+interface Run { code: number | null; output: string }
+
+let sandbox: string;
+let home: string;
+/** Keeps a retried case off the directories its first attempt left. */
+let attempt = 0;
+
+function env(): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...GIT_ENV,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    FORCE_COLOR: '0',
+  };
+  delete base.CLAUDE_CONFIG_DIR;
+  return base;
+}
+
+function run(command: string, args: string[], cwd: string): Run {
+  const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env(), stdio: ['ignore', 'pipe', 'pipe'] });
+  return { code: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+function gitOk(args: string[], cwd: string): string {
+  const r = run('git', args, cwd);
+  if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.output}`);
+  return r.output.trim();
+}
+
+const teamai = (args: string[], cwd: string): Run => run(process.execPath, [CLI, ...args], cwd);
+
+function teamaiOk(args: string[], cwd: string): Run {
+  const r = teamai(args, cwd);
+  if (r.code !== 0) throw new Error(`teamai ${args.join(' ')} failed: ${r.output}`);
+  return r;
+}
+
+function writeFile(file: string, content: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+const read = (file: string): string => fs.readFileSync(file, 'utf8');
+
+/** A team: the bare remote its synthetic URL reaches, and a way to publish to it. */
+interface Team { url: string; publish(files: Record<string, string>, message: string): void }
+
+const ROLES_YAML = [
+  'version: 1',
+  'roles:',
+  '  - id: frontend',
+  '    resources:',
+  '      knowledge: [frontend]',
+  '      skills: [frontend]',
+  '  - id: backend',
+  '    resources:',
+  '      knowledge: [backend]',
+  '      skills: [backend]',
+  '',
+].join('\n');
+
+const agentYaml = (name: string, instructions: string): string => [
+  `name: ${name}`,
+  `description: ${name} fixture`,
+  'targets:',
+  '  - claude',
+  'instructions: |',
+  `  ${instructions}`,
+  '',
+].join('\n');
+
+function team(base: string, files: Record<string, string>): Team {
+  const name = `${base}-${++attempt}`;
+  const url = `https://git.example.com/team/${name}.git`;
+  const seed = path.join(sandbox, `${name}-seed`);
+  const remote = path.join(sandbox, `${name}.git`);
+  writeFile(path.join(seed, 'teamai.yaml'), [`team: ${name}`, `repo: ${url}`, 'provider: git', 'reviewers: []', ''].join('\n'));
+  gitOk(['init', '-q', '-b', 'main'], seed);
+  const publish = (next: Record<string, string>, message: string): void => {
+    for (const [rel, content] of Object.entries(next)) writeFile(path.join(seed, rel), content);
+    gitOk(['add', '-A'], seed);
+    gitOk(['commit', '-q', '-m', message], seed);
+    if (fs.existsSync(remote)) gitOk(['push', '-q', remote, 'main'], seed);
+  };
+  publish(files, 'seed');
+  gitOk(['clone', '-q', '--bare', seed, remote], sandbox);
+  gitOk(['config', '--global', `url.${remote}.insteadOf`, url], sandbox);
+  return { url, publish };
+}
+
+/** A git business repo holding `files` before teamai is set up in it. */
+function business(name: string, files: Record<string, string> = {}): string {
+  const dir = path.join(sandbox, `${name}-${++attempt}`);
+  writeFile(path.join(dir, 'README.md'), '# app\n');
+  gitOk(['init', '-q', '-b', 'main'], dir);
+  gitOk(['add', '-A'], dir);
+  gitOk(['commit', '-q', '-m', 'app'], dir);
+  for (const [rel, content] of Object.entries(files)) writeFile(path.join(dir, rel), content);
+  return fs.realpathSync.native(dir);
+}
+
+function init(t: Team, dir: string, ...extra: string[]): Run {
+  return teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude', '--scope', 'project', '--force', ...extra], dir);
+}
+
+/** What a restore from backup or a `cp -a` copy does to the checkout: `.git` gets a new inode. */
+function giveGitNewInode(dir: string): void {
+  fs.renameSync(path.join(dir, '.git'), path.join(dir, '.git.old'));
+  fs.cpSync(path.join(dir, '.git.old'), path.join(dir, '.git'), { recursive: true, preserveTimestamps: true });
+  fs.rmSync(path.join(dir, '.git.old'), { recursive: true, force: true });
+}
+
+const TEAM_RULE = '# Team rule\n';
+const FE_RULE = '# Frontend rule\n';
+const BE_RULE = '# Backend rule\n';
+
+describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', () => {
+  beforeAll(() => {
+    if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-rule-ownership-e2e-')));
+    home = path.join(sandbox, 'home');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  });
+
+  afterAll(() => {
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it('after .git gets a new inode, keeps edited still-delivered copies and updates an unedited older one', () => {
+    const t = team('restored', {
+      'rules/team-rule.md': TEAM_RULE,
+      'rules/other-rule.md': '# Other rule v1\n',
+      'agents/team-agent.yaml': agentYaml('team-agent', 'Version one.'),
+    });
+    const dir = business('restored-biz');
+    init(t, dir);
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    const other = path.join(dir, '.claude', 'rules', 'other-rule.md');
+    const agent = path.join(dir, '.claude', 'agents', 'team-agent.md');
+    // A first install writes where no file exists.
+    expect(read(rule)).toBe(TEAM_RULE);
+    expect(read(other)).toBe('# Other rule v1\n');
+    expect(read(agent)).toContain('Version one.');
+
+    giveGitNewInode(dir);
+    fs.appendFileSync(rule, 'member edit\n');
+    fs.appendFileSync(agent, 'member edit\n');
+    t.publish({ 'rules/other-rule.md': '# Other rule v2\n' }, 'other v2');
+
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(rule)).toBe(`${TEAM_RULE}member edit\n`);
+    expect(read(agent)).toContain('member edit');
+    expect(pulled.output).toContain(`Kept ${rule}: you changed it`);
+    expect(pulled.output).toContain(`Kept ${agent}: you changed it`);
+    // The unedited copy of an older team version is teamai's, and updated.
+    expect(read(other)).toBe('# Other rule v2\n');
+    expect(pulled.output).not.toContain(`Kept ${other}`);
+  });
+
+  it('after .git gets a new inode and a role switch, keeps an edited rule of the old role', () => {
+    const t = team('restored-role', {
+      'manifest/roles.yaml': ROLES_YAML,
+      'rules/team-rule.md': TEAM_RULE,
+      'rules/frontend/fe-rule.md': FE_RULE,
+      'rules/backend/be-rule.md': BE_RULE,
+    });
+    const dir = business('restored-role-biz');
+    init(t, dir, '--role', 'frontend');
+    const feRule = path.join(dir, '.claude', 'rules', 'frontend', 'fe-rule.md');
+    const beRule = path.join(dir, '.claude', 'rules', 'backend', 'be-rule.md');
+    expect(read(feRule)).toBe(FE_RULE);
+
+    giveGitNewInode(dir);
+    fs.appendFileSync(feRule, 'member edit\n');
+    teamaiOk(['roles', 'set', 'backend'], dir);
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(read(feRule)).toBe(`${FE_RULE}member edit\n`);
+    expect(pulled.output).toContain(
+      `Kept ${feRule}: teamai no longer delivers frontend/fe-rule here, but you changed this copy. Delete it when you no longer need it.`,
+    );
+    expect(read(beRule)).toBe(BE_RULE);
+  });
+
+  it('keeps a member\'s own rule and agent at a team resource\'s path, names them, and doctor lists them', () => {
+    const t = team('own-files', {
+      'rules/team-rule.md': TEAM_RULE,
+      'agents/team-agent.yaml': agentYaml('team-agent', 'Team version.'),
+    });
+    const dir = business('own-files-biz', {
+      '.claude/rules/team-rule.md': 'MY RULE\n',
+      '.claude/agents/team-agent.md': 'MY AGENT\n',
+    });
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    const agent = path.join(dir, '.claude', 'agents', 'team-agent.md');
+    const ruleMessage = `Kept ${rule}: it is not teamai's (no delivery record, and it matches no team version of rules/team-rule.md). `
+      + 'Rename or delete it, then run teamai pull, to receive the team version.';
+    const agentMessage = `Kept ${agent}: it is not teamai's (no delivery record, and it matches no team version of agents/team-agent.yaml). `
+      + 'Rename or delete it, then run teamai pull, to receive the team version.';
+
+    const initRun = init(t, dir);
+    expect(read(rule)).toBe('MY RULE\n');
+    expect(read(agent)).toBe('MY AGENT\n');
+    expect(initRun.output).toContain(ruleMessage);
+    expect(initRun.output).toContain(agentMessage);
+
+    const forced = teamaiOk(['pull', '--force'], dir);
+    expect(read(rule)).toBe('MY RULE\n');
+    expect(read(agent)).toBe('MY AGENT\n');
+    expect(forced.output).toContain(ruleMessage);
+    expect(forced.output).toContain(agentMessage);
+
+    const doctor = teamai(['doctor'], dir);
+    expect(doctor.output).toContain(ruleMessage);
+    expect(doctor.output).toContain(agentMessage);
+
+    // As the message says: once the member's file is out of the way, a plain pull delivers the team version.
+    fs.renameSync(rule, path.join(dir, '.claude', 'rules', 'my-rule.md'));
+    fs.rmSync(agent);
+    const plain = teamaiOk(['pull'], dir);
+    expect(read(rule)).toBe(TEAM_RULE);
+    expect(read(agent)).toContain('Team version.');
+    expect(plain.output).not.toContain('it is not teamai\'s');
+    // The member's renamed rule was never a team rule: the sweep leaves it alone.
+    expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
+  });
+});

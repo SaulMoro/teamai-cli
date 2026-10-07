@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import matter from 'gray-matter';
 import { isToolInstalledForConfig, ResourceHandler, type PlacementRecords, type ScanForPushOptions } from './base.js';
-import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
+import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { resolveToolBaseDir, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
@@ -726,10 +726,10 @@ export class AgentsHandler extends ResourceHandler {
         for (const warning of aliasWarningsFor(aliases, spec, tool)) warnOnce(`[agents] ${warning}`);
       }
     }
-    for (const { tool, dest, render } of renders) {
+    for (const { tool, dest, render, origin } of renders) {
       const destDir = path.dirname(dest);
       try {
-        if (ledger && await keepsEditedCopy(ledger, item, { tool, dest, content: render.content })) continue;
+        if (ledger && await keepsEditedCopy(ledger, item, { tool, dest, content: render.content, origin })) continue;
         await ensureDir(destDir);
         // Only a rendered spec can leave a sibling behind: its extension follows
         // the tool's format and changes when `targets` does. A legacy `.md` is
@@ -886,9 +886,9 @@ export class AgentsHandler extends ResourceHandler {
     for (const item of items) {
       if (isLegacyAgent(item as AgentResourceItem)) continue;
       const copies: RedeployedCopy[] = [];
-      for (const { tool, dest, render } of await this.resolveRenders(teamConfig, localConfig, item, aliases)) {
+      for (const { tool, dest, render, origin } of await this.resolveRenders(teamConfig, localConfig, item, aliases)) {
         if (!render.model) continue;
-        const target = { tool, dest, content: render.content };
+        const target = { tool, dest, content: render.content, origin };
         const recorded = ledger.agentModels[item.name]?.[tool];
         const reason = !await pathExists(dest) ? 'missing'
           : recorded ? (sameAgentModel(recorded, render.model.recorded) ? undefined : 'model')
@@ -1020,16 +1020,17 @@ export class AgentsHandler extends ResourceHandler {
     item: ResourceItem,
     aliases?: ModelAliases,
     recorded?: Readonly<Record<string, RecordedAgentModel>>,
-  ): Promise<{ tool: ToolName; dest: string; render: AgentRender }[]> {
+  ): Promise<{ tool: ToolName; dest: string; render: AgentRender; origin: CopyOrigin }[]> {
     const agentItem = item as AgentResourceItem;
-    const renders: { tool: ToolName; dest: string; render: AgentRender }[] = [];
+    const renders: { tool: ToolName; dest: string; render: AgentRender; origin: CopyOrigin }[] = [];
     const modelAliases = aliases ?? await loadModelAliases(localConfig);
 
     for (const { tool, dir } of await this.agentToolDirs(teamConfig, localConfig)) {
       const render = await this.renderedForTool(agentItem, tool, modelAliases, recorded?.[tool]);
       if (!render) continue;
 
-      renders.push({ tool, dest: path.join(dir, `${item.name}${render.ext}`), render });
+      const origin = agentOrigin(localConfig.repo.localPath, item.name, tool, modelAliases);
+      renders.push({ tool, dest: path.join(dir, `${item.name}${render.ext}`), render, origin });
     }
 
     return renders;
@@ -1068,7 +1069,7 @@ export class AgentsHandler extends ResourceHandler {
     item: ResourceItem,
   ): Promise<DeliveryTarget[]> {
     return (await this.resolveRenders(teamConfig, localConfig, item))
-      .map(({ tool, dest, render }) => ({ tool, dest, content: render.content }));
+      .map(({ tool, dest, render, origin }) => ({ tool, dest, content: render.content, origin }));
   }
 
   /**
@@ -1084,7 +1085,7 @@ export class AgentsHandler extends ResourceHandler {
     const { recordedAgentModels } = await import('../pull.js');
     const records = await recordedAgentModels(localConfig);
     return (await this.resolveRenders(teamConfig, localConfig, item, undefined, records[item.name]))
-      .map(({ tool, dest, render }) => ({ tool, dest, content: render.content }));
+      .map(({ tool, dest, render, origin }) => ({ tool, dest, content: render.content, origin }));
   }
 
   /** Whether `item`'s team file can be read and, for a YAML spec, parses. */
@@ -1488,6 +1489,33 @@ interface DeployedModel {
   recorded: RecordedAgentModel;
   /** The spec's own `model` is replaced, which a CLI without aliases wrote as is. */
   replacesSpecModel: boolean;
+}
+
+/**
+ * How a file with no record in `tool`'s agents directory is proven teamai's
+ * (#993): it holds a version of a team agent named `stem`, in any namespace
+ * (agents land flat, so same-stem agents share the file), verbatim (a legacy
+ * `.md`) or as pull renders that version for `tool` today, aliases resolved.
+ */
+export function agentOrigin(repoPath: string, stem: string, tool: ToolName, aliases: ModelAliases): CopyOrigin {
+  return {
+    repoPath,
+    pathspec: `:(glob)agents/**/${stem}.*`,
+    renders: [(content, version) => {
+      const file = path.posix.basename(version.path);
+      if (file !== `${stem}.yaml`) return null;
+      const parsed = parseAgentYaml(content.toString('utf-8'), file);
+      if (!parsed.ok || (parsed.spec.targets && !parsed.spec.targets.includes(tool))) return null;
+      const resolved = renderResolved(parsed.spec, tool, aliases);
+      return resolved.ok ? resolved.render.content : null;
+    }],
+  };
+}
+
+/** `agentOrigin` for a copy of a removed agent; undefined for a tool teamai renders no agents for. */
+export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin | undefined> {
+  if (!isKnownTool(tool)) return undefined;
+  return agentOrigin(localConfig.repo.localPath, stem, tool, await loadModelAliases(localConfig));
 }
 
 /**

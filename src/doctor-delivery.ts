@@ -167,19 +167,45 @@ function hasDeliveryProblem(delivery: ToolDelivery): boolean {
 }
 
 /**
- * What `pullItem` did not write at `target`: an older render, or a copy the
- * member changed since teamai delivered it, which pull keeps. With
- * `recordedLabel`, an older render still holding what teamai recorded writing
- * gets that label instead.
+ * The label for a file at a team resource's path that teamai has no record
+ * of and that holds no team version of it (#993): the member's own, which
+ * pull keeps, so the team version does not reach the tool. Each is named in
+ * the fix with pull's own line; `pull --force` does not replace it.
+ */
+const MEMBERS_OWN = 'not teamai\'s (kept by pull)';
+
+/** The list `lines` keeps for `tool`, created on first use. */
+function linesFor(lines: Map<string, string[]>, tool: string): string[] {
+  let list = lines.get(tool);
+  if (!list) lines.set(tool, list = []);
+  return list;
+}
+
+/** Pull's line for each file of the member's own in `delivery`'s tool, when the check lists any. */
+function membersOwnFix(lines: Map<string, string[]>, delivery: ToolDelivery): string {
+  const list = delivery.problems.has(MEMBERS_OWN) ? lines.get(delivery.tool) ?? [] : [];
+  return list.map((line) => ` ${line}`).join('');
+}
+
+/**
+ * What `pullItem` did not write at `target`: an older render, a copy the
+ * member changed since teamai delivered it, or a file of the member's own,
+ * which pull keeps; the line naming one of the last goes on `memberLines`.
+ * With `recordedLabel`, an older render still holding what teamai recorded
+ * writing gets that label instead.
  */
 async function differingCopyLabel(
-  item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig, recordedLabel?: string,
+  item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig, memberLines: string[], recordedLabel?: string,
 ): Promise<string> {
   const { deliveredHashes } = await import('./pull.js');
-  const { judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
+  const { describeMembersFile, judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
   const previous = await deliveredHashes(localConfig);
   const verdict = await judgeCopy(previous, item, target);
   if (verdict.kind === 'keep') return CHANGED_BY_YOU;
+  if (verdict.kind === 'member') {
+    memberLines.push(describeMembersFile(target.dest, item.relativePath));
+    return MEMBERS_OWN;
+  }
   return recordedLabel !== undefined && await recordedUnchanged(previous, target.dest) ? recordedLabel : olderLabel;
 }
 
@@ -284,7 +310,9 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   // scopes the rule by fields of it (Cursor `globs`, Kiro `inclusion`, …);
   // comparing against the render catches a wrong value there, which checking
   // the keys were present did not.
-  const ruleLabels = ['not delivered', 'delivered from an older copy', RECORDED_OLDER_RULE, FLAT_NAME_TAKEN, CHANGED_BY_YOU] as const;
+  const ruleLabels = ['not delivered', 'delivered from an older copy', RECORDED_OLDER_RULE, FLAT_NAME_TAKEN, CHANGED_BY_YOU, MEMBERS_OWN] as const;
+  // Pull's line for each file of the member's own, by the tool it is in.
+  const memberLines = new Map<string, string[]>();
   const { byTool } = await walkDelivery(
     getHandler('rules'),
     ctx,
@@ -295,7 +323,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
       const delivered = await readFileSafe(target.dest);
       if (delivered === null) return ruleLabels[0];
       if (target.content === undefined || delivered === target.content) return null;
-      return differingCopyLabel(item, target, ruleLabels[1], localConfig, RECORDED_OLDER_RULE);
+      return differingCopyLabel(item, target, ruleLabels[1], localConfig, linesFor(memberLines, target.tool), RECORDED_OLDER_RULE);
     },
   );
   // A tool that reads only the top of its rules directory gets no file for a
@@ -347,7 +375,7 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
             ? 'Run `teamai pull` to rewrite a copy that still holds what teamai recorded writing: it re-renders '
               + 'one even when the team repo has not changed. '
             : '')
-          + `${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}`,
+          + `${olderRuleCopyMeaning(delivery.tool)}${changedByYouFix(delivery)}${membersOwnFix(memberLines, delivery)}`,
     });
   }
 
@@ -664,7 +692,9 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
 
   // An agent whose spec reaches no tool at all is not a per-tool failure: the
   // file is in the team repo and nothing renders it anywhere.
-  const agentLabels = ['not delivered', 'delivered from an older spec', MODEL_CHANGED, CHANGED_BY_YOU] as const;
+  const agentLabels = ['not delivered', 'delivered from an older spec', MODEL_CHANGED, CHANGED_BY_YOU, MEMBERS_OWN] as const;
+  // Pull's line for each file of the member's own, by the tool it is in.
+  const memberLines = new Map<string, string[]>();
   // What the last pull wrote for each agent, its model as recorded then (#830).
   const recordedTargets = new Map<string, Promise<DeliveryTarget[]>>();
   const recordedContent = async (item: ResourceItem, tool: string): Promise<string | undefined> => {
@@ -690,7 +720,7 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
       if (delivered === null) return agentLabels[0];
       if (target.content === undefined || delivered === target.content) return null;
       if (delivered === await recordedContent(item, target.tool)) return MODEL_CHANGED;
-      return differingCopyLabel(item, target, agentLabels[1], localConfig);
+      return differingCopyLabel(item, target, agentLabels[1], localConfig, linesFor(memberLines, target.tool));
     },
   );
   // An agent whose model cannot be resolved is held, not unreachable: the
@@ -701,7 +731,8 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
 
   const checks: Check[] = [...byTool].map(([tool, delivery]) => {
     const modelChanged = delivery.problems.has(MODEL_CHANGED);
-    const restoredByForce = [...delivery.problems.keys()].some((label) => label !== MODEL_CHANGED && label !== CHANGED_BY_YOU);
+    const restoredByForce = [...delivery.problems.keys()]
+      .some((label) => label !== MODEL_CHANGED && label !== CHANGED_BY_YOU && label !== MEMBERS_OWN);
     return {
       name: `Agents delivered to ${tool}`,
       source: 'local',
@@ -713,7 +744,7 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
           ? [`${modelChanged ? 'For the rest, run' : 'Run'} \`teamai pull --force\`: a plain pull skips a scope whose team repo `
             + 'has not changed, so it cannot restore this.']
           : []),
-      ].join(' ') + changedByYouFix(delivery),
+      ].join(' ') + changedByYouFix(delivery) + membersOwnFix(memberLines, delivery),
     };
   });
 

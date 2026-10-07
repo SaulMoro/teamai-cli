@@ -19,6 +19,7 @@ import { resetWarnOnce } from '../utils/warn-once.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { TeamaiConfigSchema, scopedToolPaths } from '../types.js';
 import type { LocalConfig, ResourceItem } from '../types.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 describe('OMP (Oh My Pi) support', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -137,6 +138,11 @@ describe('OMP rules directory is user-owned', () => {
       await fse.ensureDir(path.join(repoPath, 'rules'));
       await fse.outputFile(path.join(homeDir, '.omp/agent/rules', 'gone.md'), 'Former team rule.');
       await fse.outputFile(path.join(homeDir, '.omp/agent/rules', 'personal.md'), 'Personal rule.');
+      // The rule as an older teamai delivered it verbatim, before the team
+      // removed it: with no record, the history proves the copy teamai's (#993).
+      await fse.writeFile(path.join(repoPath, 'rules', 'gone.md'), 'Former team rule.');
+      commitTeamRepo(repoPath, 'gone');
+      await fse.remove(path.join(repoPath, 'rules', 'gone.md'));
       await fse.writeFile(path.join(repoPath, 'rules', 'keep.md'), 'Current team rule.');
       await fse.writeFile(path.join(repoPath, 'rules', '.removed'), 'gone\n');
       vi.stubEnv('HOME', homeDir);
