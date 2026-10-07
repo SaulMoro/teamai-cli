@@ -262,6 +262,28 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
   });
 
+  it('delivers once the member\'s file is gone, even when the pull that kept it found the checkout at the team revision', () => {
+    const t = team('kept-at-rev', { 'rules/team-rule.md': TEAM_RULE });
+    const dir = business('kept-at-rev-biz');
+    init(t, dir);
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    // The state an older CLI leaves (no `delivered`), at the current team revision.
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(d, e.name)) : e.name === 'state.json' ? [path.join(d, e.name)] : []);
+    for (const file of walk(path.join(home, '.teamai'))) {
+      const state = JSON.parse(read(file)) as { lastPullByWorkspace?: Record<string, { delivered?: unknown }> };
+      for (const record of Object.values(state.lastPullByWorkspace ?? {})) delete record.delivered;
+      fs.writeFileSync(file, JSON.stringify(state, null, 2));
+    }
+    fs.writeFileSync(rule, 'MY RULE\n');
+    expect(teamaiOk(['pull', '--force'], dir).output).toContain(`Kept ${rule}: it is not teamai's`);
+
+    fs.rmSync(rule);
+    teamaiOk(['pull'], dir);
+
+    expect(read(rule)).toBe(TEAM_RULE);
+  });
+
   it('updates an unrecorded agent copy an older CLI rendered with another tool\'s extras (0.26.0, before #830)', () => {
     const t = team('old-agent-render', {
       'agents/reviewer.yaml': [

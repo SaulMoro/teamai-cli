@@ -1867,6 +1867,13 @@ async function pullForScope(
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
       setAgentModels(record, ledger.agentModels);
+      // Not advancing the revision is not enough when this checkout was at it
+      // already (`pull --force`, or after an older CLI's pull): miss the fast
+      // path outright, so a pull after the member's file is gone delivers.
+      if (membersFilesKept) {
+        if (workspaceKey) record.rev = FORCED_FULL_SYNC_REV;
+        else state[revisionField] = null;
+      }
       state.lastPullByWorkspace = { ...state.lastPullByWorkspace, [recordKey]: record };
     } else if (recordKey && deliveredRev) {
       // A forced full sync (lastPullRev cleared) leaves every other checkout
