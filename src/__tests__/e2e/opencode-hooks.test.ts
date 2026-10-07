@@ -47,6 +47,13 @@ describe.each([{ version: 'V1', binary: V1 }, { version: 'V2', binary: V2 }])('r
     fs.writeFileSync(path.join(team, 'teamai.yaml'), `team: opencode-hooks-e2e\nrepo: ${team}\nprovider: tgit\ntoolPaths:\n  opencode:\n    skills: .opencode/skills\n`);
     fs.writeFileSync(path.join(home, '.teamai/config.yaml'), `repo:\n  localPath: ${team}\n  remote: ${team}\nusername: ci\nscope: user\nenabledAgents:\n  - opencode\n`);
     fs.writeFileSync(path.join(env.OPENCODE_CONFIG_DIR, 'opencode.json'), '{}');
+    // With any plugin configured, OpenCode's first request for a directory waits
+    // until it has npm-installed @opencode-ai/plugin into its config dir: a
+    // registry fetch that, when slow, outlasts the session request below (CI).
+    // teamai's plugins import nothing from it, so record it as installed; with
+    // node_modules present and the name locked, OpenCode installs nothing.
+    fs.mkdirSync(path.join(env.OPENCODE_CONFIG_DIR, 'node_modules'));
+    fs.writeFileSync(path.join(env.OPENCODE_CONFIG_DIR, 'package-lock.json'), JSON.stringify({ packages: { '': { dependencies: { '@opencode-ai/plugin': '*' } } } }));
     const shim = path.join(bin, 'capture.cjs');
     fs.writeFileSync(shim, `let stdin='';process.stdin.on('data',d=>stdin+=d);process.stdin.on('end',()=>require('node:fs').appendFileSync(${JSON.stringify(records)},JSON.stringify({args:process.argv.slice(2),payload:JSON.parse(stdin)})+'\\n'));`);
     fs.writeFileSync(path.join(bin, process.platform === 'win32' ? 'teamai.cmd' : 'teamai'), process.platform === 'win32'
@@ -60,7 +67,7 @@ describe.each([{ version: 'V1', binary: V1 }, { version: 'V2', binary: V2 }])('r
       await applyOpencodeAgentHook({ slug: 'start-proof', event: 'SessionStart', command: `node -e ${JSON.stringify(`require('node:fs').appendFileSync(${JSON.stringify(commands)},'start\\n')`)}`, baseDir: home, scope: 'user' });
       const port = await freePort();
       const url = `http://127.0.0.1:${port}`;
-      server = spawn(binary!, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], { env, cwd: work, stdio: ['ignore', 'pipe', 'pipe'] });
+      server = spawn(binary!, ['serve', '--print-logs', '--hostname', '127.0.0.1', '--port', String(port)], { env, cwd: work, stdio: ['ignore', 'pipe', 'pipe'] });
       server.stdout?.on('data', (data: Buffer) => { logs += data.toString(); });
       server.stderr?.on('data', (data: Buffer) => { logs += data.toString(); });
       const auth = Buffer.from(`opencode:${version === 'V1' ? env.OPENCODE_SERVER_PASSWORD : env.OPENCODE_PASSWORD}`).toString('base64');
@@ -82,7 +89,8 @@ describe.each([{ version: 'V1', binary: V1 }, { version: 'V2', binary: V2 }])('r
           return ['teamai.hooks', 'teamai.agent.start-proof'].map((id) => plugins.find((p) => p.id === id)?.state.status);
         }, { timeout: 20_000 }).toEqual(['active', 'active']);
       }
-      const session = await request(version === 'V1' ? '/session' : '/api/session', version === 'V1' ? {} : { location: { directory: work } });
+      const session = await request(version === 'V1' ? '/session' : '/api/session', version === 'V1' ? {} : { location: { directory: work } })
+        .catch((error: unknown) => { throw new Error(`Creating the session failed: ${String(error)}\nOpenCode server log:\n${logs}`); });
       const dispatches = () => fs.existsSync(records) ? fs.readFileSync(records, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { args: string[]; payload: Record<string, unknown> }) : [];
       await expect.poll(() => dispatches().length, { timeout: 10_000 }).toBe(1);
       expect(dispatches()).toEqual([{ args: ['hook-dispatch', 'session-start', '--tool', 'opencode'], payload: { cwd: work, session_id: session.id } }]);
