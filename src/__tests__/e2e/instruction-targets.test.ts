@@ -809,7 +809,7 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ instructions: ['docs/style.md'], theme: 'dark' });
   });
 
-  it('gives OpenCode its user blocks in its config dir, registered with an absolute path, and adds no copy beside its Claude fallback', async () => {
+  it('gives OpenCode its user blocks in its config dir, registered with an absolute path, and lists no copy beside its Claude fallback', async () => {
     const own = makeUserSandbox(['.config/opencode']);
     sandboxes.push(own.sandbox);
     const ocDir = path.join(own.home, '.config', 'opencode');
@@ -822,17 +822,26 @@ describe('instruction block targets on real CLI pull (#945)', () => {
     expect(JSON.parse(fs.readFileSync(path.join(ocDir, 'opencode.json'), 'utf8')).instructions).toEqual(['~/notes.md', contextFile]);
     expect(fs.readFileSync(path.join(ocDir, 'AGENTS.md'), 'utf8')).toBe('# My OpenCode notes\n');
 
-    // No native user AGENTS.md: OpenCode falls back to ~/.claude/CLAUDE.md, which already holds the blocks.
+    // No native user AGENTS.md: OpenCode V1 falls back to ~/.claude/CLAUDE.md, which already holds the blocks,
+    // so the copy V2 reads through teamai's plugin is not listed for V1 (#993 bug 6).
     const fallback = makeUserSandbox(['.config/opencode', '.claude']);
     sandboxes.push(fallback.sandbox);
-    const viaClaude = await runCLI(['pull'], { HOME: fallback.home }, fallback.sandbox);
+    const env = { HOME: fallback.home, XDG_CONFIG_HOME: path.join(fallback.home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
+    const fallbackContext = path.join(fallback.home, '.config', 'opencode', 'teamai-context.md');
+    const listed = (): unknown[] => {
+      const file = path.join(fallback.home, '.config', 'opencode', 'opencode.json');
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).instructions ?? [] : [];
+    };
+    const viaClaude = await runCLI(['pull'], env, fallback.sandbox);
     expect(viaClaude.code, viaClaude.output).toBe(0);
     expect(fs.readFileSync(path.join(fallback.home, '.claude', 'CLAUDE.md'), 'utf8')).toContain(CLAUDEMD_START);
-    expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
+    expect(fs.readFileSync(fallbackContext, 'utf8')).toContain(CLAUDEMD_START);
+    expect(listed()).toEqual([]);
     expect(viaClaude.output).toContain('OpenCode reads the team instructions from');
-    const recall = await runCLI(['recall', 'enable'], { HOME: fallback.home }, fallback.sandbox);
+    const recall = await runCLI(['recall', 'enable'], env, fallback.sandbox);
     expect(recall.code, recall.output).toBe(0);
-    expect(fs.existsSync(path.join(fallback.home, '.config', 'opencode', 'teamai-context.md'))).toBe(false);
+    expect(fs.readFileSync(fallbackContext, 'utf8')).toContain(RECALL_START);
+    expect(listed()).toEqual([]);
   });
 
   it('has doctor report what keeps a tool from loading its instructions, not just whether a file was written', async () => {
