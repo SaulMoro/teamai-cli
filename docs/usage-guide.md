@@ -1326,7 +1326,7 @@ Where each tool's servers land:
 |---|---|---|
 | claude | `~/.claude.json` | `<project>/.mcp.json` |
 | cursor | `~/.cursor/mcp.json` | `<project>/.cursor/mcp.json` |
-| codebuddy | `~/.codebuddy/mcp.json` | `<project>/.mcp.json` |
+| codebuddy | the first that exists of `~/.codebuddy/.mcp.json`, `~/.codebuddy/mcp.json`, `~/.codebuddy.json` (below) | `<project>/.mcp.json` |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
 | codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
@@ -1340,9 +1340,20 @@ Where each tool's servers land:
 Codex reads `<project>/.codex/config.toml` only in a trusted project. After writing team MCP servers, `teamai pull` trusts the main checkout automatically, unless `codexTrustEnabled: false` is set or the project was explicitly marked untrusted. If automatic trust is disabled or fails, add a `[projects."<main checkout real path>"]` table with `trust_level = "trusted"` to `~/.codex/config.toml`; trusting the main checkout covers every worktree of the repository. `teamai doctor` reports an untrusted project whose file holds team servers.
 
 
+In user scope CodeBuddy reads one MCP file, the first that exists of
+`~/.codebuddy/.mcp.json`, `~/.codebuddy/mcp.json` and `~/.codebuddy.json`, and
+does not merge them. A pull writes teamai's servers to that file, beside your
+own, and creates `~/.codebuddy/.mcp.json` only when none exists. If you later
+create an earlier file (`codebuddy mcp add -s user` creates
+`~/.codebuddy/.mcp.json`), the next `teamai pull` moves teamai's own servers
+into it and leaves yours where they are; until then `teamai doctor` warns and
+`teamai mcp list` names the file they are in. `teamai mcp remove` and
+`teamai uninstall` remove them from the file that holds them. An HTTP-backed
+team's local agent still writes `~/.codebuddy/mcp.json`.
+
 CodeBuddy Code's [MCP documentation](https://www.codebuddy.ai/docs/cli/mcp)
 lists the project root's `.mcp.json` as its preferred project configuration.
-This is separate from TeamAI's user-scope `~/.codebuddy/mcp.json` target.
+This is separate from TeamAI's user-scope CodeBuddy file above.
 Explicit `toolPaths.codebuddy.mcpProject` values in `teamai.yaml` still take
 precedence. For an existing team that pins run
 `teamai mcp remove` in the affected workspace before changing that value to
