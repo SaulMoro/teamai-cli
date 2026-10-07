@@ -436,7 +436,10 @@ export class RulesHandler extends ResourceHandler {
         // Drop the `.md` copy left by an older layout; a tool that reads a
         // derived extension does not read it, and it would outlive the rule.
         const legacyCopy = path.join(destDir, `${path.basename(dest, path.extname(dest))}.md`);
-        if (dest !== legacyCopy) await remove(legacyCopy);
+        if (dest !== legacyCopy && await isLegacyLayoutCopy(legacyCopy, item.relativePath, ledger?.previous, localConfig.repo.localPath)) {
+          await remove(legacyCopy);
+          if (ledger) forgetDelivered(ledger.hashes, legacyCopy);
+        }
         // The namespaced copy an earlier pull wrote beside the author's root
         // copy: the same rule twice, for a tool that loads rules recursively.
         // A flat name (OMP's, Kiro's `fe.style.md`) may be the member's own
@@ -850,8 +853,12 @@ export class RulesHandler extends ResourceHandler {
         // active, and ahead of the built-in check, since built-ins now deploy to
         // target tool as `.mdc` too.
         if (isLegacyCursorRuleFile(tool, localFile)) {
-          await remove(path.join(destDir, localFile));
-          log.debug(`Removed legacy .md rule ${localFile} from ${tool}`);
+          const legacyFile = path.join(destDir, localFile);
+          if (await isLegacyLayoutCopy(legacyFile, `rules/${ruleName}.md`, ledger?.previous, localConfig.repo.localPath)) {
+            await remove(legacyFile);
+            if (ledger) forgetDelivered(ledger.hashes, legacyFile);
+            log.debug(`Removed legacy .md rule ${localFile} from ${tool}`);
+          }
           continue;
         }
 
@@ -1402,6 +1409,23 @@ export function ruleOrigin(tool: string, repoPath: string, relativePath: string)
     pathspec: relativePath,
     ...(renders.length > 0 ? { renders: renders.map((render) => (content: Buffer) => render(content.toString('utf-8'))) } : {}),
   };
+}
+
+/**
+ * Whether `file`, a `.md` in the rules directory of a tool that reads only
+ * its own extension (`.cursor/rules/`), is a copy an older teamai layout wrote
+ * there, so pull, remove and uninstall may delete it: on record, or a version
+ * of the team rule at `pathspec` verbatim, as that layout wrote it (#993). A
+ * built-in rule's name is teamai's own. Any other file is the member's and is
+ * kept silently: the tool never reads it, so there is nothing to resolve.
+ */
+export async function isLegacyLayoutCopy(
+  file: string, pathspec: string, previous: DeliveredHashes | undefined, repoPath: string,
+): Promise<boolean> {
+  if (!await pathExists(file)) return false;
+  if (previous?.[file] !== undefined) return true;
+  if (EXCLUDED_RULE_NAMES.has(pathspec.replace(/^rules\//, '').replace(/\.md$/, ''))) return true;
+  return isTeamaiCopy(file, { repoPath, pathspec });
 }
 
 /**
