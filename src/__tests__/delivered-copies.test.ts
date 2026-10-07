@@ -117,6 +117,13 @@ describe('judgeRemoval', () => {
     expect(await judgeRemoval({ [path.join(skill, 'SKILL.md')]: sha('team v1') }, skill, origin())).toBe('edited');
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('keeps an unrecorded file it cannot read as not teamai\'s', async () => {
+    fs.writeFileSync(copy, 'team v1');
+    fs.chmodSync(copy, 0o000);
+    expect(await judgeRemoval({}, copy, origin())).toBe('notTeamais');
+    fs.chmodSync(copy, 0o600);
+  });
+
   it('removes an unrecorded copy when no origin can prove whose it is, as before', async () => {
     fs.writeFileSync(copy, 'mine');
     expect(await judgeRemoval({}, copy)).toBe('remove');

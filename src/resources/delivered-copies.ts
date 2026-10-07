@@ -365,9 +365,10 @@ export async function judgeRemoval(
     return classifyCopy(files).kind === 'keep' ? 'edited' : 'remove';
   }
   if (origin === undefined) return 'remove';
+  // A file there that cannot be read proves nothing, so it is not teamai's (isTeamaiCopy).
   const teamais = await isDirectory(dest)
     ? await isTeamaiSkillCopy(dest, origin)
-    : await fileHash(dest) === null || await isTeamaiCopy(dest, origin);
+    : !await fse.pathExists(dest) || await isTeamaiCopy(dest, origin);
   if (teamais) return 'remove';
   return recordedUnder(otherRecords, dest).length > 0 ? 'edited' : 'notTeamais';
 }
