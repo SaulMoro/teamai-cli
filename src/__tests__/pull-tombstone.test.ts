@@ -307,6 +307,22 @@ describe('pull role-aware sync and cleanup', () => {
     await expectAgentRendersGone();
   });
 
+  it('keeps a member\'s file of a tombstoned agent in a team-defined tool, and removes teamai\'s verbatim copy (#993)', async () => {
+    useAgentToolPaths();
+    const base = (await loadTeamConfig(repoPath))!;
+    vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { ...base.toolPaths, mytool: { agents: '.mytool/agents' } } });
+    await seedTombstonedAgent();
+    await fse.ensureDir(path.join(homeDir, '.mytool/agents'));
+    await fse.writeFile(path.join(homeDir, '.mytool/agents', 'foo.md'), 'MY OWN AGENT');
+
+    await pull({});
+
+    expect(await fse.readFile(path.join(homeDir, '.mytool/agents', 'foo.md'), 'utf8')).toBe('MY OWN AGENT');
+    await fse.writeFile(path.join(homeDir, '.mytool/agents', 'foo.md'), 'stale');
+    await pull({ force: true });
+    expect(await fse.pathExists(path.join(homeDir, '.mytool/agents', 'foo.md'))).toBe(false);
+  });
+
   it('should clean up tombstoned agents even when the repo rev is unchanged', async () => {
     // Regression for #576 on the upgrade path: a machine that pulled the
     // tombstone with the older CLI keeps the copies that CLI could not delete,
