@@ -406,6 +406,32 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(m.teamai(['doctor'], app)).not.toContain('Last background pull');
   }, 120_000);
 
+  it('a checkout whose data the migration leaves in .teamai/ does not decide the setting with its own gitExcludeEnabled, and doctor names the layout', () => {
+    const m = member('legacy', '');
+    const app = m.project(path.join(caseDir('legacy'), 'app'));
+    // The layout of an older release: the checkout's own .teamai/ holds the config,
+    // and the partition directory lacks one, so the migration keeps the old layout.
+    const partition = path.dirname(m.partitionConfig());
+    const legacy = path.join(app, '.teamai');
+    fs.renameSync(partition, legacy);
+    fs.mkdirSync(partition);
+    const config = path.join(legacy, 'config.yaml');
+    write(config, `${read(config).split(partition).join(legacy)}gitExcludeEnabled: true\n`);
+    const exclude = excludeFileOf(m, app);
+
+    const pulled = m.teamai(['pull'], app);
+    expect(pulled).toContain(`Kept ${legacy}: ${partition} exists without a config.yaml.`);
+    expect(blockLines(exclude)).toEqual([]);
+    expect(status(m, app)).toContain('?? .claude/rules/team-rule.md');
+    expect(m.teamai(['pull', '--dry-run'], app)).not.toContain('teamai\'s delivered git exclude block');
+
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('Git exclude for delivered team resources: off, from the default.');
+    expect(doctor).toContain(`This checkout keeps teamai's data in ${legacy}, an un-migrated layout, so its \`gitExcludeEnabled\` is not read: `
+      + 'the setting comes from the team\'s teamai.yaml or the default until a pull migrates the data.');
+    expect(doctor).toContain('To keep them out of git, set `sharing.gitExclude.enabled: true` in teamai.yaml (the whole team), then run `teamai pull`.');
+  }, 120_000);
+
   it('reports a delivered path a rule re-includes as a failed sync, which a background pull keeps until a pull after the rule is gone', async () => {
     const m = member('reincluded');
     const app = m.project(path.join(caseDir('reincluded'), 'app'));

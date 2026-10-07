@@ -198,13 +198,23 @@ export function getRecallSharing(config: { sharing?: { recall?: { enabled?: bool
 /**
  * Resolve whether pull keeps what it delivers into a project out of git
  * (#915): the member's `gitExcludeEnabled` in the partition config > the
- * team's `sharing.gitExclude.enabled` > default (false).
+ * team's `sharing.gitExclude.enabled` > default (false). A checkout still on
+ * the un-migrated layout reads its own config from `<projectRoot>/.teamai/`,
+ * and its worktrees each have one: that member value is not read, so no single
+ * checkout decides for the exclude file they share.
  */
 export function isGitExcludeEnabled(
-  localConfig: { gitExcludeEnabled?: boolean },
+  localConfig: { gitExcludeEnabled?: boolean; scope?: string; projectRoot?: string; dataHome?: string },
   teamConfig: { sharing?: { gitExclude?: { enabled?: boolean } } },
 ): boolean {
-  return localConfig.gitExcludeEnabled ?? teamConfig.sharing?.gitExclude?.enabled ?? false;
+  const member = isUnmigratedDataHome(localConfig) ? undefined : localConfig.gitExcludeEnabled;
+  return member ?? teamConfig.sharing?.gitExclude?.enabled ?? false;
+}
+
+/** Whether a project config was read from the checkout's own `.teamai/` rather than its partition. */
+export function isUnmigratedDataHome(localConfig: { scope?: string; projectRoot?: string; dataHome?: string }): boolean {
+  const { scope, projectRoot, dataHome } = localConfig;
+  return scope === 'project' && !!projectRoot && !!dataHome && path.resolve(dataHome) === path.resolve(projectRoot, '.teamai');
 }
 
 /** Resolve whether recall is enabled: user override > team config > default (false). */
