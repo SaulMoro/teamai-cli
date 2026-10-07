@@ -156,6 +156,7 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-rule-ownership-e2e-')));
     home = path.join(sandbox, 'home');
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
   });
 
   afterAll(() => {
@@ -259,6 +260,42 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(plain.output).not.toContain('it is not teamai\'s');
     // The member's renamed rule was never a team rule: the sweep leaves it alone.
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
+  });
+
+  it('keeps a member\'s own .md in .cursor/rules through pull, remove and uninstall, and removes a legacy teamai copy', () => {
+    const t = team('cursor-legacy', {
+      'rules/old-layout.md': '# Old layout v1\n',
+      'rules/keeper.md': '# Keeper\n',
+      'rules/doomed.md': '# Doomed\n',
+    });
+    t.publish({ 'rules/old-layout.md': '# Old layout v2\n' }, 'old-layout v2');
+    const rules = (file: string): string => path.join(dir, '.cursor', 'rules', file);
+    const dir = business('cursor-legacy-biz', {
+      // The member's own notes, and a file of theirs that has a team rule's name.
+      '.cursor/rules/notes.md': 'MY NOTES\n',
+      '.cursor/rules/keeper.md': 'MY KEEPER\n',
+      // What an older teamai wrote before Cursor got `.mdc`: an old team version, verbatim, with no record.
+      '.cursor/rules/old-layout.md': '# Old layout v1\n',
+    });
+    teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'cursor', '--scope', 'project', '--force'], dir);
+
+    expect(fs.existsSync(rules('old-layout.md'))).toBe(false);
+    expect(read(rules('old-layout.mdc'))).toContain('# Old layout v2');
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['pull', '--force'], dir);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['remove', 'rules', 'doomed', '--force'], dir);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['uninstall', '--force'], dir);
+    expect(fs.existsSync(rules('keeper.mdc'))).toBe(false);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
   });
 
   it('keeps a member\'s own rules through teamai remove, the removed rule\'s name included', () => {
