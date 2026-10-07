@@ -58,8 +58,9 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     base.NODE_OPTIONS = [base.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' ');
     return base;
   };
-  const run = (command: string, args: string[], cwd: string): Run => {
-    const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env() });
+  /** stdin is a pipe, never a terminal. A run past `timeout` ms is killed and reports code null. */
+  const run = (command: string, args: string[], cwd: string, timeout?: number): Run => {
+    const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env(), input: '', timeout });
     return { code: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
   };
   const gitOk = (args: string[], cwd: string): string => {
@@ -67,7 +68,7 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.output}`);
     return r.output;
   };
-  const teamai = (args: string[], cwd: string): Run => run('node', [CLI, ...args], cwd);
+  const teamai = (args: string[], cwd: string, timeout?: number): Run => run('node', [CLI, ...args], cwd, timeout);
 
   /**
    * A business repo with one commit. init only parses the origin; nothing it
@@ -182,6 +183,20 @@ describe('init . --agent sets up only the tools passed (#993 bug 9)', () => {
     for (const dir of ['.codex', '.cursor', '.codebuddy', '.github']) {
       expect(fs.existsSync(path.join(repo, dir)), dir).toBe(false);
     }
+  });
+
+  // Scripts and CI run `init .` with no terminal: with no config in the clone
+  // yet, init must take the non-interactive default rather than wait on the
+  // tool picker.
+  it('in a fresh clone, init . with no --agent and no terminal sets up the tools found in HOME without prompting', () => {
+    const repo = clone();
+
+    const init = teamai(['init', '.', '--provider', 'git'], repo, 60_000);
+
+    expect(init.code, `timed out or failed:\n${init.output}`).toBe(0);
+    expect(init.output).not.toContain('Which AI tools');
+    expect(init.output).not.toContain('already initialized');
+    expect([...enabledAgents(repo)].sort()).toEqual(['claude', 'codebuddy', 'codex', 'copilot', 'cursor']);
   });
 
   it('in a fresh clone, any other command still self-heals with the tools found in HOME', () => {
