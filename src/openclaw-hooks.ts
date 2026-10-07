@@ -430,7 +430,8 @@ export async function removeOpenClawAgentHook(opts: {
 /** Where OpenClaw's default agent reads its workspace from, as far as teamai can tell (`resolveOpenclawWorkspace`). */
 export type OpenclawWorkspace =
   | { readonly kind: 'found'; readonly dir: string }
-  | { readonly kind: 'none'; readonly tried: string }
+  /** `candidate` is the directory OpenClaw would read, although it does not exist. */
+  | { readonly kind: 'none'; readonly tried: string; readonly candidate: string }
   /** openclaw.json is there but not plain JSON, so a workspace it sets is unknown. */
   | { readonly kind: 'unreadable-config'; readonly file: string; readonly error: string; readonly fallback: string | null };
 
@@ -465,7 +466,7 @@ export async function resolveOpenclawWorkspace(workspacePath?: string): Promise<
   if (read.kind === 'invalid') {
     return { kind: 'unreadable-config', file: cfgPath, error: read.error, fallback: exists ? candidate : null };
   }
-  return exists ? { kind: 'found', dir: candidate } : { kind: 'none', tried: [workspacePath, candidate].filter(Boolean).join(', ') };
+  return exists ? { kind: 'found', dir: candidate } : { kind: 'none', tried: [workspacePath, candidate].filter(Boolean).join(', '), candidate };
 }
 
 /**

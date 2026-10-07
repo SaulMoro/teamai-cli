@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 /**
  * E2E (#993 bug 8): skills from a team's `sources:` go where the team's own
  * skills go. They resolve through the team-skill seam (the agent-exclusion
@@ -294,6 +295,25 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(fs.existsSync(path.join(w.home, '.openclaw', 'skills'))).toBe(false);
   });
 
+  it('keeps pulling after a custom OpenClaw workspace outside ~/.openclaw is removed', () => {
+    const w = world('ows');
+    const workspace = path.join(path.dirname(w.home), 'custom-ows');
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(path.join(w.home, '.openclaw'), { recursive: true });
+    fs.writeFileSync(path.join(w.home, '.openclaw', 'openclaw.json'), JSON.stringify({ agents: { defaults: { workspace } } }));
+    w.ok(init(w, ['openclaw'], 'user'), w.home);
+    expect(read(path.join(workspace, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
+
+    fs.rmSync(workspace, { recursive: true });
+    w.publishSource({ 'skills/other-skill/SKILL.md': `${SOURCE_SKILL}v2\n` });
+    const pulled = w.run(['pull', '--force'], w.home);
+    expect(pulled.output).not.toContain('Invalid source ownership record');
+    expect(pulled.code).toBe(0);
+    const removed = w.run(['source', 'remove', 'other'], w.home);
+    expect(removed.output).not.toContain('Invalid source ownership record');
+    expect(removed.code).toBe(0);
+  });
+
   it('puts the source skill in the same directory as the team skill for every built-in tool', () => {
     const w = world('all');
     const toolPaths = TeamaiConfigSchema.parse({ team: 't', repo: 'r' }).toolPaths;
@@ -355,6 +375,33 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(read(path.join(claude, 'SKILL.md'))).toBe(MINE);
     expect(read(path.join(dir, '.agents', 'skills', 'other-skill', 'SKILL.md'))).toBe(MINE);
     expect(fs.existsSync(path.join(dir, '.codex', 'skills', 'other-skill'))).toBe(false);
+  });
+
+  it('with a source cache that has no history, never reads an enclosing repository\'s history', () => {
+    const w = world('enclosing');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude', 'codebuddy']), dir);
+    fs.rmSync(path.join(w.sourceCache, '.git'), { recursive: true });
+    // HOME is a dotfiles repository whose history holds the member's version at the cache's path.
+    const cached = path.join(w.sourceCache, 'skills', 'other-skill', 'SKILL.md');
+    const today = read(cached);
+    writeFile(cached, MINE);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: w.home });
+    execFileSync('git', ['add', '-A', path.relative(w.home, w.sourceCache)], { cwd: w.home });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'dotfiles'], { cwd: w.home });
+    writeFile(cached, today);
+
+    // The member's own copy, with no record: only proof would make it the source's.
+    const codebuddy = path.join(dir, '.codebuddy', 'skills', 'other-skill');
+    const manifestPath = w.manifestPath(dir);
+    const manifest = JSON.parse(read(manifestPath));
+    manifest.installedPaths['other-skill'] = manifest.installedPaths['other-skill'].filter((p: string) => !p.startsWith('.codebuddy/'));
+    for (const key of Object.keys(manifest.installedPhysicalPaths ?? {})) if (key.startsWith('.codebuddy/')) delete manifest.installedPhysicalPaths[key];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.rmSync(codebuddy, { recursive: true, force: true });
+    writeFile(path.join(codebuddy, 'SKILL.md'), MINE);
+    w.ok(['pull', '--force'], dir);
+    expect(read(path.join(codebuddy, 'SKILL.md'))).toBe(MINE);
   });
 
   it('with a source cache that has no history, the record and today\'s source decide', () => {

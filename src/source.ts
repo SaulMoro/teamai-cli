@@ -28,7 +28,7 @@ import {
   describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
-import { resolveOpenclawStateDir, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
+import { resolveOpenclawStateDir, resolveOpenclawWorkspace, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import { getUserHome } from './utils/home.js';
 import { acquireLock, releaseLock } from './update.js';
@@ -119,8 +119,12 @@ function isCanonicalSkillName(value: string): boolean {
  */
 async function externalToolHomes(): Promise<string[]> {
   const homes = [getHermesHome(), resolveOpenclawStateDir(), getCopilotHome()];
-  const workspace = await resolveOpenclawWorkspaceDir();
-  if (workspace) homes.push(path.resolve(workspace));
+  // The workspace OpenClaw is configured to read, even once its directory is gone:
+  // a record of a copy there stays valid, so pull and `source remove` keep working.
+  const workspace = await resolveOpenclawWorkspace();
+  if (workspace.kind === 'found') homes.push(path.resolve(workspace.dir));
+  else if (workspace.kind === 'none') homes.push(path.resolve(workspace.candidate));
+  else if (workspace.fallback) homes.push(path.resolve(workspace.fallback));
   return homes;
 }
 
@@ -1328,7 +1332,24 @@ async function isSourceSkillCopy(dir: string, repoDir: string, skillName: string
   if (sourcePath) {
     for (const rel of await listFilesRecursive(sourcePath)) current.set(path.join(dir, rel), await fileHash(path.join(sourcePath, rel)));
   }
+  // A source cache without its own .git has no history: git would read an enclosing repository's
+  // (a dotfiles HOME, say). Only today's source can prove the copy then.
+  if (!await pathExists(path.join(repoDir, '.git'))) return isCopyOfCurrent(dir, current);
   return isTeamaiSkillCopy(dir, skillOrigin(repoDir, skillName), current);
+}
+
+/**
+ * Whether every file in `dir` is the file of `current` (absolute path → hash) at that path, byte for
+ * byte, as `isTeamaiSkillCopy` judges without history: an empty directory holds nothing of the member's.
+ */
+async function isCopyOfCurrent(dir: string, current: ReadonlyMap<string, string | null>): Promise<boolean> {
+  if (await isLink(dir) || await holdsNonRegular(dir)) return false;
+  const files = (await listFilesRecursive(dir)).filter((rel) => path.basename(rel) !== 'CONTRIBUTORS');
+  for (const rel of files) {
+    const next = current.get(path.join(dir, rel));
+    if (next == null || await fileHash(path.join(dir, rel)) !== next) return false;
+  }
+  return true;
 }
 
 /**
