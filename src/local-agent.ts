@@ -66,6 +66,7 @@ import {
   resolveToolBaseDir,
   scopedToolPaths,
   applyToolRoots,
+  isGitExcludeEnabled,
   resolveToolRootDir,
   CLAUDE_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
@@ -2129,6 +2130,8 @@ async function syncClaudemd(
   // Why each tool got nothing, for the ACK when none did.
   const skipped: string[] = [];
   const reached: string[] = [];
+  // The targets resolveInstructionTargets checks below (#915: Copilot's moves with the flag).
+  const gitExclude = isGitExcludeEnabled(localConfig, fullTeamConfig);
 
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     // Pi, OMP and Hermes in a project take the cache from their extension or
@@ -2145,7 +2148,7 @@ async function syncClaudemd(
       reached.push(tool);
       continue;
     }
-    const targetFile = await instructionTargetFile(tool, toolPath, localConfig.scope)
+    const targetFile = await instructionTargetFile(tool, toolPath, localConfig.scope, gitExclude)
       // A server-sent workspace can exist where OpenClaw's own lookup finds none.
       ?? (tool === 'openclaw' && localConfig.scope !== 'project' && workspacePath ? toolPath.claudemd : undefined);
     if (!targetFile) continue;
@@ -2177,7 +2180,7 @@ async function syncClaudemd(
     const viaClaude = tool === 'opencode' && localConfig.scope === 'user'
       && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START) === true
       && await opencodeClaudeFallback(getUserHome(), [claudeUserFile]) !== null;
-    const target = await instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath);
+    const target = await instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath, gitExclude);
     const plan = await planInstructionFiles([target], { claudemd: block });
     // A warning means the file was left as it was: nothing reached the tool.
     if (plan.warnings.length > 0) {

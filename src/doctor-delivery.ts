@@ -1615,7 +1615,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     name: 'No team instruction blocks are left in files no tool loads them from',
     source: 'local',
     check: async () => leftovers.length === 0,
-    fix: [...warnings, `Earlier teamai releases left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`].join(' '),
+    // A sharing.gitExclude switch moves Copilot's blocks too (#915).
+    fix: [...warnings, `An earlier teamai release or sharing.gitExclude setting left team instruction blocks in ${nameList(leftovers)}, which can carry another member's selection. ${pullNow}`].join(' '),
   });
   return checks;
 }
