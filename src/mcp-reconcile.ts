@@ -322,7 +322,7 @@ export async function userMcpFile(tool: string, rel: string, baseDir: string): P
 }
 
 /** The file `record` holds its server in: for a lookup target, the one it recorded, or the mapped one. */
-export function recordedFileOf(target: McpTarget, record: ManagedMcpRecord): string {
+export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, record: ManagedMcpRecord): string {
   return target.mappedFile ? record.file ?? target.mappedFile : target.file;
 }
 

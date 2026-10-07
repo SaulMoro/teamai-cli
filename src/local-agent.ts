@@ -48,6 +48,7 @@ import {
   writeCodexAtomic,
   spliceCodexBlock,
   codexServerNames,
+  recordedFileOf,
   userMcpFile,
   USER_MCP_LOOKUP,
 } from './mcp-reconcile.js';
@@ -3050,7 +3051,8 @@ async function installMcpServer(
   // CodeBuddy reads only the first of its user MCP files that exists (#993), as a pull writes it.
   const lookup = !projectScope && USER_MCP_LOOKUP[tool] !== undefined;
   const targetFile = lookup ? await userMcpFile(tool, mcpRel, baseDir) : mappedFile;
-  const fileOf = (record: ManagedMcpRecord): string => lookup ? record.file ?? mappedFile : targetFile;
+  const fileOf = (record: ManagedMcpRecord): string =>
+    recordedFileOf({ file: targetFile, ...(lookup ? { mappedFile } : {}) }, record);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
