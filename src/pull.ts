@@ -21,9 +21,9 @@ import {
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { ruleOrigin } from './resources/rules.js';
-import { listStaleDocDirectories, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
+import { listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { skillsDirForTool } from './resources/skills.js';
+import { skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
@@ -552,10 +552,11 @@ async function cleanupTombstonedResources(
             log.warn(`[${scopeLabel}] Kept tombstoned skill "${name}" (${tool}): it has local VCS metadata (.git) that may hold unpushed history. Back it up, then delete it manually.`);
             continue;
           }
-          // With no record, a rule or agent copy goes only on proof that it is teamai's (#993).
+          // With no record, a copy goes only on proof that it is teamai's (#993).
           const origin = type === 'rules' ? ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`)
             : type === 'agents' ? await removedAgentOrigin(localConfig, name, tool)
-              : undefined;
+              : type === 'skills' ? skillOrigin(localConfig.repo.localPath, name)
+                : undefined;
           if (await removedCopyChanged(ledger.previous, localPath, origin)) {
             log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed ${name}, but you changed this copy. Delete it when you no longer need it.`);
             continue;
@@ -1482,7 +1483,7 @@ async function pullForScope(
   // which they fix without a new team revision, so the next pull must sync
   // again to deliver what was held.
   let agentModelsHeld = false;
-  // Set when a file of the member's own holds a team rule or agent back (#993):
+  // Set when a file of the member's own holds a team resource back (#993):
   // the next pull must sync again, so it delivers once the file is gone.
   let membersFilesKept = false;
   let knownRepoSkillNames: Set<string> | null = null;
@@ -1552,8 +1553,11 @@ async function pullForScope(
           && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) continue;
         if (options.dryRun) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs and remove stale local docs`);
+          for (const file of await membersDocs(desired, destination, localConfig.repo.localPath)) {
+            log.info(`[${scopeLabel}] [dry-run] Would keep ${path.join(destination, file)}: it is not teamai's (no delivery record, and it matches no team version of docs/${file}).`);
+          }
         } else {
-          await docsHandler.pullDocs(desired, freshConfig, localConfig);
+          if (await docsHandler.pullDocs(desired, freshConfig, localConfig) > 0) membersFilesKept = true;
           log.success(`[${scopeLabel}] Synced ${fileCount} docs`);
         }
         totalSynced += fileCount;
@@ -3052,6 +3056,9 @@ async function reconcileCoAuthorAllScopes(
       if (options.silent) continue;
       for (const c of changes.filter((change) => change.action === 'removed')) {
         log.info(`Removed the co-author setting an earlier teamai wrote to ${c.file}, a shared project file (teamai now writes it only to .claude/settings.local.json). Commit the change if the file is tracked.`);
+      }
+      for (const c of changes.filter((change) => change.action === 'moved')) {
+        log.info(`Moved the co-author setting an earlier teamai wrote to ${c.file}, a shared project file, to .claude/settings.local.json; your trailer setting is unchanged. Commit the change if the file is tracked.`);
       }
       if (applied.length > 0) {
         const verb = applied[0].enabled ? 'enabled' : 'disabled';

@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import { DocsHandler } from '../resources/docs.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { LocalConfigSchema, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
 describe('DocsHandler nested documents', () => {
@@ -99,6 +100,8 @@ describe('DocsHandler pruning (#794)', () => {
   it('copies updates and removes deleted and renamed files, including nested directories', async () => {
     await fse.outputFile(path.join(source, 'guide.md'), 'old');
     await fse.outputFile(path.join(source, 'nested', 'old.md'), 'old');
+    // The copy pull wrote is the team's earlier version, which history proves (#993).
+    commitTeamRepo(path.join(root, 'repo'), 'old');
     await sync();
     await fse.remove(path.join(source, 'nested'));
     await fse.outputFile(path.join(source, 'guide.md'), 'new');

@@ -972,16 +972,19 @@ interface ListedWorktree extends WorktreeListEntry {
 /**
  * The entries of `git worktree list --porcelain -z` for the repo containing
  * `cwd`, or null when git fails: outside a repository, a missing `cwd`, or git
- * older than 2.36, which has no `-z`. Output is never split on newlines (#993).
+ * older than 2.36, which has no `-z`. With `newlineSplit`, the entries of
+ * `git worktree list --porcelain` instead, split on newlines, which cuts a
+ * path holding one: never a proof of liveness (#993).
  */
-async function readWorktreeList(cwd?: string): Promise<ListedWorktree[] | null> {
+async function readWorktreeList(cwd?: string, newlineSplit = false): Promise<ListedWorktree[] | null> {
   let list: string;
   try {
     // Inside the try: simple-git throws at once for a directory that does not exist.
-    list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', '-z']);
+    list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', ...newlineSplit ? [] : ['-z']]);
   } catch {
     return null;
   }
+  if (newlineSplit) list = list.split(/\r?\n/).join('\0');
   return Promise.all(parseWorktreeList(list)
     .filter((entry) => entry.path)
     .map(async (entry) => ({ ...entry, listed: entry.path, path: await realpath(entry.path).catch(() => entry.path) })));
@@ -999,10 +1002,13 @@ function listedCheckouts(entries: ListedWorktree[], commonDir: string | null): L
  * and so is the git directory itself, which a `--separate-git-dir` repo or a
  * submodule lists in place of its main checkout (#993): that checkout is then
  * missing, so liveness is never read from this list alone (see isLiveCheckout,
- * completeWorktreeList). Returns [] when git fails (readWorktreeList).
+ * completeWorktreeList). On git before 2.36, which has no `-z`, it falls back
+ * to the newline-split list: callers that guard every checkout's files (the
+ * shared `info/exclude`, per-worktree MCP cleanup) need the siblings there
+ * too. Returns [] when git fails both ways.
  */
 export async function listWorktrees(cwd?: string): Promise<string[]> {
-  const entries = await readWorktreeList(cwd);
+  const entries = await readWorktreeList(cwd) ?? await readWorktreeList(cwd, true);
   if (!entries) return [];
   const commonDir = await gitCommonDir(path.resolve(cwd ?? process.cwd()));
   return [...new Set(listedCheckouts(entries, commonDir).map((entry) => entry.path))];
