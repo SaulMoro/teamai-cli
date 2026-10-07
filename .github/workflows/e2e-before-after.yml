@@ -1,0 +1,95 @@
+name: E2E before-after benchmark
+
+on:
+  push:
+    branches: [benchmark/e2e-performance-20261007]
+    paths:
+      - .github/workflows/e2e-before-after.yml
+      - .github/scripts/e2e-measure.py
+
+permissions:
+  contents: read
+
+jobs:
+  paired:
+    name: Full E2E before and after on one Linux runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout measurement harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout baseline
+        uses: actions/checkout@v4
+        with:
+          ref: f287dcb1a3fa247206a5dad9766b5d6ef14e3106
+          path: before
+          persist-credentials: false
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 809edbd1090f07b911eedaeb8dafc7e30d41bb40
+          path: after
+          persist-credentials: false
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: before/package-lock.json
+      - name: Install baseline dependencies
+        run: npm ci --ignore-scripts
+        working-directory: before
+      - name: Measure before (full suite, one worker)
+        run: python3 harness/.github/scripts/e2e-measure.py --root before --out /tmp/e2e-ab-results --label before --before
+      - name: Install candidate dependencies
+        run: npm ci --ignore-scripts
+        working-directory: after
+      - name: Measure after (full suite, two workers)
+        run: python3 harness/.github/scripts/e2e-measure.py --root after --out /tmp/e2e-ab-results --label after
+      - name: Compare coverage, verdicts and elapsed time
+        if: always()
+        run: |
+          python3 - <<'PYCODE'
+          import json, pathlib, os
+          p = pathlib.Path('/tmp/e2e-ab-results')
+          def read(name):
+              report = json.loads((p / (name + '.json')).read_text())
+              meta = json.loads((p / (name + '-meta.json')).read_text())
+              cases = {(str(pathlib.Path(r['name']).relative_to(meta['root'])), t['fullName']): t['status'] for r in report['testResults'] for t in r['assertionResults']}
+              return meta, cases
+          before, bc = read('before')
+          after, ac = read('after')
+          identical = bc == ac
+          summary = '\n'.join([
+              '## Full E2E before / after',
+              '',
+              '| Variant | Seconds including build | Passed | Failed | Skipped |',
+              '| --- | ---: | ---: | ---: | ---: |',
+              *[f"| {m['label']} | {m['seconds']:.2f} | {m['counts']['numPassedTests']} | {m['counts']['numFailedTests']} | {m['counts']['numPendingTests']} |" for m in [before, after]],
+              '',
+              f"Time reduction: {(1 - after['seconds'] / before['seconds']) * 100:.1f}%.",
+              f"Identical per-case verdicts: {identical}.",
+              'Same runner, Node 20, lockfile, retry=0, cache=false; no remote credentials. This measures build plus the E2E suite, not the full CI workflow.',
+          ])
+          print(summary)
+          (p / 'summary.md').write_text(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(summary)
+          assert before['lock_sha256'] == after['lock_sha256']
+          assert before['node'] == after['node']
+          assert identical, 'Before and after have different per-case verdicts'
+          assert before['exit_code'] == after['exit_code'] == 0, 'An E2E suite failed; timings are diagnostic'
+          PYCODE
+      - name: Upload logs, reports and metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-before-after-linux-node20
+          path: |
+            /tmp/e2e-ab-results/*.json
+            /tmp/e2e-ab-results/*.log
+            /tmp/e2e-ab-results/summary.md
+          retention-days: 30
