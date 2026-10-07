@@ -36,6 +36,13 @@ import { resolveBaseDir, scopedToolPaths, SOURCE_PULL_TTL_MS } from './types.js'
 
 // ─── Source repo management ──────────────────────────────
 
+/**
+ * Source skills keep taking Codex's existing `.agents/skills` copy as theirs;
+ * their ownership proof is the source repo's history, not the team repo's
+ * (`resolveSkillDestination`, #993 bug 8).
+ */
+const sourceOwnsShared = async (): Promise<boolean> => true;
+
 function sourceLockPath(): string {
   return path.join(getUserHome(), '.teamai', '.source-lifecycle-lock');
 }
@@ -735,7 +742,7 @@ async function pullSingleSource(
     let conflictingRecord: string | undefined;
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills || !await ResourceHandler.isToolInstalled(toolPath.skills, baseDir)) continue;
-      const target = await resolveSkillDestination(tool, toolPath.skills, baseDir, skill.name);
+      const target = await resolveSkillDestination(tool, toolPath.skills, baseDir, skill.name, sourceOwnsShared);
       if (tool === CODEX_TOOL && target !== path.join(baseDir, toolPath.skills, skill.name)) codexSkillsPath = toolPath.skills;
       targets.push(target);
       const destination = await resolveSourceCopyDestination(target);
@@ -820,7 +827,7 @@ async function pullSingleSource(
       }
       // The existing resolver alone decides whether both copies and the
       // incoming source match. Different local drafts are never removed.
-      await resolveSkillDestination(CODEX_TOOL, skillsPath, baseDir, skill.name, skill.sourcePath);
+      await resolveSkillDestination(CODEX_TOOL, skillsPath, baseDir, skill.name, sourceOwnsShared, skill.sourcePath);
     }
   }
 
