@@ -439,6 +439,18 @@ describe('doctor — skills delivered on disk', () => {
       expect(check!.fix).not.toContain('billing.md');
     });
 
+    it('does not report as stale a directory of the member\'s that pull keeps where the team deleted a doc file (#993)', async () => {
+      await writeTeamDoc('guide');
+      commitTeamRepo(repoPath, 'add guide');
+      await fse.remove(path.join(repoPath, 'docs', 'guide'));
+      await writeTeamDoc('other.md');
+      commitTeamRepo(repoPath, 'remove guide');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'other.md'), '# doc\n');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'guide', 'personal.md'), 'mine');
+      const check = await docsCheck();
+      expect(check?.fix ?? '').not.toContain('guide/personal.md');
+    });
+
     it('reports missing and stale docs together without changing local files', async () => {
       await writeTeamDoc('guide.md');
       const stale = path.join(homeDir, 'team-docs', 'old', 'retired.md');

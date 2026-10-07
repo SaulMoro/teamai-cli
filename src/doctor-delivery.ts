@@ -1386,7 +1386,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   if (!teamConfig) return [];
 
   const {
-    isPrunableDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
+    isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
   } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
@@ -1421,7 +1421,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   // A file pull keeps because it is no team version of a removed doc is the member's, not stale (#993).
   const staleFiles: string[] = [];
   for (const file of localFiles.filter((local) => !known.has(local))) {
-    if (await isPrunableDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
+    if (await isPrunedDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
   }
   const stale = [...staleFiles, ...staleDirectories];
 
