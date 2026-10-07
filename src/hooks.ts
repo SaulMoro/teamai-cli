@@ -25,6 +25,7 @@ import {
   CODEX_TOOL_ID,
   DEFAULT_CODEX_ROOT,
   getDataHome,
+  isGitExcludeEnabled,
   isSelfMode,
   managedMcpManifestKey,
   managedMcpManifestPath,
@@ -322,6 +323,12 @@ export interface ReconcileHooksOptions {
   teamOnly?: boolean;
   /** The team's hooks at every revision, to recognize entries the manifest does not record (#993). */
   teamHookHistory?: TeamHookHistory;
+  /**
+   * Without a manifest, still treat every entry carrying a team hook's marker
+   * as teamai's: the pass removes them and records nothing. For self mode's
+   * tracked settings while the team hooks live in `settings.local.json` (#915).
+   */
+  dropTeamEntries?: boolean;
 }
 
 /** Every team hook any revision of the team repo's hook files declares, read once. */
@@ -682,6 +689,76 @@ async function mainCheckoutOf(projectRoot: string): Promise<{ root: string; work
 /** The main checkout's team hook file of `tool`, when the tool keeps one there. */
 export function mainCheckoutHookFile(mainCheckout: MainCheckoutHooks | null | undefined, tool: string): string | null {
   return mainCheckout?.files[tool] ?? null;
+}
+
+/**
+ * Self mode (#915): the tools whose team hooks leave the committed settings
+ * for the checkout's own `settings.local.json` while `sharing.gitExclude` is
+ * on. Their built-ins stay committed, so a fresh clone still has them.
+ */
+const SELF_LOCAL_TEAM_HOOK_TOOLS: readonly string[] = ['claude'];
+
+function selfLocalHookFile(baseDir: string, tool: string, settings: string): string | null {
+  return SELF_LOCAL_TEAM_HOOK_TOOLS.includes(tool) ? path.join(baseDir, path.dirname(settings), 'settings.local.json') : null;
+}
+
+/** This self-mode checkout's `settings.local.json` that can hold `tool`'s team hooks, or null. */
+export function selfLocalTeamHookFile(
+  localConfig: LocalConfig,
+  toolPaths: Record<string, { settings?: string }>,
+  tool: string,
+): string | null {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot || !isSelfMode(localConfig)) return null;
+  const settings = toolPaths[tool]?.settings;
+  return settings ? selfLocalHookFile(resolveHookScope(localConfig).baseDir, tool, settings) : null;
+}
+
+/**
+ * Reconcile one self-mode tool whose team hooks can live in `localFile`. The
+ * per-checkout manifest keys records by tool, so its records for `tool`
+ * describe one file at a time: the one holding the team hooks.
+ *
+ * - `relocate` (the resolved `sharing.gitExclude` on): the local file is
+ *   reconciled team-only from those records first; then the tracked file
+ *   keeps the built-ins and drops every team entry by its marker, without
+ *   reading or writing the records.
+ * - otherwise: the local file gives up the entries the records name (and is
+ *   deleted when nothing else is left in it), then the tracked file gets the
+ *   built-ins and team hooks as before #915, and its pass records them.
+ */
+async function reconcileSelfLocalTeamHooks(
+  settingsPath: string,
+  localFile: string,
+  tool: string,
+  teamDefs: HookDef[],
+  manifestPath: string,
+  opts: { relocate: boolean; removeAll?: boolean; builtinOverride?: BuiltinHookOverride; teamHookHistory?: TeamHookHistory },
+): Promise<void> {
+  const relocate = opts.relocate && !opts.removeAll;
+  if (relocate || await hasTeamaiHooks(localFile, tool, manifestPath)) {
+    await reconcileMainCheckoutTeamHooks(localFile, tool, relocate ? teamDefs : [], {
+      manifestPath,
+      removeAll: !relocate,
+      teamHookHistory: opts.teamHookHistory,
+    });
+    if (!relocate) await removeEmptyHookFile(localFile);
+  }
+  await reconcileHooks(settingsPath, tool, relocate ? [] : teamDefs, relocate
+    ? { builtinOverride: opts.builtinOverride, dropTeamEntries: true }
+    : { manifestPath, removeAll: opts.removeAll, builtinOverride: opts.builtinOverride, teamHookHistory: opts.teamHookHistory });
+}
+
+/** Delete an untracked hook file that holds nothing but empty hook lists. */
+async function removeEmptyHookFile(file: string): Promise<void> {
+  const json = await readJson<Record<string, unknown>>(file);
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return;
+  const hooks = json.hooks;
+  const empty = Object.keys(json).every((key) => key === 'hooks')
+    && (hooks === undefined || (typeof hooks === 'object' && hooks !== null
+      && Object.values(hooks).every((entries) => Array.isArray(entries) && entries.length === 0)));
+  if (!empty) return;
+  const { gitTracks } = await import('./git-exclude.js');
+  if ((await gitTracks(file)).kind === 'untracked') await rm(file, { force: true });
 }
 
 /**
@@ -1500,7 +1577,7 @@ export async function reconcileHooks(
   teamDefs: HookDef[] = [],
   opts: ReconcileHooksOptions = {},
 ): Promise<void> {
-  const teamActive = !!opts.manifestPath;
+  const teamActive = !!opts.manifestPath || !!opts.dropTeamEntries;
   const manifest = opts.manifestPath ? await readManifest(opts.manifestPath) : null;
   // Pre-#370 Codex hooks used this same file. Persist their authority in the
   // new manifest before touching the file; retire the old records only on success.
@@ -1974,7 +2051,11 @@ export async function reconcileHooksToAllTools(
   baseDir: string,
   teamDefs: HookDef[],
   manifestPath: string,
-  opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory } = {},
+  opts: {
+    removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory;
+    /** Self mode: team hooks of SELF_LOCAL_TEAM_HOOK_TOOLS go to `settings.local.json` while `relocate` (#915). */
+    selfLocalTeamHooks?: { relocate: boolean };
+  } = {},
 ): Promise<Set<string>> {
   // Without the manifest, reconcileHooks manages the built-in entries only.
   const teamManifestPath = opts.builtinsOnly ? undefined : manifestPath;
@@ -2122,6 +2203,7 @@ export async function reconcileHooksToAllTools(
       ? path.join(opts.installedBaseDir, toolInstallRoot(paths.settings))
       : toolRoot;
     const mainFile = mainCheckoutHookFile(opts.mainCheckout, tool);
+    const localFile = opts.selfLocalTeamHooks ? selfLocalHookFile(baseDir, tool, paths.settings) : null;
     const installed = await pathExists(toolRoot) || await pathExists(installedRoot)
       || (!opts.removeAll && mainFile !== null && await pathExists(mainFile));
     // Existing main-checkout hooks can be removed after HOME was deleted or
@@ -2145,6 +2227,13 @@ export async function reconcileHooksToAllTools(
               teamHookHistory: opts.teamHookHistory,
             });
           }
+        } else if (localFile && !opts.builtinsOnly) {
+          await reconcileSelfLocalTeamHooks(settingsPath, localFile, tool, defs, manifestPath, {
+            relocate: opts.selfLocalTeamHooks?.relocate ?? false,
+            removeAll: opts.removeAll,
+            builtinOverride: opts.builtinOverride,
+            teamHookHistory: opts.teamHookHistory,
+          });
         } else {
           await reconcileHooks(settingsPath, tool, defs, {
             manifestPath: teamManifestPath,
@@ -2182,7 +2271,7 @@ async function reconcileMainCheckoutTeamHooks(
   file: string,
   tool: string,
   teamDefs: HookDef[],
-  opts: { manifestPath: string; legacyManifestPath: string; removeAll?: boolean; teamHookHistory?: TeamHookHistory },
+  opts: { manifestPath: string; legacyManifestPath?: string; removeAll?: boolean; teamHookHistory?: TeamHookHistory },
 ): Promise<void> {
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
@@ -2507,6 +2596,9 @@ export async function reconcileTeamHooksForConfig(
     builtinsOnly,
     mainCheckout: await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths),
     teamHookHistory: teamHookHistory(localConfig),
+    ...(isSelfMode(localConfig) && localConfig.scope === 'project' && localConfig.projectRoot
+      ? { selfLocalTeamHooks: { relocate: isGitExcludeEnabled(localConfig, teamConfig) } }
+      : {}),
   });
 
   const copilotExcluded = disabled?.includes(COPILOT_TOOL_ID) ?? false;
@@ -2551,8 +2643,9 @@ export async function reconcileTeamHooksForConfig(
  * (#915): the main checkout's `.claude/settings.local.json` while its manifest
  * records team hooks there, and Copilot's hook file while it holds teamai's
  * entries. Read from disk after the reconcile, so a file the pass left as it
- * was (team hooks unresolved, built-ins already installed) counts too. Self
- * mode's tracked settings and `.codex/hooks.json` are not among them.
+ * was (team hooks unresolved, built-ins already installed) counts too. In self
+ * mode, this checkout's `.claude/settings.local.json` while its manifest records
+ * team hooks there; never the tracked settings or `.codex/hooks.json`.
  */
 export async function deliveredHookFiles(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
   if (localConfig.scope !== 'project') return [];
@@ -2562,6 +2655,13 @@ export async function deliveredHookFiles(teamConfig: TeamaiConfig, localConfig: 
   if (main && claudeFile && ((await readManifest(main.manifestPath)).claude?.length ?? 0) > 0
     && await hasTeamaiHooks(claudeFile, 'claude', main.manifestPath)) {
     files.push(claudeFile);
+  }
+  // Self mode: this checkout's own settings.local.json while its manifest records team hooks there.
+  const selfLocal = selfLocalTeamHookFile(localConfig, scopedToolPaths(teamConfig, localConfig), 'claude');
+  const selfManifest = getManagedHooksPath(localConfig);
+  if (selfLocal && ((await readManifest(selfManifest)).claude?.length ?? 0) > 0
+    && await hasTeamaiHooks(selfLocal, 'claude', selfManifest)) {
+    files.push(selfLocal);
   }
   const copilotHooks = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID]?.hooks;
   if (copilotHooks) {

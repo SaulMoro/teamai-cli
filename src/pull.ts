@@ -2832,7 +2832,7 @@ export async function pull(
  * `sharing.gitExclude` is on, or remove the block when it is off. The list is
  * kept either way. Runs on every pull, fast path included.
  */
-async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
+export async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
   const key = await checkoutRecordKey(localConfig);
   if (!key) return;
   const state = await loadStateForScope(localConfig);
