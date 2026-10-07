@@ -305,6 +305,15 @@ describe('co-author reconcile', () => {
       expect(skipped?.reason).toBe(`${shared()} is not valid JSON, so teamai could not read it`);
     });
 
+    it('keeps the record of a recorded file that does not parse, so a pull after it is repaired removes the value', async () => {
+      await fse.writeFile(shared(), '{"attribution": {"commit": "", "pr": ""},');
+      const first = await reconcileCoAuthorForConfig(team({ enabled: false }), local, preFix({ [shared()]: false }));
+      expect(first.managed[shared()]).toBe(false);
+      await fse.writeFile(shared(), '{"attribution": {"commit": "", "pr": ""}}');
+      const second = await reconcileCoAuthorForConfig(team({ enabled: false }), local, preFix(first.managed));
+      expect(second.changes.find((c) => c.file === shared())?.action).toBe('removed');
+    });
+
     it('leaves a value with keys teamai never writes alone', async () => {
       const before = '{"attribution": {"commit": "", "pr": "", "extra": true}}';
       await fse.writeFile(shared(), before);

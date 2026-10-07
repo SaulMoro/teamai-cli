@@ -435,6 +435,8 @@ export async function reconcileCoAuthorForConfig(
     try {
       const next = wroteStrip ? await withoutPreFixAttribution(file) : { kind: 'none' as const };
       if (next.kind !== 'stripped') {
+        // An unreadable file proves nothing: keep the record, so a pull after it is repaired settles it.
+        if (next.kind === 'unreadable') managed[file] = recorded;
         const reason = next.kind === 'unreadable' ? `${file} is not valid JSON, so teamai could not read it` : 'not teamai\'s value';
         changes.push({ tool, file, enabled: false, action: 'skipped', reason });
         continue;
