@@ -303,6 +303,25 @@ describe('git exclude blocks (#915)', () => {
         expect(await read()).toMatch(/^\/\.claude\/skills\/x\/$/m);
         expect(status(repo)).toBe(' M .claude/skills/x/SKILL.md\n');
       });
+
+      it('lists a file tracked in one worktree and untracked in another, reporting it for the tracking worktree', async () => {
+        await fse.outputFile(inRepo('README.md'), 'r\n');
+        commit(repo, 'README.md');
+        const worktree = path.join(tmp, 'wt');
+        git(repo, 'worktree', 'add', '-q', worktree, '-b', 'wt');
+        await fse.outputFile(path.join(worktree, 'team.md'), 't\n');
+        commit(worktree, 'team.md');
+        await fse.outputFile(inRepo('team.md'), 't\n');
+
+        const result = await sync(memoryOwner('delivered'), [inRepo('team.md'), path.join(worktree, 'team.md')]);
+
+        expect(result.files).toHaveLength(1);
+        expect(result.files[0].lines).toEqual(['/team.md']);
+        expect(result.files[0].tracked).toEqual([{ path: path.join(worktree, 'team.md'), checkout: worktree, descendants: [] }]);
+        expect(status(repo)).toBe('');
+        await fse.appendFile(path.join(worktree, 'team.md'), 'edit\n');
+        expect(status(worktree)).toBe(' M team.md\n');
+      });
     });
 
     it('still lists a path when git cannot say what the checkout tracks, and says so', async () => {

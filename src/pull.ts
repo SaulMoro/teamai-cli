@@ -67,7 +67,10 @@ import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
-import { applyDeliveredGitExclude, createDeliveryRecorder, type DeliveryRecorder } from './git-exclude-delivered.js';
+import {
+  applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, warnForeign,
+  type DeliveryRecorder, type GitExcludePaths, type ListedCheckout,
+} from './git-exclude-delivered.js';
 
 // A timed-out report still owns its success bookkeeping. Do not start another
 // batch in this process until it settles and finishes consuming its events.
@@ -708,7 +711,7 @@ export async function checkoutKey(projectRoot: string): Promise<string> {
  * name this repository's common directory: a stale key matches no checkout,
  * while a dropped one sends push back to the shared revision (#812).
  */
-async function liveCheckoutRecords(
+export async function liveCheckoutRecords(
   projectRoot: string,
   records: State['lastPullByWorkspace'],
 ): Promise<State['lastPullByWorkspace']> {
@@ -2827,14 +2830,16 @@ export async function pull(
 /**
  * Store what this pull's writers delivered into the project checkout on its
  * record (`gitExcludePaths`, see DeliveryRecorder for how reports replace it),
- * changing nothing else on the record earlier stages saved, then list those
- * paths in teamai's `delivered` git exclude block while the resolved
- * `sharing.gitExclude` is on, or remove the block when it is off. The list is
- * kept either way. Runs on every pull, fast path included.
+ * changing nothing else on the record earlier stages saved, then list in
+ * teamai's `delivered` git exclude blocks the union of every live checkout's
+ * list (deliveredUnion) while the resolved `sharing.gitExclude` is on, naming
+ * each path left out as foreign in another checkout, or remove the blocks
+ * when it is off. The list is kept either way. Runs on every pull, fast path
+ * included.
  */
-async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
+export async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: DeliveryRecorder): Promise<void> {
   const key = await checkoutRecordKey(localConfig);
-  if (!key) return;
+  if (!key || !localConfig.projectRoot) return;
   const state = await loadStateForScope(localConfig);
   const record = state.lastPullByWorkspace?.[key];
   const paths = await recorder.merge(record?.gitExcludePaths);
@@ -2843,7 +2848,32 @@ async function syncDeliveredGitExclude(localConfig: LocalConfig, recorder: Deliv
     await saveStateForScope(state, localConfig);
   }
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  await applyDeliveredGitExclude(localConfig, isGitExcludeEnabled(localConfig, teamConfig ?? {}), Object.values(paths).flat());
+  const enabled = isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
+  if (enabled) warnForeign(union.foreign);
+  await applyDeliveredGitExclude(localConfig, enabled, union.paths);
+}
+
+/**
+ * The delivered lists of the project's live checkouts (liveCheckoutRecords),
+ * `current` standing in for the list of the checkout keyed `current.key`
+ * (this pull's, which may have no record yet). A record without `root` or
+ * without `gitExcludePaths` is a live checkout with no list. Read-only.
+ */
+export async function liveDeliveredLists(
+  projectRoot: string,
+  records: State['lastPullByWorkspace'],
+  current?: { key: string; paths: GitExcludePaths },
+): Promise<ListedCheckout[]> {
+  const live = await liveCheckoutRecords(projectRoot, records) ?? {};
+  const lists: ListedCheckout[] = Object.entries(live)
+    .filter(([key]) => key !== current?.key)
+    .map(([, { root, gitExcludePaths }]) => ({
+      root: root ?? projectRoot,
+      paths: root !== undefined && gitExcludePaths ? Object.values(gitExcludePaths).flat() : null,
+    }));
+  if (current) lists.push({ root: projectRoot, paths: Object.values(current.paths).flat() });
+  return lists;
 }
 
 /** Post-pull diagnostics are a courtesy, not the job. Do not wait forever. */

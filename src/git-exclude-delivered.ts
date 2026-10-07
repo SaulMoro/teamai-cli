@@ -1,7 +1,9 @@
 import fse from 'fs-extra';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { loadStateForScope, saveStateForScope } from './config.js';
 import {
+  existingAncestor,
   gitExcludeFile,
   realFilePath,
   remove,
@@ -9,7 +11,8 @@ import {
   type GitExcludeOwner,
   type GitExcludeWrite,
 } from './git-exclude.js';
-import type { LocalConfig } from './types.js';
+import { getDataHome, type LocalConfig } from './types.js';
+import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
 // ─── What pull delivered into a checkout, kept out of git (#915) ──
@@ -88,48 +91,177 @@ async function existing(paths: string[]): Promise<string[]> {
   return found.filter((p): p is string => p !== null);
 }
 
-/** teamai's `delivered` owner, its exclude files recorded in the partition's state.json. */
+/**
+ * teamai's `delivered` owner for the project's own repository, its exclude
+ * files recorded in the partition's state.json.
+ */
 export function deliveredOwner(localConfig: LocalConfig): GitExcludeOwner {
+  return partitionOwner(localConfig, DELIVERED_OWNER);
+}
+
+/**
+ * teamai's owner for what this project delivers into other repositories: a
+ * tool folder that is a submodule or a nested clone, a tool home under version
+ * control. Its block there is named after this partition, `delivered/<id>`,
+ * so a repository that is itself a teamai project keeps its own `delivered`
+ * block, and projects sharing a tool home each drop only their own lines.
+ */
+export function deliveredOwnerElsewhere(localConfig: LocalConfig): GitExcludeOwner {
+  return partitionOwner(localConfig, `${DELIVERED_OWNER}/${partitionId(localConfig)}`);
+}
+
+/** The partition's 16-hex anchor hash, as its directory name ends (`projectSlug`), else a hash of its path. */
+function partitionId(localConfig: LocalConfig): string {
+  const dataHome = getDataHome(localConfig);
+  return /-([0-9a-f]{16})$/.exec(path.basename(dataHome))?.[1]
+    ?? createHash('sha256').update(path.resolve(dataHome)).digest('hex').slice(0, 16);
+}
+
+function partitionOwner(localConfig: LocalConfig, name: string): GitExcludeOwner {
   return {
-    name: DELIVERED_OWNER,
+    name,
     record: {
-      files: async () => (await loadStateForScope(localConfig)).gitExcludeFiles?.[DELIVERED_OWNER] ?? [],
+      files: async () => (await loadStateForScope(localConfig)).gitExcludeFiles?.[name] ?? [],
       update: async ({ add, drop }) => {
         const state = await loadStateForScope(localConfig);
-        const before = state.gitExcludeFiles?.[DELIVERED_OWNER] ?? [];
+        const before = state.gitExcludeFiles?.[name] ?? [];
         const files = [...new Set([...before, ...add])].filter((f) => !drop.includes(f)).sort();
         if (files.length === before.length && files.every((f) => before.includes(f))) return;
-        const { [DELIVERED_OWNER]: _dropped, ...others } = state.gitExcludeFiles ?? {};
-        state.gitExcludeFiles = files.length > 0 ? { ...others, [DELIVERED_OWNER]: files } : others;
+        const { [name]: _dropped, ...others } = state.gitExcludeFiles ?? {};
+        state.gitExcludeFiles = files.length > 0 ? { ...others, [name]: files } : others;
         await saveStateForScope(state, localConfig);
       },
     },
   };
 }
 
+// ─── Every live checkout's list ───────────────────────────────
+
+/** A live checkout of the project and its delivered paths; `paths` null: live, with no list yet (no full sync since an older CLI). */
+export interface ListedCheckout {
+  root: string;
+  paths: string[] | null;
+}
+
+/** A delivered path left without a line: `file`, the same path in the checkout at `checkout`, is not in that checkout's list. */
+export interface ForeignPath {
+  /** The listed path, absolute. */
+  path: string;
+  /** Its path from its checkout's root, `/`-separated. */
+  rel: string;
+  checkout: string;
+  file: string;
+}
+
+export interface DeliveredUnion {
+  /** What the `delivered` blocks list: every live checkout's paths but the foreign ones. */
+  paths: string[];
+  foreign: ForeignPath[];
+}
+
+/** Claude Code reads it as the member's own, per checkout: never foreign in another checkout. */
+const PERSONAL = new Set(['.claude/settings.local.json']);
+
 /**
- * Make teamai's `delivered` block in the project's exclude file hold `paths`
- * while `enabled`, or remove that block, and no other owner's, when not. Only
- * paths inside the project checkout are listed.
+ * The paths teamai's `delivered` blocks list for a project: the union of the
+ * lists of its live checkouts, less each path that is foreign in another live
+ * checkout, since one line in the exclude file they share would hide that
+ * checkout's file too. A path is foreign in checkout X when X's root joined
+ * with its path from its own checkout's root exists (lstat) and is not in X's
+ * list. A checkout without a list has no foreign files; a listed path outside
+ * its own checkout (the main checkout's hook file) is not tested. Read-only.
+ */
+export async function deliveredUnion(checkouts: ListedCheckout[]): Promise<DeliveredUnion> {
+  const listed = await Promise.all(checkouts.flatMap(({ root, paths }) => paths === null ? [] : [(async () => ({
+    root: await fse.realpath(root).catch(() => root),
+    paths,
+    set: new Set(paths),
+  }))()]));
+  const result: DeliveredUnion = { paths: [], foreign: [] };
+  for (const checkout of listed) {
+    for (const file of checkout.paths) {
+      const rel = path.relative(checkout.root, file);
+      const inside = rel !== '' && !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel);
+      const portable = rel.split(path.sep).join('/');
+      const foreign = inside && !PERSONAL.has(portable) ? await foreignIn(listed.filter((other) => other !== checkout), rel) : [];
+      result.foreign.push(...foreign.map((other) => ({ path: file, rel: portable, checkout: other.root, file: other.file })));
+      if (foreign.length === 0) result.paths.push(file);
+    }
+  }
+  result.paths = [...new Set(result.paths)].sort();
+  return result;
+}
+
+async function foreignIn(others: Array<{ root: string; set: Set<string> }>, rel: string): Promise<Array<{ root: string; file: string }>> {
+  const found = await Promise.all(others.map(async ({ root, set }) => {
+    const file = path.join(root, rel);
+    return !set.has(file) && await fse.lstat(file).then(() => true, () => false) ? { root, file } : null;
+  }));
+  return found.filter((f) => f !== null);
+}
+
+/** The pull line naming each foreign path once, by the file that holds its line back. */
+export function warnForeign(foreign: ForeignPath[]): void {
+  const named = new Set<string>();
+  for (const { rel, file } of foreign) {
+    if (named.has(file)) continue;
+    named.add(file);
+    log.warn(`Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
+  }
+}
+
+// ─── Sync ─────────────────────────────────────────────────────
+
+/**
+ * Make teamai's `delivered` blocks hold `paths` while `enabled`, each in the
+ * exclude file git reads for it: the project's own repository's in the
+ * `delivered` block, another repository's (a submodule, a nested clone, a
+ * tool home under version control) in this partition's `delivered/<id>`
+ * block. Off, remove those blocks, and no other owner's. A path outside every
+ * repository is left out.
  */
 export async function applyDeliveredGitExclude(localConfig: LocalConfig, enabled: boolean, paths: Iterable<string>): Promise<void> {
   const projectRoot = localConfig.projectRoot;
   if (!projectRoot) return;
-  const owner = deliveredOwner(localConfig);
-  const root = await fse.realpath(projectRoot).catch(() => projectRoot);
-  const inside = [...paths].filter((p) => p.startsWith(`${root}${path.sep}`));
+  const own = await gitExcludeFile(projectRoot);
+  const here = deliveredOwner(localConfig);
+  const elsewhere = deliveredOwnerElsewhere(localConfig);
   if (enabled) {
-    const result = await sync(owner, inside);
-    for (const file of result.files) warnUnwritten(file.excludeFile, file.write, 'update');
-    for (const refused of result.refused) log.warn(`Not kept out of git: ${refused.message}.`);
-    for (const { path: file, error } of result.gitFailed) log.warn(`Could not keep ${file} out of git: ${error}`);
+    const split = await byRepository(own?.excludeFile ?? null, paths);
+    for (const [owner, list] of [[here, split.here], [elsewhere, split.elsewhere]] as const) {
+      const result = await sync(owner, list);
+      for (const file of result.files) warnUnwritten(file.excludeFile, file.write, 'update');
+      for (const refused of result.refused) log.warn(`Not kept out of git: ${refused.message}.`);
+      for (const { path: file, error } of result.gitFailed) log.warn(`Could not keep ${file} out of git: ${error}`);
+    }
     return;
   }
   // Also the project's own exclude file, when the record lost track of it.
-  const own = await gitExcludeFile(projectRoot);
-  for (const removal of await remove(owner, { files: own ? [own.excludeFile] : [] })) {
-    if (removal.write.kind !== 'missing') warnUnwritten(removal.excludeFile, removal.write, 'remove');
+  for (const [owner, files] of [[here, own ? [own.excludeFile] : []], [elsewhere, []]] as const) {
+    for (const removal of await remove(owner, { files })) {
+      if (removal.write.kind !== 'missing') warnUnwritten(removal.excludeFile, removal.write, 'remove');
+    }
   }
+}
+
+/**
+ * `paths` split by whether git reads them through `ownExclude` (any checkout
+ * of the project's repository) or through another repository's exclude file.
+ * git is asked once per repository: from the closest directory above a path's
+ * landed location that holds `.git`, where git's own search would stop. A
+ * path with no `.git` above it goes with the others; `sync` leaves it out.
+ */
+async function byRepository(ownExclude: string | null, paths: Iterable<string>): Promise<{ here: string[]; elsewhere: string[] }> {
+  const excludeOf = new Map<string, Promise<string | null>>();
+  const split = { here: [] as string[], elsewhere: [] as string[] };
+  for (const file of paths) {
+    let dir: string | null = await existingAncestor(await realFilePath(file));
+    while (dir !== null && !await pathExists(path.join(dir, '.git'))) dir = path.dirname(dir) === dir ? null : path.dirname(dir);
+    if (dir !== null && !excludeOf.has(dir)) excludeOf.set(dir, gitExcludeFile(dir).then((found) => found?.excludeFile ?? null));
+    const excludeFile = dir === null ? null : await excludeOf.get(dir);
+    (excludeFile !== null && excludeFile === ownExclude ? split.here : split.elsewhere).push(file);
+  }
+  return split;
 }
 
 function warnUnwritten(excludeFile: string, write: GitExcludeWrite, action: 'update' | 'remove'): void {

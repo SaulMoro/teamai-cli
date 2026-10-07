@@ -99,6 +99,12 @@ The fast path also needs the entry's `gitExcludePaths`, what each writer of
 the pull delivered into the checkout (the paths teamai's `delivered` git
 exclude block lists, #915). An entry saved by an older CLI has none, so the
 first pull after the upgrade is a full sync, whatever `sharing.gitExclude` says.
+The block is the union of the `gitExcludePaths` of the live checkouts
+(`liveCheckoutRecords`), less paths that hold a file outside another live
+checkout's list; paths in another repository (a submodule, a nested clone, a tool
+home under git) go to that repository's exclude file under `delivered/<id>`, the
+partition's anchor hash. `state.gitExcludeFiles` records, per owner, the exclude
+files holding its block.
 Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
 roles, projects, init and bootstrap apply their changes: the pull that finds
 `lastPullRev` cleared resets every other checkout's entry to an empty `rev`,

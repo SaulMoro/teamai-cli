@@ -1564,8 +1564,11 @@ MCP 与 OpenCode 的配置文件、`.codex/hooks.json`、`.github/copilot-instru
 
 - 改动在下一次 `teamai pull` 生效，包括会话开始时的 pull，即使该 pull 发现团队仓库未变（"Already synced"）也一样：无需 `--force`。单仓模式下，对 `.teamai/teamai.yaml` 未提交的修改同样生效。
 - 只列出 teamai 在本 checkout 中写入、或确认归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。因你改过而被 pull 保留的副本，以及 teamai 不再分发、但仍留在磁盘上的副本（例如团队移除最后一个 source 之后的 source skill）同样如此。
+- 一个块服务于该克隆的所有 worktree：它列出每个仍存在的 checkout 上一次 pull 在那里分发的内容，因此在一个 worktree 中 pull 不会移除另一个 worktree 的行，用 `git init --separate-git-dir` 创建的仓库以及作为 submodule 的项目也是如此。你移除或 prune 的 worktree，其行会在任一 checkout 的下一次 pull 中移除。
+- 某个路径在另一个 checkout 中是你自己的文件（teamai 没有在那里分发它）时，该路径不写入任何行，因为这一行也会把那个文件隐藏：pull 会指出该路径，git 在每个 checkout 中都会显示它。linked worktree 中你自己的 `.claude/settings.local.json` 不在此列。某个 checkout 跟踪、而另一个 checkout 中由 teamai 分发且未被跟踪的文件仍会列出；被跟踪的那份的改动 git 照样显示。
+- 本身是 submodule 或嵌套克隆的工具目录（例如用 `git submodule add` 加入的 `.claude`），以及纳入 git 管理的工具 home（Hermes 的 `~/.hermes/skills`），其行写入那个仓库自己的 `.git/info/exclude`，放在以项目命名的块中（`# [teamai:delivered/<id>:start]`）。superproject 不再把该 submodule 显示为已修改，共用同一工具 home 的各项目只管理自己的块。
 - 切换角色或项目后，下一次 pull 会移除原选择对应的行。pull 未重写但仍归 teamai 所有的副本（因模型无法解析而暂缓的 agent、团队 hook 文件无法解析时的 hook 文件）仍会列出。
-- 关闭后，下一次 pull 只移除 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
+- 关闭后，下一次 pull 只移除该项目的 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
 - pull 无法更新该块时（exclude 文件不可写或不可读，或另一个 teamai 命令占用着它），会保持其原样并给出警告；排除原因后再运行 `teamai pull`。因另一个 pull 或 push 持有项目同步锁而跳过的 pull 同样不改动它，由持锁者或下一次 pull 更新。
 
