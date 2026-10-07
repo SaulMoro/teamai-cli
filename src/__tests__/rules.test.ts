@@ -777,10 +777,14 @@ scope: 'user',
    */
   it("delivers a rule this machine placed onto the author's root copy, not beside it", async () => {
     const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    // An earlier pull delivered the team's first version beside the root copy: teamai's by the history (#993).
+    await fse.outputFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'first team content');
+    commitTeamRepo(localConfig.repo.localPath, 'v1');
     await fse.outputFile(path.join(teamRulesDir, 'fe-know/my-rule.md'), 'team content');
+    commitTeamRepo(localConfig.repo.localPath, 'v2');
     const localRulesDir = path.join(homeDir, '.claude/rules');
     await fse.writeFile(path.join(localRulesDir, 'my-rule.md'), 'stale root copy');
-    await fse.outputFile(path.join(localRulesDir, 'fe-know/my-rule.md'), 'duplicate from an earlier pull');
+    await fse.outputFile(path.join(localRulesDir, 'fe-know/my-rule.md'), 'first team content');
     vi.mocked(loadStateForScope).mockResolvedValue({
       lastPush: null, lastPull: null, lastPullRev: null, pushedRules: [], pushedSkills: [],
       pushedEnvVars: [], pendingPushes: [], lastUpdateCheck: null, availableUpdate: null,
