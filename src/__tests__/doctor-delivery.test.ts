@@ -318,10 +318,10 @@ describe('doctor — skills delivered on disk', () => {
       await deliver(CLAUDE_SKILLS, 'alpha');
       const beta = path.join(homeDir, ...CLAUDE_SKILLS, 'beta');
       await fse.ensureDir(beta);
-      await fse.writeFile(
-        path.join(beta, 'SKILL.md'),
-        '---\nname: beta\ndescription: d\nallowed-tools: [Read]\nversion: 2\n---\n',
-      );
+      const skillMd = '---\nname: beta\ndescription: d\nallowed-tools: [Read]\nversion: 2\n---\n';
+      // As pull delivered it: the team's SKILL.md (a copy that is not one is the member's, #993).
+      await fse.writeFile(path.join(repoPath, 'skills', 'beta', 'SKILL.md'), skillMd);
+      await fse.writeFile(path.join(beta, 'SKILL.md'), skillMd);
 
       expect(await (await deliveryCheck()).check()).toBe(true);
     });
