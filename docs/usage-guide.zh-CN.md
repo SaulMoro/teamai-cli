@@ -1548,10 +1548,10 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本；
 - rule 每个文件一行，从不列目录，因此你放在旁边的自己的文件仍然可见：包括命名空间子目录（`.cursor/rules/fe/style.mdc`）、扁平化的文件名（`.kiro/steering/fe.style.md`）以及 `.github/instructions/**/*.instructions.md`；
 - agent，以及 `teamai-recall` rule 和 agent；
-- 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`）；
+- 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、`.github/instructions/teamai-context.instructions.md`）；
 - Copilot 的 `.github/hooks/teamai.json`，以及 teamai 在其中有条目（团队 hook 或 co-author 设置）时的 `.claude/settings.local.json`，无论其中还有什么。
 
-MCP 与 OpenCode 的配置文件、`.codex/hooks.json`、`.github/copilot-instructions.md` 以及文档镜像不会列出。
+MCP 与 OpenCode 的配置文件、`.codex/hooks.json` 以及文档镜像不会列出。开启此选项后，teamai 不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
 
 被排除的 skill、rule 和 agent 仍会被 AI 工具加载：只有 git 忽略它们。遵循 git 忽略规则的搜索（ripgrep、大多数编辑器的搜索、agent 的搜索工具）会跳过它们，因此请按路径打开被排除的文件；`teamai skill path <name>` 会输出 CLI 内置 skill 所在的位置。
 
@@ -1662,7 +1662,7 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 | Claude Code | `~/.claude/CLAUDE.md` | `.claude/rules/teamai-context.md` |
 | claude-internal、tclaude | 各自主目录下的 `.claude-internal/CLAUDE.md`、`.tclaude/CLAUDE.md`（未改变） | 项目下的相同路径（未改变，未验证） |
 | Codex、codex-internal、tcodex | `$CODEX_HOME/AGENTS.md`（以及各变体的主目录），位于团队规则旁 | 由 session-start 和 subagent-start hook 加入，位于项目团队规则旁；恢复会话时不重复加入 |
-| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md`（未改变） | `.github/copilot-instructions.md`（未改变） |
+| Copilot CLI | `$COPILOT_HOME/copilot-instructions.md`（未改变） | `.github/copilot-instructions.md`（未改变）；开启 `sharing.gitExclude` 时为 `.github/instructions/teamai-context.instructions.md`（未验证） |
 | Cursor | `~/.cursor/rules/teamai-context.mdc`（未验证） | `.cursor/rules/teamai-context.mdc`（未验证） |
 | CodeBuddy | `~/.codebuddy/CODEBUDDY.md` | `.codebuddy/rules/teamai-context.md`，与 WorkBuddy 共用一份（未验证） |
 | WorkBuddy | `~/.workbuddy/rules/teamai-context.md`（未验证） | `.codebuddy/rules/teamai-context.md`，与 CodeBuddy 共用一份（未验证） |
@@ -1677,6 +1677,8 @@ pull 只把团队文化、共享指令和 recall 块写入已安装 AI 工具的
 *未验证*：依据工具的文档或源码中的加载逻辑实现，尚未在实际会话中检查。Claude Code、Oh My Pi、OpenCode 和 Pi（项目范围）已在实际会话中从项目根目录和子目录检查过。有 `teamai-recall` subagent 的工具获得调用该 subagent 的 recall 块；没有的工具（Pi、Hermes、OpenClaw）获得提示 agent 直接运行 `teamai recall` 的 recall 块。多个工具共用的文件只有在每个工具都有该 subagent 时才获得 subagent 块。
 
 Claude Code 会从项目根目录和任意子目录加载 `.claude/rules/teamai-context.md`，并照常读取项目的 `AGENTS.md` 或项目自己编写的 `CLAUDE.md`。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此同时安装这两个工具时，Copilot 可能会读到两份。
+
+开启 [`sharing.gitExclude`](#让分发的文件不进入-git) 时，Copilot 的项目块写入 teamai 自己的文件 `.github/instructions/teamai-context.instructions.md`，带有 `applyTo: "**"`，因此团队的 `.github/copilot-instructions.md` 保持团队提交时的样子。Copilot CLI 和 VS Code Copilot Chat（ask、edit、agent 和 inline chat）会把 `**` 指令文件应用到每个请求，包括没有附加任何文件的提问，与 `copilot-instructions.md` 相同；这一点是阅读其源码得出的，尚未在实际会话中检查。有些 Copilot 界面不读取任何 `.github/instructions` 文件，因此开启此选项后得不到团队文化、共享指令和 recall 块（它们本来也得不到使用同样文件的团队 rule）：VS Code 和 Visual Studio 的代码审查，以及 Eclipse chat。GitHub 文档对 JetBrains 和 Xcode 的 Copilot chat 说法不一，两者均未检查。VS Code 只在 `chat.includeApplyingInstructions` 开启（默认开启）时应用该文件；关闭时只有 edit 模式能获得这些块。
 
 这两个 `teamai-context.mdc` 文件都带有 `alwaysApply: true`，Cursor 的规则加载器将其视为始终应用。Cursor CLI 仅在会话从主目录下启动时读取 `~/.cursor/rules`；Cursor IDE 未经验证。
 
@@ -2207,7 +2209,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 
 - **作用域。** 用户资源位于 `$COPILOT_HOME`（默认 `~/.copilot`）下，项目资源位于 `<project>/.github` 下。TeamAI 在检测以及所有用户级读写中都会遵循 `COPILOT_HOME`。
 - **Skills。** `teamai pull` 将用户级 Skills 写入 `$COPILOT_HOME/skills/`，将项目级 Skills 写入 `.github/skills/`；任一作用域中的修改都可像其他 TeamAI Skills 一样被 `teamai push` 检测。
-- **自定义指令。** TeamAI 将团队文化和共享指令注入用户级 `$COPILOT_HOME/copilot-instructions.md` 或项目级 `.github/copilot-instructions.md`。TeamAI 标记包围的区块会被幂等替换，标记之外的文字归用户所有。`teamai uninstall` 只移除 TeamAI 管理的区块。
+- **自定义指令。** TeamAI 将团队文化和共享指令注入用户级 `$COPILOT_HOME/copilot-instructions.md` 或项目级 `.github/copilot-instructions.md`。TeamAI 标记包围的区块会被幂等替换，标记之外的文字归用户所有。`teamai uninstall` 只移除 TeamAI 管理的区块。开启 `sharing.gitExclude` 时，项目级区块改为写入 `.github/instructions/teamai-context.instructions.md`，`.github/copilot-instructions.md` 保持为团队的文件（见[这些块写到哪里](#这些块写到哪里)）。
 - **Rules。** 团队 Rules 会转换为 `$COPILOT_HOME/instructions/` 或 `.github/instructions/` 下的原生 `*.instructions.md` 文件。TeamAI 从团队 Rule 的 `paths` 派生 Copilot 必需的 `applyTo` frontmatter；没有 `paths` 时使用 `**`。Push 时只有 Markdown 正文回流，团队拥有的 `paths` 元数据保持不变。未知的 Copilot instructions 文件属于用户，不会被上传或删除。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此启用 Claude 时，每条项目 rule 会送达 Copilot 两次；teamai 仍会写入两份副本，对每个也读取其他工具文件的工具都是如此。
 - **自定义 Agents。** 团队 Agents 会转换为 `$COPILOT_HOME/agents/` 或 `.github/agents/` 下的官方 `<name>.agent.md` 配置。TeamAI 将兼容的工具名映射为 Copilot 主别名，通过 `tool_extras.copilot` 保留 Copilot 专属 frontmatter，并且只删除与团队 Agent 或内置 recall 配置匹配的文件；用户自建配置保持不变。详见 [GitHub 自定义 Agent 配置](https://docs.github.com/zh/copilot/reference/custom-agents-configuration)。
 - **Team Context recall。** 内置 `teamai-recall.agent.md` 只获得 `execute`、`read` 和 `search`。它调用现有的 `teamai recall` 流程，让 Copilot 检索 learnings、codebase 证据和 teamwiki 结果，而不会复制或创建第二套知识库。
