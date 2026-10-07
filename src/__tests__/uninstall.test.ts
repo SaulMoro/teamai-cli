@@ -59,8 +59,6 @@ import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManif
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
-// A team skill's copy goes only when it is teamai's (#993): the team clone needs history.
-import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 // ─── Helpers ───────────────────────────────────────────
 
