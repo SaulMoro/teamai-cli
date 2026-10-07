@@ -1502,7 +1502,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - **只写不删。** teamai 一旦写入某个值，之后团队撤下策略也不会改动该值 —— teamai 绝不还原它去除过的尾注。若要重新启用，请显式把意图设回 `true`（这会移除 teamai 的覆盖，从而恢复工具自身的默认行为）。
 - **幂等。** teamai 在 `state.json` 的 `coAuthorManaged` 中记录每个文件上次写入的值，无变化时跳过写入。
 - **只改动已安装的工具**，并保留各配置文件中已有的键与注释（键级别的精修，而非整文件重生成）。
-- **不改动共享的项目文件。** 该选择属于成员个人，而项目的 `.claude/settings.json` 往往纳入版本控制，因此在项目 scope 下 teamai 只写 Claude 的成员本地文件 `.claude/settings.local.json`，其他 Claude 家族工具只在用户 scope 下处理。此修复之前的版本会写入共享的项目 `settings.json`；下一次 `pull` 仅当其中的 `attribution` 恰好是 teamai 写入的 `{"commit": "", "pr": ""}`、且 teamai 记录过曾写入该文件时才移除它，并且只删除这一个键。若该文件已纳入版本控制，请提交这一改动。
+- **不改动共享的项目文件。** 该选择属于成员个人，而项目的 `.claude/settings.json` 往往纳入版本控制，因此在项目 scope 下 teamai 只写 Claude 的成员本地文件 `.claude/settings.local.json`，其他 Claude 家族工具只在用户 scope 下处理。此修复之前的版本会写入共享的项目 `settings.json`；下一次 `pull` 仅当其中的 `attribution` 恰好是 teamai 写入的 `{"commit": "", "pr": ""}`、且 teamai 记录过曾写入该文件时才移除它，并且只删除这一个键。若该文件已纳入版本控制，请提交这一改动。只要团队和你都没有设置 co-author 选择，teamai 就不做任何改动，因此旧版 teamai 写入共享 settings 文件的值会保留在那里。
 
 `pull` 之后请重启 AI 工具会话使改动生效。
 
