@@ -5,6 +5,7 @@ import fse from 'fs-extra';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -1193,6 +1194,8 @@ describe('uninstall', () => {
       },
     });
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig });
+    // The legacy copy is the team rule verbatim: the team history proves it teamai's (#993).
+    commitTeamRepo(repoPath);
 
     await uninstall({ force: true });
 

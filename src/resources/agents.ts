@@ -1492,23 +1492,50 @@ interface DeployedModel {
 }
 
 /**
+ * The extras each tool's copy carried before #830 gave every tool its own
+ * key: Qoder, Qoder CN, ZCode and OMP rendered Claude's, tclaude and tcodex
+ * their base tool's only. 0.26.0 and earlier wrote these, with the spec's
+ * `model` as written and no delivery record.
+ */
+const PRE_830_EXTRAS_TOOL: Readonly<Partial<Record<ToolName, ToolName>>> = {
+  qoder: 'claude', 'qoder-cn': 'claude', zcode: 'claude', omp: 'claude', tclaude: 'claude', tcodex: 'codex',
+};
+
+/**
  * How a file with no record in `tool`'s agents directory is proven teamai's
  * (#993): it holds a version of a team agent named `stem`, in any namespace
  * (agents land flat, so same-stem agents share the file), verbatim (a legacy
- * `.md`) or as pull renders that version for `tool` today, aliases resolved.
+ * `.md`), as pull renders that version for `tool` today, aliases resolved, or
+ * as an older CLI rendered it: the spec's `model` as written (before aliases),
+ * and before #830 another tool's extras (`PRE_830_EXTRAS_TOOL`).
  */
 export function agentOrigin(repoPath: string, stem: string, tool: ToolName, aliases: ModelAliases): CopyOrigin {
+  const specOf = (content: Buffer, version: { path: string }): AgentSpec | null => {
+    const file = path.posix.basename(version.path);
+    if (file !== `${stem}.yaml`) return null;
+    const parsed = parseAgentYaml(content.toString('utf-8'), file);
+    if (!parsed.ok || (parsed.spec.targets && !parsed.spec.targets.includes(tool))) return null;
+    return parsed.spec;
+  };
+  const extrasTool = PRE_830_EXTRAS_TOOL[tool];
   return {
     repoPath,
     pathspec: `:(glob)agents/**/${stem}.*`,
-    renders: [(content, version) => {
-      const file = path.posix.basename(version.path);
-      if (file !== `${stem}.yaml`) return null;
-      const parsed = parseAgentYaml(content.toString('utf-8'), file);
-      if (!parsed.ok || (parsed.spec.targets && !parsed.spec.targets.includes(tool))) return null;
-      const resolved = renderResolved(parsed.spec, tool, aliases);
-      return resolved.ok ? resolved.render.content : null;
-    }],
+    renders: [
+      (content, version) => {
+        const spec = specOf(content, version);
+        const resolved = spec && renderResolved(spec, tool, aliases);
+        return resolved?.ok ? resolved.render.content : null;
+      },
+      (content, version) => {
+        const spec = specOf(content, version);
+        return spec && renderForTool(spec, tool).content;
+      },
+      ...extrasTool ? [(content: Buffer, version: { path: string }) => {
+        const spec = specOf(content, version);
+        return spec && renderForTool(spec, extrasTool).content;
+      }] : [],
+    ],
   };
 }
 

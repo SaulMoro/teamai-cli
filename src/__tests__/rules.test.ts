@@ -1499,6 +1499,8 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     await fse.writeFile(path.join(repoPath, 'rules', 'legacy.md'), 'Legacy rule body.');
     // Simulate the pre-.mdc layout.
     await fse.writeFile(path.join(homeDir, '.cursor/rules/legacy.md'), 'Legacy rule body.');
+    // The copy is the team rule verbatim: the team history proves it teamai's (#993).
+    commitTeamRepo(repoPath);
 
     await handler.pullAllRules(teamConfig, localConfig);
 
@@ -1521,7 +1523,11 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
 
   it('sweeps a legacy .md whose rule the team has since deleted', async () => {
     await fse.writeFile(path.join(repoPath, 'rules', 'team.md'), 'Team rule.');
-    // `dropped` is no longer in the team repo, but its pre-.mdc copy lingers.
+    // `dropped` is no longer in the team repo, but its pre-.mdc copy lingers:
+    // the team history still has it (#993).
+    await fse.writeFile(path.join(repoPath, 'rules', 'dropped.md'), 'gone upstream');
+    commitTeamRepo(repoPath, 'dropped');
+    await fse.remove(path.join(repoPath, 'rules', 'dropped.md'));
     await fse.writeFile(path.join(homeDir, '.cursor/rules/dropped.md'), 'gone upstream');
 
     await handler.pullAllRules(teamConfig, localConfig);

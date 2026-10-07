@@ -156,6 +156,7 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-rule-ownership-e2e-')));
     home = path.join(sandbox, 'home');
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
   });
 
   afterAll(() => {
@@ -259,6 +260,82 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(plain.output).not.toContain('it is not teamai\'s');
     // The member's renamed rule was never a team rule: the sweep leaves it alone.
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
+  });
+
+  it('delivers once the member\'s file is gone, even when the pull that kept it found the checkout at the team revision', () => {
+    const t = team('kept-at-rev', { 'rules/team-rule.md': TEAM_RULE });
+    const dir = business('kept-at-rev-biz');
+    init(t, dir);
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    // The state an older CLI leaves (no `delivered`), at the current team revision.
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(d, e.name)) : e.name === 'state.json' ? [path.join(d, e.name)] : []);
+    for (const file of walk(path.join(home, '.teamai'))) {
+      const state = JSON.parse(read(file)) as { lastPullByWorkspace?: Record<string, { delivered?: unknown }> };
+      for (const record of Object.values(state.lastPullByWorkspace ?? {})) delete record.delivered;
+      fs.writeFileSync(file, JSON.stringify(state, null, 2));
+    }
+    fs.writeFileSync(rule, 'MY RULE\n');
+    expect(teamaiOk(['pull', '--force'], dir).output).toContain(`Kept ${rule}: it is not teamai's`);
+
+    fs.rmSync(rule);
+    teamaiOk(['pull'], dir);
+
+    expect(read(rule)).toBe(TEAM_RULE);
+  });
+
+  it('updates an unrecorded agent copy an older CLI rendered with another tool\'s extras (0.26.0, before #830)', () => {
+    const t = team('old-agent-render', {
+      'agents/reviewer.yaml': [
+        'name: reviewer', 'description: Reviews code', 'targets:', '  - claude', '  - qoder',
+        'instructions: |', '  Review the change.', 'tool_extras:', '  claude:', '    color: blue', '',
+      ].join('\n'),
+    });
+    // What teamai 0.26.0 wrote for Qoder: Claude's extras (`color`), and no delivery record.
+    const old = '---\nname: reviewer\ndescription: Reviews code\ncolor: blue\n---\nReview the change.\n';
+    const dir = business('old-agent-render-biz', { '.qoder/agents/reviewer.md': old, '.claude/agents/.keep': '' });
+    const qoder = path.join(dir, '.qoder', 'agents', 'reviewer.md');
+
+    const initRun = teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude,qoder', '--scope', 'project', '--force'], dir);
+
+    expect(initRun.output).not.toContain('not teamai\'s');
+    expect(read(qoder)).toBe('---\nname: reviewer\ndescription: Reviews code\n---\nReview the change.\n');
+  });
+
+  it('keeps a member\'s own .md in .cursor/rules through pull, remove and uninstall, and removes a legacy teamai copy', () => {
+    const t = team('cursor-legacy', {
+      'rules/old-layout.md': '# Old layout v1\n',
+      'rules/keeper.md': '# Keeper\n',
+      'rules/doomed.md': '# Doomed\n',
+    });
+    t.publish({ 'rules/old-layout.md': '# Old layout v2\n' }, 'old-layout v2');
+    const rules = (file: string): string => path.join(dir, '.cursor', 'rules', file);
+    const dir = business('cursor-legacy-biz', {
+      // The member's own notes, and a file of theirs that has a team rule's name.
+      '.cursor/rules/notes.md': 'MY NOTES\n',
+      '.cursor/rules/keeper.md': 'MY KEEPER\n',
+      // What an older teamai wrote before Cursor got `.mdc`: an old team version, verbatim, with no record.
+      '.cursor/rules/old-layout.md': '# Old layout v1\n',
+    });
+    teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'cursor', '--scope', 'project', '--force'], dir);
+
+    expect(fs.existsSync(rules('old-layout.md'))).toBe(false);
+    expect(read(rules('old-layout.mdc'))).toContain('# Old layout v2');
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['pull', '--force'], dir);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['remove', 'rules', 'doomed', '--force'], dir);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
+
+    teamaiOk(['uninstall', '--force'], dir);
+    expect(fs.existsSync(rules('keeper.mdc'))).toBe(false);
+    expect(read(rules('notes.md'))).toBe('MY NOTES\n');
+    expect(read(rules('keeper.md'))).toBe('MY KEEPER\n');
   });
 
   it('keeps a member\'s own rules through teamai remove, the removed rule\'s name included', () => {

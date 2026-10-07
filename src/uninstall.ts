@@ -38,11 +38,11 @@ import {
   type ManagedMcpManifest,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
-import { keptLegacyCopiesWarning, ruleStemFromFilename, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
+import { isLegacyCursorRuleFile, keptLegacyCopiesWarning, ruleStemFromFilename, usesMdcRules, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs } from './resources/agents.js';
-import { RulesHandler } from './resources/rules.js';
+import { RulesHandler, isLegacyLayoutCopy } from './resources/rules.js';
 import { deliveredHashes } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
@@ -728,6 +728,21 @@ async function buildRemovalPlan(
         globalAdapters,
       ),
     );
+  }
+
+  // A `.md` in the rules directory of a tool that reads only `.mdc` goes only
+  // as a copy an older layout wrote (#993): a team rule's name is no proof.
+  const delivered = await deliveredHashes(localConfig);
+  for (const [tool, res] of perTool) {
+    const rulesPath = toolPaths[tool]?.rules;
+    if (!rulesPath || !usesMdcRules(tool)) continue;
+    const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), rulesPath);
+    const owned: string[] = [];
+    for (const file of res.ruleFiles) {
+      const rel = path.relative(rulesDir, file).split(path.sep).join('/');
+      if (!isLegacyCursorRuleFile(tool, file) || await isLegacyLayoutCopy(file, `rules/${rel}`, delivered, repoPath)) owned.push(file);
+    }
+    res.ruleFiles.splice(0, res.ruleFiles.length, ...owned);
   }
 
   // OpenCode's instructions entry is teamai's only when pull recorded adding
