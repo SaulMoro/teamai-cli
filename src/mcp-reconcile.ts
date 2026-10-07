@@ -61,13 +61,12 @@ import {
   ensureExcludedFromGit,
   excludeFromGit,
   findMcpGitExcludes,
-  gitTracks,
   mcpExcludePatternPath,
-  realFilePath,
   removeMcpGitExclude,
   resolvedVariableIn,
   type GitExclusion,
 } from './mcp-git-exclude.js';
+import { gitTracks, realFilePath } from './git-exclude.js';
 import { createGit, getFileContentAtRev, listWorktrees } from './utils/git.js';
 import {
   readResolvedMcpFiles,
