@@ -199,6 +199,20 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(pulled.output).not.toContain('Kept MCP server');
   });
 
+  it('records an adopted MCP server that already equals the current team render, so a team removal reaches it', () => {
+    // Nothing to write on adoption: the record alone must still be saved.
+    const t = team('noop-adopt', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const v1 = { type: 'http', url: 'https://team.example.com/v1' };
+    const dir = business('noop-adopt-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'plain-api': v1 } }) });
+
+    init(t, dir, 'claude');
+    expect(mcpServer(dir, 'plain-api')).toEqual(v1);
+
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(dir);
+    expect(mcpServer(dir, 'plain-api')).toBeUndefined();
+  });
+
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
     // The co-author setting shares settings.local.json with the team hooks (#993 bug 7).
     const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') }, ['  coAuthor:', '    enabled: false']);
