@@ -498,6 +498,19 @@ describe('git exclude blocks (#915)', () => {
       await fse.chmod(excludeFile, 0o644);
       expect(await read()).toBe(member);
     });
+
+    it('reports it as not readable, not every path as missing', async () => {
+      const result = await report(memoryOwner('delivered', [excludeFile]), [inRepo('a.md')]);
+
+      expect(result.files).toMatchObject([{
+        excludeFile,
+        notReadable: expect.stringContaining(`${excludeFile} cannot be read`),
+        listed: [],
+        missing: [],
+        stale: [],
+        visible: [inRepo('a.md')],
+      }]);
+    });
   });
 
   describe('two owners in one exclude file', () => {
@@ -727,8 +740,9 @@ describe('git exclude blocks (#915)', () => {
           stale: ['/stale.md'],
           damaged: [{ owner: 'delivered', line: 7, problem: 'unopened' }],
           checkFailed: [],
+          visible: [inRepo('missing.md'), inRepo('.claude', 'rules', 'back.md')],
         },
-        { excludeFile: otherExclude, listed: [], missing: [], tracked: [], reincluded: [], stale: ['/gone.md'], damaged: [], checkFailed: [] },
+        { excludeFile: otherExclude, listed: [], missing: [], tracked: [], reincluded: [], stale: ['/gone.md'], damaged: [], checkFailed: [], visible: [] },
       ]);
       expect(await read()).toBe(before);
       expect(await fse.pathExists(`${excludeFile}.teamai-lock`)).toBe(false);
@@ -742,6 +756,37 @@ describe('git exclude blocks (#915)', () => {
 
       expect(ignored(repo, 'a.md')).toBe(false);
       expect(result.files).toMatchObject([{ listed: [], missing: [inRepo('a.md')], stale: ['  /a.md'] }]);
+    });
+
+    it('asks git a fixed number of times per exclude file, however many paths and directories it checks', async () => {
+      const paths: string[] = [];
+      for (const dir of ['.claude/skills', '.claude/rules/fe', '.cursor/rules', '.codex/agents', '.github/instructions', '.opencode']) {
+        for (const name of ['a', 'b', 'c']) {
+          paths.push(inRepo(...dir.split('/'), `${name}.md`));
+          await fse.outputFile(paths[paths.length - 1], `${name}\n`);
+        }
+      }
+      await fse.outputFile(inRepo('.claude', '.gitignore'), '!rules/fe/a.md\n');
+      await fse.outputFile(excludeFile, ['# [teamai:delivered:start]', ...paths.map((p) => `/${path.relative(repo, p)}`), '# [teamai:delivered:end]', ''].join('\n'));
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const bin = path.join(tmp, 'bin');
+      const log = path.join(tmp, 'git-calls.log');
+      await fse.outputFile(path.join(bin, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+      const pathBefore = process.env.PATH;
+      process.env.PATH = `${bin}${path.delimiter}${pathBefore ?? ''}`;
+      let result: Awaited<ReturnType<typeof report>>;
+      try {
+        result = await report(memoryOwner('delivered'), paths);
+      } finally {
+        process.env.PATH = pathBefore;
+      }
+      const calls = (await read(log)).split('\n').filter(Boolean);
+
+      expect(result.files).toMatchObject([{ missing: [], reincluded: [{ path: inRepo('.claude', 'rules', 'fe', 'a.md') }] }]);
+      expect(calls.filter((c) => /\bls-files\b.*--others/.test(c))).toHaveLength(1);
+      expect(calls.filter((c) => /\bcheck-ignore\b/.test(c))).toHaveLength(1);
+      // Where the file is, what it tracks, what git still offers, the one re-included path, and git for macOS' precompose setting.
+      expect(calls.length).toBeLessThanOrEqual(5);
     });
 
     it('creates no info/ in a repository without one', async () => {
