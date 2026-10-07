@@ -8,7 +8,7 @@ import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
-import { describeKeptEntry, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
+import { describeKeptEntry, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
 import { blobIdOf, historicalVersions } from '../utils/team-history.js';
 
 /**
@@ -353,6 +353,16 @@ async function sameLink(local: string, team: string): Promise<boolean> {
   return mine !== null && mine === theirs;
 }
 
+/** Whether `rel` under `root`, or a directory on the way to it, is a link (never followed). */
+async function passesThroughLink(root: string, rel: string): Promise<boolean> {
+  let current = root;
+  for (const part of rel.split(/[\\/]/)) {
+    current = path.join(current, part);
+    if (await isLink(current)) return true;
+  }
+  return false;
+}
+
 /** The file's bytes, or null when it is not a file this process can read. */
 async function readBytes(filePath: string): Promise<Buffer | null> {
   try {
@@ -376,6 +386,8 @@ async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: st
     const kept: string[] = [];
     for (const file of files) {
       const deployed = path.join(localDocsDir, dir, file);
+      // A link of the member's at the doc or on the way to it: never read through or deleted in (#993).
+      if (await passesThroughLink(localDocsDir, path.join(dir, file))) continue;
       const current = await readBytes(deployed);
       if (current === null) continue;
       const source = await readBytes(path.join(desired.sourceDir, dir, file));

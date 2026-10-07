@@ -237,6 +237,35 @@ describe('pull: docs by namespace', () => {
     expect(await fse.pathExists(path.join(repoPath, 'docs', 'devops', 'deploy.md'))).toBe(true);
   });
 
+  it('never reads through or deletes inside a member\'s link in a deactivated namespace (#993)', async () => {
+    await team('docs/backend/api.md', '# Backend API\n');
+    await fse.writeFile(path.join(repoPath, 'manifest/roles.yaml'), `${ROLES_YAML}  - id: backend
+    resources:
+      knowledge: []
+      skills: []
+      docs: [backend]
+`);
+    await pull({});
+    // The member's own directory, linked in place of the namespace, holds a copy of a team doc.
+    const external = path.join(tmpDir, 'my-frontend');
+    await fse.outputFile(path.join(external, 'components.md'), '# Components\n');
+    await fse.remove(local('frontend'));
+    await fse.ensureSymlink(external, local('frontend'), 'dir');
+    // In another namespace, a link of theirs in place of a delivered doc, to the same bytes.
+    as('backend');
+    await pull({});
+    const linkedDoc = path.join(tmpDir, 'my-api.md');
+    await fse.writeFile(linkedDoc, '# Backend API\n');
+    await fse.remove(local('backend/api.md'));
+    await fse.symlink(linkedDoc, local('backend/api.md'));
+
+    as('devops');
+    await pull({});
+
+    expect(await fse.readFile(path.join(external, 'components.md'), 'utf8')).toBe('# Components\n');
+    expect((await fse.lstat(local('backend/api.md'))).isSymbolicLink()).toBe(true);
+  });
+
   it('removes the directory a deactivated namespace leaves empty', async () => {
     await team('docs/frontend/nested/deep.md', '# Deep\n');
     await pull({});
