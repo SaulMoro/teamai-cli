@@ -23,25 +23,25 @@
       "--cache=false",
       "--reporter=default",
       "--reporter=json",
-      "--outputFile.json=/private/results/before.json"
+      "--outputFile.json=/results/before.json"
     ]
   ],
-  "started_at": "2026-10-07T18:25:47.419660+00:00",
+  "started_at": "2026-10-07T21:16:45.530699+00:00",
   "retry": 0,
   "cache": false,
   "remote_credentials": false,
   "load_start": [
-    2.62060546875,
-    2.20166015625,
-    2.24951171875
+    1.63720703125,
+    12.6103515625,
+    21.5009765625
   ],
-  "seconds": 961.0517447910097,
+  "seconds": 1003.7827498750121,
   "exit_code": 1,
-  "completed_at": "2026-10-07T18:41:48.474137+00:00",
+  "completed_at": "2026-10-07T21:33:29.318657+00:00",
   "load_end": [
-    2.0888671875,
-    2.31787109375,
-    2.638671875
+    61.564453125,
+    21.19677734375,
+    15.14892578125
   ],
   "counts": {
     "numTotalTests": 656,

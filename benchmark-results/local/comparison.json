@@ -1,8 +1,8 @@
 {
-  "before_seconds": 961.0517447910097,
-  "after_seconds": 293.51357629100676,
-  "reduction_percent": 69.45912872206124,
-  "speedup": 3.274300824293613,
+  "before_seconds": 1003.7827498750121,
+  "after_seconds": 435.08518375002313,
+  "reduction_percent": 56.655443241657764,
+  "speedup": 2.3070947652672364,
   "cases": 656,
   "identical_verdicts": true,
   "verdict_changes": [],
@@ -42,25 +42,25 @@
           "--cache=false",
           "--reporter=default",
           "--reporter=json",
-          "--outputFile.json=/private/results/before.json"
+          "--outputFile.json=/results/before.json"
         ]
       ],
-      "started_at": "2026-10-07T18:25:47.419660+00:00",
+      "started_at": "2026-10-07T21:16:45.530699+00:00",
       "retry": 0,
       "cache": false,
       "remote_credentials": false,
       "load_start": [
-        2.62060546875,
-        2.20166015625,
-        2.24951171875
+        1.63720703125,
+        12.6103515625,
+        21.5009765625
       ],
-      "seconds": 961.0517447910097,
+      "seconds": 1003.7827498750121,
       "exit_code": 1,
-      "completed_at": "2026-10-07T18:41:48.474137+00:00",
+      "completed_at": "2026-10-07T21:33:29.318657+00:00",
       "load_end": [
-        2.0888671875,
-        2.31787109375,
-        2.638671875
+        61.564453125,
+        21.19677734375,
+        15.14892578125
       ],
       "counts": {
         "numTotalTests": 656,
@@ -71,7 +71,7 @@
     },
     {
       "label": "after",
-      "sha": "b7f0bef81fb31fd27aac15c049a5b39227176c4c",
+      "sha": "47905de7d9d8c865a7c96932cded1b1bdcfabfe5",
       "node": "v24.21.0",
       "npm": "11.19.0",
       "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
@@ -89,25 +89,25 @@
           "--cache=false",
           "--reporter=default",
           "--reporter=json",
-          "--outputFile.json=/private/results/after.json"
+          "--outputFile.json=/results/after.json"
         ]
       ],
-      "started_at": "2026-10-07T18:42:17.111192+00:00",
+      "started_at": "2026-10-07T21:33:29.582657+00:00",
       "retry": 0,
       "cache": false,
       "remote_credentials": false,
       "load_start": [
-        2.1318359375,
-        2.30712890625,
-        2.625
+        61.564453125,
+        21.19677734375,
+        15.14892578125
       ],
-      "seconds": 293.51357629100676,
+      "seconds": 435.08518375002313,
       "exit_code": 1,
-      "completed_at": "2026-10-07T18:47:10.625835+00:00",
+      "completed_at": "2026-10-07T21:40:44.670376+00:00",
       "load_end": [
-        2.59375,
-        3.35107421875,
-        3.09130859375
+        38.658203125,
+        34.5908203125,
+        25.4912109375
       ],
       "counts": {
         "numTotalTests": 656,

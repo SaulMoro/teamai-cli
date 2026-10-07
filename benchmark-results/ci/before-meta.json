@@ -23,30 +23,30 @@
       "--cache=false",
       "--reporter=default",
       "--reporter=json",
-      "--outputFile.json=/tmp/e2e-ab-results/before.json"
+      "--outputFile.json=/results/before.json"
     ]
   ],
-  "started_at": "2026-10-07T18:30:05.532184+00:00",
+  "started_at": "2026-10-07T20:33:23.438756+00:00",
   "retry": 0,
   "cache": false,
   "remote_credentials": false,
   "load_start": [
-    0.44775390625,
-    0.15234375,
-    0.05224609375
+    0.8271484375,
+    0.279296875,
+    0.0986328125
   ],
-  "seconds": 1239.076298519,
+  "seconds": 971.7174536389999,
   "exit_code": 1,
-  "completed_at": "2026-10-07T18:50:44.608733+00:00",
+  "completed_at": "2026-10-07T20:49:35.156398+00:00",
   "load_end": [
-    1.61669921875,
-    1.15380859375,
-    0.8291015625
+    1.1416015625,
+    0.884765625,
+    0.6240234375
   ],
   "counts": {
     "numTotalTests": 656,
-    "numPassedTests": 627,
-    "numFailedTests": 2,
+    "numPassedTests": 628,
+    "numFailedTests": 1,
     "numPendingTests": 27
   }
 }

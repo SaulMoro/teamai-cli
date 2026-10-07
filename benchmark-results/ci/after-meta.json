@@ -1,6 +1,6 @@
 {
   "label": "after",
-  "sha": "809edbd1090f07b911eedaeb8dafc7e30d41bb40",
+  "sha": "47905de7d9d8c865a7c96932cded1b1bdcfabfe5",
   "node": "v20.20.2",
   "npm": "10.8.2",
   "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
@@ -18,30 +18,30 @@
       "--cache=false",
       "--reporter=default",
       "--reporter=json",
-      "--outputFile.json=/tmp/e2e-ab-results/after.json"
+      "--outputFile.json=/results/after.json"
     ]
   ],
-  "started_at": "2026-10-07T18:50:51.047548+00:00",
+  "started_at": "2026-10-07T20:49:39.994020+00:00",
   "retry": 0,
   "cache": false,
   "remote_credentials": false,
   "load_start": [
-    1.916015625,
-    1.23193359375,
-    0.85791015625
+    1.1298828125,
+    0.88671875,
+    0.62646484375
   ],
-  "seconds": 666.2637064160001,
+  "seconds": 512.0322869699999,
   "exit_code": 1,
-  "completed_at": "2026-10-07T19:01:57.311496+00:00",
+  "completed_at": "2026-10-07T20:58:12.026492+00:00",
   "load_end": [
-    1.95361328125,
-    2.0,
-    1.52978515625
+    1.88720703125,
+    1.7822265625,
+    1.23388671875
   ],
   "counts": {
     "numTotalTests": 656,
-    "numPassedTests": 627,
-    "numFailedTests": 2,
+    "numPassedTests": 628,
+    "numFailedTests": 1,
     "numPendingTests": 27
   }
 }

@@ -1,8 +1,8 @@
 {
-  "before_seconds": 971.7174536389999,
-  "after_seconds": 512.0322869699999,
-  "reduction_percent": 47.30646392606389,
-  "speedup": 1.897765977589482,
+  "before_seconds": 961.0517447910097,
+  "after_seconds": 293.51357629100676,
+  "reduction_percent": 69.45912872206124,
+  "speedup": 3.274300824293613,
   "cases": 656,
   "identical_verdicts": true,
   "verdict_changes": [],
@@ -10,17 +10,21 @@
     {
       "file": "src/__tests__/e2e/hooks-project-isolation-issue373.test.ts",
       "test": "issue #373 project hook isolation (real CLI) shares one ungated Claude/Codex team-hook file in the main checkout with a linked worktree"
+    },
+    {
+      "file": "src/__tests__/e2e/self-mode-worktrees-808.test.ts",
+      "test": "a checkout an older git-mode install left (#808) lets a checkout pull and contribute after another checkout switched the project to single-repo mode, keeping the knowledge and setting the old queue aside"
     }
   ],
   "variants": [
     {
       "label": "before",
       "sha": "f287dcb1a3fa247206a5dad9766b5d6ef14e3106",
-      "node": "v20.20.2",
-      "npm": "10.8.2",
-      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
-      "cpus": 4,
-      "ci": true,
+      "node": "v24.21.0",
+      "npm": "11.19.0",
+      "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+      "cpus": 12,
+      "ci": false,
       "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
       "root": "/workspace/before",
       "commands": [
@@ -38,41 +42,41 @@
           "--cache=false",
           "--reporter=default",
           "--reporter=json",
-          "--outputFile.json=/results/before.json"
+          "--outputFile.json=/private/results/before.json"
         ]
       ],
-      "started_at": "2026-10-07T20:33:23.438756+00:00",
+      "started_at": "2026-10-07T18:25:47.419660+00:00",
       "retry": 0,
       "cache": false,
       "remote_credentials": false,
       "load_start": [
-        0.8271484375,
-        0.279296875,
-        0.0986328125
+        2.62060546875,
+        2.20166015625,
+        2.24951171875
       ],
-      "seconds": 971.7174536389999,
+      "seconds": 961.0517447910097,
       "exit_code": 1,
-      "completed_at": "2026-10-07T20:49:35.156398+00:00",
+      "completed_at": "2026-10-07T18:41:48.474137+00:00",
       "load_end": [
-        1.1416015625,
-        0.884765625,
-        0.6240234375
+        2.0888671875,
+        2.31787109375,
+        2.638671875
       ],
       "counts": {
         "numTotalTests": 656,
-        "numPassedTests": 628,
-        "numFailedTests": 1,
+        "numPassedTests": 627,
+        "numFailedTests": 2,
         "numPendingTests": 27
       }
     },
     {
       "label": "after",
-      "sha": "47905de7d9d8c865a7c96932cded1b1bdcfabfe5",
-      "node": "v20.20.2",
-      "npm": "10.8.2",
-      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
-      "cpus": 4,
-      "ci": true,
+      "sha": "b7f0bef81fb31fd27aac15c049a5b39227176c4c",
+      "node": "v24.21.0",
+      "npm": "11.19.0",
+      "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+      "cpus": 12,
+      "ci": false,
       "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
       "root": "/workspace/after",
       "commands": [
@@ -85,30 +89,30 @@
           "--cache=false",
           "--reporter=default",
           "--reporter=json",
-          "--outputFile.json=/results/after.json"
+          "--outputFile.json=/private/results/after.json"
         ]
       ],
-      "started_at": "2026-10-07T20:49:39.994020+00:00",
+      "started_at": "2026-10-07T18:42:17.111192+00:00",
       "retry": 0,
       "cache": false,
       "remote_credentials": false,
       "load_start": [
-        1.1298828125,
-        0.88671875,
-        0.62646484375
+        2.1318359375,
+        2.30712890625,
+        2.625
       ],
-      "seconds": 512.0322869699999,
+      "seconds": 293.51357629100676,
       "exit_code": 1,
-      "completed_at": "2026-10-07T20:58:12.026492+00:00",
+      "completed_at": "2026-10-07T18:47:10.625835+00:00",
       "load_end": [
-        1.88720703125,
-        1.7822265625,
-        1.23388671875
+        2.59375,
+        3.35107421875,
+        3.09130859375
       ],
       "counts": {
         "numTotalTests": 656,
-        "numPassedTests": 628,
-        "numFailedTests": 1,
+        "numPassedTests": 627,
+        "numFailedTests": 2,
         "numPendingTests": 27
       }
     }

@@ -1,14 +1,19 @@
 {
-  "label": "after",
-  "sha": "47905de7d9d8c865a7c96932cded1b1bdcfabfe5",
+  "label": "before",
+  "sha": "f287dcb1a3fa247206a5dad9766b5d6ef14e3106",
   "node": "v24.21.0",
   "npm": "11.19.0",
   "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
   "cpus": 12,
   "ci": false,
   "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
-  "root": "/workspace/after",
+  "root": "/workspace/before",
   "commands": [
+    [
+      "npm",
+      "run",
+      "build"
+    ],
     [
       "npm",
       "run",
@@ -18,25 +23,25 @@
       "--cache=false",
       "--reporter=default",
       "--reporter=json",
-      "--outputFile.json=/results/after.json"
+      "--outputFile.json=/private/results/before.json"
     ]
   ],
-  "started_at": "2026-10-07T21:33:29.582657+00:00",
+  "started_at": "2026-10-07T18:25:47.419660+00:00",
   "retry": 0,
   "cache": false,
   "remote_credentials": false,
   "load_start": [
-    61.564453125,
-    21.19677734375,
-    15.14892578125
+    2.62060546875,
+    2.20166015625,
+    2.24951171875
   ],
-  "seconds": 435.08518375002313,
+  "seconds": 961.0517447910097,
   "exit_code": 1,
-  "completed_at": "2026-10-07T21:40:44.670376+00:00",
+  "completed_at": "2026-10-07T18:41:48.474137+00:00",
   "load_end": [
-    38.658203125,
-    34.5908203125,
-    25.4912109375
+    2.0888671875,
+    2.31787109375,
+    2.638671875
   ],
   "counts": {
     "numTotalTests": 656,

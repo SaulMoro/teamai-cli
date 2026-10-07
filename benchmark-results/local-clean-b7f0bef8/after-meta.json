@@ -1,6 +1,6 @@
 {
   "label": "after",
-  "sha": "47905de7d9d8c865a7c96932cded1b1bdcfabfe5",
+  "sha": "b7f0bef81fb31fd27aac15c049a5b39227176c4c",
   "node": "v24.21.0",
   "npm": "11.19.0",
   "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
@@ -18,25 +18,25 @@
       "--cache=false",
       "--reporter=default",
       "--reporter=json",
-      "--outputFile.json=/results/after.json"
+      "--outputFile.json=/private/results/after.json"
     ]
   ],
-  "started_at": "2026-10-07T21:33:29.582657+00:00",
+  "started_at": "2026-10-07T18:42:17.111192+00:00",
   "retry": 0,
   "cache": false,
   "remote_credentials": false,
   "load_start": [
-    61.564453125,
-    21.19677734375,
-    15.14892578125
+    2.1318359375,
+    2.30712890625,
+    2.625
   ],
-  "seconds": 435.08518375002313,
+  "seconds": 293.51357629100676,
   "exit_code": 1,
-  "completed_at": "2026-10-07T21:40:44.670376+00:00",
+  "completed_at": "2026-10-07T18:47:10.625835+00:00",
   "load_end": [
-    38.658203125,
-    34.5908203125,
-    25.4912109375
+    2.59375,
+    3.35107421875,
+    3.09130859375
   ],
   "counts": {
     "numTotalTests": 656,
