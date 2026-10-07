@@ -793,7 +793,7 @@ teamai packages --dry-run   # Preview native commands without installing or writ
 teamai doctor              # Check runtimes, declared package/marketplace/plugin status, and what actually landed on disk; exits 1 when any check fails
 ```
 
-After a successful install, TeamAI writes a local snapshot to `teamai.lock` under the active scope's `.teamai` directory. The lock records installed versions and the declaration hash used by the SessionStart hint; it is not stored in the team repository. In user scope, machine-wide npm tools and Claude plugins are acknowledged once, while project npm dependencies are acknowledged separately for each working directory so installing in one repository cannot silence another repository's hint.
+After a successful install, TeamAI writes a local snapshot to `teamai.lock` in the scope's data home (`~/.teamai/projects/<slug>/` for a project, `~/.teamai/` for user scope), never in the working tree. A `.teamai/teamai.lock` an older release wrote is moved there on the next install or session start, and the `.teamai/.gitignore` it created to hide it is removed. The lock records installed versions and the declaration hash used by the SessionStart hint; it is not stored in the team repository. In user scope, machine-wide npm tools and Claude plugins are acknowledged once, while project npm dependencies are acknowledged separately for each working directory so installing in one repository cannot silence another repository's hint.
 
 **Declaration format:**
 

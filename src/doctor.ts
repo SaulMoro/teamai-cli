@@ -12,6 +12,7 @@ import {
   resolveToolRootDir,
   toolRootRejection,
   resolveHookScope,
+  legacyManagedHooksPath,
   resolveToolBaseDir,
   isAgentExcluded,
   scopedToolPaths,
@@ -550,6 +551,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
         + 'can push to the team repo (run with --verbose to see the push error).',
     },
     ...await buildGitHookChecks(localConfig, stage),
+    ...await buildTrackedHookIndexCheck(localConfig),
     ...buildToolRootChecks(localConfig, teamConfig),
     ...await buildEnabledToolChecks(ctx),
     ...await buildHookChecks(toolPaths, hookToolPaths, baseDir, localConfig),
@@ -604,6 +606,28 @@ async function buildGitHookChecks(localConfig: LocalConfig, stage: CheckStage): 
       }
       : { name: 'No git hook failure recorded', source: 'local', check: async () => true },
   ];
+}
+
+/**
+ * Project scope: the hook index a release before #993 kept in the working
+ * tree, when git tracks it. Pull moves its records to the data home but
+ * leaves a tracked file for the member to untrack (`migrateLegacyManagedHooks`).
+ */
+async function buildTrackedHookIndexCheck(localConfig: LocalConfig): Promise<Check[]> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return [];
+  const file = legacyManagedHooksPath(localConfig.projectRoot);
+  if (!await pathExists(file)) return [];
+  const { gitTracks } = await import('./mcp-git-exclude.js');
+  if ((await gitTracks(file)).kind !== 'tracked') return [];
+  return [{
+    name: `${file} is tracked by git`,
+    source: 'local',
+    informational: true,
+    check: async () => false,
+    fix: 'teamai keeps its hook index in its data home now; this copy is left over from an older release. '
+      + `Run \`git rm --cached .teamai/managed-hooks.json\` in ${localConfig.projectRoot} and commit, `
+      + 'so it leaves the repository; teamai pull deletes it once nothing in it is needed.',
+  }];
 }
 
 /**
