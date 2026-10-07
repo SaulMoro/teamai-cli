@@ -22,7 +22,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@v4
         with:
-          ref: b7f0bef81fb31fd27aac15c049a5b39227176c4c
+          ref: 47905de7d9d8c865a7c96932cded1b1bdcfabfe5
           path: after
           persist-credentials: false
       - name: Setup Node 20
