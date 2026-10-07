@@ -2168,14 +2168,12 @@ async function syncClaudemd(
     }
 
     const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
-    // OpenCode's Claude fallback already carries the blocks, as in pull (#945).
+    // OpenCode V1's Claude fallback already carries the blocks, as in pull
+    // (#945), so OpenCode's file is written for V2's plugin but not listed.
     const claudeUserFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
-    if (tool === 'opencode' && localConfig.scope === 'user'
-      && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START)
-      && await opencodeClaudeFallback(getUserHome(), [claudeUserFile])) {
-      log.debug(`local-agent: OpenCode reads the team instructions from ${claudeUserFile}; skipped`);
-      continue;
-    }
+    const viaClaude = tool === 'opencode' && localConfig.scope === 'user'
+      && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START) === true
+      && await opencodeClaudeFallback(getUserHome(), [claudeUserFile]) !== null;
     const target = await instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath);
     const plan = await planInstructionFiles([target], { claudemd: block });
     // A warning means the file was left as it was: nothing reached the tool.
@@ -2191,9 +2189,9 @@ async function syncClaudemd(
       continue;
     }
     if (tool === 'opencode') {
-      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [] }, false, files);
-      // OpenCode reads the file only through its `instructions` entry.
-      if (block) {
+      await registerOpencodeContext(teamConfig, localConfig, { targets: [target], stale: [], opencodeFallback: viaClaude ? claudeUserFile : null }, false, files);
+      // OpenCode V1 reads the file only through its `instructions` entry.
+      if (block && !viaClaude) {
         const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
         const { config, entry } = opencodeContextReference(claudeMdPath, localConfig.scope, baseDir);
         if (!(await readOpencodeInstructionList(config))?.includes(entry)) {
@@ -2232,7 +2230,7 @@ async function syncClaudemd(
     const verification = await planInstructionFiles([target], { claudemd: block });
     if (verification.files[0]?.status !== 'current') continue;
     for (const tool of target.tools) {
-      if (tool === 'opencode' && block) {
+      if (tool === 'opencode' && block && !resolved.opencodeFallback) {
         const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
         const { config, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir(tool, localConfig));
         if (!(await readOpencodeInstructionList(config))?.includes(entry)) continue;
