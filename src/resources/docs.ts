@@ -9,6 +9,7 @@ import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
 import { describeMembersFile, isTeamaiCopy } from './delivered-copies.js';
+import { blobIdOf, historicalVersions } from '../utils/team-history.js';
 
 /**
  * The single directory the team docs bundle is copied into. In project scope a
@@ -68,19 +69,48 @@ export async function listStaleDocDirectories(source: string | undefined, destin
   return stale;
 }
 
-/** Remove stale visible entries without following local symlinks or removing dotfiles. */
-async function pruneDocs(source: string | undefined, destination: string): Promise<void> {
+/**
+ * Whether the prune may delete `file`, at `rel` in the mirror (`/`-separated),
+ * which the team repo no longer has (#993): a link, a version of the team doc
+ * once at that path, or a local-only file at a path the team repo's history
+ * never had (or cannot tell). Anything else at a removed team doc's
+ * path is the member's. Read-only.
+ */
+export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
+  if (!(await fse.lstat(file).catch(() => null))?.isFile()) return true;
+  const versions = await historicalVersions(repoPath, `docs/${rel}`);
+  if (versions === null || versions.length === 0) return true;
+  const bytes = await readBytes(file);
+  if (bytes === null) return false;
+  const id = await blobIdOf(repoPath, bytes);
+  return versions.some((version) => version.blob === id);
+}
+
+/**
+ * Remove stale visible entries without following local symlinks or removing
+ * dotfiles. A file at a removed team doc's path that is no version of that doc
+ * is kept and named (`isPrunableDoc`).
+ */
+async function pruneDocs(source: string | undefined, destination: string, repoPath: string, scope: string, rel = ''): Promise<void> {
   const sourceEntries = new Map((source ? await readEntries(source) : []).map(e => [e.name, e]));
   for (const entry of await readEntries(destination)) {
     if (entry.name.startsWith('.')) continue;
     const target = path.join(destination, entry.name);
+    const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
     const sourceEntry = sourceEntries.get(entry.name);
     if (entry.isDirectory()) {
       if (sourceEntry && !sourceEntry.isDirectory()) continue;
-      await pruneDocs(sourceEntry ? path.join(source!, entry.name) : undefined, target);
-      // A stale directory containing hidden local files must survive.
+      await pruneDocs(sourceEntry ? path.join(source!, entry.name) : undefined, target, repoPath, scope, entryRel);
+      // A stale directory containing hidden local files, or a file kept above, must survive.
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
+      if (!await isPrunableDoc(target, entryRel, repoPath)) {
+        log.warn(
+          `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this copy matches no team version of it. `
+          + 'Delete it when you no longer need it.',
+        );
+        continue;
+      }
       await fse.unlink(target);
     }
   }
@@ -349,7 +379,7 @@ export class DocsHandler extends ResourceHandler {
       await copyDocs(src, localDocsDir, new Set(desired.withheld.map(({ dir }) => dir)), new Set(members));
     }
     // Copy first: a failed copy must not trigger deletion of the previous bundle.
-    await pruneDocs(src, localDocsDir);
+    await pruneDocs(src, localDocsDir, localConfig.repo.localPath, localConfig.scope);
     await withdrawInactiveNamespaces(desired, localDocsDir, localConfig);
     log.debug(`Synced docs → ${localDocsDir}`);
     return members.length;
