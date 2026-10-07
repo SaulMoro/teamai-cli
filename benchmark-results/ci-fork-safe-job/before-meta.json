@@ -1,0 +1,12 @@
+{
+  "label": "before",
+  "sha": "f287dcb1a3fa247206a5dad9766b5d6ef14e3106",
+  "seconds": 1057.090136928,
+  "exit_code": 0,
+  "counts": {
+    "numTotalTests": 656,
+    "numPassedTests": 629,
+    "numFailedTests": 0,
+    "numPendingTests": 27
+  }
+}
