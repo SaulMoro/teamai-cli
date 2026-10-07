@@ -7,8 +7,10 @@ import {
   gitExcludeFile,
   realFilePath,
   remove,
+  report,
   sync,
   type GitExcludeOwner,
+  type GitExcludeReport,
   type GitExcludeWrite,
 } from './git-exclude.js';
 import { getDataHome, type LocalConfig } from './types.js';
@@ -201,16 +203,23 @@ async function foreignIn(others: Array<{ root: string; set: Set<string> }>, rel:
 }
 
 /** The pull line naming each foreign path once, by the file that holds its line back. */
-export function warnForeign(foreign: ForeignPath[]): void {
-  const named = new Set<string>();
+export function describeForeign(foreign: ForeignPath[]): string[] {
+  const named = new Map<string, string>();
   for (const { rel, file } of foreign) {
-    if (named.has(file)) continue;
-    named.add(file);
-    log.warn(`Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
+    if (!named.has(file)) named.set(file, `Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
   }
+  return [...named.values()];
 }
 
 // ─── Sync ─────────────────────────────────────────────────────
+
+/** What a sync of the `delivered` blocks has to tell the member. */
+export interface DeliveredGitExcludeOutcome {
+  /** A block left other than it should be (a file locked, unreadable or not writable, git failing): the sync failed. */
+  failures: string[];
+  /** Paths left visible on purpose: a name no git exclude line can hold. */
+  notices: string[];
+}
 
 /**
  * Make teamai's `delivered` blocks hold `paths` while `enabled`, each in the
@@ -218,30 +227,64 @@ export function warnForeign(foreign: ForeignPath[]): void {
  * `delivered` block, another repository's (a submodule, a nested clone, a
  * tool home under version control) in this partition's `delivered/<id>`
  * block. Off, remove those blocks, and no other owner's. A path outside every
- * repository is left out.
+ * repository is left out. `dryRun` writes nothing (no lock file, no `info/`)
+ * and prints one line per block it would change instead.
  */
-export async function applyDeliveredGitExclude(localConfig: LocalConfig, enabled: boolean, paths: Iterable<string>): Promise<void> {
+export async function applyDeliveredGitExclude(
+  localConfig: LocalConfig, enabled: boolean, paths: Iterable<string>, options: { dryRun?: boolean } = {},
+): Promise<DeliveredGitExcludeOutcome> {
+  const outcome: DeliveredGitExcludeOutcome = { failures: [], notices: [] };
   const projectRoot = localConfig.projectRoot;
-  if (!projectRoot) return;
+  if (!projectRoot) return outcome;
+  const { dryRun } = options;
   const own = await gitExcludeFile(projectRoot);
   const here = deliveredOwner(localConfig);
   const elsewhere = deliveredOwnerElsewhere(localConfig);
+  const unwritten = (excludeFile: string, write: GitExcludeWrite, action: 'update' | 'remove'): void => {
+    const why = write.kind === 'locked' ? `another teamai command held it past the wait`
+      : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
+      : write.kind === 'writeFailed' ? write.error
+      : null;
+    if (why !== null) outcome.failures.push(`Could not ${action} teamai's delivered git exclude block in ${excludeFile}: ${why}. Fix the cause, then run \`teamai pull\` again.`);
+  };
   if (enabled) {
     const split = await byRepository(own?.excludeFile ?? null, paths);
     for (const [owner, list] of [[here, split.here], [elsewhere, split.elsewhere]] as const) {
-      const result = await sync(owner, list);
-      for (const file of result.files) warnUnwritten(file.excludeFile, file.write, 'update');
-      for (const refused of result.refused) log.warn(`Not kept out of git: ${refused.message}.`);
-      for (const { path: file, error } of result.gitFailed) log.warn(`Could not keep ${file} out of git: ${error}`);
+      const result = await sync(owner, list, { dryRun });
+      for (const file of result.files) {
+        unwritten(file.excludeFile, file.write, 'update');
+        if (dryRun && (file.lines.length > 0 || file.dropped.length > 0)) {
+          log.info(`[dry-run] Would list ${file.lines.length} path(s) and drop ${file.dropped.length} in teamai's delivered git exclude block in ${file.excludeFile}`);
+        }
+      }
+      for (const refused of result.refused) outcome.notices.push(`Not kept out of git: ${refused.message}.`);
+      for (const { path: file, error } of result.gitFailed) outcome.failures.push(`Could not keep ${file} out of git: ${error}`);
     }
-    return;
+    return outcome;
   }
   // Also the project's own exclude file, when the record lost track of it.
   for (const [owner, files] of [[here, own ? [own.excludeFile] : []], [elsewhere, []]] as const) {
-    for (const removal of await remove(owner, { files })) {
-      if (removal.write.kind !== 'missing') warnUnwritten(removal.excludeFile, removal.write, 'remove');
+    for (const removal of await remove(owner, { files, dryRun })) {
+      if (removal.write.kind !== 'missing') unwritten(removal.excludeFile, removal.write, 'remove');
+      if (dryRun && removal.write.kind === 'pending') {
+        log.info(`[dry-run] Would remove teamai's delivered git exclude block from ${removal.excludeFile} (sharing.gitExclude is off)`);
+      }
     }
   }
+  return outcome;
+}
+
+/**
+ * Read-only: how teamai's `delivered` blocks of this project stand against
+ * `paths` (what they should list), both owners, each path judged in the
+ * block of the repository git reads it from. Writes nothing, creates no lock.
+ */
+export async function reportDeliveredGitExclude(localConfig: LocalConfig, paths: Iterable<string>): Promise<GitExcludeReport[]> {
+  const projectRoot = localConfig.projectRoot;
+  if (!projectRoot) return [];
+  const own = await gitExcludeFile(projectRoot);
+  const split = await byRepository(own?.excludeFile ?? null, paths);
+  return [await report(deliveredOwner(localConfig), split.here), await report(deliveredOwnerElsewhere(localConfig), split.elsewhere)];
 }
 
 /**
@@ -262,13 +305,4 @@ async function byRepository(ownExclude: string | null, paths: Iterable<string>):
     (excludeFile !== null && excludeFile === ownExclude ? split.here : split.elsewhere).push(file);
   }
   return split;
-}
-
-function warnUnwritten(excludeFile: string, write: GitExcludeWrite, action: 'update' | 'remove'): void {
-  const why = write.kind === 'locked' ? `another teamai command held it past the wait`
-    : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
-    : write.kind === 'writeFailed' ? write.error
-    : null;
-  if (why === null) return;
-  log.warn(`Could not ${action} teamai's delivered git exclude block in ${excludeFile}: ${why}. Fix the cause, then run \`teamai pull\` again.`);
 }

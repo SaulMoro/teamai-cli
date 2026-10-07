@@ -104,7 +104,12 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
 partition's anchor hash. `state.gitExcludeFiles` records, per owner, the exclude
-files holding its block.
+files holding its block. A pull nobody watches (session start, git hooks) keeps
+what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
+its last failure to update it (cleared by the next update that succeeds) and
+notices the next interactive pull says once and drops; `doctor` reads both.
+`pull --dry-run` previews the block from what its writers would write, writing
+nothing.
 Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
 roles, projects, init and bootstrap apply their changes: the pull that finds
 `lastPullRev` cleared resets every other checkout's entry to an empty `rev`,

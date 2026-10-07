@@ -39,8 +39,10 @@ import {
   buildEntryScopeKeyCheck,
   entryNamespaceNotes,
   buildDocsCheck,
+  keptDocNotes,
 } from './doctor-delivery.js';
 import { agentModelNotes, aliasNamespaceNotes, buildAgentModelChecks } from './doctor-agent-models.js';
+import { buildDeliveredGitExcludeChecks, deliveredGitExcludeNotes } from './doctor-git-exclude.js';
 
 /**
  * Where a check gets its answer. `provider` checks shell out to a provider CLI
@@ -567,6 +569,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...await buildMcpReadFileChecks(ctx),
     ...await buildCodexProjectTrustCheck(ctx),
     ...await buildMcpGitExcludeCheck(ctx),
+    ...await buildDeliveredGitExcludeChecks(ctx),
     ...await buildDocsCheck(ctx),
     ...await buildEnvDeliveryCheck(ctx),
     ...await buildEntryResolutionChecks(ctx),
@@ -734,6 +737,9 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
     ...await ruleChannelNotes(localConfig),
     ...codexTrust.notes,
+    // What git sees of the delivered team resources, and what no pull changes (#915).
+    ...await deliveredGitExcludeNotes(ctx),
+    ...await keptDocNotes(ctx),
   ];
 
   if (jsonMode) {

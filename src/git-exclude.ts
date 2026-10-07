@@ -450,12 +450,31 @@ async function onDiskSpelling(file: string): Promise<string> {
 /** A per-run cache of what git says about directories and repositories. */
 class GitContext {
   private readonly locations = new Map<string, ReturnType<typeof locateExclude>>();
+  private readonly repositories = new Map<string, ReturnType<typeof locateExclude>>();
   private readonly precompose = new Map<string, Promise<boolean>>();
 
   locate(dir: string): ReturnType<typeof locateExclude> {
     let found = this.locations.get(dir);
-    if (!found) this.locations.set(dir, found = locateExclude(dir));
+    if (!found) this.locations.set(dir, found = this.locateOnce(dir));
     return found;
+  }
+
+  /**
+   * {@link locateExclude}, asking git once per repository: from the closest
+   * directory at or above `dir` that holds `.git`, `dir`'s prefix being its
+   * path from that toplevel. Anything else (a `.git` git does not take for a
+   * repository, a directory outside the toplevel git names) asks git from `dir`.
+   */
+  private async locateOnce(dir: string): Promise<Awaited<ReturnType<typeof locateExclude>>> {
+    let holder: string | null = dir;
+    while (holder !== null && !await pathExists(path.join(holder, '.git'))) holder = path.dirname(holder) === holder ? null : path.dirname(holder);
+    if (holder === null || holder === dir) return locateExclude(dir);
+    let repository = this.repositories.get(holder);
+    if (!repository) this.repositories.set(holder, repository = locateExclude(holder));
+    const location = await repository;
+    const rel = 'error' in location || location.prefix !== '' ? null : path.relative(location.root, dir);
+    if (rel === null || rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return locateExclude(dir);
+    return { ...location, prefix: `${rel.split(path.sep).join('/')}/` };
   }
 
   /** Whether git there reads names in NFC: `core.precomposeunicode`, which only git for macOS honours. */
@@ -649,7 +668,16 @@ async function trackedPaths(placed: Placed[], failed: GitCheckFailure[]): Promis
  * then `check-ignore -v` only for those few.
  */
 async function reincludedPaths(placed: Placed[], failed: GitCheckFailure[]): Promise<Array<{ path: string; rule: ReincludingRule | null }>> {
-  const found: Array<{ path: string; rule: ReincludingRule | null }> = [];
+  return reincludingRules([...await offeredPaths(placed, failed)]);
+}
+
+/**
+ * Paths among `placed` git would still offer for a commit (untracked and not
+ * ignored), each with a file of it git offers (a directory's first one): one
+ * `ls-files --others` per checkout.
+ */
+async function offeredPaths(placed: Placed[], failed: GitCheckFailure[]): Promise<Map<Placed, string>> {
+  const found = new Map<Placed, string>();
   for (const [root, group] of groupBy(placed, (p) => p.root)) {
     const listed = await runGit(['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...group.map((p) => p.rel)], root);
     if (listed.code !== 0) {
@@ -659,9 +687,16 @@ async function reincludedPaths(placed: Placed[], failed: GitCheckFailure[]): Pro
     const visible = listed.stdout.split('\0').filter(Boolean);
     for (const p of group) {
       const offered = visible.find((f) => f === p.rel || p.directory && f.startsWith(`${p.rel}/`));
-      if (offered) found.push({ path: p.path, rule: await reincludingRule(path.join(root, offered), root) });
+      if (offered) found.set(p, path.join(root, offered));
     }
   }
+  return found;
+}
+
+/** The rule `check-ignore -v` names for each offered path: one call per path, so only for the few git still offers. */
+async function reincludingRules(offered: Array<[Placed, string]>): Promise<Array<{ path: string; rule: ReincludingRule | null }>> {
+  const found: Array<{ path: string; rule: ReincludingRule | null }> = [];
+  for (const [p, file] of offered) found.push({ path: p.path, rule: await reincludingRule(file, p.root) });
   return found;
 }
 
@@ -945,6 +980,13 @@ export interface GitExcludeFileReport {
   stale: string[];
   damaged: DamagedMarker[];
   checkFailed: GitCheckFailure[];
+  /** Expected paths git would offer for a commit: untracked and not ignored, listed or not. */
+  visible: string[];
+  /**
+   * Set when the file exists but cannot be read (the read error): its lines
+   * are unknown, so no path is `listed` or `missing` and no line `stale`.
+   */
+  notReadable?: string;
 }
 
 export interface GitExcludeReport {
@@ -957,7 +999,10 @@ export interface GitExcludeReport {
 /**
  * Read-only: how `owner`'s blocks stand against `expectedPaths`, per exclude
  * file (recorded ones and those the paths route to). Writes nothing and
- * creates no lock file.
+ * creates no lock file. git is asked a fixed number of times per checkout:
+ * where its exclude file is, what it tracks, which paths it still offers for
+ * a commit (one `ls-files --others`), then `check-ignore -v` only for the
+ * listed paths it offers.
  */
 export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<string>): Promise<GitExcludeReport> {
   markersOf(owner.name);
@@ -973,21 +1018,33 @@ export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<str
   }
   for (const recorded of await owner.record?.files() ?? []) if (!byFile.has(recorded)) byFile.set(recorded, []);
   for (const [excludeFile, placed] of byFile) {
-    const parsed = parseExclude((await readFileSafe(excludeFile)) ?? '');
+    let content: string;
+    let notReadable: string | undefined;
+    try {
+      content = (await readExisting(excludeFile)) ?? '';
+    } catch (e) {
+      if (!(e instanceof NotReadableError)) throw e;
+      content = '';
+      notReadable = e.message;
+    }
+    const parsed = parseExclude(content);
     const lines = ownerLines(parsed, owner.name) ?? [];
     const checkFailed: GitCheckFailure[] = [];
     const tracked = await trackedPaths(placed, checkFailed);
     const listed = placed.filter((p) => lines.includes(p.line));
-    const missing = placed.filter((p) => !lines.includes(p.line) && (p.directory || !tracked.some((t) => t.path === p.path)));
+    const missing = notReadable ? [] : placed.filter((p) => !lines.includes(p.line) && (p.directory || !tracked.some((t) => t.path === p.path)));
+    const offered = await offeredPaths(placed, checkFailed);
     result.files.push({
       excludeFile,
       listed: listed.map((p) => p.path),
       missing: missing.map((p) => p.path),
       tracked,
-      reincluded: await reincludedPaths(listed, checkFailed),
+      reincluded: await reincludingRules([...offered].filter(([p]) => listed.includes(p))),
       stale: lines.filter((l) => !placed.some((p) => p.line === l)),
       damaged: parsed.damaged.filter((d) => d.owner === owner.name),
       checkFailed,
+      visible: placed.filter((p) => offered.has(p)).map((p) => p.path),
+      ...notReadable ? { notReadable } : {},
     });
   }
   return result;

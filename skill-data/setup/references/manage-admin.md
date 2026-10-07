@@ -200,7 +200,8 @@ new team; an existing team adds the line and commits it through the normal
 review flow. A member overrides it on their machine with `gitExcludeEnabled:
 true|false` in the project's `config.yaml` (`~/.teamai/projects/<slug>/config.yaml`).
 Either takes effect on the next pull, no `--force`; turned off, the next pull
-removes only that block.
+removes only that block. `teamai doctor` says where the setting comes from and
+what git still sees; `teamai pull --dry-run` previews the block.
 
 ## Team dashboard (web UI)
 

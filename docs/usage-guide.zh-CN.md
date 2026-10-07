@@ -1573,6 +1573,15 @@ MCP 与 OpenCode 的配置文件、`.codex/hooks.json` 以及文档镜像不会�
 - 关闭后，下一次 pull 只移除该项目的 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
 - pull 无法更新该块时（exclude 文件不可写或不可读，或另一个 teamai 命令占用着它），会保持其原样并给出警告；排除原因后再运行 `teamai pull`。因另一个 pull 或 push 持有项目同步锁而跳过的 pull 同样不改动它，由持锁者或下一次 pull 更新。
+- 无人查看的 pull（会话开始时的 pull、teamai 的 git hooks 运行的 pull）无法给出警告，因此会把要说的内容保存在项目的数据目录中（`git-exclude-notices.json`，与 git hook 自己的失败记录分开）：最近一次更新块的失败，每次更新失败都会替换它，下一次成功的更新会清除它；以及提示（无法写成 git exclude 行的路径、因另一个 checkout 中你自己的文件而保持可见的路径）。你下一次运行的 `teamai pull` 会把它们各说一次，先说失败（``A background pull (<time>) could not keep teamai's git exclude blocks up to date: …``），然后移除这些提示；被占用的 exclude 文件由这次 pull 直接重试。在此之前，`teamai doctor` 会显示两者。
+
+**检查这些块。** `teamai doctor` 会说明该选项是否开启以及来源（团队的 `teamai.yaml`、你的 `gitExcludeEnabled`，或默认值），并指出数据仍在项目 `.teamai/` 中的未迁移布局。它的 git 调用是批量的：每个 exclude 文件一次 `git ls-files --others`，再只对 git 仍会提交的路径运行 `git check-ignore -v`。
+
+- 关闭时，它会说明 git 能看到多少个分发的资源：``Delivered team resources are visible to git: N untracked (first 5: …)``，并给出开启该选项的两种方式。只有 `doctor` 会这样说，pull 从不会。
+- 开启时，以下检查会失败，交互式 pull 结束时也会报告：未列出的分发路径，或已列出但 git 仍能看到的路径（会指出重新包含它的规则，例如 `.gitignore` 中的 `!` 行）；无法读取的 exclude 文件；损坏的块（缺少配对的开始或结束标记、同一个块写了两次）；因另一个 checkout 中你自己的文件而保持可见的路径；后台 pull 最近一次的失败。
+- 仅作提示、绝不算失败：你的仓库已跟踪的分发路径（``Run `git rm -r --cached <path>` there and commit``）、下一次 pull 会移除的过期行、因你的仓库跟踪而被 pull 保留的副本、团队移除某个文档后 pull 保留的文件，以及后台 pull 的提示。每一项都使用 pull 自己输出的那一行。
+
+**预览。** `teamai pull --dry-run` 为每个块输出一行：``[dry-run] Would list N path(s) and drop M in teamai's delivered git exclude block in <file>``，选项关闭时为 ``[dry-run] Would remove teamai's delivered git exclude block from <file> (sharing.gitExclude is off)``。N 是该块将包含的行数：本次 pull 将写入的内容加上其他每个仍存在的 checkout 的列表。预览不写入任何内容：不改 exclude 文件，不创建 `info/` 目录，也不创建锁文件。hook 与 co-author 文件按它们当前含有 teamai 条目的情况预览。
 
 **单仓模式。** 该设置开启时：
 

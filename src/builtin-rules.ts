@@ -57,7 +57,7 @@ export const EXCLUDED_RULE_NAMES = new Set<string>([
 export async function deployBuiltinRules(
     teamConfig: TeamaiConfig,
     localConfig?: LocalConfig,
-    options?: { skipRecall?: boolean; recorder?: DeliveryRecorder },
+    options?: { skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean },
 ): Promise<number> {
     const defaultBaseDir = getUserHome();
     let deployed = 0;
@@ -82,6 +82,13 @@ export async function deployBuiltinRules(
 
         const rulesDir = path.join(baseDir, toolPath.rules);
         if (!await pathExists(rulesDir)) continue;
+        // A dry run writes nothing: it reports where each rule would land (#915).
+        if (options?.dryRun) {
+            const ext = ruleFileExtensionForTool(tool);
+            for (const rule of builtinRules) options.recorder?.report('builtin', path.join(rulesDir, `${rule.name}${ext}`));
+            deployed++;
+            continue;
+        }
 
         try {
             await ensureDir(rulesDir);

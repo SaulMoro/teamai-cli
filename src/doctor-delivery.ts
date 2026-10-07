@@ -1452,6 +1452,30 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
 }
 
 /**
+ * Pull's line for each file it keeps where the team removed a doc, because it
+ * is no version of that doc (#993): information, never a failure, since no
+ * pull removes it, and git sees it (#915). Nothing when the docs cannot be
+ * read: the docs check says so.
+ */
+export async function keptDocNotes(ctx: DoctorContext): Promise<string[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const { describeKeptRemovedDoc, isPrunableDoc, listDocFiles, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  try {
+    const desired = await resolveDocsForDirectory(localConfig);
+    const dest = resolveDocsDestination(teamConfig, localConfig);
+    const known = new Set([...desired.files, ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`))]);
+    const notes: string[] = [];
+    for (const file of (await listDocFiles(dest)).filter((local) => !known.has(local))) {
+      if (!await isPrunableDoc(path.join(dest, file), file, localConfig.repo.localPath)) notes.push(describeKeptRemovedDoc(path.join(dest, file), file));
+    }
+    return notes;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Information lines, not checks, that answer "why do I have this version?"
  * (#707). With roles or projects: each namespace skill, agent, rule or
  * claudemd file that replaces a root item of the same name. In legacy mode,

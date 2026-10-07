@@ -117,15 +117,17 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
       if (!await isPrunableDoc(target, entryRel, repoPath)) {
-        log.warn(
-          `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this copy matches no team version of it. `
-          + 'Delete it when you no longer need it.',
-        );
+        log.warn(`[${scope}] ${describeKeptRemovedDoc(target, entryRel)}`);
         continue;
       }
       await fse.unlink(target);
     }
   }
+}
+
+/** Pull's line for a file it keeps at `docs/<rel>`, which the team removed, because it is no version of it (#993). */
+export function describeKeptRemovedDoc(target: string, rel: string): string {
+  return `Kept ${target}: the team removed docs/${rel}, but this copy matches no team version of it. Delete it when you no longer need it.`;
 }
 
 /** Whether the team history ever had a file at `docs/<rel>` itself, not only under it. */
