@@ -141,6 +141,18 @@ function removeHookManifests(): void {
   for (const file of found) fs.rmSync(file);
 }
 
+/** Lose every MCP manifest under the sandbox HOME's data home, as an older release or a restore would. */
+function removeMcpManifests(): void {
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : e.name === 'managed-mcp.json' ? [path.join(dir, e.name)] : []);
+  const found = walk(path.join(home, '.teamai'));
+  expect(found.length).toBeGreaterThan(0);
+  for (const file of found) fs.rmSync(file);
+}
+
+const twoServersYaml = (url: string): string =>
+  `servers:\n  - name: plain-api\n    transport: http\n    url: ${url}\n  - name: other-api\n    transport: http\n    url: https://team.example.com/other\n`;
+
 describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', () => {
   beforeAll(() => {
     if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
@@ -229,6 +241,57 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     const r = teamai(['uninstall', '--force'], dir);
     expect(r.code).toBe(0);
     expect(fs.existsSync(path.join(dir, '.mcp.json')) ? mcpServer(dir, 'plain-api') : undefined).toBeUndefined();
+  });
+
+  it('removes an unrecorded copy of a server the team deleted, beside servers it still defines', () => {
+    const t = team('removed-beside', { 'mcp/mcp.yaml': twoServersYaml('https://team.example.com/v1') });
+    const dir = business('removed-beside-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    removeMcpManifests();
+
+    t.publish({ 'mcp/mcp.yaml': `servers:\n  - name: other-api\n    transport: http\n    url: https://team.example.com/other\n` }, 'drop plain-api');
+    pull(dir);
+    expect(mcpServer(dir, 'plain-api')).toBeUndefined();
+    expect(mcpServer(dir, 'other-api')).toEqual({ type: 'http', url: 'https://team.example.com/other' });
+  });
+
+  it('removes an unrecorded copy of a server when the team deletes every server, on pull and on uninstall', () => {
+    const t = team('removed-all', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const pulled = business('removed-all-biz', { '.claude/.keep': '' });
+    init(t, pulled, 'claude');
+    removeMcpManifests();
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(pulled);
+    expect(mcpServer(pulled, 'plain-api')).toBeUndefined();
+
+    const t2 = team('removed-uninstall', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const uninstalled = business('removed-uninstall-biz', { '.claude/.keep': '' });
+    init(t2, uninstalled, 'claude');
+    removeMcpManifests();
+    expect(teamai(['uninstall', '--force'], uninstalled).code).toBe(0);
+    expect(fs.existsSync(path.join(uninstalled, '.mcp.json')) ? mcpServer(uninstalled, 'plain-api') : undefined).toBeUndefined();
+  });
+
+  it('keeps a member\'s server under the name of a server the team deleted', () => {
+    const t = team('removed-member', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const mine = { type: 'http', url: 'https://mine.example.com/mcp' };
+    const dir = business('removed-member-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'plain-api': mine } }) });
+    init(t, dir, 'claude');
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(dir);
+    expect(mcpServer(dir, 'plain-api')).toEqual(mine);
+  });
+
+  it('removes an unrecorded copy of a deleted server from Codex config too', () => {
+    const t = team('removed-codex', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const dir = business('removed-codex-biz', { '.codex/.keep': '' });
+    init(t, dir, 'codex');
+    const config = path.join(dir, '.codex', 'config.toml');
+    expect(fs.readFileSync(config, 'utf8')).toContain('[mcp_servers.plain-api]');
+    removeMcpManifests();
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(dir);
+    expect(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '').not.toContain('[mcp_servers.plain-api]');
   });
 
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
