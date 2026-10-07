@@ -268,6 +268,33 @@ describe('co-author reconcile', () => {
       expect(await fse.readFile(shared(), 'utf8')).toBe(before);
     });
 
+    it('with no choice, keeps the member\'s own settings.local.json attribution when moving a pre-fix value', async () => {
+      const localFile = path.join(projRoot, '.claude', 'settings.local.json');
+      const mine = '{\n  "attribution": {"commit": "Mine"}\n}\n';
+      await fse.writeFile(localFile, mine);
+      await fse.writeFile(shared(), '{"attribution": {"commit": "", "pr": ""}, "model": "opus"}');
+      const { changes, managed } = await reconcileCoAuthorForConfig(team(), local, preFix({ [shared()]: false }));
+      expect(changes.map((c) => c.action)).toEqual(['moved']);
+      expect(await fse.readFile(shared(), 'utf8')).toBe('{"model": "opus"}');
+      expect(await fse.readFile(localFile, 'utf8')).toBe(mine);
+      expect(managed).toEqual({});
+    });
+
+    it('with no choice, leaves a pre-fix value in another Claude-family tool\'s shared file for a later choice', async () => {
+      await fse.ensureDir(path.join(projRoot, '.codebuddy', 'skills'));
+      const withCodebuddy = {
+        ...team(),
+        toolPaths: { ...TOOL_PATHS, codebuddy: { skills: '.codebuddy/skills', settings: '.codebuddy/settings.json' } },
+      } as TeamaiConfig;
+      const codebuddyShared = path.join(projRoot, '.codebuddy', 'settings.json');
+      const before = '{"attribution": {"commit": "", "pr": ""}}';
+      await fse.writeFile(codebuddyShared, before);
+      const { changes, managed } = await reconcileCoAuthorForConfig(withCodebuddy, local, preFix({ [codebuddyShared]: false }));
+      expect(changes).toEqual([]);
+      expect(await fse.readFile(codebuddyShared, 'utf8')).toBe(before);
+      expect(managed).toEqual({ [codebuddyShared]: false });
+    });
+
     it('leaves a value with keys teamai never writes alone', async () => {
       const before = '{"attribution": {"commit": "", "pr": "", "extra": true}}';
       await fse.writeFile(shared(), before);

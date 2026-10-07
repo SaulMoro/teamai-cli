@@ -3046,6 +3046,9 @@ async function reconcileCoAuthorAllScopes(
       for (const c of changes.filter((change) => change.action === 'removed')) {
         log.info(`Removed the co-author setting an earlier teamai wrote to ${c.file}, a shared project file (teamai now writes it only to .claude/settings.local.json). Commit the change if the file is tracked.`);
       }
+      for (const c of changes.filter((change) => change.action === 'moved')) {
+        log.info(`Moved the co-author setting an earlier teamai wrote to ${c.file}, a shared project file, to .claude/settings.local.json; your trailer setting is unchanged. Commit the change if the file is tracked.`);
+      }
       if (applied.length > 0) {
         const verb = applied[0].enabled ? 'enabled' : 'disabled';
         const tools = [...new Set(applied.map((c) => c.tool))];
