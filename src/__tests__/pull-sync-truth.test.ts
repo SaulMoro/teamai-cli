@@ -20,7 +20,9 @@ vi.mock('../config.js', async (importOriginal) => ({
   saveStateForScope: vi.fn(),
 }));
 
-vi.mock('../utils/git.js', () => ({
+vi.mock('../utils/git.js', async (importOriginal) => ({
+  // The real one: the docs prune reads the team history (#993).
+  createGit: (await importOriginal<typeof import('../utils/git.js')>()).createGit,
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
   listWorktrees: vi.fn().mockResolvedValue([]),
@@ -75,6 +77,7 @@ import type { TeamaiConfig, LocalConfig } from '../types.js';
 import { recordGitHookFailure, readGitHookFailure } from '../git-hook.js';
 import { reconcileTeamHooksForConfig } from '../hooks.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 describe('pull reports what reached the tool directory (#585)', () => {
   let tmpDir: string;
@@ -214,6 +217,8 @@ describe('pull reports what reached the tool directory (#585)', () => {
       state.lastPullTargets = [];
       await fse.outputFile(path.join(homeDir, 'docs', 'stale.md'), 'stale');
       await fse.outputFile(path.join(repoPath, 'env', 'env.yaml'), 'variables:\n  - key: DOCS_TEST\n    value: delivered\n');
+      // The history shows the team never had docs/stale.md, so the prune may delete it (#993).
+      commitTeamRepo(repoPath);
       if (failure === 'copy') ioSpy = vi.spyOn(fse, 'copy').mockRejectedValueOnce(new Error('copy failed'));
       if (failure === 'prune') ioSpy = vi.spyOn(fse, 'unlink').mockRejectedValueOnce(new Error('prune failed'));
       if (failure === 'unsafe destination') teamConfig.sharing.docs.localDir = homeDir;
@@ -306,6 +311,8 @@ describe('pull reports what reached the tool directory (#585)', () => {
   });
 
   it.each(['empty', 'missing'])('prunes docs through pull when the team bundle is %s (#794)', async (state) => {
+    // The copy pull delivers is a team version by the history, so the prune may delete it (#993).
+    commitTeamRepo(repoPath);
     await pull({ silent: true, force: true });
     await fse.remove(path.join(repoPath, 'docs'));
     if (state === 'empty') await fse.ensureDir(path.join(repoPath, 'docs'));
