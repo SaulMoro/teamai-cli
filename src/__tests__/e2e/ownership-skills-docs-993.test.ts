@@ -290,6 +290,7 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(fs.existsSync(path.join(dir, '.claude', 'skills', 'gone-skill'))).toBe(false);
     const old = path.join(dir, '.claude', 'skills', 'old-skill');
     expect(read(path.join(old, 'SKILL.md'))).toBe(skillMd('old-skill', 'MY OLD SKILL'));
-    expect(initRun.output).toContain(`Kept ${old}: the team removed old-skill`);
+    // The member's own copy is named as not teamai's, not as an edit of a teamai copy.
+    expect(initRun.output).toContain(`Kept ${old}: it is not teamai's (no delivery record, and it matches no team version of skills/old-skill), so pull left it.`);
   });
 });
