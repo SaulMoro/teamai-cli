@@ -59,6 +59,7 @@ import { checkoutKey, pull } from '../pull.js';
 import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig, loadStateForScope } from '../config.js';
 import { log } from '../utils/logger.js';
 import { StateSchema, type TeamaiConfig, type LocalConfig } from '../types.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 
 const ROLES_YAML = `
 version: 1
@@ -158,6 +159,8 @@ describe('pull: an active namespace item replaces the root item of the same name
       await pull({});
       expect(await read('.claude/agents/reviewer.md')).toContain('Review the front end.');
 
+      // Nothing records the copy here (state is not saved): the history proves it teamai's (#993).
+      commitTeamRepo(repoPath);
       as(['devops']);
       await pull({});
       expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
@@ -222,6 +225,8 @@ describe('pull: an active namespace item replaces the root item of the same name
       expect(soul).toContain('# Front style');
       expect(soul).not.toContain('# Shared style');
 
+      // Nothing records the copy here (state is not saved): the history proves it teamai's (#993).
+      commitTeamRepo(repoPath);
       as(['devops']);
       await pull({});
 

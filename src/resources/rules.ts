@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { isToolInstalledForConfig, ResourceHandler, type PlacementRecords } from './base.js';
-import type { ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
+import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
@@ -15,6 +15,7 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
+import { historicalVersions } from '../utils/team-history.js';
 import {
   adoptRecord, contentHash, forgetDelivered, keepsEditedCopy, recordDelivered, recordedUnchanged, removedCopyChanged,
   type DeliveredHashes, type DeliveryLedger,
@@ -348,6 +349,7 @@ export class RulesHandler extends ResourceHandler {
         tool,
         dest,
         content,
+        origin: ruleOrigin(tool, localConfig.repo.localPath, item.relativePath),
         ...(supersededStem !== undefined ? { supersedes: path.join(destDir, `${supersededStem}${ext}`) } : {}),
         ...(stem !== localName ? { movedFrom: path.join(destDir, `${localName}${ext}`) } : {}),
       });
@@ -846,10 +848,16 @@ export class RulesHandler extends ResourceHandler {
         if (EXCLUDED_RULE_NAMES.has(ruleName)) continue;
         if (!deliveredStems.has(ruleName)) {
           const fullPath = path.join(destDir, localFile);
-          // A copy the member changed since teamai delivered it stays (#822);
-          // the tombstone cleanup names one of a rule the team removed.
-          if (await removedCopyChanged(ledger?.previous, fullPath)) {
-            if (!tombstones.has(ruleName)) {
+          // A copy the member changed since teamai delivered it stays (#822),
+          // and so does one with no record that holds no team version of the
+          // rule (#993); the tombstone cleanup names one of a rule the team
+          // removed. A file of a name the team never had is the member's own
+          // rule, which needs no word.
+          const teamFile = `rules/${ruleName}.md`;
+          if (await removedCopyChanged(ledger?.previous, fullPath, ruleOrigin(tool, localConfig.repo.localPath, teamFile))) {
+            const wasTeamRule = ledger?.previous?.[fullPath] !== undefined
+              || ((await historicalVersions(localConfig.repo.localPath, teamFile))?.length ?? 0) > 0;
+            if (wasTeamRule && !tombstones.has(ruleName)) {
               log.warn(`Kept ${fullPath}: teamai no longer delivers ${ruleName} here, but you changed this copy. Delete it when you no longer need it.`);
             }
             continue;
@@ -1368,6 +1376,20 @@ function keptNestedCopyMessage(tool: string, file: string, name: string, flatCop
   return `Kept ${file}: ${tool} reads only the top level of its rules directory, so it does not read this copy of ${name}, `
     + `which teamai now delivers as ${flatCopy}. To keep your edit, copy it into that file and share it with \`teamai push\`; `
     + 'then delete this one.';
+}
+
+/**
+ * How a file with no record in `tool`'s rules directory is proven teamai's
+ * (#993): it holds a version of the team rule at `relativePath`, verbatim or
+ * in one of the tool's `deliveredRenders`.
+ */
+export function ruleOrigin(tool: string, repoPath: string, relativePath: string): CopyOrigin {
+  const renders = ruleFormatForTool(tool) ? deliveredRenders(tool) : [];
+  return {
+    repoPath,
+    pathspec: relativePath,
+    ...(renders.length > 0 ? { renders: renders.map((render) => (content: Buffer) => render(content.toString('utf-8'))) } : {}),
+  };
 }
 
 /**

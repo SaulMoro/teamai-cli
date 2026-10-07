@@ -489,12 +489,22 @@ skill directory is one unit, and files only the member added are not recorded.
 Tombstone cleanup keeps an edited copy the same way, and so does the rules
 sweep of a rule no longer delivered (deleted from the team repo, or of a
 namespace the member left). `--force` keeps edits;
-deleting the copy and running `pull --force` takes the team version. A record
-without `delivered` (the first pull on this version, a new worktree) protects
-nothing, and a copy teamai never delivered to that path is overwritten as
-before. A forced full sync elsewhere keeps each checkout's `delivered`.
+deleting the copy and running `pull --force` takes the team version. A rule or
+agent file with no entry in `delivered` (the first pull on this version, a new
+worktree, a restored checkout whose `.git` key changed, the member's own file)
+is teamai's only on proof (#993): its bytes, by git blob id, equal a version of
+the resource's team file in the team repo's history, or teamai's render of one
+for that tool (`isTeamaiCopy`, the target's `origin`). The proof runs only for
+a file that exists without a record. Otherwise it is the member's: neither
+written nor deleted, named (with the kept-edit wording when another checkout's
+record lists the path, else `describeMembersFile`), listed by `doctor`, and the
+pull does not count as synced, so the next one retries. No record is carried
+over to a new key. Skills without a record are still overwritten. A forced
+full sync elsewhere keeps each checkout's `delivered`.
 `doctor` does not fail on a kept copy; next to another problem it lists one
-as "changed by you (kept by pull)".
+as "changed by you (kept by pull)". A member's own file fails the delivery
+check, as the team version does not reach that tool: it is listed as "not
+teamai's (kept by pull)" with pull's line for each file.
 
 ### Known gaps
 

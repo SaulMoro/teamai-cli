@@ -948,6 +948,27 @@ export interface DeliveryTarget {
    * cannot say, and only the destination's existence can be judged.
    */
   content?: string;
+  /**
+   * The team file `dest` is rendered from, for proving that a file already
+   * at `dest` with no delivery record is teamai's (#993). Absent: the handler
+   * offers no proof, and such a file is written over as before.
+   */
+  origin?: CopyOrigin;
+}
+
+/**
+ * A resource's file in the repo it comes from, and how teamai renders one
+ * version of it (`DeliveryTarget.origin`). A file is teamai's when its bytes
+ * equal a version `pathspec` held in `repoPath`'s history, or one of
+ * `renders` of such a version.
+ */
+export interface CopyOrigin {
+  /** The team clone (`repo.localPath`), or a source repo. */
+  repoPath: string;
+  /** Repo-relative, `/`-separated. */
+  pathspec: string;
+  /** teamai's renders of one version; null when that version renders nothing here. */
+  renders?: ReadonlyArray<(content: Buffer, version: { path: string; blob: string }) => string | Uint8Array | null>;
 }
 
 // ─── Hook definitions (unified model, issue #19) ─────────
