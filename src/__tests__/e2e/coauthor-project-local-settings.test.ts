@@ -22,6 +22,8 @@ const CLI = path.join(ROOT, 'dist', 'index.js');
 const FAKE_URL = 'https://git.example.com/team/coauthor.git';
 /** A team whose `toolPaths` defines its own tool (replacing the defaults). */
 const CUSTOM_URL = 'https://git.example.com/team/coauthor-custom.git';
+/** A team with no co-author policy (e.g. it dropped `sharing.coAuthor`). */
+const NO_CHOICE_URL = 'https://git.example.com/team/coauthor-none.git';
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'TeamAI CI',
@@ -89,18 +91,18 @@ function modifiedTracked(dir: string): string[] {
   return git(['status', '--porcelain', '--untracked-files=no'], dir).split('\n').filter(Boolean);
 }
 
-/** Find the project scope's state.json in the sandbox data home. */
-function findStateFile(dir: string): string {
+/** Find the project scope's state.json (the one naming `marker`) in the sandbox data home. */
+function findStateFile(dir: string, marker: string): string {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      const found = (() => { try { return findStateFile(full); } catch { return null; } })();
+      const found = (() => { try { return findStateFile(full, marker); } catch { return null; } })();
       if (found) return found;
-    } else if (entry.name === 'state.json' && fs.readFileSync(full, 'utf8').includes('coAuthorManaged')) {
+    } else if (entry.name === 'state.json' && fs.readFileSync(full, 'utf8').includes(marker)) {
       return full;
     }
   }
-  throw new Error(`no state.json with coAuthorManaged under ${dir}`);
+  throw new Error(`no state.json naming ${marker} under ${dir}`);
 }
 
 /**
@@ -111,14 +113,14 @@ function simulatePreFix(project: string, settingsText: string): void {
   const shared = path.join(project, '.claude', 'settings.json');
   writeFile(shared, settingsText);
   git(['commit', '-q', '-am', 'settings written by an earlier teamai'], project);
-  const stateFile = findStateFile(path.join(home, '.teamai'));
+  const stateFile = findStateFile(path.join(home, '.teamai'), project);
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { coAuthorManaged?: Record<string, boolean> };
   state.coAuthorManaged = { ...state.coAuthorManaged, [shared]: false };
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 
-/** A bare team repo reached through `url`, whose team disables the trailer. */
-function makeRemote(url: string, extraYaml: string[]): void {
+/** A bare team repo reached through `url`, whose team disables the trailer unless `coAuthor` is false. */
+function makeRemote(url: string, extraYaml: string[], coAuthor = true): void {
   const name = path.basename(url, '.git');
   const seed = path.join(sandbox, `seed-${name}`);
   writeFile(path.join(seed, 'teamai.yaml'), [
@@ -126,9 +128,7 @@ function makeRemote(url: string, extraYaml: string[]): void {
     `repo: ${url}`,
     'provider: git',
     'reviewers: []',
-    'sharing:',
-    '  coAuthor:',
-    '    enabled: false',
+    ...(coAuthor ? ['sharing:', '  coAuthor:', '    enabled: false'] : []),
     ...extraYaml,
     '',
   ].join('\n'));
@@ -146,6 +146,7 @@ describe.skipIf(process.platform === 'win32')('co-author setting in project scop
     if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
     sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-coauthor-e2e-')));
     makeRemote(FAKE_URL, []);
+    makeRemote(NO_CHOICE_URL, [], false);
     makeRemote(CUSTOM_URL, [
       'toolPaths:',
       '  claude:',
@@ -237,5 +238,45 @@ describe.skipIf(process.platform === 'win32')('co-author setting in project scop
     expect(pull.output).not.toMatch(/Removed the co-author setting/);
     expect(fs.readFileSync(path.join(project, '.claude', 'settings.json'), 'utf8')).toBe(before);
     expect(modifiedTracked(project)).toEqual([]);
+  }, 120_000);
+
+  it('moves a pre-fix attribution to settings.local.json when no co-author choice exists', async () => {
+    const project = makeBusinessRepo();
+    const init = await runCLI(['init', NO_CHOICE_URL, '--scope', 'project', '--agent', 'claude', '--force'], project);
+    expect(init.code, init.output).toBe(0);
+    expect(fs.existsSync(path.join(project, '.claude', 'settings.local.json')), init.output).toBe(false);
+
+    const before = '{\n  "permissions": {\n    "allow": ["Bash(npm test)"]\n  },\n'
+      + '  "attribution": {\n    "commit": "",\n    "pr": ""\n  },\n  "model":   "opus"\n}\n';
+    simulatePreFix(project, before);
+
+    const pull = await runCLI(['pull'], project);
+    expect(pull.code, pull.output).toBe(0);
+    expect(pull.output).toMatch(/Moved the co-author setting an earlier teamai wrote to .*settings\.json/);
+    expect(fs.readFileSync(path.join(project, '.claude', 'settings.json'), 'utf8'))
+      .toBe('{\n  "permissions": {\n    "allow": ["Bash(npm test)"]\n  },\n  "model":   "opus"\n}\n');
+    const local = JSON.parse(fs.readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
+    expect(local.attribution).toEqual({ commit: '', pr: '' });
+
+    // Settled: the next pull has nothing left to move.
+    const again = await runCLI(['pull'], project);
+    expect(again.code, again.output).toBe(0);
+    expect(again.output).not.toMatch(/Moved the co-author setting/);
+  }, 150_000);
+
+  it('leaves a different attribution in the tracked settings.json alone when no co-author choice exists', async () => {
+    const project = makeBusinessRepo();
+    const init = await runCLI(['init', NO_CHOICE_URL, '--scope', 'project', '--agent', 'claude', '--force'], project);
+    expect(init.code, init.output).toBe(0);
+
+    const before = '{\n  "attribution": {"commit": "Team trailer", "pr": ""},\n  "model": "opus"\n}\n';
+    simulatePreFix(project, before);
+
+    const pull = await runCLI(['pull'], project);
+    expect(pull.code, pull.output).toBe(0);
+    expect(pull.output).not.toMatch(/co-author setting/);
+    expect(fs.readFileSync(path.join(project, '.claude', 'settings.json'), 'utf8')).toBe(before);
+    expect(modifiedTracked(project)).toEqual([]);
+    expect(fs.existsSync(path.join(project, '.claude', 'settings.local.json'))).toBe(false);
   }, 120_000);
 });
