@@ -126,15 +126,20 @@ describe('DocsHandler pruning (#794)', () => {
   });
 
   it.each(['guide', 'nested/guide'])('mirrors directory/file transitions at %s', async (name) => {
+    // Each layout is committed: what pull wrote before is a team version, so it may be replaced (#993).
+    const repo = path.join(root, 'repo');
     await fse.outputFile(path.join(source, name, 'old.md'), 'old directory');
+    commitTeamRepo(repo, 'directory');
     await sync();
     await fse.remove(path.join(source, name));
     await fse.outputFile(path.join(source, name), 'new file');
+    commitTeamRepo(repo, 'file');
     await sync();
     expect(await fse.readFile(path.join(destination, name), 'utf8')).toBe('new file');
 
     await fse.remove(path.join(source, name));
     await fse.outputFile(path.join(source, name, 'new.md'), 'new directory');
+    commitTeamRepo(repo, 'directory again');
     await sync();
     expect(await fse.readFile(path.join(destination, name, 'new.md'), 'utf8')).toBe('new directory');
     expect(await fse.readdir(path.join(destination, name))).toEqual(['new.md']);
@@ -145,8 +150,15 @@ describe('DocsHandler pruning (#794)', () => {
     await fse.outputFile(path.join(destination, 'guide', 'old.md'), 'old directory');
     await fse.outputFile(path.join(destination, 'api'), 'old file');
     await fse.outputFile(path.join(destination, 'stale.md'), 'stale');
+    // The conflicting entries are earlier team versions, so pull may replace them (#993).
+    await fse.outputFile(path.join(source, 'guide', 'old.md'), 'old directory');
+    await fse.outputFile(path.join(source, 'api'), 'old file');
+    commitTeamRepo(path.join(root, 'repo'), 'old layout');
+    await fse.remove(path.join(source, 'guide'));
+    await fse.remove(path.join(source, 'api'));
     await fse.outputFile(path.join(source, 'guide'), 'new file');
     await fse.outputFile(path.join(source, 'api', 'new.md'), 'new directory');
+    commitTeamRepo(path.join(root, 'repo'), 'new layout');
     if (failure === 'copy') {
       vi.spyOn(fse, 'copy').mockRejectedValueOnce(new Error('copy failed'));
     } else {
@@ -165,10 +177,28 @@ describe('DocsHandler pruning (#794)', () => {
     expect((await fse.readdir(destination)).sort()).toEqual(['api', 'guide', 'stale.md']);
   });
 
-  it('refuses to replace a directory containing hidden local entries', async () => {
+  it('keeps a member\'s directory at the path of a team doc file, and writes nothing over it (#993)', async () => {
+    await fse.outputFile(path.join(destination, 'guide.md', 'notes.txt'), 'mine');
+    await fse.outputFile(path.join(source, 'guide.md'), 'team');
+    commitTeamRepo(path.join(root, 'repo'));
+    await sync();
+    expect(await fse.readFile(path.join(destination, 'guide.md', 'notes.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('keeps a member\'s file at the path of a team docs directory, and writes nothing over it (#993)', async () => {
+    await fse.outputFile(path.join(destination, 'guide'), 'mine');
+    await fse.outputFile(path.join(source, 'guide', 'readme.md'), 'team');
+    commitTeamRepo(path.join(root, 'repo'));
+    await sync();
+    expect(await fse.readFile(path.join(destination, 'guide'), 'utf8')).toBe('mine');
+  });
+
+  it('keeps a directory containing hidden local entries at a team doc file\'s path (#993)', async () => {
+    // No team version holds `.keep`: the directory is the member's, so pull leaves it whole.
     await fse.outputFile(path.join(destination, 'guide', 'nested', '.keep'), 'private');
     await fse.outputFile(path.join(source, 'guide'), 'new file');
-    await expect(sync()).rejects.toThrow('hidden local entries');
+    commitTeamRepo(path.join(root, 'repo'));
+    await sync();
     expect(await fse.readFile(path.join(destination, 'guide', 'nested', '.keep'), 'utf8')).toBe('private');
   });
 

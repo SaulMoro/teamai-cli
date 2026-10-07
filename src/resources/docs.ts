@@ -8,7 +8,7 @@ import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
-import { describeMembersFile, isTeamaiCopy } from './delivered-copies.js';
+import { describeMembersFile, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
 import { blobIdOf, historicalVersions } from '../utils/team-history.js';
 
 /**
@@ -139,11 +139,16 @@ async function findDocConflicts(
   source: string,
   destination: string,
   withheld: ReadonlySet<string> = new Set(),
+  kept: ReadonlySet<string> = new Set(),
+  rel = '',
 ): Promise<Array<{ source: string; target: string }>> {
   const conflicts: Array<{ source: string; target: string }> = [];
   const localEntries = new Map((await readEntries(destination)).map(entry => [entry.name, entry]));
   for (const entry of await readEntries(source)) {
     if (entry.name.startsWith('.') || withheld.has(entry.name)) continue;
+    const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+    // The member's entry stays where it is (#993): nothing replaces it.
+    if (kept.has(entryRel)) continue;
     const local = localEntries.get(entry.name);
     if (!local) continue;
     const src = path.join(source, entry.name);
@@ -154,7 +159,7 @@ async function findDocConflicts(
       }
       conflicts.push({ source: src, target });
     } else if (entry.isDirectory()) {
-      conflicts.push(...await findDocConflicts(src, target));
+      conflicts.push(...await findDocConflicts(src, target, new Set(), kept, entryRel));
     }
   }
   return conflicts;
@@ -167,7 +172,7 @@ async function findDocConflicts(
 async function copyDocs(
   source: string, destination: string, withheld: ReadonlySet<string>, kept: ReadonlySet<string>,
 ): Promise<void> {
-  const conflicts = await findDocConflicts(source, destination, withheld);
+  const conflicts = await findDocConflicts(source, destination, withheld, kept);
   const staging = conflicts.length ? await fse.mkdtemp(path.join(destination, '.teamai-docs-')) : undefined;
   const moved: Array<{ target: string; backup: string }> = [];
   const visible = (src: string) => !path.basename(src).startsWith('.');
@@ -250,23 +255,43 @@ export async function resolveDocsForDirectory(localConfig: LocalConfig): Promise
 }
 
 /**
- * The docs of `desired` whose copy in the mirror at `localDocsDir` is the
- * member's (#993), relative as `desired.files` lists them. The mirror keeps no
- * delivery record, so a file there at a team doc's path is teamai's only when
- * it holds that doc now or at some revision of the team repo's history.
- * Anything else is the member's own: pull does not write over it. Read-only.
+ * The paths of `desired` the mirror at `localDocsDir` must not write over,
+ * because they are the member's (#993), relative and `/`-separated. The mirror
+ * keeps no delivery record, so an entry there is teamai's only when the team
+ * history holds it: a file at a team doc's path, a file where the team now has
+ * a directory, or a directory where the team now has a file (every file in it).
+ * Anything else is the member's own: pull neither writes over nor moves it,
+ * and names the entry. A link is replaced as before, without touching its
+ * target. Read-only.
  */
 export async function membersDocs(desired: DesiredDocs, localDocsDir: string, repoPath: string): Promise<string[]> {
-  const members: string[] = [];
+  const members = new Set<string>();
+  const teamais = (local: string, rel: string) => isTeamaiCopy(local, { repoPath, pathspec: `docs/${rel}` });
   for (const file of desired.files) {
+    const parts = file.split('/');
+    // A file of the member's where the team now has a directory holds back every doc under it.
+    let blocked = false;
+    for (let depth = 1; depth < parts.length && !blocked; depth++) {
+      const rel = parts.slice(0, depth).join('/');
+      const stat = await fse.lstat(path.join(localDocsDir, rel)).catch(() => null);
+      if (!stat?.isFile()) continue;
+      blocked = true;
+      if (!await teamais(path.join(localDocsDir, rel), rel)) members.add(rel);
+    }
+    if (blocked) continue;
     const local = path.join(localDocsDir, file);
-    if (!(await fse.lstat(local).catch(() => null))?.isFile()) continue;
+    const stat = await fse.lstat(local).catch(() => null);
+    if (stat?.isDirectory()) {
+      if (!await isTeamaiSkillCopy(local, { repoPath, pathspec: `docs/${file}` })) members.add(file);
+      continue;
+    }
+    if (!stat?.isFile()) continue;
     const current = await readBytes(local);
     const source = await readBytes(path.join(desired.sourceDir, file));
     if (current === null || (source !== null && current.equals(source))) continue;
-    if (!await isTeamaiCopy(local, { repoPath, pathspec: `docs/${file}` })) members.push(file);
+    if (!await teamais(local, file)) members.add(file);
   }
-  return members;
+  return [...members];
 }
 
 /** The file's bytes, or null when it is not a file this process can read. */
