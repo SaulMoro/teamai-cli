@@ -2,7 +2,7 @@ import YAML from 'yaml';
 import fs from 'node:fs';
 import path from 'node:path';
 import { saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, saveStateForScope, resolveProjectDataHome } from './config.js';
-import { describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
+import { deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
 import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward } from './utils/git.js';
 import { pushRepoDirectly } from './utils/git.js';
 import { getProvider, detectProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
@@ -1391,6 +1391,19 @@ export async function initSelfRepo(options: GlobalOptions & {
     } catch (e) {
       log.warn(`Could not commit the .teamai/ skeleton (do it manually before \`teamai push\`): ${(e as Error).message}`);
     }
+  }
+
+  // Step 5.6: keep the hook files init wrote out of git while sharing.gitExclude
+  // is on (#915). Git-mode init ends with a pull that does this; self mode has
+  // none, so it syncs here, after its last writer. Dry run stopped at the top.
+  try {
+    const { createDeliveryRecorder } = await import('./git-exclude-delivered.js');
+    const { syncDeliveredGitExclude } = await import('./pull.js');
+    const recorder = createDeliveryRecorder();
+    for (const file of await deliveredHookFiles(teamConfig, localConfig)) recorder.report('hooks', file);
+    await syncDeliveredGitExclude(localConfig, recorder);
+  } catch (e) {
+    log.warn(`Could not update teamai's delivered git exclude block: ${(e as Error).message}. Fix the cause, then run \`teamai pull\`.`);
   }
 
   // Step 6: register member on the reports orphan branch (never touches main / active tree).

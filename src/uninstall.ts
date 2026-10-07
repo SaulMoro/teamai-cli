@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
-import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
+import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile } from './hooks.js';
 import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
@@ -684,6 +684,17 @@ async function buildRemovalPlan(
   // a pre-#370 CLI is swept too, tagged with its project manifest.
   const primaryHookScope = resolveHookScope(localConfig);
   const hookTargets: HookTarget[] = [primaryHookScope];
+  // Self mode: team hooks in the checkout's settings.local.json (#915), removed
+  // by their records before the tracked file's pass drops those records.
+  const selfLocalToolPaths = scopedToolPaths(teamConfig, { ...localConfig, scope: primaryHookScope.scope });
+  if (selfLocalTeamHookFile(localConfig, selfLocalToolPaths, 'claude')) {
+    hookTargets.unshift({
+      baseDir: primaryHookScope.baseDir,
+      manifestPath: primaryHookScope.manifestPath,
+      teamOnly: true,
+      fileFor: (tool) => selfLocalTeamHookFile(localConfig, selfLocalToolPaths, tool),
+    });
+  }
   const legacyHookScope = resolveLegacyProjectHookScope(localConfig);
   if (legacyHookScope) hookTargets.push(legacyHookScope);
   // The project's Claude and Codex team hooks, in the main checkout (#955).

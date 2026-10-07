@@ -546,7 +546,9 @@ every checkout, so that is where they live now:
     ├── managed-hooks.json                     getManagedHooksPath: team hooks teamai wrote into this checkout's own hook files (Copilot's
     │                                          .github/hooks/; every tool in self mode). Until #993 it sat in <root>/.teamai/: the first pull
     │                                          moves its Copilot records (all of them in self mode), and deletes it once empty and untracked;
-    │                                          doctor names a tracked one. Other records stay there for the pre-#370 import and legacy sweep
+    │                                          doctor names a tracked one. Other records stay there for the pre-#370 import and legacy sweep.
+    │                                          Self mode with sharing.gitExclude on: Claude's records describe .claude/settings.local.json, the
+    │                                          tracked settings.json keeps only the built-ins; off, they describe settings.json again (#915)
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
