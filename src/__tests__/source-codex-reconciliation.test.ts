@@ -112,12 +112,11 @@ describe('source Codex duplicate reconciliation', () => {
     expect(await candidates()).toEqual([]);
   });
 
-  it.each(['configured-differs', 'incoming-differs', 'shared-differs'])('preserves unverified local copies as push candidates: %s', async (difference) => {
+  it.each(['configured-differs', 'incoming-differs'])('preserves unverified local copies as push candidates: %s', async (difference) => {
     await publish();
     await duplicate();
     if (difference === 'configured-differs') await skill('.codex/skills/foo', '# Independent local draft\n');
     if (difference === 'incoming-differs') await publish(['foo'], '# Incoming revision\n');
-    if (difference === 'shared-differs') await skill('.agents/skills/foo', '# Older shared copy\n');
     const configured = path.join(home, '.codex/skills/foo');
     const before = await fse.readFile(path.join(configured, 'SKILL.md'), 'utf8');
 
@@ -125,6 +124,18 @@ describe('source Codex duplicate reconciliation', () => {
 
     expect(await fse.readFile(path.join(configured, 'SKILL.md'), 'utf8')).toBe(before);
     expect(await candidates()).toEqual([expect.objectContaining({ name: 'foo', sourcePath: configured })]);
+  });
+
+  it('leaves a shared copy that is no version of the source skill, delivering to the configured directory (#993)', async () => {
+    await publish();
+    await duplicate();
+    await skill('.agents/skills/foo', '# Not a source version\n');
+
+    await pullSources(config, { force: true });
+
+    expect(await fse.readFile(path.join(home, '.agents/skills/foo/SKILL.md'), 'utf8')).toBe('# Not a source version\n');
+    expect(await fse.readFile(path.join(home, '.codex/skills/foo/SKILL.md'), 'utf8')).toBe('# Source skill\n');
+    expect((await fse.readJson(getSourceManifestPath('shared', config))).installedPaths).toEqual({ foo: ['.codex/skills/foo'] });
   });
 
   it.each(['same-repository', 'different-repository', 'nested-owner'])('preserves duplicates covered by any foreign owner: %s', async (ownership) => {

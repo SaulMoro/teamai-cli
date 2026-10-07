@@ -198,7 +198,7 @@ describe('source physical destination ownership', () => {
     expect(await fse.pathExists(config.projectRoot!)).toBe(true);
   });
 
-  it('records the post-copy destination when copyDir replaces a leaf symlink', async () => {
+  it('leaves an unrecorded leaf symlink to a directory that is no copy of the source skill (#993)', async () => {
     const external = path.join(root, 'unrelated-leaf');
     await fse.outputFile(path.join(external, 'SKILL.md'), '# Unrelated leaf target\n');
     const target = path.join(config.projectRoot!, relativePath);
@@ -206,15 +206,28 @@ describe('source physical destination ownership', () => {
     await publish();
     await pullSources(config, { force: true });
 
+    expect((await fse.lstat(target)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Unrelated leaf target\n');
+  });
+
+  it('records the post-copy destination when copyDir replaces a leaf symlink', async () => {
+    // The link leads to a copy of the source skill: the source's, so it is replaced.
+    const external = path.join(root, 'copied-leaf');
+    await fse.outputFile(path.join(external, 'SKILL.md'), '# Original source: foo\n');
+    const target = path.join(config.projectRoot!, relativePath);
+    await fse.symlink(external, target, 'dir');
+    await publish();
+    await pullSources(config, { force: true });
+
     expect((await fse.lstat(target)).isSymbolicLink()).toBe(false);
     expect((await pinManifest()).installedPhysicalPaths?.[relativePath]).toBe(target);
-    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Unrelated leaf target\n');
+    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
     await publish(producer, ['foo'], 'Updated source');
     await pullSources(config, { force: true });
     expect(await fse.readFile(path.join(target, 'SKILL.md'), 'utf8')).toBe('# Updated source: foo\n');
     await removeSource();
     expect(await fse.pathExists(target)).toBe(false);
-    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Unrelated leaf target\n');
+    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
   });
 
   it('does not abandon an existing pin when an ancestor link becomes a leaf link', async () => {

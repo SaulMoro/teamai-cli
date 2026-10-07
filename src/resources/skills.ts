@@ -35,6 +35,14 @@ export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
  */
 export type SharedSkillOwnership = (sharedDir: string) => Promise<boolean>;
 
+/** What a full pull prints while Codex sees the member's `.agents/skills/<name>` and teamai's copy. */
+export function codexSkillConflictLine(skillName: string, configuredSkillsPath: string): string {
+  const shared = path.posix.join(SHARED_AGENT_SKILLS_PATH, skillName);
+  const configured = path.posix.join(configuredSkillsPath, skillName);
+  return `Codex skill conflict for ${skillName}: ${shared} is not teamai's, so it was left alone; `
+    + `the team skill is in ${configured}. Codex now sees two skills named ${skillName}.`;
+}
+
 /**
  * Where Codex's copy of `skillName` goes: the shared `.agents/skills/<name>`
  * when a copy there is teamai's (`ownsShared`), else the configured directory.
@@ -54,12 +62,7 @@ export async function resolveSkillDestination(
     if (!await pathExists(sharedDestination)) return configuredDestination;
     if (!await ownsShared(sharedDestination)) {
       // The member's skill, or another tool's: never written, so Codex sees both.
-      if (sourcePath) {
-        const shared = path.posix.join(SHARED_AGENT_SKILLS_PATH, skillName);
-        const configured = path.posix.join(configuredSkillsPath, skillName);
-        log.warn(`Codex skill conflict for ${skillName}: ${shared} is not teamai's, so it was left alone; `
-          + `the team skill is in ${configured}. Codex now sees two skills named ${skillName}.`);
-      }
+      if (sourcePath) log.warn(codexSkillConflictLine(skillName, configuredSkillsPath));
       return configuredDestination;
     }
     // No source to compare against: the caller only wants to know where the
