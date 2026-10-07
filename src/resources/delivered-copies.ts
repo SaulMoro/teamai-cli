@@ -184,9 +184,18 @@ export function describeMembersLink(file: string, resource: string, origin: 'tea
     + `Remove the link to receive ${resource} from ${origin === 'team' ? 'the team' : 'its source'}.`;
 }
 
-/** `describeMembersLink` for a link at `file`, else `describeMembersFile`. */
+/** `describeMembersLink` for a link at `file` or inside it (`membersLinkAt`), else `describeMembersFile`. */
 export async function describeKeptEntry(file: string, resource: string, origin: 'team' | 'source' = 'team'): Promise<string> {
-  return await isLink(file) ? describeMembersLink(file, resource, origin) : describeMembersFile(file, resource, origin);
+  const link = await membersLinkAt(file);
+  return link !== null ? describeMembersLink(link, resource, origin) : describeMembersFile(file, resource, origin);
+}
+
+/**
+ * The member's link that keeps the copy at `file` theirs: `file` itself when it is a link,
+ * else the first link (or other non-regular entry) inside the directory there. Null when none.
+ */
+export async function membersLinkAt(file: string): Promise<string | null> {
+  return await isLink(file) ? file : firstNonRegular(file);
 }
 
 /**
@@ -230,7 +239,8 @@ export async function isTeamaiSkillCopy(
 export async function ownsSkillDir(
   previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin, sources: readonly ResourceItem[] = [],
 ): Promise<boolean> {
-  if (await isLink(dir)) return false;
+  // A link at or anywhere inside the directory is the member's: deleting the directory would take it.
+  if (await isLink(dir) || await holdsNonRegular(dir)) return false;
   if (recordedUnder(previous ?? {}, dir).length > 0) return true;
   if (sources.length === 0) return isTeamaiSkillCopy(dir, origin);
   for (const source of sources) {
@@ -255,14 +265,21 @@ export async function isLink(file: string): Promise<boolean> {
  * not list the others.
  */
 export async function holdsNonRegular(dir: string): Promise<boolean> {
+  return await firstNonRegular(dir) !== null;
+}
+
+/** The path of the first entry `holdsNonRegular` finds under `dir`, or null. */
+async function firstNonRegular(dir: string): Promise<string | null> {
   for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (await holdsNonRegular(path.join(dir, entry.name))) return true;
+      const found = await firstNonRegular(entryPath);
+      if (found !== null) return found;
     } else if (!entry.isFile()) {
-      return true;
+      return entryPath;
     }
   }
-  return false;
+  return null;
 }
 
 async function isDirectory(dir: string): Promise<boolean> {
@@ -279,7 +296,10 @@ async function isMembersCopy(previous: DeliveredHashes | undefined, item: Resour
   // A link at the delivered path is the member's: teamai never writes through, replaces or deletes it.
   if (await isLink(target.dest)) return true;
   if (item.type === 'skills') {
-    if (recordedUnder(previous ?? {}, target.dest).length > 0 || !await isDirectory(target.dest)) return false;
+    if (!await isDirectory(target.dest)) return false;
+    // A link the member put inside the skill is theirs, on record or not: copying over it would replace it.
+    if (await holdsNonRegular(target.dest)) return true;
+    if (recordedUnder(previous ?? {}, target.dest).length > 0) return false;
     return !await isTeamaiSkillCopy(target.dest, target.origin, await nextHashes({}, item, target));
   }
   if (previous?.[target.dest] !== undefined) return false;
@@ -308,8 +328,10 @@ export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem
     ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: verdict.teamChanged });
     return true;
   }
-  if (await isLink(target.dest)) {
-    ledger.members.push({ dest: target.dest, teamRelPath: item.relativePath, link: true });
+  // Named by the link itself: the one at the path, or the first inside the skill.
+  const link = await membersLinkAt(target.dest);
+  if (link !== null) {
+    ledger.members.push({ dest: link, teamRelPath: item.relativePath, link: true });
   } else if (recordedUnder(ledger.otherRecords, target.dest).length > 0) {
     const next = await nextHashes(ledger.otherRecords, item, target);
     const teamChanged = [...next].some(([file, hash]) => hash !== (ledger.otherRecords[file] ?? null));
@@ -337,6 +359,8 @@ export async function judgeRemoval(
   // A link the member put there is theirs: teamai never writes one.
   if (await isLink(dest)) return recorded.length > 0 || recordedUnder(otherRecords, dest).length > 0 ? 'edited' : 'notTeamais';
   if (recorded.length > 0) {
+    // A link the member put inside a recorded skill changes it: removing the directory would take the link.
+    if (await holdsNonRegular(dest)) return 'edited';
     const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
     return classifyCopy(files).kind === 'keep' ? 'edited' : 'remove';
   }

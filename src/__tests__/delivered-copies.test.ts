@@ -108,6 +108,15 @@ describe('judgeRemoval', () => {
     expect(await judgeRemoval({ [copy]: sha('team v1') }, copy, origin())).toBe('edited');
   });
 
+  it('keeps a recorded skill directory as an edit when the member replaced a file in it with a link to the same bytes', async () => {
+    const skill = path.join(root, 'skill');
+    fs.mkdirSync(skill);
+    const target = path.join(root, 'elsewhere.md');
+    fs.writeFileSync(target, 'team v1');
+    fs.symlinkSync(target, path.join(skill, 'SKILL.md'));
+    expect(await judgeRemoval({ [path.join(skill, 'SKILL.md')]: sha('team v1') }, skill, origin())).toBe('edited');
+  });
+
   it('removes an unrecorded copy when no origin can prove whose it is, as before', async () => {
     fs.writeFileSync(copy, 'mine');
     expect(await judgeRemoval({}, copy)).toBe('remove');

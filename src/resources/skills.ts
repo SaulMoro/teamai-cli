@@ -880,7 +880,8 @@ export class SkillsHandler extends ResourceHandler {
       }
       for (const skillDir of skillDirs) {
         if (!await pathExists(skillDir)) continue;
-        if (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources)) {
+        // A link is the member's even at a built-in's name, so it is judged before the name.
+        if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
           owned.push({ tool, skillDir });
         } else {
           log.warn(describeMembersDirLeft(skillDir, `skills/${name}`, 'remove'));
