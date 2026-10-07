@@ -1,0 +1,51 @@
+name: E2E OpenCode concurrency control
+on:
+  push:
+    branches: [benchmark/e2e-performance-20261007]
+    paths: [.github/workflows/e2e-opencode-control.yml]
+permissions:
+  contents: read
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dec401fc5efab9a9871f35126213dee6fc2c52ec
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - name: Prepare runner HOME
+        run: |
+          mkdir -p "$RUNNER_TEMP/control-home"
+          echo "HOME=$RUNNER_TEMP/control-home" >> "$GITHUB_ENV"
+      - run: npm run build
+      - name: OpenCode files with one worker
+        continue-on-error: true
+        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/opencode-hooks.test.ts src/__tests__/e2e/opencode-recall.test.ts --retry=0 --cache=false --maxWorkers=1 --fileParallelism=false --reporter=default --reporter=json --outputFile.json=/tmp/opencode-serial.json > /tmp/opencode-serial.log 2>&1
+      - name: OpenCode files with two workers
+        continue-on-error: true
+        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/opencode-hooks.test.ts src/__tests__/e2e/opencode-recall.test.ts --retry=0 --cache=false --maxWorkers=2 --reporter=default --reporter=json --outputFile.json=/tmp/opencode-parallel.json > /tmp/opencode-parallel.log 2>&1
+      - name: Compare complete verdicts and retain failures
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import collections, json, pathlib, os
+          reports = [json.loads(pathlib.Path('/tmp/opencode-' + name + '.json').read_text()) for name in ['serial', 'parallel']]
+          cases = [collections.Counter((f['name'], t['fullName'], t['status']) for f in r['testResults'] for t in f['assertionResults']) for r in reports]
+          text = '\n'.join(['## OpenCode concurrency control', '', *[f"{name}: {r['numPassedTests']} passed / {r['numFailedTests']} failed / {r['numPendingTests']} skipped" for name, r in zip(['Serial', 'Parallel'], reports)], f'Identical verdicts: {cases[0] == cases[1]}'])
+          print(text)
+          pathlib.Path('/tmp/opencode-summary.md').write_text(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write(text)
+          assert cases[0] == cases[1], 'Concurrency changed a verdict'
+          assert all(r['numFailedTests'] == 0 for r in reports), 'An OpenCode test failed; this is diagnostic evidence'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opencode-concurrency-control
+          path: /tmp/opencode-*
+          retention-days: 30
