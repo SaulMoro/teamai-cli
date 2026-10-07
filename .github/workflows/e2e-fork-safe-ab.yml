@@ -1,0 +1,57 @@
+name: E2E fork-safe job before-after (committed settings)
+
+on:
+  push:
+    branches: [benchmark/e2e-performance-20261007]
+    paths: [.github/workflows/e2e-fork-safe-ab.yml]
+
+permissions:
+  contents: read
+
+# Reproduces the "E2E (fork-safe, no credentials)" job of each version as committed:
+# no retry/cache/HOME overrides. Build time is excluded because that job downloads dist.
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: f287dcb1a3fa247206a5dad9766b5d6ef14e3106, path: before, persist-credentials: false }
+      - uses: actions/checkout@v4
+        with: { ref: 47905de7d9d8c865a7c96932cded1b1bdcfabfe5, path: after, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: before/package-lock.json }
+      - name: Install and build both
+        run: |
+          for v in before after; do (cd $v && npm ci --ignore-scripts && npm run build); done
+      - run: mkdir -p /tmp/fork-ab
+      - name: Configure git identity (as ci.yml)
+        run: |
+          git config --global user.email "ci@teamai.test"
+          git config --global user.name "TeamAI CI"
+      - name: Before - main's command (npm run test:e2e, serial, retry 1)
+        working-directory: before
+        run: |
+          s=$(date +%s.%N); set +e
+          npm run test:e2e -- --reporter=default --reporter=json --outputFile.json=/tmp/fork-ab/before.json 2>&1 | tee /tmp/fork-ab/before.log
+          code=${PIPESTATUS[0]}; e=$(date +%s.%N)
+          echo "{\"label\":\"before\",\"sha\":\"$(git rev-parse HEAD)\",\"seconds\":$(echo "$e - $s" | bc),\"exit_code\":$code}" > /tmp/fork-ab/before-meta.json
+      - name: After - PR's command (npx vitest, 2 workers, retry 1)
+        working-directory: after
+        run: |
+          s=$(date +%s.%N); set +e
+          npx vitest run --config vitest.e2e.config.ts --reporter=default --reporter=json --outputFile.json=/tmp/fork-ab/after.json 2>&1 | tee /tmp/fork-ab/after.log
+          code=${PIPESTATUS[0]}; e=$(date +%s.%N)
+          echo "{\"label\":\"after\",\"sha\":\"$(git rev-parse HEAD)\",\"seconds\":$(echo "$e - $s" | bc),\"exit_code\":$code}" > /tmp/fork-ab/after-meta.json
+      - name: Summary
+        if: always()
+        run: |
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          for l in ['before', 'after']:
+              m = json.load(open(f'/tmp/fork-ab/{l}-meta.json')); r = json.load(open(f'/tmp/fork-ab/{l}.json'))
+              print(f"| {l} | {m['sha'][:8]} | {m['seconds']:.1f} s | exit {m['exit_code']} | {r['numPassedTests']} passed / {r['numFailedTests']} failed / {r['numPendingTests']} skipped |")
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: e2e-fork-safe-ab, path: /tmp/fork-ab/, retention-days: 30 }
