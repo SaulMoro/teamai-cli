@@ -54,7 +54,6 @@ jobs:
 
   build:
     name: Build
-    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -119,7 +118,7 @@ jobs:
       # Fork code is untrusted. Never expose repository secrets to this job.
       # Remote-provider cases skip themselves when credentials are absent.
       - name: Run E2E (no remote credentials)
-        run: npm run test:e2e
+        run: npx vitest run --config vitest.e2e.config.ts
 
   e2e:
     name: E2E (GitHub provider, full surface)

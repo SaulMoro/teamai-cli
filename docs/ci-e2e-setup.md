@@ -14,6 +14,10 @@ GitHub Actions 上的 `e2e` job 跑全量端到端测试（init / push / pull / 
 
 为了避免多个 PR/push 同时操作同一个 fixture 仓造成状态污染，e2e job 用 `concurrency: e2e-fixture-repo` 串行排队跑（不取消正在跑的，让它跑完留下干净状态）。
 
+Fork PR 运行 `fork-e2e` job，无需配置上述 Variable，也不会获得 fixture token；需要远程凭证的用例会自行跳过。`build` 与 lint / unit test 矩阵同时启动，e2e job 等待 `build` 完成。所有原有检查仍需通过。
+
+测试文件在 CI 中最多使用 2 个 worker，在本地最多使用 4 个。CLI 必须在启动 Vitest 前编译；测试内不得重新编译，否则会清空其他测试正在使用的 `dist/`。已编译或下载 build artifact 的 CI step 直接调用 Vitest，避免重复编译。
+
 ---
 
 ## 必需的配置
@@ -82,7 +86,17 @@ GitHub repo → **Settings → Secrets and variables → Actions → Variables �
 
 ---
 
-## 本地复现 CI 的 e2e
+## 本地验证改动
+
+大多数 e2e 用例使用本地 fixture，不需要远程仓或 token。开发时运行覆盖本次改动的测试文件：
+
+```bash
+npm run test:e2e -- src/__tests__/e2e/git-hook-new-worktree.test.ts
+```
+
+该命令会先编译一次。修改 e2e runner、共享 fixture 或隔离机制时，用 `npm run test:e2e` 运行本地全量测试；CI 始终运行全量测试。资源较少的机器可追加 `--maxWorkers=2`。
+
+## 本地复现 CI 的远程 e2e
 
 ⚠️ **不要用你自己的真实 `~/.teamai/`** 跑！会污染你的工作仓。
 

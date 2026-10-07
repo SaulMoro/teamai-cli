@@ -25,6 +25,8 @@ TypeScript, Node 20+ (`npm run lint` needs ^20.19 or >=22.12), tsup (ESM), Vites
 
 改动运行时行为的 PR（docs-only / tests-only 之外），`npm run build` 后必须用真实 CLI 对本次改动做端到端验证，不能只跑 type check / unit test；**一次代表性的 real-CLI 运行即可**，把实际通过的验证记录贴进 PR。docs-only / tests-only 的改动无需 e2e 记录。
 
+For local iterations, run the E2E files covering the changed behavior with `npm run test:e2e -- <test-file>`. Run the full local suite when changing the E2E runner, shared fixtures, or test isolation. CI runs the full suite. See [CONTRIBUTING.md](.github/CONTRIBUTING.md#testing-guidelines) for commands and credential requirements.
+
 不要求覆盖下面的完整 provider × agent 矩阵——额外 provider / agent 的覆盖交给 CI，或在本地环境不具备时说明即可：
 
 - Agent：Claude、Codex、CodeBuddy、OpenCode

@@ -18,7 +18,7 @@ npx tsc --noEmit       # Type check
 npm run lint           # oxlint; CI fails on any warning
 npx vitest run         # Run unit tests
 npx vitest run --coverage
-npm run test:e2e       # E2E tests (optional, requires a live test repo)
+npm run test:e2e       # Build and run E2E tests; remote cases require credentials
 ```
 
 `npm run lint` needs Node ^20.19 or >=22.12 (oxlint's requirement); the CLI itself still supports Node 20.
@@ -96,6 +96,20 @@ Your PR also gets an informational `Code Erosion` report (SlopCodeBench verbosit
 - Unit tests go in `src/__tests__/`. Mirror the source file name (`init.ts` → `init.test.ts`).
 - Mock external I/O (git, fetch, child_process) at the module boundary.
 - Avoid relying on real network access unless guarded by an env variable (like `TEAMAI_TEST_TOKEN`).
+
+For local iterations, run the E2E files covering the changed behavior:
+
+```bash
+npm run test:e2e -- src/__tests__/e2e/git-hook-new-worktree.test.ts
+# Select a case within the affected file:
+npm run test:e2e -- <test-file> -t "<test-name>"
+```
+
+`npm run test:e2e` builds once before starting Vitest. Test files run with up to four workers locally and two in CI. On a resource-constrained machine, pass `--maxWorkers=2` after `--`. E2E tests must use the prepared build rather than rebuild it while other files use the CLI.
+
+Most cases use local fixtures. Cases requiring remote credentials skip when those credentials are absent; see [CI E2E setup](../docs/ci-e2e-setup.md) for the live fixture configuration.
+
+Run the full local suite with `npm run test:e2e` when changing the E2E runner, shared fixtures, or test isolation. CI runs the full suite. A PR changing CLI runtime behavior needs a representative real-CLI verification of the affected behavior, which can be a focused E2E run. Include the exact command and result in the PR. Docs-only and tests-only changes do not require a real-CLI verification record.
 
 ## Bug Reports & Feature Requests
 
