@@ -95,6 +95,8 @@ interface Machine {
   excludeFile(): string;
   /** Commit `files` to the team remote, as a teammate would; a null content deletes the file. */
   teamCommit(files: Record<string, string | null>): void;
+  /** Commit `files` to source `source`'s remote, as its team would. */
+  sourceCommit(source: string, files: Record<string, string | null>): void;
   setOverride(value: boolean | null): void;
   /** A Claude Code session starting in the business repo, with the pass it leaves behind joined. */
   sessionStart(): Promise<Run>;
@@ -133,16 +135,27 @@ function machine(base: string, opts: MachineOptions = {}): Machine {
   const url = `https://git.example.com/team/${name}.git`;
   const seed = path.join(sandbox, `${name}-seed`);
   const remote = path.join(sandbox, `${name}.git`);
+  const sourceSeed = (source: string): string => path.join(sandbox, `${name}-${source}-seed`);
+  const sourceRemote = (source: string): string => path.join(sandbox, `${name}-${source}.git`);
+  const commitAndPush = (repo: string, files: Record<string, string | null>, remote: string): void => {
+    for (const [rel, content] of Object.entries(files)) {
+      if (content === null) fs.rmSync(path.join(repo, rel), { force: true });
+      else writeFile(path.join(repo, rel), content);
+    }
+    gitOk(['add', '-A'], repo);
+    gitOk(['commit', '-q', '-m', 'team change'], repo);
+    gitOk(['push', '-q', remote, 'main'], repo);
+  };
   const sources = Object.entries(opts.sources ?? {}).map(([source, files]) => {
-    const sourceSeed = path.join(sandbox, `${name}-${source}-seed`);
-    const sourceRemote = path.join(sandbox, `${name}-${source}.git`);
+    const seedDir = sourceSeed(source);
+    const remoteDir = sourceRemote(source);
     const sourceUrl = `https://git.example.com/sources/${name}-${source}.git`;
-    for (const [rel, content] of Object.entries(files)) writeFile(path.join(sourceSeed, rel), content);
-    gitOk(['init', '-q', '-b', 'main'], sourceSeed);
-    gitOk(['add', '-A'], sourceSeed);
-    gitOk(['commit', '-q', '-m', 'source'], sourceSeed);
-    gitOk(['clone', '-q', '--bare', sourceSeed, sourceRemote], sandbox);
-    gitOk(['config', '--global', `url.${sourceRemote}.insteadOf`, sourceUrl], sandbox);
+    for (const [rel, content] of Object.entries(files)) writeFile(path.join(seedDir, rel), content);
+    gitOk(['init', '-q', '-b', 'main'], seedDir);
+    gitOk(['add', '-A'], seedDir);
+    gitOk(['commit', '-q', '-m', 'source'], seedDir);
+    gitOk(['clone', '-q', '--bare', seedDir, remoteDir], sandbox);
+    gitOk(['config', '--global', `url.${remoteDir}.insteadOf`, sourceUrl], sandbox);
     return `  - name: ${source}\n    repo: ${sourceUrl}`;
   });
   writeFile(path.join(seed, 'teamai.yaml'), [
@@ -193,15 +206,8 @@ function machine(base: string, opts: MachineOptions = {}): Machine {
     partitionConfig: () => path.join(partitionDir(), 'config.yaml'),
     statePath: () => path.join(partitionDir(), 'state.json'),
     excludeFile: () => path.join(realDir, '.git', 'info', 'exclude'),
-    teamCommit: (files) => {
-      for (const [rel, content] of Object.entries(files)) {
-        if (content === null) fs.rmSync(path.join(seed, rel), { force: true });
-        else writeFile(path.join(seed, rel), content);
-      }
-      gitOk(['add', '-A'], seed);
-      gitOk(['commit', '-q', '-m', 'team change'], seed);
-      gitOk(['push', '-q', 'origin', 'main'], seed);
-    },
+    teamCommit: (files) => commitAndPush(seed, files, 'origin'),
+    sourceCommit: (source, files) => commitAndPush(sourceSeed(source), files, sourceRemote(source)),
     setOverride: (value) => {
       const config = m.partitionConfig();
       const lines = read(config).split('\n').filter((line) => !line.startsWith('gitExcludeEnabled:'));
@@ -697,5 +703,136 @@ describe('every writer keeps what it delivered out of git (#915 ticket 03)', () 
     expect(m.status(), withdrawn.output).toContain('?? .claude/skills/ext-skill/SKILL.md');
     m.git(['add', '-A']);
     expect(m.git(['diff', '--cached', '--name-only'])).toContain('.claude/skills/ext-skill/SKILL.md');
+  });
+});
+
+// ─── Removals keep tracked copies and sweep Codex's shared skills ──────────
+
+const ROOT_SKILL = skillMd('root-skill', 'Root skill.');
+/** Roles `fe` and `be`, each with a skill, a rule and an agent, and a root skill roles do not deliver. */
+const SWITCH_TEAM = {
+  'manifest/roles.yaml': ROLES,
+  'skills/fe/fe-skill/SKILL.md': FE_SKILL,
+  'skills/be/be-skill/SKILL.md': skillMd('be-skill', 'Back-end skill.'),
+  'skills/root-skill/SKILL.md': ROOT_SKILL,
+  'rules/fe/fe-rule.md': rule('Front-end'),
+  'agents/fe/fe-agent.yaml': agentYaml('fe-agent'),
+};
+
+/** What pull says about a copy it keeps because the business repo tracks it. */
+function trackedKept(m: Machine, rel: string): string {
+  const file = path.join(m.dir, rel);
+  return `Kept ${file}: this repository tracks it, so teamai does not delete it. Run \`git rm -r ${file}\` and commit if the repository no longer needs it.`;
+}
+
+const times = (output: string, line: string): number => output.split(line).length - 1;
+const deletions = (m: Machine): string[] => m.status().filter((line) => line.startsWith(' D') || line.startsWith('D '));
+
+describe('removals keep the copies the business repo tracks, and sweep Codex\'s shared skills directory (#915)', () => {
+  it('a role switch keeps every copy the business repo tracks, names each once per pull, and still removes the untracked ones', () => {
+    const m = machine('tracked-switch', {
+      team: ON,
+      files: SWITCH_TEAM,
+      initArgs: ['--role', 'fe'],
+      // A root skill the repository committed long ago: with roles set, pull does not deliver it.
+      committed: { '.claude/skills/root-skill/SKILL.md': ROOT_SKILL },
+      // teamai's copy in Codex's shared directory: Codex's copy goes there.
+      business: { '.agents/skills/fe-skill/SKILL.md': FE_SKILL },
+    });
+    expect(deletions(m)).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'root-skill', 'SKILL.md'))).toBe(true);
+
+    // The repository commits the copies teamai delivered, as they are.
+    const tracked = ['.claude/skills/fe-skill', '.agents/skills/fe-skill', '.claude/rules/fe/fe-rule.md', '.claude/agents/fe-agent.md'];
+    for (const rel of tracked) expect(fs.existsSync(path.join(m.dir, rel)), rel).toBe(true);
+    m.git(['add', '-f', ...tracked]);
+    m.git(['commit', '-q', '-m', 'commit the delivered copies']);
+
+    m.ok(['roles', 'set', 'be']);
+    // The switch, then a later full sync that proves each copy teamai's again.
+    for (const args of [['pull'], ['pull', '--force']]) {
+      const pulled = m.ok(args);
+      expect(deletions(m), pulled.output).toEqual([]);
+      for (const rel of [...tracked, '.claude/skills/root-skill']) {
+        expect(fs.existsSync(path.join(m.dir, rel)), `${args.join(' ')}: ${rel}`).toBe(true);
+        expect(times(pulled.output, trackedKept(m, rel)), `${args.join(' ')}: ${rel}\n${pulled.output}`).toBe(1);
+      }
+      // The untracked copies of the old role go, as before.
+      expect(fs.existsSync(path.join(m.dir, '.codex', 'agents', 'fe-agent.toml')), pulled.output).toBe(false);
+      expect(m.status().filter((line) => line.includes('fe-')), pulled.output).toEqual([]);
+      expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'be-skill', 'SKILL.md'))).toBe(true);
+    }
+  });
+
+  it('a role switch removes teamai\'s untracked copy in .agents/skills, leaving no ??, and keeps a member\'s own and an edited copy there visible', () => {
+    const shared = (name: string): string => `.agents/skills/${name}/SKILL.md`;
+    const m = machine('shared-sweep', {
+      team: ON,
+      files: {
+        ...SWITCH_TEAM,
+        'skills/fe/fe-edit/SKILL.md': skillMd('fe-edit', 'Edit me.'),
+        'skills/fe/fe-mine/SKILL.md': skillMd('fe-mine', 'Team version.'),
+      },
+      initArgs: ['--role', 'fe'],
+      business: {
+        // teamai's copies, so Codex's copies go there.
+        [shared('fe-skill')]: FE_SKILL,
+        [shared('fe-edit')]: skillMd('fe-edit', 'Edit me.'),
+        // The member's own skill of a team skill's name.
+        [shared('fe-mine')]: skillMd('fe-mine', 'MY OWN.'),
+      },
+    });
+    expect(m.status()).not.toContain(`?? ${shared('fe-skill')}`);
+    fs.appendFileSync(path.join(m.dir, shared('fe-edit')), '\nMy note.\n');
+
+    m.ok(['roles', 'set', 'be']);
+    const switched = m.ok(['pull']);
+    expect(fs.existsSync(path.join(m.dir, '.agents', 'skills', 'fe-skill')), switched.output).toBe(false);
+    expect(m.status().filter((line) => line.includes('fe-skill')), switched.output).toEqual([]);
+    expect(read(path.join(m.dir, shared('fe-mine')))).toContain('MY OWN.');
+    expect(read(path.join(m.dir, shared('fe-edit')))).toContain('My note.');
+    expect(m.status(), switched.output).toEqual(expect.arrayContaining([`?? ${shared('fe-mine')}`, `?? ${shared('fe-edit')}`]));
+    expect(switched.output).toContain(`Kept ${path.join(m.dir, '.agents', 'skills', 'fe-edit')}: `);
+    expect(switched.output).toContain(`Kept ${path.join(m.dir, '.agents', 'skills', 'fe-mine')}: `);
+    m.git(['add', '-A']);
+    expect(m.git(['diff', '--cached', '--name-only']).split('\n')).toEqual(expect.arrayContaining([shared('fe-mine'), shared('fe-edit')]));
+  });
+
+  it('keeps a tracked copy of a skill or rule the team removed, and of a skill its source stopped sharing, and removes the untracked ones', () => {
+    const source = {
+      'teamai.yaml': EXT_SOURCE['teamai.yaml'].replace('  - ext-skill\n', '  - ext-skill\n  - ext-two\n'),
+      'skills/ext-skill/SKILL.md': EXT_SOURCE['skills/ext-skill/SKILL.md'],
+      'skills/ext-two/SKILL.md': skillMd('ext-two', 'Second source skill.'),
+    };
+    const m = machine('tracked-removed', {
+      team: ON,
+      files: { ...TEAM_SKILLS, 'rules/team-rule.md': rule('Team'), 'rules/keep-rule.md': rule('Keep') },
+      sources: { ext: source },
+      // teamai's copy in Codex's shared directory: Codex's copy goes there.
+      business: { '.agents/skills/other-skill/SKILL.md': TEAM_SKILLS['skills/other-skill/SKILL.md'] },
+    });
+    const tracked = ['.claude/skills/fe-skill', '.claude/skills/ext-skill', '.claude/rules/team-rule.md'];
+    for (const rel of tracked) expect(fs.existsSync(path.join(m.dir, rel)), rel).toBe(true);
+    m.git(['add', '-f', ...tracked]);
+    m.git(['commit', '-q', '-m', 'commit the delivered copies']);
+
+    // The team removes both its skills and its rule; the source stops sharing ext-skill.
+    m.teamCommit({
+      'skills/fe-skill/SKILL.md': null, 'skills/other-skill/SKILL.md': null, 'skills/.removed': 'fe-skill\nother-skill\n', 'rules/team-rule.md': null,
+    });
+    m.sourceCommit('ext', { 'teamai.yaml': source['teamai.yaml'].replace('  - ext-skill\n', '') });
+    // A source is fetched once a day, or on --force.
+    const pulled = m.ok(['pull', '--force']);
+    expect(deletions(m), pulled.output).toEqual([]);
+    for (const rel of tracked) {
+      expect(fs.existsSync(path.join(m.dir, rel)), rel).toBe(true);
+      expect(times(pulled.output, trackedKept(m, rel)), `${rel}\n${pulled.output}`).toBe(1);
+    }
+    // The untracked copies go, Codex's in the shared directory too.
+    for (const rel of ['.claude/skills/other-skill', '.agents/skills/other-skill', '.codex/skills/fe-skill']) {
+      expect(fs.existsSync(path.join(m.dir, rel)), `${rel}\n${pulled.output}`).toBe(false);
+    }
+    expect(m.status().filter((line) => /(fe|other|ext)-skill/.test(line)), pulled.output).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'ext-two', 'SKILL.md'))).toBe(true);
   });
 });

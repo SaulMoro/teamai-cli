@@ -23,11 +23,12 @@ import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './res
 import { ruleOrigin } from './resources/rules.js';
 import { listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { skillOrigin, skillsDirForTool } from './resources/skills.js';
+import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  describeMembersDirLeft, forgetDelivered, judgeCopy, judgeRemoval, notTeamaisReason, openLedger, reportKept, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, forgetDelivered, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
+  type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import type { AgentModelRecords, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
@@ -57,7 +58,7 @@ import {
 import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
-import { resetWarnOnce } from './utils/warn-once.js';
+import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
 import type { EnvVariable } from './resources/env.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
@@ -299,6 +300,7 @@ export async function cleanupInactiveNamespaceSkills(
   retainedSkillNames: Set<string>,
   inactiveSkillNames: Set<string>,
   inactiveSkillSources?: Map<string, string>,
+  ledger?: DeliveryLedger,
 ): Promise<Set<string>> {
   const removed = new Set<string>();
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
@@ -308,6 +310,10 @@ export async function cleanupInactiveNamespaceSkills(
     // directory a pull never wrote to and leaves the real one untouched (#624).
     const skillsDir = await skillsDirForTool(tool, toolPath.skills, localConfig);
     if (skillsDir === null) continue;
+    if (tool === CODEX_TOOL) {
+      const swept = (name: string): boolean => !retainedSkillNames.has(name) && inactiveSkillNames.has(name);
+      for (const name of await sweepSharedSkillCopies(localConfig, swept, ledger, localConfig.scope)) removed.add(name);
+    }
     if (!await pathExists(skillsDir)) continue;
 
     const localSkillNames = await listDirs(skillsDir);
@@ -327,11 +333,49 @@ export async function cleanupInactiveNamespaceSkills(
         log.warn(`[${localConfig.scope}] Kept skill "${skillName}" (${tool}): it has local changes or unpushed files not in the team repo (or could not be verified). Push or back them up, then delete it manually.`);
         continue;
       }
+      if (await keepsTrackedCopy(localSkillDir)) continue;
 
       await remove(localSkillDir);
       removed.add(skillName);
       log.debug(`[${localConfig.scope}] Removed inactive role-scoped skill ${skillName} from ${tool}`);
     }
+  }
+  return removed;
+}
+
+/**
+ * Remove teamai's copies of the skills `swept` names from Codex's shared
+ * `.agents/skills` (#915), where pull delivers a skill whose copy there is
+ * teamai's: the sweeps of the configured skills directory never look there.
+ * The member and other tools write there too, so only a copy `judgeRemoval`
+ * proves teamai's and unchanged goes, and never one the repository tracks.
+ * Returns the names removed.
+ */
+async function sweepSharedSkillCopies(
+  localConfig: LocalConfig,
+  swept: (name: string) => boolean,
+  ledger: DeliveryLedger | undefined,
+  scopeLabel: string,
+): Promise<string[]> {
+  const sharedDir = path.join(resolveToolBaseDir(CODEX_TOOL, localConfig), SHARED_AGENT_SKILLS_PATH);
+  const removed: string[] = [];
+  for (const name of await listDirs(sharedDir)) {
+    if (BUILTIN_SKILL_NAMES.has(name) || !swept(name)) continue;
+    const dir = path.join(sharedDir, name);
+    const removal = await judgeRemoval(ledger?.previous, dir, skillOrigin(localConfig.repo.localPath, name), ledger?.otherRecords);
+    if (removal === 'edited') {
+      warnOnce(`[${scopeLabel}] Kept ${dir}: teamai no longer delivers ${name} here, but you changed this copy. Delete it when you no longer need it.`);
+      continue;
+    }
+    if (removal === 'notTeamais') {
+      warnOnce(`[${scopeLabel}] ${describeMembersDirLeft(dir, `skills/${name}`, 'pull')}`);
+      continue;
+    }
+    if (await keepsTrackedCopy(dir)) continue;
+    await remove(dir);
+    if (ledger) forgetDelivered(ledger.hashes, dir);
+    removed.push(name);
+    log.debug(`[${scopeLabel}] Removed skill ${name} from ${SHARED_AGENT_SKILLS_PATH}: no longer delivered here`);
   }
   return removed;
 }
@@ -533,6 +577,7 @@ async function cleanupTombstonedResources(
           log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed the rule it is a copy of, but you changed this copy. Delete it when you no longer need it.`);
           continue;
         }
+        if (await keepsTrackedCopy(localPath)) continue;
         await remove(localPath);
         forgetDelivered(ledger.hashes, localPath);
         log.debug(`[${scopeLabel}] Cleaned up tombstoned rules copy ${stem} from ${dir}`);
@@ -568,10 +613,14 @@ async function cleanupTombstonedResources(
             log.warn(`[${scopeLabel}] ${describeMembersDirLeft(localPath, type === 'rules' ? `rules/${name}.md` : `${type}/${name}`, 'pull')}`);
             continue;
           }
+          if (await keepsTrackedCopy(localPath)) continue;
           await remove(localPath);
           forgetDelivered(ledger.hashes, localPath);
           log.debug(`[${scopeLabel}] Cleaned up tombstoned ${type} ${name} from ${dir}`);
         }
+      }
+      if (type === 'skills' && tool === CODEX_TOOL) {
+        await sweepSharedSkillCopies(localConfig, (name) => tombstones.has(name), ledger, scopeLabel);
       }
     }
   }
@@ -1718,6 +1767,7 @@ async function pullForScope(
           desiredSkillNames ?? roleContext.activeSkillNames,
           roleContext.inactiveSkillNames,
           roleContext.inactiveSkillSources,
+          ledger,
         );
         // A directory byte-identical to its inactive-namespace source is
         // removed here, before Step 3b can see it. When the repo also holds
@@ -1746,6 +1796,14 @@ async function pullForScope(
       if (isAgentExcluded(localConfig, tool)) continue;
       if (!toolPath.skills) continue;
       if (!await ResourceHandler.isToolInstalled(toolPath.skills, baseDir)) continue;
+      if (tool === CODEX_TOOL) {
+        const swept = (name: string): boolean => !desiredSkillNames.has(name) && knownRepoSkillNames.has(name);
+        for (const name of await sweepSharedSkillCopies(localConfig, swept, ledger, scopeLabel)) {
+          if (excludedSkills.has(name)) continue;
+          undeliveredSkills.add(name);
+          if (rootRepoSkillNames?.has(name)) rootSkillUndelivered = true;
+        }
+      }
       const skillsDir = path.join(baseDir, toolPath.skills);
       if (!await pathExists(skillsDir)) continue;
 
@@ -1762,6 +1820,7 @@ async function pullForScope(
           log.warn(`[${scopeLabel}] Kept skill "${dir}" (${tool}): it has local changes or unpushed files not in the team repo (or could not be verified). Push or back them up, then delete it manually.`);
           continue;
         }
+        if (await keepsTrackedCopy(skillDir)) continue;
         await remove(skillDir);
         if (excludedSkills.has(dir)) {
           log.debug(`Removed excluded skill ${dir} from ${tool}`);
@@ -1790,6 +1849,7 @@ async function pullForScope(
               log.debug(`Kept ${nestedSkillDir}: it is not teamai's copy of the excluded skill ${skillName}`);
               continue;
             }
+            if (await keepsTrackedCopy(nestedSkillDir)) continue;
             await remove(nestedSkillDir);
             forgetDelivered(ledger.hashes, nestedSkillDir);
             log.debug(`Removed excluded skill ${namespace}/${skillName} from ${tool}`);
