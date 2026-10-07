@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { openLedger } from '../resources/delivered-copies.js';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
@@ -213,6 +215,28 @@ describe('AgentsHandler — Phase 1 push/pull/remove', () => {
     );
 
     expect(await fse.pathExists(path.join(homeDir, '.claude/agents/helper.md'))).toBe(true);
+    expect(await fse.readFile(mine, 'utf8')).toBe('name = "my own helper"\n');
+  });
+
+  it('pullItem keeps a member\'s same-stem file beside a rendered agent, and removes a recorded stale sibling (#993)', async () => {
+    // A rendered spec sweeps the extensions it left behind, but only a file the
+    // record or the team history proves teamai's: a same-stem file of the
+    // member's stays.
+    const srcPath = path.join(repoPath, 'agents', 'helper.yaml');
+    await fse.writeFile(srcPath, 'name: helper\ndescription: Helper.\ninstructions: Help.\n');
+    const mine = path.join(homeDir, '.claude/agents/helper.toml');
+    await fse.ensureDir(path.dirname(mine));
+    await fse.writeFile(mine, 'name = "my own helper"\n');
+    const item = { name: 'helper', type: 'agents' as const, sourcePath: srcPath, relativePath: 'agents/helper.yaml' };
+
+    await handler.pullItem(item, teamConfig, localConfig, openLedger({}));
+    expect(await fse.readFile(mine, 'utf8')).toBe('name = "my own helper"\n');
+
+    const stale = path.join(homeDir, '.claude/agents/helper.json');
+    await fse.writeFile(stale, '{"old":"render"}');
+    const recorded = { [stale]: crypto.createHash('sha256').update('{"old":"render"}').digest('hex') };
+    await handler.pullItem(item, teamConfig, localConfig, openLedger(recorded));
+    expect(await fse.pathExists(stale)).toBe(false);
     expect(await fse.readFile(mine, 'utf8')).toBe('name = "my own helper"\n');
   });
 

@@ -15,7 +15,9 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { describeMembersDirLeft, isTeamaiCopy, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger } from './delivered-copies.js';
+import {
+  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+} from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
@@ -737,7 +739,7 @@ export class AgentsHandler extends ResourceHandler {
         // `.toml`, `.json` or `.agent.md` beside it is the member's own file
         // and not ours to delete (#624 review).
         if (!isLegacyAgent(agentItem)) {
-          await removeStaleAgentSiblings(destDir, item.name, render.ext);
+          await removeStaleAgentSiblings(destDir, item.name, render.ext, ledger, origin);
         }
         await writeFile(dest, render.content);
         if (ledger) {
@@ -1696,11 +1698,28 @@ function warnLegacyAlias(item: ResourceItem, content: string, aliases: ModelAlia
     + `so each tool receives "${model}" literally. Move it to ${item.relativePath.replace(/\.md$/, '.yaml')} to have the alias resolved.`);
 }
 
-/** Remove an obsolete same-stem native rendering after a format migration. */
-async function removeStaleAgentSiblings(agentsDir: string, stem: string, targetExt: string): Promise<void> {
+/**
+ * Remove an obsolete same-stem native rendering after a format migration:
+ * only a file the checkout's record or the team history (`origin`) proves
+ * teamai's (#993). A same-stem file of the member's stays, named.
+ */
+async function removeStaleAgentSiblings(
+  agentsDir: string, stem: string, targetExt: string, ledger: DeliveryLedger | undefined, origin: CopyOrigin | undefined,
+): Promise<void> {
   for (const file of await listFiles(agentsDir)) {
     if (agentStemFromFilename(file) !== stem || file === `${stem}${targetExt}`) continue;
-    await remove(path.join(agentsDir, file));
+    const sibling = path.join(agentsDir, file);
+    const removal = await judgeRemoval(ledger?.previous, sibling, origin, ledger?.otherRecords);
+    if (removal === 'edited') {
+      warnOnce(`Kept ${sibling}: teamai no longer writes ${stem} in this format, but you changed this copy. Delete it when you no longer need it.`);
+      continue;
+    }
+    if (removal === 'notTeamais') {
+      warnOnce(describeMembersDirLeft(sibling, `agents/${stem}`, 'pull'));
+      continue;
+    }
+    await remove(sibling);
+    if (ledger) forgetDelivered(ledger.hashes, sibling);
     log.debug(`Removed stale agent sibling ${file} for ${stem}`);
   }
 }
