@@ -1813,6 +1813,8 @@ async function reconcileTargets(
   if (targets.length === 0) return { changes, wrote };
 
   const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
+  // An adoption (#993) records a server without writing its file: the manifest must still be saved.
+  const manifestBefore = JSON.stringify(manifest);
 
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
@@ -1929,7 +1931,7 @@ async function reconcileTargets(
       for (const record of records) record.unnoted = true;
     }
   }
-  if (!options.dryRun && (wrote || rebuilt.length > 0)) {
+  if (!options.dryRun && (wrote || rebuilt.length > 0 || JSON.stringify(manifest) !== manifestBefore)) {
     // Before the manifest: once it is written, only a record marked unnoted says it was rebuilt.
     const failed = await noteUnverifiedMcpServers(localConfig, rebuilt);
     for (const { records } of rebuilt) {
