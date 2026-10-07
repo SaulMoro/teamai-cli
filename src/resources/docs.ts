@@ -72,18 +72,18 @@ export async function listStaleDocDirectories(source: string | undefined, destin
 /**
  * Whether the prune may delete `file`, at `rel` in the mirror (`/`-separated),
  * which the team repo no longer has (#993): a version of the team doc once at
- * that path (a link included, by its target), or a local-only file or link at
- * a path the team repo's history never had. Anything else at a removed team
- * doc's path is the member's, and
- * so is any file while the history cannot be read: there is no proof either
- * way. Read-only.
+ * that path (a link included, by its target), or a local-only file at a path
+ * the team repo's history never had. Anything else at a removed team doc's
+ * path is the member's, and so is a link at a path the team never had (teamai
+ * never creates one there) and any file while the history cannot be read:
+ * there is no proof either way. Read-only.
  */
 export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
   const stat = await fse.lstat(file).catch(() => null);
   if (!stat) return true;
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
   if (versions === null) return false;
-  if (versions.length === 0) return true;
+  if (versions.length === 0) return !stat.isSymbolicLink();
   // Anything but a file or a link at a removed team doc's path is the member's: no team version can match it.
   if (!stat.isFile() && !stat.isSymbolicLink()) return false;
   // git stores a link as a blob of its target, so a link the team delivered matches by id; it is never followed.
@@ -123,10 +123,11 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
       if (!await isPrunableDoc(target, entryRel, repoPath)) {
-        log.warn(
-          `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this copy matches no team version of it. `
-          + 'Delete it when you no longer need it.',
-        );
+        log.warn(entry.isSymbolicLink()
+          ? `[${scope}] Kept ${target}: it is a link of yours, and the team does not have docs/${entryRel}. `
+            + 'Delete it when you no longer need it.'
+          : `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this copy matches no team version of it. `
+            + 'Delete it when you no longer need it.');
         continue;
       }
       await fse.unlink(target);
