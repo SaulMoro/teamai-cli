@@ -220,4 +220,49 @@ describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', ()
     expect(m.servers(m.file.mcp)).toEqual({ 'mine-old': MEMBER_SERVER });
     expect(m.servers(m.file.dotMcp)).toEqual({ 'my-user': MEMBER_SERVER });
   }, 120_000);
+
+  // An earlier teamai always created ~/.codebuddy/mcp.json, which hides the member's ~/.codebuddy.json.
+  const LEGACY = { projects: { '/work/app': { mcpServers: { local: MEMBER_SERVER } } }, mcpServers: { 'usr-srv': MEMBER_SERVER } };
+  for (const owned of ['recorded by an earlier teamai', 'unrecorded, equal to the team\'s render'] as const) {
+    it(`moves teamai's servers out of a ~/.codebuddy/mcp.json holding nothing else into ~/.codebuddy.json, and deletes it (${owned})`, () => {
+      const m = machine(owned.startsWith('recorded') ? 'upgrade-recorded' : 'upgrade-adopted');
+      let first: Run;
+      if (owned.startsWith('recorded')) {
+        writeFile(m.file.mcp, '{}');
+        m.init();
+        expect(m.servers(m.file.mcp)).toEqual({ 'tm-user': TEAM_SERVER });
+        m.forgetRecordedFile();
+        writeFile(m.file.legacy, JSON.stringify(LEGACY, null, 2));
+        first = m.teamaiOk('pull', '--force');
+      } else {
+        writeFile(m.file.mcp, JSON.stringify({ mcpServers: { 'tm-user': TEAM_SERVER } }, null, 2));
+        writeFile(m.file.legacy, JSON.stringify(LEGACY, null, 2));
+        first = m.init();
+      }
+      expect(fs.existsSync(m.file.mcp)).toBe(false);
+      expect(fs.existsSync(m.file.dotMcp)).toBe(false);
+      expect(readJson(m.file.legacy)).toEqual({ ...LEGACY, mcpServers: { 'usr-srv': MEMBER_SERVER, 'tm-user': TEAM_SERVER } });
+      expect(first.output).toContain(`Moved teamai's MCP servers for codebuddy (tm-user) from ${m.file.mcp}`);
+
+      const again = m.teamaiOk('pull', '--force');
+      expect(again.output).not.toContain('Moved teamai\'s MCP servers');
+      expect(readJson(m.file.legacy)).toEqual({ ...LEGACY, mcpServers: { 'usr-srv': MEMBER_SERVER, 'tm-user': TEAM_SERVER } });
+    }, 180_000);
+  }
+
+  for (const other of [
+    { what: 'a member\'s server', content: { mcpServers: { 'mine-old': MEMBER_SERVER } } },
+    { what: 'another key', content: { mcpServers: {}, theme: 'dark' } },
+  ]) {
+    it(`leaves a ~/.codebuddy/mcp.json that also holds ${other.what} where it is`, () => {
+      const m = machine('upgrade-kept');
+      writeFile(m.file.mcp, JSON.stringify(other.content, null, 2));
+      m.init();
+      writeFile(m.file.legacy, JSON.stringify(LEGACY, null, 2));
+      const pull = m.teamaiOk('pull', '--force');
+      expect(pull.output).not.toContain('Moved teamai\'s MCP servers');
+      expect(readJson(m.file.mcp)).toEqual({ ...other.content, mcpServers: { ...other.content.mcpServers, 'tm-user': TEAM_SERVER } });
+      expect(readJson(m.file.legacy)).toEqual(LEGACY);
+    }, 120_000);
+  }
 });
