@@ -1,0 +1,81 @@
+{
+  "numTotalTestSuites": 5,
+  "numPassedTestSuites": 5,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 3,
+  "numPassedTests": 2,
+  "numFailedTests": 0,
+  "numPendingTests": 1,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1791400388787,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "real OpenCode 'V1' hooks"
+          ],
+          "fullName": "real OpenCode 'V1' hooks loads the CLI-generated plugin and dispatches session start once",
+          "status": "passed",
+          "title": "loads the CLI-generated plugin and dispatches session start once",
+          "duration": 9762.313925,
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "real OpenCode 'V2' hooks"
+          ],
+          "fullName": "real OpenCode 'V2' hooks loads the CLI-generated plugin and dispatches session start once",
+          "status": "skipped",
+          "title": "loads the CLI-generated plugin and dispatches session start once",
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 1791400389905,
+      "endTime": 1791400399667.314,
+      "status": "passed",
+      "message": "",
+      "name": "/workspace/after/src/__tests__/e2e/opencode-hooks.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "OpenCode recall startup (#332)"
+          ],
+          "fullName": "OpenCode recall startup (#332) rejects the old artifact, then starts with every generated agent",
+          "status": "passed",
+          "title": "rejects the old artifact, then starts with every generated agent",
+          "duration": 5705.813426,
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 1791400389882,
+      "endTime": 1791400395587.8135,
+      "status": "passed",
+      "message": "",
+      "name": "/workspace/after/src/__tests__/e2e/opencode-recall.test.ts"
+    }
+  ]
+}
