@@ -73,13 +73,13 @@ function writeFile(file: string, content: string): void {
 /** A team: a seed checkout and the bare remote its synthetic URL reaches. */
 interface Team { url: string; seed: string; publish(files: Record<string, string>, message: string): void }
 
-function team(name: string, files: Record<string, string>): Team {
+function team(name: string, files: Record<string, string>, sharing: string[] = []): Team {
   const url = `https://git.example.com/team/${name}.git`;
   const seed = path.join(sandbox, `${name}-seed`);
   const remote = path.join(sandbox, `${name}.git`);
   writeFile(path.join(seed, 'teamai.yaml'), [
     `team: ${name}`, `repo: ${url}`, 'provider: git', 'reviewers: []',
-    'sharing:', '  mcp:', '    autoApply: true', '  hooks:', '    autoApply: true', '    requireTeamScripts: false', '',
+    'sharing:', '  mcp:', '    autoApply: true', '  hooks:', '    autoApply: true', '    requireTeamScripts: false', ...sharing, '',
   ].join('\n'));
   gitOk(['init', '-q', '-b', 'main'], seed);
   const publish = (next: Record<string, string>, message: string): void => {
@@ -200,11 +200,15 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
   });
 
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
-    const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    // The co-author setting shares settings.local.json with the team hooks (#993 bug 7).
+    const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') }, ['  coAuthor:', '    enabled: false']);
     const dir = business('hook-manifest-biz', { '.claude/.keep': '' });
     init(t, dir, 'claude,codex');
     expect(claudeTeamStops(dir)).toHaveLength(1);
     expect(codexStops(dir)).toEqual(['echo team-stop-v1']);
+    const settings = path.join(dir, '.claude', 'settings.local.json');
+    const attribution = { commit: '', pr: '' };
+    expect(readJson(settings).attribution).toEqual(attribution);
 
     // Recorded entries are updated as before.
     t.publish({ 'hooks/hooks.yaml': hooksYaml('echo team-stop-v2') }, 'v2');
@@ -213,11 +217,15 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(claudeTeamStops(dir)[0].hooks[0].command).toMatch(/echo team-stop-v2$/);
     expect(codexStops(dir)).toEqual(['echo team-stop-v2']);
 
-    // The record is lost: the entries equal today's render and are recognized.
+    // The record is lost, and the file rewritten in another layout with another key first: the
+    // entries equal today's render and are recognized; the key teamai's hooks do not own stays.
     removeHookManifests();
+    const { hooks, ...rest } = readJson(settings);
+    fs.writeFileSync(settings, JSON.stringify({ ...rest, hooks }));
     pull(dir, '--force');
     expect(claudeTeamStops(dir)).toHaveLength(1);
     expect(codexStops(dir)).toEqual(['echo team-stop-v2']);
+    expect(readJson(settings).attribution).toEqual(attribution);
 
     // Lost again, and the team changed the hook: the entries equal an older render.
     removeHookManifests();
@@ -227,6 +235,7 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(claudeTeamStops(dir)[0].hooks[0].command).toMatch(/echo team-stop-v3$/);
     expect(codexStops(dir)).toEqual(['echo team-stop-v3']);
     expect(pulled.output).not.toContain('Kept the');
+    expect(readJson(settings).attribution).toEqual(attribution);
   });
 
   it('keeps and names an unrecorded hook entry that matches no team render, or more than one, and doctor lists it', () => {
