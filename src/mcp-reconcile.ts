@@ -121,6 +121,11 @@ export interface McpChange {
 
 const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
 
+/** The dry-run line for an unrecorded server pull would record as teamai's without rewriting it (#993). */
+function describeAdoptionPreview(target: McpTarget, name: string): string {
+  return `Would record MCP server ${name} in ${target.file} as teamai's: it already holds the team's ${name}.`;
+}
+
 /**
  * The line naming a member's own server a reconcile kept (#993): one with a
  * team server's name that teamai has no record of and that matches no team
@@ -1812,6 +1817,8 @@ async function reconcileTargets(
   if (targets.length === 0) return { changes, wrote };
 
   const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
+  // An adoption (#993) records a server without writing its file: the manifest must still be saved.
+  const manifestBefore = JSON.stringify(manifest);
 
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
@@ -1928,7 +1935,7 @@ async function reconcileTargets(
       for (const record of records) record.unnoted = true;
     }
   }
-  if (!options.dryRun && (wrote || rebuilt.length > 0)) {
+  if (!options.dryRun && (wrote || rebuilt.length > 0 || JSON.stringify(manifest) !== manifestBefore)) {
     // Before the manifest: once it is written, only a record marked unnoted says it was rebuilt.
     const failed = await noteUnverifiedMcpServers(localConfig, rebuilt);
     for (const { records } of rebuilt) {
@@ -2094,7 +2101,10 @@ async function applyJson(
       delete doc.data[name];
       dirty = true;
     }
-    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) continue;
+    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     doc.servers[name] = entry;
     if (doc.bare) record.bare = true;
     dirty = true;
@@ -2265,7 +2275,8 @@ async function applyCodex(
 
   for (const [name, { hash, block, resolvedValue }] of desired) {
     // An entry with no record is teamai's when it equals a team render of `name` (#993), and is adopted.
-    const owner = present.has(name) && !ownedNames.has(name) && !options.force ? await judge(name, codexBlockIn(source, name)) : 'teamai';
+    const unrecorded = present.has(name) && !ownedNames.has(name) && !options.force;
+    const owner = unrecorded ? await judge(name, codexBlockIn(source, name)) : 'teamai';
     if (owner !== 'teamai') {
       changes.push(unrecordedServerKept(target, name, owner));
       continue;
@@ -2273,7 +2284,10 @@ async function applyCodex(
     nextRecords.push({ name, hash });
     holdsResolvedValue ||= resolvedValue;
     const next = spliceCodexBlock(source, name, block!);
-    if (next === source) continue;
+    if (next === source) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     source = next;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: present.has(name) ? 'updated' : 'added' });
