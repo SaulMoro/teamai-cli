@@ -17,7 +17,8 @@ import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
 import { historicalVersions } from '../utils/team-history.js';
 import {
-  adoptRecord, contentHash, forgetDelivered, keepsEditedCopy, recordDelivered, recordedUnchanged, removedCopyChanged,
+  adoptRecord, contentHash, forgetDelivered, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
+  removedCopyChanged, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import {
@@ -548,9 +549,12 @@ export class RulesHandler extends ResourceHandler {
     // OMP's flat copies, judged against the team rule before it goes.
     const teamFile = path.join(localConfig.repo.localPath, 'rules', `${name}.md`);
     const { deliveredHashes } = await import('../pull.js');
+    // What this checkout's pulls recorded writing: a file with no record is
+    // teamai's only on proof, here as in pull (#993).
+    const ledger = openLedger(await deliveredHashes(localConfig));
     const flatCopies = await this.ownedFlatCopies(
       teamConfig, localConfig, [{ name, type: 'rules', sourcePath: teamFile, relativePath: `rules/${name}.md` }],
-      await deliveredHashes(localConfig),
+      ledger.previous,
     );
 
     // Remove from team repo (always `.md`)
@@ -601,6 +605,13 @@ export class RulesHandler extends ResourceHandler {
       for (const localName of localNames) {
         for (const extension of extensions) {
           const filePath = path.join(baseDir, toolPath.rules, `${localName}${extension}`);
+          // The team file is gone from the working tree only: its history still proves a copy teamai's.
+          // The author's root copy is this rule's by the placement record, which proves it here.
+          if (localName === name && await pathExists(filePath) && ledger.previous?.[filePath] === undefined
+            && !await isTeamaiCopy(filePath, ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`))) {
+            log.warn(`Kept ${filePath}: it is not teamai's (no delivery record, and it matches no team version of rules/${name}.md), so remove left it.`);
+            continue;
+          }
           if (await pathExists(filePath)) {
             await remove(filePath);
             removed.push(filePath);
@@ -614,7 +625,8 @@ export class RulesHandler extends ResourceHandler {
     // and tag selection still applies to the files the refresh writes.
     const { buildRolePullContext, resolveDesiredRules } = await import('./desired.js');
     const { items, replaced } = await resolveDesiredRules(teamConfig, localConfig, await buildRolePullContext(localConfig));
-    await this.pullAllRules(teamConfig, localConfig, items, replaced);
+    await this.pullAllRules(teamConfig, localConfig, items, replaced, ledger);
+    reportKept(ledger, localConfig.scope);
 
     return removed;
   }
