@@ -496,14 +496,13 @@ const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skill
 
 /**
  * What git may still show: paths later tickets move or keep out of git (MCP
- * and OpenCode configs, `.codex/hooks.json`, Copilot's instructions, the docs
- * mirror). Nothing this ticket's writers deliver is on it.
+ * and OpenCode configs, `.codex/hooks.json`, the docs mirror). Nothing this
+ * ticket's writers deliver is on it.
  */
 const LATER_TICKETS = [
   /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
   /^opencode\.json$/, /^\.opencode\/opencode\.json$/,
   /^\.codex\/hooks\.json$/,
-  /^\.github\/copilot-instructions\.md$/,
   /^\.teamai\/docs\//, /^\.teamai\/\.ignore$/,
 ];
 const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
@@ -513,6 +512,7 @@ const DELIVERED = [
   '.github/instructions/fe/fe-rule.instructions.md', '.codebuddy/rules/team-rule.md',
   '.claude/agents/fe-agent.md', '.codex/agents/reviewer.toml', '.github/agents/reviewer.agent.md',
   '.claude/rules/teamai-context.md', '.cursor/rules/teamai-context.mdc', '.codebuddy/rules/teamai-context.md', '.opencode/teamai-context.md',
+  '.github/instructions/teamai-context.instructions.md',
   '.claude/settings.local.json', '.github/hooks/teamai.json',
   '.claude/skills/teamai/SKILL.md', '.claude/rules/teamai-recall.md', '.claude/agents/teamai-recall.md', '.cursor/rules/teamai-recall.mdc',
   '.claude/skills/ext-skill/SKILL.md', '.agents/skills/fe-skill/SKILL.md', '.claude/skills/checkout-skill/SKILL.md',
@@ -697,5 +697,111 @@ describe('every writer keeps what it delivered out of git (#915 ticket 03)', () 
     expect(m.status(), withdrawn.output).toContain('?? .claude/skills/ext-skill/SKILL.md');
     m.git(['add', '-A']);
     expect(m.git(['diff', '--cached', '--name-only'])).toContain('.claude/skills/ext-skill/SKILL.md');
+  });
+});
+
+// ─── Copilot's instructions in a file teamai owns ───────────────────────────
+
+const COPILOT_TEAM = {
+  ...TEAM_SKILLS,
+  'culture.md': '# Culture\n\nCULTURE-915.\n',
+  'claudemd/shared.md': 'SHARED-915 instructions.\n',
+};
+const COPILOT_FILE = '.github/copilot-instructions.md';
+const CONTEXT_FILE = '.github/instructions/teamai-context.instructions.md';
+const TEAMS_COPILOT_FILE = '# Team Copilot instructions\n\nUse the team style.\n';
+
+describe('Copilot gets the team instructions from a file teamai owns (#915)', () => {
+  const at = (m: Machine, file: string): string => path.join(m.dir, file);
+  const githubEntries = (m: Machine): string[] => m.status().filter((line) => line.slice(3).startsWith('.github/'));
+  const doctor = (m: Machine): Map<string, { ok: boolean; fix?: string }> => {
+    const run = spawnSync(process.execPath, [CLI, 'doctor', '--json'], { cwd: m.dir, encoding: 'utf8', env: env(m.home) });
+    const report = JSON.parse(run.stdout) as {
+      checks: Array<{ name: string; ok: boolean; fix?: string }>;
+    };
+    return new Map(report.checks.map((check) => [check.name, check]));
+  };
+
+  it('with the flag on, writes the blocks to teamai\'s own file applied to every request, leaves the team\'s tracked copilot-instructions.md unchanged, and doctor checks the new file', () => {
+    const m = machine('copilot-on', { team: ON, files: COPILOT_TEAM, agents: 'claude,copilot', committed: { [COPILOT_FILE]: TEAMS_COPILOT_FILE } });
+
+    for (const step of ['init', 'pull', 'fast-path pull']) {
+      const output = step === 'init' ? '' : m.ok(['pull']).output;
+      expect(githubEntries(m), `${step}\n${output}`).toEqual([]);
+      expect(m.git(['diff', '--', COPILOT_FILE]), step).toBe('');
+      expect(read(at(m, COPILOT_FILE)), step).toBe(TEAMS_COPILOT_FILE);
+      const context = read(at(m, CONTEXT_FILE));
+      // Exactly `**`: any other glob applies only to requests with a matching file in context.
+      expect(context.startsWith('---\napplyTo: "**"\n---\n'), context).toBe(true);
+      expect(context).toContain('CULTURE-915');
+      expect(context).toContain('SHARED-915');
+      expect(m.deliveredLines(), step).toContain(`/${CONTEXT_FILE}`);
+      expect(notIgnored(m, [CONTEXT_FILE]), step).toEqual([]);
+    }
+
+    const healthy = doctor(m);
+    expect(healthy.get('Team instructions are current for copilot')?.ok).toBe(true);
+    expect(healthy.get('No team instruction blocks are left in files no tool loads them from')?.ok).toBe(true);
+
+    // A glob other than `**` would make Copilot skip the blocks for a question with no file.
+    const blocks = read(at(m, CONTEXT_FILE)).split('\n---\n').slice(1).join('\n---\n');
+    fs.writeFileSync(at(m, CONTEXT_FILE), read(at(m, CONTEXT_FILE)).replace('applyTo: "**"', 'applyTo: "src/**"'));
+    fs.appendFileSync(at(m, COPILOT_FILE), `\n${blocks}`);
+    const broken = doctor(m);
+    expect(broken.get('Team instructions are current for copilot')).toMatchObject({ ok: false });
+    expect(broken.get('Team instructions are current for copilot')?.fix).toContain(at(m, CONTEXT_FILE));
+    expect(broken.get('No team instruction blocks are left in files no tool loads them from')).toMatchObject({ ok: false });
+    expect(broken.get('No team instruction blocks are left in files no tool loads them from')?.fix).toContain(at(m, COPILOT_FILE));
+
+    const repaired = m.ok(['pull', '--force']);
+    expect(read(at(m, CONTEXT_FILE)).startsWith('---\napplyTo: "**"\n---\n'), repaired.output).toBe(true);
+    expect(read(at(m, COPILOT_FILE)), repaired.output).toBe(TEAMS_COPILOT_FILE);
+    expect(githubEntries(m)).toEqual([]);
+
+    const uninstalled = m.ok(['uninstall', '--force']);
+    expect(fs.existsSync(at(m, CONTEXT_FILE)), uninstalled.output).toBe(false);
+    expect(read(at(m, COPILOT_FILE))).toBe(TEAMS_COPILOT_FILE);
+  });
+
+  it('with the flag off, writes into copilot-instructions.md as before; turning it on moves the blocks out, and off moves them back', () => {
+    const m = machine('copilot-switch', { team: OFF, files: COPILOT_TEAM, agents: 'claude,copilot', committed: { [COPILOT_FILE]: TEAMS_COPILOT_FILE } });
+    const before = read(at(m, COPILOT_FILE));
+    expect(before.startsWith(TEAMS_COPILOT_FILE.trimEnd())).toBe(true);
+    expect(before).toContain('CULTURE-915');
+    expect(m.status()).toContain(` M ${COPILOT_FILE}`);
+    expect(fs.existsSync(at(m, CONTEXT_FILE))).toBe(false);
+
+    m.setOverride(true);
+    const on = m.ok(['pull']);
+    expect(read(at(m, COPILOT_FILE)), on.output).toBe(TEAMS_COPILOT_FILE);
+    expect(read(at(m, CONTEXT_FILE))).toContain('CULTURE-915');
+    expect(githubEntries(m), on.output).toEqual([]);
+
+    m.setOverride(false);
+    const off = m.ok(['pull']);
+    expect(read(at(m, COPILOT_FILE)), off.output).toBe(before);
+    expect(fs.existsSync(at(m, CONTEXT_FILE)), off.output).toBe(false);
+    expect(m.status().filter((line) => line.includes('instructions'))).toEqual([` M ${COPILOT_FILE}`]);
+  });
+
+  it('deletes a copilot-instructions.md teamai created once the flag is on, and never one the business repo tracks', () => {
+    const m = machine('copilot-created', { team: OFF, files: COPILOT_TEAM, agents: 'claude,copilot' });
+    expect(m.status()).toContain(`?? ${COPILOT_FILE}`);
+
+    m.setOverride(true);
+    const on = m.ok(['pull']);
+    expect(fs.existsSync(at(m, COPILOT_FILE)), on.output).toBe(false);
+    expect(githubEntries(m), on.output).toEqual([]);
+
+    // The member commits the file teamai created while the flag was off.
+    m.setOverride(false);
+    m.ok(['pull']);
+    m.git(['add', COPILOT_FILE]);
+    m.git(['commit', '-q', '-m', 'copilot instructions']);
+    m.setOverride(true);
+    const tracked = m.ok(['pull']);
+    expect(fs.existsSync(at(m, COPILOT_FILE)), tracked.output).toBe(true);
+    expect(read(at(m, COPILOT_FILE))).not.toContain('[teamai:');
+    expect(read(at(m, CONTEXT_FILE))).toContain('CULTURE-915');
   });
 });

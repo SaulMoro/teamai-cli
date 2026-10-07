@@ -193,6 +193,21 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(path.join(destination, 'guide'), 'utf8')).toBe('mine');
   });
 
+  it('keeps a member\'s directory at a former team doc file\'s path when the team deletes that doc (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'guide'), 'team file');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    // The member replaces the delivered file with a directory of their own.
+    await fse.remove(path.join(destination, 'guide'));
+    await fse.outputFile(path.join(destination, 'guide', 'personal.md'), 'mine');
+    await fse.remove(path.join(source, 'guide'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect(await fse.readFile(path.join(destination, 'guide', 'personal.md'), 'utf8')).toBe('mine');
+  });
+
   it('keeps a directory containing hidden local entries at a team doc file\'s path (#993)', async () => {
     // No team version holds `.keep`: the directory is the member's, so pull leaves it whole.
     await fse.outputFile(path.join(destination, 'guide', 'nested', '.keep'), 'private');

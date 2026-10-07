@@ -121,6 +121,11 @@ export interface McpChange {
 
 const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
 
+/** The dry-run line for an unrecorded server pull would record as teamai's without rewriting it (#993). */
+function describeAdoptionPreview(target: McpTarget, name: string): string {
+  return `Would record MCP server ${name} in ${target.file} as teamai's: it already holds the team's ${name}.`;
+}
+
 /**
  * The line naming a member's own server a reconcile kept (#993): one with a
  * team server's name that teamai has no record of and that matches no team
@@ -718,6 +723,15 @@ function renderMcpEntry(
   }
   const entry = renderJsonEntry(target.format, def);
   return { entry: { entry, hash: entryHash(entry), resolvedValue }, passthrough };
+}
+
+/** Whether any revision of the team repo's MCP files defines a server (#993). Never for an HTTP-mode team. */
+async function teamMcpHistoryHasServers(localConfig: LocalConfig): Promise<boolean> {
+  if (localConfig.repo.kind === 'http') return false;
+  const layout = entryLayout('mcp');
+  const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
+  return (versions ?? []).some((version) => path.posix.basename(version.path) === layout.file
+    && (parseTeamMcpServers(version.content.toString('utf8'))?.length ?? 0) > 0);
 }
 
 /** Whose an entry is that `target`'s own MCP record does not claim (#993). */
@@ -1812,11 +1826,15 @@ async function reconcileTargets(
   if (targets.length === 0) return { changes, wrote };
 
   const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
+  // An adoption (#993) records a server without writing its file: the manifest must still be saved.
+  const manifestBefore = JSON.stringify(manifest);
 
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
   const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
-  if (teamDefs.length === 0 && nothingOwned) return { changes, wrote };
+  // A server the team deleted can still sit unrecorded in a tool's file (#993): only a team
+  // history with no MCP server at all proves there is nothing to look for.
+  if (teamDefs.length === 0 && nothingOwned && !await teamMcpHistoryHasServers(localConfig)) return { changes, wrote };
   // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
   const ledger = localConfig.scope === 'project' && !options.dryRun ? (await readResolvedMcpFiles(localConfig)).files : {};
   const listed = new Set(Object.keys(ledger));
@@ -1928,7 +1946,7 @@ async function reconcileTargets(
       for (const record of records) record.unnoted = true;
     }
   }
-  if (!options.dryRun && (wrote || rebuilt.length > 0)) {
+  if (!options.dryRun && (wrote || rebuilt.length > 0 || JSON.stringify(manifest) !== manifestBefore)) {
     // Before the manifest: once it is written, only a record marked unnoted says it was rebuilt.
     const failed = await noteUnverifiedMcpServers(localConfig, rebuilt);
     for (const { records } of rebuilt) {
@@ -2094,7 +2112,10 @@ async function applyJson(
       delete doc.data[name];
       dirty = true;
     }
-    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) continue;
+    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     doc.servers[name] = entry;
     if (doc.bare) record.bare = true;
     dirty = true;
@@ -2118,6 +2139,15 @@ async function applyJson(
       delete doc.data[name];
       dirty = true;
     }
+    changes.push({ tool: target.tool, server: name, action: 'removed' });
+  }
+
+  // An unrecorded entry of a server the team deleted is teamai's when it equals a render of that
+  // server from the team history (#993), and goes like any other server teamai no longer delivers.
+  for (const [name, entry] of Object.entries(doc.servers)) {
+    if (desired.has(name) || ownedNames.has(name) || await judge(name, entry) !== 'teamai') continue;
+    delete doc.servers[name];
+    dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });
   }
 
@@ -2265,7 +2295,8 @@ async function applyCodex(
 
   for (const [name, { hash, block, resolvedValue }] of desired) {
     // An entry with no record is teamai's when it equals a team render of `name` (#993), and is adopted.
-    const owner = present.has(name) && !ownedNames.has(name) && !options.force ? await judge(name, codexBlockIn(source, name)) : 'teamai';
+    const unrecorded = present.has(name) && !ownedNames.has(name) && !options.force;
+    const owner = unrecorded ? await judge(name, codexBlockIn(source, name)) : 'teamai';
     if (owner !== 'teamai') {
       changes.push(unrecordedServerKept(target, name, owner));
       continue;
@@ -2273,7 +2304,10 @@ async function applyCodex(
     nextRecords.push({ name, hash });
     holdsResolvedValue ||= resolvedValue;
     const next = spliceCodexBlock(source, name, block!);
-    if (next === source) continue;
+    if (next === source) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     source = next;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: present.has(name) ? 'updated' : 'added' });
@@ -2292,6 +2326,17 @@ async function applyCodex(
       source = next;
       dirty = true;
     }
+    changes.push({ tool: target.tool, server: name, action: 'removed' });
+  }
+
+  // An unrecorded block of a server the team deleted is teamai's when it equals a render of that
+  // server from the team history (#993), and goes like any other server teamai no longer delivers.
+  for (const name of codexServerNames(source)) {
+    if (desired.has(name) || ownedNames.has(name) || await judge(name, codexBlockIn(source, name)) !== 'teamai') continue;
+    const next = spliceCodexBlock(source, name, null);
+    if (next === source) continue;
+    source = next;
+    dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });
   }
 

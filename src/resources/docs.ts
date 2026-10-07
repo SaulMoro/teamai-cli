@@ -102,6 +102,16 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
     const sourceEntry = sourceEntries.get(entry.name);
     if (entry.isDirectory()) {
       if (sourceEntry && !sourceEntry.isDirectory()) continue;
+      // A directory where the team once had a doc file, holding anything that is
+      // no team version, is the member's, put in place of that file: all of it stays (#993).
+      if (!sourceEntry && await wasTeamDocFile(repoPath, entryRel)
+        && !await isTeamaiSkillCopy(target, { repoPath, pathspec: `docs/${entryRel}` })) {
+        log.warn(
+          `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this is a directory of yours in its place. `
+          + 'Delete it when you no longer need it.',
+        );
+        continue;
+      }
       await pruneDocs(sourceEntry ? path.join(source!, entry.name) : undefined, target, repoPath, scope, entryRel);
       // A stale directory containing hidden local files, or a file kept above, must survive.
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
@@ -116,6 +126,13 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       await fse.unlink(target);
     }
   }
+}
+
+/** Whether the team history ever had a file at `docs/<rel>` itself, not only under it. */
+async function wasTeamDocFile(repoPath: string, rel: string): Promise<boolean> {
+  const pathspec = `docs/${rel}`;
+  const versions = await historicalVersions(repoPath, pathspec);
+  return (versions ?? []).some((version) => version.path === pathspec || version.path.endsWith(`/${pathspec}`));
 }
 
 function containsPath(parent: string, child: string): boolean {
