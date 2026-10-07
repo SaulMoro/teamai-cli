@@ -2904,15 +2904,23 @@ async function reconcileMcpAllScopes(
         errors.push(`[${localConfig.scope}] MCP: team config could not be loaded`);
         continue;
       }
-      const { reconcileMcpForConfig } = await import('./mcp-reconcile.js');
+      const { reconcileMcpForConfig, describeKeptMemberServer } = await import('./mcp-reconcile.js');
+      // Not `--force`: it means a full sync here, never taking a member's own server (#993).
       const { changes, unresolved } = await reconcileMcpForConfig(teamConfig, localConfig, {
-        force: options.force, dryRun: options.dryRun, teamEnv: await scopeEnv(localConfig, teamEnvs),
+        dryRun: options.dryRun, teamEnv: await scopeEnv(localConfig, teamEnvs),
       });
       if (unresolved) errors.push(`[${localConfig.scope}] Team MCP configuration could not be resolved`);
 
       const applied = changes.filter((c) => c.action !== 'skipped');
+      const named = new Set<string>();
       for (const c of changes) {
-        if (c.action === 'skipped') log.debug(`[mcp] ${c.tool}/${c.server}: skipped — ${c.reason}`);
+        if (c.action !== 'skipped') continue;
+        log.debug(`[mcp] ${c.tool}/${c.server}: skipped — ${c.reason}`);
+        // Two tools sharing a file (Claude and CodeBuddy's .mcp.json) name it once.
+        if (c.member && c.file && !named.has(`${c.file}\0${c.server}`)) {
+          named.add(`${c.file}\0${c.server}`);
+          log.warn(describeKeptMemberServer(c.server, c.file));
+        }
       }
       if (applied.length > 0 && !options.silent) {
         const servers = [...new Set(applied.map((c) => c.server))];

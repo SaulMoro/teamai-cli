@@ -21,7 +21,7 @@ import {
 import { isToolInstalledForConfig } from './resources/base.js';
 import { skillsDirForTool } from './resources/skills.js';
 import { isCodexTool } from './utils/tool-names.js';
-import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, readCodexHookTrustForScope } from './hooks.js';
+import { TEAMAI_HOOK_SUBCOMMANDS, isCodexTrustGatedTool, codexTrustReminder, keptTeamHookEntries, readCodexHookTrustForScope } from './hooks.js';
 import {
   buildDeliveryChecks,
   buildRulesDeliveryChecks,
@@ -692,6 +692,8 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
   const notes = [
     ...await buildNamespaceNotes(ctx),
     ...await entryNamespaceNotes(ctx),
+    // Hook entries a pull keeps as the member's (#993): the team's own entries are written beside them.
+    ...ctx.teamConfig ? await keptTeamHookEntries(ctx.teamConfig, localConfig) : [],
     ...await aliasNamespaceNotes(ctx),
     ...await agentModelNotes(ctx),
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
