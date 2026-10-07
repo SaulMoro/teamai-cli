@@ -2608,7 +2608,7 @@ sharing:
         retries: 3             # 可选，失败重试次数（默认 3）
 ```
 
-`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。过期的空目录也会删除，隐藏文件和隐藏目录会保留。请使用专用文档目录，因为仅存在于本地的草稿也会删除。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
+`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。过期的空目录也会删除，隐藏文件和隐藏目录会保留。请使用专用文档目录，因为仅存在于本地的草稿也会删除。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
 
 ### config.yaml（本地配置）
 
