@@ -521,8 +521,11 @@ history proof alone (`isTeamaiSkillCopy`) in doctor, and `ownsSkillDir` in
 or another tool's, and is
 not "kept" in the sense above: Codex gets `.codex/skills/<name>` instead, the
 team skill is delivered, and every full sync names the conflict (Codex sees two
-skills of that name). Source skills and the built-in stub still take an
-existing shared copy as theirs.
+skills of that name). Source skills use the same rule with the source repo
+as origin (#993 bug 8): a shared copy is the source's when its installation
+manifest records it, or it is the source skill as pulled now or a version in
+the source repo's history (`isTeamaiSkillCopy` against the source cache).
+The built-in stub still takes an existing shared copy as its own.
 
 The commands that delete skill directories by a team skill's name apply the
 same rule in every tool's skills root (#993): `teamai remove skills <name>` and
