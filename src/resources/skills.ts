@@ -17,7 +17,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  isTeamaiSkillCopy, judgeCopy, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, judgeCopy, keepsEditedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -842,56 +842,62 @@ export class SkillsHandler extends ResourceHandler {
    */
   async removeItem(name: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
     const removed: string[] = [];
-
-    // Remove from team repo
     const scopedNamespaces = await resolveSkillNamespaces(localConfig);
-    if (scopedNamespaces.length > 0) {
-      for (const namespace of scopedNamespaces) {
-        const namespaceDir = path.join(localConfig.repo.localPath, 'skills', namespace, name);
-        if (await pathExists(namespaceDir)) {
-          await remove(namespaceDir);
-          removed.push(namespaceDir);
-        }
-      }
-    } else {
-      const teamDir = path.join(localConfig.repo.localPath, 'skills', name);
-      if (await pathExists(teamDir)) {
-        await remove(teamDir);
-        removed.push(teamDir);
-      }
+    const teamDirs = scopedNamespaces.length > 0
+      ? scopedNamespaces.map((namespace) => path.join(localConfig.repo.localPath, 'skills', namespace, name))
+      : [path.join(localConfig.repo.localPath, 'skills', name)];
+
+    // Only teamai's copy in each tool's skills directory goes (#993): one on
+    // this checkout's record, what pull writes today from the team source, or
+    // a team version by the history. Judged before the team source is
+    // deleted below; the local agent's resource cache has no history.
+    const sources: ResourceItem[] = [];
+    for (const teamDir of teamDirs) {
+      if (!await pathExists(teamDir)) continue;
+      sources.push({ name, type: 'skills', sourcePath: teamDir, relativePath: path.relative(localConfig.repo.localPath, teamDir).split(path.sep).join('/') });
     }
-
-    // Record tombstone so the resource won't be re-pushed
-    await this.addTombstone(name, localConfig);
-
-    // Remove from each tool's skills directory
+    const previous = await (await import('../pull.js')).deliveredHashes(localConfig);
     const origin = skillOrigin(localConfig.repo.localPath, name);
-    const ownsShared = (dir: string): Promise<boolean> => isTeamaiSkillCopy(dir, origin);
+    const owned: { tool: string; skillDir: string }[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
       // Not ours to write to, so not ours to delete from. Above the OpenClaw
       // branch, so the workspace copy is covered by the same gate.
       if (isAgentExcluded(localConfig, tool)) continue;
-      let skillDir: string;
+      const skillDirs: string[] = [];
       if (tool === 'openclaw') {
         const wsDir = await resolveOpenclawWorkspaceDir();
         if (!wsDir) continue;
-        skillDir = path.join(wsDir, 'skills', name);
+        skillDirs.push(path.join(wsDir, 'skills', name));
       } else {
         const baseDir = resolveToolBaseDir(tool, localConfig);
-        const configuredDir = path.join(baseDir, toolPath.skills, name);
-        // No ledger here: Codex's copy in .agents/skills goes only on the team history's proof.
-        skillDir = await resolveSkillDestination(tool, toolPath.skills, baseDir, name, ownsShared);
-        if (skillDir !== configuredDir && await pathExists(configuredDir) && await dirContentEqual(skillDir, configuredDir)) {
-          await remove(configuredDir);
-          removed.push(configuredDir);
+        skillDirs.push(path.join(baseDir, toolPath.skills, name));
+        // Codex also reads, and pull may deliver into, the shared directory.
+        if (tool === CODEX_TOOL) skillDirs.push(path.join(baseDir, SHARED_AGENT_SKILLS_PATH, name));
+      }
+      for (const skillDir of skillDirs) {
+        if (!await pathExists(skillDir)) continue;
+        if (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources)) {
+          owned.push({ tool, skillDir });
+        } else {
+          log.warn(describeMembersDirLeft(skillDir, `skills/${name}`, 'remove'));
         }
       }
-      if (await pathExists(skillDir)) {
-        await remove(skillDir);
-        removed.push(skillDir);
-        log.debug(`Removed skill ${name} from ${tool}`);
-      }
+    }
+
+    // Remove from team repo
+    for (const { sourcePath } of sources) {
+      await remove(sourcePath);
+      removed.push(sourcePath);
+    }
+
+    // Record tombstone so the resource won't be re-pushed
+    await this.addTombstone(name, localConfig);
+
+    for (const { tool, skillDir } of owned) {
+      await remove(skillDir);
+      removed.push(skillDir);
+      log.debug(`Removed skill ${name} from ${tool}`);
     }
 
     return removed;

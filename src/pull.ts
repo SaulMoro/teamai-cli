@@ -1752,7 +1752,15 @@ async function pullForScope(
             if (!excludedSkills.has(skillName) || BUILTIN_SKILL_NAMES.has(skillName)) continue;
             const nestedSkillDir = path.join(namespaceDir, skillName);
             if (!await pathExists(path.join(nestedSkillDir, 'SKILL.md'))) continue;
+            // A name is no proof: the member's own skill can sit in a folder
+            // of theirs. Only teamai's copy goes (#993); pull never delivers
+            // here, so the member's stays without a line on every pull.
+            if (await removedCopyChanged(ledger.previous, nestedSkillDir, skillOrigin(localConfig.repo.localPath, skillName))) {
+              log.debug(`Kept ${nestedSkillDir}: it is not teamai's copy of the excluded skill ${skillName}`);
+              continue;
+            }
             await remove(nestedSkillDir);
+            forgetDelivered(ledger.hashes, nestedSkillDir);
             log.debug(`Removed excluded skill ${namespace}/${skillName} from ${tool}`);
           }
         }

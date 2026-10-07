@@ -170,7 +170,8 @@ there goes only when it is teamai's (#993); other tools and the member write
 to that directory too.
 
 **`uninstall` deletes a CLI-owned directory by the same rule.** A team-repo skill
-is synced whole, so uninstall removes the whole directory. A CLI-owned one is
+is synced whole, so uninstall removes the whole directory, when it is teamai's:
+on the checkout's record or a team version by the history (#993). A CLI-owned one is
 not: deployment writes only `PACKAGED_SKILL_FILES` and never touched a file the
 member added beside them, so uninstall removes those same paths through
 `removeOwnedFiles` and keeps the rest, saying which directory it kept. Deleting

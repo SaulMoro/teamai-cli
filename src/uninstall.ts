@@ -58,7 +58,7 @@ import {
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
-import { isTeamaiSkillCopy } from './resources/delivered-copies.js';
+import { describeMembersDirLeft, ownsSkillDir } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
@@ -120,6 +120,8 @@ interface RemovalPlan {
   keptRuleFiles: { files: string[]; entry: LegacyRuleDir }[];
   /** OMP's flat copies of namespaced rules the member edited after delivery: never removed, only named (#946). */
   keptFlatCopies: string[];
+  /** The line naming each skill directory at a team skill's name that is not teamai's: never removed (#993). */
+  keptSkillDirs: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -183,6 +185,7 @@ interface ToolResources {
   /** Machine-wide adapters this project uninstall keeps (`RemovalPlan.keptGlobal`). */
   keptGlobal: string[];
   skillDirs: SkillDirEntry[];
+  keptSkillDirs: string[];
   ruleFiles: string[];
   keptRuleFiles: { files: string[]; entry: LegacyRuleDir }[];
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
@@ -354,8 +357,8 @@ async function discoverToolResources(
   /** Home, or the project root: where the skills link guard starts (`skillsGuardBase`). */
   scopeRoot: string,
   teamSkillNames: Set<string>,
-  /** Whether Codex's copy of skill `name` in the shared .agents/skills is teamai's (#993). */
-  ownsSharedSkill: (dir: string, name: string) => Promise<boolean>,
+  /** Whether the skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
+  ownsSkill: (dir: string, name: string) => Promise<boolean>,
   teamRuleNames: Set<string>,
   teamAgentNames: Set<string>,
   hookTargets: HookTarget[],
@@ -379,7 +382,7 @@ async function discoverToolResources(
 ): Promise<ToolResources> {
   const res: ToolResources = {
     hookFiles: [], openclawHookDirs: [], opencodeHookScopes: [], ompHookFile: null, piHookFiles: [], dshHookFile: null,
-    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: [], agentFiles: [],
+    claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], keptSkillDirs: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: [], agentFiles: [],
   };
 
   // (a) Hooks — settings.json / hooks.json
@@ -554,17 +557,20 @@ async function discoverToolResources(
     // `resolveSkillDestination` writes Codex's copy into the shared
     // .agents/skills root when teamai's copy already lives there, so uninstall
     // must look where deployment could have put it — the legacy prune already
-    // does. Codex only: another tool's pass must not reach into it. Other
-    // tools and the member write there too, so only teamai's copies go.
-    const sharedSkills = tool === CODEX_TOOL ? path.join(baseDir, SHARED_AGENT_SKILLS_PATH) : null;
-    if (sharedSkills) skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
+    // does. Codex only: another tool's pass must not reach into it.
+    if (tool === CODEX_TOOL) {
+      const sharedSkills = path.join(baseDir, SHARED_AGENT_SKILLS_PATH);
+      skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
+    }
+    // A team skill's name is no proof: only teamai's copies go (#993).
     for (const [skillsDir, rootBase] of skillRoots) {
       if (await pathExists(skillsDir)) {
         const dirs = await listDirs(skillsDir);
         for (const dir of dirs) {
           if (!teamSkillNames.has(dir)) continue;
-          if (skillsDir === sharedSkills && !await ownsSharedSkill(path.join(skillsDir, dir), dir)) continue;
-          res.skillDirs.push({ dir: path.join(skillsDir, dir), baseDir: rootBase });
+          const skillDir = path.join(skillsDir, dir);
+          if (await ownsSkill(skillDir, dir)) res.skillDirs.push({ dir: skillDir, baseDir: rootBase });
+          else res.keptSkillDirs.push(describeMembersDirLeft(skillDir, `skills/${dir}`, 'uninstall'));
         }
       }
     }
@@ -633,15 +639,12 @@ async function buildRemovalPlan(
   // Directories earlier releases deployed: uninstall would otherwise leave the
   // pre-stub skill trees behind on any machine that upgraded.
   for (const name of LEGACY_BUILTIN_SKILL_NAMES) teamSkillNames.add(name);
-  // Codex's copy in the shared .agents/skills is teamai's when it holds a
-  // built-in's name, or on the team history's proof (#993).
-  const ownsSharedSkill = async (dir: string, name: string): Promise<boolean> =>
-    isCliOwnedSkillName(name) || isTeamaiSkillCopy(dir, skillOrigin(repoPath, name));
   const teamRuleNames = await collectTeamRuleNames(repoPath);
   for (const name of BUILTIN_RULE_NAMES) teamRuleNames.add(name);
   const teamAgentNames = await collectTeamAgentNames(repoPath);
 
   // Also include resources installed by local-agent (HTTP distribution)
+  const localAgentSkillNames = new Set<string>();
   const localAgentManifestPath = path.join(
     getUserHome(), '.teamai', 'local-agent', 'manifest.json',
   );
@@ -651,12 +654,20 @@ async function buildRemovalPlan(
       if (raw) {
         const manifest = JSON.parse(raw) as { scopes?: Record<string, { skills?: Record<string, unknown>; rules?: Record<string, unknown> }> };
         for (const scopeVal of Object.values(manifest.scopes ?? {})) {
-          for (const slug of Object.keys(scopeVal.skills ?? {})) teamSkillNames.add(slug);
+          for (const slug of Object.keys(scopeVal.skills ?? {})) localAgentSkillNames.add(slug);
           for (const slug of Object.keys(scopeVal.rules ?? {})) teamRuleNames.add(slug);
         }
       }
     } catch { /* best effort */ }
   }
+
+  for (const name of localAgentSkillNames) teamSkillNames.add(name);
+  // A skill directory is teamai's (#993) when it holds a built-in's name or one
+  // the local agent's manifest records installing, is on this checkout's
+  // record, or is a team version by the team repo's history.
+  const previous = await deliveredHashes(localConfig);
+  const ownsSkill = async (dir: string, name: string): Promise<boolean> =>
+    isCliOwnedSkillName(name) || localAgentSkillNames.has(name) || ownsSkillDir(previous, dir, skillOrigin(repoPath, name));
 
   // Discover per-tool resources. Hooks are discovered at the injection target
   // resolveHookScope reports (HOME + user manifest for a non-self project scope,
@@ -707,7 +718,7 @@ async function buildRemovalPlan(
         resolveToolBaseDir(tool, localConfig),
         baseDir,
         teamSkillNames,
-        ownsSharedSkill,
+        ownsSkill,
         teamRuleNames,
         teamAgentNames,
         hookTargets,
@@ -862,6 +873,7 @@ async function buildRemovalPlan(
     keptRuleFiles: [],
     // Only the tools being uninstalled: another tool's copy is not touched, so not "kept".
     keptFlatCopies: flatCopies.edited.filter(({ tool }) => toolsToMerge.includes(tool)).map(({ file }) => file),
+    keptSkillDirs: [],
     opencodeOwnedGlobs: [],
     agentFiles: [],
     mcpServers: [],
@@ -936,6 +948,7 @@ async function buildRemovalPlan(
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned: false });
     }
     plan.skillDirs.push(...res.skillDirs);
+    plan.keptSkillDirs.push(...res.keptSkillDirs);
     plan.ruleFiles.push(...res.ruleFiles.filter((file) => !retainedRuleFiles.has(file) && !plan.ruleFiles.includes(file)));
     plan.keptRuleFiles.push(...res.keptRuleFiles);
     plan.opencodeOwnedGlobs.push(...res.opencodeOwnedGlobs);
@@ -1550,6 +1563,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       log.warn(`Kept ${plan.keptFlatCopies.join(', ')}: you edited ${one ? 'it' : 'them'} after teamai delivered ${one ? 'it' : 'them'}. `
         + `Delete ${one ? 'it' : 'them'} once you have saved what you need.`);
     }
+    for (const line of plan.keptSkillDirs) log.warn(line);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
       && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);
