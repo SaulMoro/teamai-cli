@@ -73,13 +73,15 @@ export async function listStaleDocDirectories(source: string | undefined, destin
  * Whether the prune may delete `file`, at `rel` in the mirror (`/`-separated),
  * which the team repo no longer has (#993): a link, a version of the team doc
  * once at that path, or a local-only file at a path the team repo's history
- * never had (or cannot tell). Anything else at a removed team doc's
- * path is the member's. Read-only.
+ * never had. Anything else at a removed team doc's path is the member's, and
+ * so is any file while the history cannot be read: there is no proof either
+ * way. Read-only.
  */
 export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
   if (!(await fse.lstat(file).catch(() => null))?.isFile()) return true;
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
-  if (versions === null || versions.length === 0) return true;
+  if (versions === null) return false;
+  if (versions.length === 0) return true;
   const bytes = await readBytes(file);
   if (bytes === null) return false;
   const id = await blobIdOf(repoPath, bytes);
