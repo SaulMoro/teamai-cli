@@ -2544,12 +2544,38 @@ export function getStatePath(localConfig: LocalConfig): string {
 }
 
 /**
- * Get the managed-hooks manifest path for a given scope. This file indexes the
- * team (B) hooks injected into each tool, so reconcile can clean up hooks that
- * were removed from hooks.yaml (esp. for Cursor, whose entries carry no marker).
+ * The managed-hooks manifest: the team (B) hooks teamai injected into each
+ * tool, so reconcile can clean up hooks removed from hooks.yaml (esp. for
+ * Cursor and Copilot, whose entries carry no marker).
+ *
+ * User scope keeps one file in `~/.teamai`. A project scope's hook files are
+ * per checkout (Copilot's `.github/hooks/`, self mode's tool dirs), so its
+ * manifest is too, in the data home beside `managed-mcp.json`
+ * (`workspaces/<id>/`), never in the working tree (#993).
  */
-export function getManagedHooksPath(scope: Scope, projectRoot?: string): string {
-  return path.join(getTeamaiHome(scope, projectRoot), 'managed-hooks.json');
+export function getManagedHooksPath(localConfig: LocalConfig): string {
+  if (localConfig.scope !== 'project') return getUserManagedHooksPath();
+  if (!localConfig.projectRoot) {
+    throw new Error('getManagedHooksPath: scope is "project" but projectRoot is missing.');
+  }
+  return path.join(
+    getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(localConfig.projectRoot), 'managed-hooks.json',
+  );
+}
+
+/** `~/.teamai/managed-hooks.json`: user scope, and a non-self project scope's HOME hooks (#370). */
+export function getUserManagedHooksPath(): string {
+  return path.join(getTeamaiHome('user'), 'managed-hooks.json');
+}
+
+/**
+ * Where releases before #993 kept a project's managed-hooks manifest, in the
+ * working tree. Read by the pre-#370 Codex import, the legacy hook scope and
+ * uninstall; the first pull moves the Copilot records (every record in self
+ * mode) out of it (`migrateLegacyManagedHooks`).
+ */
+export function legacyManagedHooksPath(projectRoot: string): string {
+  return path.join(projectRoot, '.teamai', 'managed-hooks.json');
 }
 
 /**
@@ -2588,11 +2614,11 @@ export function resolveHookScope(
     // one (OpenCode, Qoder CN) would otherwise be written under the project
     // prefix, inside HOME. `scope` is returned so callers resolve paths and
     // base dir from one decision instead of re-deriving it (#370, #667).
-    return { baseDir: getUserHome(), manifestPath: getManagedHooksPath('user'), scope: 'user' };
+    return { baseDir: getUserHome(), manifestPath: getUserManagedHooksPath(), scope: 'user' };
   }
   return {
     baseDir: resolveBaseDir(localConfig),
-    manifestPath: getManagedHooksPath(localConfig.scope, localConfig.projectRoot),
+    manifestPath: getManagedHooksPath(localConfig),
     scope: localConfig.scope,
   };
 }
@@ -2642,7 +2668,7 @@ export function resolveLegacyProjectHookScope(
   if (path.resolve(localConfig.projectRoot) === path.resolve(getUserHome())) return null;
   return {
     baseDir: localConfig.projectRoot,
-    manifestPath: getManagedHooksPath('project', localConfig.projectRoot),
+    manifestPath: legacyManagedHooksPath(localConfig.projectRoot),
     scope: 'project',
   };
 }

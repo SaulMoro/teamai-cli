@@ -12,6 +12,7 @@ import {
   TEAMAI_CUSTOM_HOOK_PREFIX,
   TEAMAI_AGENT_HOOK_PREFIX,
   getManagedHooksPath,
+  legacyManagedHooksPath,
   getCopilotHome,
   resolveHookScope,
   resolveLegacyProjectHookScope,
@@ -353,7 +354,7 @@ export async function keptTeamHookEntries(teamConfig: TeamaiConfig, localConfig:
   const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
   if (!mainCheckout) return [];
   const manifest = await readManifest(mainCheckout.manifestPath);
-  const legacy = await readManifest(getManagedHooksPath('project', mainCheckout.root));
+  const legacy = await readManifest(legacyManagedHooksPath(mainCheckout.root));
   const history = teamHookHistory(localConfig);
   const kept: string[] = [];
   for (const [tool, file] of Object.entries(mainCheckout.files)) {
@@ -462,6 +463,43 @@ export type BuiltinsOnly = 'with-overrides' | 'defaults-where-none';
 async function readManifest(manifestPath: string): Promise<ManagedHooksManifest> {
   const data = await readJson<ManagedHooksManifest>(expandHome(manifestPath));
   return data && typeof data === 'object' ? data : {};
+}
+
+/**
+ * Move what a release before #993 recorded in `<root>/.teamai/managed-hooks.json`
+ * into this checkout's manifest in the data home: the Copilot records in a
+ * project scope, every record in self mode. The other records stay there for
+ * the pre-#370 Codex import and the legacy hook sweep. The file is deleted
+ * once empty, unless git tracks it: doctor names a tracked one. Idempotent;
+ * an unreadable file is left alone.
+ */
+export async function migrateLegacyManagedHooks(localConfig: LocalConfig): Promise<void> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return;
+  const legacyPath = legacyManagedHooksPath(localConfig.projectRoot);
+  const legacy = await readJson<ManagedHooksManifest>(legacyPath);
+  if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return;
+  const moving = Object.keys(legacy).filter((tool) => isSelfMode(localConfig) || tool === COPILOT_TOOL_ID);
+  if (moving.length > 0) {
+    const manifestPath = getManagedHooksPath(localConfig);
+    const manifest = await readManifest(manifestPath);
+    for (const tool of moving) {
+      const records = manifest[tool] ?? [];
+      for (const record of legacy[tool] ?? []) {
+        if (!records.some((r) => isDeepStrictEqual(r, record))) records.push(record);
+      }
+      if (records.length > 0) manifest[tool] = records;
+      delete legacy[tool];
+    }
+    await writeJson(manifestPath, manifest);
+  }
+  if (Object.keys(legacy).length === 0) {
+    const { gitTracks } = await import('./mcp-git-exclude.js');
+    if ((await gitTracks(legacyPath)).kind === 'untracked') {
+      await rm(legacyPath, { force: true });
+      return;
+    }
+  }
+  if (moving.length > 0) await writeJson(legacyPath, legacy);
 }
 
 /** Team hooks to record in the manifest for a tool (empty when removing). */
@@ -2121,7 +2159,7 @@ export async function reconcileHooksToAllTools(
       if (mainFile && opts.mainCheckout && !opts.builtinsOnly) {
         await reconcileMainCheckoutTeamHooks(mainFile, tool, defs, {
           manifestPath: opts.mainCheckout.manifestPath,
-          legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
+          legacyManifestPath: legacyManagedHooksPath(opts.mainCheckout.root),
           removeAll: opts.removeAll,
           teamHookHistory: opts.teamHookHistory,
         });
@@ -2455,6 +2493,8 @@ export async function reconcileTeamHooksForConfig(
     }
     return resolved.ok ? { ok: true, defs: teamDefs } : { ok: false, builtins: builtinsOnly ?? 'with-overrides' };
   }
+  // Before any reconcile reads this checkout's manifest (#993).
+  await migrateLegacyManagedHooks(localConfig);
   const reconciledMainTools = await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
@@ -2480,7 +2520,7 @@ export async function reconcileTeamHooksForConfig(
   if (copilotEnabled && copilotPaths?.hooks) {
     const copilotBase = resolveToolBaseDir(COPILOT_TOOL_ID, localConfig);
     const copilotHooksPath = path.join(copilotBase, copilotPaths.hooks);
-    const copilotManifestPath = getManagedHooksPath(localConfig.scope, localConfig.projectRoot);
+    const copilotManifestPath = getManagedHooksPath(localConfig);
     const copilotInstalled = await builtinsInstalled(
       builtinsOnly, copilotHooksPath, COPILOT_TOOL_ID, copilotManifestPath, builtin);
     if (!copilotInstalled && (copilotSelected || await pathExists(getCopilotHome()))) {
@@ -2497,6 +2537,8 @@ export async function reconcileTeamHooksForConfig(
     }
   }
   if (!builtinsOnly) await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
+  // The pre-#370 import and the sweep above may have emptied the old index.
+  await migrateLegacyManagedHooks(localConfig);
   // Last, so a repository whose hooks cannot be written still gets the agent
   // hooks above; the error then reaches the caller.
   if (!opts.removeAll) await installProjectGitHook(localConfig);

@@ -868,6 +868,8 @@ export function buildSelfModeGitignore(): string {
     'known-skills.json',
     'search-index.json',
     'managed-mcp.json',
+    // The hook index, which releases before #993 wrote here.
+    'managed-hooks.json',
     // Per-worktree machine data (managed-mcp.json + the local-agent resource
     // cache). Not ignored before P2 — a real leak source in self repos.
     'workspaces/',
@@ -964,6 +966,8 @@ export function migrateSelfModeGitignoreContent(content: string): { changed: boo
   ensure('usage.pending-*.jsonl', 'usage.jsonl.*');
   // config.yaml has been saved atomically, through a temp copy, since #831.
   ensure('config.yaml.*.tmp', 'config.yaml');
+  // The hook index moved to the data home (#993); older releases wrote it here.
+  ensure('managed-hooks.json', 'managed-mcp.json');
 
   return { changed, content: filtered.join('\n') };
 }

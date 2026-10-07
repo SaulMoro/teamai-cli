@@ -48,6 +48,8 @@ import {
   writeCodexAtomic,
   spliceCodexBlock,
   codexServerNames,
+  userMcpFile,
+  USER_MCP_LOOKUP,
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
@@ -2990,10 +2992,14 @@ function updateManifestRecord(
   /** Project scope: whether the entry carries a credential, as `resolved` notes for a pull's (#882). */
   resolved?: boolean,
   bare?: boolean,
+  /** User scope, CodeBuddy: the file it wrote (#993). */
+  file?: string,
 ): void {
   const records = manifest[key] ?? [];
   const idx = records.findIndex((r: ManagedMcpRecord) => r.name === name);
-  const record: ManagedMcpRecord = { name, hash, ...resolved === undefined ? {} : { resolved }, ...bare === undefined ? {} : { bare } };
+  const record: ManagedMcpRecord = {
+    name, hash, ...resolved === undefined ? {} : { resolved }, ...bare === undefined ? {} : { bare }, ...file === undefined ? {} : { file },
+  };
   if (idx >= 0) {
     records[idx] = record;
   } else {
@@ -3040,7 +3046,11 @@ async function installMcpServer(
   }
 
   const baseDir = resolveToolBaseDir(tool, localConfig);
-  const targetFile = path.join(baseDir, mcpRel);
+  const mappedFile = path.join(baseDir, mcpRel);
+  // CodeBuddy reads only the first of its user MCP files that exists (#993), as a pull writes it.
+  const lookup = !projectScope && USER_MCP_LOOKUP[tool] !== undefined;
+  const targetFile = lookup ? await userMcpFile(tool, mcpRel, baseDir) : mappedFile;
+  const fileOf = (record: ManagedMcpRecord): string => lookup ? record.file ?? mappedFile : targetFile;
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
@@ -3057,8 +3067,11 @@ async function installMcpServer(
     manifest = (await readJson<ManagedMcpManifest>(manifestPath)) ?? {};
   }
   const manifestKey = managedMcpManifestKey(tool, projectScope);
-  const owned = manifest[manifestKey] ?? [];
+  // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
+  const owned = (manifest[manifestKey] ?? []).filter((r: ManagedMcpRecord) => fileOf(r) === targetFile);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
+  const movedFrom = (manifest[manifestKey] ?? []).find((r: ManagedMcpRecord) => r.name === slug && fileOf(r) !== targetFile);
+  const file = lookup ? targetFile : undefined;
 
   if (format === 'codex') {
     const block = renderCodexBlock(def);
@@ -3094,7 +3107,7 @@ async function installMcpServer(
     // Existing ownership stays valid until the config write completes. New installs
     // still persist a provisional record before adding a Git exclusion (#882).
     if (!previousRecord) {
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined);
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, undefined, file);
       await writeJsonAtomic(manifestPath, manifest);
     }
     if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
@@ -3103,7 +3116,7 @@ async function installMcpServer(
     await writeJsonDoc(targetFile, serverKey, doc);
     if (allowBare || previousRecord) {
       // Placement is evidence of a completed write, not just an attempted install.
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, allowBare ? doc.bare : undefined);
+      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, allowBare ? doc.bare : undefined, file);
       try {
         await writeJsonAtomic(manifestPath, manifest);
       } catch (error) {
@@ -3121,9 +3134,28 @@ async function installMcpServer(
         throw error;
       }
     }
+    if (movedFrom) await removeMovedMcpEntry(fileOf(movedFrom), serverKey, slug, targetFile);
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
+}
+
+/**
+ * Take `slug` out of `file`, where an earlier install wrote it and which
+ * CodeBuddy no longer reads (#993): this install wrote it to `targetFile` and
+ * recorded it there. A failure leaves the old entry, and says where.
+ */
+async function removeMovedMcpEntry(file: string, serverKey: string, slug: string, targetFile: string): Promise<void> {
+  try {
+    const doc = await readJsonDoc(file, serverKey);
+    if (!doc) throw new Error('it does not parse');
+    if (doc.servers[slug] === undefined) return;
+    delete doc.servers[slug];
+    await writeJsonDoc(file, serverKey, doc);
+  } catch (error) {
+    log.warn(`Installed MCP server ${slug} in ${targetFile}, but could not remove the copy an earlier install left in ${file}: `
+      + `${error instanceof Error ? error.message : String(error)}. Remove ${slug} from ${file} yourself.`);
+  }
 }
 
 /**
@@ -3182,7 +3214,6 @@ async function uninstallMcpServer(
   if (!format) return;
 
   const baseDir = resolveToolBaseDir(tool, localConfig);
-  const targetFile = path.join(baseDir, mcpRel);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
@@ -3203,6 +3234,9 @@ async function uninstallMcpServer(
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
 
   if (!ownedNames.has(slug)) return;
+  // CodeBuddy's user servers are where the install recorded them (#993); an older one recorded no file.
+  const recordedFile = !projectScope && USER_MCP_LOOKUP[tool] ? owned.find((r) => r.name === slug)?.file : undefined;
+  const targetFile = recordedFile ?? path.join(baseDir, mcpRel);
 
   let restoreConfig: (() => Promise<void>) | undefined;
   if (format === 'codex') {

@@ -694,7 +694,7 @@ teamai packages --dry-run   # 预览底层命令，不安装也不写文件
 teamai doctor              # 检查运行环境、声明的包/marketplace/插件状态，以及磁盘上实际落地的资源；任一检查失败时退出码为 1
 ```
 
-安装成功后，TeamAI 会在当前 scope 的 `.teamai` 目录下写入本地快照 `teamai.lock`。该文件记录已安装版本，以及供 SessionStart 提示比对的声明哈希，不会写入团队仓库。在 user scope 下，全局 npm 工具和 Claude 插件只需确认一次；项目 npm 依赖会按工作目录分别确认，避免在一个仓库安装后错误关闭另一个仓库的提示。
+安装成功后，TeamAI 会在当前 scope 的数据目录（项目为 `~/.teamai/projects/<slug>/`，user scope 为 `~/.teamai/`）写入本地快照 `teamai.lock`，不会写入工作区。旧版本写在 `.teamai/teamai.lock` 的文件会在下次安装或会话启动时移到这里，旧版本为隐藏它而创建的 `.teamai/.gitignore` 也会删除。该文件记录已安装版本，以及供 SessionStart 提示比对的声明哈希，不会写入团队仓库。在 user scope 下，全局 npm 工具和 Claude 插件只需确认一次；项目 npm 依赖会按工作目录分别确认，避免在一个仓库安装后错误关闭另一个仓库的提示。
 
 **声明格式：**
 
@@ -1202,7 +1202,12 @@ Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。写入�
 下一次 `teamai pull` 会把 teamai 自己的 server 移入该文件，你自己的 server 保持原处；
 在此之前，`teamai doctor` 会给出警告，`teamai mcp list` 会指出它们所在的文件。
 `teamai mcp remove` 和 `teamai uninstall` 会从实际存放它们的文件中移除。
-HTTP 模式团队的本地 agent 仍写入 `~/.codebuddy/mcp.json`。
+早期版本总是创建 `~/.codebuddy/mcp.json`，它会遮住 `~/.codebuddy.json`：当它只含 teamai 的 server、
+且排在后面的文件存在时，下一次 pull 会把这些 server 移入该文件，删除 `~/.codebuddy/mcp.json`，
+并只提示一次。在 `~/.codebuddy.json` 中 teamai 只改动自己的条目。若 `~/.codebuddy/mcp.json`
+还含有你自己的 server 或任何其他键，它保持原样，teamai 仍写入该文件。
+HTTP 模式团队的本地 agent 也安装到 CodeBuddy 读取的那个文件并记录它；
+它曾安装到 CodeBuddy 已不再读取的文件中的 server，会在再次安装时移过去。
 
 CodeBuddy Code 的 [MCP 文档](https://www.codebuddy.cn/docs/cli/mcp)
 明确将项目根目录的 `.mcp.json` 列为首选项目配置。

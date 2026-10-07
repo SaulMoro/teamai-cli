@@ -793,7 +793,7 @@ teamai packages --dry-run   # Preview native commands without installing or writ
 teamai doctor              # Check runtimes, declared package/marketplace/plugin status, and what actually landed on disk; exits 1 when any check fails
 ```
 
-After a successful install, TeamAI writes a local snapshot to `teamai.lock` under the active scope's `.teamai` directory. The lock records installed versions and the declaration hash used by the SessionStart hint; it is not stored in the team repository. In user scope, machine-wide npm tools and Claude plugins are acknowledged once, while project npm dependencies are acknowledged separately for each working directory so installing in one repository cannot silence another repository's hint.
+After a successful install, TeamAI writes a local snapshot to `teamai.lock` in the scope's data home (`~/.teamai/projects/<slug>/` for a project, `~/.teamai/` for user scope), never in the working tree. A `.teamai/teamai.lock` an older release wrote is moved there on the next install or session start, and the `.teamai/.gitignore` it created to hide it is removed. The lock records installed versions and the declaration hash used by the SessionStart hint; it is not stored in the team repository. In user scope, machine-wide npm tools and Claude plugins are acknowledged once, while project npm dependencies are acknowledged separately for each working directory so installing in one repository cannot silence another repository's hint.
 
 **Declaration format:**
 
@@ -1350,8 +1350,16 @@ create an earlier file (`codebuddy mcp add -s user` creates
 `~/.codebuddy/.mcp.json`), the next `teamai pull` moves teamai's own servers
 into it and leaves yours where they are; until then `teamai doctor` warns and
 `teamai mcp list` names the file they are in. `teamai mcp remove` and
-`teamai uninstall` remove them from the file that holds them. An HTTP-backed
-team's local agent still writes `~/.codebuddy/mcp.json`.
+`teamai uninstall` remove them from the file that holds them. Earlier releases
+always created `~/.codebuddy/mcp.json`, which hides `~/.codebuddy.json`: when it
+holds nothing but teamai's servers and a later file exists, the next pull moves
+them to that file, deletes `~/.codebuddy/mcp.json` and says so once. In
+`~/.codebuddy.json` teamai touches only its own entries. A
+`~/.codebuddy/mcp.json` that also holds a server of yours, or any other key,
+stays where it is and stays the file teamai writes. An HTTP-backed team's local
+agent installs into the same file CodeBuddy reads and records it; a server it
+installed in a file CodeBuddy no longer reads moves there when it is installed
+again.
 
 CodeBuddy Code's [MCP documentation](https://www.codebuddy.ai/docs/cli/mcp)
 lists the project root's `.mcp.json` as its preferred project configuration.
