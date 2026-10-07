@@ -334,7 +334,8 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     const initRun = init(t, dir);
     expect(fs.lstatSync(path.join(skillDir, 'SKILL.md')).isSymbolicLink()).toBe(true);
     expect(read(external)).toBe(skillMd('team-skill', 'Team.'));
-    expect(initRun.output).toContain(`Kept ${skillDir}: it is not teamai's`);
+    // Named by the link itself (#993).
+    expect(initRun.output).toContain(`Kept ${path.join(skillDir, 'SKILL.md')}: it is a link of yours, so teamai does not replace it.`);
   });
 
   it('keeps a member\'s link in place of a team skill directory through pull, remove and uninstall, and names it', () => {
