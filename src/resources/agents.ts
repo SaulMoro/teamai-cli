@@ -1556,9 +1556,10 @@ export function agentOrigin(repoPath: string, stem: string, tool: ToolName, alia
   };
 }
 
-/** `agentOrigin` for a copy of a removed agent; undefined for a tool teamai renders no agents for. */
-export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin | undefined> {
-  if (!isKnownTool(tool)) return undefined;
+/** `agentOrigin` for a copy of a removed agent; for a tool teamai renders no agents for, the team agents verbatim. */
+export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin> {
+  // A tool teamai renders no agents for still gets a proof: the team agents' own bytes, verbatim (#993).
+  if (!isKnownTool(tool)) return { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };
   return agentOrigin(localConfig.repo.localPath, stem, tool, await loadModelAliases(localConfig));
 }
 
@@ -1574,8 +1575,7 @@ export async function ownsAgentCopy(
 ): Promise<boolean> {
   if (await isLink(file)) return false;
   if (BUILTIN_AGENT_NAMES.has(stem) || previous?.[file] !== undefined) return true;
-  const origin = await removedAgentOrigin(localConfig, stem, tool)
-    ?? { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };
+  const origin = await removedAgentOrigin(localConfig, stem, tool);
   return isTeamaiCopy(file, origin);
 }
 
