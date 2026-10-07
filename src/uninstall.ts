@@ -1062,14 +1062,18 @@ async function buildRemovalPlan(
     // own: a clone whose other resources are gone still gets it removed.
     if (localConfig.scope === 'project') {
       const { resolveMcpTargets, projectWorktreeConfigs } = await import('./mcp-reconcile.js');
-      const { findMcpGitExcludes } = await import('./mcp-git-exclude.js');
+      const { findMcpGitExcludes, realFilePath } = await import('./mcp-git-exclude.js');
       const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
       const dirs: string[] = [];
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         if (cfg.projectRoot) dirs.push(cfg.projectRoot);
-        for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) dirs.push(path.dirname(target.file));
-        // A file a pull wrote under a toolPaths mapping since changed.
-        for (const file of Object.keys((await readResolvedMcpFiles(cfg)).files)) dirs.push(path.dirname(file));
+        const files = [
+          ...(await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })).map((target) => target.file),
+          // A file a pull wrote under a toolPaths mapping since changed.
+          ...Object.keys((await readResolvedMcpFiles(cfg)).files),
+        ];
+        // Also where a symlink there points: the line of a linked file is in its target's repository.
+        for (const file of files) dirs.push(path.dirname(file), path.dirname(await realFilePath(file)));
       }
       plan.gitExcludes = await findMcpGitExcludes(dirs);
       // (h) teamai's git hook, in the config every worktree shares.
