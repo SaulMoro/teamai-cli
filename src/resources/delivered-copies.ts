@@ -154,12 +154,17 @@ export async function isTeamaiCopy(file: string, origin: CopyOrigin): Promise<bo
   return false;
 }
 
+/** Why a file at `resource`'s path is the member's (#993), for every line that names one. */
+export function notTeamaisReason(resource: string): string {
+  return `it is not teamai's (no delivery record, and it matches no team version of ${resource})`;
+}
+
 /**
  * The line for a file pull keeps because it is not teamai's (#993), for
  * pull and doctor alike: `resource` is the team file it holds back.
  */
 export function describeMembersFile(file: string, resource: string): string {
-  return `Kept ${file}: it is not teamai's (no delivery record, and it matches no team version of ${resource}). `
+  return `Kept ${file}: ${notTeamaisReason(resource)}. `
     + 'Rename or delete it, then run teamai pull, to receive the team version.';
 }
 
@@ -213,7 +218,7 @@ export async function ownsSkillDir(
 
 /** The line for a copy `command` did not delete because it is not teamai's (#993). */
 export function describeMembersDirLeft(dir: string, resource: string, command: string): string {
-  return `Kept ${dir}: it is not teamai's (no delivery record, and it matches no team version of ${resource}), so ${command} left it.`;
+  return `Kept ${dir}: ${notTeamaisReason(resource)}, so ${command} left it.`;
 }
 
 async function isDirectory(dir: string): Promise<boolean> {

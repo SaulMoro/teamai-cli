@@ -618,7 +618,7 @@ export class RulesHandler extends ResourceHandler {
           // The author's root copy is this rule's by the placement record, which proves it here.
           if (localName === name && await pathExists(filePath) && ledger.previous?.[filePath] === undefined
             && !await isTeamaiCopy(filePath, ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`))) {
-            log.warn(`Kept ${filePath}: it is not teamai's (no delivery record, and it matches no team version of rules/${name}.md), so remove left it.`);
+            log.warn(describeMembersDirLeft(filePath, `rules/${name}.md`, 'remove'));
             continue;
           }
           if (await pathExists(filePath)) {
