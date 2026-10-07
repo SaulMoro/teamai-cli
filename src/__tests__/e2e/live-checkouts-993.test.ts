@@ -221,6 +221,17 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
       expect(tracked(partition, main)).toEqual(KEPT);
     });
 
+    it('keeps a removed worktree\'s directory without a root, since the worktree list does not name the main checkout', async () => {
+      const removed = await addWorktree(main, 'sep-rootless');
+      fs.rmSync(path.join(workspaceDir(partition, removed), 'root'));
+      gitOk(['worktree', 'remove', '--force', removed], main);
+
+      teamaiOk(['pull', '--force'], main);
+
+      expect(tracked(partition, removed)).toEqual({ directory: true, record: false });
+      expect(tracked(partition, main)).toEqual(KEPT);
+    });
+
     it('keeps a record and directory an older teamai left without a root until their own checkout writes one', async () => {
       // As teamai 0.22 left them: no `root` in the main checkout's record or
       // directory, and a directory of a checkout long gone.
@@ -242,6 +253,37 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
       expect(fs.readFileSync(path.join(workspaceDir(partition, main), 'root'), 'utf8')).toBe(main);
       expect(fs.existsSync(gone)).toBe(true);
     });
+  });
+
+  it('judges a directory without a root by the worktree list, for checkouts reached through a symlink', async () => {
+    // contribute, recall, viz, the MCP writers and the local agent create a
+    // checkout's directory before its first full pull writes `root`. In a
+    // plain repo `git worktree list` names every checkout, so it proves such a
+    // directory's checkout live or gone.
+    fs.mkdirSync(path.join(sandbox, 'link-target'));
+    fs.symlinkSync(path.join(sandbox, 'link-target'), path.join(sandbox, 'link'));
+    const viaLink = path.join(sandbox, 'link');
+    const real = fs.realpathSync(viaLink);
+    commitApp(path.join(viaLink, 'plain'));
+    await initTeamai(path.join(viaLink, 'plain'));
+    const main = path.join(real, 'plain');
+    const partition = partitionOf(main);
+    for (const name of ['plain-live', 'plain-removed']) {
+      gitOk(['worktree', 'add', '-q', path.join(viaLink, name), '-b', name], path.join(viaLink, 'plain'));
+      await detached.waitForExit();
+      teamaiOk(['pull'], path.join(viaLink, name));
+      await detached.waitForExit();
+    }
+    const live = path.join(real, 'plain-live');
+    const removed = path.join(real, 'plain-removed');
+    for (const checkout of [live, removed]) fs.rmSync(path.join(workspaceDir(partition, checkout), 'root'));
+    gitOk(['worktree', 'remove', '--force', removed], main);
+
+    teamaiOk(['pull', '--force'], path.join(viaLink, 'plain'));
+
+    expect(tracked(partition, live)).toEqual(KEPT);
+    expect(tracked(partition, removed)).toEqual(DROPPED);
+    expect(tracked(partition, main)).toEqual(KEPT);
   });
 
   it('keeps a submodule\'s main checkout when its linked worktree pulls', async () => {

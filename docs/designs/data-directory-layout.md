@@ -767,9 +767,14 @@ Every checkout keeps its `workspaces/<id>/` (search index, managed MCP and
 the MCP configs it wrote a resolved value to, resource cache) in the shared data home. A full `pull` writes its
 checkout's path to the directory's `root` file, then removes the directories
 whose `root` is no longer a checkout of the repository, probed as for the
-`lastPullByWorkspace` entries above (#993). A directory without `root`, from
-an older CLI, stays until its checkout's own full pull writes one. The fast
-path probes nothing.
+`lastPullByWorkspace` entries above (#993). A directory without `root` (an
+older CLI's, or one contribute, recall, viz, the MCP writers or the local agent
+created before its checkout's first full pull) goes only when
+`git worktree list --porcelain -z` names every checkout (no non-bare entry is
+the common directory) and none of them, as git prints it or realpath'd, has its
+id. With `--separate-git-dir`, in a submodule, on git before 2.36, or when it
+holds `local-agent/`, it stays until its checkout's own full pull writes
+`root`. The fast path probes nothing.
 
 `import --from-mr` queues its learning in `pendingLearningsDir` and publishes
 it as `contribute` does (#823), so in self mode it lands in the partition queue
