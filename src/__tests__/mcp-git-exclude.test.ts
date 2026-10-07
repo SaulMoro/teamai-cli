@@ -39,7 +39,7 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
   };
 });
 
-import { MCP_EXCLUDE_END, MCP_EXCLUDE_START, carriesLocalAgentCredential, ensureExcludedFromGit, excludeFromGit, removeMcpGitExclude } from '../mcp-git-exclude.js';
+import { MCP_EXCLUDE_END, MCP_EXCLUDE_START, carriesLocalAgentCredential, ensureExcludedFromGit, excludeFromGit, removeMcpGitExclude, updateFileLocked } from '../mcp-git-exclude.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
 
@@ -144,12 +144,15 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(await fse.pathExists(path.join(repo, '.git', 'info'))).toBe(false);
     });
 
-    it('names the exclude file as not writable when .git/info is a regular file, without waiting on a lock', async () => {
+    it.each([
+      ['a pull', {}],
+      ['a dry run', { dryRun: true }],
+    ])('names the exclude file as not writable on %s when .git/info is a regular file, without waiting on a lock', async (_label, options) => {
       const info = path.join(await fse.realpath(repo), '.git', 'info');
       await fse.writeFile(info, 'not a directory\n');
       const started = Date.now();
 
-      const exclusion = await ensureExcludedFromGit(path.join(repo, '.mcp.json'));
+      const exclusion = await ensureExcludedFromGit(path.join(repo, '.mcp.json'), options);
 
       expect(exclusion).toEqual({
         kind: 'failed',
@@ -159,6 +162,17 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       // The lock wait is 25 attempts 100 ms apart.
       expect(Date.now() - started).toBeLessThan(1500);
       expect(await fse.readFile(info, 'utf8')).toBe('not a directory\n');
+    });
+
+    it('rejects a locked update whose directory is a regular file, without waiting on the lock', async () => {
+      const info = path.join(repo, '.git', 'info');
+      await fse.writeFile(info, 'not a directory\n');
+      const started = Date.now();
+
+      await expect(updateFileLocked(path.join(info, 'exclude'), () => 'x\n')).rejects.toThrow(
+        `${path.join(info, 'exclude')} is not writable, as ${info} is not a directory`,
+      );
+      expect(Date.now() - started).toBeLessThan(1500);
     });
   });
 

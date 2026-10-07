@@ -213,7 +213,12 @@ describe('a repository without .git/info/ (#993 bug 5)', () => {
       expect(output).not.toContain('another teamai command held');
     }
     expect(fs.readFileSync(info, 'utf8')).toBe('not a directory\n');
-    expect(doctorCheck(dir, 'MCP servers delivered to claude').ok).toBe(false);
+    const check = doctorCheck(dir, 'MCP servers delivered to claude');
+    expect(check.ok).toBe(false);
+    expect(check.fix).toContain(
+      `withheld: secret-api, as git would commit the file: ${path.join(info, 'exclude')} is not writable, as ${info} is not a directory. `
+      + `Move ${info} aside, then run \`teamai pull\` again.`,
+    );
   });
 
   it('creates the main repository\'s .git/info/ from a linked worktree', () => {

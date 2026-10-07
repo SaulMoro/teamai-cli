@@ -257,7 +257,10 @@ export async function ensureExcludedFromGit(
   });
   // A read-only exclude file is the member's choice; the atomic write would replace it all the same.
   // A missing `info/` (`git init --template=`) is created by the write, so its closest existing directory is checked (#993).
-  for (const writable of [await existingAncestor(excludeFile), ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
+  const ancestor = await existingAncestor(excludeFile);
+  // A file where a directory belongs (`.git/info` a regular file): no write can create it, a dry run included.
+  if (await fse.stat(ancestor).then((s) => !s.isDirectory(), () => false)) return notWritable(new NotWritableError(excludeFile, ancestor, true));
+  for (const writable of [ancestor, ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
     const denied = await fse.access(writable, fse.constants.W_OK).then(
       () => false,
       (e: NodeJS.ErrnoException) => ['EACCES', 'EPERM', 'EROFS'].includes(e.code ?? ''),
