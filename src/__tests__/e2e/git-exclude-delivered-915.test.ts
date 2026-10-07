@@ -1009,6 +1009,143 @@ describe('explicit commands and layout migrations never delete a file the busine
     expect(times(pulled.output, trackedMoved(m, legacy, '.cursor/rules/team-rule.mdc')), pulled.output).toBe(1);
   });
 
+  it('teamai source remove keeps a committed copy of the source\'s skill, names it once, and removes the untracked copies', () => {
+    const m = machine('tracked-source-remove', { team: ON, sources: { ext: EXT_SOURCE } });
+    const copy = '.claude/skills/ext-skill';
+    expect(fs.existsSync(path.join(m.dir, copy, 'SKILL.md'))).toBe(true);
+    m.git(['add', '-f', copy]);
+    m.git(['commit', '-q', '-m', 'commit the source skill copy']);
+
+    const removed = m.ok(['source', 'remove', 'ext']);
+    expect(deletions(m), removed.output).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, copy, 'SKILL.md')), removed.output).toBe(true);
+    expect(times(removed.output, trackedKept(m, copy)), removed.output).toBe(1);
+    expect(fs.existsSync(path.join(m.dir, '.codex', 'skills', 'ext-skill')), removed.output).toBe(false);
+  });
+
+  // Each row: the business repo commits the copy a migration or a removal pass
+  // would delete, the trigger runs, and the copy stays, named once.
+  interface TrackedRow {
+    name: string;
+    opts: MachineOptions;
+    /** Writes and commits the old copy (and anything else the trigger needs). */
+    setup(m: Machine): void;
+    trigger(m: Machine): string;
+    kept: string;
+    /** Where the resource lives now, for a layout migration. */
+    movedTo?: string;
+  }
+  const commit = (m: Machine, files: Record<string, string>, also: string[] = []): void => {
+    for (const [rel, content] of Object.entries(files)) writeFile(path.join(m.dir, rel), content);
+    m.git(['add', '-f', ...Object.keys(files), ...also]);
+    m.git(['commit', '-q', '-m', 'commit an old copy']);
+  };
+  const legacyAgent = '---\nname: fe-agent\ndescription: fe-agent agent\n---\n\nAct as fe-agent.\n';
+  const retiredReference = read(path.join(ROOT, 'src', '__tests__', 'fixtures', 'packaged-skills', 'teamai', 'references', 'uninstall.md'));
+  const rows: TrackedRow[] = [
+    {
+      // The namespaced copy beside the rule this machine pushed to the rules root.
+      name: 'a superseded rule copy',
+      opts: { files: { 'manifest/roles.yaml': ROLES, 'rules/fe/my-rule.md': rule('Mine') }, initArgs: ['--role', 'fe'] },
+      setup: (m) => {
+        commit(m, {}, ['.claude/rules/fe/my-rule.md']);
+        const state = JSON.parse(read(m.statePath())) as Record<string, unknown>;
+        fs.writeFileSync(m.statePath(), JSON.stringify({ ...state, placedRules: { 'my-rule': 'rules/fe/my-rule.md' } }, null, 2));
+      },
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept: '.claude/rules/fe/my-rule.md',
+      movedTo: '.claude/rules/my-rule.md',
+    },
+    {
+      // The nested copy an older release wrote for Kiro, which reads only the top of its steering directory.
+      name: 'a moved nested rule copy',
+      opts: { files: { 'manifest/roles.yaml': ROLES, 'rules/fe/style.md': rule('Style') }, agents: 'claude,kiro', initArgs: ['--role', 'fe'] },
+      setup: (m) => {
+        commit(m, { '.kiro/steering/fe/style.md': rule('Style') });
+        fs.rmSync(path.join(m.dir, '.kiro', 'steering', 'fe.style.md'));
+      },
+      trigger: (m) => m.ok(['pull']).output,
+      kept: '.kiro/steering/fe/style.md',
+      movedTo: '.kiro/steering/fe.style.md',
+    },
+    {
+      // Codex never read the .md rule copies an older release wrote there.
+      name: 'a copy in a legacy rules directory',
+      opts: { files: { ...TEAM_SKILLS, 'rules/team-rule.md': rule('Team') } },
+      setup: (m) => commit(m, { '.codex/rules/team-rule.md': rule('Team') }),
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept: '.codex/rules/team-rule.md',
+    },
+    {
+      // The team turned its legacy .md agent into a spec, which Codex gets as .toml.
+      name: 'an agent\'s copy in another format',
+      opts: { files: { ...TEAM_SKILLS, 'agents/fe-agent.md': legacyAgent } },
+      setup: (m) => {
+        commit(m, { '.codex/agents/fe-agent.md': legacyAgent });
+        m.teamCommit({ 'agents/fe-agent.md': null, 'agents/fe-agent.yaml': agentYaml('fe-agent') });
+      },
+      trigger: (m) => m.ok(['pull']).output,
+      kept: '.codex/agents/fe-agent.md',
+      movedTo: '.codex/agents/fe-agent.toml',
+    },
+    {
+      // teamai's copy in the shared .agents/skills makes Codex's configured copy a duplicate.
+      name: 'Codex\'s duplicate of a skill in .agents/skills',
+      opts: {},
+      setup: (m) => {
+        commit(m, {}, ['.codex/skills/fe-skill']);
+        writeFile(path.join(m.dir, '.agents', 'skills', 'fe-skill', 'SKILL.md'), TEAM_SKILLS['skills/fe-skill/SKILL.md']);
+      },
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept: '.codex/skills/fe-skill',
+      movedTo: '.agents/skills/fe-skill',
+    },
+    {
+      // An older release's teamai-recall agent for Codex, which reads .toml.
+      name: 'the recall agent in its old format',
+      opts: { team: `${ON}  recall:\n    enabled: true\n` },
+      setup: (m) => commit(m, { '.codex/agents/teamai-recall.md': '---\nname: teamai-recall\n---\n\nOld recall agent.\n' }),
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept: '.codex/agents/teamai-recall.md',
+      movedTo: '.codex/agents/teamai-recall.toml',
+    },
+    {
+      // Switching roles swaps one team version of a skill for another of the same name.
+      name: 'a file of another team version of a skill',
+      opts: {
+        files: {
+          'manifest/roles.yaml': ROLES,
+          'skills/fe/dup/SKILL.md': skillMd('dup', 'Front-end version.'),
+          'skills/be/dup/SKILL.md': skillMd('dup', 'Back-end version.'),
+          'skills/be/dup/extra.md': '# Extra\n\nOnly the back-end version has it.\n',
+        },
+        initArgs: ['--role', 'be'],
+      },
+      setup: (m) => commit(m, {}, ['.claude/skills/dup']),
+      trigger: (m) => `${m.ok(['roles', 'set', 'fe']).output}${m.ok(['pull']).output}`,
+      kept: '.claude/skills/dup/extra.md',
+    },
+    {
+      // A reference file an earlier release shipped in the teamai skill, which the package no longer ships.
+      name: 'a retired file of the packaged teamai skill',
+      opts: {},
+      setup: (m) => commit(m, { '.claude/skills/teamai/references/uninstall.md': retiredReference }),
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept: '.claude/skills/teamai/references/uninstall.md',
+    },
+  ];
+
+  it.each(rows)('keeps $name the business repo tracks, and names it once', (row) => {
+    const m = machine(`tracked-${row.kept.replace(/[^a-z]+/gi, '-')}`, { team: ON, ...row.opts });
+    row.setup(m);
+    expect(deletions(m)).toEqual([]);
+    const output = row.trigger(m);
+    expect(deletions(m), output).toEqual([]);
+    expect(fs.existsSync(path.join(m.dir, row.kept)), output).toBe(true);
+    const line = row.movedTo === undefined ? trackedKept(m, row.kept) : trackedMoved(m, row.kept, row.movedTo);
+    expect(times(output, line), output).toBe(1);
+  });
+
   it('removes the copies of the team\'s last rule once the team deletes it, and keeps the member\'s own rule visible', () => {
     const mine = '.claude/rules/my-rule.md';
     const m = machine('last-rule', { team: ON, files: { ...TEAM_SKILLS, 'rules/only-rule.md': rule('Only') }, business: { [mine]: rule('Mine') } });

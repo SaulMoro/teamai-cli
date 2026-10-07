@@ -553,8 +553,10 @@ that proves the copy teamai's keeps it too. Each pull names it once, with
 The same check guards layout migrations (a rule's legacy `.md`, the copy a
 namespaced rule supersedes, legacy rule directories, moved nested copies,
 agent format siblings, Codex's configured copy of a skill in `.agents/skills`,
-leftover files of another team version of a skill), whose message adds where
-the resource lives now, and the explicit commands: `teamai remove`,
+leftover files of another team version of a skill, the built-in recall agent's
+old format), whose message adds where the resource lives now, the prune of the
+files earlier releases shipped in the CLI's built-in skills, and the explicit
+commands: `teamai remove`,
 `teamai source remove` and `uninstall`, whose summary counts them as
 `Kept (tracked)`. A team repo with no rules left still runs the rules sweep,
 so the copies of a last rule the team deleted go, on the same ownership proof.

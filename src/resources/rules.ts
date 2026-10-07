@@ -679,6 +679,10 @@ export class RulesHandler extends ResourceHandler {
       const delivered = (recorded !== undefined && recorded === await fileHash(file))
         || await isDeliveredRender(deliveredRenders(tool), file, rule, localConfig.repo.localPath, deliveredRevs);
       if (!delivered) continue;
+      // No keepsTrackedCopy here: where this path is the tool's instruction
+      // file (Claude, Cursor, CodeBuddy, WorkBuddy), the instruction sync right
+      // after rewrites it, so a tracked copy shows ` M`, as any update does,
+      // not ` D`. Keeping the old file would block that sync.
       await remove(file);
       if (ledger) forgetDelivered(ledger.hashes, file);
       log.info(`Removed ${file}, the copy of the team rule ${TEAMAI_CONTEXT_RULE_NAME} an earlier release delivered: the team instructions go there now`);
