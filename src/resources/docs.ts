@@ -111,8 +111,7 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (sourceEntry && !sourceEntry.isDirectory()) continue;
       // A directory where the team once had a doc file, holding anything that is
       // no team version, is the member's, put in place of that file: all of it stays (#993).
-      if (!sourceEntry && await wasTeamDocFile(repoPath, entryRel)
-        && !await isTeamaiSkillCopy(target, { repoPath, pathspec: `docs/${entryRel}` })) {
+      if (!sourceEntry && await isMembersDocDirectory(target, entryRel, repoPath)) {
         log.warn(
           `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this is a directory of yours in its place. `
           + 'Delete it when you no longer need it.',
@@ -133,6 +132,29 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       await fse.unlink(target);
     }
   }
+}
+
+/**
+ * Whether the mirror's directory `dir`, at `rel`, is one the member put where the team
+ * history had a doc file, holding anything that is no team version (#993): pull keeps it whole.
+ */
+async function isMembersDocDirectory(dir: string, rel: string, repoPath: string): Promise<boolean> {
+  return await wasTeamDocFile(repoPath, rel) && !await isTeamaiSkillCopy(dir, { repoPath, pathspec: `docs/${rel}` });
+}
+
+/**
+ * Whether the prune deletes the mirror's `file` at `rel`, a path the team repo no longer has:
+ * not inside a directory pull keeps whole, and `isPrunableDoc`. For doctor, which lists
+ * files rather than walking directories as the prune does. Read-only.
+ */
+export async function isPrunedDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
+  const parts = rel.split('/');
+  const root = file.slice(0, file.length - rel.length);
+  for (let depth = 1; depth < parts.length; depth++) {
+    const dirRel = parts.slice(0, depth).join('/');
+    if (await isMembersDocDirectory(path.join(root, dirRel), dirRel, repoPath)) return false;
+  }
+  return isPrunableDoc(file, rel, repoPath);
 }
 
 /** Whether the team history ever had a file at `docs/<rel>` itself, not only under it. */

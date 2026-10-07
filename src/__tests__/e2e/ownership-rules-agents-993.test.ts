@@ -279,6 +279,23 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(path.join(dir, '.claude', 'rules', 'my-rule.md'))).toBe('MY RULE\n');
   });
 
+  it('keeps a member\'s link at a team rule\'s path and never writes through it, even when its target holds an older team version', () => {
+    const t = team('rule-link', { 'rules/team-rule.md': 'Old team rule.\n' });
+    t.publish({ 'rules/team-rule.md': TEAM_RULE }, 'v2');
+    const external = path.join(sandbox, 'rule-link-mine.md');
+    writeFile(external, 'Old team rule.\n');
+    const dir = business('rule-link-biz', { '.claude/rules/.keep': '' });
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    fs.symlinkSync(external, rule);
+
+    const initRun = init(t, dir);
+    expect(fs.lstatSync(rule).isSymbolicLink()).toBe(true);
+    expect(read(external)).toBe('Old team rule.\n');
+    expect(initRun.output).toContain(`Kept ${rule}: it is not teamai's`);
+    teamaiOk(['pull', '--force'], dir);
+    expect(read(external)).toBe('Old team rule.\n');
+  });
+
   it('delivers once the member\'s file is gone, even when the pull that kept it found the checkout at the team revision', () => {
     const t = team('kept-at-rev', { 'rules/team-rule.md': TEAM_RULE });
     const dir = business('kept-at-rev-biz');

@@ -100,6 +100,14 @@ describe('judgeRemoval', () => {
     expect(await judgeRemoval({}, copy, origin(), { [copy]: sha('team v1') })).toBe('edited');
   });
 
+  it('keeps a link at the path, recorded or not, and never follows it', async () => {
+    const target = path.join(root, 'elsewhere.md');
+    fs.writeFileSync(target, 'team v1');
+    fs.symlinkSync(target, copy);
+    expect(await judgeRemoval({}, copy, origin())).toBe('notTeamais');
+    expect(await judgeRemoval({ [copy]: sha('team v1') }, copy, origin())).toBe('edited');
+  });
+
   it('removes an unrecorded copy when no origin can prove whose it is, as before', async () => {
     fs.writeFileSync(copy, 'mine');
     expect(await judgeRemoval({}, copy)).toBe('remove');

@@ -226,6 +226,25 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(outside, 'utf8')).toBe('mine');
   });
 
+  it('keeps a member\'s directory holding only a link where the team deleted a doc file (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'guide'), 'team file');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const outside = path.join(root, 'mine.md');
+    await fse.outputFile(outside, 'mine');
+    await fse.remove(path.join(destination, 'guide'));
+    await fse.ensureDir(path.join(destination, 'guide'));
+    const link = path.join(destination, 'guide', 'personal.md');
+    await fse.symlink(outside, link);
+    await fse.remove(path.join(source, 'guide'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(outside, 'utf8')).toBe('mine');
+  });
+
   it('keeps a directory containing hidden local entries at a team doc file\'s path (#993)', async () => {
     // No team version holds `.keep`: the directory is the member's, so pull leaves it whole.
     await fse.outputFile(path.join(destination, 'guide', 'nested', '.keep'), 'private');

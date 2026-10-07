@@ -144,6 +144,8 @@ async function withDisk(previous: DeliveredHashes, next: Iterable<[string, strin
  * exists without a record, as it reads the history.
  */
 export async function isTeamaiCopy(file: string, origin: CopyOrigin): Promise<boolean> {
+  // teamai writes files, never links: a link is the member's, whatever its target holds.
+  if (await isLink(file)) return false;
   const bytes = await fse.readFile(file).catch(() => null);
   if (bytes === null) return false;
   if (await matchesHistory(origin.repoPath, origin.pathspec, bytes)) return true;
@@ -186,7 +188,9 @@ export function describeMembersFile(file: string, resource: string, origin: 'tea
 export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
 ): Promise<boolean> {
-  if (!await isDirectory(dir)) return false;
+  // A link inside it is the member's: copying the skill over it would write through it.
+  // A link in place of the directory itself is replaced whole by copyDir, never written through.
+  if (!await isDirectory(dir) || await holdsLink(dir)) return false;
   for (const rel of await listFilesRecursive(dir)) {
     if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
     const file = path.join(dir, rel);
@@ -226,6 +230,19 @@ export function describeMembersDirLeft(dir: string, resource: string, command: s
   return `Kept ${dir}: ${notTeamaisReason(resource)}, so ${command} left it.`;
 }
 
+async function isLink(file: string): Promise<boolean> {
+  return (await fse.lstat(file).catch(() => null))?.isSymbolicLink() ?? false;
+}
+
+/** Whether `dir` holds a link anywhere below it. teamai writes no links, and `listFilesRecursive` does not list them. */
+async function holdsLink(dir: string): Promise<boolean> {
+  for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.isSymbolicLink()) return true;
+    if (entry.isDirectory() && await holdsLink(path.join(dir, entry.name))) return true;
+  }
+  return false;
+}
+
 async function isDirectory(dir: string): Promise<boolean> {
   return (await fse.stat(dir).catch(() => null))?.isDirectory() ?? false;
 }
@@ -237,6 +254,8 @@ async function isDirectory(dir: string): Promise<boolean> {
  */
 async function isMembersCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<boolean> {
   if (target.origin === undefined) return false;
+  // A link in place of a file is the member's: writing would go through it to whatever it points at.
+  if (item.type !== 'skills' && await isLink(target.dest)) return true;
   if (item.type === 'skills') {
     if (recordedUnder(previous ?? {}, target.dest).length > 0 || !await isDirectory(target.dest)) return false;
     return !await isTeamaiSkillCopy(target.dest, target.origin, await nextHashes({}, item, target));
@@ -291,6 +310,8 @@ export async function judgeRemoval(
   previous: DeliveredHashes | undefined, dest: string, origin?: CopyOrigin, otherRecords: DeliveredHashes = {},
 ): Promise<'remove' | 'edited' | 'notTeamais'> {
   const recorded = previous === undefined ? [] : recordedUnder(previous, dest);
+  // A link the member put there is theirs: teamai never writes one.
+  if (await isLink(dest)) return recorded.length > 0 || recordedUnder(otherRecords, dest).length > 0 ? 'edited' : 'notTeamais';
   if (recorded.length > 0) {
     const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
     return classifyCopy(files).kind === 'keep' ? 'edited' : 'remove';
