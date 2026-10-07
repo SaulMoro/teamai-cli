@@ -1,0 +1,30 @@
+{
+  "sha": "b7f0bef81fb31fd27aac15c049a5b39227176c4c",
+  "node": "v24.21.0",
+  "retry": 0,
+  "cache": false,
+  "name_pattern": "issue #373|lets a checkout pull and contribute",
+  "files": [
+    "src/__tests__/e2e/hooks-project-isolation-issue373.test.ts",
+    "src/__tests__/e2e/self-mode-worktrees-808.test.ts"
+  ],
+  "identical_per_case_verdicts": true,
+  "variants": [
+    {
+      "workers": 1,
+      "fileParallelism": false,
+      "exit_code": 1,
+      "passed": 1,
+      "failed": 2,
+      "skipped": 28
+    },
+    {
+      "workers": 4,
+      "fileParallelism": true,
+      "exit_code": 1,
+      "passed": 1,
+      "failed": 2,
+      "skipped": 28
+    }
+  ]
+}

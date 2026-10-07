@@ -1,0 +1,366 @@
+{
+  "numTotalTestSuites": 5,
+  "numPassedTestSuites": 1,
+  "numFailedTestSuites": 4,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 31,
+  "numPassedTests": 1,
+  "numFailedTests": 2,
+  "numPendingTests": 28,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1791399676878,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "issue #373 project hook isolation (real CLI)"
+          ],
+          "fullName": "issue #373 project hook isolation (real CLI) injects both projects, gates execution by cwd, and removes only the caller project",
+          "status": "passed",
+          "title": "injects both projects, gates execution by cwd, and removes only the caller project",
+          "duration": 663.0922499999999,
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "issue #373 project hook isolation (real CLI)"
+          ],
+          "fullName": "issue #373 project hook isolation (real CLI) shares one ungated Claude/Codex team-hook file in the main checkout with a linked worktree",
+          "status": "failed",
+          "title": "shares one ungated Claude/Codex team-hook file in the main checkout with a linked worktree",
+          "duration": 471.422375,
+          "failureMessages": [
+            "AssertionError: expected [ \u2026(2) ] to deeply equal [ \u2026(2) ]\n    at /workspace/after/src/__tests__/e2e/hooks-project-isolation-issue373.test.ts:155:78\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///workspace/after/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20"
+          ],
+          "meta": {}
+        }
+      ],
+      "startTime": 1791399677184,
+      "endTime": 1791399678318.4224,
+      "status": "failed",
+      "message": "",
+      "name": "/workspace/after/src/__tests__/e2e/hooks-project-isolation-issue373.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) publishes from both checkouts, keeps a worktree queue after the worktree is removed, and recalls only live paths",
+          "status": "skipped",
+          "title": "publishes from both checkouts, keeps a worktree queue after the worktree is removed, and recalls only live paths",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) moves a queue out of a linked worktree an older teamai never migrated before contribute publishes, so removing the worktree loses nothing",
+          "status": "skipped",
+          "title": "moves a queue out of a linked worktree an older teamai never migrated before contribute publishes, so removing the worktree loses nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) moves the queue an older teamai left in a linked worktree before import --from-mr publishes, so removing the worktree loses nothing",
+          "status": "skipped",
+          "title": "moves the queue an older teamai left in a linked worktree before import --from-mr publishes, so removing the worktree loses nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops contribute in an unmigrated linked worktree while another command holds its sync lock, saving nothing there",
+          "status": "skipped",
+          "title": "stops contribute in an unmigrated linked worktree while another command holds its sync lock, saving nothing there",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops contribute with exit 1 while another command holds the queue lock, saving nothing (#823 item 11)",
+          "status": "skipped",
+          "title": "stops contribute with exit 1 while another command holds the queue lock, saving nothing (#823 item 11)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops init in an unmigrated linked worktree while its queue would stay there, then moves it, so removing the worktree loses nothing (#808)",
+          "status": "skipped",
+          "title": "stops init in an unmigrated linked worktree while its queue would stay there, then moves it, so removing the worktree loses nothing (#808)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops contribute when an unmigrated worktree's old queue cannot move, saving nothing",
+          "status": "skipped",
+          "title": "stops contribute when an unmigrated worktree's old queue cannot move, saving nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) upgrades a checkout an older teamai left: keeps a dirty old checkout, then frees a clean one and drains every queue",
+          "status": "skipped",
+          "title": "upgrades a checkout an older teamai left: keeps a dirty old checkout, then frees a clean one and drains every queue",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) publishes the learning an older import --from-mr left in the old checkout, so git can remove it and contribute publishes both (#823 item 7)",
+          "status": "skipped",
+          "title": "publishes the learning an older import --from-mr left in the old checkout, so git can remove it and contribute publishes both (#823 item 7)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) removes that learning instead when a teammate already published one from the same merge request the old checkout never fetched (#823 item 21)",
+          "status": "skipped",
+          "title": "removes that learning instead when a teammate already published one from the same merge request the old checkout never fetched (#823 item 21)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) refuses a learnings checkout another repository left in the partition, and publishes nothing to it",
+          "status": "skipped",
+          "title": "refuses a learnings checkout another repository left in the partition, and publishes nothing to it",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) refuses and keeps a learnings checkout whose repository is gone, and indexes none of it",
+          "status": "skipped",
+          "title": "refuses and keeps a learnings checkout whose repository is gone, and indexes none of it",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops maintenance and promote while another command holds the learnings or reports lock, writing nothing",
+          "status": "skipped",
+          "title": "stops maintenance and promote while another command holds the learnings or reports lock, writing nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) sets aside a git-mode queue when init switches the project to single-repo mode, and uninstall lists every queue",
+          "status": "skipped",
+          "title": "sets aside a git-mode queue when init switches the project to single-repo mode, and uninstall lists every queue",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) sets aside an unmigrated worktree's old queue once another checkout switched the project to a git team repo, and publishes none of it there",
+          "status": "skipped",
+          "title": "sets aside an unmigrated worktree's old queue once another checkout switched the project to a git team repo, and publishes none of it there",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) stops maintenance and promote when the learnings checkout cannot be created, writing nothing",
+          "status": "skipped",
+          "title": "stops maintenance and promote when the learnings checkout cannot be created, writing nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) sets aside the queue an older self install left in the checkout once the project uses a team repo, so contribute and init still run",
+          "status": "skipped",
+          "title": "sets aside the queue an older self install left in the checkout once the project uses a team repo, so contribute and init still run",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "self mode with a linked worktree (#808)"
+          ],
+          "fullName": "self mode with a linked worktree (#808) names the checkout's config.yaml it cannot read when a learning queued beside it stops contribute",
+          "status": "skipped",
+          "title": "names the checkout's config.yaml it cannot read when a learning queued beside it stops contribute",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) stops contribute while the partition has no config it can read, so nothing is queued in the checkout",
+          "status": "skipped",
+          "title": "stops contribute while the partition has no config it can read, so nothing is queued in the checkout",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) keeps a linked worktree's queue when another checkout migrated first, so removing the worktree loses nothing",
+          "status": "skipped",
+          "title": "keeps a linked worktree's queue when another checkout migrated first, so removing the worktree loses nothing",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) lets a checkout pull and contribute after another checkout switched the project to single-repo mode, keeping the knowledge and setting the old queue aside",
+          "status": "failed",
+          "title": "lets a checkout pull and contribute after another checkout switched the project to single-repo mode, keeping the knowledge and setting the old queue aside",
+          "duration": 3329.238542,
+          "failureMessages": [
+            "AssertionError: expected '?? .teamai/last-fetch.json\\n' to be '' // Object.is equality\n    at /workspace/after/src/__tests__/e2e/self-mode-worktrees-808.test.ts:1467:71\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///workspace/after/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20"
+          ],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) sets aside the queue when init points the project at another team repo, and the next pull publishes none of it there (#823 item 13)",
+          "status": "skipped",
+          "title": "sets aside the queue when init points the project at another team repo, and the next pull publishes none of it there (#823 item 13)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) leaves no config naming team A beside team B's clone when init stops after recloning, and sets team A's queue aside (#823 item 17)",
+          "status": "skipped",
+          "title": "leaves no config naming team A beside team B's clone when init stops after recloning, and sets team A's queue aside (#823 item 17)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) moves team A's config aside when init reuses a clone of team B an earlier init left beside it and then fails, and carries its settings on the rerun (#823 item 17)",
+          "status": "skipped",
+          "title": "moves team A's config aside when init reuses a clone of team B an earlier init left beside it and then fails, and carries its settings on the rerun (#823 item 17)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) carries the set-aside config's settings into the init that reruns after the replacement clone failed (#823 item 17)",
+          "status": "skipped",
+          "title": "carries the set-aside config's settings into the init that reruns after the replacement clone failed (#823 item 17)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) keeps the agent lists of the set-aside config when the rerun after a failed replacement clone names no --agent (#823 item 17)",
+          "status": "skipped",
+          "title": "keeps the agent lists of the set-aside config when the rerun after a failed replacement clone names no --agent (#823 item 17)",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) sets aside the queue under an unknown owner when init replaces a config it cannot read, and the next pull publishes none of it",
+          "status": "skipped",
+          "title": "sets aside the queue under an unknown owner when init replaces a config it cannot read, and the next pull publishes none of it",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) refuses and keeps team A's learnings checkout once init reclones team B at the same path, so its uncommitted work stays",
+          "status": "skipped",
+          "title": "refuses and keeps team A's learnings checkout once init reclones team B at the same path, so its uncommitted work stays",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "a checkout an older git-mode install left (#808)"
+          ],
+          "fullName": "a checkout an older git-mode install left (#808) sets aside a linked worktree's old queue for another team repo, and publishes none of it to this one (#823 item 13)",
+          "status": "skipped",
+          "title": "sets aside a linked worktree's old queue for another team repo, and publishes none of it to this one (#823 item 13)",
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 1791399677137,
+      "endTime": 1791399680466.2385,
+      "status": "failed",
+      "message": "",
+      "name": "/workspace/after/src/__tests__/e2e/self-mode-worktrees-808.test.ts"
+    }
+  ]
+}

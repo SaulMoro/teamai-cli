@@ -1,0 +1,120 @@
+{
+  "before_seconds": 1239.076298519,
+  "after_seconds": 666.2637064160001,
+  "reduction_percent": 46.229000811947685,
+  "speedup": 1.859738548846226,
+  "cases": 656,
+  "identical_verdicts": true,
+  "verdict_changes": [],
+  "failures": [
+    {
+      "file": "src/__tests__/e2e/hooks-project-isolation-issue373.test.ts",
+      "test": "issue #373 project hook isolation (real CLI) shares one ungated Claude/Codex team-hook file in the main checkout with a linked worktree"
+    },
+    {
+      "file": "src/__tests__/e2e/opencode-hooks.test.ts",
+      "test": "real OpenCode 'V1' hooks loads the CLI-generated plugin and dispatches session start once"
+    }
+  ],
+  "variants": [
+    {
+      "label": "before",
+      "sha": "f287dcb1a3fa247206a5dad9766b5d6ef14e3106",
+      "node": "v20.20.2",
+      "npm": "10.8.2",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "cpus": 4,
+      "ci": true,
+      "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
+      "root": "/workspace/before",
+      "commands": [
+        [
+          "npm",
+          "run",
+          "build"
+        ],
+        [
+          "npm",
+          "run",
+          "test:e2e",
+          "--",
+          "--retry=0",
+          "--cache=false",
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json=/tmp/e2e-ab-results/before.json"
+        ]
+      ],
+      "started_at": "2026-10-07T18:30:05.532184+00:00",
+      "retry": 0,
+      "cache": false,
+      "remote_credentials": false,
+      "load_start": [
+        0.44775390625,
+        0.15234375,
+        0.05224609375
+      ],
+      "seconds": 1239.076298519,
+      "exit_code": 1,
+      "completed_at": "2026-10-07T18:50:44.608733+00:00",
+      "load_end": [
+        1.61669921875,
+        1.15380859375,
+        0.8291015625
+      ],
+      "counts": {
+        "numTotalTests": 656,
+        "numPassedTests": 627,
+        "numFailedTests": 2,
+        "numPendingTests": 27
+      }
+    },
+    {
+      "label": "after",
+      "sha": "809edbd1090f07b911eedaeb8dafc7e30d41bb40",
+      "node": "v20.20.2",
+      "npm": "10.8.2",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "cpus": 4,
+      "ci": true,
+      "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
+      "root": "/workspace/after",
+      "commands": [
+        [
+          "npm",
+          "run",
+          "test:e2e",
+          "--",
+          "--retry=0",
+          "--cache=false",
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json=/tmp/e2e-ab-results/after.json"
+        ]
+      ],
+      "started_at": "2026-10-07T18:50:51.047548+00:00",
+      "retry": 0,
+      "cache": false,
+      "remote_credentials": false,
+      "load_start": [
+        1.916015625,
+        1.23193359375,
+        0.85791015625
+      ],
+      "seconds": 666.2637064160001,
+      "exit_code": 1,
+      "completed_at": "2026-10-07T19:01:57.311496+00:00",
+      "load_end": [
+        1.95361328125,
+        2.0,
+        1.52978515625
+      ],
+      "counts": {
+        "numTotalTests": 656,
+        "numPassedTests": 627,
+        "numFailedTests": 2,
+        "numPendingTests": 27
+      }
+    }
+  ]
+}

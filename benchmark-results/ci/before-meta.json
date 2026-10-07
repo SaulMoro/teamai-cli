@@ -1,0 +1,52 @@
+{
+  "label": "before",
+  "sha": "f287dcb1a3fa247206a5dad9766b5d6ef14e3106",
+  "node": "v20.20.2",
+  "npm": "10.8.2",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "cpus": 4,
+  "ci": true,
+  "lock_sha256": "8371a5c07d826bbeb878432efafb3993762341451ad043d26f44a1ddeeeaec2a",
+  "root": "/workspace/before",
+  "commands": [
+    [
+      "npm",
+      "run",
+      "build"
+    ],
+    [
+      "npm",
+      "run",
+      "test:e2e",
+      "--",
+      "--retry=0",
+      "--cache=false",
+      "--reporter=default",
+      "--reporter=json",
+      "--outputFile.json=/tmp/e2e-ab-results/before.json"
+    ]
+  ],
+  "started_at": "2026-10-07T18:30:05.532184+00:00",
+  "retry": 0,
+  "cache": false,
+  "remote_credentials": false,
+  "load_start": [
+    0.44775390625,
+    0.15234375,
+    0.05224609375
+  ],
+  "seconds": 1239.076298519,
+  "exit_code": 1,
+  "completed_at": "2026-10-07T18:50:44.608733+00:00",
+  "load_end": [
+    1.61669921875,
+    1.15380859375,
+    0.8291015625
+  ],
+  "counts": {
+    "numTotalTests": 656,
+    "numPassedTests": 627,
+    "numFailedTests": 2,
+    "numPendingTests": 27
+  }
+}
