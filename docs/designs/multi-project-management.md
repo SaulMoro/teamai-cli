@@ -516,12 +516,23 @@ teamai's (kept by pull)" with pull's line for each file.
 Codex's shared `.agents/skills/<name>` is a destination only for a copy that
 is teamai's under the same rule (#993): `resolveSkillDestination` takes the
 ownership predicate, `judgeCopy` against the checkout's record in pull, the
-history proof alone (`isTeamaiSkillCopy`) in doctor, `teamai remove` and
-`uninstall`. Any other copy there is the member's or another tool's, and is
+history proof alone (`isTeamaiSkillCopy`) in doctor, and `ownsSkillDir` in
+`teamai remove` and `uninstall` (below). Any other copy there is the member's
+or another tool's, and is
 not "kept" in the sense above: Codex gets `.codex/skills/<name>` instead, the
 team skill is delivered, and every full sync names the conflict (Codex sees two
 skills of that name). Source skills and the built-in stub still take an
 existing shared copy as theirs.
+
+The commands that delete skill directories by a team skill's name apply the
+same rule in every tool's skills root (#993): `teamai remove skills <name>` and
+`uninstall` delete a directory only when a file under it is on the checkout's
+record (edited or not) or `isTeamaiSkillCopy` proves it (`ownsSkillDir`), and
+name each one they leave; uninstall also deletes a built-in's name and a name
+the local agent's manifest lists. Pull's sweep of the namespace-nested copies
+earlier releases left of an excluded skill deletes one only when
+`removedCopyChanged` says it is teamai's and unchanged, and leaves the rest
+silently, as pull never delivers there.
 
 ### Known gaps
 

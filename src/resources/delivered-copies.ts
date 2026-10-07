@@ -170,8 +170,8 @@ export function describeMembersFile(file: string, resource: string): string {
  * history `origin` names (`pathspec` is the skill directory; `renders` apply
  * to its SKILL.md). One file that is neither, the member's own included,
  * makes the whole directory the member's. Read-only. Callers with a ledger
- * ask it only for a directory with no file on record; callers without one
- * (doctor, `teamai remove`) decide with it alone.
+ * ask it only for a directory with no file on record (`ownsSkillDir` for
+ * `teamai remove` and `uninstall`); doctor decides with it alone.
  */
 export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
@@ -190,6 +190,30 @@ export async function isTeamaiSkillCopy(
     if (!await isTeamaiCopy(file, fileOrigin)) return false;
   }
   return true;
+}
+
+/**
+ * Whether a command the member ran to delete skill copies (`teamai remove`,
+ * `uninstall`) may delete the skill directory `dir` (#993): a file under it
+ * is on `previous`, the checkout's record, edited since or not, or
+ * `isTeamaiSkillCopy` proves it teamai's, each file being what pull writes
+ * today from one of `sources` (the team skill's directories, while they are
+ * still there) or a version from the history. Read-only.
+ */
+export async function ownsSkillDir(
+  previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin, sources: readonly ResourceItem[] = [],
+): Promise<boolean> {
+  if (recordedUnder(previous ?? {}, dir).length > 0) return true;
+  if (sources.length === 0) return isTeamaiSkillCopy(dir, origin);
+  for (const source of sources) {
+    if (await isTeamaiSkillCopy(dir, origin, await nextHashes({}, source, { tool: '', dest: dir }))) return true;
+  }
+  return false;
+}
+
+/** The line for a copy `command` did not delete because it is not teamai's (#993). */
+export function describeMembersDirLeft(dir: string, resource: string, command: string): string {
+  return `Kept ${dir}: it is not teamai's (no delivery record, and it matches no team version of ${resource}), so ${command} left it.`;
 }
 
 async function isDirectory(dir: string): Promise<boolean> {
