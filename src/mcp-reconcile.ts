@@ -122,6 +122,11 @@ export interface McpChange {
 
 const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
 
+/** The dry-run line for an unrecorded copy of a server the team removed, which a run would remove (#993). */
+function describeRemovedServerPreview(target: McpTarget, name: string): string {
+  return `Would remove MCP server ${name} from ${target.file}: it equals a server the team has removed.`;
+}
+
 /** The dry-run line for an unrecorded server pull would record as teamai's without rewriting it (#993). */
 function describeAdoptionPreview(target: McpTarget, name: string): string {
   return `Would record MCP server ${name} in ${target.file} as teamai's: it already holds the team's ${name}.`;
@@ -726,13 +731,14 @@ function renderMcpEntry(
   return { entry: { entry, hash: entryHash(entry), resolvedValue }, passthrough };
 }
 
-/** Whether any revision of the team repo's MCP files defines a server (#993). Never for an HTTP-mode team. */
-async function teamMcpHistoryHasServers(localConfig: LocalConfig): Promise<boolean> {
-  if (localConfig.repo.kind === 'http') return false;
-  const layout = entryLayout('mcp');
-  const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
-  return (versions ?? []).some((version) => path.posix.basename(version.path) === layout.file
-    && (parseTeamMcpServers(version.content.toString('utf8'))?.length ?? 0) > 0);
+/** Every revision of the team repo's MCP files (#993), or null when unreadable or an HTTP-mode team. */
+type TeamMcpHistory = Array<{ path: string; content: Buffer }> | null;
+
+/** The team's MCP history, read once, on first use. One per reconcile run, shared by every target. */
+function teamMcpHistory(localConfig: LocalConfig): () => Promise<TeamMcpHistory> {
+  return once(async () => (localConfig.repo.kind === 'http'
+    ? null
+    : historicalContents(localConfig.repo.localPath, entryLayout('mcp').dir)));
 }
 
 /** Whose an entry is that `target`'s own MCP record does not claim (#993). */
@@ -770,11 +776,11 @@ function judgeUnrecordedMcpEntry(
   desired: ReadonlyMap<string, DesiredMcpEntry>,
   vars: Record<string, string>,
   claimed: ReadonlySet<string>,
+  history: () => Promise<TeamMcpHistory> = teamMcpHistory(localConfig),
 ): McpEntryJudge {
   const renders = once(async (): Promise<Map<string, unknown[]> | null> => {
-    if (localConfig.repo.kind === 'http') return null;
     const layout = entryLayout('mcp');
-    const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
+    const versions = await history();
     if (versions === null) return null;
     const entries = new Map<string, unknown[]>();
     for (const version of versions) {
@@ -976,6 +982,14 @@ export async function resolvedValueEvidence(
 export async function unclaimedMcpServers(target: McpTarget, claimed: readonly string[]): Promise<string[]> {
   const unclaimed = [...(await installedMcpEntries(target))?.keys() ?? []].filter((name) => !claimed.includes(name));
   return unclaimed.length === 0 || (await gitTracks(target.file)).kind === 'tracked' ? [] : unclaimed;
+}
+
+/** Whether any target's file holds an MCP server, recorded or not. */
+async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boolean> {
+  for (const target of targets) {
+    if (((await installedMcpEntries(target))?.size ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 /** `load`, run once, on the first call. */
@@ -1833,9 +1847,10 @@ async function reconcileTargets(
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
   const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
-  // A server the team deleted can still sit unrecorded in a tool's file (#993): only a team
-  // history with no MCP server at all proves there is nothing to look for.
-  if (teamDefs.length === 0 && nothingOwned && !await teamMcpHistoryHasServers(localConfig)) return { changes, wrote };
+  // A server the team deleted can still sit unrecorded in a tool's file (#993): only target
+  // files with no server at all prove there is nothing to look for, without reading the history.
+  if (teamDefs.length === 0 && nothingOwned && !await someMcpEntryInstalled(targets)) return { changes, wrote };
+  const history = teamMcpHistory(localConfig);
   // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
   const ledger = localConfig.scope === 'project' && !options.dryRun ? (await readResolvedMcpFiles(localConfig)).files : {};
   const listed = new Set(Object.keys(ledger));
@@ -1864,7 +1879,7 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, claimedByOtherTools(targets, resolved, manifest));
+    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, claimedByOtherTools(targets, resolved, manifest), history);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
@@ -2147,6 +2162,7 @@ async function applyJson(
   // server from the team history (#993), and goes like any other server teamai no longer delivers.
   for (const [name, entry] of Object.entries(doc.servers)) {
     if (desired.has(name) || ownedNames.has(name) || await judge(name, entry) !== 'teamai') continue;
+    if (options.dryRun) log.info(describeRemovedServerPreview(target, name));
     delete doc.servers[name];
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });
@@ -2336,6 +2352,7 @@ async function applyCodex(
     if (desired.has(name) || ownedNames.has(name) || await judge(name, codexBlockIn(source, name)) !== 'teamai') continue;
     const next = spliceCodexBlock(source, name, null);
     if (next === source) continue;
+    if (options.dryRun) log.info(describeRemovedServerPreview(target, name));
     source = next;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });

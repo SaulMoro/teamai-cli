@@ -261,6 +261,11 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     init(t, pulled, 'claude');
     removeMcpManifests();
     t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    const preview = pull(pulled, '--dry-run');
+    expect(preview.output).toContain(
+      `Would remove MCP server plain-api from ${path.join(pulled, '.mcp.json')}: it equals a server the team has removed.`,
+    );
+    expect(mcpServer(pulled, 'plain-api')).toEqual({ type: 'http', url: 'https://team.example.com/v1' });
     pull(pulled);
     expect(mcpServer(pulled, 'plain-api')).toBeUndefined();
 
@@ -280,6 +285,18 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
     pull(dir);
     expect(mcpServer(dir, 'plain-api')).toEqual(mine);
+  });
+
+  it('keeps a member\'s server whose name the team history never had', () => {
+    const t = team('never-team', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const mine = { type: 'http', url: 'https://mine.example.com/mcp' };
+    const dir = business('never-team-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'my-own': mine } }) });
+    init(t, dir, 'claude');
+    removeMcpManifests();
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(dir);
+    expect(mcpServer(dir, 'plain-api')).toBeUndefined();
+    expect(mcpServer(dir, 'my-own')).toEqual(mine);
   });
 
   it('removes an unrecorded copy of a deleted server from Codex config too', () => {
