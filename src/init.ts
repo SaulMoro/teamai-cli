@@ -1254,6 +1254,8 @@ export async function initSelfRepo(options: GlobalOptions & {
         rules: { enforced: [] },
         docs: { localDir: './.teamai/docs' },
         env: { injectShellProfile: true },
+        // A new team keeps what teamai delivers out of git (#915).
+        gitExclude: { enabled: true },
       },
     });
     await writeFile(teamaiYamlPath, defaultConfig);
@@ -1850,6 +1852,8 @@ export async function init(options: GlobalOptions & {
         rules: { enforced: [] },
         docs: { localDir: scope === 'project' ? './.teamai/docs' : '~/.teamai/docs' },
         env: { injectShellProfile: true },
+        // A new team keeps what teamai delivers out of git (#915).
+        gitExclude: { enabled: true },
       },
     });
     await writeFile(path.join(localPath, 'teamai.yaml'), defaultConfig);

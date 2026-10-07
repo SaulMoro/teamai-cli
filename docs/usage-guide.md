@@ -25,6 +25,7 @@
 - [Knowledge Capture & Retrieval](#knowledge-capture--retrieval)
 - [Knowledge Base Health Report](#knowledge-base-health-report)
 - [Commit Co-Author Attribution](#commit-co-author-attribution)
+- [Keeping Delivered Files Out of Git](#keeping-delivered-files-out-of-git)
 - [Team Culture](#team-culture)
 - [Advanced Features](#advanced-features)
 - [Command Reference](#command-reference)
@@ -1680,6 +1681,35 @@ Restart your AI tool session after a `pull` for the change to take effect.
 
 ---
 
+## Keeping Delivered Files Out of Git
+
+In project scope, `teamai pull` writes the team's skills into the business repo's tool folders (`.claude/skills/<name>/`, `.agents/skills/<name>/`, and so on), where `git status` shows them and one `git add -A` commits them. With this option on, teamai lists each skill it delivered in a block it owns in the clone's `.git/info/exclude`:
+
+```
+# [teamai:delivered:start]
+/.claude/skills/code-review/
+# [teamai:delivered:end]
+```
+
+That file is local to your clone, shared by its worktrees, and never committed. teamai never changes `.gitignore` or the git index. Your AI tools still load the excluded skills: only git ignores them.
+
+The option is controlled by the same two-tier pattern as recall:
+
+| Tier | Config file | Field | Description |
+|------|----------|------|------|
+| Team default | `teamai.yaml` | `sharing.gitExclude.enabled` | `true` / `false` (default `false`). `teamai init` writes `true` into the `teamai.yaml` it creates for a new team (git and single-repo mode); joining or re-running `init` never changes it |
+| Member override | the project's `config.yaml` (`~/.teamai/projects/<slug>/config.yaml`) | `gitExcludeEnabled` | `true` / `false`, edited by hand; takes priority over the team default |
+
+- A change takes effect on the next `teamai pull`, the session-start one included, also when that pull finds the team repo unchanged ("Already synced"): no `--force` needed. In single-repo mode, an uncommitted edit of `.teamai/teamai.yaml` counts too.
+- Only what teamai wrote and still owns is listed. A file of your own at a path teamai would deliver (pull keeps it and names it) stays visible and addable.
+- Turned off, the next pull removes the `delivered` block and nothing else: your own lines and teamai's other blocks (such as the MCP one, see [MCP servers](#mcp-servers)) stay.
+- teamai records what each pull delivered into a checkout whatever the setting, so the first pull after upgrading from a release that kept no such record is a full sync, never "Already synced".
+- A pull that cannot update the block (the exclude file is not writable or not readable, or another teamai command holds it) leaves it as it was and warns; fix the cause and run `teamai pull` again. A pull skipped because another pull or push holds the project's sync lock leaves it too; the holder, or the next pull, updates it.
+
+**The `git add -A` window.** A pull lists what it delivered once its last step has run, so a path it has just written is visible to git until that pull ends. Commands that deliver outside a pull (`teamai recall on|off`, `teamai hooks inject`, `teamai mcp inject`) do not update the block: the next pull lists what they wrote. Don't run `git add -A` (or an IDE's commit-all) while a pull runs, or between those commands and the next pull.
+
+---
+
 ## Team Culture
 
 TeamAI supports injecting your team's culture into AI tools, so your AI coding assistant is aware of your team's culture, values, and coding standards in every session.
@@ -1817,7 +1847,7 @@ The pull names each file it changes:
 
 If a requested block has incomplete or duplicated markers, the entire file stays unchanged, including its other managed blocks. Fix the named markers, then run `teamai pull` again.
 
-A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions` (an entry you listed for it stays), and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai does not change `.gitignore`, `.git/info/exclude` or the git index. A team that wants to keep these files out of commits excludes them itself.
+A file named like a teamai target that teamai did not write is left alone and not listed in OpenCode's `instructions` (an entry you listed for it stays), and the pull warns about it. A team rule named `teamai-context` is not delivered, since it would land on that file; the pull names it, and removes a copy an earlier release delivered unless you changed it. teamai never changes `.gitignore` or the git index; what it lists in `.git/info/exclude` is described in [Keeping Delivered Files Out of Git](#keeping-delivered-files-out-of-git).
 
 ### Viewing the result
 
@@ -2798,6 +2828,8 @@ sharing:
     injectShellProfile: true
   coAuthor:
     enabled: false             # optional; strip AI-tool commit trailers team-wide
+  gitExclude:
+    enabled: true              # optional; keep delivered files out of git (init writes true for a new team)
   contributeHint:
     enabled: true              # optional; false = no /teamai nudge after high-friction sessions
   intervention:
@@ -2827,6 +2859,7 @@ scope: project                 # project (default from init) or user
 projectRoot: /path/to/project  # project scope only
 inheritUserScope: true         # optional; project scope only, defaults to false
 coAuthorEnabled: true          # optional; per-machine co-author override
+gitExcludeEnabled: true        # optional; per-machine override of sharing.gitExclude.enabled
 contributeHintEnabled: false   # optional; per-machine override of sharing.contributeHint.enabled
 codexTrustEnabled: false       # optional; per-machine, stops teamai trusting its Codex hooks and project (see Hooks)
 toolRoots:                     # optional; per-machine tool roots (see below)

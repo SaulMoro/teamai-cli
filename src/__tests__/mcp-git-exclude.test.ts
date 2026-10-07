@@ -36,6 +36,11 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
       if (slowExcludeRead.on && file.endsWith(path.join('info', 'exclude'))) await new Promise((r) => setTimeout(r, 30));
       return content;
     },
+    readFileIfExists: async (file: string) => {
+      const content = await actual.readFileIfExists(file);
+      if (slowExcludeRead.on && file.endsWith(path.join('info', 'exclude'))) await new Promise((r) => setTimeout(r, 30));
+      return content;
+    },
   };
 });
 
@@ -185,6 +190,26 @@ describe('teamai block in .git/info/exclude (#882)', () => {
 
     const content = await fse.readFile(excludeFile, 'utf8');
     for (const name of ['a', 'b', 'c', 'd', 'e']) expect(content).toMatch(new RegExp(`^/${name}\\.json$`, 'm'));
+  });
+
+  describe.skipIf(process.getuid?.() === 0)('when the exclude file exists but cannot be read (#915)', () => {
+    afterEach(async () => {
+      await fse.chmod(excludeFile, 0o644);
+    });
+
+    it('fails with the fix, never takes the file for empty, and keeps the member\'s lines', async () => {
+      await fse.outputFile(excludeFile, 'scratch/\n');
+      await fse.chmod(excludeFile, 0o200);
+      const realExclude = path.join(await fse.realpath(repo), '.git', 'info', 'exclude');
+
+      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toEqual({
+        kind: 'failed',
+        reason: `${realExclude} cannot be read (EACCES)`,
+        fix: `Make ${realExclude} readable, then run \`teamai pull\` again.`,
+      });
+      await fse.chmod(excludeFile, 0o644);
+      expect(await fse.readFile(excludeFile, 'utf8')).toBe('scratch/\n');
+    });
   });
 
   describe('while another command holds the exclude file\'s lock', () => {

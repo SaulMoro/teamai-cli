@@ -25,6 +25,7 @@
 - [知识沉淀与检索](#知识沉淀与检索)
 - [知识库健康报告](#知识库健康报告)
 - [提交 Co-Author 署名](#提交-co-author-署名)
+- [让分发的文件不进入 git](#让分发的文件不进入-git)
 - [团队文化](#团队文化)
 - [进阶功能](#进阶功能)
 - [命令参考](#命令参考)
@@ -1526,6 +1527,35 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 ---
 
+## 让分发的文件不进入 git
+
+在项目 scope 下，`teamai pull` 会把团队的 skill 写入业务仓库的工具目录（`.claude/skills/<name>/`、`.agents/skills/<name>/` 等），`git status` 会显示它们，一次 `git add -A` 就会把它们提交。开启此选项后，teamai 会把它分发的每个 skill 列在本地克隆 `.git/info/exclude` 中一个由它管理的块里：
+
+```
+# [teamai:delivered:start]
+/.claude/skills/code-review/
+# [teamai:delivered:end]
+```
+
+该文件只属于你的本地克隆，由各 worktree 共用，永远不会被提交。teamai 从不修改 `.gitignore` 或 git 索引。被排除的 skill 仍会被 AI 工具加载：只有 git 忽略它们。
+
+该选项采用与 recall 相同的两级配置：
+
+| 层级 | 配置文件 | 字段 | 说明 |
+|------|----------|------|------|
+| 团队默认 | `teamai.yaml` | `sharing.gitExclude.enabled` | `true` / `false`（默认 `false`）。`teamai init` 为新团队创建 `teamai.yaml` 时写入 `true`（git 模式与单仓模式）；加入团队或重新运行 `init` 不会改动它 |
+| 成员覆盖 | 项目的 `config.yaml`（`~/.teamai/projects/<slug>/config.yaml`） | `gitExcludeEnabled` | `true` / `false`，手动编辑；优先级高于团队默认 |
+
+- 改动在下一次 `teamai pull` 生效，包括会话开始时的 pull，即使该 pull 发现团队仓库未变（"Already synced"）也一样：无需 `--force`。单仓模式下，对 `.teamai/teamai.yaml` 未提交的修改同样生效。
+- 只列出 teamai 写入且仍归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。
+- 关闭后，下一次 pull 只移除 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
+- 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
+- pull 无法更新该块时（exclude 文件不可写或不可读，或另一个 teamai 命令占用着它），会保持其原样并给出警告；排除原因后再运行 `teamai pull`。因另一个 pull 或 push 持有项目同步锁而跳过的 pull 同样不改动它，由持锁者或下一次 pull 更新。
+
+**`git add -A` 的时间窗口。** pull 在最后一步运行完之后才列出它分发的内容，因此在该 pull 结束前，它刚写入的路径对 git 可见。在 pull 之外分发内容的命令（`teamai recall on|off`、`teamai hooks inject`、`teamai mcp inject`）不会更新该块：下一次 pull 会列出它们写入的内容。请不要在 pull 运行期间，或在这些命令之后、下一次 pull 之前运行 `git add -A`（或 IDE 的全部提交）。
+
+---
+
 ## 团队文化
 
 TeamAI 支持将团队文化注入到 AI 工具中，让 AI 编码助手在每次会话中都能感知你的团队文化、价值观和编码准则。
@@ -1663,7 +1693,7 @@ pull 会列出所修改的每个文件：
 
 若请求更新的块存在不完整或重复的标记，整个文件保持不变，包括其他托管块。修复提示中的标记后，再运行 `teamai pull`。
 
-与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 不修改 `.gitignore`、`.git/info/exclude` 或 git 索引。若团队希望这些文件不进入提交，需要自行排除。
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 从不修改 `.gitignore` 或 git 索引；它在 `.git/info/exclude` 中列出哪些内容，见[让分发的文件不进入 git](#让分发的文件不进入-git)。
 
 ### 查看效果
 
@@ -2597,6 +2627,8 @@ sharing:
     injectShellProfile: true
   coAuthor:
     enabled: false             # 可选，为全团队去除 AI 工具提交尾注
+  gitExclude:
+    enabled: true              # 可选，让分发的文件不进入 git（init 为新团队写入 true）
   contributeHint:
     enabled: true              # 可选，false = 高摩擦 session 结束后不再提示 /teamai
   intervention:
@@ -2626,6 +2658,7 @@ scope: project                 # project（init 默认）或 user
 projectRoot: /path/to/project  # 仅 project scope
 inheritUserScope: true         # 可选，仅 project scope，默认 false
 coAuthorEnabled: true          # 可选，每机器的 co-author 覆盖
+gitExcludeEnabled: true        # 可选，每机器对 sharing.gitExclude.enabled 的覆盖
 contributeHintEnabled: false   # 可选，每机器覆盖 sharing.contributeHint.enabled
 codexTrustEnabled: false       # 可选，每机器，停止 teamai 信任它写入的 Codex hooks 与项目（见 Hooks）
 toolRoots:                     # 可选，每机器的工具根目录（见下）
