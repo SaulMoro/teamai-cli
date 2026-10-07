@@ -255,6 +255,25 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(teamai(['doctor'], dir).output).not.toContain('Stale docs');
   });
 
+  it('keeps a member\'s link that replaced a team doc when the team deletes that doc, without following it', () => {
+    const t = team('docs-link', { 'docs/guide.md': '# Guide\n', 'docs/keep.md': '# Keep\n' });
+    const dir = business('docs-link-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    const mine = path.join(sandbox, 'docs-link-mine.md');
+    writeFile(mine, 'MY GUIDE\n');
+    const link = path.join(docs, 'guide.md');
+    fs.rmSync(link);
+    fs.symlinkSync(mine, link);
+
+    t.publish({ 'docs/guide.md': null }, 'remove guide');
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(mine)).toBe('MY GUIDE\n');
+    expect(pulled.output).toContain(`Kept ${link}: the team removed docs/guide.md`);
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

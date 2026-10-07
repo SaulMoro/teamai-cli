@@ -80,10 +80,12 @@ export async function listStaleDocDirectories(source: string | undefined, destin
  */
 export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
   const stat = await fse.lstat(file).catch(() => null);
-  if (!stat?.isFile() && !stat?.isSymbolicLink()) return true;
+  if (!stat) return true;
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
   if (versions === null) return false;
   if (versions.length === 0) return true;
+  // Anything but a file or a link at a removed team doc's path is the member's: no team version can match it.
+  if (!stat.isFile() && !stat.isSymbolicLink()) return false;
   // git stores a link as a blob of its target, so a link the team delivered matches by id; it is never followed.
   const bytes = stat.isSymbolicLink()
     ? await fs.readlink(file).then((target) => Buffer.from(target), () => null)
