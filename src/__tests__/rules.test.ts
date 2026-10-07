@@ -38,7 +38,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-import { RulesHandler, inlinedRulesText } from '../resources/rules.js';
+import { RulesHandler, inlinedRulesText, isLegacyLayoutCopy } from '../resources/rules.js';
 import { loadStateForScope } from '../config.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { openLedger, recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
@@ -1035,6 +1035,31 @@ scope: 'user',
     await fse.writeFile(context, 'RESERVED-RULE, edited by the member');
     await handler.pullAllRules(teamConfig, localConfig);
     expect(await fse.readFile(context, 'utf8')).toBe('RESERVED-RULE, edited by the member');
+  });
+
+  it('keeps a member\'s link named teamai-context in a rules directory, even when its target holds the delivered copy (#993)', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRulesDir, 'teamai-context.md'), 'RESERVED-RULE');
+    const context = path.join(homeDir, '.claude/rules', 'teamai-context.md');
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'RESERVED-RULE');
+    await fse.symlink(target, context);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect((await fse.lstat(context)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(target, 'utf8')).toBe('RESERVED-RULE');
+  });
+
+  it('never counts a member\'s link as a copy an older layout wrote, on record or with a built-in rule\'s name (#993)', async () => {
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'mine');
+    const link = path.join(homeDir, '.cursor', 'rules', 'teamai-recall.md');
+    await fse.ensureDir(path.dirname(link));
+    await fse.symlink(target, link);
+
+    expect(await isLegacyLayoutCopy(link, 'rules/teamai-recall.md', undefined, localConfig.repo.localPath)).toBe(false);
+    expect(await isLegacyLayoutCopy(link, 'rules/team-rule.md', { [link]: 'recorded' }, localConfig.repo.localPath)).toBe(false);
   });
 });
 

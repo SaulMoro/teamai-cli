@@ -254,7 +254,7 @@ export async function isLink(file: string): Promise<boolean> {
  * directory (a link, above all). teamai writes only files, and `listFilesRecursive` does
  * not list the others.
  */
-async function holdsNonRegular(dir: string): Promise<boolean> {
+export async function holdsNonRegular(dir: string): Promise<boolean> {
   for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
     if (entry.isDirectory()) {
       if (await holdsNonRegular(path.join(dir, entry.name))) return true;

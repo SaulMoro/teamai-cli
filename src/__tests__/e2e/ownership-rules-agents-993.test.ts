@@ -298,6 +298,34 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(external)).toBe('Old team rule.\n');
   });
 
+  it('never writes through a member\'s link at a rule copy on an already synced pull, or deletes it on teamai remove', () => {
+    const t = team('rule-link-synced', { 'rules/team-rule.md': TEAM_RULE });
+    const dir = business('rule-link-synced-biz', { '.claude/rules/.keep': '' });
+    teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude,cursor', '--scope', 'project', '--force'], dir);
+    const cursorRule = path.join(dir, '.cursor', 'rules', 'team-rule.mdc');
+    const claudeRule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    expect(read(cursorRule)).toContain('# Team rule');
+    // The member points both copies at files of their own; the team rule verbatim is what an older CLI wrote for Cursor.
+    const cursorTarget = path.join(sandbox, `rule-link-synced-cursor-${attempt}.md`);
+    const claudeTarget = path.join(sandbox, `rule-link-synced-claude-${attempt}.md`);
+    writeFile(cursorTarget, TEAM_RULE);
+    writeFile(claudeTarget, TEAM_RULE);
+    forgetRecord(cursorRule);
+    fs.rmSync(cursorRule);
+    fs.symlinkSync(cursorTarget, cursorRule);
+    fs.rmSync(claudeRule);
+    fs.symlinkSync(claudeTarget, claudeRule);
+
+    teamaiOk(['pull'], dir);
+    expect(fs.lstatSync(cursorRule).isSymbolicLink()).toBe(true);
+    expect(read(cursorTarget)).toBe(TEAM_RULE);
+
+    teamaiOk(['remove', 'rules', 'team-rule', '--force'], dir);
+    expect(fs.lstatSync(claudeRule).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(cursorRule).isSymbolicLink()).toBe(true);
+    expect(read(claudeTarget)).toBe(TEAM_RULE);
+  });
+
   it('delivers once the member\'s file is gone, even when the pull that kept it found the checkout at the team revision', () => {
     const t = team('kept-at-rev', { 'rules/team-rule.md': TEAM_RULE });
     const dir = business('kept-at-rev-biz');
