@@ -202,15 +202,29 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(path.join(destination, 'guide', 'nested', '.keep'), 'utf8')).toBe('private');
   });
 
-  it('replaces a directory link without modifying its target', async () => {
+  it('keeps a member\'s directory link where the team adds a docs directory, without following it (#993)', async () => {
     const outside = path.join(root, 'outside');
     await fse.outputFile(path.join(outside, 'keep.md'), 'outside');
-    await fse.symlink(outside, path.join(destination, 'guide'), process.platform === 'win32' ? 'junction' : 'dir');
-    await fse.outputFile(path.join(source, 'guide', 'new.md'), 'new directory');
+    const link = path.join(destination, 'guide');
+    await fse.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    await fse.outputFile(path.join(source, 'guide', 'readme.md'), 'new directory');
+    commitTeamRepo(path.join(root, 'repo'));
     await sync();
-    expect((await fse.lstat(path.join(destination, 'guide'))).isSymbolicLink()).toBe(false);
-    expect(await fse.readFile(path.join(destination, 'guide', 'new.md'), 'utf8')).toBe('new directory');
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readlink(link)).toBe(outside);
     expect(await fse.readdir(outside)).toEqual(['keep.md']);
+  });
+
+  it('keeps a member\'s link at a team doc file\'s path, without touching its target (#993)', async () => {
+    const outside = path.join(root, 'outside.md');
+    await fse.outputFile(outside, 'mine');
+    const link = path.join(destination, 'guide.md');
+    await fse.symlink(outside, link);
+    await fse.outputFile(path.join(source, 'guide.md'), 'team');
+    commitTeamRepo(path.join(root, 'repo'));
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(outside, 'utf8')).toBe('mine');
   });
 
   it.each(['missing', 'empty', 'hidden-only'])('prunes a %s team bundle while retaining hidden local files', async (state) => {

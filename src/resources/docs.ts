@@ -260,9 +260,9 @@ export async function resolveDocsForDirectory(localConfig: LocalConfig): Promise
  * keeps no delivery record, so an entry there is teamai's only when the team
  * history holds it: a file at a team doc's path, a file where the team now has
  * a directory, or a directory where the team now has a file (every file in it).
- * Anything else is the member's own: pull neither writes over nor moves it,
- * and names the entry. A link is replaced as before, without touching its
- * target. Read-only.
+ * A link is teamai's only when the team has the same link there now; it is
+ * never followed. Anything else is the member's own: pull neither writes over
+ * nor moves it, and names the entry. Read-only.
  */
 export async function membersDocs(desired: DesiredDocs, localDocsDir: string, repoPath: string): Promise<string[]> {
   const members = new Set<string>();
@@ -274,13 +274,20 @@ export async function membersDocs(desired: DesiredDocs, localDocsDir: string, re
     for (let depth = 1; depth < parts.length && !blocked; depth++) {
       const rel = parts.slice(0, depth).join('/');
       const stat = await fse.lstat(path.join(localDocsDir, rel)).catch(() => null);
-      if (!stat?.isFile()) continue;
+      if (!stat?.isFile() && !stat?.isSymbolicLink()) continue;
       blocked = true;
-      if (!await teamais(path.join(localDocsDir, rel), rel)) members.add(rel);
+      const owned = stat.isSymbolicLink()
+        ? await sameLink(path.join(localDocsDir, rel), path.join(desired.sourceDir, rel))
+        : await teamais(path.join(localDocsDir, rel), rel);
+      if (!owned) members.add(rel);
     }
     if (blocked) continue;
     const local = path.join(localDocsDir, file);
     const stat = await fse.lstat(local).catch(() => null);
+    if (stat?.isSymbolicLink()) {
+      if (!await sameLink(local, path.join(desired.sourceDir, file))) members.add(file);
+      continue;
+    }
     if (stat?.isDirectory()) {
       if (!await isTeamaiSkillCopy(local, { repoPath, pathspec: `docs/${file}` })) members.add(file);
       continue;
@@ -292,6 +299,12 @@ export async function membersDocs(desired: DesiredDocs, localDocsDir: string, re
     if (!await teamais(local, file)) members.add(file);
   }
   return [...members];
+}
+
+/** Whether `local` and `team` are both links to the same target. Never follows either. */
+async function sameLink(local: string, team: string): Promise<boolean> {
+  const [mine, theirs] = await Promise.all([fs.readlink(local).catch(() => null), fs.readlink(team).catch(() => null)]);
+  return mine !== null && mine === theirs;
 }
 
 /** The file's bytes, or null when it is not a file this process can read. */
