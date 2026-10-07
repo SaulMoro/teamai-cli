@@ -512,6 +512,16 @@ as "changed by you (kept by pull)". A member's own file fails the delivery
 check, as the team version does not reach that tool: it is listed as "not
 teamai's (kept by pull)" with pull's line for each file.
 
+Codex's shared `.agents/skills/<name>` is a destination only for a copy that
+is teamai's under the same rule (#993): `resolveSkillDestination` takes the
+ownership predicate, `judgeCopy` against the checkout's record in pull, the
+history proof alone (`isTeamaiSkillCopy`) in doctor, `teamai remove` and
+`uninstall`. Any other copy there is the member's or another tool's, and is
+not "kept" in the sense above: Codex gets `.codex/skills/<name>` instead, the
+team skill is delivered, and every full sync names the conflict (Codex sees two
+skills of that name). Source skills and the built-in stub still take an
+existing shared copy as theirs.
+
 ### Known gaps
 
 - `teamai remove`'s rules refresh judges copies against the checkout's record

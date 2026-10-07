@@ -57,7 +57,8 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
-import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH } from './resources/skills.js';
+import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
+import { isTeamaiSkillCopy } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
@@ -353,6 +354,8 @@ async function discoverToolResources(
   /** Home, or the project root: where the skills link guard starts (`skillsGuardBase`). */
   scopeRoot: string,
   teamSkillNames: Set<string>,
+  /** Whether Codex's copy of skill `name` in the shared .agents/skills is teamai's (#993). */
+  ownsSharedSkill: (dir: string, name: string) => Promise<boolean>,
   teamRuleNames: Set<string>,
   teamAgentNames: Set<string>,
   hookTargets: HookTarget[],
@@ -549,20 +552,19 @@ async function discoverToolResources(
       skillRoots.set(hermesSkills, skillsGuardBase(scopeRoot, hermesSkills));
     }
     // `resolveSkillDestination` writes Codex's copy into the shared
-    // .agents/skills root whenever that skill already lives there, so uninstall
+    // .agents/skills root when teamai's copy already lives there, so uninstall
     // must look where deployment could have put it — the legacy prune already
-    // does. Codex only: another tool's pass must not reach into it.
-    if (tool === CODEX_TOOL) {
-      const sharedSkills = path.join(baseDir, SHARED_AGENT_SKILLS_PATH);
-      skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
-    }
+    // does. Codex only: another tool's pass must not reach into it. Other
+    // tools and the member write there too, so only teamai's copies go.
+    const sharedSkills = tool === CODEX_TOOL ? path.join(baseDir, SHARED_AGENT_SKILLS_PATH) : null;
+    if (sharedSkills) skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
     for (const [skillsDir, rootBase] of skillRoots) {
       if (await pathExists(skillsDir)) {
         const dirs = await listDirs(skillsDir);
         for (const dir of dirs) {
-          if (teamSkillNames.has(dir)) {
-            res.skillDirs.push({ dir: path.join(skillsDir, dir), baseDir: rootBase });
-          }
+          if (!teamSkillNames.has(dir)) continue;
+          if (skillsDir === sharedSkills && !await ownsSharedSkill(path.join(skillsDir, dir), dir)) continue;
+          res.skillDirs.push({ dir: path.join(skillsDir, dir), baseDir: rootBase });
         }
       }
     }
@@ -631,6 +633,10 @@ async function buildRemovalPlan(
   // Directories earlier releases deployed: uninstall would otherwise leave the
   // pre-stub skill trees behind on any machine that upgraded.
   for (const name of LEGACY_BUILTIN_SKILL_NAMES) teamSkillNames.add(name);
+  // Codex's copy in the shared .agents/skills is teamai's when it holds a
+  // built-in's name, or on the team history's proof (#993).
+  const ownsSharedSkill = async (dir: string, name: string): Promise<boolean> =>
+    isCliOwnedSkillName(name) || isTeamaiSkillCopy(dir, skillOrigin(repoPath, name));
   const teamRuleNames = await collectTeamRuleNames(repoPath);
   for (const name of BUILTIN_RULE_NAMES) teamRuleNames.add(name);
   const teamAgentNames = await collectTeamAgentNames(repoPath);
@@ -701,6 +707,7 @@ async function buildRemovalPlan(
         resolveToolBaseDir(tool, localConfig),
         baseDir,
         teamSkillNames,
+        ownsSharedSkill,
         teamRuleNames,
         teamAgentNames,
         hookTargets,

@@ -18,6 +18,7 @@ vi.mock('../utils/logger.js', () => ({
 import { SkillsHandler } from '../resources/skills.js';
 import { scanTeamRepoNamespaces, ensureSkillFrontmatter } from '../resources/skills.js';
 import { log } from '../utils/logger.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
 describe('SkillsHandler.scanLocalForPush', () => {
@@ -1389,6 +1390,8 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     await fse.writeFile(path.join(sharedSkillPath, 'SKILL.md'), managedContent);
     await fse.writeFile(path.join(codexSkillPath, 'SKILL.md'), managedContent);
     await fse.writeFile(path.join(sourcePath, 'SKILL.md'), managedContent);
+    // With no record, the shared copy is teamai's on the team history's proof (#993).
+    commitTeamRepo(path.join(tmpDir, 'team-repo'));
 
     const teamConfig = {
       team: 'test',
@@ -1421,7 +1424,7 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     expect(await fse.pathExists(sharedSkillPath)).toBe(false);
   });
 
-  it('preserves and reports a different .codex copy', async () => {
+  it('preserves and reports a different .codex copy beside teamai\'s shared copy', async () => {
     const homeDir = path.join(tmpDir, 'home');
     const sourcePath = path.join(tmpDir, 'team-repo', 'skills', 'team-skill');
     const sharedSkillPath = path.join(homeDir, '.agents', 'skills', 'team-skill');
@@ -1429,9 +1432,13 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     await fse.ensureDir(sharedSkillPath);
     await fse.ensureDir(codexSkillPath);
     await fse.ensureDir(sourcePath);
+    // The shared copy is an older team version, so teamai's (#993).
+    await fse.writeFile(path.join(sourcePath, 'SKILL.md'), 'shared copy');
+    commitTeamRepo(path.join(tmpDir, 'team-repo'), 'v1');
     await fse.writeFile(path.join(sharedSkillPath, 'SKILL.md'), 'shared copy');
     await fse.writeFile(path.join(codexSkillPath, 'SKILL.md'), 'different copy');
     await fse.writeFile(path.join(sourcePath, 'SKILL.md'), '---\nname: team-skill\ndescription: Updated\n---\n');
+    commitTeamRepo(path.join(tmpDir, 'team-repo'), 'v2');
 
     await new SkillsHandler().pullItem({
       name: 'team-skill', type: 'skills', sourcePath, relativePath: 'skills/team-skill',
@@ -1445,6 +1452,7 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     });
 
     expect(await fse.readFile(path.join(codexSkillPath, 'SKILL.md'), 'utf8')).toBe('different copy');
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Codex skill conflict'));
+    expect(await fse.readFile(path.join(sharedSkillPath, 'SKILL.md'), 'utf8')).toContain('description: Updated');
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Codex skill conflict for team-skill: keeping different copies'));
   });
 });
