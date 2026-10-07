@@ -81,9 +81,10 @@ and give it your team repo URL."*
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any
   changes you need, then delete the copy manually.
-- A skill directory at a team skill's name goes only when it is teamai's (on
-  the delivery record, or a team version by the history). The user's own skill
-  of that name stays, and uninstall names it in a warning.
+- A skill directory, rule or agent at a team resource's name goes only when it
+  is teamai's (on the delivery record, or a team version by the history). The
+  user's own file or skill of that name stays, and uninstall names it in a
+  warning.
 - If an OpenCode config entry cannot be removed, repair its config or permissions
   and retry the same uninstall command. Uninstall reports failure and keeps
   its ownership record and shared data directory, even for the last tool.

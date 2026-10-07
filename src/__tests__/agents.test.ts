@@ -29,6 +29,7 @@ vi.mock('../utils/git.js', async () => ({
 }));
 
 import { AgentsHandler } from '../resources/agents.js';
+import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { getDataHome, type TeamaiConfig, type LocalConfig } from '../types.js';
 
 /**
@@ -940,6 +941,8 @@ projects:
     await fse.writeFile(path.join(repoPath, 'agents', 'old.md'), 'old');
     await fse.writeFile(path.join(homeDir, '.claude/agents', 'old.md'), 'old');
     await fse.writeFile(path.join(homeDir, '.codebuddy/agents', 'old.md'), 'old');
+    // Copies of a team version: the history proves them teamai's (#993).
+    commitTeamRepo(repoPath);
 
     const removed = await handler.removeItem('old', teamConfig, localConfig);
 
@@ -958,6 +961,7 @@ projects:
     await fse.writeFile(path.join(repoPath, 'agents', 'old.md'), 'old');
     await fse.writeFile(path.join(homeDir, '.claude/agents', 'old.md'), 'old');
     await fse.writeFile(path.join(homeDir, '.codebuddy/agents', 'old.md'), 'old');
+    commitTeamRepo(repoPath);
 
     // enabledAgents whitelists claude only, so codebuddy is not ours to touch.
     await handler.removeItem('old', teamConfig, { ...localConfig, enabledAgents: ['claude'] });
@@ -969,7 +973,9 @@ projects:
   it('removeItem deletes a namespaced agent from the team repo and tombstones it', async () => {
     await fse.ensureDir(path.join(repoPath, 'agents', 'devops'));
     await fse.writeFile(path.join(repoPath, 'agents', 'devops', 'tf.yaml'), 'name: tf\n');
-    await fse.writeFile(path.join(homeDir, '.claude/agents', 'tf.md'), 'rendered');
+    // A copy of the team version, verbatim: the history proves it teamai's (#993).
+    await fse.writeFile(path.join(homeDir, '.claude/agents', 'tf.md'), 'name: tf\n');
+    commitTeamRepo(repoPath);
 
     await handler.removeItem('tf', teamConfig, localConfig);
 

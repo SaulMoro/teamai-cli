@@ -146,6 +146,23 @@ function giveGitNewInode(dir: string): void {
   fs.rmSync(path.join(dir, '.git.old'), { recursive: true, force: true });
 }
 
+/** Drop the checkout record of `file`, as for a copy an older CLI wrote: only the team history can prove it teamai's. */
+function forgetRecord(file: string): void {
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : e.name === 'state.json' ? [path.join(d, e.name)] : []);
+  let found = false;
+  for (const stateFile of walk(path.join(home, '.teamai'))) {
+    const state = JSON.parse(read(stateFile)) as { lastPullByWorkspace?: Record<string, { delivered?: Record<string, string> }> };
+    for (const record of Object.values(state.lastPullByWorkspace ?? {})) {
+      if (record.delivered?.[file] === undefined) continue;
+      delete record.delivered[file];
+      found = true;
+    }
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  }
+  if (!found) throw new Error(`no delivery record of ${file}`);
+}
+
 const TEAM_RULE = '# Team rule\n';
 const FE_RULE = '# Frontend rule\n';
 const BE_RULE = '# Backend rule\n';
@@ -384,5 +401,62 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(keeper)).toBe('MY KEEPER\n');
     expect(removed.output).toContain(`Kept ${doomed}: it is not teamai's`);
     expect(removed.output).toContain(`Kept ${keeper}: it is not teamai's`);
+  });
+
+  it('keeps a member\'s own agent through teamai remove agents, and removes teamai\'s recorded and history copies', () => {
+    const t = team('own-agent-remove', {
+      'agents/doomed-agent.yaml': agentYaml('doomed-agent', 'Doomed.'),
+      'agents/gone-agent.yaml': agentYaml('gone-agent', 'Gone.'),
+      'agents/old-agent.yaml': agentYaml('old-agent', 'Old.'),
+    });
+    const dir = business('own-agent-remove-biz', { '.claude/agents/doomed-agent.md': 'MY DOOMED\n' });
+    const agents = (file: string): string => path.join(dir, '.claude', 'agents', file);
+    init(t, dir);
+    expect(read(agents('gone-agent.md'))).toContain('Gone.');
+    expect(read(agents('old-agent.md'))).toContain('Old.');
+    forgetRecord(agents('old-agent.md'));
+
+    const removed = teamaiOk(['remove', 'agents', 'doomed-agent', 'gone-agent', 'old-agent', '--force'], dir);
+
+    expect(read(agents('doomed-agent.md'))).toBe('MY DOOMED\n');
+    expect(removed.output).toContain(`Kept ${agents('doomed-agent.md')}: it is not teamai's (no delivery record, `
+      + 'and it matches no team version of agents/doomed-agent.yaml), so remove left it.');
+    // On record, and a team version by history.
+    expect(fs.existsSync(agents('gone-agent.md'))).toBe(false);
+    expect(fs.existsSync(agents('old-agent.md'))).toBe(false);
+  });
+
+  it('keeps a member\'s own rule and agent through uninstall, and removes teamai\'s recorded and history copies', () => {
+    const t = team('own-uninstall', {
+      'rules/team-rule.md': TEAM_RULE,
+      'rules/edited-rule.md': '# Edited rule\n',
+      'rules/old-rule.md': '# Old rule\n',
+      'agents/team-agent.yaml': agentYaml('team-agent', 'Team version.'),
+      'agents/old-agent.yaml': agentYaml('old-agent', 'Old.'),
+    });
+    const dir = business('own-uninstall-biz', {
+      '.claude/rules/team-rule.md': 'MY RULE\n',
+      '.claude/agents/team-agent.md': 'MY AGENT\n',
+    });
+    const rules = (file: string): string => path.join(dir, '.claude', 'rules', file);
+    const agents = (file: string): string => path.join(dir, '.claude', 'agents', file);
+    init(t, dir);
+    // A recorded copy the member edited is still teamai's to remove, as a skill directory is.
+    fs.appendFileSync(rules('edited-rule.md'), 'member edit\n');
+    forgetRecord(rules('old-rule.md'));
+    forgetRecord(agents('old-agent.md'));
+    const builtins = [rules('teamai-recall.md'), agents('teamai-recall.md')].filter((file) => fs.existsSync(file));
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+
+    expect(read(rules('team-rule.md'))).toBe('MY RULE\n');
+    expect(read(agents('team-agent.md'))).toBe('MY AGENT\n');
+    expect(uninstalled.output).toContain(`Kept ${rules('team-rule.md')}: it is not teamai's (no delivery record, `
+      + 'and it matches no team version of rules/team-rule.md), so uninstall left it.');
+    expect(uninstalled.output).toContain(`Kept ${agents('team-agent.md')}: it is not teamai's (no delivery record, `
+      + 'and it matches no team version of agents/team-agent.yaml), so uninstall left it.');
+    for (const file of [rules('edited-rule.md'), rules('old-rule.md'), agents('old-agent.md'), ...builtins]) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
   });
 });

@@ -57,6 +57,7 @@ import { checkoutKey } from '../pull.js';
 import { fileHash } from '../utils/fs.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
+import { renderRuleForTool } from '../resources/rule-format.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
@@ -1167,7 +1168,8 @@ describe('uninstall', () => {
 
     const cursorRules = path.join(homeDir, '.cursor', 'rules');
     await fse.ensureDir(cursorRules);
-    await fse.writeFile(path.join(cursorRules, 'team-rule.mdc'), '---\nalwaysApply: true\n---\n\n# Team Rule');
+    // What pull delivered: the team rule's render, so teamai's by the history (#993).
+    await fse.writeFile(path.join(cursorRules, 'team-rule.mdc'), renderRuleForTool('cursor', '# Team Rule'));
     // Left behind by the layout that predates `.mdc`.
     await fse.writeFile(path.join(cursorRules, 'team-rule.md'), '# Team Rule');
     // A rule the user wrote themselves must survive.
@@ -1426,7 +1428,9 @@ describe('uninstall', () => {
       mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
       await fse.ensureDir(path.join(projectRoot, '.workbuddy'));
       const copy = path.join(projectRoot, '.codebuddy', 'rules', 'team-rule.md');
-      await fse.outputFile(copy, '---\nalwaysApply: true\n---\n\n# Team Rule\n');
+      // What pull delivered: the team rule's render, so teamai's by the history (#993).
+      await fse.outputFile(copy, renderRuleForTool('codebuddy', '# Team Rule'));
+      commitTeamRepo(repoPath);
       return copy;
     }
 
@@ -2332,6 +2336,13 @@ describe('uninstall', () => {
     vi.stubEnv('SHELL', '/bin/zsh');
 
     await fse.ensureDir(path.join(repoPath, 'agents', 'frontend'));
+    // The copies below hold what an older team version of each agent was,
+    // so teamai's by the history (#993).
+    await fse.writeFile(path.join(repoPath, 'agents', 'beta-proof-agent.md'), '# Managed agent');
+    await fse.writeFile(path.join(repoPath, 'agents', 'frontend', 'scoped-agent.md'), '# Managed agent');
+    commitTeamRepo(repoPath, 'markdown agents');
+    await fse.remove(path.join(repoPath, 'agents', 'beta-proof-agent.md'));
+    await fse.remove(path.join(repoPath, 'agents', 'frontend', 'scoped-agent.md'));
     await fse.writeFile(
       path.join(repoPath, 'agents', 'beta-proof-agent.yaml'),
       'name: beta-proof-agent\ndescription: Team agent\ninstructions: Help the team\n',

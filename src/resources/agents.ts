@@ -15,7 +15,7 @@ import { loadStateForScope } from '../config.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { keepsEditedCopy, recordDelivered, type DeliveryLedger } from './delivered-copies.js';
+import { describeMembersDirLeft, isTeamaiCopy, keepsEditedCopy, recordDelivered, type DeliveredHashes, type DeliveryLedger } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
 import {
@@ -790,9 +790,14 @@ export class AgentsHandler extends ResourceHandler {
     // `<ns>/<stem>` resolves to exactly one file, because the root directory is
     // one of the directories probed and `<ns>/<stem>.yaml` sits under it — so
     // naming a namespace leaves the same stem in other namespaces alone.
-    for (const located of await findTeamAgentFiles(teamAgentsDir, name)) {
-      await remove(located.path);
-      removed.push(located.path);
+    const located = await findTeamAgentFiles(teamAgentsDir, name);
+    // The team file a kept copy is named against, before it goes.
+    const resource = located.length > 0
+      ? path.relative(localConfig.repo.localPath, located[0].path).split(path.sep).join('/')
+      : `agents/${name}.yaml`;
+    for (const { path: teamFile } of located) {
+      await remove(teamFile);
+      removed.push(teamFile);
     }
 
     // Only the name given. Agents deploy FLATTENED — `~/.claude/agents/<stem>` —
@@ -832,6 +837,10 @@ export class AgentsHandler extends ResourceHandler {
       }
     }
 
+    // What this checkout's pulls recorded writing: a copy with no record is
+    // teamai's only on proof, here as in pull (#993).
+    const { deliveredHashes } = await import('../pull.js');
+    const previous = await deliveredHashes(localConfig);
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.agents) continue;
       // A tool the member excluded is not ours to write to, so it is not ours
@@ -842,6 +851,12 @@ export class AgentsHandler extends ResourceHandler {
       for (const localName of localNames) {
         for (const ext of AGENT_FILE_EXTENSIONS) {
           const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
+          // The author's root copy is this agent's by the placement record, which proves it here.
+          if (localName === name && await pathExists(filePath)
+            && !await ownsAgentCopy(localConfig, filePath, stem, tool, previous)) {
+            log.warn(describeMembersDirLeft(filePath, resource, 'remove'));
+            continue;
+          }
           if (await pathExists(filePath)) {
             await remove(filePath);
             removed.push(filePath);
@@ -1543,6 +1558,22 @@ export function agentOrigin(repoPath: string, stem: string, tool: ToolName, alia
 export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin | undefined> {
   if (!isKnownTool(tool)) return undefined;
   return agentOrigin(localConfig.repo.localPath, stem, tool, await loadModelAliases(localConfig));
+}
+
+/**
+ * Whether `file`, a copy of agent `stem` in `tool`'s agents directory, is
+ * teamai's to delete in a command the member ran (`teamai remove`,
+ * `uninstall`; #993): a built-in's name, on `previous`, the checkout's
+ * record, edited since or not, or a version of a team agent of that stem by
+ * the team history, verbatim or as teamai rendered it for `tool`. Read-only.
+ */
+export async function ownsAgentCopy(
+  localConfig: LocalConfig, file: string, stem: string, tool: string, previous: DeliveredHashes | undefined,
+): Promise<boolean> {
+  if (BUILTIN_AGENT_NAMES.has(stem) || previous?.[file] !== undefined) return true;
+  const origin = await removedAgentOrigin(localConfig, stem, tool)
+    ?? { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };
+  return isTeamaiCopy(file, origin);
 }
 
 /**
