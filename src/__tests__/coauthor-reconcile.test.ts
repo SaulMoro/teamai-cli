@@ -221,9 +221,60 @@ describe('co-author reconcile', () => {
     const { changes } = await reconcileCoAuthorForConfig(team({ enabled: false }), local, freshState());
     expect(changes.find((c) => c.tool === 'codex')).toBeUndefined();
     expect(changes.find((c) => c.tool === 'cursor')).toBeUndefined();
-    // Claude writes into the PROJECT settings.json.
-    const projClaude = await fse.readJson(path.join(projRoot, '.claude', 'settings.json'));
+    // Claude writes into the member's PROJECT settings.local.json, never the shared settings.json (#993).
+    const projClaude = await fse.readJson(path.join(projRoot, '.claude', 'settings.local.json'));
     expect(projClaude.attribution).toEqual({ commit: '', pr: '' });
+    expect(await fse.pathExists(path.join(projRoot, '.claude', 'settings.json'))).toBe(false);
+  });
+
+  describe('project scope (#993)', () => {
+    let projRoot: string;
+    let local: LocalConfig;
+    const shared = () => path.join(projRoot, '.claude', 'settings.json');
+    const preFix = (managed: Record<string, boolean>): State => StateSchema.parse({ coAuthorManaged: managed });
+
+    beforeEach(async () => {
+      projRoot = path.join(tmpDir, 'proj');
+      await fse.ensureDir(path.join(projRoot, '.claude', 'skills'));
+      local = { ...baseLocal, scope: 'project', projectRoot: projRoot } as LocalConfig;
+    });
+
+    it('skips every Claude-family tool but claude', async () => {
+      await fse.ensureDir(path.join(projRoot, '.codebuddy', 'skills'));
+      const withCodebuddy = {
+        ...team({ enabled: false }),
+        toolPaths: { ...TOOL_PATHS, codebuddy: { skills: '.codebuddy/skills', settings: '.codebuddy/settings.json' } },
+      } as TeamaiConfig;
+      const { changes } = await reconcileCoAuthorForConfig(withCodebuddy, local, freshState());
+      expect(changes.map((c) => c.tool)).toEqual(['claude']);
+      expect(await fse.pathExists(path.join(projRoot, '.codebuddy', 'settings.json'))).toBe(false);
+    });
+
+    it.each([
+      ['first member', '{"attribution": {"commit": "", "pr": ""}, "model": "opus"}', '{"model": "opus"}'],
+      ['last member', '{\n\t"model": "opus",\n\t"attribution": {"pr": "", "commit": ""}\n}\n', '{\n\t"model": "opus"\n}\n'],
+      ['only member', '{\n  "attribution": {\n    "commit": "",\n    "pr": ""\n  }\n}\n', '{\n}\n'],
+    ])('removes a pre-fix value recorded as teamai\'s, byte-preserving (%s)', async (_label, before, after) => {
+      await fse.writeFile(shared(), before);
+      const { managed } = await reconcileCoAuthorForConfig(team({ enabled: false }), local, preFix({ [shared()]: false }));
+      expect(await fse.readFile(shared(), 'utf8')).toBe(after);
+      expect(managed[shared()]).toBeUndefined();
+    });
+
+    it('leaves a pre-fix-looking value alone when the record does not list the file', async () => {
+      const before = '{"attribution": {"commit": "", "pr": ""}}';
+      await fse.writeFile(shared(), before);
+      await reconcileCoAuthorForConfig(team({ enabled: false }), local, freshState());
+      expect(await fse.readFile(shared(), 'utf8')).toBe(before);
+    });
+
+    it('leaves a value with keys teamai never writes alone', async () => {
+      const before = '{"attribution": {"commit": "", "pr": "", "extra": true}}';
+      await fse.writeFile(shared(), before);
+      const { managed } = await reconcileCoAuthorForConfig(team({ enabled: false }), local, preFix({ [shared()]: false }));
+      expect(await fse.readFile(shared(), 'utf8')).toBe(before);
+      expect(managed[shared()]).toBeUndefined();
+    });
   });
 });
 

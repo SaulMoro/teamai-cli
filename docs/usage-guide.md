@@ -475,7 +475,7 @@ teamai init . --agent claude,codex   # non-interactive: set up Claude Code + Cod
 
 **Choosing which AI tools to set up.** Single-repo mode creates a per-tool directory in your repo (e.g. `.claude/`, `.codex/`) — it seeds the skills dir, injects the teamai hooks, and commits that tool's settings to main so teammates get them on clone. You control which tools:
 
-- **`--agent <name...>`** — explicit list, repeatable or comma-separated: `--agent claude`, `--agent claude,codex`, `--agent claude --agent cursor`. Supported ids include `claude`, `codex`, `cursor`, `joycode`, `codebuddy`, `workbuddy`, and `dsh` (DeepSeek Harness).
+- **`--agent <name...>`** — explicit list, repeatable or comma-separated: `--agent claude`, `--agent claude,codex`, `--agent claude --agent cursor`. Supported ids include `claude`, `codex`, `cursor`, `joycode`, `codebuddy`, `workbuddy`, and `dsh` (DeepSeek Harness). Only the listed tools are set up, even when others are installed under your home dir. Re-running `init .` keeps the tools already enabled and adds the listed ones.
 - **Interactive (no `--agent`, a terminal)** — teamai shows a multi-select. Option 1 is **Auto**, which lists the AI tools already installed on your machine (`~/.claude`, `~/.codex`, …) and is the Enter default; the remaining options are the individual tools. Auto and specific tools can be combined.
 - **Non-interactive (no `--agent`, no terminal — CI, hooks, clone-time bootstrap)** — teamai mirrors the tools you already use under your home dir (`~/.claude`, `~/.codex`, …). If none are found, it creates nothing (you still get the knowledge; run `teamai init .` later to pick tools).
 
@@ -1642,7 +1642,7 @@ Per tool family, the trailer maps to a different setting:
 
 | Tool family | File | Setting written | Scope | Reliability |
 |------|------|------|------|------|
-| Claude (`claude`, `codebuddy`, `workbuddy`) | `settings.json` | `attribution.commit` / `attribution.pr` set to `""` | user **or** project (follows the active scope) | Deterministic |
+| Claude (`claude`, `codebuddy`, `workbuddy`) | user scope: `settings.json`; project scope: `.claude/settings.local.json` | `attribution.commit` / `attribution.pr` set to `""` | user **or** project (follows the active scope); in project scope only `claude`, through its member-local file | Deterministic |
 | Codex (`codex`) | `~/.codex/config.toml` | `commit_attribution = ""` | user only | Best-effort — only takes effect when `[features].codex_git_commit = true`, which teamai does not force |
 | Cursor | `~/.cursor/cli-config.json` | `attribution.attributeCommitsToAgent = false` | user only | Best-effort — a [known upstream bug](https://forum.cursor.com/t/local-executor-ignores-cli-config-attribution-opt-out-forcing-co-authored-by-trailer/167722) can cause the local executor to ignore this |
 
@@ -1651,6 +1651,7 @@ Semantics:
 - **Write-only, never delete.** Once teamai has written a value, dropping the team policy later leaves that value untouched — teamai never restores a trailer it stripped. To re-enable, set the intent back to `true` explicitly (which removes teamai's override so the tool's own default returns).
 - **Idempotent.** teamai records what it last wrote per file (in `state.json` under `coAuthorManaged`) and skips a write when nothing would change.
 - **Only installed tools are touched**, and existing keys/comments in each config file are preserved (key-level surgery, not regenerate-from-scratch).
+- **Shared project files stay untouched.** The choice is per member, and a project's `.claude/settings.json` is often tracked, so in project scope teamai writes only Claude's member-local `.claude/settings.local.json` and leaves the other Claude-family tools to user scope. Releases before this fix wrote the shared project `settings.json`; the next `pull` removes that `attribution` only when it is exactly teamai's `{"commit": "", "pr": ""}` and teamai recorded writing it there, deleting just that key. Commit the change if the file is tracked. While neither the team nor you has a co-author choice, teamai touches nothing, so a value an older teamai wrote into a shared settings file stays there.
 
 Restart your AI tool session after a `pull` for the change to take effect.
 

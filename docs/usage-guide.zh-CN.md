@@ -413,7 +413,7 @@ teamai init . --agent claude,codex   # 非交互：启用 Claude Code + Codex
 
 **选择启用哪些 AI 工具。** 单仓模式会在你的仓库里为每个工具创建一个目录（如 `.claude/`、`.codex/`）——建好 skills 目录、注入 teamai hooks，并把该工具的 settings 提交到 main，让队友 clone 后即可获得。由你决定启用哪些工具：
 
-- **`--agent <name...>`** —— 显式列表，可重复或逗号分隔：`--agent claude`、`--agent claude,codex`、`--agent claude --agent cursor`。常用 id 包括 `claude`、`codex`、`cursor`、`joycode`、`codebuddy`、`workbuddy`、`dsh`（DeepSeek Harness）。
+- **`--agent <name...>`** —— 显式列表，可重复或逗号分隔：`--agent claude`、`--agent claude,codex`、`--agent claude --agent cursor`。常用 id 包括 `claude`、`codex`、`cursor`、`joycode`、`codebuddy`、`workbuddy`、`dsh`（DeepSeek Harness）。只启用列出的工具，即使 home 目录下还装有其他工具。再次运行 `init .` 会保留已启用的工具，并加上列出的工具。
 - **交互式（无 `--agent`、有终端）** —— teamai 弹出多选列表。第 1 项是 **Auto**，会列出你本机已安装的 AI 工具（`~/.claude`、`~/.codex`……）并作为回车默认项；其余各项是具体工具。Auto 与具体工具可以组合勾选。
 - **非交互（无 `--agent`、无终端 —— CI、hook、clone 时自愈 bootstrap）** —— teamai 会按你本机 home 目录下已装的工具（`~/.claude`、`~/.codex`……）来建。若一个都没检测到，则什么都不建（你仍拿到知识，可稍后运行 `teamai init .` 再选工具）。
 
@@ -1493,7 +1493,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 | 工具家族 | 文件 | 写入的设置 | 作用域 | 可靠性 |
 |------|------|------|------|------|
-| Claude（`claude`、`codebuddy`、`workbuddy`） | `settings.json` | `attribution.commit` / `attribution.pr` 置为 `""` | 用户 **或** 项目（跟随当前 scope） | 确定生效 |
+| Claude（`claude`、`codebuddy`、`workbuddy`） | 用户 scope：`settings.json`；项目 scope：`.claude/settings.local.json` | `attribution.commit` / `attribution.pr` 置为 `""` | 用户 **或** 项目（跟随当前 scope）；项目 scope 下仅 `claude`，写入成员本地文件 | 确定生效 |
 | Codex（`codex`） | `~/.codex/config.toml` | `commit_attribution = ""` | 仅用户 | 尽力而为 —— 仅当 `[features].codex_git_commit = true` 时生效，teamai 不会强制开启该开关 |
 | Cursor | `~/.cursor/cli-config.json` | `attribution.attributeCommitsToAgent = false` | 仅用户 | 尽力而为 —— 存在[上游已知 bug](https://forum.cursor.com/t/local-executor-ignores-cli-config-attribution-opt-out-forcing-co-authored-by-trailer/167722)，local executor 可能忽略该设置 |
 
@@ -1502,6 +1502,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - **只写不删。** teamai 一旦写入某个值，之后团队撤下策略也不会改动该值 —— teamai 绝不还原它去除过的尾注。若要重新启用，请显式把意图设回 `true`（这会移除 teamai 的覆盖，从而恢复工具自身的默认行为）。
 - **幂等。** teamai 在 `state.json` 的 `coAuthorManaged` 中记录每个文件上次写入的值，无变化时跳过写入。
 - **只改动已安装的工具**，并保留各配置文件中已有的键与注释（键级别的精修，而非整文件重生成）。
+- **不改动共享的项目文件。** 该选择属于成员个人，而项目的 `.claude/settings.json` 往往纳入版本控制，因此在项目 scope 下 teamai 只写 Claude 的成员本地文件 `.claude/settings.local.json`，其他 Claude 家族工具只在用户 scope 下处理。此修复之前的版本会写入共享的项目 `settings.json`；下一次 `pull` 仅当其中的 `attribution` 恰好是 teamai 写入的 `{"commit": "", "pr": ""}`、且 teamai 记录过曾写入该文件时才移除它，并且只删除这一个键。若该文件已纳入版本控制，请提交这一改动。只要团队和你都没有设置 co-author 选择，teamai 就不做任何改动，因此旧版 teamai 写入共享 settings 文件的值会保留在那里。
 
 `pull` 之后请重启 AI 工具会话使改动生效。
 
