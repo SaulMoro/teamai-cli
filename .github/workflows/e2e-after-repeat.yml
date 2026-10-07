@@ -1,0 +1,56 @@
+name: E2E candidate repeat
+
+on:
+  push:
+    branches: [benchmark/e2e-performance-20261007]
+    paths: [.github/workflows/e2e-after-repeat.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    name: Repeat full E2E on the final candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: b7f0bef81fb31fd27aac15c049a5b39227176c4c
+          path: after
+          persist-credentials: false
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: after/package-lock.json
+      - name: Install dependencies
+        working-directory: after
+        run: npm ci --ignore-scripts
+      - name: Measure repeated candidate
+        run: python3 harness/.github/scripts/e2e-measure.py --root after --out /tmp/e2e-repeat --label after-repeat
+      - name: Preserve the test result
+        if: always()
+        run: |
+          python3 - <<'PYCODE'
+          import json, pathlib
+          meta = json.loads(pathlib.Path('/tmp/e2e-repeat/after-repeat-meta.json').read_text())
+          print(json.dumps(meta, indent=2))
+          assert meta['exit_code'] == 0, 'Repeated E2E suite failed'
+          PYCODE
+      - name: Upload repeated logs and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-candidate-repeat-linux-node20
+          path: |
+            /tmp/e2e-repeat/*.json
+            /tmp/e2e-repeat/*.log
+          retention-days: 30
