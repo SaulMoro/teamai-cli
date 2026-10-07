@@ -16,7 +16,8 @@ import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import {
-  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, recordDelivered, recordedUnchanged, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, keepsTrackedCopy, recordDelivered, recordedUnchanged,
+  type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { TEAM_ALIASES_FILE, aliasWarningsFor, isModelAlias, loadModelAliases, localAliasesPath, resolveAgentModel, type ModelAliases, type ResolutionStep } from '../models/aliases.js';
@@ -1040,6 +1041,7 @@ export class AgentsHandler extends ResourceHandler {
           log.warn(`[${localConfig.scope}] Kept agent "${item.name}" (${tool}): it differs from the team source ${item.relativePath}. Back it up, then delete it manually.`);
           continue;
         }
+        if (await keepsTrackedCopy(deployed)) continue;
         await remove(deployed);
         log.debug(`[${localConfig.scope}] Removed inactive role-scoped agent ${item.name} from ${tool}`);
       }

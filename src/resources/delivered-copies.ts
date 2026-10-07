@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { gitTracks } from '../git-exclude.js';
 import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { matchesHistory } from '../utils/team-history.js';
+import { warnOnce } from '../utils/warn-once.js';
 
 /**
  * What teamai last wrote at each skill, rule and agent file it delivered into
@@ -308,6 +310,20 @@ export async function judgeRemoval(
     : await fileHash(dest) === null || await isTeamaiCopy(dest, origin);
   if (teamais) return 'remove';
   return recordedUnder(otherRecords, dest).length > 0 ? 'edited' : 'notTeamais';
+}
+
+/**
+ * Whether a removal pass keeps `dest`, a copy teamai no longer delivers there,
+ * because the repository it sits in tracks it (#915): deleting it would be a
+ * change in the member's repository. Asked right before the deletion, after
+ * whatever proved the copy teamai's, so no proof deletes it. Named once per
+ * pull. A path git cannot answer for (no repository) is not kept.
+ */
+export async function keepsTrackedCopy(dest: string): Promise<boolean> {
+  if ((await gitTracks(dest)).kind !== 'tracked') return false;
+  warnOnce(`Kept ${dest}: this repository tracks it, so teamai does not delete it. `
+    + `Run \`git rm -r ${dest}\` and commit if the repository no longer needs it.`);
+  return true;
 }
 
 /**

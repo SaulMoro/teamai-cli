@@ -540,6 +540,17 @@ delivered into `remove`, `edited` (changed since teamai delivered it, or on
 another checkout's record) and `notTeamais` (no record, no team version), so
 each caller names a kept copy for what it is.
 
+Codex's shared `.agents/skills/<name>` is swept with the configured skills
+directory (#915): when a skill stops being delivered (an inactive namespace,
+Step 3b, a tombstone), pull deletes the shared copy only when `judgeRemoval`
+returns `remove`, and names an `edited` or `notTeamais` one. No removal pass of
+pull deletes a path the index of its checkout tracks (#915): the check
+(`keepsTrackedCopy`) sits right before each deletion of a copy no longer
+delivered (inactive namespaces, Step 3b, tombstones, the rules sweep and
+unselected rules, inactive agents, a source dropping a skill), so a later pull
+that proves the copy teamai's keeps it too. Each pull names it once, with
+`git rm -r <path>`; a source's kept copy stays on its installation's record.
+
 ### Known gaps
 
 - `teamai remove`'s rules refresh judges copies against the checkout's record
