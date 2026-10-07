@@ -165,7 +165,9 @@ Codex's shared root is on the removal side of three commands now, because
 `resolveSkillDestination` puts the stub there whenever the skill already lives
 there: the legacy prune, `recall disable`, and `uninstall`, whose skill discovery
 adds `.agents/skills` for `codex` alone. Without it, an uninstall reported
-success while leaving `~/.agents/skills/teamai` behind.
+success while leaving `~/.agents/skills/teamai` behind. A team skill's copy
+there goes only when it is teamai's (#993); other tools and the member write
+to that directory too.
 
 **`uninstall` deletes a CLI-owned directory by the same rule.** A team-repo skill
 is synced whole, so uninstall removes the whole directory. A CLI-owned one is
