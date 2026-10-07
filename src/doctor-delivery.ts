@@ -262,21 +262,34 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
   }
   if (items.length === 0) return [];
 
-  const labels = ['not delivered', 'delivered but unreadable'] as const;
-  const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async ({ dest }, item) => {
-    if (!await pathExists(dest)) return labels[0];
-    return await skillIsDiscoverable(dest, item.name) ? null : labels[1];
+  const labels = ['not delivered', 'delivered but unreadable', MEMBERS_OWN] as const;
+  // Pull's line for each skill directory of the member's own, by the tool it is in.
+  const memberLines = new Map<string, string[]>();
+  const { deliveredHashes } = await import('./pull.js');
+  const { describeMembersFile, judgeCopy } = await import('./resources/delivered-copies.js');
+  const previous = await deliveredHashes(localConfig);
+  const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async (target, item) => {
+    if (!await pathExists(target.dest)) return labels[0];
+    if ((await judgeCopy(previous, item, target)).kind === 'member') {
+      linesFor(memberLines, target.tool).push(describeMembersFile(target.dest, item.relativePath));
+      return MEMBERS_OWN;
+    }
+    return await skillIsDiscoverable(target.dest, item.name) ? null : labels[1];
   });
 
   return [...byTool].map(([tool, delivery]) => ({
     name: `Skills delivered to ${tool}`,
     source: 'local',
     check: async () => delivery.problems.size === 0,
-    fix: `In ${tool}, ${describeProblems(delivery.problems, labels)}. Run \`teamai pull --force\`: `
-      + 'a plain pull skips a scope whose team repo has not changed, so it cannot restore this. '
-      + 'If a skill stays unreadable, fix its SKILL.md in the team repo — the '
-      + 'frontmatter needs a `name` matching the directory, or the agent never '
-      + 'discovers it.',
+    fix: `In ${tool}, ${describeProblems(delivery.problems, labels)}.`
+      + (delivery.problems.has(labels[0]) || delivery.problems.has(labels[1])
+        ? ' Run `teamai pull --force`: '
+          + 'a plain pull skips a scope whose team repo has not changed, so it cannot restore this. '
+          + 'If a skill stays unreadable, fix its SKILL.md in the team repo — the '
+          + 'frontmatter needs a `name` matching the directory, or the agent never '
+          + 'discovers it.'
+        : '')
+      + membersOwnFix(memberLines, delivery),
   }));
 }
 
@@ -1372,7 +1385,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
-  const { listDocFiles, listStaleDocDirectories, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  const { listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
   // compare against, and pull stops the scope over them.
@@ -1412,15 +1425,21 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   for (const file of teamFiles) {
     if (!await isReadableFile(path.join(dest, file))) missing.push(file);
   }
+  // Files at a team doc's path that hold no team version of it: pull keeps them (#993).
+  const members = await membersDocs(desired, dest, localConfig.repo.localPath);
+  const { describeMembersFile } = await import('./resources/delivered-copies.js');
 
   return [{
     name: 'Team docs delivered',
     source: 'local',
-    check: async () => missing.length === 0 && stale.length === 0,
+    check: async () => missing.length === 0 && stale.length === 0 && members.length === 0,
     fix: [
       ...(missing.length ? [`Missing from ${dest}: ${nameList(missing)}.`] : []),
       ...(stale.length ? [`Stale docs in ${dest}: ${nameList(stale)}.`] : []),
-      'Run `teamai pull --force` to restore the docs mirror; a plain pull skips an already-synced revision.',
+      ...(missing.length || stale.length
+        ? ['Run `teamai pull --force` to restore the docs mirror; a plain pull skips an already-synced revision.']
+        : []),
+      ...members.map((file) => describeMembersFile(path.join(dest, file), `docs/${file}`)),
     ].join(' '),
   }];
 }
