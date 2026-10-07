@@ -201,16 +201,34 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
 
   it('records an adopted MCP server that already equals the current team render, so a team removal reaches it', () => {
     // Nothing to write on adoption: the record alone must still be saved.
-    const t = team('noop-adopt', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
-    const v1 = { type: 'http', url: 'https://team.example.com/v1' };
-    const dir = business('noop-adopt-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'plain-api': v1 } }) });
-
+    const t = team('noop-adopt', { 'README.md': '# team\n' });
+    const dir = business('noop-adopt-biz', { '.claude/.keep': '' });
     init(t, dir, 'claude');
+    const v1 = { type: 'http', url: 'https://team.example.com/v1' };
+    fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { 'plain-api': v1 } }));
+    t.publish({ 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') }, 'add');
+
+    // A dry run says it would record the server, and records nothing.
+    const preview = pull(dir, '--dry-run');
+    expect(preview.output).toContain(`Would record MCP server plain-api in ${path.join(dir, '.mcp.json')} as teamai's`);
+    pull(dir);
     expect(mcpServer(dir, 'plain-api')).toEqual(v1);
 
     t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
     pull(dir);
     expect(mcpServer(dir, 'plain-api')).toBeUndefined();
+  });
+
+  it('records an adopted MCP server that already equals the current team render, so uninstall removes it', () => {
+    const t = team('noop-adopt-uninstall', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const v1 = { type: 'http', url: 'https://team.example.com/v1' };
+    const dir = business('noop-adopt-uninstall-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'plain-api': v1 } }) });
+    init(t, dir, 'claude');
+    expect(mcpServer(dir, 'plain-api')).toEqual(v1);
+
+    const r = teamai(['uninstall', '--force'], dir);
+    expect(r.code).toBe(0);
+    expect(fs.existsSync(path.join(dir, '.mcp.json')) ? mcpServer(dir, 'plain-api') : undefined).toBeUndefined();
   });
 
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {

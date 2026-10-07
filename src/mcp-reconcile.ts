@@ -121,6 +121,11 @@ export interface McpChange {
 
 const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
 
+/** The dry-run line for an unrecorded server pull would record as teamai's without rewriting it (#993). */
+function describeAdoptionPreview(target: McpTarget, name: string): string {
+  return `Would record MCP server ${name} in ${target.file} as teamai's: it already holds the team's ${name}.`;
+}
+
 /**
  * The line naming a member's own server a reconcile kept (#993): one with a
  * team server's name that teamai has no record of and that matches no team
@@ -2096,7 +2101,10 @@ async function applyJson(
       delete doc.data[name];
       dirty = true;
     }
-    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) continue;
+    if (existing !== undefined && (unrecorded ? entryHash(existing) : ownedHash.get(name)) === hash) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     doc.servers[name] = entry;
     if (doc.bare) record.bare = true;
     dirty = true;
@@ -2267,7 +2275,8 @@ async function applyCodex(
 
   for (const [name, { hash, block, resolvedValue }] of desired) {
     // An entry with no record is teamai's when it equals a team render of `name` (#993), and is adopted.
-    const owner = present.has(name) && !ownedNames.has(name) && !options.force ? await judge(name, codexBlockIn(source, name)) : 'teamai';
+    const unrecorded = present.has(name) && !ownedNames.has(name) && !options.force;
+    const owner = unrecorded ? await judge(name, codexBlockIn(source, name)) : 'teamai';
     if (owner !== 'teamai') {
       changes.push(unrecordedServerKept(target, name, owner));
       continue;
@@ -2275,7 +2284,10 @@ async function applyCodex(
     nextRecords.push({ name, hash });
     holdsResolvedValue ||= resolvedValue;
     const next = spliceCodexBlock(source, name, block!);
-    if (next === source) continue;
+    if (next === source) {
+      if (unrecorded && options.dryRun) log.info(describeAdoptionPreview(target, name));
+      continue;
+    }
     source = next;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: present.has(name) ? 'updated' : 'added' });
