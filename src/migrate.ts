@@ -158,6 +158,8 @@ const SUPERSEDED_ENTRIES = [
   'env.sh',
   'env.local',
   'team-repo',
+  // When the clone was last fetched, kept beside it since #964.
+  'last-fetch.json',
   'search-index.json',
   'managed-mcp.json',
   'workspaces',

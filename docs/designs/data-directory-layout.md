@@ -386,7 +386,7 @@ A readable self partition over a legacy dir that holds self knowledge (a
 another checkout ran `init --self`, and this one checked out what it committed
 next to its old install, so retiring the whole dir would take the knowledge too
 (#808). Its machine entries (`SUPERSEDED_ENTRIES`: state, token, the `env` file,
-the team-repo clone, indexes, report and usage data) move to a new
+the team-repo clone and its `last-fetch.json` stamp, indexes, report and usage data) move to a new
 `.teamai.bak[.N]` with its own `.gitignore` (`*`), as step 5 keeps a retired dir;
 the knowledge stays. Then its queue is set aside as `pending-learnings.<old kind>`
 (settleCheckoutQueue, below), and only then does `config.yaml` follow: it is what
@@ -529,8 +529,14 @@ every checkout, so that is where they live now:
 │                                              Codex records event, matcher-group position and complete rendered entry; unique definitions recover moved entries
 │                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
+├── teamai.lock                                packageLockDir: installed package versions (#993; an older <root>/.teamai/teamai.lock is moved here,
+│                                              and a <root>/.teamai/.gitignore holding only `teamai.lock` is removed outside self mode)
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── root                                   the checkout's path, written by its full pulls; liveness is probed from it (#993)
+    ├── managed-hooks.json                     getManagedHooksPath: team hooks teamai wrote into this checkout's own hook files (Copilot's
+    │                                          .github/hooks/; every tool in self mode). Until #993 it sat in <root>/.teamai/: the first pull
+    │                                          moves its Copilot records (all of them in self mode), and deletes it once empty and untracked;
+    │                                          doctor names a tracked one. Other records stay there for the pre-#370 import and legacy sweep
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether

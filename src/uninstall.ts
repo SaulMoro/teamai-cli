@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
-import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
+import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
 import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
@@ -23,6 +23,7 @@ import {
   TEAMAI_TEAM_RULES_END,
   getDataHome,
   getManagedHooksPath,
+  legacyManagedHooksPath,
   isAgentExcluded,
   managedMcpManifestPath,
   resolveBaseDir,
@@ -617,10 +618,7 @@ async function buildRemovalPlan(
 ): Promise<RemovalPlan> {
   const baseDir = resolveBaseDir(localConfig);
   const teamaiHome = getDataHome(localConfig);
-  const standaloneHookManifestPath = getManagedHooksPath(
-    localConfig.scope,
-    localConfig.projectRoot,
-  );
+  const standaloneHookManifestPath = getManagedHooksPath(localConfig);
 
   // Discover team repo resource names for targeted removal. CLI built-in
   // resources (recall agent/rule, share-learnings skill, …) are deployed by
@@ -680,7 +678,7 @@ async function buildRemovalPlan(
       baseDir: target.root,
       manifestPath: target.manifestPath,
       teamOnly: true,
-      legacyManifestPath: getManagedHooksPath('project', target.root),
+      legacyManifestPath: legacyManagedHooksPath(target.root),
       fileFor: (tool) => mainCheckoutHookFile(target, tool),
     });
   }
@@ -1520,6 +1518,8 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       }
       agentKey = matched; // normalize to canonical toolPaths key
     }
+    // An index an older release left in the tree still owns Copilot's team hooks (#993).
+    if (!opts.dryRun) await migrateLegacyManagedHooks(localConfig);
     const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
     // Uninstall never removes these, so they are named whatever happens next.
     for (const { files, entry } of plan.keptRuleFiles) log.warn(keptLegacyCopiesWarning(files, entry));

@@ -1343,6 +1343,8 @@ function writeGitInstall(install: { teamRemote: string }, checkout: string): str
     '',
   ].join('\n'));
   fs.writeFileSync(path.join(legacyDir, 'state.json'), JSON.stringify({ lastPullRev: null }));
+  // A release with #964 stamps each fetch beside the clone.
+  fs.writeFileSync(path.join(legacyDir, 'last-fetch.json'), JSON.stringify({ lastFetch: new Date().toISOString() }));
   return legacyDir;
 }
 
