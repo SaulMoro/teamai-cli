@@ -45,6 +45,8 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
   let sandbox: string;
   let home: string;
   let detached: ReturnType<typeof trackDetachedProcesses>;
+  /** PATH for git before 2.36, set in beforeAll. */
+  let oldGit: Record<string, string>;
 
   const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
     const base: NodeJS.ProcessEnv = {
@@ -181,6 +183,25 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
     gitOk(['config', '--global', `url.${remote}.insteadOf`, FAKE_URL], sandbox);
     // `git submodule add` of a local path.
     gitOk(['config', '--global', 'protocol.file.allow', 'always'], sandbox);
+
+    // A git that refuses `-z` on `worktree list`, as git before 2.36 does, and runs everything else.
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const bin = path.join(sandbox, 'old-git-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), [
+      '#!/bin/sh',
+      'worktree=; list=; z=',
+      'for arg in "$@"; do',
+      '  case "$arg" in worktree) worktree=1 ;; list) list=1 ;; -z) z=1 ;; esac',
+      'done',
+      'if [ -n "$worktree" ] && [ -n "$list" ] && [ -n "$z" ]; then',
+      '  echo "error: unknown switch \\`z\'" >&2',
+      '  exit 129',
+      'fi',
+      `exec ${JSON.stringify(realGit)} "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    oldGit = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
   }, 60_000);
 
   afterAll(async () => {
@@ -312,25 +333,6 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
     const live = await addWorktree(main, 'old-git-live');
     const removed = await addWorktree(main, 'old-git-removed');
     gitOk(['worktree', 'remove', '--force', removed], main);
-
-    // A git that refuses `-z` on `worktree list`, as git before 2.36 does, and runs everything else.
-    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-    const bin = path.join(sandbox, 'old-git-bin');
-    fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, 'git'), [
-      '#!/bin/sh',
-      'worktree=; list=; z=',
-      'for arg in "$@"; do',
-      '  case "$arg" in worktree) worktree=1 ;; list) list=1 ;; -z) z=1 ;; esac',
-      'done',
-      'if [ -n "$worktree" ] && [ -n "$list" ] && [ -n "$z" ]; then',
-      '  echo "error: unknown switch \\`z\'" >&2',
-      '  exit 129',
-      'fi',
-      `exec ${JSON.stringify(realGit)} "$@"`,
-      '',
-    ].join('\n'), { mode: 0o755 });
-    const oldGit = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
     expect(run('git', ['worktree', 'list', '--porcelain', '-z'], main, oldGit).code).toBe(129);
 
     teamaiOk(['pull', '--force'], main, oldGit);
@@ -339,5 +341,62 @@ describe.skipIf(process.platform === 'win32')('live checkouts are probed, not in
     expect(tracked(partition, main)).toEqual(KEPT);
     expect(tracked(partition, live)).toEqual(KEPT);
     expect(tracked(partition, removed)).toEqual(DROPPED);
+  });
+
+  it('keeps the shared .git/info/exclude line while a sibling worktree\'s MCP config holds a resolved value, on git before 2.36', async () => {
+    // Fresh paths, so the runner's retry does not trip over the first try's fixtures.
+    const base = fs.mkdtempSync(path.join(sandbox, 'mcp-'));
+    const name = path.basename(base);
+    // A team whose one MCP server sends a value resolved from env.yaml.
+    const url = `https://git.example.com/team/${name}.git`;
+    const token = 'live-checkouts-token-7c2d';
+    const seed = path.join(base, 'seed');
+    const write = (rel: string, content: string) => {
+      fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
+      fs.writeFileSync(path.join(seed, rel), content);
+    };
+    write('teamai.yaml', `team: live-checkouts-mcp\nrepo: ${url}\nprovider: git\nreviewers: []\nsharing:\n  mcp:\n    autoApply: true\n`);
+    write('rules/team-rule.md', '# Team rule\n');
+    write('mcp/mcp.yaml', [
+      'servers:', '  - name: secret-api', '    transport: http', '    url: https://api.example.com/mcp',
+      '    headers:', '      Authorization: "Bearer ${LAB_TOKEN}"', '',
+    ].join('\n'));
+    write('env/env.yaml', `variables:\n  - key: LAB_TOKEN\n    value: "${token}"\n`);
+    gitOk(['init', '-q', '-b', 'main'], seed);
+    gitOk(['add', '-A'], seed);
+    gitOk(['commit', '-q', '-m', 'seed'], seed);
+    const remote = path.join(base, 'team.git');
+    gitOk(['clone', '-q', '--bare', seed, remote], sandbox);
+    gitOk(['config', '--global', `url.${remote}.insteadOf`, url], sandbox);
+
+    const main = path.join(base, 'main');
+    commitApp(main);
+    teamaiOk(['init', url, '--scope', 'project', '--force', '--agent', 'claude'], main);
+    await detached.waitForExit();
+    const sibling = await addWorktree(main, `${name}/sibling`);
+    const mcpJson = (checkout: string): string => fs.readFileSync(path.join(checkout, '.mcp.json'), 'utf8');
+    const excludeLines = (): string[] => fs.readFileSync(path.join(main, '.git', 'info', 'exclude'), 'utf8').split('\n');
+    /** What `git add -A` in the sibling would pick up of its MCP config. */
+    const siblingStatus = (): string => gitOk(['status', '--porcelain', '--untracked-files=all', '--', '.mcp.json'], sibling);
+    expect(mcpJson(sibling)).toContain(token);
+    expect(excludeLines()).toContain('/.mcp.json');
+
+    // The team drops the server; only the main checkout pulls that.
+    write('mcp/mcp.yaml', 'servers: []\n');
+    gitOk(['commit', '-q', '-am', 'drop secret-api'], seed);
+    gitOk(['push', '-q', remote, 'main'], seed);
+
+    teamaiOk(['pull', '--force'], main, oldGit);
+
+    expect(mcpJson(main)).not.toContain(token);
+    expect(mcpJson(sibling)).toContain(token);
+    expect(excludeLines()).toContain('/.mcp.json');
+    expect(siblingStatus()).toBe('');
+
+    teamaiOk(['uninstall', '--force'], main, oldGit);
+
+    // Uninstall reaches the sibling: it takes teamai's server out there before it drops the line.
+    expect(mcpJson(sibling)).not.toContain(token);
+    expect(excludeLines()).not.toContain('/.mcp.json');
   });
 });
