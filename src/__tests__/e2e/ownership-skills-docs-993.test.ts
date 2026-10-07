@@ -274,6 +274,41 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(pulled.output).toContain(`Kept ${link}: the team removed docs/guide.md`);
   });
 
+  it('keeps a member\'s directory holding a link where the team deleted a doc file, without following it', () => {
+    const t = team('docs-dir-link', { 'docs/guide': '# Guide file\n', 'docs/keep.md': '# Keep\n' });
+    const dir = business('docs-dir-link-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    const mine = path.join(sandbox, 'docs-dir-link-mine.md');
+    writeFile(mine, 'MY NOTES\n');
+    fs.rmSync(path.join(docs, 'guide'));
+    fs.mkdirSync(path.join(docs, 'guide'));
+    const link = path.join(docs, 'guide', 'personal.md');
+    fs.symlinkSync(mine, link);
+
+    t.publish({ 'docs/guide': null }, 'remove guide');
+    teamaiOk(['pull'], dir);
+
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(mine)).toBe('MY NOTES\n');
+  });
+
+  it('keeps a member\'s skill directory holding a link at a team skill\'s path, and never writes through the link', () => {
+    const t = team('skill-link', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const external = path.join(sandbox, 'skill-link-mine.md');
+    writeFile(external, skillMd('team-skill', 'Team.'));
+    const dir = business('skill-link-biz', { '.claude/skills/.keep': '' });
+    const skillDir = path.join(dir, '.claude', 'skills', 'team-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.symlinkSync(external, path.join(skillDir, 'SKILL.md'));
+    t.publish({ 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team v2.') }, 'v2');
+
+    const initRun = init(t, dir);
+    expect(fs.lstatSync(path.join(skillDir, 'SKILL.md')).isSymbolicLink()).toBe(true);
+    expect(read(external)).toBe(skillMd('team-skill', 'Team.'));
+    expect(initRun.output).toContain(`Kept ${skillDir}: it is not teamai's`);
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

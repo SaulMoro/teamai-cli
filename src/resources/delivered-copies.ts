@@ -188,9 +188,9 @@ export function describeMembersFile(file: string, resource: string, origin: 'tea
 export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
 ): Promise<boolean> {
-  // A link inside it is the member's: copying the skill over it would write through it.
+  // A link (or any non-regular entry) inside it is the member's: copying the skill over it would write through it.
   // A link in place of the directory itself is replaced whole by copyDir, never written through.
-  if (!await isDirectory(dir) || await holdsLink(dir)) return false;
+  if (!await isDirectory(dir) || await holdsNonRegular(dir)) return false;
   for (const rel of await listFilesRecursive(dir)) {
     if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
     const file = path.join(dir, rel);
@@ -234,11 +234,18 @@ async function isLink(file: string): Promise<boolean> {
   return (await fse.lstat(file).catch(() => null))?.isSymbolicLink() ?? false;
 }
 
-/** Whether `dir` holds a link anywhere below it. teamai writes no links, and `listFilesRecursive` does not list them. */
-async function holdsLink(dir: string): Promise<boolean> {
+/**
+ * Whether `dir` holds, anywhere below it, an entry that is neither a regular file nor a
+ * directory (a link, above all). teamai writes only files, and `listFilesRecursive` does
+ * not list the others.
+ */
+async function holdsNonRegular(dir: string): Promise<boolean> {
   for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
-    if (entry.isSymbolicLink()) return true;
-    if (entry.isDirectory() && await holdsLink(path.join(dir, entry.name))) return true;
+    if (entry.isDirectory()) {
+      if (await holdsNonRegular(path.join(dir, entry.name))) return true;
+    } else if (!entry.isFile()) {
+      return true;
+    }
   }
   return false;
 }
