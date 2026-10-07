@@ -84,36 +84,19 @@ GitHub repo → **Settings → Secrets and variables → Actions → Variables �
 
 ## 本地复现 CI 的 e2e
 
-⚠️ **不要用你自己的真实 `~/.teamai/`** 跑！会污染你的工作仓。
+e2e 的 setup 文件 `src/__tests__/helpers/isolate-e2e-env.ts` 会为每个测试文件创建一个临时沙盒 HOME（自带 git 身份 `.gitconfig`），并在 PATH 前放一个运行本次 `dist/` 的 `teamai`，测试结束后删除整个沙盒。所以不需要自己 `export HOME`，也不会碰到你真实的 `~/.teamai/` 和 `~/.gitconfig`。远程用例（`src/__tests__/e2e/e2e.test.ts`）在 `beforeAll` 里用 token 把 fixture 仓 clone 进沙盒 HOME 并写好 `~/.teamai/config.yaml`（`prepareRemoteTeamHome`），无需手动准备。
 
 ```bash
-# 1. 隔离一个临时 HOME
-export HOME=$(mktemp -d)
-
-# 2. 配 fixture 仓 + token（owner/repo 自己填）
+# 1. 配 fixture 仓 + token（owner/repo 自己填；不配则远程用例自动 skip）
 export TEAMAI_TEST_PROVIDER=github
 export TEAMAI_TEST_REPO_URL=<owner>/<repo>
 export TEAMAI_TEST_TOKEN=ghp_xxxxx
 export GITHUB_TOKEN=$TEAMAI_TEST_TOKEN
 
-# 3. 准备 ~/.teamai/config.yaml + clone fixture 仓
-mkdir -p $HOME/.teamai
-git clone "https://x-access-token:${TEAMAI_TEST_TOKEN}@github.com/${TEAMAI_TEST_REPO_URL}.git" \
-  $HOME/.teamai/team-repo
-cat > $HOME/.teamai/config.yaml <<EOF
-repo:
-  localPath: $HOME/.teamai/team-repo
-  remote: $TEAMAI_TEST_REPO_URL
-username: ci
-updatePolicy: auto
-EOF
-
-# 4. 跑
+# 2. 跑
 npm run build
 npx vitest run --config vitest.e2e.config.ts --reporter=verbose
 ```
-
-跑完之后 `rm -rf $HOME` 即可清理（注意 `$HOME` 是临时目录，不是你真实的 home）。
 
 ---
 
@@ -133,4 +116,4 @@ Fine-grained token 权限不全。确认 `Contents: read/write` + `Pull requests
 
 ### Fixture 仓被 e2e 写脏（残留 `__ci_e2e_tag__` 之类）
 
-正常情况测试会 add/remove roundtrip 自清。如果中途崩了留下垃圾：本地 clone fixture → 手动 `git revert` 或 reset → push。CI 失败时也会跑 `Cleanup fixture repo state on failure` step 做 `git reset --hard HEAD`。
+正常情况测试会 add/remove roundtrip 自清。如果中途崩了留下垃圾：本地 clone fixture → 手动 `git revert` 或 reset → push。测试用的本地 clone 在沙盒 HOME 里，随沙盒一起删除，不需要额外清理。
