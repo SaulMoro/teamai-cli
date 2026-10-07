@@ -1248,4 +1248,47 @@ describe('OpenCode V2 delivery through the teamai plugin (#993 bug 6)', () => {
     expect(await systemTexts(member.home, deep, 'compaction')).toEqual(inProject);
     expect(sources(await systemTexts(member.home, sandbox, 'context'))).toEqual(userSources);
   });
+
+  it('has doctor check the plugin on OpenCode V2 and `instructions` on V1', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-oc-v2-')));
+    sandboxes.push(sandbox);
+    const fixture = makeTeamAndProject(sandbox, { files: { 'rules/style.md': 'RULE-SENTINEL: keep functions small.\n' } });
+    const member = makeProjectMember(sandbox, fixture, 'dev', 'developer', ['.opencode/skills']);
+    const bin = path.join(sandbox, 'bin');
+    fs.mkdirSync(bin);
+    /** `opencode` on PATH prints `version`, as the installed binary does. */
+    const withOpencode = (version: string): Record<string, string> => {
+      fs.writeFileSync(path.join(bin, 'opencode'), `#!/bin/sh\necho '${version}'\n`, { mode: 0o755 });
+      fs.writeFileSync(path.join(bin, 'opencode.cmd'), `@echo ${version}\r\n`);
+      return { ...isolated(member.home), PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
+    };
+    const doctor = async (env: Record<string, string>): Promise<Map<string, { ok: boolean; fix?: string }>> => {
+      const run = await runCLI(['doctor', '--json'], env, member.projectRoot);
+      const report = JSON.parse(run.stdout) as { checks: Array<{ name: string; ok: boolean; fix?: string }> };
+      return new Map(report.checks.map((c) => [c.name, c]));
+    };
+    const pulled = await pullAs(member, [], withOpencode('opencode v2.0.24'));
+    expect(pulled.code, pulled.output).toBe(0);
+    // V2 ignores these entries: doctor does not ask for them.
+    fs.writeFileSync(path.join(member.projectRoot, '.opencode', 'opencode.json'), '{}\n');
+
+    const v2 = await doctor(withOpencode('opencode v2.0.24'));
+    expect(v2.get('Team rules are active in opencode')?.ok).toBe(true);
+    expect(v2.get('opencode adds the team instructions to its prompt')?.ok).toBe(true);
+    expect(v2.has('Team instructions are listed in opencode instructions')).toBe(false);
+
+    const plugin = path.join(member.home, '.config', 'opencode', 'plugin', 'teamai-hooks.ts');
+    fs.rmSync(plugin);
+    const noPlugin = await doctor(withOpencode('opencode v2.0.24'));
+    for (const name of ['Team rules are active in opencode', 'opencode adds the team instructions to its prompt']) {
+      expect(noPlugin.get(name)).toMatchObject({ ok: false });
+      expect(noPlugin.get(name)?.fix).toContain(plugin);
+    }
+
+    const v1 = await doctor(withOpencode('1.18.35'));
+    expect(v1.get('Team rules are active in opencode')).toMatchObject({ ok: false });
+    expect(v1.get('Team rules are active in opencode')?.fix).toContain('`instructions`');
+    expect(v1.get('Team instructions are listed in opencode instructions')).toMatchObject({ ok: false });
+    expect(v1.has('opencode adds the team instructions to its prompt')).toBe(false);
+  });
 });

@@ -23,7 +23,8 @@
  */
 
 import path from 'node:path';
-import { writeFile, writeIfChanged, ensureDir, pathExists, remove } from './utils/fs.js';
+import { writeFile, writeIfChanged, ensureDir, pathExists, readFileSafe, remove } from './utils/fs.js';
+import { probeBinary } from './utils/exec.js';
 import { log } from './utils/logger.js';
 import { getUserHome } from './utils/home.js';
 
@@ -325,6 +326,25 @@ export async function injectOpencodeHooks(baseDir: string, scope: 'project' | 'u
   } else {
     log.debug(`teamai OpenCode hook already up-to-date in ${file}`);
   }
+}
+
+/**
+ * OpenCode's major version, from `opencode --version` (`opencode v2.0.24` on
+ * V2, `1.18.35` on V1). 1 when the binary is absent or prints no version.
+ */
+export async function opencodeMajorVersion(): Promise<number> {
+  const match = /(\d+)\.\d+/.exec(await probeBinary('opencode'));
+  return match ? Number(match[1]) : 1;
+}
+
+/**
+ * The teamai plugin in HOME, and whether it is the one this build writes.
+ * OpenCode V2 ignores `instructions` and gets the team rules and instruction
+ * files only from this plugin's context hook.
+ */
+export async function opencodeContextPlugin(): Promise<{ file: string; ready: boolean }> {
+  const file = path.join(resolveOpencodePluginDir(getUserHome(), 'user'), OPENCODE_HOOK_FILE);
+  return { file, ready: await readFileSafe(file) === buildPluginSource() };
 }
 
 /** Remove the teamai OpenCode plugin for a scope if present. */
