@@ -1110,8 +1110,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   force?: boolean;
   inheritUserScope?: boolean;
 }): Promise<void> {
-  // No preview yet, and loading the config below already bootstraps a clone
-  // whose teamai.yaml says `mode: self` (#852), so stop before anything (#900).
+  // No preview yet, so stop before anything (#900).
   if (options.dryRun) {
     log.error(noDryRunPreview('init'));
     process.exit(1);
@@ -1138,14 +1137,14 @@ export async function initSelfRepo(options: GlobalOptions & {
   const partitionHome = await resolveProjectDataHome(businessRepoRoot);
 
   // Read the existing config once, before Step 3 writes the `mode: self`
-  // marker, and use this snapshot for every later step. Once the marker is on
-  // disk and no config exists yet, loading would run the clone-time self-heal,
-  // which enables every tool found in HOME and injects their hooks, so
-  // `--agent` would no longer choose the tools (#993).
+  // marker, and use this snapshot for every later step. With the marker on
+  // disk and no config yet (after Step 3, or in a fresh clone), loading would
+  // run the clone-time self-heal, which enables every tool found in HOME and
+  // injects their hooks, so `--agent` would no longer choose the tools (#993).
   let preInitConfig: LocalConfig | null;
   let inheritUserScope: boolean | undefined;
   try {
-    preInitConfig = await loadLocalConfigForScope('project', businessRepoRoot);
+    preInitConfig = await loadLocalConfigForScope('project', businessRepoRoot, { selfHeal: false });
     inheritUserScope = resolveInheritUserScope('project', options.inheritUserScope, preInitConfig?.inheritUserScope);
   } catch (e) {
     log.error((e as Error).message);
