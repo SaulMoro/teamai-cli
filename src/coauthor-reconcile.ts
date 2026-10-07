@@ -188,22 +188,24 @@ function preFixSharedTargets(teamConfig: TeamaiConfig, localConfig: LocalConfig)
  * A shared settings file's text without its pre-#993 `attribution`, when that
  * is exactly what teamai wrote (`{"commit": "", "pr": ""}`): only that
  * member's text goes, so every other byte, formatting included, stays as it
- * was. Null when there is nothing of teamai's to remove.
+ * was. `none` when there is nothing of teamai's to remove; `unreadable` when
+ * the file is not JSON, so nothing can be told.
  */
-async function withoutPreFixAttribution(file: string): Promise<string | null> {
+async function withoutPreFixAttribution(file: string): Promise<{ kind: 'stripped'; text: string } | { kind: 'none' } | { kind: 'unreadable' }> {
   const source = await readFileSafe(file);
-  if (source === null) return null;
+  if (source === null) return { kind: 'none' };
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
   } catch {
-    return null;
+    return { kind: 'unreadable' };
   }
   const attribution = (parsed as Record<string, unknown> | null)?.attribution as Record<string, unknown> | undefined;
-  if (typeof attribution !== 'object' || attribution === null) return null;
+  if (typeof attribution !== 'object' || attribution === null) return { kind: 'none' };
   const keys = Object.keys(attribution);
-  if (keys.length !== 2 || attribution.commit !== '' || attribution.pr !== '') return null;
-  return removeTopLevelJsonMember(source, 'attribution');
+  if (keys.length !== 2 || attribution.commit !== '' || attribution.pr !== '') return { kind: 'none' };
+  const text = removeTopLevelJsonMember(source, 'attribution');
+  return text === null ? { kind: 'none' } : { kind: 'stripped', text };
 }
 
 /**
@@ -431,13 +433,14 @@ export async function reconcileCoAuthorForConfig(
     const wroteStrip = recorded === false;
     delete managed[file];
     try {
-      const next = wroteStrip ? await withoutPreFixAttribution(file) : null;
-      if (next === null) {
-        changes.push({ tool, file, enabled: false, action: 'skipped', reason: 'not teamai\'s value' });
+      const next = wroteStrip ? await withoutPreFixAttribution(file) : { kind: 'none' as const };
+      if (next.kind !== 'stripped') {
+        const reason = next.kind === 'unreadable' ? `${file} is not valid JSON, so teamai could not read it` : 'not teamai\'s value';
+        changes.push({ tool, file, enabled: false, action: 'skipped', reason });
         continue;
       }
       if (moveTo && await writeStripUnlessSet(moveTo)) managed[moveTo] = false;
-      await writeFile(file, next);
+      await writeFile(file, next.text);
       changes.push({ tool, file, enabled: false, action: moveTo ? 'moved' : 'removed' });
     } catch (e) {
       managed[file] = recorded;
