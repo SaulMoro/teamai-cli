@@ -538,7 +538,10 @@ same rule in every tool's skills root (#993): `teamai remove skills <name>` and
 `uninstall` delete a directory only when a file under it is on the checkout's
 record (edited or not) or `isTeamaiSkillCopy` proves it (`ownsSkillDir`), and
 name each one they leave; uninstall also deletes a built-in's name and a name
-the local agent's manifest lists. Pull's sweep of the namespace-nested copies
+the local agent's manifest lists. `uninstall` removes from the docs mirror only
+what the history proves teamai's (`removeTeamDocs`: a file or link at `<rel>`
+that is a version of `docs/<rel>`), keeps and names the rest, and leaves the
+directories holding it, inside the data home too. Pull's sweep of the namespace-nested copies
 earlier releases left of an excluded skill deletes one only when
 `judgeRemoval` returns `remove`, and leaves the rest silently, as pull never
 delivers there. `judgeRemoval` sorts a copy of a resource no longer

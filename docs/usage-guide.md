@@ -3039,6 +3039,7 @@ What gets removed:
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
 - In a project, teamai's git hook: the `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout`, `post-merge` and `post-rewrite` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
+- The team docs in the docs directory (`sharing.docs.localDir`): each file, or link, that holds a version of that doc from the team repo's history. Anything else there stays and is named (`Kept <path>: it is not teamai's ... so uninstall left it.`): a file at a removed doc's path or at one the team never had, a directory or a link of yours. The directories holding it stay too, inside `~/.teamai/` as well. While the team repo's history cannot be read, the docs directory stays whole
 - The `~/.teamai/` directory
 
 ### Uninstall a single tool (`--agent <tool>`)

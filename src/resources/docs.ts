@@ -8,8 +8,8 @@ import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
-import { describeKeptEntry, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
-import { blobIdOf, historicalVersions } from '../utils/team-history.js';
+import { describeKeptEntry, describeMembersDirLeft, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
+import { blobIdOf, historicalVersions, type HistoricalVersion } from '../utils/team-history.js';
 
 /**
  * The single directory the team docs bundle is copied into. In project scope a
@@ -84,15 +84,57 @@ export async function isPrunableDoc(file: string, rel: string, repoPath: string)
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
   if (versions === null) return false;
   if (versions.length === 0) return !stat.isSymbolicLink();
-  // Anything but a file or a link at a removed team doc's path is the member's: no team version can match it.
-  if (!stat.isFile() && !stat.isSymbolicLink()) return false;
-  // git stores a link as a blob of its target, so a link the team delivered matches by id; it is never followed.
+  return isDocVersion(file, stat, versions, repoPath);
+}
+
+/**
+ * Whether the mirror entry at `file` (`stat`, from lstat) is one of `versions` of a team doc,
+ * compared by git blob id. Anything but a file or a link is not: no team version can match it.
+ * git stores a link as a blob of its target, so a link the team delivered matches by id; it is
+ * never followed.
+ */
+async function isDocVersion(file: string, stat: fse.Stats, versions: readonly HistoricalVersion[], repoPath: string): Promise<boolean> {
+  if (versions.length === 0 || (!stat.isFile() && !stat.isSymbolicLink())) return false;
   const bytes = stat.isSymbolicLink()
     ? await fs.readlink(file).then((target) => Buffer.from(target), () => null)
     : await readBytes(file);
   if (bytes === null) return false;
   const id = await blobIdOf(repoPath, bytes);
   return versions.some((version) => version.blob === id);
+}
+
+/**
+ * Remove from the docs mirror `dir` what is teamai's, for `uninstall` (#993): each file or link
+ * at `<rel>` that is a version of `docs/<rel>` in the team repo's history. Anything else is the
+ * member's and stays, named; hidden entries stay silently, as pull leaves them. A directory goes
+ * once nothing is left in it. While the history cannot be read, nothing goes, since nothing proves
+ * a doc teamai's. Returns the lines naming what stayed.
+ */
+export async function removeTeamDocs(dir: string, repoPath: string): Promise<string[]> {
+  const history = await historicalVersions(repoPath, 'docs');
+  if (history === null) {
+    return [`Kept ${dir}: the team repo's history cannot be read, so nothing proves a doc there teamai's, and uninstall left it.`];
+  }
+  const kept: string[] = [];
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await readEntries(current)) {
+      if (entry.name.startsWith('.')) continue;
+      const target = path.join(current, entry.name);
+      const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(target, entryRel);
+        if ((await fse.readdir(target)).length === 0) await fse.rmdir(target);
+        continue;
+      }
+      const versions = history.filter((version) => version.path === `docs/${entryRel}`);
+      if (await isDocVersion(target, await fse.lstat(target), versions, repoPath)) await fse.unlink(target);
+      else kept.push(describeMembersDirLeft(target, `docs/${entryRel}`, 'uninstall'));
+    }
+  };
+  await walk(dir, '');
+  // A linked mirror keeps its link: only what teamai delivered through it goes.
+  if ((await fse.lstat(dir)).isDirectory() && (await fse.readdir(dir)).length === 0) await fse.rmdir(dir);
+  return kept;
 }
 
 /**

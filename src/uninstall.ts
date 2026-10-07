@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
 import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, hasUnrecordedTeamHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, teamHookHistory, type TeamHookHistory } from './hooks.js';
@@ -137,6 +137,8 @@ interface RemovalPlan {
   shellProfiles: string[];
   /** Docs directory (null if doesn't exist). */
   docsDir: string | null;
+  /** The team clone, whose history proves a doc in `docsDir` teamai's (#993). */
+  teamRepoPath: string;
   /** The .git/info/exclude files holding teamai's MCP config block (#882), each with its patterns and the paths each protects. */
   gitExcludes: Map<string, Array<{ pattern: string; files: string[] }>>;
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
@@ -919,6 +921,7 @@ async function buildRemovalPlan(
     mcpServers: [],
     shellProfiles: [],
     docsDir: null,
+    teamRepoPath: localConfig.repo.localPath,
     gitExcludes: new Map(),
     gitHook: null,
     teamaiHome,
@@ -1521,12 +1524,18 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     }
   }
 
-  // (f) Remove docs directory
+  // (f) Remove teamai's docs from the docs directory: the mirror keeps no record, so a
+  // doc goes only as a version from the team history; anything else is the member's (#993).
+  let docsKept = false;
   if (plan.docsDir) {
     try {
-      await remove(plan.docsDir);
-      log.success(`Removed docs: ${plan.docsDir}`);
+      const { removeTeamDocs } = await import('./resources/docs.js');
+      const kept = await removeTeamDocs(plan.docsDir, plan.teamRepoPath);
+      for (const line of kept) log.warn(line);
+      docsKept = kept.length > 0;
+      log.success(docsKept ? `Removed teamai's docs from ${plan.docsDir}` : `Removed docs: ${plan.docsDir}`);
     } catch (e) {
+      docsKept = true;
       log.warn(`Failed to remove docs: ${(e as Error).message}`);
     }
   }
@@ -1536,8 +1545,11 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
     await teardownPlugins();
     try {
-      await remove(plan.teamaiHome);
-      log.success(`Removed ${plan.teamaiHome}/`);
+      // A docs directory inside it that kept the member's files stays, with them.
+      const docsInside = docsKept && plan.docsDir !== null && plan.docsDir.startsWith(plan.teamaiHome + path.sep);
+      if (docsInside) await removeAllBut(plan.teamaiHome, plan.docsDir!);
+      else await remove(plan.teamaiHome);
+      log.success(docsInside ? `Removed ${plan.teamaiHome}/ but ${plan.docsDir}` : `Removed ${plan.teamaiHome}/`);
     } catch (e) {
       log.warn(`Failed to remove ${plan.teamaiHome}: ${(e as Error).message}`);
     }
@@ -1558,6 +1570,16 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     }
   }
   return pendingOpencode;
+}
+
+/** Remove everything under `root` but `keep` and the directories on the way to it. */
+async function removeAllBut(root: string, keep: string): Promise<void> {
+  for (const name of await readdir(root)) {
+    const entry = path.join(root, name);
+    if (entry === keep) continue;
+    if (keep.startsWith(entry + path.sep) && (await lstat(entry)).isDirectory()) await removeAllBut(entry, keep);
+    else await remove(entry);
+  }
 }
 
 // ─── Public API ────────────────────────────────────────
