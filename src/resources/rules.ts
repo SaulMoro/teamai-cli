@@ -17,7 +17,7 @@ import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/git.js';
 import { historicalVersions } from '../utils/team-history.js';
 import {
-  adoptRecord, contentHash, describeMembersDirLeft, forgetDelivered, holdsNonRegular, isLink, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
+  adoptRecord, contentHash, describeMembersDirLeft, describeMembersLink, forgetDelivered, holdsNonRegular, isLink, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
   judgeRemoval, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
@@ -425,6 +425,11 @@ export class RulesHandler extends ResourceHandler {
           // The flat name of a namespaced rule may be a file the member wrote.
           warnOnce(`Kept ${dest}: teamai did not write it, and it is where ${tool} would read team rule ${item.name}. `
             + 'Rename your file, then run `teamai pull --force`.');
+          continue;
+        }
+        // With no ledger (the local agent's install), nothing else judges a link of the member's there (#993).
+        if (!ledger && await isLink(dest)) {
+          warnOnce(describeMembersLink(dest, item.relativePath));
           continue;
         }
         if (!ledger || !await keepsEditedCopy(ledger, item, target)) {

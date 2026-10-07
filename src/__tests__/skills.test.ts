@@ -1363,6 +1363,29 @@ describe('SkillsHandler.pullItem skips hermes when not installed', () => {
 
     expect(await fse.pathExists(path.join(hermesHome, 'skills', 'team-skill', 'SKILL.md'))).toBe(true);
   });
+
+  it('keeps a member\'s link at or inside the skill directory when installed without a delivery record (#993)', async () => {
+    const hermesHome = path.join(homeDir, '.hermes');
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    const dest = path.join(hermesHome, 'skills', 'team-skill');
+    const external = path.join(tmpDir, 'my-skill');
+    await fse.outputFile(path.join(external, 'SKILL.md'), 'mine');
+    await fse.ensureDir(path.dirname(dest));
+    await fse.symlink(external, dest, 'dir');
+
+    await handler.pullItem(item(), teamConfig, localConfig);
+
+    expect((await fse.lstat(dest)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('mine');
+
+    await fse.unlink(dest);
+    await fse.ensureDir(dest);
+    await fse.symlink(path.join(external, 'SKILL.md'), path.join(dest, 'SKILL.md'));
+
+    await handler.pullItem(item(), teamConfig, localConfig);
+
+    expect((await fse.lstat(path.join(dest, 'SKILL.md'))).isSymbolicLink()).toBe(true);
+  });
 });
 
 describe('SkillsHandler.pullItem Codex shared skills', () => {

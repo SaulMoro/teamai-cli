@@ -1051,6 +1051,19 @@ scope: 'user',
     expect(await fse.readFile(target, 'utf8')).toBe('RESERVED-RULE');
   });
 
+  it('never writes through a member\'s link at a rule path when installed without a delivery record (#993)', async () => {
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'team-rule.md'), 'team content');
+    const link = path.join(homeDir, '.claude/rules', 'team-rule.md');
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'mine');
+    await fse.symlink(target, link);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(target, 'utf8')).toBe('mine');
+  });
+
   it('never counts a member\'s link as a copy an older layout wrote, on record or with a built-in rule\'s name (#993)', async () => {
     const target = path.join(tmpDir, 'mine.md');
     await fse.writeFile(target, 'mine');
