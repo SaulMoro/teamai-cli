@@ -373,6 +373,24 @@ function olderRuleCopyMeaning(tool: string): string {
 }
 
 /**
+ * On OpenCode V2, which parses `instructions` and ignores it (#993), the check
+ * that teamai's plugin in HOME is installed as this build writes it; its
+ * context hook is what adds `what`. Null on V1, which loads `instructions`.
+ */
+async function opencodeV2PluginCheck(name: string, what: string): Promise<Check | null> {
+  const { opencodeContextPlugin, opencodeMajorVersion } = await import('./opencode-hooks.js');
+  if (await opencodeMajorVersion() < 2) return null;
+  const { file, ready } = await opencodeContextPlugin();
+  return {
+    name,
+    source: 'local',
+    check: async () => ready,
+    fix: `${file} is missing or out of date. OpenCode V2 ignores \`instructions\` and gets ${what} only through this plugin. `
+      + 'Run `teamai hooks inject` to reinstall it.',
+  };
+}
+
+/**
  * The two rule destinations that are not a file per tool.
  *
  * OpenCode does not auto-scan its rules directory: a `.md` copied there is
@@ -394,7 +412,10 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const checks: Check[] = [];
 
   const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig, items);
-  if (opencode !== null) {
+  const opencodeV2 = opencode === null ? null : await opencodeV2PluginCheck('Team rules are active in opencode', 'the team rules');
+  if (opencodeV2) {
+    checks.push(opencodeV2);
+  } else if (opencode !== null) {
     const { readOpencodeInstructionList } = await import('./resources/opencode-config.js');
     // A missing file just lists nothing yet; null is one the pull cannot parse.
     const instructions = await pathExists(opencode.configFile) ? await readOpencodeInstructionList(opencode.configFile) : [];
@@ -1440,7 +1461,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { buildRolePullContext } = await import('./resources/desired.js');
   const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
   const { blocks } = await resolveInstructionBlocks(teamConfig, localConfig, await buildRolePullContext(localConfig));
-  const { targets, hooks, stale } = await resolveInstructionTargets(teamConfig, localConfig);
+  const { targets, hooks, stale, opencodeFallback } = await resolveInstructionTargets(teamConfig, localConfig);
   const pullNow = 'Run `teamai pull`.';
   const checks: Check[] = [];
 
@@ -1458,8 +1479,15 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
 
   const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
   const opencodeFile = opencodePaths && await instructionTargetPath('opencode', opencodePaths, localConfig);
-  // Only a file holding the blocks needs listing; pull registers it once it writes them.
-  if (opencodeFile && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile)) {
+  // Only a file holding the blocks needs listing; pull registers it once it
+  // writes them. Beside the Claude fallback V1 reads CLAUDE.md instead.
+  const opencodeDelivered = opencodeFile !== undefined && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile);
+  const opencodeV2 = opencodeDelivered
+    ? await opencodeV2PluginCheck('opencode adds the team instructions to its prompt', 'the team instructions')
+    : null;
+  if (opencodeV2) {
+    checks.push(opencodeV2);
+  } else if (opencodeFile && opencodeDelivered && !opencodeFallback) {
     const { config, entry } = opencodeContextReference(opencodeFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
     const instructions = await readOpencodeInstructionList(config);
     checks.push({

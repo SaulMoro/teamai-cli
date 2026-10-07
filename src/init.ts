@@ -1110,8 +1110,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   force?: boolean;
   inheritUserScope?: boolean;
 }): Promise<void> {
-  // No preview yet, and loading the config below already bootstraps a clone
-  // whose teamai.yaml says `mode: self` (#852), so stop before anything (#900).
+  // No preview yet, so stop before anything (#900).
   if (options.dryRun) {
     log.error(noDryRunPreview('init'));
     process.exit(1);
@@ -1137,10 +1136,16 @@ export async function initSelfRepo(options: GlobalOptions & {
   // Attaching dataHome routes every getDataHome()-based write into the partition.
   const partitionHome = await resolveProjectDataHome(businessRepoRoot);
 
+  // Read the existing config once, before Step 3 writes the `mode: self`
+  // marker, and use this snapshot for every later step. With the marker on
+  // disk and no config yet (after Step 3, or in a fresh clone), loading would
+  // run the clone-time self-heal, which enables every tool found in HOME and
+  // injects their hooks, so `--agent` would no longer choose the tools (#993).
+  let preInitConfig: LocalConfig | null;
   let inheritUserScope: boolean | undefined;
   try {
-    const existing = await loadLocalConfigForScope('project', businessRepoRoot);
-    inheritUserScope = resolveInheritUserScope('project', options.inheritUserScope, existing?.inheritUserScope);
+    preInitConfig = await loadLocalConfigForScope('project', businessRepoRoot, { selfHeal: false });
+    inheritUserScope = resolveInheritUserScope('project', options.inheritUserScope, preInitConfig?.inheritUserScope);
   } catch (e) {
     log.error((e as Error).message);
     process.exit(1);
@@ -1286,12 +1291,11 @@ export async function initSelfRepo(options: GlobalOptions & {
   // commit their settings.json). Resolved from --agent, else HOME detection
   // (non-interactive), else an interactive picker. Written to enabledAgents,
   // which drives seedSelfModeToolDirs and hook injection alike.
-  const existingSelfConfig = await loadLocalConfigForScope('project', businessRepoRoot);
   const selectedAgents = await promptForSelfModeAgents(options);
   if (selectedAgents.length > 0) {
-    const prev = existingSelfConfig?.enabledAgents ?? [];
+    const prev = preInitConfig?.enabledAgents ?? [];
     localConfig.enabledAgents = [...new Set([...prev, ...selectedAgents])];
-    localConfig.disabledAgents = (existingSelfConfig?.disabledAgents ?? []).filter((t) => !selectedAgents.includes(t));
+    localConfig.disabledAgents = (preInitConfig?.disabledAgents ?? []).filter((t) => !selectedAgents.includes(t));
   }
 
   // Carry the member's recorded tool roots across a re-init. `init` is
@@ -1299,7 +1303,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   // from a shell that does not export it must not quietly send every later sync
   // back to the default root. recordToolRoots then overwrites a tool's
   // entry when its variable IS set.
-  if (existingSelfConfig?.toolRoots) localConfig.toolRoots = { ...existingSelfConfig.toolRoots };
+  if (preInitConfig?.toolRoots) localConfig.toolRoots = { ...preInitConfig.toolRoots };
   recordToolRoots(localConfig);
 
   // Step 5: write local config (into the partition via dataHome) + single-repo
@@ -1308,7 +1312,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   // getDataHome, which now resolves to the partition.
   await ensureDir(teamaiHome);
   await ensureDir(partitionHome);
-  await settleModeSwitch(existingSelfConfig, localConfig, () =>
+  await settleModeSwitch(preInitConfig, localConfig, () =>
     saveLocalConfigForScope(localConfig, 'project', businessRepoRoot));
   log.success(`Local config saved to ${partitionHome}/config.yaml`);
   // (Pre-P2 this retired any stale partition config so detection fell back to the

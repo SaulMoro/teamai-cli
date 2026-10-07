@@ -1689,6 +1689,22 @@ describe('local-agent: cmds[] migration', () => {
     expect(manifest.scopes.user.rules?.['doc-a']).toBeUndefined();
   });
 
+  it('writes an OpenCode prompt beside its Claude fallback for V2, without listing it for V1 (#993)', async () => {
+    const ocDir = path.join(tmpDir, '.config', 'opencode');
+    await fse.ensureDir(path.join(ocDir, 'skills'));
+    await fse.outputFile(path.join(tmpDir, '.claude', 'CLAUDE.md'), `${TEAMAI_CLAUDEMD_START}\nearlier prompt\n<!-- [teamai:claudemd:end] -->\n`);
+    const acks = await runResponse({
+      cmds: [{
+        id: 3, type: 'install_prompt_rule', handle_type: 'prompt', slug: 'doc-a',
+        version: '1.0.0', download_url: 'http://127.0.0.1:42100/doc-a.md', scope: 'user',
+      }],
+    }, undefined, 'opencode');
+
+    expect(acks.find((a) => a.id === 3), JSON.stringify(acks)).toMatchObject({ status: 'success' });
+    expect(await fse.readFile(path.join(ocDir, 'teamai-context.md'), 'utf8')).toContain('# content');
+    expect(await fse.pathExists(path.join(ocDir, 'opencode.json'))).toBe(false);
+  });
+
   it('creates AGENTS.md for an HTTP prompt in an existing OpenClaw workspace (#946)', async () => {
     const workspace = path.join(tmpDir, 'openclaw-workspace');
     const configFile = path.join(tmpDir, '.openclaw', 'openclaw.json');
@@ -1881,7 +1897,7 @@ describe('local-agent: cmds[] migration', () => {
       }],
     });
 
-    expect(acks.find((a) => a.id === 3)?.status).toBe('success');
+    expect(acks.find((a) => a.id === 3), JSON.stringify(acks)).toMatchObject({ status: 'success' });
     const manifest = await fse.readJson(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'));
     expect(manifest.scopes.user.rules?.['rule-b']).toBeDefined();
     expect(manifest.scopes.user.claudemd?.['rule-b']).toBeUndefined();

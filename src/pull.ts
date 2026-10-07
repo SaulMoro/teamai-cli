@@ -2077,7 +2077,7 @@ async function syncManagedInstructions(
   if (opencodeFallback && opencodeFallbackStale) {
     log.warn(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, but teamai no longer updates them there: Claude Code is excluded or not installed. Create that AGENTS.md to have teamai deliver them to OpenCode's own file, or remove the teamai blocks from ${opencodeFallback}.`);
   } else if (opencodeFallback) {
-    log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai adds no second copy for it. Create that AGENTS.md to have teamai deliver them to OpenCode's own file instead.`);
+    log.info(`[${scopeLabel}] OpenCode reads the team instructions from ${opencodeFallback}, its fallback while ~/.config/opencode/AGENTS.md does not exist, so teamai lists no second copy in its instructions. OpenCode V2, which reads neither, gets them from ~/.config/opencode/teamai-context.md through teamai's plugin. Create that AGENTS.md to have teamai list OpenCode's own file instead.`);
   }
   // Retired files are cleaned after hook reconciliation, using the delivery
   // results from this pass. A failed replacement must keep its working copy.
@@ -2095,7 +2095,8 @@ async function syncManagedInstructions(
     const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, files);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
-    if (!dryRun && targets.some((target) => target.tools.includes('opencode'))
+    // Beside the Claude fallback V1 reads CLAUDE.md, so no entry is wanted.
+    if (!dryRun && !opencodeFallback && targets.some((target) => target.tools.includes('opencode'))
       && Object.values(blocks).some(Boolean)) {
       const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
       const target = targets.find((target) => target.tools.includes('opencode'))!;
@@ -2997,18 +2998,23 @@ async function reconcileCoAuthorAllScopes(
       const state = await loadStateForScope(localConfig);
       const { changes, managed } = await reconcileCoAuthorForConfig(teamConfig, localConfig, state);
 
-      const applied = changes.filter((c) => c.action !== 'skipped');
+      const applied = changes.filter((c) => c.action === 'updated');
       for (const c of changes) {
         if (c.action === 'skipped') log.debug(`[coauthor] ${c.tool}: skipped — ${c.reason}`);
       }
-      if (applied.length > 0) {
+      // Also persists a dropped record of a pre-#993 shared file (#993).
+      if (JSON.stringify(managed) !== JSON.stringify(state.coAuthorManaged ?? {})) {
         state.coAuthorManaged = managed;
         await saveStateForScope(state, localConfig);
-        if (!options.silent) {
-          const verb = applied[0].enabled ? 'enabled' : 'disabled';
-          const tools = [...new Set(applied.map((c) => c.tool))];
-          log.info(`Co-author trailer ${verb} for ${tools.join(', ')}. Restart your AI tool session to apply.`);
-        }
+      }
+      if (options.silent) continue;
+      for (const c of changes.filter((change) => change.action === 'removed')) {
+        log.info(`Removed the co-author setting an earlier teamai wrote to ${c.file}, a shared project file (teamai now writes it only to .claude/settings.local.json). Commit the change if the file is tracked.`);
+      }
+      if (applied.length > 0) {
+        const verb = applied[0].enabled ? 'enabled' : 'disabled';
+        const tools = [...new Set(applied.map((c) => c.tool))];
+        log.info(`Co-author trailer ${verb} for ${tools.join(', ')}. Restart your AI tool session to apply.`);
       }
     } catch (e) {
       log.debug(`[${localConfig.scope}] co-author reconcile skipped: ${(e as Error).message}`);
