@@ -67,7 +67,7 @@ const MAX_SYMLINK_HOPS = 40;
  * exists there yet; `filePath` itself when it is not a link. Each hop resolves
  * against the real directory of the link, as the kernel does.
  */
-async function symlinkTarget(filePath: string): Promise<string> {
+export async function symlinkTarget(filePath: string): Promise<string> {
   let target = filePath;
   for (let hops = 0; hops < MAX_SYMLINK_HOPS; hops++) {
     try {

@@ -265,4 +265,20 @@ describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', ()
       expect(readJson(m.file.legacy)).toEqual(LEGACY);
     }, 120_000);
   }
+
+  it('keeps a ~/.codebuddy/mcp.json that is a symlink holding only teamai\'s servers, and writes through it', () => {
+    const m = machine('upgrade-linked');
+    const target = path.join(m.home, '..', 'dotfiles', 'codebuddy-mcp.json');
+    writeFile(target, JSON.stringify({ mcpServers: { 'tm-user': TEAM_SERVER } }, null, 2));
+    fs.symlinkSync(target, m.file.mcp);
+    writeFile(m.file.legacy, JSON.stringify(LEGACY, null, 2));
+
+    const first = m.init();
+
+    expect(first.output).not.toContain('Moved teamai\'s MCP servers');
+    expect(fs.lstatSync(m.file.mcp).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(m.file.mcp)).toBe(target);
+    expect(m.servers(target)).toEqual({ 'tm-user': TEAM_SERVER });
+    expect(readJson(m.file.legacy)).toEqual(LEGACY);
+  }, 120_000);
 });

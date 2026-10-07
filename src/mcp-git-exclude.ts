@@ -5,7 +5,7 @@ import type { McpServerDef } from './types.js';
 import type { McpTarget } from './mcp-reconcile.js';
 import { referencedVars, supportsEnvExpansion } from './resources/mcp-format.js';
 import { execCommand } from './utils/exec.js';
-import { pathExists, readFileSafe, writeFileAtomic } from './utils/fs.js';
+import { pathExists, readFileSafe, symlinkTarget, writeFileAtomic } from './utils/fs.js';
 import { listWorktrees } from './utils/git.js';
 import { log } from './utils/logger.js';
 
@@ -105,15 +105,18 @@ export async function existingAncestor(file: string): Promise<string> {
 }
 
 /**
- * Where a write to `file` lands: the real path of its closest existing
- * directory, the rest appended. The appliers replace the file itself (tmp +
- * rename) but follow its directories, so every check of whether git would
- * commit the file judges this path (#886), and reads keep `file`.
+ * Where a write to `file` lands: the file a symlink at `file` points to (a
+ * member's dotfiles link stays, and the write goes to its target), then the
+ * real path of its closest existing directory, the rest appended. Every check
+ * of whether git would commit the file judges this path, in the repository
+ * holding it (#886), and reads keep `file`.
  */
 export async function realFilePath(file: string): Promise<string> {
-  const dir = await existingAncestor(file);
+  // A link loop or an unreadable path: judged as the file itself, as the write would fail.
+  const target = await symlinkTarget(file).catch(() => file);
+  const dir = await existingAncestor(target);
   const real = await fs.promises.realpath(dir).catch(() => dir);
-  return path.join(real, path.relative(dir, file));
+  return path.join(real, path.relative(dir, target));
 }
 
 /**
@@ -129,14 +132,15 @@ export type GitTracking =
 
 /**
  * `file` as a message names it, and the path to give git for it: the one a
- * write lands in, named with `file`, when a directory inside its checkout is a
- * symlink (#886), where git refuses `file` ("beyond a symbolic link"). A
- * symlink above the checkout (macOS /var) changes no path git uses.
+ * write lands in, named with `file`, when `file` is a symlink or a directory
+ * inside its checkout is one (#886), where git refuses `file` ("beyond a
+ * symbolic link"). A symlink above the checkout (macOS /var) changes no path git uses.
  */
 export async function gitPathOf(file: string): Promise<{ label: string; path: string }> {
   const landed = await realFilePath(file);
   if (landed === file) return { label: file, path: file };
-  const location = await gitExcludeFile(await existingAncestor(landed));
+  const linked = await symlinkTarget(file).catch(() => file) !== file;
+  const location = linked ? null : await gitExcludeFile(await existingAncestor(landed));
   const inCheckout = location ? path.relative(location.root, landed) : '';
   if (inCheckout && !inCheckout.startsWith('..') && file.endsWith(`${path.sep}${inCheckout}`)) return { label: file, path: file };
   return { label: `${landed} (where ${file} is written)`, path: landed };

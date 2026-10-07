@@ -46,6 +46,7 @@ import { entryLayout, reportEntryResolution, resolveEntriesFor } from './namespa
 import {
   readJson,
   writeJsonAtomic,
+  symlinkTarget,
   readFileSafe,
   readFileIfExists,
   pathExists,
@@ -526,11 +527,25 @@ export async function writeJsonDoc(
   options?: { mode?: number },
 ): Promise<void> {
   if (doc.bare) {
-    await writeJsonAtomic(file, doc.servers, options);
+    await writeMcpJson(file, doc.servers, options);
     return;
   }
   doc.data[serverKey] = doc.servers;
-  await writeJsonAtomic(file, doc.data, options);
+  await writeMcpJson(file, doc.data, options);
+}
+
+/**
+ * Write a JSON MCP config atomically. A symlink at `file` is the member's (a
+ * dotfiles setup): the write lands in the file it points to and the link
+ * stays, and the git checks judge that file (`realFilePath`).
+ */
+export async function writeMcpJson(file: string, data: unknown, options?: { mode?: number }): Promise<void> {
+  await writeJsonAtomic(await symlinkTarget(file), data, options);
+}
+
+/** Undo a write that created `file`: the file created goes, and a symlink at `file` stays. */
+async function removeCreatedMcpFile(file: string): Promise<void> {
+  await fs.promises.rm(await symlinkTarget(file), { force: true });
 }
 
 // ─── Codex TOML target I/O ───────────────────────────────────
@@ -1769,8 +1784,12 @@ async function releaseMcpGitExcludes(
   kept: string[] = [],
 ): Promise<void> {
   const dirs = [projectRoot];
-  for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) dirs.push(path.dirname(target.file));
-  for (const file of Object.keys((await readResolvedMcpFiles(localConfig)).files)) dirs.push(path.dirname(file));
+  const files = [
+    ...(await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })).map((target) => target.file),
+    ...Object.keys((await readResolvedMcpFiles(localConfig)).files),
+  ];
+  // Also where a symlink there points: the line of a linked file is in its target's repository.
+  for (const file of files) dirs.push(path.dirname(file), path.dirname(await realFilePath(file)));
   const excludes = await findMcpGitExcludes(dirs);
   if (excludes.size === 0) return;
   // Keyed as findMcpGitExcludes keys them: by real path (macOS /var).
@@ -2182,8 +2201,8 @@ async function applyJson(
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
   if (!restoreConfigs.has(target.file)) {
     restoreConfigs.set(target.file, existed
-      ? () => writeJsonAtomic(target.file, previousData)
-      : () => fs.promises.rm(target.file, { force: true }));
+      ? () => writeMcpJson(target.file, previousData)
+      : () => removeCreatedMcpFile(target.file));
   }
   return true;
 }
@@ -2246,6 +2265,8 @@ async function leaveFormerMcpFile(
   const index = rel ? USER_MCP_LOOKUP[target.tool]?.indexOf(rel) ?? -1 : -1;
   const former = target.lookupFiles?.[index];
   if (!former || target.file !== former) return null;
+  // A symlink there is the member's, never deleted: the tool keeps reading it, and teamai writes through it.
+  if (await fs.promises.lstat(former).then((stat) => stat.isSymbolicLink(), () => false)) return null;
   let next: string | undefined;
   for (const candidate of target.lookupFiles?.slice(index + 1) ?? []) {
     if (await pathExists(candidate)) {
@@ -2367,7 +2388,7 @@ async function applyCodex(
   await writeCodexAtomic(target.file, source);
   if (!restoreConfigs.has(target.file)) {
     restoreConfigs.set(target.file, previous === null
-      ? () => fs.promises.rm(target.file, { force: true })
+      ? () => removeCreatedMcpFile(target.file)
       : () => writeCodexAtomic(target.file, previous));
   }
   return true;
@@ -2376,20 +2397,29 @@ async function applyCodex(
 /**
  * Make an unchanged config readable by this user only, without rewriting it:
  * an entry a CLI before #879 wrote holds its resolved value in a file that may
- * still be 0644.
+ * still be 0644. A symlink is followed, as the value sits in its target; a
+ * target another user owns is left as it is, and named.
  */
 async function tightenMode(file: string): Promise<void> {
-  const { mode } = await fs.promises.stat(file);
-  if ((mode & 0o077) !== 0) await fs.promises.chmod(file, 0o600);
+  const { mode, uid } = await fs.promises.stat(file);
+  if ((mode & 0o077) === 0) return;
+  const self = process.getuid?.();
+  if (self !== undefined && uid !== self) {
+    log.warn(`${await realFilePath(file)} holds a value teamai resolved and other users can read it, but it is not yours, so teamai `
+      + `left its mode as it is. Ask its owner to make it readable by you only, or point ${file} at a file you own.`);
+    return;
+  }
+  await fs.promises.chmod(file, 0o600);
 }
 
 /**
  * Write a Codex config.toml atomically, readable by this user only: it may
- * hold resolved values. A symlink at `file` is replaced, as `writeJsonAtomic`
- * does for the JSON configs: git protection judges `file`, so a value must
- * never land in the file it links to (#882).
+ * hold resolved values. A symlink at `file` is the member's: the write lands
+ * in the file it points to and the link stays, and the git checks judge that
+ * file (`realFilePath`).
  */
 export async function writeCodexAtomic(file: string, content: string): Promise<void> {
+  file = await symlinkTarget(file);
   await fs.promises.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
