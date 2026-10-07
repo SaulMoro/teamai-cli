@@ -184,6 +184,14 @@ export function describeMembersLink(file: string, resource: string, origin: 'tea
     + `Remove the link to receive ${resource} from ${origin === 'team' ? 'the team' : 'its source'}.`;
 }
 
+/**
+ * The line for a link in a skill's source that delivery skipped (#993): teamai never
+ * creates a link. `link` is its path in the skill, `skill` the skill's team or source name.
+ */
+export function describeSkippedLink(link: string, skill: string): string {
+  return `Skipped ${link} in ${skill}: teamai does not deliver links.`;
+}
+
 /** `describeMembersLink` for a link at `file` or inside it (`membersLinkAt`), else `describeMembersFile`. */
 export async function describeKeptEntry(file: string, resource: string, origin: 'team' | 'source' = 'team'): Promise<string> {
   const link = await membersLinkAt(file);

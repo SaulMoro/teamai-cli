@@ -18,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, describeMembersLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -836,7 +836,7 @@ export class SkillsHandler extends ResourceHandler {
           warnOnce(describeMembersLink(membersLink, item.relativePath));
           continue;
         }
-        await copyDir(item.sourcePath, dest);
+        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)));
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);

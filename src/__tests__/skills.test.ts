@@ -1364,6 +1364,25 @@ describe('SkillsHandler.pullItem skips hermes when not installed', () => {
     expect(await fse.pathExists(path.join(hermesHome, 'skills', 'team-skill', 'SKILL.md'))).toBe(true);
   });
 
+  it('delivers a skill without the links in its source, and names each one it skipped (#993)', async () => {
+    const hermesHome = path.join(homeDir, '.hermes');
+    await fse.ensureDir(hermesHome);
+    vi.stubEnv('HERMES_HOME', hermesHome);
+    const outside = path.join(tmpDir, 'outside.md');
+    await fse.writeFile(outside, 'outside');
+    await fse.symlink(outside, path.join(sourcePath, 'linked.md'));
+    vi.mocked(log.warn).mockClear();
+
+    await handler.pullItem(item(), teamConfig, localConfig);
+
+    const dest = path.join(hermesHome, 'skills', 'team-skill');
+    expect(await fse.pathExists(path.join(dest, 'SKILL.md'))).toBe(true);
+    expect(await fse.lstat(path.join(dest, 'linked.md')).catch(() => null)).toBeNull();
+    expect(vi.mocked(log.warn).mock.calls.map(([message]) => String(message))).toContain(
+      'Skipped linked.md in skills/team-skill: teamai does not deliver links.',
+    );
+  });
+
   it('keeps a member\'s link at or inside the skill directory when installed without a delivery record (#993)', async () => {
     const hermesHome = path.join(homeDir, '.hermes');
     vi.stubEnv('HERMES_HOME', hermesHome);

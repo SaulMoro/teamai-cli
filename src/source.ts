@@ -25,7 +25,7 @@ import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
 import {
-  describeKeptEntry, describeMembersLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
+  describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
@@ -939,9 +939,15 @@ async function pullSingleSource(
       continue;
     }
 
-    // Deploy only after every target passes the ownership check.
+    // Deploy only after every target passes the ownership check. Links in the
+    // source are not delivered (#993), and each is named once.
+    const skippedLinks = new Set<string>();
     for (const targetDir of targets) {
-      await copyDir(skill.sourcePath, targetDir);
+      await copyDir(skill.sourcePath, targetDir, (link) => {
+        if (skippedLinks.has(link)) return;
+        skippedLinks.add(link);
+        log.warn(`[source:${source.name}] ${describeSkippedLink(link, `${source.name}/${skill.name}`)}`);
+      });
       const relativeTarget = recordedDestination(baseDir, targetDir);
       const skillPaths = installedPaths[skill.name] ??= [];
       if (!skillPaths.includes(relativeTarget)) skillPaths.push(relativeTarget);

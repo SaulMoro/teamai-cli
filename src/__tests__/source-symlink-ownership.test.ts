@@ -227,6 +227,25 @@ describe('source physical destination ownership', () => {
     expect(await fse.readFile(path.join(external, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
   });
 
+  it('delivers a source skill without the links in it, and names each one once (#993)', async () => {
+    await publish();
+    const id = createHash('sha256').update(producer).digest('hex');
+    const outside = path.join(root, 'outside.md');
+    await fse.writeFile(outside, 'outside');
+    await fse.symlink(outside, path.join(home, '.teamai/source-repos', id, 'repo', 'skills', 'foo', 'linked.md'));
+    const { log } = await import('../utils/logger.js');
+    vi.mocked(log.warn).mockClear();
+
+    await pullSources(config, { force: true });
+
+    const dest = path.join(config.projectRoot!, relativePath);
+    expect(await fse.readFile(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# Original source: foo\n');
+    expect(await fse.lstat(path.join(dest, 'linked.md')).catch(() => null)).toBeNull();
+    expect(vi.mocked(log.warn).mock.calls.map(([message]) => String(message))).toContain(
+      '[source:current] Skipped linked.md in current/foo: teamai does not deliver links.',
+    );
+  });
+
   it('keeps a member\'s dangling link at the destination (#993)', async () => {
     const target = path.join(config.projectRoot!, relativePath);
     await fse.symlink(path.join(root, 'nowhere'), target, 'dir');
