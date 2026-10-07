@@ -739,7 +739,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
   const {
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
-    mcpTargetExcluded, installedMcpEntries,
+    mcpTargetExcluded, installedMcpEntries, memberMcpServers, describeKeptMemberServer,
   } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
@@ -809,11 +809,13 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
     if (problems.length === 0 && !withheld && desired.size === 0) continue;
 
+    // A pull keeps a server of the member's own under a team name, and names it (#993).
+    const member = problems.length === 0 ? [] : await memberMcpServers(localConfig, targets, target, desired, desiredContext.vars);
     const delivery = problems.length === 0 ? [] : [`In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
       + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
-      + 'parses as no variables at all. Then run `teamai pull --force`: a pull leaves an entry '
-      + 'teamai does not own untouched, so a server of your own under a team name only gives '
-      + 'way to `--force`.'];
+      + 'parses as no variables at all. Then run `teamai pull`.',
+      ...member.map((name) => describeKeptMemberServer(name, target.file)),
+      ...member.length > 0 ? ['Or run `teamai mcp inject --force` to replace it with the team\'s.'] : []];
     checks.push({
       name: `MCP servers delivered to ${target.tool}`,
       source: 'local',
