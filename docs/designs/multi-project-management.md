@@ -505,7 +505,8 @@ CONTRIBUTORS is today's team file or a version of that file of a team skill of
 that name (root or any namespace, SKILL.md also with its frontmatter repaired),
 so one file of the member's makes it the member's, whole. The docs mirror keeps
 no record: a file at a team doc's path is teamai's only when it is a version
-of that doc (`membersDocs`). A forced
+of that doc (`membersDocs`), and the mirror prune deletes a file at a removed
+team doc's path only on the same proof (`isPrunableDoc`). A forced
 full sync elsewhere keeps each checkout's `delivered`.
 `doctor` does not fail on a kept copy; next to another problem it lists one
 as "changed by you (kept by pull)". A member's own file fails the delivery

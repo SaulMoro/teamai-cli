@@ -222,6 +222,39 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(initRun.output).not.toContain('docs/guide.md).');
   });
 
+  it('keeps a member\'s own file at a team doc\'s path when the team deletes that doc', () => {
+    const t = team('docs-removed', {
+      'docs/guide.md': '# Guide\n',
+      'docs/gone.md': '# Gone v1\n',
+      'docs/old.md': '# Old\n',
+    });
+    t.publish({ 'docs/gone.md': '# Gone v2\n' }, 'gone v2');
+    const dir = business('docs-removed-biz', {
+      '.teamai/docs/old.md': 'MY OLD NOTES\n',
+      // An unrecorded copy of an earlier team version: teamai's.
+      '.teamai/docs/gone.md': '# Gone v1\n',
+    });
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
+    expect(read(path.join(docs, 'gone.md'))).toBe('# Gone v2\n');
+    // A local-only draft at a path the team never had is the mirror's to prune, as before.
+    writeFile(path.join(docs, 'draft.md'), 'draft\n');
+
+    t.publish({ 'docs/old.md': null, 'docs/gone.md': null }, 'remove docs');
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
+    expect(pulled.output).toContain(
+      `Kept ${path.join(docs, 'old.md')}: the team removed docs/old.md, but this copy matches no team version of it. Delete it when you no longer need it.`,
+    );
+    expect(fs.existsSync(path.join(docs, 'gone.md'))).toBe(false);
+    expect(fs.existsSync(path.join(docs, 'draft.md'))).toBe(false);
+    expect(read(path.join(docs, 'guide.md'))).toBe('# Guide\n');
+    // Pull keeps it, so doctor does not ask pull --force to remove it.
+    expect(teamai(['doctor'], dir).output).not.toContain('Stale docs');
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

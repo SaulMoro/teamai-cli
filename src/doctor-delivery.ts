@@ -1385,7 +1385,9 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
 
-  const { listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  const {
+    isPrunableDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
+  } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
   // compare against, and pull stops the scope over them.
@@ -1416,7 +1418,12 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
     ...teamFiles,
     ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`)),
   ]);
-  const stale = [...localFiles.filter(file => !known.has(file)), ...staleDirectories];
+  // A file pull keeps because it is no team version of a removed doc is the member's, not stale (#993).
+  const staleFiles: string[] = [];
+  for (const file of localFiles.filter((local) => !known.has(local))) {
+    if (await isPrunableDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
+  }
+  const stale = [...staleFiles, ...staleDirectories];
 
   // isFile, not merely "something is there": a directory sitting on the
   // expected name, or a symlink with nothing behind it, would satisfy a plain
