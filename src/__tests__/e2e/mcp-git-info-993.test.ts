@@ -71,9 +71,11 @@ function writeFile(file: string, content: string): void {
 
 /** A team whose one MCP server sends `Authorization: Bearer ${LAB_TOKEN}`, the variable set in env.yaml. */
 function team(name: string): string {
-  const url = `https://git.example.com/team/${name}.git`;
-  const seed = path.join(sandbox, `${name}-seed`);
-  const remote = path.join(sandbox, `${name}.git`);
+  // Fresh paths on every call, so the runner's retry rebuilds the fixture instead of failing on the first try's.
+  const root = fs.mkdtempSync(path.join(sandbox, `${name}-`));
+  const url = `https://git.example.com/team/${path.basename(root)}.git`;
+  const seed = path.join(root, 'seed');
+  const remote = path.join(root, 'team.git');
   writeFile(path.join(seed, 'teamai.yaml'), [
     `team: ${name}`, `repo: ${url}`, 'provider: git', 'reviewers: []', 'sharing:', '  mcp:', '    autoApply: true', '',
   ].join('\n'));
@@ -92,7 +94,7 @@ function team(name: string): string {
 
 /** A business repo created with an empty template, so `.git/` has no `info/`. */
 function business(name: string): string {
-  const dir = path.join(sandbox, name);
+  const dir = fs.mkdtempSync(path.join(sandbox, `${name}-`));
   writeFile(path.join(dir, 'README.md'), '# app\n');
   gitOk(['init', '-q', '-b', 'main', '--template='], dir);
   gitOk(['add', '-A'], dir);
@@ -104,7 +106,7 @@ function business(name: string): string {
 /** A linked worktree of a fresh empty-template repo; the exclude file lives in the main repo's `.git/info/`. */
 function linkedWorktree(name: string): { worktree: string; infoDir: string } {
   const main = business(`${name}-main`);
-  const worktree = path.join(sandbox, `${name}-wt`);
+  const worktree = path.join(fs.mkdtempSync(path.join(sandbox, `${name}-`)), 'wt');
   gitOk(['worktree', 'add', '-q', '-b', 'wt', worktree], main);
   const infoDir = path.join(main, '.git', 'info');
   expect(fs.existsSync(infoDir)).toBe(false);
@@ -193,6 +195,25 @@ describe('a repository without .git/info/ (#993 bug 5)', () => {
       init(url, dir);
       expectWithheld(dir, path.join(infoDir, 'exclude'), teamai(['pull'], dir));
     });
+  });
+
+  it('withholds the server when .git/info is a regular file, naming the exclude file as not writable without waiting on a lock', () => {
+    const url = team('info-file');
+    const dir = business('info-file-biz');
+    const info = path.join(dir, '.git', 'info');
+    writeFile(info, 'not a directory\n');
+
+    const initRun = init(url, dir);
+    const pulled = teamai(['pull'], dir);
+
+    expect(mcpServer(dir)).toBeUndefined();
+    for (const output of [initRun.output, pulled.output]) {
+      expect(output).toContain(`${path.join(info, 'exclude')} is not writable, as ${info} is not a directory`);
+      expect(output).toContain(`Move ${info} aside, then run \`teamai pull\` again.`);
+      expect(output).not.toContain('another teamai command held');
+    }
+    expect(fs.readFileSync(info, 'utf8')).toBe('not a directory\n');
+    expect(doctorCheck(dir, 'MCP servers delivered to claude').ok).toBe(false);
   });
 
   it('creates the main repository\'s .git/info/ from a linked worktree', () => {

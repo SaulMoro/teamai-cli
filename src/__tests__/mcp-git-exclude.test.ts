@@ -143,6 +143,23 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       }
       expect(await fse.pathExists(path.join(repo, '.git', 'info'))).toBe(false);
     });
+
+    it('names the exclude file as not writable when .git/info is a regular file, without waiting on a lock', async () => {
+      const info = path.join(await fse.realpath(repo), '.git', 'info');
+      await fse.writeFile(info, 'not a directory\n');
+      const started = Date.now();
+
+      const exclusion = await ensureExcludedFromGit(path.join(repo, '.mcp.json'));
+
+      expect(exclusion).toEqual({
+        kind: 'failed',
+        reason: `${path.join(info, 'exclude')} is not writable, as ${info} is not a directory`,
+        fix: `Move ${info} aside, then run \`teamai pull\` again.`,
+      });
+      // The lock wait is 25 attempts 100 ms apart.
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(await fse.readFile(info, 'utf8')).toBe('not a directory\n');
+    });
   });
 
   it('keeps every pattern when several writers add to the same exclude file at once', async () => {

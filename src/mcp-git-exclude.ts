@@ -248,6 +248,13 @@ export async function ensureExcludedFromGit(
   const rel = path.relative(dir, landed).split(path.sep).join('/');
   const pattern = `/${location.prefix}${rel}`.replace(/[\\*?[\]!#]/g, '\\$&');
   const retry = `Make it writable, or add \`${pattern}\` to it yourself, then ${rerun}.`;
+  const notWritable = ({ message, blocker, notDirectory }: NotWritableError): GitExclusion => ({
+    kind: 'failed',
+    reason: message,
+    fix: notDirectory
+      ? `Move ${blocker} aside, then ${rerun}.`
+      : `Make ${blocker} writable, or add \`${pattern}\` to ${excludeFile} yourself, then ${rerun}.`,
+  });
   // A read-only exclude file is the member's choice; the atomic write would replace it all the same.
   // A missing `info/` (`git init --template=`) is created by the write, so its closest existing directory is checked (#993).
   for (const writable of [await existingAncestor(excludeFile), ...(await pathExists(excludeFile) ? [excludeFile] : [])]) {
@@ -257,11 +264,7 @@ export async function ensureExcludedFromGit(
     );
     if (!denied) continue;
     if (writable === excludeFile) return { kind: 'failed', reason: `${excludeFile} is not writable`, fix: retry };
-    return {
-      kind: 'failed',
-      reason: `${excludeFile} is not writable, as ${writable} is not`,
-      fix: `Make ${writable} writable, or add \`${pattern}\` to ${excludeFile} yourself, then ${rerun}.`,
-    };
+    return notWritable(new NotWritableError(excludeFile, writable, false));
   }
   const add = (content: string): string | null => {
     const block = splitBlock(content);
@@ -285,6 +288,7 @@ export async function ensureExcludedFromGit(
       result = await updateFileLocked(excludeFile, add);
     }
   } catch (e) {
+    if (e instanceof NotWritableError) return notWritable(e);
     return { kind: 'failed', reason: `adding it to ${excludeFile} failed: ${e instanceof Error ? e.message : String(e)}`, fix: retry };
   }
   if (result === 'locked') {
@@ -344,12 +348,25 @@ export async function excludeFromGit(file: string, options: { rerun?: string; ho
 export type ExcludeUpdate = 'written' | 'unchanged' | 'locked';
 
 /**
+ * `updateFileLocked` could not create `file`'s directory, which also holds its
+ * lock: `blocker`, the closest existing path above `file`, is not a directory
+ * (`notDirectory`), or denies the write.
+ */
+export class NotWritableError extends Error {
+  constructor(readonly file: string, readonly blocker: string, readonly notDirectory: boolean) {
+    super(`${file} is not writable, as ${blocker} is not${notDirectory ? ' a directory' : ''}`);
+    this.name = 'NotWritableError';
+  }
+}
+
+/**
  * Rewrite `file` with `edit` (null: leave it as it is), holding a lock
  * across the read and an atomic write: the worktrees of a repository share
  * `.git/info/exclude`, so two commands adding different paths must not drop each other's.
  * A lock still held after the wait writes nothing: an unlocked write could drop
  * the holder's pattern, leaving that path unprotected. `mode` forces the file's
- * mode; without it the file keeps its own.
+ * mode; without it the file keeps its own. Throws `NotWritableError`, without
+ * waiting, when the file's directory cannot be created.
  */
 export async function updateFileLocked(
   file: string,
@@ -358,6 +375,11 @@ export async function updateFileLocked(
 ): Promise<ExcludeUpdate> {
   const { acquireLock, releaseLock } = await import('./update.js');
   const lockPath = `${file}.teamai-lock`;
+  // acquireLock reads a lock directory it cannot create as a held lock; no wait would change that (#993).
+  await fse.ensureDir(path.dirname(file)).catch(async (e: NodeJS.ErrnoException) => {
+    if (!['EEXIST', 'ENOTDIR', 'EACCES', 'EPERM', 'EROFS'].includes(e.code ?? '')) throw e;
+    throw new NotWritableError(file, await existingAncestor(file), e.code === 'EEXIST' || e.code === 'ENOTDIR');
+  });
   let held = false;
   for (let attempt = 0; attempt < 25 && !held; attempt++) {
     held = await acquireLock(lockPath);
