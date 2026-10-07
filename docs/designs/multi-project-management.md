@@ -534,8 +534,11 @@ record (edited or not) or `isTeamaiSkillCopy` proves it (`ownsSkillDir`), and
 name each one they leave; uninstall also deletes a built-in's name and a name
 the local agent's manifest lists. Pull's sweep of the namespace-nested copies
 earlier releases left of an excluded skill deletes one only when
-`removedCopyChanged` says it is teamai's and unchanged, and leaves the rest
-silently, as pull never delivers there.
+`judgeRemoval` returns `remove`, and leaves the rest silently, as pull never
+delivers there. `judgeRemoval` sorts a copy of a resource no longer
+delivered into `remove`, `edited` (changed since teamai delivered it, or on
+another checkout's record) and `notTeamais` (no record, no team version), so
+each caller names a kept copy for what it is.
 
 ### Known gaps
 

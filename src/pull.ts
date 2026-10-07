@@ -27,7 +27,7 @@ import { skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  forgetDelivered, judgeCopy, notTeamaisReason, openLedger, removedCopyChanged, reportKept, type DeliveredHashes, type DeliveryLedger,
+  describeMembersDirLeft, forgetDelivered, judgeCopy, judgeRemoval, notTeamaisReason, openLedger, reportKept, type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import type { AgentModelRecords, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
@@ -527,7 +527,7 @@ async function cleanupTombstonedResources(
       for (const stem of flatStems) {
         const localPath = path.join(baseDir, dir, `${stem}${ruleFileExtensionForTool(tool)}`);
         if (ledger.previous?.[localPath] === undefined || !await pathExists(localPath)) continue;
-        if (await removedCopyChanged(ledger.previous, localPath)) {
+        if (await judgeRemoval(ledger.previous, localPath) !== 'remove') {
           log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed the rule it is a copy of, but you changed this copy. Delete it when you no longer need it.`);
           continue;
         }
@@ -557,8 +557,13 @@ async function cleanupTombstonedResources(
             : type === 'agents' ? await removedAgentOrigin(localConfig, name, tool)
               : type === 'skills' ? skillOrigin(localConfig.repo.localPath, name)
                 : undefined;
-          if (await removedCopyChanged(ledger.previous, localPath, origin)) {
+          const removal = await judgeRemoval(ledger.previous, localPath, origin, ledger.otherRecords);
+          if (removal === 'edited') {
             log.warn(`[${scopeLabel}] Kept ${localPath}: the team removed ${name}, but you changed this copy. Delete it when you no longer need it.`);
+            continue;
+          }
+          if (removal === 'notTeamais') {
+            log.warn(`[${scopeLabel}] ${describeMembersDirLeft(localPath, type === 'rules' ? `rules/${name}.md` : `${type}/${name}`, 'pull')}`);
             continue;
           }
           await remove(localPath);
@@ -1755,7 +1760,7 @@ async function pullForScope(
             // A name is no proof: the member's own skill can sit in a folder
             // of theirs. Only teamai's copy goes (#993); pull never delivers
             // here, so the member's stays without a line on every pull.
-            if (await removedCopyChanged(ledger.previous, nestedSkillDir, skillOrigin(localConfig.repo.localPath, skillName))) {
+            if (await judgeRemoval(ledger.previous, nestedSkillDir, skillOrigin(localConfig.repo.localPath, skillName)) !== 'remove') {
               log.debug(`Kept ${nestedSkillDir}: it is not teamai's copy of the excluded skill ${skillName}`);
               continue;
             }

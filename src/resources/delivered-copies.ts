@@ -278,21 +278,29 @@ export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem
 }
 
 /**
- * Whether the copy at `dest` of a resource no longer delivered there must
- * stay: on record and changed since teamai delivered it, or, with no record,
- * not proven teamai's by `origin` (#993); a skill directory by every file in
- * it (`isTeamaiSkillCopy`). Without a record and an origin, it is removed as
- * before.
+ * What happens to the copy at `dest` of a resource no longer delivered there.
+ * - `remove`: teamai's and unchanged, or teamai's by `origin` (a skill
+ *   directory by every file in it, `isTeamaiSkillCopy`). Without a record and
+ *   an origin, it is removed as before.
+ * - `edited`: on record and changed since teamai delivered it, or with no
+ *   record here but on `otherRecords` (a record lost to a new key, as after a
+ *   restore) and not proven teamai's.
+ * - `notTeamais`: no record, and `origin` proves nothing (#993).
  */
-export async function removedCopyChanged(previous: DeliveredHashes | undefined, dest: string, origin?: CopyOrigin): Promise<boolean> {
+export async function judgeRemoval(
+  previous: DeliveredHashes | undefined, dest: string, origin?: CopyOrigin, otherRecords: DeliveredHashes = {},
+): Promise<'remove' | 'edited' | 'notTeamais'> {
   const recorded = previous === undefined ? [] : recordedUnder(previous, dest);
-  if (recorded.length === 0) {
-    if (origin === undefined) return false;
-    if (await isDirectory(dest)) return !await isTeamaiSkillCopy(dest, origin);
-    return await fileHash(dest) !== null && !await isTeamaiCopy(dest, origin);
+  if (recorded.length > 0) {
+    const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
+    return classifyCopy(files).kind === 'keep' ? 'edited' : 'remove';
   }
-  const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
-  return classifyCopy(files).kind === 'keep';
+  if (origin === undefined) return 'remove';
+  const teamais = await isDirectory(dest)
+    ? await isTeamaiSkillCopy(dest, origin)
+    : await fileHash(dest) === null || await isTeamaiCopy(dest, origin);
+  if (teamais) return 'remove';
+  return recordedUnder(otherRecords, dest).length > 0 ? 'edited' : 'notTeamais';
 }
 
 /**

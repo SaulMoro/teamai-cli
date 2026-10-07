@@ -18,7 +18,7 @@ import { getFileContentAtRev, isPastVersionOf, listFilesAtRev } from '../utils/g
 import { historicalVersions } from '../utils/team-history.js';
 import {
   adoptRecord, contentHash, describeMembersDirLeft, forgetDelivered, isTeamaiCopy, keepsEditedCopy, openLedger, recordDelivered, recordedUnchanged,
-  removedCopyChanged, reportKept,
+  judgeRemoval, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import {
@@ -879,12 +879,16 @@ export class RulesHandler extends ResourceHandler {
           // removed. A file of a name the team never had is the member's own
           // rule, which needs no word.
           const teamFile = `rules/${ruleName}.md`;
-          if (await removedCopyChanged(ledger?.previous, fullPath, ruleOrigin(tool, localConfig.repo.localPath, teamFile))) {
-            const wasTeamRule = ledger?.previous?.[fullPath] !== undefined
-              || ((await historicalVersions(localConfig.repo.localPath, teamFile))?.length ?? 0) > 0;
-            if (wasTeamRule && !tombstones.has(ruleName)) {
+          const removal = await judgeRemoval(ledger?.previous, fullPath, ruleOrigin(tool, localConfig.repo.localPath, teamFile), ledger?.otherRecords);
+          if (removal === 'edited') {
+            if (!tombstones.has(ruleName)) {
               log.warn(`Kept ${fullPath}: teamai no longer delivers ${ruleName} here, but you changed this copy. Delete it when you no longer need it.`);
             }
+            continue;
+          }
+          if (removal === 'notTeamais') {
+            const wasTeamRule = ((await historicalVersions(localConfig.repo.localPath, teamFile))?.length ?? 0) > 0;
+            if (wasTeamRule && !tombstones.has(ruleName)) log.warn(describeMembersDirLeft(fullPath, teamFile, 'pull'));
             continue;
           }
           await remove(fullPath);
