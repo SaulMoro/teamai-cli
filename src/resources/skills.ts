@@ -18,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeKeptDir, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -756,7 +756,10 @@ export class SkillsHandler extends ResourceHandler {
       dest,
       `Invalid skill destination outside team repo skills directory: ${item.relativePath}`,
     );
-    await copyDir(item.sourcePath, dest);
+    // A link in the member's skill stays theirs: teamai never puts links in the team repo (#993).
+    await copyDir(item.sourcePath, dest, (link) => {
+      log.warn(`Skipped ${link} in ${item.relativePath}: teamai does not push links to the team repo.`);
+    });
     const sourceFiles = new Set(await listFilesRecursive(item.sourcePath));
     const teamFiles = await listFilesRecursive(dest);
     for (const relativePath of teamFiles) {
@@ -891,7 +894,7 @@ export class SkillsHandler extends ResourceHandler {
         if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
           owned.push({ tool, skillDir });
         } else {
-          log.warn(describeMembersDirLeft(skillDir, `skills/${name}`, 'remove'));
+          log.warn(await describeKeptDir(skillDir, `skills/${name}`, 'remove'));
         }
       }
     }

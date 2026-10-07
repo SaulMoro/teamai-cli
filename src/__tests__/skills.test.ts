@@ -685,6 +685,23 @@ scope: 'user',
     expect(content).toBe('testuser\n');
   });
 
+  it('does not push a link inside the skill into the team repo, and names it (#993)', async () => {
+    const localSkillDir = path.join(homeDir, '.claude/skills', 'my-skill');
+    await fse.ensureDir(localSkillDir);
+    await fse.writeFile(path.join(localSkillDir, 'SKILL.md'), '# My Skill');
+    const outside = path.join(tmpDir, 'notes.md');
+    await fse.writeFile(outside, 'private');
+    await fse.symlink(outside, path.join(localSkillDir, 'notes.md'));
+    const warn = vi.spyOn(log, 'warn');
+
+    await handler.pushItem({ name: 'my-skill', type: 'skills' as const, sourcePath: localSkillDir, relativePath: 'skills/my-skill' }, teamConfig, localConfig);
+
+    const pushed = path.join(localConfig.repo.localPath, 'skills', 'my-skill');
+    expect(await fse.readFile(path.join(pushed, 'SKILL.md'), 'utf-8')).toContain('# My Skill');
+    expect(await fse.pathExists(path.join(pushed, 'notes.md'))).toBe(false);
+    expect(warn.mock.calls.flat().join('\n')).toContain('notes.md');
+  });
+
   it('should not duplicate username on repeated push', async () => {
     const localSkillDir = path.join(homeDir, '.claude/skills', 'my-skill');
     await fse.ensureDir(localSkillDir);

@@ -258,6 +258,16 @@ export async function ownsSkillDir(
 }
 
 /** The line for a copy `command` did not delete because it is not teamai's (#993). */
+/**
+ * The line for a skill directory `command` did not delete (#993): a link of the member's, one
+ * holding a link of theirs, or else one that is not teamai's.
+ */
+export async function describeKeptDir(dir: string, resource: string, command: string): Promise<string> {
+  if (await isLink(dir)) return `Kept ${dir}: it is a link of yours, so ${command} left it.`;
+  if (await holdsNonRegular(dir)) return `Kept ${dir}: it holds a link of yours, so ${command} left it.`;
+  return describeMembersDirLeft(dir, resource, command);
+}
+
 export function describeMembersDirLeft(dir: string, resource: string, command: string): string {
   return `Kept ${dir}: ${notTeamaisReason(resource)}, so ${command} left it.`;
 }

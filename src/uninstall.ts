@@ -59,7 +59,7 @@ import {
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
-import { describeMembersDirLeft, ownsSkillDir } from './resources/delivered-copies.js';
+import { describeKeptDir, describeMembersDirLeft, ownsSkillDir } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
@@ -587,7 +587,7 @@ async function discoverToolResources(
           if (!teamSkillNames.has(dir)) continue;
           const skillDir = path.join(skillsDir, dir);
           if (await ownsSkill(skillDir, dir)) res.skillDirs.push({ dir: skillDir, baseDir: rootBase });
-          else res.keptSkillDirs.push(describeMembersDirLeft(skillDir, `skills/${dir}`, 'uninstall'));
+          else res.keptSkillDirs.push(await describeKeptDir(skillDir, `skills/${dir}`, 'uninstall'));
         }
       }
     }
