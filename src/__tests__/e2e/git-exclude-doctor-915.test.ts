@@ -268,9 +268,9 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(broken).toContain(`Stale lines in teamai's delivered git exclude block in ${exclude}: /gone.md. The next \`teamai pull\` drops them.`);
 
     // The pull lists the path again and drops the stale line; the rule and the stray marker are the member's to fix.
+    // The pull says the re-included path itself, as a failed sync, so the post-pull check does not repeat it.
     const pulled = m.teamai(['pull'], app);
-    expect(pulled).toContain('Pull finished, but');
-    expect(pulled).toContain('✖ Delivered team resources are kept out of git');
+    expect(pulled.split('git still sees .claude/rules/team-rule.md: ')).toHaveLength(2);
     expect(pulled).toContain('re-includes it');
     expect(pulled).not.toContain('Stale lines');
     expect(pulled).not.toContain('Git exclude for delivered team resources:');
@@ -404,6 +404,30 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(retried).not.toContain('could not keep teamai\'s git exclude blocks');
     expect(blockLines(exclude)).toContain('/.claude/rules/new-rule.md');
     expect(m.teamai(['doctor'], app)).not.toContain('Last background pull');
+  }, 120_000);
+
+  it('reports a delivered path a rule re-includes as a failed sync, which a background pull keeps until a pull after the rule is gone', async () => {
+    const m = member('reincluded');
+    const app = m.project(path.join(caseDir('reincluded'), 'app'));
+    write(path.join(app, '.gitignore'), '!/.claude/rules/team-rule.md\n');
+    const seen = `git still sees .claude/rules/team-rule.md: \`!/.claude/rules/team-rule.md\` (${path.join(app, '.gitignore')}:1) re-includes it. Remove that rule.`;
+
+    const pulled = m.teamai(['pull'], app);
+    expect(pulled.split(seen)).toHaveLength(2);
+
+    await m.sessionStart(app);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('✖ Last background pull could not keep teamai\'s git exclude blocks up to date');
+    expect(doctor).toContain('✖ Delivered team resources are kept out of git');
+    expect(doctor.split(seen)).toHaveLength(3);
+
+    fs.rmSync(path.join(app, '.gitignore'));
+    const fixed = m.teamai(['pull'], app);
+    expect(fixed).toMatch(/A background pull \([^)]+\) could not keep teamai's git exclude blocks up to date: git still sees/);
+    expect(fixed.split(seen)).toHaveLength(2);
+    const after = m.teamai(['doctor'], app);
+    expect(after).not.toContain('Last background pull');
+    expect(after).toContain('✔ Delivered team resources are kept out of git');
   }, 120_000);
 
   it('keeps a background pull\'s notice of another checkout\'s file for doctor and the next interactive pull, which says it once', async () => {
