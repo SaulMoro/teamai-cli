@@ -124,12 +124,12 @@ is kept and named. Use a dedicated directory; preview with `--dry-run`.
 delivered it, `--force` included, and names it (`Kept <path>: ...`). To share
 the change, `teamai push`; when pull says the version teamai would deploy has
 changed since, or push says so for that copy, merge that change into the copy first, or the push replaces it. To take the team version instead, delete
-the copy and run `teamai pull --force`. A rule or agent file teamai has no
-record of (first pull after upgrading, a new or restored checkout, the user's
-own file) is teamai's only if it holds a team version from the team repo's
-history; any other is kept as the user's (`Kept <path>: it is not teamai's ...`):
-rename or delete it, then `teamai pull`, to receive the team version. A skill
-with no record is still overwritten: nothing is recorded yet.
+the copy and run `teamai pull --force`. A skill, rule, agent or docs-mirror file
+teamai has no record of (first pull after upgrading, a new or restored checkout,
+the user's own) is teamai's only if it holds a team version from the team repo's
+history (a skill: every file in it); any other is kept as the user's
+(`Kept <path>: it is not teamai's ...`): rename or delete it, then `teamai pull`,
+to receive the team version.
 
 In project scope, `init` and `pull` also install a git hook in the repository's
 local git config (`hook.teamai-post-checkout`, `hook.teamai-post-merge`, `hook.teamai-post-rewrite`; Git

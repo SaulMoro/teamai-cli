@@ -38,6 +38,7 @@ export type CopyVerdict =
 
 /** Push does not count a skill's CONTRIBUTORS as a change, so neither does this. */
 const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
+const SKILL_MD = 'SKILL.md';
 
 /**
  * Keep a copy only on proof that the member changed it: a recorded file whose
@@ -162,9 +163,51 @@ export function describeMembersFile(file: string, resource: string): string {
     + 'Rename or delete it, then run teamai pull, to receive the team version.';
 }
 
-/** Whether `target.dest` holds a file with no record, other than the render, that its origin does not prove teamai's. */
-async function isMembersFile(previous: DeliveredHashes | undefined, target: DeliveryTarget): Promise<boolean> {
-  if (target.origin === undefined || previous?.[target.dest] !== undefined) return false;
+/**
+ * Whether the skill directory `dir` is teamai's copy (#993): it exists, and
+ * every file in it but CONTRIBUTORS is either what pull writes there now
+ * (`current`, by absolute path) or a version of that file of the skill in the
+ * history `origin` names (`pathspec` is the skill directory; `renders` apply
+ * to its SKILL.md). One file that is neither, the member's own included,
+ * makes the whole directory the member's. Read-only. Callers with a ledger
+ * ask it only for a directory with no file on record; callers without one
+ * (doctor, `teamai remove`) decide with it alone.
+ */
+export async function isTeamaiSkillCopy(
+  dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
+): Promise<boolean> {
+  if (!await isDirectory(dir)) return false;
+  for (const rel of await listFilesRecursive(dir)) {
+    if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
+    const file = path.join(dir, rel);
+    const next = current.get(file);
+    if (next != null && await fileHash(file) === next) continue;
+    const fileOrigin: CopyOrigin = {
+      repoPath: origin.repoPath,
+      pathspec: `${origin.pathspec}/${rel}`,
+      renders: rel === SKILL_MD ? origin.renders : undefined,
+    };
+    if (!await isTeamaiCopy(file, fileOrigin)) return false;
+  }
+  return true;
+}
+
+async function isDirectory(dir: string): Promise<boolean> {
+  return (await fse.stat(dir).catch(() => null))?.isDirectory() ?? false;
+}
+
+/**
+ * Whether `target.dest` holds a copy with no record, other than the render,
+ * that its origin does not prove teamai's. A skill directory counts as
+ * recorded when any file under it is: its edits are then judged as before.
+ */
+async function isMembersCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<boolean> {
+  if (target.origin === undefined) return false;
+  if (item.type === 'skills') {
+    if (recordedUnder(previous ?? {}, target.dest).length > 0 || !await isDirectory(target.dest)) return false;
+    return !await isTeamaiSkillCopy(target.dest, target.origin, await nextHashes({}, item, target));
+  }
+  if (previous?.[target.dest] !== undefined) return false;
   const disk = await fileHash(target.dest);
   if (disk === null || (target.content !== undefined && disk === contentHash(target.content))) return false;
   return !await isTeamaiCopy(target.dest, target.origin);
@@ -172,7 +215,7 @@ async function isMembersFile(previous: DeliveredHashes | undefined, target: Deli
 
 /** What pull does with `target`'s copy of `item`. Read-only. */
 export async function judgeCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<CopyVerdict> {
-  if (await isMembersFile(previous, target)) return { kind: 'member' };
+  if (await isMembersCopy(previous, item, target)) return { kind: 'member' };
   if (previous === undefined) return { kind: 'write' };
   return classifyCopy(await withDisk(previous, await nextHashes(previous, item, target)));
 }
@@ -190,10 +233,10 @@ export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem
     ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: verdict.teamChanged });
     return true;
   }
-  const delivered = ledger.otherRecords[target.dest];
-  if (delivered !== undefined) {
-    const next = target.content === undefined ? null : contentHash(target.content);
-    ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged: next !== delivered });
+  if (recordedUnder(ledger.otherRecords, target.dest).length > 0) {
+    const next = await nextHashes(ledger.otherRecords, item, target);
+    const teamChanged = [...next].some(([file, hash]) => hash !== (ledger.otherRecords[file] ?? null));
+    ledger.kept.push({ dest: target.dest, teamRelPath: item.relativePath, teamChanged });
   } else {
     ledger.members.push({ dest: target.dest, teamRelPath: item.relativePath });
   }
@@ -203,13 +246,16 @@ export async function keepsEditedCopy(ledger: DeliveryLedger, item: ResourceItem
 /**
  * Whether the copy at `dest` of a resource no longer delivered there must
  * stay: on record and changed since teamai delivered it, or, with no record,
- * not proven teamai's by `origin` (#993). Without a record and an origin, it
- * is removed as before.
+ * not proven teamai's by `origin` (#993); a skill directory by every file in
+ * it (`isTeamaiSkillCopy`). Without a record and an origin, it is removed as
+ * before.
  */
 export async function removedCopyChanged(previous: DeliveredHashes | undefined, dest: string, origin?: CopyOrigin): Promise<boolean> {
   const recorded = previous === undefined ? [] : recordedUnder(previous, dest);
   if (recorded.length === 0) {
-    return origin !== undefined && await fileHash(dest) !== null && !await isTeamaiCopy(dest, origin);
+    if (origin === undefined) return false;
+    if (await isDirectory(dest)) return !await isTeamaiSkillCopy(dest, origin);
+    return await fileHash(dest) !== null && !await isTeamaiCopy(dest, origin);
   }
   const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
   return classifyCopy(files).kind === 'keep';
