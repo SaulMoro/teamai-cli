@@ -249,7 +249,8 @@ export async function applyDeliveredGitExclude(
   };
   if (enabled) {
     const split = await byRepository(own?.excludeFile ?? null, paths);
-    for (const [owner, list] of [[here, split.here], [elsewhere, split.elsewhere]] as const) {
+    // A path git cannot place goes to both blocks: each sync then keeps every line it holds.
+    for (const [owner, list] of [[here, [...split.here, ...split.unlocated]], [elsewhere, split.elsewhere]] as const) {
       const result = await sync(owner, list, { dryRun });
       for (const file of result.files) {
         unwritten(file.excludeFile, file.write, 'update');
@@ -268,6 +269,7 @@ export async function applyDeliveredGitExclude(
       for (const refused of result.refused) outcome.notices.push(`Not kept out of git: ${refused.message}.`);
       for (const { path: file, error } of result.gitFailed) outcome.failures.push(`Could not keep ${file} out of git: ${error}`);
     }
+    outcome.failures = [...new Set(outcome.failures)];
     return outcome;
   }
   // Also the project's own exclude file, when the record lost track of it.
@@ -301,16 +303,21 @@ export async function reportDeliveredGitExclude(localConfig: LocalConfig, paths:
  * git is asked once per repository: from the closest directory above a path's
  * landed location that holds `.git`, where git's own search would stop. A
  * path with no `.git` above it goes with the others; `sync` leaves it out.
+ * One whose repository git cannot locate also goes with the others, and is
+ * named in `unlocated`: its line may be in either block.
  */
-async function byRepository(ownExclude: string | null, paths: Iterable<string>): Promise<{ here: string[]; elsewhere: string[] }> {
+async function byRepository(
+  ownExclude: string | null, paths: Iterable<string>,
+): Promise<{ here: string[]; elsewhere: string[]; unlocated: string[] }> {
   const excludeOf = new Map<string, Promise<string | null>>();
-  const split = { here: [] as string[], elsewhere: [] as string[] };
+  const split = { here: [] as string[], elsewhere: [] as string[], unlocated: [] as string[] };
   for (const file of paths) {
     let dir: string | null = await existingAncestor(await realFilePath(file));
     while (dir !== null && !await pathExists(path.join(dir, '.git'))) dir = path.dirname(dir) === dir ? null : path.dirname(dir);
     if (dir !== null && !excludeOf.has(dir)) excludeOf.set(dir, gitExcludeFile(dir).then((found) => found?.excludeFile ?? null));
     const excludeFile = dir === null ? null : await excludeOf.get(dir);
     (excludeFile !== null && excludeFile === ownExclude ? split.here : split.elsewhere).push(file);
+    if (dir !== null && excludeFile === null) split.unlocated.push(file);
   }
   return split;
 }

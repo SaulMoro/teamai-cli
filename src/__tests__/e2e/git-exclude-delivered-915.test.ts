@@ -296,6 +296,21 @@ describe('delivered team skills stay out of git (#915)', () => {
     expect(read(m.excludeFile())).toBe(members);
   });
 
+  it('keeps every delivered line while git cannot locate a tool folder\'s repository, and says so', () => {
+    const m = machine('lost-gitdir', { team: ON });
+    expect(m.teamSkillEntries()).toEqual([]);
+    const lines = m.deliveredLines();
+    expect(lines).toEqual(expect.arrayContaining(['/.claude/skills/fe-skill/']));
+    // A tool folder that was a linked checkout or a submodule, its git directory since deleted: git still shows its files here.
+    writeFile(path.join(m.dir, '.claude', '.git'), `gitdir: ${path.join(m.dir, 'gone')}\n`);
+
+    const r = m.run(['pull']);
+
+    expect(m.deliveredLines(), r.output).toEqual(lines);
+    expect(m.teamSkillEntries(), r.output).toEqual([]);
+    expect(r.output.match(/Could not keep \S*\.claude\/skills\/fe-skill out of git/g)).toHaveLength(1);
+  });
+
   it('applies a team commit that changes only sharing.gitExclude.enabled on that pull, and a later override over it', () => {
     const m = machine('team-commit', { team: OFF });
     expect(m.teamSkillEntries()).not.toEqual([]);

@@ -119,6 +119,34 @@ describe('git exclude blocks (#915)', () => {
       expect(owner.files).toEqual([excludeFile]);
     });
 
+    it('drops no line while git cannot place a path, says so, and replaces normally once it can', async () => {
+      const other = await newRepo('other');
+      const otherExclude = path.join(other, '.git', 'info', 'exclude');
+      for (const file of [inRepo('a.md'), inRepo('b.md'), path.join(other, 'c.md')]) await fse.outputFile(file, 'x\n');
+      const owner = memoryOwner('local-agent');
+      await sync(owner, [inRepo('a.md'), path.join(other, 'c.md')]);
+      const otherBefore = await read(otherExclude);
+      const head = await read(path.join(other, '.git', 'HEAD'));
+      await fse.writeFile(path.join(other, '.git', 'HEAD'), 'not a ref\n');
+
+      const result = await sync(owner, [inRepo('b.md'), path.join(other, 'c.md')]);
+
+      expect(result.gitFailed).toMatchObject([{ path: path.join(other, 'c.md') }]);
+      expect(await read(otherExclude)).toBe(otherBefore);
+      expect(owner.files.sort()).toEqual([excludeFile, otherExclude].sort());
+      // Which file the unplaced path belongs to is unknown, so no block loses a line in this run; new paths are still listed.
+      expect(ignored(repo, 'a.md')).toBe(true);
+      expect(ignored(repo, 'b.md')).toBe(true);
+
+      await fse.writeFile(path.join(other, '.git', 'HEAD'), head);
+      const after = await sync(owner, [inRepo('b.md')]);
+
+      expect(after.gitFailed).toEqual([]);
+      expect(status(repo)).toBe('?? a.md\n');
+      expect(status(other)).toBe('?? c.md\n');
+      expect(owner.files).toEqual([excludeFile]);
+    });
+
     it('lists a path git already ignores, so a later .gitignore change cannot expose it', async () => {
       await fse.outputFile(inRepo('.gitignore'), '*.md\n');
       await fse.outputFile(inRepo('a.md'), 'a\n');
@@ -619,6 +647,31 @@ describe('git exclude blocks (#915)', () => {
       const [{ result }] = await ensure({ name: 'credentials' }, [inRepo('models.json')]);
 
       expect(result).toMatchObject({ kind: 'gitFailed', error: expect.stringMatching(/config/) });
+    });
+
+    it('fails when git cannot confirm it ignores the path after listing it', async () => {
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const bin = path.join(tmp, 'bin');
+      await fse.outputFile(
+        path.join(bin, 'git'),
+        `#!/bin/sh\nif [ "$1" = check-ignore ]; then echo 'fatal: cannot check' >&2; exit 128; fi\nexec '${realGit}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      const pathBefore = process.env.PATH;
+      process.env.PATH = `${bin}${path.delimiter}${pathBefore ?? ''}`;
+      let results: Awaited<ReturnType<typeof ensure>>;
+      try {
+        results = await ensure({ name: 'credentials' }, [inRepo('models.json')]);
+      } finally {
+        process.env.PATH = pathBefore;
+      }
+
+      expect(results[0].result).toEqual({
+        kind: 'gitFailed',
+        error: 'fatal: cannot check',
+        reason: `git could not confirm that it ignores ${inRepo('models.json')}: "fatal: cannot check"`,
+        fix: `Check that \`git check-ignore -v ${inRepo('models.json')}\` works in that repository, then run \`teamai pull\` again.`,
+      });
     });
 
     it('says a path outside any repository is outside', async () => {
