@@ -428,6 +428,12 @@ async function discoverToolResources(
     const { resolveOpencodePluginDir, OPENCODE_HOOK_FILE } = await import('./opencode-hooks.js');
     for (const target of opencodePluginTargets(baseDir, scope)) {
       const pluginDir = resolveOpencodePluginDir(target.baseDir, target.scope);
+      // The user plugin carries hooks, rules and instructions to every OpenCode project and the user
+      // scope (#993): only a user-scope uninstall removes it, as for the other global adapters (#945).
+      if (target.scope === 'user' && !globalAdapters) {
+        if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) res.keptGlobal.push(path.join(pluginDir, OPENCODE_HOOK_FILE));
+        continue;
+      }
       if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) {
         res.opencodeHookScopes.push(target);
       } else if (await pathExists(pluginDir)) {
