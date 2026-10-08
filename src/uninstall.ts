@@ -1653,7 +1653,8 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
         // A delete that failed is not a member's file: say what happened, not
         // "the packaged files were removed".
         else if (result.notRemoved.length > 0) failedSkillDirs.push({ skillDir, first: result.notRemoved[0] });
-        else keptSkillDirs.push(skillDir);
+        // Kept only because the repository tracks a file: keepsTrackedCopy named it.
+        else if (result.foreign > 0) keptSkillDirs.push(skillDir);
       } else {
         await remove(skillDir);
         removedSkillDirs++;

@@ -2894,6 +2894,29 @@ describe('uninstall', () => {
     expect(await fse.pathExists(legacyShare)).toBe(false);
   });
 
+  it('names a packaged file the repository started tracking after the plan once, as tracked, not as a file TeamAI did not put there', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const stubDir = path.join(homeDir, '.claude', 'skills', 'teamai');
+    const stub = path.join(stubDir, 'SKILL.md');
+    // A HOME under version control, which tracks nothing of teamai's when the plan is built.
+    execFileSync('git', ['init', '-q'], { cwd: homeDir });
+    // The member stages the stub while uninstall runs: hooks go before skills.
+    mockReconcileHooks.mockImplementation(async () => {
+      execFileSync('git', ['add', '-f', path.relative(homeDir, stub)], { cwd: homeDir });
+      return { changes: [] };
+    });
+
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    await uninstall({ force: true });
+
+    const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    const about = warnings.filter((w) => w.includes(stubDir));
+    expect(about).toEqual([expect.stringContaining(`Kept ${stub}: this repository tracks it`)]);
+    expect(await fse.pathExists(stub)).toBe(true);
+  });
+
   it('names the file and the error when a packaged file cannot be deleted, instead of calling the directory kept', async () => {
     if (process.getuid?.() === 0) return; // root ignores directory permissions
     const { homeDir, repoPath } = await setupFixture(tmpDir);
