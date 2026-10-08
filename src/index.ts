@@ -1016,9 +1016,25 @@ program
   .option('--matcher <matcher>', 'Hook matcher for PostToolUse (e.g. Skill, Bash)')
   .option('--bg-only', 'Internal: run only fire-and-forget background handlers (used by the detached child)')
   .option('--stdin-file <path>', 'Internal: read the hook payload from this file instead of STDIN')
-  .action(async (event: string, hookArgs: string[], cmdOpts: { stdin?: boolean; tool?: string; matcher?: string; bgOnly?: boolean; stdinFile?: string }) => {
+  .option('--team-hooks', 'Run the team hooks of the project the hook\'s cwd belongs to (Codex, when the project\'s .codex/hooks.json is not teamai\'s alone)')
+  .action(async (event: string, hookArgs: string[], cmdOpts: { stdin?: boolean; tool?: string; matcher?: string; bgOnly?: boolean; stdinFile?: string; teamHooks?: boolean }) => {
     const bgOnly = cmdOpts.bgOnly ?? false;
     const tool = cmdOpts.tool ?? 'claude';
+
+    // Team hooks keep their own timeouts and exit status: Codex bounds the
+    // entry by the largest of them, and exit 2 is a hook's blocking decision.
+    if (cmdOpts.teamHooks) {
+      let code = 0;
+      try {
+        if (tool === 'codex') {
+          const { runCodexDispatcher } = await import('./codex-team-hooks.js');
+          code = await runCodexDispatcher(event);
+        }
+      } catch (e) {
+        process.stderr.write(`teamai: team hooks did not run: ${(e as Error).message}\n`);
+      }
+      process.exit(code);
+    }
 
     // Hard wall-clock safety net for the FOREGROUND (parent) hook process, which
     // blocks the host IDE's hook. The host aborts a hook at ~10s regardless of
