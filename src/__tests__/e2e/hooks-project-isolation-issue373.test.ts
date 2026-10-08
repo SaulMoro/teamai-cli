@@ -270,6 +270,96 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     expect(readSettings(mainFiles(projectA)[1]).hooks.Stop).toHaveLength(1);
   });
 
+  it.each(['enabledAgents: [codex]', 'disabledAgents: [claude]'])('releases the last Claude hook when main excludes Claude through %s', async (selection) => {
+    installWorktreeConfig();
+    fs.appendFileSync(path.join(projectA, '.teamai', 'config.yaml'), `${selection}\n`);
+    for (const checkout of [projectA, worktreeA]) {
+      const injected = await runCLI(checkout, home);
+      expect(injected.code, injected.output).toBe(0);
+    }
+    const removed = await runCLI(worktreeA, home, ['hooks', 'remove']);
+    expect(removed.code, removed.output).toBe(0);
+    expect(readSettings(mainFiles(projectA)[0]).hooks.Stop ?? []).toHaveLength(0);
+    expect(readSettings(mainFiles(projectA)[1]).hooks.Stop).toHaveLength(1);
+  });
+
+  it('uninstalls the remaining legacy worktree hook after main releases its copy', async () => {
+    installWorktreeConfig();
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
+    seedOlderWorktreeInstall();
+    const removedMain = await runCLI(projectA, home, ['hooks', 'remove']);
+    expect(removedMain.code, removedMain.output).toBe(0);
+    for (const file of mainFiles(projectA)) expect(readSettings(file).hooks.Stop).toHaveLength(1);
+    const uninstalled = await runCLI(worktreeA, home, ['uninstall', '--force']);
+    expect(uninstalled.code, uninstalled.output).toBe(0);
+    for (const file of mainFiles(projectA)) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
+  });
+
+  it.each([
+    { order: [0, 1, 2] }, { order: [0, 2, 1] }, { order: [1, 0, 2] },
+    { order: [1, 2, 0] }, { order: [2, 0, 1] }, { order: [2, 1, 0] },
+  ])('removes legacy Codex copies in order $order and keeps an identical user entry', async ({ order }) => {
+    installWorktreeConfig();
+    const second = path.join(sandbox, 'worktree-a2');
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'worktree-a2', second], { cwd: projectA });
+    fs.mkdirSync(path.join(second, '.teamai'));
+    fs.writeFileSync(path.join(second, '.teamai', 'config.yaml'),
+      fs.readFileSync(path.join(worktreeA, '.teamai', 'config.yaml'), 'utf8').replace(`projectRoot: ${worktreeA}`, `projectRoot: ${second}`));
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
+    seedOlderWorktreeInstall();
+    const manifestFile = path.join(worktreeA, '.teamai', 'managed-main-checkout-hooks.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.codex[0].codexEntryIndex = 2;
+    fs.writeFileSync(path.join(second, '.teamai', 'managed-main-checkout-hooks.json'), JSON.stringify(manifest));
+    for (const file of mainFiles(projectA)) {
+      const settings = readSettings(file);
+      settings.hooks.Stop.push(settings.hooks.Stop[0]);
+      fs.writeFileSync(file, JSON.stringify(settings));
+    }
+    const codexFile = mainFiles(projectA)[1];
+    const codex = readSettings(codexFile);
+    const userEntry = codex.hooks.Stop[0];
+    codex.hooks.Stop.push(userEntry);
+    fs.writeFileSync(codexFile, JSON.stringify(codex));
+    const checkouts = [projectA, worktreeA, second];
+    for (const [step, index] of order.entries()) {
+      const checkout = checkouts[index];
+      const removed = await runCLI(checkout, home, ['hooks', 'remove']);
+      expect(removed.code, removed.output).toBe(0);
+      expect(readSettings(codexFile).hooks.Stop ?? [], checkout).toHaveLength(3 - step);
+    }
+    expect(readSettings(codexFile).hooks.Stop).toEqual([userEntry]);
+  });
+
+  it('removes only the caller hook file in an installed bare worktree', async () => {
+    const bare = path.join(sandbox, 'bare.git');
+    const teamRepo = path.join(sandbox, 'bare-team');
+    fs.cpSync(path.join(projectA, '.teamai', 'team-repo'), teamRepo, { recursive: true });
+    execFileSync('git', ['init', '--bare', '-q', bare]);
+    const worktrees = [path.join(sandbox, 'bare-a'), path.join(sandbox, 'bare-b')];
+    for (const worktree of worktrees) {
+      execFileSync('git', ['--git-dir', bare, 'worktree', 'add', '--orphan', worktree]);
+      fs.mkdirSync(path.join(worktree, '.teamai'));
+      fs.writeFileSync(path.join(worktree, '.teamai', 'config.yaml'),
+        fs.readFileSync(path.join(projectB, '.teamai', 'config.yaml'), 'utf8')
+          .replace(path.join(projectB, '.teamai', 'team-repo'), teamRepo)
+          .replace(`projectRoot: ${projectB}`, `projectRoot: ${worktree}`));
+    }
+    for (const worktree of worktrees) {
+      const injected = await runCLI(worktree, home);
+      expect(injected.code, injected.output).toBe(0);
+    }
+    const removed = await runCLI(worktrees[0], home, ['hooks', 'remove']);
+    expect(removed.code, removed.output).toBe(0);
+    for (const file of mainFiles(worktrees[0])) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
+    for (const file of mainFiles(worktrees[1])) expect(readSettings(file).hooks.Stop).toHaveLength(1);
+    const removedSecond = await runCLI(worktrees[1], home, ['hooks', 'remove']);
+    expect(removedSecond.code, removedSecond.output).toBe(0);
+    for (const file of mainFiles(worktrees[1])) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
+  });
+
   it('shares one main checkout team hook between two worktree installs when the main checkout has none', async () => {
     const projectC = path.join(sandbox, 'project-c');
     const teamRepo = path.join(sandbox, 'team-c');

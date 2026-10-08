@@ -523,10 +523,12 @@ every checkout, so that is where they live now:
 │                                              has no install), importing then retiring the records v0.22.0 kept in each linked checkout's data home; checkouts registered in the
 │                                              manifest share ownership so removal keeps the shared entries until the last checkout removes them (#373)
 │                                              registration is per tool; targeted uninstall releases only that tool and keeps the remaining tools' records
+│                                              discovery respects enabledAgents/disabledAgents; excluded tools do not retain another checkout's shared hook
+│                                              removing a legacy Codex copy shifts surviving checkout records only after matching their full entry at the old position
 │                                              the synthetic main-checkout manifest and empty .teamai directory go only after the last hook record is removed
 │                                              removal releases one Claude entry per record, so an identical copy another checkout records stays
 └── workspaces/<managedMcpWorkspaceId(root)>/
-    ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
+    ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target, without sibling registrations
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
     │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882);

@@ -25,6 +25,7 @@ import {
   DEFAULT_CODEX_ROOT,
   getDataHome,
   getTeamaiHome,
+  isAgentExcluded,
   isSelfMode,
   managedMcpManifestKey,
   managedMcpManifestPath,
@@ -629,17 +630,20 @@ async function otherWorktreeHasOwnManifest(root: string, current: string, tool: 
   return false;
 }
 
-async function discoverInstalledCheckouts(root: string): Promise<string[]> {
+async function discoverInstalledCheckouts(root: string, tool: string): Promise<string[]> {
   const result: string[] = [];
   const canonicalRoot = canonicalProjectRoot(root);
-  const { detectProjectConfig } = await import('./config.js');
-  const mainConfig = await pathExists(root) ? await detectProjectConfig(root).catch(() => null) : null;
-  if (mainConfig) result.push(canonicalRoot);
+  const { detectProjectConfig, readConfigFrom } = await import('./config.js');
+  const mainConfig = await pathExists(root) ? await detectProjectConfig(root, undefined, { dryRun: true }).catch(() => null) : null;
+  if (mainConfig && !isAgentExcluded(mainConfig, tool)) result.push(canonicalRoot);
   for (const worktree of await listWorktrees(root)) {
     const canonical = canonicalProjectRoot(worktree);
     if (canonical === canonicalRoot) continue;
-    if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) {
-      result.push(canonical);
+    const home = getTeamaiHome('project', worktree);
+    if (await pathExists(path.join(home, 'config.yaml'))) {
+      const config = await readConfigFrom(home, worktree);
+      // An unreadable installed config cannot prove that its tool was excluded.
+      if (!config || !isAgentExcluded(config, tool)) result.push(canonical);
     }
   }
   return result;
@@ -1520,8 +1524,8 @@ export async function reconcileHooks(
       legacyManifestPath: getManagedHooksPath('project', target.root),
       checkoutManifestPath: target.checkoutManifestPath,
       sharedWithOtherInstall: target.sharedWithOtherInstall,
-      current: target.current,
-      root: target.root,
+      current: target.worktreeScoped ? undefined : target.current,
+      root: target.worktreeScoped ? undefined : target.root,
       removeAll: opts.removeAll,
     });
   }
@@ -2179,8 +2183,8 @@ export async function reconcileHooksToAllTools(
           legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
           checkoutManifestPath: opts.mainCheckout.checkoutManifestPath,
           sharedWithOtherInstall: opts.mainCheckout.sharedWithOtherInstall,
-          current: opts.mainCheckout.current,
-          root: opts.mainCheckout.root,
+          current: opts.mainCheckout.worktreeScoped ? undefined : opts.mainCheckout.current,
+          root: opts.mainCheckout.worktreeScoped ? undefined : opts.mainCheckout.root,
           removeAll: opts.removeAll,
         });
         reconciledMainTools.add(tool);
@@ -2226,7 +2230,7 @@ async function reconcileMainCheckoutTeamHooks(
       let checkouts = getToolCheckouts(manifest, tool);
       const tracked = Array.isArray(manifest.checkouts) || Object.hasOwn(manifest.checkouts ?? {}, tool);
       if (!tracked && manifest[tool]) {
-        checkouts = await discoverInstalledCheckouts(canonicalRoot);
+        checkouts = await discoverInstalledCheckouts(canonicalRoot, tool);
       }
       const liveWorktrees = new Set((await listWorktrees(canonicalRoot)).map(canonicalProjectRoot));
       const remaining = checkouts
@@ -2245,10 +2249,9 @@ async function reconcileMainCheckoutTeamHooks(
         ? await otherWorktreeHasOwnManifest(canonicalRoot, canonicalCurrent ?? canonicalRoot, tool)
         : false;
       await writeJson(expandHome(opts.manifestPath), manifest);
-      if (checkoutManifestPath) {
-        await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
-      } else if (otherHasOwnManifest) {
-        await reconcileHooks(file, tool, teamDefs, { manifestPath: opts.manifestPath, removeAll: true, teamOnly: true });
+      const ownerManifestPath = checkoutManifestPath ?? (otherHasOwnManifest ? opts.manifestPath : undefined);
+      if (ownerManifestPath) {
+        await removeCheckoutTeamHooks(file, tool, ownerManifestPath, opts.manifestPath, canonicalRoot ?? undefined);
       }
       return;
     }
@@ -2293,7 +2296,7 @@ async function reconcileMainCheckoutTeamHooks(
       const existing = getToolCheckouts(updated, tool);
       let checkouts: string[];
       if (existing.length === 0) {
-        const discovered = canonicalRoot ? await discoverInstalledCheckouts(canonicalRoot) : [];
+        const discovered = canonicalRoot ? await discoverInstalledCheckouts(canonicalRoot, tool) : [];
         checkouts = Array.from(new Set([...discovered, canonicalCurrent]));
       } else {
         checkouts = Array.from(new Set([...existing.map(canonicalProjectRoot), canonicalCurrent]));
@@ -2308,6 +2311,39 @@ async function reconcileMainCheckoutTeamHooks(
       }
     }
     await writeJson(expandHome(opts.manifestPath), updated);
+  }
+}
+
+/** Keep surviving legacy ownership positions aligned when a shared file shrinks. */
+async function removeCheckoutTeamHooks(file: string, tool: string, manifestPath: string, sharedManifestPath: string, root?: string): Promise<void> {
+  const before = tool === CODEX_TOOL_ID && root ? await readJson<CodexHooksJson>(file) : null;
+  const owned = before ? (await readManifest(manifestPath))[tool] ?? [] : [];
+  const surviving = new Map<string, number[]>();
+  for (const [event, entries] of Object.entries(before?.hooks ?? {})) {
+    surviving.set(event, entries.flatMap((entry, index) =>
+      isExactBuiltinEntry(event, tool, entry) || owned.some((record) => ownsCodexEntry(record, event, index, entries))
+        ? [] : [index]));
+  }
+  await reconcileHooks(file, tool, [], { manifestPath, removeAll: true, teamOnly: true });
+  if (!before?.hooks || !root) return;
+  const after = await readJson<CodexHooksJson>(file);
+  const siblingPaths = new Set([sharedManifestPath, ...(await listWorktrees(root))
+    .map((worktree) => path.join(getTeamaiHome('project', worktree), 'managed-main-checkout-hooks.json'))]);
+  for (const siblingPath of siblingPaths) {
+    if (siblingPath === manifestPath) continue;
+    const sibling = await readManifest(siblingPath);
+    let changed = false;
+    for (const record of sibling[tool] ?? []) {
+      const index = record.codexEntryIndex;
+      if (index === undefined || !record.codexEntry
+        || !isDeepStrictEqual(before.hooks[record.event]?.[index], record.codexEntry)) continue;
+      const shifted = surviving.get(record.event)?.indexOf(index) ?? -1;
+      if (shifted < 0 || shifted === index
+        || !isDeepStrictEqual(after?.hooks?.[record.event]?.[shifted], record.codexEntry)) continue;
+      record.codexEntryIndex = shifted;
+      changed = true;
+    }
+    if (changed) await writeJson(expandHome(siblingPath), sibling);
   }
 }
 

@@ -494,6 +494,7 @@ async function discoverToolResources(
       if (settingsPath && await pathExists(settingsPath)
         && (await hasTeamaiHooks(settingsPath, tool, manifestPath)
           || (legacyManifestPath && await hasTeamaiHooks(settingsPath, tool, legacyManifestPath))
+          || (mainCheckout?.checkoutManifestPath && await hasTeamaiHooks(settingsPath, tool, mainCheckout.checkoutManifestPath))
           || isEmptyHooksResidue(await readJson<Record<string, unknown>>(settingsPath)))) {
         res.hookFiles.push({ path: settingsPath, tool, manifestPath,
           ...(teamOnly ? { teamOnly, legacyManifestPath, mainCheckout } : {}),
