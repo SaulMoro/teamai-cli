@@ -1386,10 +1386,11 @@ is the path Claude Code files the checkout under, the main checkout's real path,
 (in a `--separate-git-dir` repository a linked worktree's key is the git directory; in a linked worktree of a
 submodule, its directory under `.git/modules`). Resolved tokens then stay out of the working tree, Claude Code
 loads the servers without asking for approval, and the team's own `.mcp.json` is left as it is. teamai touches
-only its own entries there, and `teamai uninstall` removes exactly those. The next pull takes teamai's servers out
+only its own entries there, and `teamai uninstall` removes exactly those, under every key it recorded, also one
+whose worktree is gone. The next pull takes teamai's servers out
 of `.mcp.json`, keeps your own and those CodeBuddy still writes there, keeps a teamai server you changed and names
 it, and deletes the file if nothing else is left in it and git does not track it. Turning the option off moves
-the servers back on the next pull. While tclaude is installed and enabled in the project, Claude keeps `.mcp.json`,
+the servers back on the next pull and takes them out of every recorded key. While tclaude is installed and enabled in the project, Claude keeps `.mcp.json`,
 which tclaude reads.
 
 TeamAI removes a bare Copilot entry beside `mcpServers` only when its ownership record proves a completed bare write and the entry still matches that write. Older records without placement evidence leave the bare entry alone, even if it matches the team definition. A bare ownership record does not authorize changes to a same-named member entry under `mcpServers`; update skips that collision and removal cleans only the owned bare copy. An unmarked record can claim a keyed entry only when its hash matches that entry and does not also match the bare entry. Completed keyed writes record `bare: false`; a failed placement-record write leaves ownership unproven. New HTTP local-agent installs check Git protection without changing it, persist provisional ownership, then add the exclusion and file record before writing a credential. A failed initial ownership write changes neither Git exclusions nor the MCP config.

@@ -335,9 +335,12 @@ export async function claudeProjectKey(checkoutRoot: string): Promise<string> {
   }
 }
 
+/** What sets a local scope's manifest key (`<tool>:local:<key>`) apart from a file's. */
+const LOCAL_KEY_INFIX = ':local:';
+
 /** Where `target`'s records live in the MCP manifest: Claude's local scope by its key, as no checkout owns it. */
 export function mcpManifestKey(target: Pick<McpTarget, 'tool' | 'projectScope' | 'projectKey'>): string {
-  return target.projectKey ? `${target.tool}:local:${target.projectKey}` : managedMcpManifestKey(target.tool, target.projectScope);
+  return target.projectKey ? `${target.tool}${LOCAL_KEY_INFIX}${target.projectKey}` : managedMcpManifestKey(target.tool, target.projectScope);
 }
 
 /** A file or a local scope, as a member finds it. */
@@ -1062,24 +1065,26 @@ function localMcpManifestPath(localConfig: LocalConfig): string {
 /** Whether a manifest key is one of the local-scope keys of `localConfig`'s checkout. */
 async function localMcpKeyOf(localConfig: LocalConfig): Promise<(key: string) => boolean> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return () => false;
-  const suffix = `:local:${await claudeProjectKey(localConfig.projectRoot)}`;
+  const suffix = `${LOCAL_KEY_INFIX}${await claudeProjectKey(localConfig.projectRoot)}`;
   return (key) => key.endsWith(suffix);
 }
 
 /**
  * Write what `loadMcpManifest` read: the checkout's own records to its
  * manifest, and its local-scope records into the shared file, re-read so
- * another checkout's keys there stay as they are.
+ * another checkout's keys there stay as they are. Another key's records the
+ * reconcile took in (`leaveOtherClaudeLocalScopes`) are written back there too.
  */
 async function saveMcpManifest(localConfig: LocalConfig, manifestPath: string, manifest: ManagedMcpManifest): Promise<void> {
   const ours = await localMcpKeyOf(localConfig);
-  await writeJsonAtomic(manifestPath, Object.fromEntries(Object.entries(manifest).filter(([key]) => !ours(key))));
+  const local = (key: string): boolean => key.includes(LOCAL_KEY_INFIX);
+  await writeJsonAtomic(manifestPath, Object.fromEntries(Object.entries(manifest).filter(([key]) => !local(key))));
   if (localConfig.scope !== 'project') return;
   const file = localMcpManifestPath(localConfig);
   const shared = await readManifest(file);
   const before = JSON.stringify(shared);
-  for (const key of Object.keys(shared)) if (ours(key)) delete shared[key];
-  for (const [key, records] of Object.entries(manifest)) if (ours(key) && records.length > 0) shared[key] = records;
+  for (const key of Object.keys(shared)) if (ours(key) || (local(key) && key in manifest)) delete shared[key];
+  for (const [key, records] of Object.entries(manifest)) if (local(key) && records.length > 0) shared[key] = records;
   if (JSON.stringify(shared) !== before) await writeJsonAtomic(file, shared);
 }
 
@@ -2275,6 +2280,9 @@ async function reconcileTargets(
       wrote = await leaveClaudeMcpLocation(teamConfig, localConfig, target, {
         desired, kept, manifest, changes, vars: desiredContext.vars, history, options, restoreConfigs,
       }) || wrote;
+      if (removeAll || !target.projectKey) {
+        wrote = await leaveOtherClaudeLocalScopes(teamConfig, localConfig, { manifest, changes, options, restoreConfigs }) || wrote;
+      }
     }
   }
 
@@ -2629,6 +2637,56 @@ async function leaveClaudeMcpLocation(
   log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for claude (${removed.map((c) => c.server).join(', ')}) `
     + `out of ${describeMcpLocation(other)}: with sharing.gitExclude ${active.projectKey ? 'on' : 'off'}, Claude reads them from ${describeMcpLocation(active)}.`);
   return wrote && !other.projectKey ? await deleteEmptiedMcpFile(other.file) || wrote : wrote;
+}
+
+/**
+ * Take teamai's servers out of Claude's local scope under every other key
+ * its records name (#915), on `removeAll` and while sharing.gitExclude is off:
+ * another checkout's key, and a key no checkout has any more, as a removed
+ * linked worktree of a `--separate-git-dir` repository leaves, whose servers
+ * no pull would ever take out. Only recorded entries go; one the member
+ * changed since teamai wrote it stays, named, unless `removeAll`. Their
+ * records go through `ctx.manifest` (`saveMcpManifest`). Whether it wrote a file.
+ */
+async function leaveOtherClaudeLocalScopes(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  ctx: {
+    manifest: ManagedMcpManifest;
+    changes: McpChange[];
+    options: McpReconcileOptions;
+    restoreConfigs: Map<string, () => Promise<void>>;
+  },
+): Promise<boolean> {
+  const local = (await claudeMcpLocations(teamConfig, localConfig))?.local;
+  if (!local) return false;
+  const prefix = `${local.tool}${LOCAL_KEY_INFIX}`;
+  const ours = await localMcpKeyOf(localConfig);
+  let wrote = false;
+  for (const [key, records] of Object.entries(await readManifest(localMcpManifestPath(localConfig)))) {
+    if (!key.startsWith(prefix) || ours(key) || key in ctx.manifest || !Array.isArray(records) || records.length === 0) continue;
+    const target: McpTarget = { ...local, projectKey: key.slice(prefix.length) };
+    const installed = await installedMcpEntries(target);
+    const present = records.filter((record) => installed?.has(record.name));
+    const edited = ctx.options.removeAll ? [] : present.filter((record) => entryHash(installed?.get(record.name)) !== record.hash);
+    for (const { name } of edited) {
+      log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it. `
+        + `Remove it there when you no longer need it.`);
+    }
+    const owned = present.filter((record) => !edited.includes(record));
+    const removed: McpChange[] = [];
+    const result = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed,
+      async () => 'member', ctx.options, ctx.restoreConfigs);
+    // Not read: its records stay.
+    if (result === null) continue;
+    wrote ||= result;
+    ctx.changes.push(...removed);
+    ctx.manifest[key] = [];
+    if (removed.length === 0 || ctx.options.removeAll) continue;
+    log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for claude (${removed.map((c) => c.server).join(', ')}) `
+      + `out of ${describeMcpLocation(target)}: with sharing.gitExclude off, Claude reads them from each checkout's MCP file.`);
+  }
+  return wrote;
 }
 
 /**

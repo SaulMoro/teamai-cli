@@ -390,6 +390,48 @@ describe.skipIf(process.platform === 'win32')('Claude gets the team\'s project M
     }
   }, 120_000);
 
+  describe('a local scope whose checkout is gone: the git directory of a removed linked worktree in a --separate-git-dir repository', () => {
+    /** Main checkout and the git directory key its removed linked worktree's servers stay under, holding a server of the member's too. */
+    async function orphanedKey(name: string): Promise<{ m: Member; main: string; orphan: string; mine: unknown }> {
+      const m = member(name);
+      const root = fs.realpathSync.native(caseDir(name));
+      const orphan = path.join(root, 'main.git');
+      const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${orphan}`] });
+      const wt = await m.worktree(main, path.join(root, 'wt'));
+      m.git(['worktree', 'remove', '--force', wt], main);
+      const data = m.claudeJson();
+      const mine = { type: 'stdio', command: 'my-local-tool', args: [] };
+      data.projects![orphan].mcpServers = { ...data.projects![orphan].mcpServers, 'my-local': mine };
+      write(path.join(m.home, '.claude.json'), json(data));
+      expect(Object.keys(m.local(orphan) ?? {}).sort()).toEqual(['my-local', 'plain-api', 'secret-api']);
+      return { m, main, orphan, mine };
+    }
+
+    it('uninstall removes teamai\'s servers from it', async () => {
+      const { m, main, orphan, mine } = await orphanedKey('orphan-uninstall');
+      // A pull in between forgets the removed worktree.
+      m.teamai(['pull', '--force'], main);
+
+      m.teamai(['uninstall', '--force'], main);
+
+      expect(m.local(orphan)).toEqual({ 'my-local': mine });
+      expect(m.local(main) ?? {}).toEqual({});
+      expect(read(path.join(m.home, '.claude.json'))).not.toContain(TOKEN);
+    }, 120_000);
+
+    it('turning the option off removes teamai\'s servers from it', async () => {
+      const { m, main, orphan, mine } = await orphanedKey('orphan-off');
+
+      m.gitExclude(false);
+      m.teamai(['pull'], main);
+
+      expect(m.local(orphan)).toEqual({ 'my-local': mine });
+      expect(m.local(main) ?? {}).toEqual({});
+      expect(Object.keys(projectServers(main) ?? {}).sort()).toEqual(['plain-api', 'secret-api']);
+      expect(read(path.join(m.home, '.claude.json'))).not.toContain(TOKEN);
+    }, 120_000);
+  });
+
   it('files a submodule under its checkout, and a linked worktree of it under its git directory', async () => {
     const m = member('submodule');
     const root = fs.realpathSync.native(caseDir('submodule'));

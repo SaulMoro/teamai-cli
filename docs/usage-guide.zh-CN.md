@@ -1231,9 +1231,9 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 为该 checkout 使用的路径，即主 checkout 的真实路径，因此所有 worktree 共用一份（`--separate-git-dir` 仓库的 linked worktree
 用 git 目录；submodule 的 linked worktree 用其在 `.git/modules` 下的目录）。这样解析后的 token 不会进入工作区，Claude Code
 加载这些 server 时无需批准，团队自己的 `.mcp.json` 保持原样。teamai 在那里只改动自己的条目，`teamai uninstall` 也只移除这些
-条目。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的 server 和 CodeBuddy 仍在其中写入的 server，保留你改动过的
-teamai server 并给出提示；文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull 会把这些 server 移回去。
-项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
+条目，覆盖它记录过的每个 key，包括 worktree 已删除的 key。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的 server 和 CodeBuddy 仍在其中写入的 server，保留你改动过的
+teamai server 并给出提示；文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull 会把这些 server 移回去，
+并从每个记录过的 key 中移除它们。项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
 
 TeamAI 仅在所有权记录证明已完成顶层写入且内容仍匹配时，才删除 `mcpServers` 旁的 Copilot 顶层条目。旧记录缺少位置证据时，即使内容与团队定义相同，也保留顶层条目。顶层所有权记录不授权修改 `mcpServers` 下的同名成员条目；更新跳过该冲突，移除时只清理受管理的顶层副本。缺少位置标记的记录只有在哈希匹配嵌套条目且不同时匹配顶层条目时，才能认领嵌套条目。完成的嵌套写入记录 `bare: false`；位置记录写入失败时，所有权仍未得到证明。HTTP 本地代理首次安装先只读检查 Git 保护，再保存临时所有权记录，随后添加排除规则和文件记录，最后写入凭据。初始所有权记录写入失败不会改变 Git 排除规则或 MCP 配置。
 
