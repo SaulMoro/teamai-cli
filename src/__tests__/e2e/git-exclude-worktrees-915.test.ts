@@ -11,6 +11,9 @@
  *   that checkout's list (a member's file there) gets no line, since the line
  *   would hide that file too; pull names it. The member's own
  *   `.claude/settings.local.json` in a linked worktree is never such a file.
+ * - A pull keeps the shared MCP line while any checkout's config, the main
+ *   checkout of a `--separate-git-dir` repo included, still holds a value
+ *   teamai resolved; that checkout's own pull cleans it and releases the line.
  * - A tool folder that is a submodule or a nested clone gets its lines in that
  *   repository's exclude file, in this project's own `delivered/<id>` block.
  *
@@ -65,6 +68,17 @@ const TEAM = {
   'rules/team-rule.md': rule('Team'),
 };
 const ON = 'sharing:\n  gitExclude:\n    enabled: true\n';
+const TOKEN = 'lab-token-value-5e1f';
+/** One MCP server whose header teamai resolves into the project's `.mcp.json`. */
+const MCP_TEAM = {
+  ...TEAM,
+  'mcp/mcp.yaml': [
+    'servers:', '  - name: secret-api', '    transport: http', '    url: https://api.example.com/mcp',
+    '    headers:', '      Authorization: "Bearer ${LAB_TOKEN}"', '',
+  ].join('\n'),
+  'env/env.yaml': `variables:\n  - key: LAB_TOKEN\n    value: "${TOKEN}"\n`,
+};
+const MCP_ON = 'sharing:\n  gitExclude:\n    enabled: true\n  mcp:\n    autoApply: true\n';
 const HOOKS_ON = [
   'sharing:', '  gitExclude:', '    enabled: true', '  hooks:', '    autoApply: true', '    requireTeamScripts: false', '',
 ].join('\n');
@@ -187,6 +201,14 @@ function blockLines(file: string, owner = 'delivered'): string[] {
   return start < 0 || end < start ? [] : lines.slice(start + 1, end);
 }
 
+/** The lines of the MCP block in `file`, whose start marker carries a description. */
+function mcpLines(file: string): string[] {
+  const lines = fs.existsSync(file) ? read(file).split('\n') : [];
+  const start = lines.findIndex((line) => line.startsWith('# [teamai:mcp-exclude:start]'));
+  const end = lines.indexOf('# [teamai:mcp-exclude:end]');
+  return start < 0 || end < start ? [] : lines.slice(start + 1, end);
+}
+
 /** What `git add -A` would stage in `dir` (dry run). */
 const addable = (m: Member, dir: string): string[] =>
   m.git(['add', '-A', '--dry-run'], dir).split('\n').filter(Boolean).map((line) => line.replace(/^add '(.*)'$/, '$1'));
@@ -241,6 +263,34 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
     expect(fs.existsSync(path.join(main, '.claude/skills/fe-skill/SKILL.md'))).toBe(true);
     expect(status(m, main)).toEqual([]);
     expect(status(m, wt)).toEqual([]);
+  }, 120_000);
+
+  it('keeps the MCP line while the main checkout of a --separate-git-dir repo holds the resolved value a linked worktree\'s pull dropped, until the main checkout pulls', async () => {
+    const m = member('mcp-separate', MCP_TEAM, MCP_ON);
+    const root = caseDir('mcp-separate');
+    const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`] });
+    const wt = await m.worktree(main, path.join(root, 'wt'));
+    const exclude = excludeFileOf(m, wt);
+    expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
+    expect(read(path.join(wt, '.mcp.json'))).toContain(TOKEN);
+    expect(mcpLines(exclude)).toEqual(['/.mcp.json']);
+
+    // The server leaves the team; only the linked worktree pulls.
+    m.teamCommit({ 'mcp/mcp.yaml': 'servers: []\n' });
+    const out = m.teamai(['pull'], wt);
+
+    expect(read(path.join(wt, '.mcp.json'))).not.toContain(TOKEN);
+    // The main checkout's own pull cleans its config; until then git must not see it.
+    expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
+    expect(mcpLines(exclude)).toEqual(['/.mcp.json']);
+    expect(out).not.toContain('Removed /.mcp.json');
+    expect(status(m, main)).toEqual([]);
+
+    const mainOut = m.teamai(['pull'], main);
+
+    expect(read(path.join(main, '.mcp.json'))).not.toContain(TOKEN);
+    expect(mcpLines(exclude)).toEqual([]);
+    expect(mainOut).toContain(`Removed /.mcp.json from ${exclude}`);
   }, 120_000);
 
   it('keeps the main checkout\'s lines when a linked worktree of a project that is a submodule pulls', async () => {

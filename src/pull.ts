@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import matter from 'gray-matter';
 import {
   buildRolePullContext, collectClaudemdFiles, describeDeliveryConflict, indexedRuleFiles,
@@ -7,7 +7,7 @@ import {
 } from './resources/desired.js';
 import type { IndexedSkills } from './utils/search-index.js';
 import { detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit, getDefaultBranch, gitCommonDir, isLiveCheckout } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch, completeWorktreeList, gitCommonDir, isLiveCheckout } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
@@ -784,6 +784,25 @@ export async function liveCheckoutRecords(
     return live ? [key, record] as const : null;
   }));
   return Object.fromEntries(kept.filter((entry) => entry !== null));
+}
+
+/**
+ * The project's checkouts, by real path: the current one, every live recorded
+ * one, and every one `git worktree list` names when it names them all; when it
+ * cannot (a `--separate-git-dir` repo or a submodule lists its git directory
+ * for its main checkout, or git is older than 2.36), every recorded root
+ * instead. Never `listWorktrees` alone, which leaves those main checkouts out.
+ */
+export async function projectCheckouts(localConfig: LocalConfig): Promise<string[]> {
+  const projectRoot = localConfig.projectRoot;
+  if (!projectRoot) return [];
+  const records = (await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
+  const roots = (from: typeof records | undefined): string[] => Object.values(from ?? {}).flatMap(({ root }) => root ? [root] : []);
+  const commonDir = await gitCommonDir(projectRoot);
+  const listed = commonDir ? await completeWorktreeList(projectRoot, commonDir) : null;
+  const all = [projectRoot, ...roots(await liveCheckoutRecords(projectRoot, records)), ...listed ?? roots(records)];
+  // The list names each checkout as git printed it and as its real path: one checkout, once.
+  return [...new Set(await Promise.all(all.map((root) => realpath(root).catch(() => root))))];
 }
 
 export type CheckoutRecord = NonNullable<State['lastPullByWorkspace']>[string];

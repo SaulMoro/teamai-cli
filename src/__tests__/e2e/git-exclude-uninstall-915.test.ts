@@ -6,11 +6,13 @@
  *   other repositories (a tool folder that is a nested clone). A file a member
  *   creates afterwards at a path teamai delivered is visible to git again. The
  *   block another project keeps in a shared repository stays.
- * - A line for an MCP config that may still hold a resolved value stays, with
- *   #886's warning, judged in every checkout of the repository, also the main
- *   checkout of a `--separate-git-dir` repo seen from a linked worktree.
+ * - teamai's MCP servers go from every checkout of the repository, also the
+ *   main checkout of a `--separate-git-dir` repo seen from a linked worktree;
+ *   a line for an MCP config that may still hold a resolved value stays, with
+ *   #886's warning, judged in each of them.
  * - `uninstall --agent <tool>` drops that tool's lines from every checkout's
- *   list and syncs the blocks again.
+ *   list and syncs the blocks again, keeping a path another tool in use reads
+ *   (CodeBuddy and WorkBuddy share `.codebuddy/rules`).
  * - `uninstall --dry-run` lists the blocks per owner and file, and writes nothing.
  * - A read-only exclude file is left as it is, with the lines to delete by
  *   hand; an exclude file whose repository is gone is skipped.
@@ -335,7 +337,34 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
   }, 120_000);
 
-  it('keeps the MCP line while the main checkout of a --separate-git-dir repo holds a resolved value, uninstalling from a linked worktree', async () => {
+  // WorkBuddy reads CodeBuddy's `.codebuddy/rules` in a project: one copy, one line, for both.
+  it.each([
+    { uninstalled: 'codebuddy', remaining: 'workbuddy', gone: '/.codebuddy/skills/fe-skill/', stays: '/.workbuddy/skills/fe-skill/' },
+    { uninstalled: 'workbuddy', remaining: 'codebuddy', gone: '/.workbuddy/skills/fe-skill/', stays: '/.codebuddy/skills/fe-skill/' },
+  ])('uninstall --agent $uninstalled keeps the .codebuddy/rules lines $remaining still reads', ({ uninstalled, gone, stays }) => {
+    const m = member(`agent-${uninstalled}`);
+    const root = caseDir(`agent-${uninstalled}`);
+    const app = m.project(path.join(root, 'app'), { agents: 'codebuddy,workbuddy' });
+    const exclude = excludeFileOf(m, app);
+    const ruleLines = (): string[] => blockLines(exclude).filter((line) => line.startsWith('/.codebuddy/rules/'));
+    expect(ruleLines()).toContain('/.codebuddy/rules/team-rule.md');
+    const rulesBefore = ruleLines();
+    expect(blockLines(exclude)).toEqual(expect.arrayContaining([gone, stays]));
+
+    m.teamai(['uninstall', '--agent', uninstalled, '--force'], app);
+
+    expect(ruleLines()).toEqual(rulesBefore);
+    expect(fs.existsSync(path.join(app, '.codebuddy/rules/team-rule.md'))).toBe(true);
+    expect(blockLines(exclude)).not.toContain(gone);
+    expect(blockLines(exclude)).toContain(stays);
+    expect(status(m, app)).toEqual([]);
+    // The next pull agrees.
+    m.teamai(['pull'], app);
+    expect(ruleLines()).toEqual(rulesBefore);
+    expect(status(m, app)).toEqual([]);
+  }, 120_000);
+
+  it('removes teamai\'s server and its resolved value from the main checkout of a --separate-git-dir repo, then its MCP line, uninstalling from a linked worktree', async () => {
     const m = member('mcp-separate', MCP_TEAM, MCP_ON);
     const root = caseDir('mcp-separate');
     const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`] });
@@ -346,12 +375,13 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
 
     const out = m.teamai(['uninstall', '--force'], wt);
 
-    expect(fs.existsSync(path.join(wt, '.mcp.json')) ? read(path.join(wt, '.mcp.json')) : '').not.toContain(TOKEN);
-    expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
-    expect(blockLines(exclude, 'mcp-exclude')).toEqual(['/.mcp.json']);
-    expect(out).toContain(`Kept \`/.mcp.json\` in ${exclude}`);
-    expect(out).toContain(path.join(main, '.mcp.json'));
-    expect(status(m, main)).not.toContain('?? .mcp.json');
+    const config = (dir: string): string => fs.existsSync(path.join(dir, '.mcp.json')) ? read(path.join(dir, '.mcp.json')) : '';
+    expect(config(wt)).not.toContain(TOKEN);
+    expect(config(main)).not.toContain(TOKEN);
+    expect(config(main)).not.toContain('secret-api');
+    // Clean in every checkout, so the line goes with the rest of the block.
+    expect(blockLines(exclude, 'mcp-exclude')).toEqual([]);
+    expect(out).not.toContain('Kept `/.mcp.json`');
   }, 120_000);
 });
 

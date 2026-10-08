@@ -5,7 +5,7 @@ import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileConten
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
 import { warnOnce } from '../utils/warn-once.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, isGitExcludeEnabled, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
 import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
@@ -662,7 +662,7 @@ export class RulesHandler extends ResourceHandler {
     localConfig: LocalConfig,
     ledger: DeliveryLedger | undefined,
   ): Promise<void> {
-    const { holdsInstructionBlocks } = await import('../instruction-targets.js');
+    const { holdsInstructionBlocks, instructionTargetPath } = await import('../instruction-targets.js');
     const relativePath = `rules/${TEAMAI_CONTEXT_RULE_NAME}.md`;
     const rule: ResourceItem = {
       name: TEAMAI_CONTEXT_RULE_NAME, type: 'rules', relativePath, sourcePath: path.join(localConfig.repo.localPath, relativePath),
@@ -679,10 +679,13 @@ export class RulesHandler extends ResourceHandler {
       const delivered = (recorded !== undefined && recorded === await fileHash(file))
         || await isDeliveredRender(deliveredRenders(tool), file, rule, localConfig.repo.localPath, deliveredRevs);
       if (!delivered) continue;
-      // No keepsTrackedCopy here: where this path is the tool's instruction
-      // file (Claude, Cursor, CodeBuddy, WorkBuddy), the instruction sync right
-      // after rewrites it, so a tracked copy shows ` M`, as any update does,
-      // not ` D`. Keeping the old file would block that sync.
+      // Where this path is the tool's instruction file (Claude, Cursor,
+      // CodeBuddy, WorkBuddy), the instruction sync right after rewrites it,
+      // so a tracked copy shows ` M`, as any update does, and keeping the old
+      // file would block that sync. Elsewhere (OpenCode, Kiro) nothing
+      // rewrites it: a tracked copy is kept, as every removal keeps one.
+      const target = await instructionTargetPath(tool, toolPath, localConfig, isGitExcludeEnabled(localConfig, teamConfig));
+      if (target !== file && await keepsTrackedCopy(file)) continue;
       await remove(file);
       if (ledger) forgetDelivered(ledger.hashes, file);
       log.info(`Removed ${file}, the copy of the team rule ${TEAMAI_CONTEXT_RULE_NAME} an earlier release delivered: the team instructions go there now`);
