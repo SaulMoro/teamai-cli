@@ -121,27 +121,64 @@ describe('local-agent rules (#993)', () => {
     }
   });
 
+  /** A full user-scope git team install for WorkBuddy, whose uninstall plans from the team config. */
+  async function installUserScopeTeam(sandbox: string, home: string, env: Record<string, string>) {
+    const url = 'https://git.example.com/team/http-uninstall.git';
+    const seed = path.join(sandbox, 'seed');
+    const git = (args: string[], cwd: string) => execFileSync('git', args, { cwd, env: { ...process.env, ...env }, stdio: 'pipe' });
+    fs.mkdirSync(seed, { recursive: true });
+    fs.mkdirSync(path.join(home, '.workbuddy'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'teamai.yaml'), `team: http-uninstall\nrepo: ${url}\nprovider: git\nreviewers: []\n`);
+    git(['init', '-q', '-b', 'main'], seed);
+    git(['add', '-A'], seed);
+    git(['-c', 'user.email=e2e@example.com', '-c', 'user.name=e2e', 'commit', '-q', '-m', 'seed'], seed);
+    git(['clone', '-q', '--bare', seed, path.join(sandbox, 'team.git')], sandbox);
+    git(['config', '--global', `url.${path.join(sandbox, 'team.git')}.insteadOf`, url], sandbox);
+    const init = await runCLI(['init', url, '--provider', 'git', '--agent', 'workbuddy', '--scope', 'user', '--force'], env, sandbox);
+    expect(init.code, init.output).toBe(0);
+  }
+
+  it('a hook sync runs a server-pushed uninstall of the last tool, which holds the sync\'s lock', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-pushed-uninstall-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
+    await installUserScopeTeam(sandbox, home, env);
+    const agentDir = path.join(home, '.teamai', 'local-agent');
+    fs.mkdirSync(agentDir, { recursive: true });
+    const acks: Array<{ status: string; error: string }> = [];
+    const server = createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      response.setHeader('Content-Type', 'application/json');
+      if (request.url?.endsWith('/ack')) acks.push(JSON.parse(body));
+      response.end(JSON.stringify(request.url?.endsWith('/local-agent/sync') ? { ok: true, cmds: [{
+        id: 1, type: 'uninstall_teamai', cmd: 'teamai uninstall --force --agent workbuddy',
+      }] } : { ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, createdAt: 'x', workspaceBindings: {} }));
+    try {
+      const startedAt = Date.now();
+      const synced = await runCLI(['hook-dispatch', 'stop', '--tool', 'workbuddy', '--bg-only'], env, sandbox,
+        JSON.stringify({ cwd: sandbox, hook_event_name: 'Stop', session_id: 'pushed-uninstall' }));
+      expect(synced.code, synced.output).toBe(0);
+      expect(acks, synced.output).toEqual([expect.objectContaining({ status: 'success' })]);
+      // The uninstall did not wait out the lock its own sync holds.
+      expect(Date.now() - startedAt).toBeLessThan(20_000);
+      expect(fs.existsSync(path.join(home, '.teamai', 'config.yaml')), synced.output).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it.each(['HTTP-only', 'user-scope team'])('uninstall of an %s install waits for an in-flight hook sync and leaves nothing it installed', async (install) => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-uninstall-http-')));
     sandboxes.push(sandbox);
     const home = path.join(sandbox, 'home');
     const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
-    if (install === 'user-scope team') {
-      // A full install, whose uninstall plans from the team config.
-      const url = 'https://git.example.com/team/http-uninstall.git';
-      const seed = path.join(sandbox, 'seed');
-      const git = (args: string[], cwd: string) => execFileSync('git', args, { cwd, env: { ...process.env, ...env }, stdio: 'pipe' });
-      fs.mkdirSync(seed, { recursive: true });
-      fs.mkdirSync(path.join(home, '.workbuddy'), { recursive: true });
-      fs.writeFileSync(path.join(seed, 'teamai.yaml'), `team: http-uninstall\nrepo: ${url}\nprovider: git\nreviewers: []\n`);
-      git(['init', '-q', '-b', 'main'], seed);
-      git(['add', '-A'], seed);
-      git(['-c', 'user.email=e2e@example.com', '-c', 'user.name=e2e', 'commit', '-q', '-m', 'seed'], seed);
-      git(['clone', '-q', '--bare', seed, path.join(sandbox, 'team.git')], sandbox);
-      git(['config', '--global', `url.${path.join(sandbox, 'team.git')}.insteadOf`, url], sandbox);
-      const init = await runCLI(['init', url, '--provider', 'git', '--agent', 'workbuddy', '--scope', 'user', '--force'], env, sandbox);
-      expect(init.code, init.output).toBe(0);
-    }
+    if (install === 'user-scope team') await installUserScopeTeam(sandbox, home, env);
     const sync = await pausedHttpOperation(home, sandbox, 'hook sync', env);
     let uninstall: ReturnType<typeof runCLI> | undefined;
     try {
