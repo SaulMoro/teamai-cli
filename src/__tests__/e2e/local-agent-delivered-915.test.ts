@@ -179,4 +179,56 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(status(app).filter((line) => /renamed-skill|http-rule/.test(line))).toEqual([]);
     expect(fs.readFileSync(membersRule, 'utf8')).toBe('# My own rule of that name\n');
   }, 180_000);
+
+  it('follows the flag at the next session start with no install from the backend', async () => {
+    const m = machine('flip');
+    const app = await m.project('app');
+    const status = (): string[] => m.git(['status', '--porcelain', '-uall'], app).out.split('\n').filter(Boolean);
+    const installed = ['?? .claude/rules/flip-rule.md', '?? .claude/skills/flip-skill/SKILL.md'];
+
+    await m.sessionStart(app, [install(11, 'skill', 'flip-skill', app), install(12, 'rule', 'flip-rule', app)]);
+    expect(server.acks.filter(({ id }) => id === 11 || id === 12).map(({ body }) => (body as { status: string }).status))
+      .toEqual(['success', 'success']);
+    expect(block(app)).toBeNull();
+    expect(status()).toEqual(expect.arrayContaining(installed));
+
+    // Turned on: a session start alone lists both copies.
+    m.setFlag(app, true);
+    await m.sessionStart(app, []);
+    expect(block(app)).toEqual(['/.claude/rules/flip-rule.md', '/.claude/skills/flip-skill/']);
+    expect(status().filter((line) => /flip-/.test(line))).toEqual([]);
+
+    // Turned off: a session start alone drops the block, and git sees both again.
+    m.setFlag(app, false);
+    await m.sessionStart(app, []);
+    expect(block(app)).toBeNull();
+    expect(status()).toEqual(expect.arrayContaining(installed));
+  }, 180_000);
+
+  it('keeps a session start\'s failure to write the block for the next pull, once, and for doctor until a sync succeeds', async () => {
+    const m = machine('fail');
+    const app = await m.project('app');
+    const exclude = path.join(app, '.git', 'info', 'exclude');
+    await m.sessionStart(app, [install(21, 'rule', 'fail-rule', app)]);
+    m.setFlag(app, true);
+    fs.chmodSync(exclude, 0o444);
+    const failure = /A local agent sync \(.+\) could not keep teamai's git exclude blocks up to date: Could not update the local agent's git exclude block in .*exclude/;
+    const doctorCheck = 'Last local agent sync could not keep its git exclude block up to date';
+
+    try {
+      await m.sessionStart(app, []);
+      expect(block(app)).toBeNull();
+
+      const pull = await m.cli(['pull'], app);
+      expect(pull.output).toMatch(failure);
+      expect((await m.cli(['pull'], app)).output).not.toMatch(failure);
+      expect((await m.cli(['doctor'], app)).output).toContain(doctorCheck);
+    } finally {
+      fs.chmodSync(exclude, 0o644);
+    }
+
+    await m.sessionStart(app, []);
+    expect(block(app)).toEqual(['/.claude/rules/fail-rule.md']);
+    expect((await m.cli(['doctor'], app)).output).not.toContain(doctorCheck);
+  }, 180_000);
 });
