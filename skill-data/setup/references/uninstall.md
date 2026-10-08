@@ -122,7 +122,9 @@ and give it your team repo URL."*
   recorded), and every other `# [teamai:…]` block in those files. A file the user creates later at one of
   those paths is visible to git. Their own lines stay, and so does another
   project's block in a shared repository. A read-only exclude file is left as
-  it is, and the warning lists the lines to delete by hand. Copies in other
+  it is, and the warning lists the lines to delete by hand; the uninstall is
+  then incomplete (exit 1) and keeps its records, so rerunning it once the
+  file is writable removes the block. Copies in other
   worktrees stay on disk and become visible there. `--agent <tool>` drops only
   that tool's lines (`.agents/skills` too for Codex) from every worktree,
   keeping a path another tool in use reads. `--dry-run` lists the blocks under

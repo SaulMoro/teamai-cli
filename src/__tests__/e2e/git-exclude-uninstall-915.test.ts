@@ -15,7 +15,9 @@
  *   (CodeBuddy and WorkBuddy share `.codebuddy/rules`).
  * - `uninstall --dry-run` lists the blocks per owner and file, and writes nothing.
  * - A read-only exclude file is left as it is, with the lines to delete by
- *   hand; an exclude file whose repository is gone is skipped.
+ *   hand, and the uninstall is incomplete: it keeps the records and exits 1,
+ *   so a retry removes the block; an exclude file whose repository is gone is
+ *   skipped.
  * - In HTTP mode (an in-process mock backend), uninstall removes every skill
  *   the local agent installed, also one installed under its SKILL.md name,
  *   and keeps a member's skill the local agent has no record of.
@@ -305,7 +307,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(partitionDirs(m).map((dir) => [dir, fs.readdirSync(dir).sort()])).toEqual(partitionsBefore);
   }, 120_000);
 
-  it.skipIf(isRoot)('leaves a read-only exclude file as it is, naming the lines to delete, and skips a repository that is gone', () => {
+  it.skipIf(isRoot)('leaves a read-only exclude file as it is, naming the lines to delete, keeps the records for the retry, and skips a repository that is gone', () => {
     const m = member('read-only');
     const app = m.project(path.join(caseDir('read-only'), 'app'), {
       agents: 'claude,cursor',
@@ -324,17 +326,29 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     fs.rmSync(path.join(app, '.cursor', '.git'), { recursive: true, force: true });
     const content = read(appExclude);
     fs.chmodSync(appExclude, 0o444);
+    const partitions = partitionDirs(m);
+    expect(partitions).toHaveLength(1);
     try {
-      const out = m.teamai(['uninstall', '--force'], app);
+      const first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
 
+      expect(first.code, first.output).toBe(1);
       expect(read(appExclude)).toBe(content);
-      expect(out).toContain(appExclude);
-      expect(out).toContain('/.claude/skills/fe-skill/SKILL.md');
-      expect(out).not.toContain(cursorExclude);
-      expect(out).toContain('teamai uninstalled');
+      expect(first.output).toContain(appExclude);
+      expect(first.output).toContain('/.claude/skills/fe-skill/SKILL.md');
+      expect(first.output).not.toContain(cursorExclude);
+      expect(first.output).toContain('Uninstall incomplete');
+      expect(first.output).not.toContain('teamai uninstalled');
+      // The record of the exclude files stays, so the retry finds the block.
+      expect(partitionDirs(m)).toEqual(partitions);
     } finally {
       fs.chmodSync(appExclude, 0o644);
     }
+
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(read(appExclude)).not.toContain('# [teamai:');
+    write(path.join(app, '.claude/skills/fe-skill/SKILL.md'), 'mine\n');
+    expect(visible(m, app)).toContain('.claude/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   it('uninstall --agent codex drops Codex\'s lines from every checkout\'s list and keeps the others', async () => {
