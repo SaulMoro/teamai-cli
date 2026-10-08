@@ -1936,6 +1936,85 @@ describe('local-agent: cmds[] migration', () => {
     expect(manifest.hk1).toMatchObject({ tool: 'codebuddy', event: 'SessionStart', command: 'echo hi', timeout: 10 });
   });
 
+  it('remove-http reports failure and leaves the source intact when another operation keeps its lock', async () => {
+    await setupConfig();
+    const configPath = path.join(tmpDir, '.teamai', 'local-agent', 'config.json');
+    const before = await fse.readFile(configPath, 'utf8');
+    const lockPath = path.join(tmpDir, '.teamai', '.local-agent-sync-lock');
+    const { acquireLock, releaseLock } = await import('../update.js');
+    expect(await acquireLock(lockPath)).toBe(true);
+    const exitCode = process.exitCode;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => { now += 30_001; return now; });
+    try {
+      const { removeLocalAgentHttp, reportAndSyncLocalAgent } = await import('../local-agent.js');
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      expect(await reportAndSyncLocalAgent({ cwd: tmpDir, tool: 'codebuddy' })).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+      await removeLocalAgentHttp();
+      expect(process.exitCode).toBe(1);
+      expect(await fse.readFile(configPath, 'utf8')).toBe(before);
+      const { log } = await import('../utils/logger.js');
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('removal did not run'));
+    } finally {
+      process.exitCode = exitCode;
+      clock.mockRestore();
+      await releaseLock(lockPath);
+    }
+  });
+
+  it.each(['none', 'legacy config', 'environment'])('remove-http disables the source with %s fallback but keeps an unreadable hook\'s record (#993)', async (fallback) => {
+    await runResponse({ cmds: [{
+      id: 24, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-broken',
+      event: 'SessionStart', cmd: 'echo hi', scope: 'user',
+    }] });
+    const settingsPath = path.join(tmpDir, '.codebuddy', 'settings.json');
+    const repaired = await fse.readFile(settingsPath, 'utf8');
+    const broken = `${repaired.trimEnd()}, \n`;
+    await fse.writeFile(settingsPath, broken);
+    const { removeLocalAgentHttp, loadLocalAgentConfig, reportAndSyncFromHook, initLocalAgentHttp } = await import('../local-agent.js');
+    const home = path.join(tmpDir, '.teamai', 'local-agent');
+    if (fallback === 'legacy config') {
+      await fse.outputFile(path.join(tmpDir, '.teamai', 'config.yaml'), [
+        'username: tester', 'repo:', '  kind: http', '  url: https://test.example.com/api',
+        `  localPath: ${path.join(tmpDir, '.teamai', 'team-repo')}`, '  remote: https://test.example.com/api', '',
+      ].join('\n'));
+    }
+    const envEndpoint = process.env.TEAMAI_HTTP_ENDPOINT;
+    if (fallback === 'environment') process.env.TEAMAI_HTTP_ENDPOINT = 'https://test.example.com/api';
+
+    const exitCode = process.exitCode;
+    try {
+      await removeLocalAgentHttp();
+      expect(process.exitCode).toBe(1);
+      expect(await loadLocalAgentConfig()).toBeNull();
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      await reportAndSyncFromHook({ cwd: tmpDir, hook_event_name: 'SessionStart' }, 'codebuddy');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await fse.readFile(settingsPath, 'utf8')).toBe(broken);
+      expect((await fse.readJson(path.join(home, 'agent-hooks.json')))['hk-broken']).toBeDefined();
+      expect((await fse.readdir(home)).sort()).toEqual(['agent-hooks.json', 'config.json']);
+
+      process.exitCode = exitCode;
+      await fse.writeFile(settingsPath, repaired);
+      await removeLocalAgentHttp();
+      expect(process.exitCode).toBe(exitCode);
+      const settings = await fse.readJson(settingsPath);
+      expect(JSON.stringify(settings)).not.toContain(agentHookDescription('hk-broken'));
+      expect(await loadLocalAgentConfig()).toBeNull();
+      expect(await fse.pathExists(path.join(home, 'agent-hooks.json'))).toBe(false);
+      expect(await fse.readdir(home)).toEqual(['config.json']);
+      await reportAndSyncFromHook({ cwd: tmpDir, hook_event_name: 'SessionStart' }, 'codebuddy');
+      expect(fetch).not.toHaveBeenCalled();
+      await initLocalAgentHttp({ endpoint: 'https://new.example.com/api', filterAgents: [] });
+      expect((await loadLocalAgentConfig())?.endpoint).toBe('https://new.example.com/api');
+    } finally {
+      process.exitCode = exitCode;
+      if (envEndpoint === undefined) delete process.env.TEAMAI_HTTP_ENDPOINT;
+      else process.env.TEAMAI_HTTP_ENDPOINT = envEndpoint;
+    }
+  });
+
   it('honors explicit timeout and replaces on re-install (idempotent)', async () => {
     const cmd21 = {
       id: 21, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk2',

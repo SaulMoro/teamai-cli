@@ -104,6 +104,7 @@ import {
 } from './git-exclude-notices.js';
 import { blockingEntries, contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin } from './resources/skills.js';
+import { acquireLock, releaseLock } from './update.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -339,6 +340,21 @@ function getLocalAgentHome(): string {
   return path.join(getTeamaiHomePath(), LOCAL_AGENT_DIR);
 }
 
+function localAgentLockPath(): string {
+  // Source cleanup removes the local-agent directory's contents, so keep its lock outside it.
+  return path.join(getTeamaiHomePath(), '.local-agent-sync-lock');
+}
+
+async function acquireLocalAgentLock(waitMs = 0): Promise<boolean> {
+  if (await acquireLock(localAgentLockPath())) return true;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (await acquireLock(localAgentLockPath())) return true;
+  }
+  return false;
+}
+
 function getConfigPath(): string {
   return path.join(getLocalAgentHome(), CONFIG_FILE);
 }
@@ -517,8 +533,9 @@ async function claudeUserRoot(): Promise<string> {
 }
 
 /** Resolve the current tool's settings file absolute path (user scope, $HOME base). */
-async function resolveToolSettingsPath(config: LocalAgentConfig, tool: string): Promise<string> {
-  const teamConfig = createLocalAgentTeamConfig(config.endpoint);
+async function resolveToolSettingsPath(config: LocalAgentConfig | null, tool: string): Promise<string> {
+  // Hook cleanup also runs after the source configuration has been cleared.
+  const teamConfig = createLocalAgentTeamConfig(config?.endpoint ?? 'local-agent');
   const toolPath = applyToolRoots(teamConfig.toolPaths, await memberToolRoots())[tool];
   if (!toolPath?.settings) {
     throw new Error(`unsupported tool: ${tool} (no settings path)`);
@@ -617,8 +634,10 @@ function mergeWorkspaceBindings(
 }
 
 export async function loadLocalAgentConfig(options: { dryRun?: boolean } = {}): Promise<LocalAgentConfig | null> {
-  const fileConfig = await readJson<LocalAgentConfig>(getConfigPath());
-  if (fileConfig?.endpoint) {
+  const fileConfig = await readJson<LocalAgentConfig | { disabled: true }>(getConfigPath());
+  // A removed source must not reconnect through legacy config or environment fallback.
+  if (fileConfig && 'disabled' in fileConfig && fileConfig.disabled === true) return null;
+  if (fileConfig && 'endpoint' in fileConfig && fileConfig.endpoint) {
     const config = {
       ...fileConfig,
       endpoint: normalizeEndpoint(fileConfig.endpoint),
@@ -1061,31 +1080,14 @@ async function maybeReconcilePlugins(context: LocalAgentContext): Promise<void> 
   } catch (e) { log.debug(`[local-agent] plugin reconcile spawn skipped: ${(e as Error).message}`); }
 }
 
-/** Detached worker: pull get-config and reconcile plugins once, guarded by a reconcile lock. */
+/** Detached worker: reconcile plugins while sharing the HTTP source lifecycle lock. */
 export async function runPluginReconcileWorker(): Promise<void> {
-  const config = await loadLocalAgentConfig();
-  if (!config) return;
-  const lockPath = path.join(getLocalAgentHome(), 'plugin-reconcile.lock');
-  await ensureDir(path.dirname(lockPath));
-  let acquired = false;
+  if (!await loadLocalAgentConfig({ dryRun: true })) return;
+  // A session-start sync spawns this worker while holding the same lifecycle lock.
+  if (!await acquireLocalAgentLock(30_000)) return;
   try {
-    try {
-      const fd = await fs.promises.open(lockPath, 'wx');
-      await fd.close();
-      acquired = true;
-    } catch (e) {
-      if ((e as { code?: string }).code !== 'EEXIST') throw e;
-      try {
-        const st = await fs.promises.stat(lockPath);
-        if (Date.now() - st.mtimeMs > 30 * 60 * 1000) {
-          await fs.promises.rm(lockPath, { force: true });
-          const fd = await fs.promises.open(lockPath, 'wx');
-          await fd.close();
-          acquired = true;
-        }
-      } catch { /* ignore */ }
-      if (!acquired) return;
-    }
+    const config = await loadLocalAgentConfig();
+    if (!config) return;
     const tag = '[local-agent] [plugin-reconcile]';
     const statePath = getPluginPullStatePath();
     try {
@@ -1127,7 +1129,7 @@ export async function runPluginReconcileWorker(): Promise<void> {
       log.debug(`${tag} reconcile failed: ${(e as Error).message}`);
     }
   } finally {
-    if (acquired) await fs.promises.rm(lockPath, { force: true });
+    await releaseLock(localAgentLockPath());
   }
 }
 
@@ -3641,7 +3643,8 @@ async function installMcpServer(
     const bareCopy = isTeamaiBareCopy(doc, slug, owned);
     // Check Git without changing it until ownership is persisted. Recheck protection before writing the credential (#882).
     const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
-    const previousRecord = owned.find((record) => record.name === slug);
+    // A record of this server in the file CodeBuddy no longer reads is existing ownership too (#993).
+    const previousRecord = owned.find((record) => record.name === slug) ?? movedFrom;
     const previousData = previousRecord ? structuredClone(doc.data) : undefined;
     // Existing ownership stays valid until the config write completes. New installs
     // still persist a provisional record before adding a Git exclusion (#882).
@@ -3956,6 +3959,19 @@ function changesProjectCopies(command: LocalAgentCommand): boolean {
 }
 
 export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promise<boolean> {
+  if (!await loadLocalAgentConfig({ dryRun: true })) return false;
+  if (!await acquireLocalAgentLock()) {
+    log.debug('[local-agent] sync skipped: could not acquire the HTTP source lock');
+    return false;
+  }
+  try {
+    return await syncLocalAgent(context);
+  } finally {
+    await releaseLock(localAgentLockPath());
+  }
+}
+
+async function syncLocalAgent(context: LocalAgentContext): Promise<boolean> {
   const config = await loadLocalAgentConfig();
   if (!config) return false;
 
@@ -4268,16 +4284,19 @@ export async function teardownLocalAgentPlugins(): Promise<void> {
 
 /**
  * Remove every HTTP-source agent hook recorded in the agent-hook manifest from
- * each tool's settings, then clear the manifest. Best-effort; used by
- * `source remove-http` and `teamai uninstall` teardown (issue #238). Safe to call
- * when no config / no manifest exists.
+ * each tool's settings, then forget the ones removed. Used by `source remove-http`
+ * and `teamai uninstall` teardown (issue #238). Safe to call when no config / no
+ * manifest exists. A hook that could not be removed (its settings file does not
+ * parse, say) keeps its record, so a later run finds it (#993); its slug and tool
+ * are returned.
  */
-export async function removeAllAgentHooks(): Promise<void> {
+export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool: string }>> {
+  // Removal can leave hook records after disabling the source.
   const config = await loadLocalAgentConfig();
-  if (!config) return;
   const manifest = await loadAgentHookManifest();
   const slugs = Object.keys(manifest);
-  if (slugs.length === 0) return;
+  if (slugs.length === 0) return [];
+  const left: typeof manifest = {};
   for (const slug of slugs) {
     const rec = manifest[slug];
     try {
@@ -4298,26 +4317,58 @@ export async function removeAllAgentHooks(): Promise<void> {
         await removeAgentHook(settingsPath, rec.tool, { slug, command: rec.command });
       }
     } catch (e) {
-      log.debug(`agent hook [${slug}] teardown failed: ${(e as Error).message}`);
+      log.warn(`Could not remove agent hook ${slug} for ${rec.tool}: ${(e as Error).message}`);
+      left[slug] = rec;
     }
   }
-  await saveAgentHookManifest({});
+  await saveAgentHookManifest(left);
+  return Object.entries(left).map(([slug, rec]) => ({ slug, tool: rec.tool }));
 }
 
 /**
  * Tear down the HTTP local-agent bypass: uninstall every resource recorded in the
  * manifest (skills/rules/claudemd, across all scopes) from the AI tool dirs, then
- * remove the whole ~/.teamai/local-agent/ directory (config + manifest).
+ * clear its config and caches. Keep a disabled config to prevent fallback from
+ * reconnecting, and any remaining hook ownership records for a retry.
  *
  * Best-effort per resource: a single failed uninstall is logged and skipped so a
  * stale entry cannot block the teardown.
  */
 export async function removeLocalAgentHttp(): Promise<void> {
-  const config = await loadLocalAgentConfig();
-  if (!config) {
+  if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) {
     log.info('No HTTP source configured — nothing to remove.');
     return;
   }
+  if (!await acquireLocalAgentLock()) {
+    log.info('Waiting for the HTTP source sync lock before removal.');
+    if (!await acquireLocalAgentLock(30_000)) {
+      log.error(`Could not lock HTTP source state at ${localAgentLockPath()}; removal did not run. `
+        + 'Wait for other HTTP source operations to finish, check directory permissions, then retry `teamai source remove-http`.');
+      process.exitCode = 1;
+      return;
+    }
+  }
+  try {
+    await removeLocalAgentHttpLocked();
+  } finally {
+    await releaseLock(localAgentLockPath());
+  }
+}
+
+async function removeLocalAgentHttpLocked(): Promise<void> {
+  const config = await loadLocalAgentConfig();
+  if (!config) {
+    // An earlier run disabled the source but could not remove these agent hooks (#993).
+    if (Object.keys(await loadAgentHookManifest()).length > 0) {
+      await finishAgentHookTeardown();
+      return;
+    }
+    log.info('No HTTP source configured — nothing to remove.');
+    return;
+  }
+
+  // No sync or plugin worker can write after this point until teardown finishes.
+  await writeJsonAtomic(getConfigPath(), { disabled: true });
 
   // Tear down installed plugins before removing teamai's local-agent state.
   try {
@@ -4342,8 +4393,28 @@ export async function removeLocalAgentHttp(): Promise<void> {
   // Before the state home goes: it records which exclude files hold the block (#915).
   await removeLocalAgentGitExclude();
   await removeWorkspaceModels();
-  await removeAllAgentHooks();
-  await remove(getLocalAgentHome());
+  await finishAgentHookTeardown();
+}
+
+/**
+ * Clear the HTTP source, preserving failed hook records for a retry.
+ */
+async function finishAgentHookTeardown(): Promise<void> {
+  const hooksLeft = await removeAllAgentHooks();
+  const home = getLocalAgentHome();
+  const keep = path.basename(getAgentHookManifestPath());
+  await writeJsonAtomic(getConfigPath(), { disabled: true });
+  for (const entry of await fse.readdir(home)) {
+    if (entry !== path.basename(getConfigPath()) && !(hooksLeft.length > 0 && entry === keep)) {
+      await remove(path.join(home, entry));
+    }
+  }
+  if (hooksLeft.length > 0) {
+    log.warn(`HTTP source disabled, but removal is incomplete: kept the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')} `
+      + `in ${home}, as they could not be removed. Fix the files named above, then run \`teamai source remove-http\` again.`);
+    process.exitCode = 1;
+    return;
+  }
   log.success('HTTP source removed (resources uninstalled, config cleared).');
 }
 

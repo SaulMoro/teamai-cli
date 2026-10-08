@@ -7,7 +7,6 @@ import { expandHome, listDirs, pruneEmptyDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
-import { isPastVersionOf } from '../utils/git.js';
 import { describeKeptEntry, describeMembersDirLeft, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
 import { blobIdOf, historicalVersions, type HistoricalVersion } from '../utils/team-history.js';
 import type { DeliveryRecorder } from '../git-exclude-delivered.js';
@@ -207,6 +206,20 @@ async function isDocVersion(file: string, stat: fse.Stats, versions: readonly Hi
 }
 
 /**
+ * Whether the docs mirror's root `dir` is itself a link (#993): the member's, pointing at a directory
+ * of their own. teamai never writes through it, walks it or deletes anything behind it.
+ */
+export async function isLinkedDocsRoot(dir: string): Promise<boolean> {
+  return (await fse.lstat(dir).catch(() => null))?.isSymbolicLink() ?? false;
+}
+
+/** The line naming a linked docs root, for the command that left it. */
+export function describeLinkedDocsRoot(dir: string, command: 'pull' | 'uninstall'): string {
+  return `Kept ${dir}: it is a link of yours, so ${command === 'pull' ? 'teamai delivers no docs through it' : 'uninstall left it and what it points at'}. `
+    + (command === 'pull' ? 'Make sharing.docs.localDir a directory, or remove the link, then run `teamai pull`.' : 'Delete it when you no longer need it.');
+}
+
+/**
  * Remove from the docs mirror `dir` what is teamai's, for `uninstall` (#993): each file or link
  * at `<rel>` that is a version of `docs/<rel>` in the team repo's history. Anything else is the
  * member's and stays, named; hidden entries stay silently, as pull leaves them. A directory goes
@@ -214,6 +227,7 @@ async function isDocVersion(file: string, stat: fse.Stats, versions: readonly Hi
  * a doc teamai's. Returns the lines naming what stayed.
  */
 export async function removeTeamDocs(dir: string, repoPath: string): Promise<string[]> {
+  if (await isLinkedDocsRoot(dir)) return [describeLinkedDocsRoot(dir, 'uninstall')];
   const history = await historicalVersions(repoPath, 'docs');
   if (history === null) {
     return [`Kept ${dir}: the team repo's history cannot be read, so nothing proves a doc there teamai's, and uninstall left it.`];
@@ -239,7 +253,7 @@ export async function removeTeamDocs(dir: string, repoPath: string): Promise<str
     }
   };
   await walk(dir, '');
-  // A linked mirror keeps its link: only what teamai delivered through it goes.
+  // The mirror itself goes once nothing is left in it.
   if ((await fse.lstat(dir)).isDirectory() && (await fse.readdir(dir)).length === 0) await fse.rmdir(dir);
   return kept;
 }
@@ -517,7 +531,9 @@ export async function membersDocs(desired: DesiredDocs, localDocsDir: string, re
     }
     if (!stat?.isFile()) continue;
     const current = await readBytes(local);
-    const source = await readBytes(path.join(desired.sourceDir, file));
+    // Equal bytes prove a copy only of a team file: a team link's target bytes do not make a file teamai's.
+    const sourceFile = path.join(desired.sourceDir, file);
+    const source = (await fse.lstat(sourceFile).catch(() => null))?.isFile() ? await readBytes(sourceFile) : null;
     if (current === null || (source !== null && current.equals(source))) continue;
     if (!await teamais(local, file)) members.add(file);
   }
@@ -576,9 +592,12 @@ async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: st
       if (await passesThroughLink(localDocsDir, path.join(dir, file))) continue;
       const current = await readBytes(deployed);
       if (current === null) continue;
-      const source = await readBytes(path.join(desired.sourceDir, dir, file));
-      const unchanged = source !== null && (current.equals(source)
-        || await isPastVersionOf(localConfig.repo.localPath, deployed, `docs/${dir}/${file}`));
+      // The type is part of the proof (#993): a file is teamai's only as a team file, today's or one from
+      // the history, never as the target of a team link.
+      const sourceFile = path.join(desired.sourceDir, dir, file);
+      const source = (await fse.lstat(sourceFile).catch(() => null))?.isFile() ? await readBytes(sourceFile) : null;
+      const unchanged = (source !== null && current.equals(source))
+        || await isTeamaiCopy(deployed, { repoPath: localConfig.repo.localPath, pathspec: `docs/${dir}/${file}` });
       if (!unchanged) {
         kept.push(`${dir}/${file}`);
         continue;
@@ -647,6 +666,12 @@ export class DocsHandler extends ResourceHandler {
     const src = desired.sourceDir;
     // Validate the source before touching the destination, including an empty bundle.
     const entries = await readEntries(src);
+    // A root that is a link is the member's: nothing is copied, pruned or withdrawn through it (#993).
+    // It holds the docs back, as a file of the member's does, so the next pull tries again.
+    if (await isLinkedDocsRoot(localDocsDir)) {
+      log.warn(`[${localConfig.scope}] ${describeLinkedDocsRoot(localDocsDir, 'pull')}`);
+      return 1;
+    }
     await fse.ensureDir(localDocsDir);
     const destination = await fse.realpath(localDocsDir);
     const repo = await fse.realpath(localConfig.repo.localPath);

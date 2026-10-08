@@ -22,7 +22,8 @@ import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from
 import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { ruleOrigin } from './resources/rules.js';
 import {
-  deliveredDocFiles, isTeamDocsDirectory, keepDocsSearchWhitelist, listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination,
+  deliveredDocFiles, describeLinkedDocsRoot, isLinkedDocsRoot, isTeamDocsDirectory, keepDocsSearchWhitelist, listStaleDocDirectories, membersDocs,
+  resolveDesiredDocs, resolveDocsDestination,
 } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } from './resources/skills.js';
@@ -1667,6 +1668,14 @@ async function pullForScope(
         const desired = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? []);
         const fileCount = desired.files.length;
         const destination = resolveDocsDestination(freshConfig, localConfig);
+        // A mirror that is a link of the member's is never walked, not even to count or preview (#993).
+        if (await isLinkedDocsRoot(destination)) {
+          log.warn(`[${scopeLabel}] ${options.dryRun ? '[dry-run] ' : ''}${describeLinkedDocsRoot(destination, 'pull')}`);
+          if (!options.dryRun) membersFilesKept = true;
+          // The member's, so none of it is teamai's to keep out of git.
+          ledger.recorder?.succeeded('docs');
+          continue;
+        }
         if (fileCount === 0 && await docsHandler.countDocFiles(destination) === 0
           && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) {
           ledger.recorder?.succeeded('docs');

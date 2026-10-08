@@ -119,6 +119,20 @@ describe('co-author reconcile', () => {
     expect(Object.values(managed).every((v) => v === false)).toBe(true);
   });
 
+  it('leaves a Claude or Cursor file that does not parse as it is, and does not record it as applied', async () => {
+    const broken = '{ "permissions": {\n';
+    await fse.outputFile(claudeSettings(), broken);
+    await fse.outputFile(cursorConfig(), broken);
+    const { changes, managed } = await reconcileCoAuthorForConfig(team({ enabled: false }), baseLocal, freshState());
+
+    expect(await fse.readFile(claudeSettings(), 'utf-8')).toBe(broken);
+    expect(await fse.readFile(cursorConfig(), 'utf-8')).toBe(broken);
+    for (const file of [claudeSettings(), cursorConfig()]) {
+      expect(changes.find((c) => c.file === file)?.action).toBe('skipped');
+      expect(managed[file]).toBeUndefined();
+    }
+  });
+
   it('writes the Codex trailer setting into the recorded CODEX_HOME root', async () => {
     const codexHome = path.join(homeDir, '.codex-alt');
     await fse.remove(path.join(homeDir, '.codex'));
