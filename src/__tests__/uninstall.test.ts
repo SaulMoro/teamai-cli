@@ -608,6 +608,22 @@ describe('uninstall', () => {
     expect(await fse.pathExists(repoPath)).toBe(true);
   });
 
+  it('excludes opencode from a project whose only teamai plugin is a server-pushed agent hook, and keeps it', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    vi.stubEnv('HOME', homeDir);
+    const agentHook = path.join(homeDir, '.config', 'opencode', 'plugin', 'teamai-agent-review.ts');
+    await fse.outputFile(agentHook, '// [teamai] agent hook');
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+    await uninstall({ force: true, agent: 'opencode' });
+    expect(mockSaveLocalConfigForScope).toHaveBeenCalledWith(expect.objectContaining({ disabledAgents: ['opencode'] }), 'project', projectRoot);
+    expect(await fse.pathExists(agentHook)).toBe(true);
+  });
+
   it.each(['codex', 'codex-internal', 'tcodex'].flatMap((tool) => [[tool, false], [tool, true]] as const))(
     'preserves global %s hooks while excluding only the targeted project, legacy copy: %s', async (tool, legacy) => {
     const homeDir = path.join(tmpDir, 'home');

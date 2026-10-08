@@ -241,6 +241,32 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(visible(m, cursor)).toContain('rules/team-rule.mdc');
   }, 120_000);
 
+  it('keeps the line of a hook file an incomplete uninstall left, and removes it on the retry', () => {
+    const m = member('hook-left', {
+      ...TEAM,
+      'hooks/hooks.yaml': 'hooks:\n  - id: team-stop\n    description: Team stop\n    event: Stop\n    command: echo team-stop\n',
+    });
+    const app = m.project(path.join(caseDir('hook-left'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const settings = path.join(app, '.claude', 'settings.local.json');
+    expect(blockLines(exclude)).toEqual(expect.arrayContaining(['/.claude/settings.local.json', '/.claude/skills/fe-skill/SKILL.md']));
+    const repaired = read(settings);
+    write(settings, `${repaired.trimEnd()}, \n`);
+
+    const first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Uninstall incomplete');
+    // The skill is gone and so is its line; the settings file is still there, hidden as before.
+    expect(blockLines(exclude), first.output).toEqual(['/.claude/settings.local.json']);
+    expect(status(m, app)).toEqual([]);
+
+    write(settings, repaired);
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(read(exclude)).not.toContain('# [teamai:');
+  }, 120_000);
+
   it('keeps the block another project holds in a tool home under version control', () => {
     const m = member('tool-home');
     fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });

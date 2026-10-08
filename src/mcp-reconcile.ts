@@ -1785,12 +1785,13 @@ export async function reconcileMcpForConfig(
     return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded, restoreConfigs);
   } catch (error) {
     const failures: string[] = [];
-    for (const [file, restore] of restoreConfigs) {
+    for (const [real, restore] of restoreConfigs) {
       try {
         await restore();
-        written.delete(file);
+        // `written` names files by the path a tool writes them at; the snapshot, by real path.
+        for (const file of written) if (file === real || await realFilePath(file) === real) written.delete(file);
       } catch (restoreError) {
-        failures.push(`${file}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+        failures.push(`${real}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
       }
     }
     if (failures.length > 0) {
@@ -2159,6 +2160,9 @@ async function reconcileTargets(
   }
   const targets = await resolveMcpTargets(teamConfig, localConfig);
   if (targets.length === 0) return { changes, wrote };
+  // Whose entries a file holds is judged with every tool mapping it, detected or not (#993):
+  // detection decides where teamai writes, never what it may delete.
+  const claimTargets = await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true });
 
   const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
   // An adoption (#993) records a server without writing its file: the manifest must still be saved.
@@ -2199,7 +2203,7 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(targets, resolved, manifest), history);
+    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, resolved, manifest), history);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
@@ -2242,11 +2246,14 @@ async function reconcileTargets(
     if (target.mappedFile && target.tool === 'opencode') {
       const other = target.file === target.mappedFile ? opencodeMcpFile(resolveToolBaseDir('opencode', localConfig)) : target.mappedFile;
       const judgeOther = judgeUnrecordedMcpEntry(localConfig, { ...target, file: other }, desired, desiredContext.vars,
-        await claimedByOtherTools(targets, { ...target, file: other }, manifest), history);
+        await claimedByOtherTools(claimTargets, { ...target, file: other }, manifest), history);
       wrote = await moveOpencodeServers(target, other, elsewhere, nextRecords, changes, judgeOther, options, restoreConfigs) || wrote;
     } else if (target.mappedFile) {
       for (const record of nextRecords) record.file = target.file;
-      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judge, options, restoreConfigs, leaving?.former);
+      // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
+      const judgeFor = async (file: string): Promise<McpEntryJudge> => judgeUnrecordedMcpEntry(
+        localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, { ...resolved, file }, manifest), history);
+      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {
         const names: string[] = [];
@@ -2514,9 +2521,11 @@ async function applyJson(
   // writing the wrong key would strip the servers and, worse, leave a phantom
   // empty `mcpServers` in a file the tool never reads under that name.
   // A file that holds a resolved value is the member's alone, an existing one tightened.
+  // Keyed by real path: two tools' paths may reach one file, which keeps the state before its first write.
+  const snapshotKey = await realFilePath(target.file);
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
-  if (!restoreConfigs.has(target.file)) {
-    restoreConfigs.set(target.file, existed
+  if (!restoreConfigs.has(snapshotKey)) {
+    restoreConfigs.set(snapshotKey, existed
       ? () => writeMcpJson(target.file, previousData)
       : () => removeCreatedMcpFile(target.file));
   }
@@ -2538,7 +2547,7 @@ async function removeFromOtherFiles(
   elsewhere: ManagedMcpRecord[],
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
-  judge: McpEntryJudge,
+  judgeFor: (file: string) => Promise<McpEntryJudge>,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
   /** A file `deleteLeftMcpFile` deletes and reports. */
@@ -2563,7 +2572,7 @@ async function removeFromOtherFiles(
   for (const [real, { file, records }] of byFile) {
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
-    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, judge, options, restoreConfigs);
+    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
     if (result === null) {
       nextRecords.push(...records);
       continue;
@@ -2768,8 +2777,9 @@ async function deleteLeftMcpFile(
     + `from ${former}, which held nothing else, to ${target.file}, and ${options.dryRun ? 'delete' : 'deleted'} ${former}: `
     + `${target.tool} reads only the first of its user MCP files that exists, so ${former} hid the servers in ${target.file}.`);
   if (options.dryRun || raw === null) return false;
+  const snapshotKey = await realFilePath(former);
   await fs.promises.rm(former, { force: true });
-  if (!restoreConfigs.has(former)) restoreConfigs.set(former, () => fs.promises.writeFile(former, raw));
+  if (!restoreConfigs.has(snapshotKey)) restoreConfigs.set(snapshotKey, () => fs.promises.writeFile(former, raw));
   return true;
 }
 
@@ -2794,8 +2804,9 @@ async function deleteEmptiedOpencodeFile(file: string, raw: string, restoreConfi
   const left = await readJsonDoc(file, serverKey);
   if (!left || !await pathExists(file) || Object.keys(left.servers).length > 0 || Object.keys(left.data).some((key) => key !== serverKey)
     || (await gitTracks(file, 'entry')).kind !== 'untracked') return false;
+  const snapshotKey = await realFilePath(file);
   await fs.promises.rm(file, { force: true });
-  if (!restoreConfigs.has(file)) restoreConfigs.set(file, () => fs.promises.writeFile(file, raw));
+  if (!restoreConfigs.has(snapshotKey)) restoreConfigs.set(snapshotKey, () => fs.promises.writeFile(file, raw));
   return true;
 }
 
@@ -2934,9 +2945,10 @@ async function applyCodex(
     return false;
   }
 
+  const snapshotKey = await realFilePath(target.file);
   await writeCodexAtomic(target.file, source);
-  if (!restoreConfigs.has(target.file)) {
-    restoreConfigs.set(target.file, previous === null
+  if (!restoreConfigs.has(snapshotKey)) {
+    restoreConfigs.set(snapshotKey, previous === null
       ? () => removeCreatedMcpFile(target.file)
       : () => writeCodexAtomic(target.file, previous));
   }

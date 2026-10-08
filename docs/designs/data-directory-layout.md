@@ -609,6 +609,18 @@ config write fails. File records added by that failed run are cleaned up before
 Git protection is checked against the restored configs. If restoration also
 fails, the command reports both failures and keeps credential files excluded.
 
+HTTP source removal keeps `~/.teamai/local-agent/config.json` as `{disabled:true}`,
+without an endpoint or credentials, so legacy config and environment fallback
+cannot reconnect. Failed agent-hook removals retain `agent-hooks.json` and report
+exit code 1; removal can retry without an active source. HTTP initialization
+replaces the disabled config to enable a source again.
+
+Sync, detached plugin reconciliation and HTTP source removal share `~/.teamai/.local-agent-sync-lock`, outside the
+cache directory cleanup. Each reloads config after acquiring the lock. Removal
+waits up to 30 seconds for the current operation, disables before teardown, and
+reports failure without teardown if the lock cannot be acquired. A hook sync
+skips while the lock is held; plugin reconciliation waits up to 30 seconds.
+
 `git worktree add` takes a path outside the repo, and the owning repo is still
 the business repo, whose refs every checkout shares. The search index is keyed
 per checkout, like managed MCP, because each checkout indexes its own branch's

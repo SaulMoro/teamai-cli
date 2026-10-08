@@ -79,7 +79,7 @@ function writeFile(file: string, content: string): void {
 const read = (file: string): string => fs.readFileSync(file, 'utf8');
 
 /** A team: the bare remote its synthetic URL reaches, and a way to publish to it. */
-interface Team { url: string; publish(files: Record<string, string | null>, message: string): void }
+interface Team { url: string; seed: string; publish(files: Record<string, string | null>, message: string): void }
 
 function team(base: string, files: Record<string, string>): Team {
   const name = `${base}-${++attempt}`;
@@ -100,7 +100,7 @@ function team(base: string, files: Record<string, string>): Team {
   publish(files, 'seed');
   gitOk(['clone', '-q', '--bare', seed, remote], sandbox);
   gitOk(['config', '--global', `url.${remote}.insteadOf`, url], sandbox);
-  return { url, publish };
+  return { url, seed, publish };
 }
 
 /** A git business repo holding `files` before teamai is set up in it. */
@@ -468,6 +468,89 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     teamaiOk(['pull'], dir);
     expect(read(path.join(skill, 'assets'))).toBe('TEAM ASSETS\n');
     expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+  });
+
+  it('keeps a member\'s own doc with the bytes of a team doc that is a link', () => {
+    const t = team('doc-link-bytes', { 'docs/content.md': '# Shared\n' });
+    fs.symlinkSync('content.md', path.join(t.seed, 'docs', 'guide.md'));
+    t.publish({}, 'link guide');
+    const dir = business('doc-link-bytes-biz', { '.teamai/docs/guide.md': '# Shared\n' });
+    const guide = path.join(dir, '.teamai', 'docs', 'guide.md');
+
+    const first = init(t, dir);
+    expect(fs.lstatSync(guide).isSymbolicLink(), first.output).toBe(false);
+    expect(read(guide)).toBe('# Shared\n');
+    expect(first.output).toContain(membersLine(guide, 'docs/guide.md'));
+  });
+
+  it('keeps a member\'s file of a deactivated docs namespace with the bytes of a team doc that is a link', () => {
+    const roles = [
+      'version: 1', 'roles:',
+      '  - id: frontend', '    resources:', '      knowledge: []', '      skills: []', '      docs: [frontend]',
+      '  - id: backend', '    resources:', '      knowledge: []', '      skills: []', '      docs: [backend]', '',
+    ].join('\n');
+    const t = team('ns-link-bytes', {
+      'manifest/roles.yaml': roles, 'docs/frontend/target.md': '# Shared\n', 'docs/backend/b.md': '# B\n',
+    });
+    fs.symlinkSync('target.md', path.join(t.seed, 'docs', 'frontend', 'linked.md'));
+    t.publish({}, 'link');
+    const dir = business('ns-link-bytes-biz');
+    teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude', '--scope', 'project', '--force', '--role', 'frontend'], dir);
+    const linked = path.join(dir, '.teamai', 'docs', 'frontend', 'linked.md');
+    expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+    // The member replaces the delivered link with a file of their own holding the same text.
+    fs.rmSync(linked);
+    writeFile(linked, '# Shared\n');
+
+    teamaiOk(['roles', 'set', 'backend'], dir);
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(linked)).toBe('# Shared\n');
+    expect(pulled.output).toContain('frontend/linked.md');
+  });
+
+  it('never writes through or deletes behind a docs mirror that is a link of the member\'s', () => {
+    const t = team('docs-root-link', { 'docs/guide.md': '# Guide\n', 'docs/extra.md': '# Extra\n' });
+    const dir = business('docs-root-link-biz');
+    init(t, dir);
+    const mirror = path.join(dir, '.teamai', 'docs');
+    // The member points the mirror at a directory of their own, holding a file equal to a team doc.
+    const personal = path.join(sandbox, `personal-docs-${attempt}`);
+    writeFile(path.join(personal, 'guide.md'), '# Guide\n');
+    fs.rmSync(mirror, { recursive: true });
+    fs.symlinkSync(personal, mirror);
+
+    const pulled = teamaiOk(['pull', '--force'], dir);
+    expect(fs.readdirSync(personal)).toEqual(['guide.md']);
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+    expect(fs.existsSync(path.join(personal, 'guide.md')), uninstalled.output).toBe(true);
+    expect(read(path.join(personal, 'guide.md'))).toBe('# Guide\n');
+    expect(fs.lstatSync(mirror).isSymbolicLink()).toBe(true);
+    expect(pulled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+    expect(uninstalled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+  });
+
+  it('names a docs mirror that is a link without walking it, also when the team has no docs and on a dry run', () => {
+    const t = team('docs-root-link-empty', { 'docs/guide.md': '# Guide\n' });
+    const dir = business('docs-root-link-empty-biz');
+    init(t, dir);
+    t.publish({ 'docs/guide.md': null }, 'no docs');
+    const mirror = path.join(dir, '.teamai', 'docs');
+    // A personal tree with a directory nothing may read.
+    const personal = path.join(sandbox, `personal-tree-${attempt}`);
+    const locked = path.join(personal, 'private');
+    writeFile(path.join(locked, 'secret.md'), 'mine\n');
+    fs.rmSync(mirror, { recursive: true });
+    fs.symlinkSync(personal, mirror);
+    fs.chmodSync(locked, 0o000);
+    try {
+      const dry = teamaiOk(['pull', '--dry-run'], dir);
+      expect(dry.output).toContain(`Kept ${mirror}: it is a link of yours`);
+      const pulled = teamaiOk(['pull'], dir);
+      expect(pulled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+      expect(pulled.output).not.toContain('Failed to sync docs');
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
   });
 
   it('keeps a recorded skill the member edited whole, as before', () => {

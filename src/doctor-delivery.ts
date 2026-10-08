@@ -880,7 +880,9 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     if (problems.length === 0 && !withheld && desired.size === 0) continue;
 
     // A pull keeps a server of the member's own under a team name, and names it (#993).
-    const member = problems.length === 0 ? [] : await memberMcpServers(localConfig, targets, target, desired, desiredContext.vars);
+    // Judged with every tool mapping the file, detected or not, as pull judges it (#993).
+    const member = problems.length === 0 ? [] : await memberMcpServers(
+      localConfig, await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }), target, desired, desiredContext.vars);
     const delivery = problems.length === 0 ? [] : [`In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
       + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
       + 'parses as no variables at all. Then run `teamai pull`.',
@@ -1391,7 +1393,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   if (!teamConfig) return [];
 
   const {
-    isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
+    describeLinkedDocsRoot, isLinkedDocsRoot, isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
   } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
@@ -1404,6 +1406,10 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   }
 
   const dest = resolveDocsDestination(teamConfig, localConfig);
+  // Pull delivers nothing through a linked root, and no pull can change that (#993).
+  if (await isLinkedDocsRoot(dest)) {
+    return [{ name: 'Team docs delivered', source: 'local', check: async () => false, fix: describeLinkedDocsRoot(dest, 'pull') }];
+  }
   let localFiles: string[];
   let staleDirectories: string[];
   try {

@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
 
-function runCLI(args: string[], env: Record<string, string>, cwd: string, stdin = ''): Promise<{ code: number | null; output: string }> {
+function runCLI(args: string[], env: Record<string, string>, cwd: string, stdin = '', onOutput?: (output: string) => void): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
     const child = spawn('node', [CLI, ...args], {
       env: { ...process.env, FORCE_COLOR: '0', ...env },
@@ -22,8 +22,9 @@ function runCLI(args: string[], env: Record<string, string>, cwd: string, stdin 
       cwd,
     });
     let output = '';
-    child.stdout.on('data', (data: Buffer) => { output += data.toString(); });
-    child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
+    const append = (data: Buffer) => { output += data.toString(); onOutput?.(output); };
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
     child.stdin.end(stdin);
     child.on('close', (code) => resolve({ code, output }));
   });
@@ -36,6 +37,126 @@ describe('local-agent rules (#993)', () => {
   });
   afterEach(() => {
     for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it.each(['hook sync', 'plugin reconciliation'])('remove-http waits for in-flight %s before clearing source state', async (operation) => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-http-shutdown-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const agentDir = path.join(home, '.teamai', 'local-agent');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(path.join(home, '.codebuddy'), { recursive: true });
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
+    let syncStarted!: () => void;
+    const syncReady = new Promise<void>((resolve) => { syncStarted = resolve; });
+    let endpoint = '';
+    const server = createServer(async (request, response) => {
+      if (request.url === '/late-rule.md') {
+        response.end('# Team rule\n');
+        return;
+      }
+      response.setHeader('Content-Type', 'application/json');
+      if (request.url?.endsWith(operation === 'hook sync' ? '/local-agent/sync' : '/local-agent/get-config')) {
+        syncStarted();
+        await syncGate;
+        response.end(JSON.stringify(operation === 'plugin reconciliation' ? { plugins: [] } : { ok: true, cmds: [{
+          id: 1, type: 'install_rule', handle_type: 'rule', slug: 'late-rule', version: '1',
+          scope: 'user', download_url: `${endpoint}/late-rule.md`,
+        }] }));
+        return;
+      }
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, createdAt: 'x', workspaceBindings: {} }));
+    const env = { HOME: home };
+    const sync = runCLI(operation === 'plugin reconciliation' ? ['source', 'reconcile-plugins']
+      : ['hook-dispatch', 'stop', '--tool', 'workbuddy', '--bg-only'], env, sandbox,
+      JSON.stringify({ cwd: sandbox, hook_event_name: 'Stop', session_id: 'http-shutdown' }));
+    let removal: ReturnType<typeof runCLI> | undefined;
+    try {
+      await syncReady;
+      let removalWaiting!: () => void;
+      const waiting = new Promise<void>((resolve) => { removalWaiting = resolve; });
+      removal = runCLI(['source', 'remove-http'], env, sandbox, '', (output) => {
+        if (output.includes('Waiting for the HTTP source sync')) removalWaiting();
+      });
+      // Release the response after removal finishes or starts waiting for the active operation.
+      await Promise.race([removal, waiting]);
+      releaseSync();
+      const [synced, removed] = await Promise.all([sync, removal]);
+      expect(synced.code, synced.output).toBe(0);
+      expect(removed.code, removed.output).toBe(0);
+      expect(fs.existsSync(path.join(home, '.codebuddy', 'rules', 'late-rule.md')), `${synced.output}\n${removed.output}`).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir, 'config.json'), 'utf8'))).toEqual({ disabled: true });
+      expect(fs.readdirSync(agentDir), `${synced.output}\n${removed.output}`).toEqual(['config.json']);
+    } finally {
+      releaseSync();
+      await Promise.all([sync, removal]);
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('remove-http disables the source after failed hook cleanup and removes the hook on retry', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-remove-http-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const agentDir = path.join(home, '.teamai', 'local-agent');
+    const settingsPath = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const hook = { description: '[teamai:agent-hook:retry]', matcher: '*', hooks: [{ type: 'command', command: 'echo retry' }] };
+    const repaired = JSON.stringify({ hooks: { SessionStart: [hook] }, personal: true });
+    const broken = `${repaired},\n`;
+    fs.writeFileSync(settingsPath, broken);
+    fs.writeFileSync(path.join(agentDir, 'agent-hooks.json'), JSON.stringify({
+      retry: { tool: 'claude', event: 'SessionStart', command: 'echo retry' },
+    }));
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const env = { HOME: home, TEAMAI_HTTP_ENDPOINT: endpoint };
+    fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, token: 'fixture-token', createdAt: 'x', workspaceBindings: {} }));
+    // Older HTTP installations can restore config.json from this file.
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), [
+      'username: tester', 'updatePolicy: skip', 'repo:', '  kind: http', `  url: ${endpoint}`,
+      `  localPath: ${path.join(home, '.teamai', 'team-repo')}`, `  remote: ${endpoint}`, '',
+    ].join('\n'));
+    const dispatch = () => runCLI(['hook-dispatch', 'stop', '--tool', 'claude', '--bg-only'], env, sandbox,
+      JSON.stringify({ cwd: sandbox, hook_event_name: 'Stop', session_id: 'remove-http-retry' }));
+    try {
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBeGreaterThan(0);
+      const removed = await runCLI(['source', 'remove-http'], env, sandbox);
+      expect(removed.code, removed.output).toBe(1);
+      expect(removed.output).toContain('HTTP source disabled, but removal is incomplete');
+      expect(fs.readFileSync(settingsPath, 'utf8')).toBe(broken);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir, 'agent-hooks.json'), 'utf8')).retry).toBeDefined();
+      const beforeDispatch = requests;
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBe(beforeDispatch);
+
+      fs.writeFileSync(settingsPath, repaired);
+      const retried = await runCLI(['source', 'remove-http'], env, sandbox);
+      expect(retried.code, retried.output).toBe(0);
+      expect(retried.output).toContain('HTTP source removed');
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      expect(settings.personal).toBe(true);
+      expect(JSON.stringify(settings)).not.toContain('[teamai:agent-hook:retry]');
+      expect(fs.existsSync(path.join(agentDir, 'agent-hooks.json'))).toBe(false);
+      const afterRetry = requests;
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBe(afterRetry);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it('uninstall_rule removes the copy the local agent installed and keeps a member\'s file at that path', async () => {

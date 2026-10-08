@@ -72,6 +72,7 @@ import {
   pathExists,
   readFileSafe,
   readJson,
+  readJsonObject,
   writeFile,
   remove,
   listDirs,
@@ -457,6 +458,10 @@ async function discoverToolResources(
       // scope (#993): only a user-scope uninstall removes it, as for the other global adapters (#945).
       if (target.scope === 'user' && !globalAdapters) {
         if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) res.keptGlobal.push(path.join(pluginDir, OPENCODE_HOOK_FILE));
+        // Server-pushed agent hooks there are as global.
+        for (const file of await listFiles(pluginDir).catch(() => [] as string[])) {
+          if (path.basename(file).startsWith('teamai-agent-')) res.keptGlobal.push(path.join(pluginDir, path.basename(file)));
+        }
         continue;
       }
       if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) {
@@ -540,7 +545,10 @@ async function discoverToolResources(
         continue;
       }
       if (settingsPath && await pathExists(settingsPath)
-        && (await hasTeamaiHooks(settingsPath, tool, manifestPath)
+        // One that does not parse may hold teamai's hooks: it is tried, fails and is named, and its
+        // records stay (#993).
+        && ((await readJsonObject(settingsPath)).kind === 'invalid'
+          || await hasTeamaiHooks(settingsPath, tool, manifestPath)
           || (legacyManifestPath && await hasTeamaiHooks(settingsPath, tool, legacyManifestPath))
           || isEmptyHooksResidue(await readJson<Record<string, unknown>>(settingsPath))
           || await hasUnrecordedTeamHooks(settingsPath, tool, { teamHookHistory: history, teamHookProjectRoot, teamOnly }))) {
@@ -1449,9 +1457,11 @@ function keepsLocalAgentBlock(plan: RemovalPlan, owner: string): boolean {
  * files they hide. `heldMcp` keeps an MCP line (`<exclude file>\0<line>`)
  * whose config may still hold a resolved value; a `credentials` line stays
  * while the file it names is there. Each block that cannot go is named with
- * the lines to delete by hand; a repository that is gone is skipped.
+ * the lines to delete by hand; a repository that is gone is skipped. An
+ * `incomplete` uninstall keeps every line whose file is still in a checkout.
  */
-async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: ReadonlySet<string>): Promise<void> {
+async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: ReadonlySet<string>, incomplete: boolean): Promise<void> {
+  const { modelFilesBehind } = await import('./local-agent.js');
   const results = await removeGitExclude('all', {
     files: plan.gitExcludeFiles,
     keep: async ({ owner, line, excludeFile }) => {
@@ -1459,6 +1469,8 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
       // A line uninstall did not find among this project's MCP configs is another project's.
       if (owner === MCP_EXCLUDE_OWNER) return heldMcp.has(`${excludeFile}\0${line}`) || !plan.gitExcludes.get(excludeFile)?.some((e) => e.pattern === line);
       if (owner === 'credentials') return keepsCredentialLine(plan, line, excludeFile);
+      // Incomplete: what it left (a hook file that does not parse) stays hidden until the retry removes it.
+      if (incomplete) return (await modelFilesBehind(line, excludeFile, { roots: plan.checkouts }))?.length !== 0;
       return false;
     },
   });
@@ -1517,9 +1529,15 @@ async function keepsCredentialLine(plan: RemovalPlan, line: string, excludeFile:
  * `uninstall --agent <tool>`: drop the paths under the tool's roots (every
  * path field of its `scopedToolPaths`, and `.agents/skills` for Codex) from
  * every checkout's list, unless another tool still in use shares the root,
- * then sync the `delivered` blocks with what is left.
+ * then sync the `delivered` blocks with what is left. `keepExisting` (an
+ * incomplete uninstall) keeps a path still on disk.
  */
-async function dropToolGitExcludePaths(localConfig: LocalConfig, teamConfig: TeamaiConfig, tool: string): Promise<void> {
+async function dropToolGitExcludePaths(
+  localConfig: LocalConfig,
+  teamConfig: TeamaiConfig,
+  tool: string,
+  options: { keepExisting?: boolean } = {},
+): Promise<void> {
   const projectRoot = localConfig.projectRoot;
   if (localConfig.scope !== 'project' || !projectRoot) return;
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
@@ -1547,7 +1565,10 @@ async function dropToolGitExcludePaths(localConfig: LocalConfig, teamConfig: Tea
     if (!record.gitExcludePaths) continue;
     const kept: Record<string, string[]> = {};
     for (const [writer, files] of Object.entries(record.gitExcludePaths)) {
-      const left = files.filter((file) => !underTool(file) || underOther(file));
+      const left: string[] = [];
+      for (const file of files) {
+        if (!underTool(file) || underOther(file) || (options.keepExisting && await pathExists(file))) left.push(file);
+      }
       if (left.length !== files.length) changed = true;
       if (left.length > 0) kept[writer] = left;
     }
@@ -1586,8 +1607,16 @@ async function teardownPlugins(): Promise<void> {
   }
 }
 
-/** `heldMcp`: the MCP git exclude lines that stay (`<exclude file>\0<line>`), judged before the manifests go. */
-async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): Promise<RemovalPlan['opencodeInstructions']> {
+/**
+ * Run `plan`. What it could not remove, so the uninstall is incomplete and its
+ * ownership stays for a retry: OpenCode `instructions` entries still listed, and
+ * hook files and agent hooks it could not clean (#993). `heldMcp`: the MCP git
+ * exclude lines that stay (`<exclude file>\0<line>`), judged before the manifests go.
+ */
+async function executeRemoval(
+  plan: RemovalPlan,
+  heldMcp: ReadonlySet<string>,
+): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }> }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
@@ -1607,6 +1636,8 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
   // location that owns them. File-based adapters apply their own scope rules
   // below; in particular, project uninstall never owns Pi's global extension.
   // An entry no record claims goes when it equals exactly one hook in the team's history (#993).
+  // A file whose hooks could not be removed keeps the records that own them, in the data home (#993).
+  const hooksLeft: Array<{ what: string; tool: string }> = [];
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, teamHookProjectRoot } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath, teamHookHistory: plan.teamHookHistory,
@@ -1615,6 +1646,7 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
       });
     } catch (e) {
       log.warn(`Failed to remove hooks from ${settingsPath}: ${(e as Error).message}`);
+      hooksLeft.push({ what: settingsPath, tool });
     }
   }
 
@@ -1690,7 +1722,7 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
   // heavy dependency graph out of uninstall's static import chain. Best-effort.
   try {
     const { removeAllAgentHooks } = await import('./local-agent.js');
-    if (plan.globalAdapters) await removeAllAgentHooks();
+    if (plan.globalAdapters) hooksLeft.push(...(await removeAllAgentHooks()).map((hook) => ({ what: `agent hook ${hook.slug} (${hook.tool})`, tool: hook.tool })));
   } catch (e) {
     log.warn(`Failed to remove agent hooks: ${(e as Error).message}`);
   }
@@ -1860,10 +1892,14 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
 
   // (f2) teamai's git exclude blocks (#915): after the files they hid, before
   // the partition state that records which exclude files hold them.
-  if (plan.includeShared) await removePlannedGitExcludeBlocks(plan, heldMcp);
+  // An incomplete one keeps the data home, so the record of these files, for the retry.
+  if (plan.includeShared) await removePlannedGitExcludeBlocks(plan, heldMcp, hooksLeft.length > 0 || pendingOpencode.length > 0);
 
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
-  if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
+  if (plan.teamaiHomeExists && hooksLeft.length > 0) {
+    log.warn(`Kept ${plan.teamaiHome}: it holds the record of teamai's hooks in ${hooksLeft.map((h) => h.what).join(', ')}, which could not be removed. `
+      + 'Fix those files, then run `teamai uninstall` again.');
+  } else if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
     await teardownPlugins();
     try {
@@ -1891,7 +1927,7 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
       log.debug(`Hermes uninstall cleanup skipped: ${(e as Error).message}`);
     }
   }
-  return pendingOpencode;
+  return { pendingOpencode, hooksLeft };
 }
 
 /** Remove everything under `root` but `keep` and the directories on the way to it. */
@@ -1954,7 +1990,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     for (const line of [...plan.keptSkillDirs, ...plan.keptFiles]) log.warn(line);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
-      && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);
+      && ['pi', 'omp', 'hermes', 'opencode', ...CODEX_TOOL_IDS].includes(agentKey);
     if (isPlanEmpty(plan) && !exclusionOnly) {
       log.info('Nothing to uninstall');
       return;
@@ -2090,7 +2126,8 @@ async function removeConfirmed(
     }
   }
 
-  const pendingOpencode = await executeRemoval(plan, heldMcp);
+  const { pendingOpencode, hooksLeft } = await executeRemoval(plan, heldMcp);
+  const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0;
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
   if (!agentKey || agentKey === 'codex') {
     try {
@@ -2101,7 +2138,7 @@ async function removeConfirmed(
   }
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
-  if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey);
+  if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
 
   // The OpenCode entries uninstall removed are no longer teamai's to track;
   // one still listed (the write failed) stays recorded for the next try.
@@ -2122,12 +2159,19 @@ async function removeConfirmed(
   // hook) does not resurrect this tool's resources. Only meaningful when the
   // shared ~/.teamai home survives (non-last-tool uninstall); on a last-tool
   // uninstall the home is deleted and there is nothing to persist.
-  if (agentKey && (!plan.includeShared || pendingOpencode.length > 0)) {
+  // So does an incomplete one: what is left in place must not be synced back for this tool.
+  if (agentKey && (!plan.includeShared || incomplete)) {
     await excludeUninstalledAgent(localConfig, agentKey);
   }
+  // A hook left in place would run a pull that restores what was removed: its tool is excluded,
+  // and a hook of an excluded tool syncs nothing, until the uninstall is retried (#993).
+  for (const tool of new Set(hooksLeft.map((hook) => hook.tool))) {
+    if (tool !== agentKey) await excludeUninstalledAgent(localConfig, tool);
+  }
 
-  if (pendingOpencode.length > 0) {
-    log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and OpenCode ownership so removal can be retried. Repair permissions or JSON in ${pendingOpencode.map((ref) => ref.config).join(', ')}, then run the same uninstall command again.`);
+  if (incomplete) {
+    const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what)];
+    log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
     process.exitCode = 1;
   } else {
     log.success('teamai uninstalled');

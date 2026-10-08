@@ -2653,7 +2653,9 @@ teamai source list
 teamai source remove-http
 ```
 
-HTTP 源通过 hook dispatch 在每次 session 中上报状态并拉取 skill 指令。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
+HTTP 源通过 hook dispatch 上报状态并拉取 skill 指令。其他 HTTP 源操作持有锁时，hook 同步会跳过，后续 hook 事件会再次尝试。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
+
+`source remove-http` 会等待正在运行的 HTTP 同步或插件协调结束，最多等待 30 秒。若无法获得共享锁，命令以退出码 1 结束且不开始清理；请等当前操作结束并检查目录权限后重试。获得锁后，命令会先禁用源，再清除 endpoint、凭据和缓存，并保留禁用配置，防止旧配置或环境变量重新连接。若某个 hook 无法移除，其记录会保留，命令以退出码 1 结束。修好命令指出的 settings 文件后再次运行即可。`source add-http` 或 `init --http` 可重新启用源。
 
 ---
 
@@ -2738,7 +2740,7 @@ sharing:
         retries: 3             # 可选，失败重试次数（默认 3）
 ```
 
-`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。你在团队曾有文档的位置放置的目录会整体保留，并以同样方式指出。你在镜像中团队从未有过的路径上放置的链接也会保留，并被指出（`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`）。团队仓库的历史无法读取时（团队克隆不是 git 仓库，或 git 出错），不会删除任何本地文件，因为无法证明它属于 teamai。过期的空目录也会删除，隐藏文件和隐藏目录会保留。团队仓库历史中从未出现过的路径上你自己的文件会保留，既不改动也不提示。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，且只替换团队历史能证明属于 teamai 的条目：团队现在是目录、本地是文件的位置，或团队现在是文件、本地是目录且其中每个文件都是团队版本的位置。其他这类条目属于你，会像上文的文件一样保留并被指出；链接也是如此，除非团队在该位置有相同的链接；pull 从不跟随链接。替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
+`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。你在团队曾有文档的位置放置的目录会整体保留，并以同样方式指出。你在镜像中团队从未有过的路径上放置的链接也会保留，并被指出（`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`）。若 `sharing.docs.localDir` 本身是链接，它属于你：pull 不会通过它写入任何文档，也不会删除它指向的任何内容，并会指出它（`Kept <path>: it is a link of yours, so teamai delivers no docs through it. ...`）；`teamai doctor` 的 `Team docs delivered` 会以这一行失败；`teamai uninstall` 会保留它及其指向的内容。团队仓库的历史无法读取时（团队克隆不是 git 仓库，或 git 出错），不会删除任何本地文件，因为无法证明它属于 teamai。过期的空目录也会删除，隐藏文件和隐藏目录会保留。团队仓库历史中从未出现过的路径上你自己的文件会保留，既不改动也不提示。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，且只替换团队历史能证明属于 teamai 的条目：团队现在是目录、本地是文件的位置，或团队现在是文件、本地是目录且其中每个文件都是团队版本的位置。其他这类条目属于你，会像上文的文件一样保留并被指出；链接也是如此，除非团队在该位置有相同的链接；pull 从不跟随链接。替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
 
 ### config.yaml（本地配置）
 
@@ -2938,7 +2940,7 @@ teamai uninstall --agent claude
 
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
-- AI 工具 settings 中的 teamai hooks
+- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，卸载会报告未完成（退出码 1），并排除该工具，使留下的 hooks 不会把任何内容同步回来；修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 也会保留未移除的 agent hook 记录，禁用 HTTP 源，并以退出码 1 结束。
 - 各工具指令文件中的 teamai 块（文化、共享指令、recall），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 没有自身 rules 格式的工具在用户作用域读取的文件中的团队规则块（`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`、OpenClaw workspace 的 `AGENTS.md`、`~/.pi/agent/AGENTS.md`、`~/.joycode/rules.txt`）；该文件若是 teamai 只为这个块创建的，则整个删除
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
@@ -2946,7 +2948,7 @@ teamai uninstall --agent claude
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
-- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
+- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。卸载未完成时，仍在磁盘上的文件的行全部保留，留待重试时移除。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
 - 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
 - `~/.teamai/` 目录
@@ -2961,9 +2963,9 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
 
-在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
+在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）；卸载未完成时，仍在磁盘上的路径也保留其行。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
 
-跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
+跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes、OpenCode 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
 
 已启用且已安装的 Pi、Oh My Pi、Hermes 或项目级 Codex 通过全局投递通道继续使用项目状态，即使项目中没有该工具的本地目录。卸载其他工具时会保留此状态，以便剩余工具继续投递该项目的指令。
 
@@ -2971,7 +2973,7 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 项目级卸载保留 Pi 和 Oh My Pi 的全局扩展、Hermes 的全局插件和配置、OpenCode 的用户级插件（它也为 V2 提供规则和指令）、Codex 系列的用户级 hooks 以及服务端下发的 agent hooks，因为本机的用户级安装、HTTP agent 或其他项目可能仍在使用它们，并在摘要中列出。若没有其他安装使用它们，请在卸载前于该项目中运行 `teamai hooks remove`，它会移除这些内容。定向项目级 Codex 卸载保留项目配置以记录排除设置，仅清理项目拥有的资源和旧 hook 副本。单工具卸载在项目配置仍保留时，将该工具加入此项目的排除列表。用户级卸载才移除这些全局投递通道。
 
-该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步和缓存 HTTP prompt 注入。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步、缓存 HTTP prompt 注入以及 session-start 时的 pull。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
 
 同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及团队指令块：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
 
