@@ -2912,25 +2912,51 @@ export async function reconcileTeamHooksForConfig(
  * team hooks there; never the tracked settings or `.codex/hooks.json`.
  */
 export async function deliveredHookFiles(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
-  if (localConfig.scope !== 'project') return [];
   const files: string[] = [];
+  for (const { file, tool, manifestPath } of await projectHookFiles(teamConfig, localConfig)) {
+    if (await hasTeamaiHooks(file, tool, manifestPath)) files.push(file);
+  }
+  return files;
+}
+
+/**
+ * The files of deliveredHookFiles' candidates that do not parse (#915). The
+ * hook pass leaves such a file as it is, so whether it still holds teamai's
+ * entries is unknown until the member repairs it.
+ */
+export async function unreadableHookFiles(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const files: string[] = [];
+  for (const { file } of await projectHookFiles(teamConfig, localConfig)) {
+    if ((await readJsonObject(file)).kind === 'invalid') files.push(file);
+  }
+  return files;
+}
+
+/** The project files that may hold teamai's hook entries, each with the manifest recording them. */
+async function projectHookFiles(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+): Promise<Array<{ file: string; tool: string; manifestPath: string }>> {
+  if (localConfig.scope !== 'project') return [];
+  const files: Array<{ file: string; tool: string; manifestPath: string }> = [];
   const main = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
   const claudeFile = mainCheckoutHookFile(main, 'claude');
-  if (main && claudeFile && ((await readManifest(main.manifestPath)).claude?.length ?? 0) > 0
-    && await hasTeamaiHooks(claudeFile, 'claude', main.manifestPath)) {
-    files.push(claudeFile);
+  if (main && claudeFile && ((await readManifest(main.manifestPath)).claude?.length ?? 0) > 0) {
+    files.push({ file: claudeFile, tool: 'claude', manifestPath: main.manifestPath });
   }
   // Self mode: this checkout's own settings.local.json while its manifest records team hooks there.
   const selfLocal = selfLocalTeamHookFile(localConfig, scopedToolPaths(teamConfig, localConfig), 'claude');
   const selfManifest = getManagedHooksPath(localConfig);
-  if (selfLocal && ((await readManifest(selfManifest)).claude?.length ?? 0) > 0
-    && await hasTeamaiHooks(selfLocal, 'claude', selfManifest)) {
-    files.push(selfLocal);
+  if (selfLocal && ((await readManifest(selfManifest)).claude?.length ?? 0) > 0) {
+    files.push({ file: selfLocal, tool: 'claude', manifestPath: selfManifest });
   }
   const copilotHooks = scopedToolPaths(teamConfig, localConfig)[COPILOT_TOOL_ID]?.hooks;
   if (copilotHooks) {
-    const file = path.join(resolveToolBaseDir(COPILOT_TOOL_ID, localConfig), copilotHooks);
-    if (await hasTeamaiHooks(file, COPILOT_TOOL_ID, getManagedHooksPath(localConfig))) files.push(file);
+    files.push({
+      file: path.join(resolveToolBaseDir(COPILOT_TOOL_ID, localConfig), copilotHooks),
+      tool: COPILOT_TOOL_ID,
+      manifestPath: getManagedHooksPath(localConfig),
+    });
   }
   return files;
 }
