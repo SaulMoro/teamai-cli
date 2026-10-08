@@ -1204,6 +1204,9 @@ Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。写入�
 下一次 `teamai pull` 会把 teamai 自己的 server 移入该文件，你自己的 server 保持原处；
 在此之前，`teamai doctor` 会给出警告，`teamai mcp list` 会指出它们所在的文件。
 `teamai mcp remove` 和 `teamai uninstall` 会从实际存放它们的文件中移除。
+pull 和 uninstall 还会从 CodeBuddy 不读取的文件中移除没有记录、但与某个团队版本的 server 相同的条目，
+因此记录丢失也不会留下残余。指向这几个文件中另一个的符号链接视为该文件本身：teamai 通过链接写入，
+不会在它们之间移动任何内容。
 早期版本总是创建 `~/.codebuddy/mcp.json`，它会遮住 `~/.codebuddy.json`：当它只含 teamai 的 server、
 且排在后面的文件存在时，下一次 pull 会把这些 server 移入该文件，删除 `~/.codebuddy/mcp.json`，
 并只提示一次。在 `~/.codebuddy.json` 中 teamai 只改动自己的条目。若 `~/.codebuddy/mcp.json`

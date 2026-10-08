@@ -50,7 +50,7 @@ const TEAM_SERVER = { type: 'http', url: 'https://team.example.com/mcp' };
 const MEMBER_SERVER = { type: 'stdio', command: 'my-user-server', args: [] };
 
 /** A member's machine: its own HOME, and a team whose MCP server goes to CodeBuddy. */
-function machine(name: string) {
+function machine(name: string, extraServers: Array<{ name: string; url: string }> = []) {
   // A fresh directory per call: the runner retries a failed case once.
   const dir = fs.mkdtempSync(path.join(sandbox, `${name}-`));
   const home = path.join(dir, 'home');
@@ -93,9 +93,12 @@ function machine(name: string) {
     `team: ${path.basename(dir)}`, `repo: ${url}`, 'provider: git', 'reviewers: []',
     'sharing:', '  mcp:', '    autoApply: true', '',
   ].join('\n'));
-  writeFile(path.join(seed, 'mcp', 'mcp.yaml'), [
-    'servers:', '  - name: tm-user', '    transport: http', `    url: ${TEAM_SERVER.url}`, '    tools: [codebuddy]', '',
-  ].join('\n'));
+  const writeTeamMcp = (servers: Array<{ name: string; url: string }>): void => {
+    writeFile(path.join(seed, 'mcp', 'mcp.yaml'), servers.length === 0 ? 'servers: []\n' : ['servers:', ...servers.flatMap((s) => [
+      `  - name: ${s.name}`, '    transport: http', `    url: ${s.url}`, '    tools: [codebuddy]',
+    ]), ''].join('\n'));
+  };
+  writeTeamMcp([{ name: 'tm-user', url: TEAM_SERVER.url }, ...extraServers]);
   gitOk(['init', '-q', '-b', 'main'], seed);
   gitOk(['add', '-A'], seed);
   gitOk(['commit', '-q', '-m', 'seed'], seed);
@@ -119,7 +122,15 @@ function machine(name: string) {
     }
     fs.writeFileSync(manifest, JSON.stringify(data, null, 2));
   };
-  return { home, file, servers, init, teamai, teamaiOk, forgetRecordedFile };
+  /** The team publishes a new set of MCP servers. */
+  const publishTeamMcp = (servers: Array<{ name: string; url: string }>): void => {
+    writeTeamMcp(servers);
+    gitOk(['add', '-A'], seed);
+    gitOk(['commit', '-q', '-m', 'mcp'], seed);
+    gitOk(['push', '-q', remote, 'main'], seed);
+  };
+  const loseManifest = (): void => fs.rmSync(path.join(home, '.teamai', 'managed-mcp.json'));
+  return { home, file, servers, init, teamai, teamaiOk, forgetRecordedFile, publishTeamMcp, loseManifest };
 }
 
 describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', () => {
@@ -280,5 +291,66 @@ describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', ()
     expect(fs.readlinkSync(m.file.mcp)).toBe(target);
     expect(m.servers(target)).toEqual({ 'tm-user': TEAM_SERVER });
     expect(readJson(m.file.legacy)).toEqual(LEGACY);
+  }, 120_000);
+
+  // With its record lost, a server an earlier teamai left in a file CodeBuddy no longer reads would come back
+  // once the member deletes the file CodeBuddy reads now.
+  const KEEP = { name: 'tm-keep', url: 'https://keep.example.com/mcp' };
+  for (const run of [
+    { how: 'pull', team: 'deleted its only server', extra: [], after: [] },
+    { how: 'pull', team: 'kept another server', extra: [KEEP], after: [KEEP] },
+    { how: 'uninstall', team: 'deleted its only server', extra: [], after: [] },
+  ] as const) {
+    it(`${run.how} takes teamai's servers out of a file CodeBuddy no longer reads after the record is lost and the team ${run.team}`, () => {
+      const m = machine(`lost-record-${run.how}`, [...run.extra]);
+      writeFile(m.file.mcp, JSON.stringify({ mcpServers: { 'mine-old': MEMBER_SERVER } }, null, 2));
+      m.init();
+      expect(Object.keys(m.servers(m.file.mcp) ?? {}).sort()).toEqual(['mine-old', 'tm-user', ...run.extra.map((s) => s.name)].sort());
+      m.loseManifest();
+      writeFile(m.file.dotMcp, JSON.stringify({ mcpServers: {} }, null, 2));
+      m.publishTeamMcp([...run.after]);
+
+      if (run.how === 'pull') m.teamaiOk('pull', '--force');
+      else m.teamaiOk('uninstall', '--force');
+
+      expect(m.servers(m.file.mcp)).toEqual({ 'mine-old': MEMBER_SERVER });
+      const kept = run.how === 'pull' ? Object.fromEntries(run.after.map((s) => [s.name, { type: 'http', url: s.url }])) : {};
+      expect(m.servers(m.file.dotMcp)).toEqual(kept);
+    }, 180_000);
+  }
+
+  for (const recorded of ['records the file', 'an earlier teamai recorded no file'] as const) {
+    it(`keeps teamai's server when ~/.codebuddy/.mcp.json is a symlink to ~/.codebuddy/mcp.json (${recorded})`, () => {
+      const m = machine(recorded === 'records the file' ? 'alias' : 'alias-legacy-record');
+      writeFile(m.file.mcp, JSON.stringify({ mcpServers: { 'mine-old': MEMBER_SERVER } }, null, 2));
+      m.init();
+      if (recorded === 'an earlier teamai recorded no file') m.forgetRecordedFile();
+      fs.symlinkSync('mcp.json', m.file.dotMcp);
+
+      const pull = m.teamaiOk('pull', '--force');
+
+      expect(fs.lstatSync(m.file.dotMcp).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(m.file.dotMcp)).toBe('mcp.json');
+      expect(m.servers(m.file.mcp)).toEqual({ 'mine-old': MEMBER_SERVER, 'tm-user': TEAM_SERVER });
+      expect(pull.output).not.toContain('Took teamai\'s MCP servers');
+      expect(m.teamai('doctor').output).not.toContain('which codebuddy does not read');
+
+      m.teamaiOk('pull', '--force');
+      expect(m.servers(m.file.mcp)).toEqual({ 'mine-old': MEMBER_SERVER, 'tm-user': TEAM_SERVER });
+    }, 180_000);
+  }
+
+  it('neither moves nor deletes a ~/.codebuddy/mcp.json holding only teamai\'s servers when ~/.codebuddy.json is a symlink to it', () => {
+    const m = machine('alias-legacy');
+    writeFile(m.file.mcp, '{}');
+    m.init();
+    fs.symlinkSync(path.join('.codebuddy', 'mcp.json'), m.file.legacy);
+
+    const pull = m.teamaiOk('pull', '--force');
+
+    expect(pull.output).not.toContain('Moved teamai\'s MCP servers');
+    expect(fs.lstatSync(m.file.mcp).isFile()).toBe(true);
+    expect(fs.lstatSync(m.file.legacy).isSymbolicLink()).toBe(true);
+    expect(m.servers(m.file.mcp)).toEqual({ 'tm-user': TEAM_SERVER });
   }, 120_000);
 });
