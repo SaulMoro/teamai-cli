@@ -253,6 +253,14 @@ export async function applyDeliveredGitExclude(
       const result = await sync(owner, list, { dryRun });
       for (const file of result.files) {
         unwritten(file.excludeFile, file.write, 'update');
+        // Listed, yet git can still commit it: the sync did not do its job. Doctor's words.
+        for (const { path: seen, rule } of file.reincluded) {
+          const rel = path.relative(projectRoot, seen);
+          const named = rel.startsWith('..') || path.isAbsolute(rel) ? seen : rel.split(path.sep).join('/');
+          outcome.failures.push(rule
+            ? `git still sees ${named}: \`${rule.pattern}\` (${rule.source}:${rule.line}) re-includes it. Remove that rule.`
+            : `git still sees ${named}: a rule in your git ignore files re-includes it (\`git check-ignore -v\` names it). Remove that rule.`);
+        }
         if (dryRun && (file.lines.length > 0 || file.dropped.length > 0)) {
           log.info(`[dry-run] Would list ${file.lines.length} path(s) and drop ${file.dropped.length} in teamai's delivered git exclude block in ${file.excludeFile}`);
         }

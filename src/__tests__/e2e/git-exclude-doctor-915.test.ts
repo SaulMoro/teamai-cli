@@ -268,9 +268,9 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(broken).toContain(`Stale lines in teamai's delivered git exclude block in ${exclude}: /gone.md. The next \`teamai pull\` drops them.`);
 
     // The pull lists the path again and drops the stale line; the rule and the stray marker are the member's to fix.
+    // The pull says the re-included path itself, as a failed sync, so the post-pull check does not repeat it.
     const pulled = m.teamai(['pull'], app);
-    expect(pulled).toContain('Pull finished, but');
-    expect(pulled).toContain('✖ Delivered team resources are kept out of git');
+    expect(pulled.split('git still sees .claude/rules/team-rule.md: ')).toHaveLength(2);
     expect(pulled).toContain('re-includes it');
     expect(pulled).not.toContain('Stale lines');
     expect(pulled).not.toContain('Git exclude for delivered team resources:');
@@ -404,6 +404,56 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(retried).not.toContain('could not keep teamai\'s git exclude blocks');
     expect(blockLines(exclude)).toContain('/.claude/rules/new-rule.md');
     expect(m.teamai(['doctor'], app)).not.toContain('Last background pull');
+  }, 120_000);
+
+  it('a checkout whose data the migration leaves in .teamai/ does not decide the setting with its own gitExcludeEnabled, and doctor names the layout', () => {
+    const m = member('legacy', '');
+    const app = m.project(path.join(caseDir('legacy'), 'app'));
+    // The layout of an older release: the checkout's own .teamai/ holds the config,
+    // and the partition directory lacks one, so the migration keeps the old layout.
+    const partition = path.dirname(m.partitionConfig());
+    const legacy = path.join(app, '.teamai');
+    fs.renameSync(partition, legacy);
+    fs.mkdirSync(partition);
+    const config = path.join(legacy, 'config.yaml');
+    write(config, `${read(config).split(partition).join(legacy)}gitExcludeEnabled: true\n`);
+    const exclude = excludeFileOf(m, app);
+
+    const pulled = m.teamai(['pull'], app);
+    expect(pulled).toContain(`Kept ${legacy}: ${partition} exists without a config.yaml.`);
+    expect(blockLines(exclude)).toEqual([]);
+    expect(status(m, app)).toContain('?? .claude/rules/team-rule.md');
+    expect(m.teamai(['pull', '--dry-run'], app)).not.toContain('teamai\'s delivered git exclude block');
+
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('Git exclude for delivered team resources: off, from the default.');
+    expect(doctor).toContain(`This checkout keeps teamai's data in ${legacy}, an un-migrated layout, so its \`gitExcludeEnabled\` is not read: `
+      + 'the setting comes from the team\'s teamai.yaml or the default until a pull migrates the data.');
+    expect(doctor).toContain('To keep them out of git, set `sharing.gitExclude.enabled: true` in teamai.yaml (the whole team), then run `teamai pull`.');
+  }, 120_000);
+
+  it('reports a delivered path a rule re-includes as a failed sync, which a background pull keeps until a pull after the rule is gone', async () => {
+    const m = member('reincluded');
+    const app = m.project(path.join(caseDir('reincluded'), 'app'));
+    write(path.join(app, '.gitignore'), '!/.claude/rules/team-rule.md\n');
+    const seen = `git still sees .claude/rules/team-rule.md: \`!/.claude/rules/team-rule.md\` (${path.join(app, '.gitignore')}:1) re-includes it. Remove that rule.`;
+
+    const pulled = m.teamai(['pull'], app);
+    expect(pulled.split(seen)).toHaveLength(2);
+
+    await m.sessionStart(app);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('✖ Last background pull could not keep teamai\'s git exclude blocks up to date');
+    expect(doctor).toContain('✖ Delivered team resources are kept out of git');
+    expect(doctor.split(seen)).toHaveLength(3);
+
+    fs.rmSync(path.join(app, '.gitignore'));
+    const fixed = m.teamai(['pull'], app);
+    expect(fixed).toMatch(/A background pull \([^)]+\) could not keep teamai's git exclude blocks up to date: git still sees/);
+    expect(fixed.split(seen)).toHaveLength(2);
+    const after = m.teamai(['doctor'], app);
+    expect(after).not.toContain('Last background pull');
+    expect(after).toContain('✔ Delivered team resources are kept out of git');
   }, 120_000);
 
   it('keeps a background pull\'s notice of another checkout\'s file for doctor and the next interactive pull, which says it once', async () => {
