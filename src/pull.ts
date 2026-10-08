@@ -21,7 +21,7 @@ import {
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { ruleOrigin } from './resources/rules.js';
-import { listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
+import { describeLinkedDocsRoot, isLinkedDocsRoot, listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
@@ -1556,6 +1556,12 @@ async function pullForScope(
         const desired = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? []);
         const fileCount = desired.files.length;
         const destination = resolveDocsDestination(freshConfig, localConfig);
+        // A mirror that is a link of the member's is never walked, not even to count or preview (#993).
+        if (await isLinkedDocsRoot(destination)) {
+          log.warn(`[${scopeLabel}] ${options.dryRun ? '[dry-run] ' : ''}${describeLinkedDocsRoot(destination, 'pull')}`);
+          if (!options.dryRun) membersFilesKept = true;
+          continue;
+        }
         if (fileCount === 0 && await docsHandler.countDocFiles(destination) === 0
           && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) continue;
         if (options.dryRun) {

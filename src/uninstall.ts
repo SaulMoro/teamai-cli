@@ -65,6 +65,7 @@ import {
   pathExists,
   readFileSafe,
   readJson,
+  readJsonObject,
   writeFile,
   remove,
   listDirs,
@@ -519,7 +520,10 @@ async function discoverToolResources(
         continue;
       }
       if (settingsPath && await pathExists(settingsPath)
-        && (await hasTeamaiHooks(settingsPath, tool, manifestPath)
+        // One that does not parse may hold teamai's hooks: it is tried, fails and is named, and its
+        // records stay (#993).
+        && ((await readJsonObject(settingsPath)).kind === 'invalid'
+          || await hasTeamaiHooks(settingsPath, tool, manifestPath)
           || (legacyManifestPath && await hasTeamaiHooks(settingsPath, tool, legacyManifestPath))
           || isEmptyHooksResidue(await readJson<Record<string, unknown>>(settingsPath))
           || await hasUnrecordedTeamHooks(settingsPath, tool, { teamHookHistory: history, teamHookProjectRoot, teamOnly }))) {
@@ -1338,6 +1342,8 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   // location that owns them. File-based adapters apply their own scope rules
   // below; in particular, project uninstall never owns Pi's global extension.
   // An entry no record claims goes when it equals exactly one hook in the team's history (#993).
+  // A file whose hooks could not be removed keeps the records that own them, in the data home (#993).
+  const hooksLeft: string[] = [];
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, teamHookProjectRoot } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath, teamHookHistory: plan.teamHookHistory,
@@ -1346,6 +1352,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
       });
     } catch (e) {
       log.warn(`Failed to remove hooks from ${settingsPath}: ${(e as Error).message}`);
+      hooksLeft.push(settingsPath);
     }
   }
 
@@ -1421,7 +1428,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   // heavy dependency graph out of uninstall's static import chain. Best-effort.
   try {
     const { removeAllAgentHooks } = await import('./local-agent.js');
-    if (plan.globalAdapters) await removeAllAgentHooks();
+    if (plan.globalAdapters) hooksLeft.push(...(await removeAllAgentHooks()).map((hook) => `agent hook ${hook}`));
   } catch (e) {
     log.warn(`Failed to remove agent hooks: ${(e as Error).message}`);
   }
@@ -1578,7 +1585,10 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   }
 
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
-  if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
+  if (plan.teamaiHomeExists && hooksLeft.length > 0) {
+    log.warn(`Kept ${plan.teamaiHome}: it holds the record of teamai's hooks in ${hooksLeft.join(', ')}, which could not be removed. `
+      + 'Fix those files, then run `teamai uninstall` again.');
+  } else if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
     await teardownPlugins();
     try {

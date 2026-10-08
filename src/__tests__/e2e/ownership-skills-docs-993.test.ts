@@ -529,6 +529,30 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(uninstalled.output).toContain(`Kept ${mirror}: it is a link of yours`);
   });
 
+  it('names a docs mirror that is a link without walking it, also when the team has no docs and on a dry run', () => {
+    const t = team('docs-root-link-empty', { 'docs/guide.md': '# Guide\n' });
+    const dir = business('docs-root-link-empty-biz');
+    init(t, dir);
+    t.publish({ 'docs/guide.md': null }, 'no docs');
+    const mirror = path.join(dir, '.teamai', 'docs');
+    // A personal tree with a directory nothing may read.
+    const personal = path.join(sandbox, `personal-tree-${attempt}`);
+    const locked = path.join(personal, 'private');
+    writeFile(path.join(locked, 'secret.md'), 'mine\n');
+    fs.rmSync(mirror, { recursive: true });
+    fs.symlinkSync(personal, mirror);
+    fs.chmodSync(locked, 0o000);
+    try {
+      const dry = teamaiOk(['pull', '--dry-run'], dir);
+      expect(dry.output).toContain(`Kept ${mirror}: it is a link of yours`);
+      const pulled = teamaiOk(['pull'], dir);
+      expect(pulled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+      expect(pulled.output).not.toContain('Failed to sync docs');
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

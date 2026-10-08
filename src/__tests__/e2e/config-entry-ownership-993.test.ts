@@ -340,6 +340,25 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(claudeTeamStops(dir).map((e) => e.hooks[0].command).join('\n')).toContain('echo team-stop-v2');
   });
 
+  it('keeps the hook records when uninstall cannot read a settings file, so uninstall after the repair removes the hooks', () => {
+    const t = team('hook-broken-uninstall', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-uninstall-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = fs.readFileSync(localSettings, 'utf8');
+    expect(repaired).toContain('echo team-stop-v1');
+    const broken = `${repaired.trimEnd()}, \n`;
+    writeFile(localSettings, broken);
+    const first = teamai(['uninstall', '--force'], dir);
+    expect(fs.readFileSync(localSettings, 'utf8'), first.output).toBe(broken);
+
+    writeFile(localSettings, repaired);
+    const second = teamai(['uninstall', '--force'], dir);
+    expect(second.code, second.output).toBe(0);
+    expect(fs.readFileSync(localSettings, 'utf8'), second.output).not.toContain('echo team-stop-v1');
+    expect(first.output).toContain(`${localSettings}, which could not be removed`);
+  });
+
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
     // The co-author setting shares settings.local.json with the team hooks (#993 bug 7).
     const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') }, ['  coAuthor:', '    enabled: false']);

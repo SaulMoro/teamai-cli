@@ -1934,6 +1934,29 @@ describe('local-agent: cmds[] migration', () => {
     expect(manifest.hk1).toMatchObject({ tool: 'codebuddy', event: 'SessionStart', command: 'echo hi', timeout: 10 });
   });
 
+  it('remove-http keeps an agent hook\'s record, and its home, when the hook\'s settings file does not parse (#993)', async () => {
+    await runResponse({ cmds: [{
+      id: 24, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-broken',
+      event: 'SessionStart', cmd: 'echo hi', scope: 'user',
+    }] });
+    const settingsPath = path.join(tmpDir, '.codebuddy', 'settings.json');
+    const repaired = await fse.readFile(settingsPath, 'utf8');
+    const broken = `${repaired.trimEnd()}, \n`;
+    await fse.writeFile(settingsPath, broken);
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    const home = path.join(tmpDir, '.teamai', 'local-agent');
+
+    await removeLocalAgentHttp();
+    expect(await fse.readFile(settingsPath, 'utf8')).toBe(broken);
+    expect((await fse.readJson(path.join(home, 'agent-hooks.json')))['hk-broken']).toBeDefined();
+
+    await fse.writeFile(settingsPath, repaired);
+    await removeLocalAgentHttp();
+    const settings = await fse.readJson(settingsPath);
+    expect(JSON.stringify(settings)).not.toContain(agentHookDescription('hk-broken'));
+    expect(await fse.pathExists(home)).toBe(false);
+  });
+
   it('honors explicit timeout and replaces on re-install (idempotent)', async () => {
     const cmd21 = {
       id: 21, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk2',

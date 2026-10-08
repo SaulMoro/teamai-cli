@@ -3726,16 +3726,19 @@ export async function teardownLocalAgentPlugins(): Promise<void> {
 
 /**
  * Remove every HTTP-source agent hook recorded in the agent-hook manifest from
- * each tool's settings, then clear the manifest. Best-effort; used by
- * `source remove-http` and `teamai uninstall` teardown (issue #238). Safe to call
- * when no config / no manifest exists.
+ * each tool's settings, then forget the ones removed. Used by `source remove-http`
+ * and `teamai uninstall` teardown (issue #238). Safe to call when no config / no
+ * manifest exists. A hook that could not be removed (its settings file does not
+ * parse, say) keeps its record, so a later run finds it (#993); its slug and tool
+ * are returned.
  */
-export async function removeAllAgentHooks(): Promise<void> {
+export async function removeAllAgentHooks(): Promise<string[]> {
   const config = await loadLocalAgentConfig();
-  if (!config) return;
+  if (!config) return [];
   const manifest = await loadAgentHookManifest();
   const slugs = Object.keys(manifest);
-  if (slugs.length === 0) return;
+  if (slugs.length === 0) return [];
+  const left: typeof manifest = {};
   for (const slug of slugs) {
     const rec = manifest[slug];
     try {
@@ -3756,10 +3759,12 @@ export async function removeAllAgentHooks(): Promise<void> {
         await removeAgentHook(settingsPath, rec.tool, { slug, command: rec.command });
       }
     } catch (e) {
-      log.debug(`agent hook [${slug}] teardown failed: ${(e as Error).message}`);
+      log.warn(`Could not remove agent hook ${slug} for ${rec.tool}: ${(e as Error).message}`);
+      left[slug] = rec;
     }
   }
-  await saveAgentHookManifest({});
+  await saveAgentHookManifest(left);
+  return Object.entries(left).map(([slug, rec]) => `${slug} (${rec.tool})`);
 }
 
 /**
@@ -3797,7 +3802,13 @@ export async function removeLocalAgentHttp(): Promise<void> {
     }
   }
 
-  await removeAllAgentHooks();
+  const hooksLeft = await removeAllAgentHooks();
+  if (hooksLeft.length > 0) {
+    // Their records are in the local agent's home: it stays, so running this again removes them.
+    log.warn(`Kept ${getLocalAgentHome()}: it holds the record of agent hooks ${hooksLeft.join(', ')}, which could not be removed. `
+      + 'Fix the files named above, then run `teamai source remove-http` again.');
+    return;
+  }
   await remove(getLocalAgentHome());
   log.success('HTTP source removed (resources uninstalled, config cleared).');
 }
