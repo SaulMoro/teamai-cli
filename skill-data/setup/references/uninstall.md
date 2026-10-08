@@ -126,7 +126,8 @@ and give it your team repo URL."*
   keeping a path another tool in use reads. `--dry-run` lists the blocks under
   `Git exclude blocks (teamai's):`. If another pull or push holds the
   project's sync lock, uninstall changes nothing and exits 1: run it again.
-- A `credentials` line stays while the file it names is still there. MCP lines
+- A `credentials` line stays, with a warning, while the models file it names
+  still holds an API key in any checkout of that repository. MCP lines
   (the `# [teamai:mcp-exclude:start]` block) go only for MCP configs it proves
   hold no resolved `${VAR}` value, judged in every checkout of the repository
   (the main checkout of a `--separate-git-dir` repo or a submodule too), after
