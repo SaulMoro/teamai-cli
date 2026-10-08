@@ -655,12 +655,38 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
 
       await reconcileTeamHooksForConfig(teamConfig, at(worktree), { removeAll: true });
       expect(await stops()).toEqual([1, 1]);
-      await fse.remove(path.join(worktree, '.teamai'));
+      // Second worktree removal clears hooks without needing .teamai removed
       await reconcileTeamHooksForConfig(teamConfig, at(second), { removeAll: true });
       expect(await stops()).toEqual([0, 0]);
     } finally {
       await fse.remove(worktree);
       await fse.remove(second);
+    }
+  });
+
+  it('keeps shared main hooks when main checkout removes while a linked worktree remains installed', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const stops = async () => [
+      (await fse.readJson(path.join(main, '.claude', '.settings.local.json').replace('.settings.local.json', 'settings.local.json'))).hooks.Stop.length,
+      (await fse.readJson(path.join(main, '.codex', 'hooks.json'))).hooks.Stop.length,
+    ];
+    const at = (root: string): LocalConfig => ({ ...localConfig(), projectRoot: root, dataHome: path.join(root, '.teamai') });
+    try {
+      for (const root of [main, worktree]) await fse.outputFile(path.join(root, '.teamai', 'config.yaml'), 'scope: project');
+      await reconcileTeamHooksForConfig(teamConfig, at(main));
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree));
+      expect(await stops()).toEqual([1, 1]);
+
+      // Removing from main checkout keeps hooks for the worktree
+      await reconcileTeamHooksForConfig(teamConfig, at(main), { removeAll: true });
+      expect(await stops()).toEqual([1, 1]);
+
+      // Removing from worktree clears them once no checkouts remain
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree), { removeAll: true });
+      expect(await stops()).toEqual([0, 0]);
+    } finally {
+      await fse.remove(worktree);
     }
   });
 

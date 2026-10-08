@@ -1,7 +1,7 @@
-import { realpath } from 'node:fs/promises';
+import { realpath, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
-import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks } from './hooks.js';
+import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError, detectProjectConfig } from './config.js';
+import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, canonicalProjectRoot, unregisterCheckoutFromSharedManifest, type MainCheckoutHooks } from './hooks.js';
 import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
@@ -63,6 +63,7 @@ import {
   readFileSafe,
   readJson,
   writeFile,
+  ensureDir,
   remove,
   listDirs,
   listFiles,
@@ -151,6 +152,14 @@ interface RemovalPlan {
   globalAdapters: boolean;
   /** Machine-wide adapters a project uninstall keeps for other installs; `teamai hooks remove` takes them. */
   keptGlobal: string[];
+  /** Shared main checkout manifest to preserve when this checkout's .teamai is removed, because another worktree still shares it. */
+  preserveSharedManifest?: string | null;
+  /** Synthetic main checkout manifest and directory to clean up when the last worktree is uninstalled and the main checkout has no install of its own. */
+  syntheticManifestCleanup?: { manifestPath: string; dir: string } | null;
+  /** Main checkout configurations resolved for this removal. */
+  mainCheckouts?: MainCheckoutHooks[];
+  /** Project root of the checkout being uninstalled. */
+  projectRoot?: string;
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
@@ -692,6 +701,29 @@ async function buildRemovalPlan(
       });
     }
   }
+
+  let preserveSharedManifest: string | null = null;
+  let syntheticManifestCleanup: { manifestPath: string; dir: string } | null = null;
+
+  if (mainCheckout && localConfig.projectRoot) {
+    const currentCanonical = canonicalProjectRoot(localConfig.projectRoot);
+    const rootCanonical = canonicalProjectRoot(mainCheckout.root);
+    const mainConfig = await pathExists(mainCheckout.root) ? await detectProjectConfig(mainCheckout.root).catch(() => null) : null;
+    const mainHasInstall = mainConfig !== null;
+
+    if (currentCanonical === rootCanonical) {
+      if (mainCheckout.sharedWithOtherInstall) {
+        preserveSharedManifest = mainCheckout.manifestPath;
+      }
+    } else {
+      if (!mainCheckout.sharedWithOtherInstall && !mainHasInstall) {
+        syntheticManifestCleanup = {
+          manifestPath: mainCheckout.manifestPath,
+          dir: path.dirname(mainCheckout.manifestPath),
+        };
+      }
+    }
+  }
   // Hook discovery resolves its file name at the same scope as the targets: a
   // non-self project scope discovers under HOME, so the tool paths there must be
   // the user-scope ones (previously the project-scope name was used, and a tool
@@ -865,6 +897,10 @@ async function buildRemovalPlan(
     scope: localConfig.scope,
     globalAdapters,
     keptGlobal: [],
+    preserveSharedManifest,
+    syntheticManifestCleanup,
+    mainCheckouts,
+    projectRoot: localConfig.projectRoot,
   };
 
   // A single instruction file can be the target of several agents (for
@@ -1039,7 +1075,8 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.docsDir === null &&
     plan.gitExcludes.size === 0 &&
     plan.gitHook === null &&
-    !plan.teamaiHomeExists
+    !plan.teamaiHomeExists &&
+    plan.syntheticManifestCleanup == null
   );
 }
 
@@ -1217,6 +1254,15 @@ async function teardownPlugins(): Promise<void> {
 
 async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeInstructions']> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
+  if (plan.projectRoot && plan.mainCheckouts?.length) {
+    for (const target of plan.mainCheckouts) {
+      try {
+        await unregisterCheckoutFromSharedManifest(target.manifestPath, plan.projectRoot);
+      } catch (e) {
+        log.warn(`Failed to unregister checkout from shared hooks manifest: ${(e as Error).message}`);
+      }
+    }
+  }
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
     try {
@@ -1468,10 +1514,36 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
     await teardownPlugins();
     try {
-      await remove(plan.teamaiHome);
-      log.success(`Removed ${plan.teamaiHome}/`);
+      if (plan.preserveSharedManifest && await pathExists(plan.preserveSharedManifest)) {
+        const content = await readFileSafe(plan.preserveSharedManifest);
+        await remove(plan.teamaiHome);
+        if (content) {
+          await ensureDir(path.dirname(plan.preserveSharedManifest));
+          await writeFile(plan.preserveSharedManifest, content);
+        }
+        log.success(`Removed ${plan.teamaiHome}/ (preserved shared hooks manifest)`);
+      } else {
+        await remove(plan.teamaiHome);
+        log.success(`Removed ${plan.teamaiHome}/`);
+      }
     } catch (e) {
       log.warn(`Failed to remove ${plan.teamaiHome}: ${(e as Error).message}`);
+    }
+  }
+
+  if (plan.syntheticManifestCleanup) {
+    try {
+      await remove(plan.syntheticManifestCleanup.manifestPath);
+      if (await pathExists(plan.syntheticManifestCleanup.dir)) {
+        const entries = await readdir(expandHome(plan.syntheticManifestCleanup.dir)).catch(() => ['failed']);
+        const meaningful = entries.filter((e) => e !== '.DS_Store' && e !== 'Thumbs.db');
+        if (meaningful.length === 0) {
+          await remove(plan.syntheticManifestCleanup.dir);
+          log.success(`Removed empty ${plan.syntheticManifestCleanup.dir}/`);
+        }
+      }
+    } catch (e) {
+      log.warn(`Failed to clean synthetic main checkout hooks manifest: ${(e as Error).message}`);
     }
   }
 

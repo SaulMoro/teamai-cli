@@ -2708,6 +2708,82 @@ describe('uninstall', () => {
     for (const manifest of manifests) expect(manifest).toMatch(/workspaces[/\\][a-f0-9]+[/\\]managed-main-checkout-hooks\.json$/);
   });
 
+  it('cleans up synthetic main checkout hooks manifest and empty .teamai when the last worktree uninstalls', async () => {
+    const mainDir = path.join(tmpDir, 'repo-main');
+    const worktreeDir = path.join(tmpDir, 'repo-wt');
+    await fse.ensureDir(mainDir);
+    execFileSync('git', ['init', mainDir]);
+    execFileSync('git', ['-C', mainDir, 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
+
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(worktreeDir, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+    const syntheticManifest = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(syntheticManifest, {
+      checkouts: { claude: [await fse.realpath(worktreeDir)] },
+      claude: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const localConfig = makeLocalConfig(worktreeDir, repoPath, { scope: 'project', projectRoot: worktreeDir });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(syntheticManifest)).toBe(false);
+    expect(await fse.pathExists(path.join(mainDir, '.teamai'))).toBe(false);
+    expect(await fse.pathExists(path.join(worktreeDir, '.teamai'))).toBe(false);
+  });
+
+  it('preserves shared main checkout manifest when main checkout uninstalls while a worktree remains', async () => {
+    const mainDir = path.join(tmpDir, 'repo-main-preserve');
+    const worktreeDir = path.join(tmpDir, 'repo-wt-preserve');
+    await fse.ensureDir(mainDir);
+    execFileSync('git', ['init', mainDir]);
+    execFileSync('git', ['-C', mainDir, 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
+
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(mainDir, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(mainDir, '.teamai', 'config.yaml'), 'scope: project');
+    await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+    const realMain = await fse.realpath(mainDir);
+    const realWt = await fse.realpath(worktreeDir);
+    const sharedManifest = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(sharedManifest, {
+      checkouts: { claude: [realMain, realWt] },
+      claude: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+    const mainClaudeSettings = path.join(mainDir, '.claude', 'settings.local.json');
+    await fse.outputJson(mainClaudeSettings, {
+      hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'npm run lint' }] }] },
+    });
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const localConfig = makeLocalConfig(mainDir, repoPath, { scope: 'project', projectRoot: mainDir });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    // Main checkout config.yaml is gone
+    expect(await fse.pathExists(path.join(mainDir, '.teamai', 'config.yaml'))).toBe(false);
+    // Shared manifest is preserved for the worktree
+    expect(await fse.pathExists(sharedManifest)).toBe(true);
+    const manifest = await fse.readJson(sharedManifest);
+    expect(manifest.checkouts.claude).toEqual([realWt]);
+    // mockReconcileHooks was not called with removeAll on the shared main checkout hooks
+    const removedShared = mockReconcileHooks.mock.calls.some(
+      (c) => String(c[0]).includes('settings.local.json') && c[3]?.manifestPath === sharedManifest
+    );
+    expect(removedShared).toBe(false);
+  });
+
   // #667: hook discovery must resolve the settings *file* at the scope hooks
   // were injected into, not at the config's scope. Qoder CN reads
   // `~/.qoder-cn/` for its user scope, so a non-self project scope (which

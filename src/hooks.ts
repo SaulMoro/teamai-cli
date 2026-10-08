@@ -346,12 +346,65 @@ async function readManifest(manifestPath: string): Promise<ManagedHooksManifest>
   return data && typeof data === 'object' ? data : {};
 }
 
+/** ~/.teamai/managed-main-checkout-hooks.json — team hooks injected into the main checkout, with checkout tracking. */
+export interface SharedHooksManifest {
+  checkouts?: Record<string, string[]> | string[];
+  [tool: string]: ManagedHookRecord[] | Record<string, string[]> | string[] | undefined;
+}
+
+export function getToolCheckouts(manifest: SharedHooksManifest, tool: string): string[] {
+  if (Array.isArray(manifest.checkouts)) {
+    return manifest.checkouts;
+  }
+  if (manifest.checkouts && typeof manifest.checkouts === 'object') {
+    const list = (manifest.checkouts as Record<string, string[]>)[tool];
+    if (Array.isArray(list)) return list;
+  }
+  return [];
+}
+
+export function setToolCheckouts(manifest: SharedHooksManifest, tool: string, checkouts: string[]): void {
+  if (!manifest.checkouts || Array.isArray(manifest.checkouts)) {
+    manifest.checkouts = {};
+  }
+  (manifest.checkouts as Record<string, string[]>)[tool] = checkouts;
+}
+
+export async function unregisterCheckoutFromSharedManifest(manifestPath: string, checkout: string): Promise<void> {
+  const expanded = expandHome(manifestPath);
+  if (!await pathExists(expanded)) return;
+  const manifest = await readJson<SharedHooksManifest>(expanded);
+  if (!manifest) return;
+  let changed = false;
+  const canonical = canonicalProjectRoot(checkout);
+  if (Array.isArray(manifest.checkouts)) {
+    const filtered = manifest.checkouts.filter((c) => canonicalProjectRoot(c) !== canonical);
+    if (filtered.length !== manifest.checkouts.length) {
+      manifest.checkouts = filtered;
+      changed = true;
+    }
+  } else if (manifest.checkouts && typeof manifest.checkouts === 'object') {
+    for (const [tool, list] of Object.entries(manifest.checkouts as Record<string, string[]>)) {
+      if (Array.isArray(list)) {
+        const filtered = list.filter((c) => canonicalProjectRoot(c) !== canonical);
+        if (filtered.length !== list.length) {
+          (manifest.checkouts as Record<string, string[]>)[tool] = filtered;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) {
+    await writeJson(expanded, manifest);
+  }
+}
+
 /** Team hooks to record in the manifest for a tool (empty when removing). */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function canonicalProjectRoot(projectRoot: string): string {
+export function canonicalProjectRoot(projectRoot: string): string {
   try { return realpathSync.native(projectRoot); } catch { return path.resolve(projectRoot); }
 }
 
@@ -475,6 +528,8 @@ const MAIN_CHECKOUT_TEAM_HOOK_TOOLS = ['claude', 'codex'] as const;
 export interface MainCheckoutHooks {
   /** The main checkout (realpath), or the current workspace when the anchor is bare. */
   root: string;
+  /** The current checkout's projectRoot. */
+  current?: string;
   /** Bare repositories have no main checkout; each workspace keeps its own files. */
   worktreeScoped: boolean;
   /** Manifest of the team hooks written in this target root. */
@@ -516,7 +571,7 @@ export async function resolveMainCheckoutHooks(
   const manifestName = 'managed-main-checkout-hooks.json';
   if (worktreeScoped) {
     const manifestRoot = path.join(getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(root));
-    return { root, worktreeScoped, manifestPath: path.join(manifestRoot, manifestName), files };
+    return { root, current: canonicalProjectRoot(localConfig.projectRoot), worktreeScoped, manifestPath: path.join(manifestRoot, manifestName), files };
   }
   // Every checkout shares the main checkout's files, so their ownership lives
   // in the main checkout's data home. An un-migrated linked worktree has a data
@@ -527,18 +582,24 @@ export async function resolveMainCheckoutHooks(
   const checkoutHome = getDataHome(localConfig);
   const checkoutManifestPath = path.join(checkoutHome, manifestName);
   if (root === current || checkoutHome !== getTeamaiHome('project', localConfig.projectRoot)) {
-    return { root, worktreeScoped, manifestPath: checkoutManifestPath, files };
+    const sharedWithOtherInstall = await isSharedWithOtherInstall(root, current, checkoutManifestPath, true);
+    return { root, current, worktreeScoped, manifestPath: checkoutManifestPath, sharedWithOtherInstall, files };
   }
   const { detectProjectConfig } = await import('./config.js');
-  const mainConfig = await detectProjectConfig(root);
+  const mainConfig = await pathExists(root) ? await detectProjectConfig(root).catch(() => null) : null;
   const sharedHome = mainConfig ? getDataHome(mainConfig) : getTeamaiHome('project', root);
-  if (sharedHome === checkoutHome) return { root, worktreeScoped, manifestPath: checkoutManifestPath, files };
+  const sharedManifestPath = path.join(sharedHome, manifestName);
+  if (sharedHome === checkoutHome) {
+    const sharedWithOtherInstall = await isSharedWithOtherInstall(root, current, checkoutManifestPath, mainConfig !== null);
+    return { root, current, worktreeScoped, manifestPath: checkoutManifestPath, sharedWithOtherInstall, files };
+  }
   return {
     root,
+    current,
     worktreeScoped,
-    manifestPath: path.join(sharedHome, manifestName),
+    manifestPath: sharedManifestPath,
     checkoutManifestPath,
-    sharedWithOtherInstall: mainConfig !== null || await otherWorktreeInstalled(root, current),
+    sharedWithOtherInstall: await isSharedWithOtherInstall(root, current, sharedManifestPath, mainConfig !== null),
     files,
   };
 }
@@ -549,19 +610,63 @@ export async function resolveMainCheckoutHooks(
  * config resolvable).
  */
 async function otherWorktreeInstalled(root: string, current: string): Promise<boolean> {
+  const canonicalCurrent = canonicalProjectRoot(current);
+  const canonicalRoot = canonicalProjectRoot(root);
   for (const worktree of await listWorktrees(root)) {
-    if (worktree === root || worktree === current) continue;
+    const canonical = canonicalProjectRoot(worktree);
+    if (canonical === canonicalRoot || canonical === canonicalCurrent) continue;
     if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) return true;
   }
   return false;
 }
 
-/**
- * The main checkout (realpath) of the repository `projectRoot` belongs to, or
- * `projectRoot` itself outside git — including a checkout that no longer
- * exists, which git cannot be asked about. A bare anchor has no main checkout,
- * so each actual workspace supplies its own hook files and ownership.
- */
+async function discoverInstalledCheckouts(root: string): Promise<string[]> {
+  const result: string[] = [];
+  const canonicalRoot = canonicalProjectRoot(root);
+  const { detectProjectConfig } = await import('./config.js');
+  const mainConfig = await pathExists(root) ? await detectProjectConfig(root).catch(() => null) : null;
+  if (mainConfig) result.push(canonicalRoot);
+  for (const worktree of await listWorktrees(root)) {
+    const canonical = canonicalProjectRoot(worktree);
+    if (canonical === canonicalRoot) continue;
+    if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) {
+      result.push(canonical);
+    }
+  }
+  return result;
+}
+
+async function isSharedWithOtherInstall(
+  root: string,
+  current: string,
+  manifestPath: string,
+  mainConfigExists: boolean,
+): Promise<boolean> {
+  const canonicalCurrent = canonicalProjectRoot(current);
+  const canonicalRoot = canonicalProjectRoot(root);
+  const manifest = await readJson<SharedHooksManifest>(expandHome(manifestPath));
+  if (manifest) {
+    const allCheckouts = new Set<string>();
+    if (Array.isArray(manifest.checkouts)) {
+      for (const c of manifest.checkouts) allCheckouts.add(canonicalProjectRoot(c));
+    } else if (manifest.checkouts && typeof manifest.checkouts === 'object') {
+      for (const list of Object.values(manifest.checkouts as Record<string, string[]>)) {
+        if (Array.isArray(list)) {
+          for (const c of list) allCheckouts.add(canonicalProjectRoot(c));
+        }
+      }
+    }
+    allCheckouts.delete(canonicalCurrent);
+    if (allCheckouts.size > 0) {
+      const liveWorktrees = new Set((await listWorktrees(root)).map(canonicalProjectRoot));
+      for (const c of allCheckouts) {
+        if (c === canonicalRoot || liveWorktrees.has(c)) return true;
+      }
+    }
+  }
+  if (canonicalCurrent !== canonicalRoot && mainConfigExists) return true;
+  return await otherWorktreeInstalled(root, current);
+}
 async function mainCheckoutOf(projectRoot: string): Promise<{ root: string; worktreeScoped: boolean }> {
   const anchors = await pathExists(projectRoot) ? await resolveAnchors(projectRoot) : null;
   return {
@@ -2053,6 +2158,8 @@ export async function reconcileHooksToAllTools(
           legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
           checkoutManifestPath: opts.mainCheckout.checkoutManifestPath,
           sharedWithOtherInstall: opts.mainCheckout.sharedWithOtherInstall,
+          current: opts.mainCheckout.current,
+          root: opts.mainCheckout.root,
           removeAll: opts.removeAll,
         });
         reconciledMainTools.add(tool);
@@ -2079,30 +2186,89 @@ async function reconcileMainCheckoutTeamHooks(
     legacyManifestPath: string;
     checkoutManifestPath?: string;
     sharedWithOtherInstall?: boolean;
+    current?: string;
+    root?: string;
     removeAll?: boolean;
   },
 ): Promise<void> {
-  const { checkoutManifestPath, sharedWithOtherInstall, ...reconcileOpts } = opts;
+  const { checkoutManifestPath, sharedWithOtherInstall, current, root, ...reconcileOpts } = opts;
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
-  if (wanted.length === 0 && !await pathExists(file)) return;
-  // A linked worktree removes only what it recorded while another install
-  // still uses the shared entries.
-  if (opts.removeAll && checkoutManifestPath && sharedWithOtherInstall) {
-    await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
-    return;
+  if (wanted.length === 0 && !await pathExists(file) && !opts.removeAll) return;
+
+  const manifest = await readJson<SharedHooksManifest>(expandHome(opts.manifestPath)) ?? {};
+  const canonicalCurrent = current ? canonicalProjectRoot(current) : null;
+  const canonicalRoot = root ? canonicalProjectRoot(root) : null;
+
+  if (opts.removeAll) {
+    let othersUsingHook = false;
+    if (canonicalCurrent && canonicalRoot) {
+      let checkouts = getToolCheckouts(manifest, tool);
+      if (checkouts.length === 0 && manifest[tool]) {
+        checkouts = await discoverInstalledCheckouts(canonicalRoot);
+      }
+      const liveWorktrees = new Set((await listWorktrees(canonicalRoot)).map(canonicalProjectRoot));
+      const remaining = checkouts
+        .map(canonicalProjectRoot)
+        .filter((c) => c !== canonicalCurrent && (c === canonicalRoot || liveWorktrees.has(c)));
+      setToolCheckouts(manifest, tool, remaining);
+      if (remaining.length > 0) {
+        othersUsingHook = true;
+      }
+    } else if (sharedWithOtherInstall) {
+      othersUsingHook = true;
+    }
+
+    if (othersUsingHook) {
+      await writeJson(expandHome(opts.manifestPath), manifest);
+      if (checkoutManifestPath) {
+        await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
+      }
+      return;
+    }
+
+    if (manifest.checkouts && typeof manifest.checkouts === 'object' && !Array.isArray(manifest.checkouts)) {
+      delete (manifest.checkouts as Record<string, string[]>)[tool];
+      if (Object.keys(manifest.checkouts).length === 0) {
+        delete manifest.checkouts;
+      }
+      await writeJson(expandHome(opts.manifestPath), manifest);
+    }
   }
+
   // Adopt this checkout's old records before reconciling, as reconcileHooks
   // does for legacyManifestPath, and retire them only once that succeeded.
   const checkout = checkoutManifestPath ? await readManifest(checkoutManifestPath) : null;
   if (checkout?.[tool]?.length) {
-    const manifest = await readManifest(opts.manifestPath);
-    manifest[tool] = [...(manifest[tool] ?? []), ...checkout[tool]];
+    manifest[tool] = [...((manifest[tool] as ManagedHookRecord[]) ?? []), ...checkout[tool]];
     await writeJson(expandHome(opts.manifestPath), manifest);
   }
   await reconcileHooks(file, tool, teamDefs, { ...reconcileOpts, teamOnly: true });
   if (checkout?.[tool]?.length && checkoutManifestPath) {
     delete checkout[tool];
     await writeJson(expandHome(checkoutManifestPath), checkout);
+  }
+
+  if (!opts.removeAll && canonicalCurrent) {
+    const updated = await readJson<SharedHooksManifest>(expandHome(opts.manifestPath)) ?? {};
+    if (updated[tool]?.length) {
+      const existing = getToolCheckouts(updated, tool);
+      let checkouts: string[];
+      if (existing.length === 0) {
+        const discovered = canonicalRoot ? await discoverInstalledCheckouts(canonicalRoot) : [];
+        checkouts = Array.from(new Set([...discovered, canonicalCurrent]));
+      } else {
+        checkouts = Array.from(new Set([...existing.map(canonicalProjectRoot), canonicalCurrent]));
+      }
+      setToolCheckouts(updated, tool, checkouts);
+    } else {
+      if (updated.checkouts && typeof updated.checkouts === 'object' && !Array.isArray(updated.checkouts)) {
+        delete (updated.checkouts as Record<string, string[]>)[tool];
+        if (Object.keys(updated.checkouts).length === 0) {
+          delete updated.checkouts;
+        }
+      }
+    }
+    await writeJson(expandHome(opts.manifestPath), updated);
   }
 }
 

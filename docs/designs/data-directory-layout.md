@@ -520,8 +520,8 @@ every checkout, so that is where they live now:
 │                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
 │                                              an un-migrated linked worktree injects through the main checkout's copy (<main>/.teamai when the main checkout
-│                                              has no install), importing then retiring the one v0.22.0 kept in its own data home; while the main checkout or
-│                                              another worktree is installed, its removal/uninstall touches only the entries that own copy records (#373)
+│                                              has no install), importing then retiring the one v0.22.0 kept in its own data home; checkouts registered in the
+│                                              manifest share ownership so removal keeps the shared entries until the last checkout removes them (#373)
 │                                              removal releases one Claude entry per record, so an identical copy another checkout records stays
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
