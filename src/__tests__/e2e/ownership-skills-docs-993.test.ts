@@ -389,11 +389,24 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     teamaiOk(['pull'], dir);
     expect(read(path.join(goneSkill, 'notes.md'))).toBe('MY GONE NOTES\n');
 
+    // remove takes teamai's files and leaves the member's, naming it.
     const removed = teamai(['remove', 'skills', 'team-skill', '--force'], dir);
     expect(read(path.join(teamSkill, 'notes.md'))).toBe('MY NOTES\n');
-    expect(removed.output).toContain(`Kept ${teamSkill}`);
-    teamai(['uninstall', '--force'], dir);
+    expect(fs.existsSync(path.join(teamSkill, 'SKILL.md'))).toBe(false);
+    expect(removed.output).toContain(`Kept ${path.join(teamSkill, 'notes.md')}`);
+  });
+
+  it('uninstall takes teamai\'s files from a delivered skill and leaves the file the member added', () => {
+    const t = team('skill-extra-uninstall', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-extra-uninstall-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const teamSkill = path.join(dir, '.claude', 'skills', 'team-skill');
+    writeFile(path.join(teamSkill, 'notes.md'), 'MY NOTES\n');
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
     expect(read(path.join(teamSkill, 'notes.md'))).toBe('MY NOTES\n');
+    expect(fs.existsSync(path.join(teamSkill, 'SKILL.md'))).toBe(false);
+    expect(uninstalled.output).toContain(`Kept ${path.join(teamSkill, 'notes.md')}`);
   });
 
   it('keeps a recorded skill the member edited whole, as before', () => {

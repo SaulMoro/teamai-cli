@@ -260,6 +260,40 @@ export async function ownsSkillDir(
 }
 
 /**
+ * The files of skill directory `dir` that are teamai's, and those that are the member's (#993),
+ * absolute: teamai's are on `previous` or a version of that file of the skill in the history
+ * `origin` names; a link or any other non-regular entry, and any other file, is the member's.
+ * Read-only; `remove` and `uninstall` delete only teamai's and keep the directory while anything
+ * is left in it.
+ */
+export async function teamaiSkillFiles(
+  previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin,
+): Promise<{ teamais: string[]; members: string[] }> {
+  const result = { teamais: [] as string[], members: [] as string[] };
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await fse.readdir(current, { withFileTypes: true }).catch(() => [])) {
+      const file = path.join(current, entry.name);
+      const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(file, entryRel);
+        continue;
+      }
+      if (!entry.isFile()) {
+        result.members.push(file);
+        continue;
+      }
+      const fileOrigin: CopyOrigin = {
+        repoPath: origin.repoPath, pathspec: `${origin.pathspec}/${entryRel}`, renders: entryRel === SKILL_MD ? origin.renders : undefined,
+      };
+      const teamais = entry.name === CONTRIBUTORS_FILE || previous?.[file] !== undefined || await isTeamaiCopy(file, fileOrigin);
+      (teamais ? result.teamais : result.members).push(file);
+    }
+  };
+  await walk(dir, '');
+  return result;
+}
+
+/**
  * Whether the recorded skill directory `dir` holds a file that is the member's own: not on
  * `previous` and, with an `origin`, no version of that file of the skill in the history.
  * Without an origin, any file off the record is the member's.

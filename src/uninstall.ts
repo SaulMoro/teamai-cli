@@ -59,7 +59,7 @@ import {
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
-import { describeKeptDir, describeMembersDirLeft, ownsSkillDir } from './resources/delivered-copies.js';
+import { describeKeptDir, describeMembersDirLeft, isLink, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
   pathExists,
@@ -71,6 +71,7 @@ import {
   listFiles,
   listFilesRecursive,
   expandHome,
+  pruneEmptyDirs,
 } from './utils/fs.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
@@ -169,6 +170,8 @@ interface RemovalPlan {
 interface SkillDirEntry {
   dir: string;
   baseDir: string;
+  /** When set, only these files are teamai's: the rest, and the directory while anything is left, stay (#993). */
+  files?: string[];
 }
 
 /** An entry teamai added to an OpenCode config's `instructions`. */
@@ -374,6 +377,8 @@ async function discoverToolResources(
   teamSkillNames: Set<string>,
   /** Whether the skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
   ownsSkill: (dir: string, name: string) => Promise<boolean>,
+  /** The files of a skill directory teamai does not own whole that are teamai's, and the member's (#993). */
+  skillFiles: (dir: string, name: string) => Promise<{ teamais: string[]; members: string[] }>,
   teamRuleNames: Set<string>,
   teamAgentNames: ReadonlyMap<string, string>,
   hookTargets: HookTarget[],
@@ -586,8 +591,20 @@ async function discoverToolResources(
         for (const dir of dirs) {
           if (!teamSkillNames.has(dir)) continue;
           const skillDir = path.join(skillsDir, dir);
-          if (await ownsSkill(skillDir, dir)) res.skillDirs.push({ dir: skillDir, baseDir: rootBase });
-          else res.keptSkillDirs.push(await describeKeptDir(skillDir, `skills/${dir}`, 'uninstall'));
+          if (await ownsSkill(skillDir, dir)) {
+            res.skillDirs.push({ dir: skillDir, baseDir: rootBase });
+            continue;
+          }
+          // Ownership is per file: teamai's go, the member's stay, and so does the directory (#993).
+          const files = await isLink(skillDir) ? { teamais: [], members: [] } : await skillFiles(skillDir, dir);
+          if (files.teamais.length === 0) {
+            res.keptSkillDirs.push(await describeKeptDir(skillDir, `skills/${dir}`, 'uninstall'));
+            continue;
+          }
+          res.skillDirs.push({ dir: skillDir, baseDir: rootBase, files: files.teamais });
+          for (const file of files.members) {
+            res.keptSkillDirs.push(describeMembersDirLeft(file, `skills/${dir}/${path.relative(skillDir, file).split(path.sep).join('/')}`, 'uninstall'));
+          }
         }
       }
     }
@@ -687,6 +704,8 @@ async function buildRemovalPlan(
   const previous = await deliveredHashes(localConfig);
   const ownsSkill = async (dir: string, name: string): Promise<boolean> =>
     isCliOwnedSkillName(name) || localAgentSkillNames.has(name) || ownsSkillDir(previous, dir, skillOrigin(repoPath, name));
+  const skillFiles = (dir: string, name: string): Promise<{ teamais: string[]; members: string[] }> =>
+    teamaiSkillFiles(previous, dir, skillOrigin(repoPath, name));
 
   // Discover per-tool resources. Hooks are discovered at the injection target
   // resolveHookScope reports (HOME + user manifest for a non-self project scope,
@@ -747,6 +766,7 @@ async function buildRemovalPlan(
         baseDir,
         teamSkillNames,
         ownsSkill,
+        skillFiles,
         teamRuleNames,
         teamAgentNames,
         hookTargets,
@@ -1437,7 +1457,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   const keptSkillDirs: string[] = [];
   const linkedSkillDirs: string[] = [];
   const failedSkillDirs: { skillDir: string; first: { file: string; error: string } }[] = [];
-  for (const { dir: skillDir, baseDir } of plan.skillDirs) {
+  for (const { dir: skillDir, baseDir, files } of plan.skillDirs) {
     try {
       const name = path.basename(skillDir);
       if (isCliOwnedSkillName(name)) {
@@ -1448,6 +1468,9 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
         // "the packaged files were removed".
         else if (result.notRemoved.length > 0) failedSkillDirs.push({ skillDir, first: result.notRemoved[0] });
         else keptSkillDirs.push(skillDir);
+      } else if (files) {
+        for (const file of files) await remove(file);
+        if (await pruneEmptyDirs(skillDir)) removedSkillDirs++;
       } else {
         await remove(skillDir);
         removedSkillDirs++;

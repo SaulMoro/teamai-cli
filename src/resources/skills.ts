@@ -18,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeKeptDir, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeKeptDir, describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -871,7 +871,7 @@ export class SkillsHandler extends ResourceHandler {
     }
     const previous = await (await import('../pull.js')).deliveredHashes(localConfig);
     const origin = skillOrigin(localConfig.repo.localPath, name);
-    const owned: { tool: string; skillDir: string }[] = [];
+    const owned: { tool: string; skillDir: string; files?: string[] }[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
       // Not ours to write to, so not ours to delete from. Above the OpenClaw
@@ -893,8 +893,17 @@ export class SkillsHandler extends ResourceHandler {
         // A link is the member's even at a built-in's name, so it is judged before the name.
         if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
           owned.push({ tool, skillDir });
-        } else {
+          continue;
+        }
+        // Ownership is per file: teamai's go, the member's stay, and so does the directory (#993).
+        const files = await isLink(skillDir) ? { teamais: [], members: [] } : await teamaiSkillFiles(previous, skillDir, origin);
+        if (files.teamais.length === 0) {
           log.warn(await describeKeptDir(skillDir, `skills/${name}`, 'remove'));
+          continue;
+        }
+        owned.push({ tool, skillDir, files: files.teamais });
+        for (const file of files.members) {
+          log.warn(describeMembersDirLeft(file, `skills/${name}/${path.relative(skillDir, file).split(path.sep).join('/')}`, 'remove'));
         }
       }
     }
@@ -908,9 +917,15 @@ export class SkillsHandler extends ResourceHandler {
     // Record tombstone so the resource won't be re-pushed
     await this.addTombstone(name, localConfig);
 
-    for (const { tool, skillDir } of owned) {
-      await remove(skillDir);
-      removed.push(skillDir);
+    for (const { tool, skillDir, files } of owned) {
+      if (files) {
+        for (const file of files) await remove(file);
+        await pruneEmptyDirs(skillDir);
+        removed.push(...files);
+      } else {
+        await remove(skillDir);
+        removed.push(skillDir);
+      }
       log.debug(`Removed skill ${name} from ${tool}`);
     }
 
