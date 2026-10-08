@@ -53,6 +53,8 @@ const MEMBER_SERVER = { type: 'http', url: 'https://mine.example.com/mcp' };
 interface Machine {
   dir: string;
   home: string;
+  /** The environment every command of this machine runs with; a test may change it. */
+  env: NodeJS.ProcessEnv;
   run(args: string[]): Run;
   ok(args: string[]): Run;
   git(args: string[]): string;
@@ -137,6 +139,7 @@ function machine(base: string, opts: MachineOptions): Machine {
   return {
     dir: realDir,
     home,
+    env,
     run: teamai,
     ok,
     git: (args) => gitOk(args, realDir),
@@ -287,7 +290,7 @@ describe('what is never teamai-only', () => {
     expect(m.status()).toContain(' M .cursor/mcp.json');
   });
 
-  it('a single-repo team\'s .codex/hooks.json, which holds the built-in hooks beside the team\'s', () => {
+  it('a single-repo team\'s .codex/hooks.json, which holds the built-in hooks', () => {
     const caseDir = fs.mkdtempSync(path.join(sandbox, 'self-codex-'));
     const home = path.join(caseDir, 'home');
     fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
@@ -317,7 +320,8 @@ describe('what is never teamai-only', () => {
     run(process.execPath, [CLI, 'pull'], realDir);
 
     const hooks = read(path.join(realDir, '.codex', 'hooks.json'));
-    expect(hooks).toContain('echo team-stop');
+    // The team hooks run from the dispatcher in ~/.codex/hooks.json.
+    expect(hooks).not.toContain('echo team-stop');
     expect(hooks).toContain('hook-dispatch session-start');
     expect(read(path.join(realDir, '.git', 'info', 'exclude'))).not.toContain('/.codex/hooks.json');
     expect(run('git', ['status', '--porcelain', '-uall'], realDir)).toContain('?? .codex/hooks.json');
@@ -342,6 +346,48 @@ describe('an MCP config holding a value teamai resolved', () => {
     expect(m.ok(['pull']).output).not.toContain('now holds entries teamai does not own');
     expect(m.status()).not.toContain('?? .cursor/mcp.json');
     expect(readJson(file).mcpServers['my-own']).toEqual(MEMBER_SERVER);
+  });
+});
+
+describe('a listed teamai-only MCP config that later gets a resolved value', () => {
+  const SECRET = {
+    'mcp/mcp.yaml': `${PLAIN}  - name: secret-api\n    transport: http\n    url: https://secret.example.com/mcp\n`
+      + '    headers:\n      Authorization: "Bearer ${LAB_TOKEN}"\n',
+    'env/env.yaml': 'variables:\n  - key: LAB_TOKEN\n    value: "lab-token-delivered-915"\n',
+  };
+  const mcpExcludeLines = (m: Machine): string[] => {
+    const lines = read(path.join(m.dir, '.git', 'info', 'exclude')).split('\n');
+    const start = lines.findIndex((line) => line.startsWith('# [teamai:mcp-exclude:start]'));
+    const end = lines.indexOf('# [teamai:mcp-exclude:end]');
+    return start < 0 || end < start ? [] : lines.slice(start + 1, end);
+  };
+  const turnOff = (m: Machine): void => {
+    const projects = path.join(m.home, '.teamai', 'projects');
+    for (const dir of fs.readdirSync(projects)) {
+      const config = path.join(projects, dir, 'config.yaml');
+      if (fs.existsSync(config)) fs.appendFileSync(config, 'gitExcludeEnabled: false\n');
+    }
+  };
+
+  it.each([
+    ['the member adds a server', (m: Machine) => addMemberServer(path.join(m.dir, '.cursor', 'mcp.json'))],
+    ['the option goes off', turnOff],
+  ])('keeps it out of git in its own block once %s', (_label, leave) => {
+    const m = machine('mcp-later-secret', { agents: 'cursor', files: { 'mcp/mcp.yaml': PLAIN } });
+    const file = path.join(m.dir, '.cursor', 'mcp.json');
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+
+    m.teamCommit(SECRET);
+    const resolved = m.ok(['pull']);
+    expect(read(file)).toContain('lab-token-delivered-915');
+    expect(mcpExcludeLines(m), resolved.output).toEqual(['/.cursor/mcp.json']);
+
+    leave(m);
+    const pulled = m.ok(['pull']);
+    expect(m.deliveredLines(), pulled.output).not.toContain('/.cursor/mcp.json');
+    expect(read(file)).toContain('lab-token-delivered-915');
+    expect(m.git(['check-ignore', '-q', '.cursor/mcp.json'])).toBe('');
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
   });
 });
 
@@ -370,7 +416,7 @@ describe('ownership without a record', () => {
     expect(m.status()).not.toContain('?? .codex/hooks.json');
   });
 
-  it('keeps out a file holding a member server no team version matches, and cleans and lists one holding a removed team server\'s copy', () => {
+  it('takes a file holding a member server no team version matches out of the delivered block, and cleans and lists one holding a removed team server\'s copy', () => {
     const m = machine('mcp-unrecorded', {
       agents: 'cursor',
       files: { 'mcp/mcp.yaml': mcpYaml(['plain-api', 'https://api.example.com/mcp'], ['old-api', 'https://old.example.com/mcp']) },
@@ -386,13 +432,55 @@ describe('ownership without a record', () => {
     expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
     expect(m.status()).not.toContain('?? .cursor/mcp.json');
 
-    // An unrecorded server of the member's, matching no team version.
+    // An unrecorded server of the member's, matching no team version. With no record, the MCP sync cannot
+    // tell it holds no value teamai resolved, so the file gets its own mcp-exclude line: the delivered
+    // block's line never counted for that. It leaves the delivered block, and git still does not see it.
     loseMcpRecords(m.home);
     addMemberServer(file);
-    expect(m.ok(['pull']).output).toContain(nowVisible('.cursor/mcp.json'));
+    expect(m.ok(['pull']).output).not.toContain('now holds entries teamai does not own');
     expect(readJson(file).mcpServers['my-own']).toEqual(MEMBER_SERVER);
     expect(m.deliveredLines()).not.toContain('/.cursor/mcp.json');
-    expect(m.status()).toContain('?? .cursor/mcp.json');
+    expect(read(path.join(m.dir, '.git', 'info', 'exclude'))).toMatch(/# \[teamai:mcp-exclude:start\][^\n]*\n\/\.cursor\/mcp\.json\n/);
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
+  });
+});
+
+/**
+ * Put a `git` first on `m`'s PATH that fails, as a broken repository would,
+ * every `ls-files` or `check-ignore` naming a path that ends in `suffix`, and
+ * runs the real git for anything else.
+ */
+function failGitFor(m: Machine, suffix: string): void {
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8', env: m.env }).stdout.trim();
+  const bin = fs.mkdtempSync(path.join(path.dirname(m.dir), 'failing-git-'));
+  writeFile(path.join(bin, 'git'), [
+    '#!/bin/sh',
+    'query=no; named=no',
+    'for arg in "$@"; do',
+    '  case "$arg" in ls-files|check-ignore) query=yes ;; esac',
+    `  case "$arg" in *${suffix}) named=yes ;; esac`,
+    'done',
+    'if [ "$query" = yes ] && [ "$named" = yes ]; then echo "fatal: index file corrupt" >&2; exit 128; fi',
+    `exec "${realGit}" "$@"`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(path.join(bin, 'git'), 0o755);
+  m.env.PATH = `${bin}${path.delimiter}${m.env.PATH ?? ''}`;
+}
+
+describe('a listed teamai-only file git cannot answer for', () => {
+  it('keeps its line, and pull and doctor say git could not tell', () => {
+    const m = machine('mcp-git-unknown', { agents: 'cursor', files: { 'mcp/mcp.yaml': PLAIN } });
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+
+    failGitFor(m, 'mcp.json');
+    const pulled = m.run(['pull']);
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+    expect(pulled.output).toContain('git could not say whether it tracks .cursor/mcp.json');
+
+    const doctor = m.run(['doctor']);
+    expect(doctor.output).toContain('git could not say what');
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
   });
 });
 

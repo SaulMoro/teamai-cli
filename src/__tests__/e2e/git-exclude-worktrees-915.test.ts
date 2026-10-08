@@ -337,18 +337,18 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
     m.teamai(['pull'], main);
     const beLines = (): string[] => blockLines(excludeFileOf(m, main)).filter((line) => line.includes('be-skill'));
     // Both worktrees hold the be skill, and list it.
-    expect(beLines()).toEqual(['/.claude/skills/be-skill/']);
+    expect(beLines()).toEqual(['/.claude/skills/be-skill/SKILL.md']);
 
     m.git(['worktree', 'remove', '--force', removed], main);
     expect(m.teamai(['pull'], main)).toContain('Already synced');
-    expect(beLines()).toEqual(['/.claude/skills/be-skill/']);
+    expect(beLines()).toEqual(['/.claude/skills/be-skill/SKILL.md']);
 
     // Its `.git` link deleted, then pruned: a directory git no longer knows as a checkout, files and all.
     fs.rmSync(path.join(pruned, '.git'));
     m.git(['worktree', 'prune'], main);
     expect(m.teamai(['pull'], main)).toContain('Already synced');
     expect(beLines()).toEqual([]);
-    expect(blockLines(excludeFileOf(m, main))).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(excludeFileOf(m, main))).toContain('/.claude/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   it('gives a member\'s rule at a delivered path in one worktree no line, names it, and keeps both copies visible and addable', async () => {
@@ -450,7 +450,7 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
     expect(m.git(['status', '--porcelain'], app).split('\n').filter(Boolean)).toEqual([]);
     expect(status(m, claude)).toEqual([]);
     expect(status(m, cursor)).toEqual([]);
-    expect(blockLines(excludeFileOf(m, claude), 'delivered/')).toContain('/skills/fe-skill/');
+    expect(blockLines(excludeFileOf(m, claude), 'delivered/')).toContain('/skills/fe-skill/SKILL.md');
     expect(blockLines(excludeFileOf(m, cursor), 'delivered/')).toContain('/rules/team-rule.mdc');
     expect(blockLines(excludeFileOf(m, app)).filter((line) => line.startsWith('/.claude/') || line.startsWith('/.cursor/'))).toEqual([]);
 
@@ -485,7 +485,7 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
 
     const both = homeBlocks();
     expect(Object.keys(both)).toHaveLength(2);
-    for (const lines of Object.values(both)) expect(lines).toContain('/.hermes/skills/fe-skill/');
+    for (const lines of Object.values(both)) expect(lines).toContain('/.hermes/skills/fe-skill/SKILL.md');
     expect(blockLines(homeExclude)).toEqual([]);
     expect(status(m, m.home, '--', '.hermes/skills')).toEqual([]);
     expect(status(m, first)).toEqual([]);
@@ -498,7 +498,7 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
 
     const left = homeBlocks();
     expect(Object.keys(left)).toHaveLength(1);
-    expect(Object.values(left)[0]).toContain('/.hermes/skills/fe-skill/');
+    expect(Object.values(left)[0]).toContain('/.hermes/skills/fe-skill/SKILL.md');
     expect(status(m, m.home, '--', '.hermes/skills')).toEqual([]);
     expect(status(m, second)).toEqual([]);
   }, 120_000);

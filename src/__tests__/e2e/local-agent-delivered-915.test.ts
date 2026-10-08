@@ -3,9 +3,8 @@
  * stay out of git, in the `local-agent` block of the exclude file of the
  * repository they land in, while the workspace's git exclude flag is on. The
  * flag is read per project: one project on, one off. A member's file at a path
- * the agent would install to is kept, and named. `teamai uninstall` removes
- * the block from every exclude file the agent recorded, a second repository's
- * too.
+ * the agent would install to is kept, and named. A project `teamai uninstall`
+ * removes that project's lines only: the agent still serves the others.
  *
  * Runs the built CLI against an in-process mock backend, so the CLI is spawned
  * asynchronously. Each case gets its own HOME and repositories.
@@ -126,7 +125,7 @@ const block = (project: string): string[] | null => {
 };
 
 describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what it installs in a project out of git (#915)', () => {
-  it('lists a skill and a rule where the flag is on and not where it is off, keeps a member\'s file, and uninstall drops the lines in every repository', async () => {
+  it('lists a skill and a rule where the flag is on and not where it is off, keeps a member\'s file, and a project uninstall drops only that project\'s lines', async () => {
     const m = machine('http');
     const app = await m.project('app');
     const side = await m.project('side');
@@ -155,7 +154,7 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     // Flag on: git ignores both installs, and still sees the member's files.
     expect(ignored(app, '.claude/skills/renamed-skill/SKILL.md')).toBe(true);
     expect(ignored(app, '.claude/rules/http-rule.md')).toBe(true);
-    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/']);
+    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/SKILL.md']);
     expect(status(app)).toEqual(['?? .claude/rules/members-rule.md', '?? .claude/rules/mine.md']);
     expect(m.git(['ls-files', '--others', '--exclude-standard', '.claude/rules'], app).out.split('\n').filter(Boolean).sort())
       .toEqual(['.claude/rules/members-rule.md', '.claude/rules/mine.md']);
@@ -164,20 +163,61 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(status(side)).toEqual(expect.arrayContaining(['?? .claude/rules/side-rule.md', '?? .claude/skills/side-skill/SKILL.md']));
 
     // Turned on in the second project: its next install lists its copies there.
+    // A file the member adds inside an installed skill stays theirs: visible and addable.
+    const myNotes = path.join(app, '.claude', 'skills', 'renamed-skill', 'my-notes.md');
+    fs.writeFileSync(myNotes, '# My notes\n');
     m.setFlag(side, true);
     await m.sessionStart(side, [install(6, 'rule', 'side-rule-2', side)]);
-    expect(block(side)).toEqual(['/.claude/rules/side-rule-2.md', '/.claude/rules/side-rule.md', '/.claude/skills/side-skill/']);
-    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/']);
+    expect(block(side)).toEqual(['/.claude/rules/side-rule-2.md', '/.claude/rules/side-rule.md', '/.claude/skills/side-skill/SKILL.md']);
+    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/SKILL.md']);
+    expect(status(app)).toContain('?? .claude/skills/renamed-skill/my-notes.md');
+    expect(m.git(['add', '--dry-run', '-A'], app).out).toContain("add '.claude/skills/renamed-skill/my-notes.md'");
+    fs.rmSync(myNotes);
 
     const out = await m.cli(['uninstall', '--force'], app);
 
     expect(out.code, out.output).toBe(0);
     expect(fs.readFileSync(path.join(app, '.git', 'info', 'exclude'), 'utf8')).not.toContain('# [teamai:');
-    // The second project's own delivered block is that project's to keep.
-    expect(block(side)).toBeNull();
+    // A project uninstall leaves the local agent serving the second project: its lines stay, and so does its own delivered block.
+    expect(block(side)).toEqual(['/.claude/rules/side-rule-2.md', '/.claude/rules/side-rule.md', '/.claude/skills/side-skill/SKILL.md']);
     expect(fs.readFileSync(path.join(side, '.git', 'info', 'exclude'), 'utf8')).toContain('# [teamai:delivered:start]');
     expect(status(app).filter((line) => /renamed-skill|http-rule/.test(line))).toEqual([]);
     expect(fs.readFileSync(membersRule, 'utf8')).toBe('# My own rule of that name\n');
+  }, 180_000);
+
+  it('a project uninstall drops only that project\'s lines: another repository keeps its block, and a shared exclude file a linked worktree\'s', async () => {
+    const m = machine('uninstall-one');
+    // The member's own setting, for every workspace teamai has no project config for.
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    const userConfig = path.join(m.home, '.teamai', 'config.yaml');
+    fs.appendFileSync(userConfig, 'gitExcludeEnabled: true\n');
+    const app = await m.project('app');
+    const side = await m.project('side');
+    m.setFlag(app, true);
+    m.setFlag(side, true);
+    const added = m.git(['worktree', 'add', '-q', path.join(path.dirname(app), 'app-wt'), '-b', 'wt'], app);
+    expect(added.code, added.out).toBe(0);
+    await detached.waitForExit();
+    const wt = fs.realpathSync.native(path.join(path.dirname(app), 'app-wt'));
+
+    await m.sessionStart(app, [
+      install(31, 'rule', 'app-rule', app),
+      install(32, 'rule', 'side-rule', side),
+      install(33, 'rule', 'wt-rule', wt),
+    ]);
+    expect(server.acks.filter(({ id }) => id >= 31 && id <= 33).map(({ body }) => (body as { status: string }).status))
+      .toEqual(['success', 'success', 'success']);
+    expect(block(app)).toEqual(['/.claude/rules/app-rule.md', '/.claude/rules/wt-rule.md']);
+    expect(block(side)).toEqual(['/.claude/rules/side-rule.md']);
+
+    const out = await m.cli(['uninstall', '--force'], app);
+
+    expect(out.code, out.output).toBe(0);
+    expect(block(side), out.output).toEqual(['/.claude/rules/side-rule.md']);
+    expect(block(app), out.output).toEqual(['/.claude/rules/wt-rule.md']);
+    expect(m.git(['status', '--porcelain', '-uall'], wt).out).not.toContain('wt-rule');
+    expect(m.git(['status', '--porcelain', '-uall'], side).out).not.toContain('side-rule');
   }, 180_000);
 
   it('follows the flag at the next session start with no install from the backend', async () => {
@@ -195,7 +235,7 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     // Turned on: a session start alone lists both copies.
     m.setFlag(app, true);
     await m.sessionStart(app, []);
-    expect(block(app)).toEqual(['/.claude/rules/flip-rule.md', '/.claude/skills/flip-skill/']);
+    expect(block(app)).toEqual(['/.claude/rules/flip-rule.md', '/.claude/skills/flip-skill/SKILL.md']);
     expect(status().filter((line) => /flip-/.test(line))).toEqual([]);
 
     // Turned off: a session start alone drops the block, and git sees both again.

@@ -592,7 +592,7 @@ export async function deployBuiltinSkills(
         }
         // A dry run writes and prunes nothing: it reports where the skill would land (#915).
         if (options?.dryRun) {
-          options.recorder?.report('builtin', destDir);
+          options.recorder?.report('builtin', path.join(destDir, 'SKILL.md'));
           deployed++;
           deployedHere++;
           continue;
@@ -618,7 +618,8 @@ export async function deployBuiltinSkills(
           log.warn(`Archived but could not delete ${result.notRemoved.length} file(s) under ${destDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
         }
         if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
-        options?.recorder?.report('builtin', destDir);
+        // The one file it writes there, never the directory (#915).
+        options?.recorder?.report('builtin', path.join(destDir, 'SKILL.md'));
 
         deployed++;
         deployedHere++;

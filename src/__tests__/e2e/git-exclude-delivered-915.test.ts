@@ -304,7 +304,7 @@ describe('delivered team skills stay out of git (#915)', () => {
     const m = machine('lost-gitdir', { team: ON });
     expect(m.teamSkillEntries()).toEqual([]);
     const lines = m.deliveredLines();
-    expect(lines).toEqual(expect.arrayContaining(['/.claude/skills/fe-skill/']));
+    expect(lines).toEqual(expect.arrayContaining(['/.claude/skills/fe-skill/SKILL.md']));
     // A tool folder that was a linked checkout or a submodule, its git directory since deleted: git still shows its files here.
     writeFile(path.join(m.dir, '.claude', '.git'), `gitdir: ${path.join(m.dir, 'gone')}\n`);
 
@@ -312,7 +312,42 @@ describe('delivered team skills stay out of git (#915)', () => {
 
     expect(m.deliveredLines(), r.output).toEqual(lines);
     expect(m.teamSkillEntries(), r.output).toEqual([]);
-    expect(r.output.match(/Could not keep \S*\.claude\/skills\/fe-skill out of git/g)).toHaveLength(1);
+    expect(r.output.match(/Could not keep \S*\.claude\/skills\/fe-skill\/SKILL\.md out of git/g)).toHaveLength(1);
+  });
+
+  it('fails the sync, naming the rule, when a member\'s negation re-includes a file of a delivered skill', () => {
+    const m = machine('skill-reincluded', { team: ON });
+    expect(m.teamSkillEntries()).toEqual([]);
+    writeFile(path.join(m.dir, '.gitignore'), '!*.md\n');
+
+    const r = m.run(['pull']);
+
+    expect(m.deliveredLines(), r.output).toContain('/.claude/skills/fe-skill/SKILL.md');
+    expect(r.output).toContain(`git still sees .claude/skills/fe-skill/SKILL.md: \`!*.md\` (${path.join(m.dir, '.gitignore')}:1) re-includes it. Remove that rule.`);
+    expect(m.teamSkillEntries()).toEqual(expect.arrayContaining(['?? .claude/skills/fe-skill/SKILL.md']));
+  });
+
+  it('replaces a skill directory line an earlier build wrote with the skill\'s file lines on the next full sync', () => {
+    const m = machine('skill-dir-line', { team: ON });
+    const skill = path.join(m.dir, '.claude', 'skills', 'fe-skill');
+    // As an earlier build left them: the skill on the record and in the block as its directory.
+    const state = JSON.parse(read(m.statePath())) as { lastPullByWorkspace: Record<string, { gitExcludePaths?: Record<string, string[]> }> };
+    for (const record of Object.values(state.lastPullByWorkspace)) {
+      const skills = record.gitExcludePaths?.skills;
+      if (skills) record.gitExcludePaths!.skills = [...skills.filter((file) => !file.startsWith(`${skill}${path.sep}`)), skill];
+    }
+    fs.writeFileSync(m.statePath(), `${JSON.stringify(state, null, 2)}\n`);
+    writeFile(m.excludeFile(), read(m.excludeFile()).replace('/.claude/skills/fe-skill/SKILL.md\n', '/.claude/skills/fe-skill/\n'));
+    writeFile(path.join(skill, 'my-notes.md'), 'mine\n');
+    expect(m.status()).not.toContain('?? .claude/skills/fe-skill/my-notes.md');
+
+    m.teamCommit({ 'skills/other-skill/SKILL.md': skillMd('other-skill', 'Other skill, revised.') });
+    const r = m.ok(['pull']);
+
+    expect(r.output).not.toContain('Already synced');
+    expect(m.deliveredLines()).toContain('/.claude/skills/fe-skill/SKILL.md');
+    expect(m.deliveredLines()).not.toContain('/.claude/skills/fe-skill/');
+    expect(m.teamSkillEntries(), r.output).toEqual(['?? .claude/skills/fe-skill/my-notes.md']);
   });
 
   it('applies a team commit that changes only sharing.gitExclude.enabled on that pull, and a later override over it', () => {
@@ -519,19 +554,22 @@ const EXT_SOURCE = {
 /** Copilot and six other agents; Kiro writes namespaced rules flat. */
 const AGENTS = 'claude,codex,cursor,codebuddy,opencode,kiro,copilot';
 const MEMBERS_CURSOR_RULE = '---\ndescription: mine\nalwaysApply: true\n---\nMY OWN TEAM RULE\n';
-/** The member's files: their own, one at the path of a team rule (#993 keeps it), one in Codex's shared skills directory, one in the docs mirror. */
-const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md', '.teamai/docs/mine.md'];
+/**
+ * The member's files: their own, one at the path of a team rule (#993 keeps it), one in Codex's shared skills directory,
+ * one inside a skill teamai delivers, one in the docs mirror.
+ */
+const MEMBERS_FILES = [
+  'notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md', '.claude/skills/fe-skill/my-notes.md', '.teamai/docs/mine.md',
+];
 
 /**
  * What git may still show: paths the delivered block does not cover yet (MCP
- * configs, `.codex/hooks.json`). Nothing the
+ * configs). Nothing the
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
   /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
-  /^\.codex\/hooks\.json$/,
 ];
-const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
 /** A delivered path of each writer and kind, as the member's tools read them. */
 const DELIVERED = [
   '.claude/rules/fe/fe-rule.md', '.cursor/rules/fe/fe-rule.mdc', '.kiro/steering/fe.fe-rule.md', '.kiro/steering/checkout.checkout-rule.md',
@@ -541,7 +579,7 @@ const DELIVERED = [
   '.github/instructions/teamai-context.instructions.md',
   '.claude/settings.local.json', '.github/hooks/teamai.json',
   '.claude/skills/teamai/SKILL.md', '.claude/rules/teamai-recall.md', '.claude/agents/teamai-recall.md', '.cursor/rules/teamai-recall.mdc',
-  '.claude/skills/ext-skill/SKILL.md', '.agents/skills/fe-skill/SKILL.md', '.claude/skills/checkout-skill/SKILL.md',
+  '.claude/skills/ext-skill/SKILL.md', '.agents/skills/fe-skill/SKILL.md', '.claude/skills/fe-skill/SKILL.md', '.claude/skills/checkout-skill/SKILL.md',
   '.claude/skills/tracked-skill/extra.md',
   '.teamai/docs/guide.md', '.teamai/.ignore',
 ];
@@ -586,7 +624,11 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
   it('after init, pull and a session start, git status lists only the allowlist, and every file of the member\'s stays visible and addable', async () => {
     const m = fullMachine('acceptance');
     const steps: Array<[string, () => Promise<Run> | Run | null]> = [
-      ['init', () => null],
+      // After init, the member adds a file of their own to a skill teamai delivered.
+      ['init', () => {
+        writeFile(path.join(m.dir, '.claude', 'skills', 'fe-skill', 'my-notes.md'), 'my notes on the team skill\n');
+        return null;
+      }],
       // A newer team version of the skill the business repo committed long ago, with a file it never had.
       ['pull', () => {
         m.teamCommit({ 'skills/fe/tracked-skill/SKILL.md': TRACKED_V2, 'skills/fe/tracked-skill/extra.md': 'Extra.\n' });
@@ -599,10 +641,9 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
       const output = (await act())?.output ?? '';
       expect(unexpected(m), `${step}:\n${m.status().join('\n')}\n${output}`).toEqual([]);
       expect(m.status(), step).toEqual(expect.arrayContaining(MEMBERS_FILES.map((file) => `?? ${file}`)));
-      for (const file of DELIVERED.filter((f) => step !== 'init' || !f.endsWith('extra.md'))) {
-        expect(fs.existsSync(path.join(m.dir, file)), `${step}: ${file}`).toBe(true);
-      }
-      expect(notIgnored(m, DELIVERED), step).toEqual([]);
+      const delivered = DELIVERED.filter((f) => step !== 'init' || !f.endsWith('extra.md'));
+      for (const file of delivered) expect(fs.existsSync(path.join(m.dir, file)), `${step}: ${file}`).toBe(true);
+      expect(notIgnored(m, delivered), step).toEqual([]);
     }
 
     // The tracked SKILL.md's change is visible; the file the team added beside it is not.
@@ -610,10 +651,14 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
     expect(m.git(['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean).sort()).toEqual(
       expect.arrayContaining(MEMBERS_FILES),
     );
-    // One line per rule file, never a directory under a rules directory, never `/*`.
+    // One line per delivered file, skills and rules alike: never a directory, never `/*`.
     const lines = m.deliveredLines();
-    expect(lines).toEqual(expect.arrayContaining(['/.cursor/rules/fe/fe-rule.mdc', '/.kiro/steering/fe.fe-rule.md', '/.agents/skills/fe-skill/']));
-    expect(lines.filter((line) => line.endsWith('/*') || (line.endsWith('/') && RULES_DIRS.some((dir) => line.startsWith(dir))))).toEqual([]);
+    expect(lines).toEqual(expect.arrayContaining([
+      '/.cursor/rules/fe/fe-rule.mdc', '/.kiro/steering/fe.fe-rule.md', '/.agents/skills/fe-skill/SKILL.md', '/.claude/skills/fe-skill/SKILL.md',
+      '/.claude/skills/tracked-skill/extra.md',
+    ]));
+    expect(lines.filter((line) => line.endsWith('/*') || line.endsWith('/'))).toEqual([]);
+    expect(lines).not.toContain('/.claude/skills/tracked-skill/SKILL.md');
 
     m.git(['add', '-A']);
     const staged = m.git(['diff', '--cached', '--name-only']).split('\n').filter(Boolean);
@@ -739,11 +784,12 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
     expect(m.deliveredLines().filter((line) => line === '/.claude/skills/fe-skill/' || line.startsWith('/.claude/skills/fe-skill/docs'))).toEqual([]);
     expect(m.teamSkillEntries(), pulled.output).toEqual(['?? .claude/skills/fe-skill/docs']);
 
-    // Once the member's entry is gone, the whole skill is delivered and listed as one directory again.
+    // Once the member's entry is gone, the whole skill is delivered, and each of its files listed.
     fs.rmSync(path.join(skill, 'docs'));
     const again = m.ok(['pull']);
     expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
-    expect(m.deliveredLines(), again.output).toContain('/.claude/skills/fe-skill/');
+    expect(m.deliveredLines(), again.output).toContain('/.claude/skills/fe-skill/docs/guide.md');
+    expect(m.deliveredLines()).not.toContain('/.claude/skills/fe-skill/');
     expect(m.teamSkillEntries(), again.output).toEqual([]);
   });
 });

@@ -220,7 +220,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const cursor = path.join(app, '.cursor');
     const appExclude = excludeFileOf(m, app);
     const cursorExclude = excludeFileOf(m, cursor);
-    expect(blockLines(appExclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(appExclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
     expect(owners(cursorExclude)).toEqual([expect.stringMatching(/^delivered\/[0-9a-f]{16}$/)]);
     // Another owner's block in the same file goes too.
     fs.appendFileSync(appExclude, '# [teamai:local-agent:start]\n/.claude/skills/http-skill/\n# [teamai:local-agent:end]\n');
@@ -257,7 +257,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const left = owners(homeExclude);
     expect(left).toHaveLength(1);
     expect(before).toContain(left[0]);
-    expect(blockLines(homeExclude, left[0])).toContain('/.hermes/skills/fe-skill/');
+    expect(blockLines(homeExclude, left[0])).toContain('/.hermes/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   it('uninstall --dry-run lists the blocks by owner and file, and writes nothing', () => {
@@ -303,7 +303,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
 
       expect(read(appExclude)).toBe(content);
       expect(out).toContain(appExclude);
-      expect(out).toContain('/.claude/skills/fe-skill/');
+      expect(out).toContain('/.claude/skills/fe-skill/SKILL.md');
       expect(out).not.toContain(cursorExclude);
       expect(out).toContain('teamai uninstalled');
     } finally {
@@ -321,12 +321,12 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const wt = await m.worktree(main, path.join(root, 'wt'));
     const exclude = excludeFileOf(m, main);
     const codexLines = (): string[] => blockLines(exclude).filter((line) => line.startsWith('/.agents/') || line.startsWith('/.codex/'));
-    expect(codexLines()).toEqual(expect.arrayContaining(['/.agents/skills/fe-skill/', '/.codex/skills/fe-skill/']));
+    expect(codexLines()).toEqual(expect.arrayContaining(['/.agents/skills/fe-skill/SKILL.md', '/.codex/skills/fe-skill/SKILL.md']));
 
     m.teamai(['uninstall', '--agent', 'codex', '--force'], main);
 
     expect(codexLines()).toEqual([]);
-    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
     // The worktree's own Codex copy stays on disk, and is no longer hidden.
     expect(status(m, wt)).toContain('?? .codex/skills/fe-skill/SKILL.md');
     write(path.join(main, '.agents/skills/fe-skill/SKILL.md'), 'mine\n');
@@ -334,13 +334,13 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     // The worktree's list lost them too: its pull does not bring the lines back.
     m.teamai(['pull'], wt);
     expect(codexLines()).toEqual([]);
-    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   // WorkBuddy reads CodeBuddy's `.codebuddy/rules` in a project: one copy, one line, for both.
   it.each([
-    { uninstalled: 'codebuddy', remaining: 'workbuddy', gone: '/.codebuddy/skills/fe-skill/', stays: '/.workbuddy/skills/fe-skill/' },
-    { uninstalled: 'workbuddy', remaining: 'codebuddy', gone: '/.workbuddy/skills/fe-skill/', stays: '/.codebuddy/skills/fe-skill/' },
+    { uninstalled: 'codebuddy', remaining: 'workbuddy', gone: '/.codebuddy/skills/fe-skill/SKILL.md', stays: '/.workbuddy/skills/fe-skill/SKILL.md' },
+    { uninstalled: 'workbuddy', remaining: 'codebuddy', gone: '/.workbuddy/skills/fe-skill/SKILL.md', stays: '/.codebuddy/skills/fe-skill/SKILL.md' },
   ])('uninstall --agent $uninstalled keeps the .codebuddy/rules lines $remaining still reads', ({ uninstalled, gone, stays }) => {
     const m = member(`agent-${uninstalled}`);
     const root = caseDir(`agent-${uninstalled}`);

@@ -103,7 +103,11 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 (`liveCheckoutRecords`), less paths that hold a file outside another live
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
-partition's anchor hash. The docs writer reports each doc file it wrote, never
+partition's anchor hash. Skill writers (team, source, built-in, Codex's
+`.agents/skills`, the local agent) report each file they wrote into a skill,
+never its directory, which the git exclude module refuses to list, so a file
+the member adds inside a delivered skill stays visible; a tracked file there
+gets no line while the skill's other files keep theirs. The docs writer reports each doc file it wrote, never
 an entry of the member's it kept nor a doc beneath one; with the mirror at
 `<root>/.teamai/docs`, outside single-repo mode, the sync also keeps teamai's
 block (`!/docs/**`) in `<root>/.teamai/.ignore` so ripgrep-based search finds
@@ -118,6 +122,17 @@ plugin current, the OpenCode MCP target is `.opencode/teamai-mcp.json` instead
 (teamai's whole, always listed; its records carry `file`), and the pull takes
 teamai's V1 entries out of the root `opencode.json` and `.opencode/opencode.json`
 when they are teamai-only.
+A `.codex/hooks.json` that is not teamai's alone (tracked, or holding a member's
+entry; always in self mode) gets no team hooks while the flag is on: pull takes
+teamai's entries out of it through its hook manifest and records the project's
+Codex team hooks in `~/.teamai/codex-team-hooks.json` (machine-wide, keyed by the
+main checkout, or by the checkout in self mode; locked by
+`codex-team-hooks.json.lock`; a project whose directory is gone is dropped). The
+same pull makes `~/.codex/hooks.json` hold one
+`teamai hook-dispatch <Event> --tool codex --team-hooks` entry per event any
+recorded project has hooks for, with the largest timeout, before the built-ins;
+at run time it resolves the project from the hook's `cwd` and runs that
+project's hooks from the index.
 `state.gitExcludeFiles` records, per owner, the exclude
 files holding its block. A pull nobody watches (session start, git hooks) keeps
 what it could not say about the block in `<dataHome>/git-exclude-notices.json`:

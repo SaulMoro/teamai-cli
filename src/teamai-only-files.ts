@@ -34,6 +34,8 @@ export interface SharedFileJudgement {
   /** Absolute, as teamai writes it. */
   file: string;
   state: TeamaiOnlyState;
+  /** `unknown`: what git said. */
+  error?: string;
 }
 
 /**
@@ -56,10 +58,8 @@ export async function judgeTeamaiOnlyFiles(teamConfig: TeamaiConfig, localConfig
   const judged: SharedFileJudgement[] = [];
   for (const [file, teamaiOnly] of byFile) {
     const tracking = await gitTracks(file);
-    judged.push({
-      file,
-      state: tracking.kind === 'tracked' ? 'tracked' : tracking.kind === 'unknown' ? 'unknown' : teamaiOnly ? 'teamai-only' : 'mixed',
-    });
+    if (tracking.kind === 'unknown') judged.push({ file, state: 'unknown', error: tracking.error });
+    else judged.push({ file, state: tracking.kind === 'tracked' ? 'tracked' : teamaiOnly ? 'teamai-only' : 'mixed' });
   }
   return judged;
 }
@@ -77,10 +77,25 @@ export async function keptOutByMcpExclude(files: readonly string[]): Promise<Set
 
 /** The notice of a listed teamai-only file that now holds something teamai does not own. */
 export async function describeNoLongerTeamaiOnly(file: string, projectRoot: string): Promise<string> {
+  return `${await shownPath(file, projectRoot)} now holds entries teamai does not own, so git can see it.`;
+}
+
+/**
+ * The failure for a shared file git could not say it tracks (`unknown`):
+ * `kept`, its line from the last pull stays; else it has none.
+ */
+export async function describeUnknownTracking(judgement: SharedFileJudgement, projectRoot: string, kept: boolean): Promise<string> {
+  const shown = await shownPath(judgement.file, projectRoot);
+  return `git could not say whether it tracks ${shown}: ${judgement.error ?? 'git failed'}. `
+    + (kept ? 'teamai keeps its git exclude line as the last pull left it. ' : 'teamai cannot tell whether to keep it out of git. ')
+    + 'Fix the repository, then run `teamai pull` again.';
+}
+
+/** `file` from the project root when it is inside it, else its real path. */
+async function shownPath(file: string, projectRoot: string): Promise<string> {
   const [real, root] = await Promise.all([realFilePath(file), realFilePath(projectRoot)]);
   const rel = path.relative(root, real);
-  const shown = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : real;
-  return `${shown} now holds entries teamai does not own, so git can see it.`;
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : real;
 }
 
 /**
