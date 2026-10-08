@@ -103,7 +103,12 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 (`liveCheckoutRecords`), less paths that hold a file outside another live
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
-partition's anchor hash. `state.gitExcludeFiles` records, per owner, the exclude
+partition's anchor hash. The docs writer reports each doc file it wrote, never
+an entry of the member's it kept nor a doc beneath one; with the mirror at
+`<root>/.teamai/docs`, outside single-repo mode, the sync also keeps teamai's
+block (`!/docs/**`) in `<root>/.teamai/.ignore` so ripgrep-based search finds
+the excluded docs, and lists that file while the block is all it holds.
+`state.gitExcludeFiles` records, per owner, the exclude
 files holding its block. A pull nobody watches (session start, git hooks) keeps
 what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
 its last failure to update it (cleared by the next update that succeeds) and

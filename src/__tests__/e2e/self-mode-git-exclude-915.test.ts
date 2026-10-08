@@ -202,6 +202,19 @@ describe('a single-repo team keeps what teamai delivers out of git (#915)', () =
     expect(hasTeamHook(cloned)).toBe(false);
   });
 
+  it('removes the docs search whitelist a project kept before it switched to single-repo mode', () => {
+    const m = member('self-whitelist', { committed: { '.teamai/docs/guide.md': '# Guide\n' } });
+    m.ok(['init', '.', '--provider', 'git', '--agent', 'claude,copilot']);
+    // What the git-mode project's pulls left in its .teamai/ before the switch.
+    writeFile(path.join(m.dir, '.teamai', '.ignore'), '# [teamai:delivered:start]\n!/docs/**\n# [teamai:delivered:end]\n');
+
+    m.ok(['pull']);
+
+    expect(fs.existsSync(path.join(m.dir, '.teamai', '.ignore'))).toBe(false);
+    expect(m.status()).toEqual(MEMBER_STATUS);
+    expect(m.deliveredLines().filter((line) => line.startsWith('/.teamai'))).toEqual([]);
+  });
+
   it('keeps a Copilot hook file the repository tracks visible', () => {
     const m = member('self-tracked', { committed: { [COPILOT_HOOKS]: '{"version":1,"hooks":{}}\n' } });
 

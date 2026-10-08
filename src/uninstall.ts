@@ -147,6 +147,8 @@ interface RemovalPlan {
   docsDir: string | null;
   /** The team clone, whose history proves a doc in `docsDir` teamai's (#993). */
   teamRepoPath: string;
+  /** Each checkout's `.teamai/.ignore` holding teamai's docs search whitelist (#915). */
+  docsSearchWhitelists: string[];
   /** The .git/info/exclude files holding teamai's MCP config block (#882), each with its patterns and the paths each protects. */
   gitExcludes: Map<string, Array<{ pattern: string; files: string[] }>>;
   /** The exclude files teamai's blocks for this project are in (#915): its `delivered` records, the project's own, the MCP ones. */
@@ -977,6 +979,7 @@ async function buildRemovalPlan(
     gitExcludes: new Map(),
     gitExcludeFiles: [],
     gitExcludeBlocks: [],
+    docsSearchWhitelists: [],
     othersGitExcludeBlock: () => true,
     checkouts: [],
     gitHook: null,
@@ -1140,6 +1143,11 @@ async function buildRemovalPlan(
       }
       plan.gitExcludes = await findMcpGitExcludes(dirs);
       await planGitExcludeBlocks(plan, localConfig);
+      const { removeDocsSearchWhitelist } = await import('./resources/docs.js');
+      for (const checkout of plan.checkouts) {
+        const whitelist = await removeDocsSearchWhitelist(checkout, { dryRun: true });
+        if (whitelist.removed) plan.docsSearchWhitelists.push(whitelist.file);
+      }
       // (h) teamai's git hook, in the config every worktree shares.
       if (localConfig.projectRoot) {
         const { removeGitHook } = await import('./git-hook.js');
@@ -1171,6 +1179,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.mcpServers.length === 0 &&
     plan.shellProfiles.length === 0 &&
     plan.docsDir === null &&
+    plan.docsSearchWhitelists.length === 0 &&
     plan.gitExcludes.size === 0 &&
     plan.gitExcludeBlocks.length === 0 &&
     plan.gitHook === null &&
@@ -1296,6 +1305,12 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   if (plan.docsDir) {
     console.log('   Docs directory:');
     console.log(`     ${plan.docsDir}`);
+    console.log('');
+  }
+
+  if (plan.docsSearchWhitelists.length > 0) {
+    console.log('   Docs search whitelist (teamai\'s block):');
+    for (const file of plan.docsSearchWhitelists) console.log(`     ${file}`);
     console.log('');
   }
 
@@ -1793,6 +1808,16 @@ async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): 
     } catch (e) {
       docsKept = true;
       log.warn(`Failed to remove docs: ${(e as Error).message}`);
+    }
+  }
+
+  // (f1) teamai's docs search whitelist in each checkout's .teamai/.ignore (#915).
+  if (plan.docsSearchWhitelists.length > 0) {
+    const { removeDocsSearchWhitelist } = await import('./resources/docs.js');
+    for (const file of plan.docsSearchWhitelists) {
+      const { removed, failure } = await removeDocsSearchWhitelist(path.dirname(path.dirname(file)));
+      if (failure) log.warn(failure);
+      else if (removed) log.success(`Removed teamai's docs search whitelist from ${file}`);
     }
   }
 
