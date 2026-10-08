@@ -524,6 +524,7 @@ every checkout, so that is where they live now:
 │                                              manifest share ownership so removal keeps the shared entries until the last checkout removes them (#373)
 │                                              registration is per tool; targeted uninstall releases only that tool and keeps the remaining tools' records
 │                                              discovery respects enabledAgents/disabledAgents; excluded tools do not retain another checkout's shared hook
+│                                              a shared partition config registers its linked worktrees even without checkout-local configs or prior hook injection
 │                                              removing a legacy Codex copy shifts surviving checkout records only after matching their full entry at the old position
 │                                              uninstall of a shared partition removes the selected tool's hooks and registrations for that whole installation before deleting its authority
 │                                              the synthetic main-checkout manifest and empty .teamai directory go only after the last hook record is removed

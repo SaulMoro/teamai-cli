@@ -361,6 +361,29 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     for (const file of mainFiles(worktrees[1])) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
   });
 
+  it.each([false, true])('retains shared partition hooks for an uninjected linked worktree with legacy tracking = %s', async (legacyTracking) => {
+    const partition = path.join(home, '.teamai', 'projects', projectSlug(fs.realpathSync(projectA)));
+    fs.mkdirSync(path.dirname(partition), { recursive: true });
+    fs.renameSync(path.join(projectA, '.teamai'), partition);
+    const configFile = path.join(partition, 'config.yaml');
+    fs.writeFileSync(configFile, fs.readFileSync(configFile, 'utf8')
+      .replace(path.join(projectA, '.teamai', 'team-repo'), path.join(partition, 'team-repo')));
+    expect(fs.existsSync(path.join(worktreeA, '.teamai', 'config.yaml'))).toBe(false);
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
+    if (legacyTracking) {
+      const manifestFile = path.join(partition, 'managed-main-checkout-hooks.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      delete manifest.checkouts;
+      fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    }
+    for (const [checkout, left] of [[projectA, 1], [worktreeA, 0]] as const) {
+      const removed = await runCLI(checkout, home, ['hooks', 'remove']);
+      expect(removed.code, removed.output).toBe(0);
+      for (const file of mainFiles(projectA)) expect(readSettings(file).hooks.Stop ?? [], checkout).toHaveLength(left);
+    }
+  });
+
   it.each([
     { caller: 'main', targeted: false }, { caller: 'linked', targeted: false },
     { caller: 'main', targeted: true }, { caller: 'linked', targeted: true },

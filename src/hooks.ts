@@ -635,10 +635,17 @@ async function discoverInstalledCheckouts(root: string, tool: string): Promise<s
   const canonicalRoot = canonicalProjectRoot(root);
   const { detectProjectConfig, readConfigFrom } = await import('./config.js');
   const mainConfig = await pathExists(root) ? await detectProjectConfig(root, undefined, { dryRun: true }).catch(() => null) : null;
+  const sharedPartition = mainConfig
+    && path.resolve(getDataHome(mainConfig)) !== path.resolve(getTeamaiHome('project', canonicalRoot));
   if (mainConfig && !isAgentExcluded(mainConfig, tool)) result.push(canonicalRoot);
   for (const worktree of await listWorktrees(root)) {
     const canonical = canonicalProjectRoot(worktree);
     if (canonical === canonicalRoot) continue;
+    // A partition config governs every linked worktree, without local configs.
+    if (sharedPartition) {
+      if (!isAgentExcluded(mainConfig, tool)) result.push(canonical);
+      continue;
+    }
     const home = getTeamaiHome('project', worktree);
     if (await pathExists(path.join(home, 'config.yaml'))) {
       const config = await readConfigFrom(home, worktree);
