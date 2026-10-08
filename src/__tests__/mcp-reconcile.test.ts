@@ -1060,6 +1060,28 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.mcp\.json$/m);
     });
 
+    it('never lets a tool whose MCP path links to another tool\'s file adopt the server that tool\'s record claims', async () => {
+      const shared = { ...teamConfig, toolPaths: TOOL_PATHS } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.cursor', 'skills'));
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), {});
+      await fse.symlink('../.mcp.json', path.join(projectRoot, '.cursor', 'mcp.json'));
+      await writeMcpYaml('servers:\n  - name: x\n    transport: http\n    url: https://example.com/x\n    tools: [claude, cursor]\n');
+      await reconcileMcpForConfig(shared, projectConfig);
+      const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+      const manifestFile = managedMcpManifestPath(getDataHome(projectConfig), projectRoot);
+      const manifest = await fse.readJson(manifestFile) as Record<string, Array<{ name: string }>>;
+      expect(manifest['claude:project'].map((r) => r.name)).toEqual(['x']);
+      // Cursor's record is lost: the x in the file it reads through the link is Claude's.
+      delete manifest['cursor:project'];
+      await fse.writeJson(manifestFile, manifest);
+
+      await reconcileMcpForConfig(shared, projectConfig);
+
+      const after = await fse.readJson(manifestFile) as Record<string, Array<{ name: string }> | undefined>;
+      expect((after['cursor:project'] ?? []).map((r) => r.name)).not.toContain('x');
+      expect(Object.keys((await fse.readJson(path.join(projectRoot, '.mcp.json')) as { mcpServers: object }).mcpServers)).toEqual(['x']);
+    });
+
     it('never lets one format\'s record claim a server of the same name under another format\'s key', async () => {
       const toolPaths = {
         ...UNMOVED_TOOL_PATHS,
