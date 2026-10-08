@@ -2044,6 +2044,7 @@ async function removeConfirmed(
     // Exclusion is a config write even when there are no local files to delete.
     await dropToolGitExcludePaths(localConfig, teamConfig, agentKey!);
     await excludeUninstalledAgent(localConfig, agentKey!);
+    if (agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
     log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
     return;
   }
@@ -2140,13 +2141,7 @@ async function removeConfirmed(
   const { pendingOpencode, hooksLeft } = await executeRemoval(plan, heldMcp);
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0;
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
-  if (!agentKey || agentKey === 'codex') {
-    try {
-      await stopCodexTeamHookDispatch(teamConfig, localConfig);
-    } catch (e) {
-      log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
-    }
-  }
+  if (!agentKey || agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
   if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
@@ -2186,6 +2181,15 @@ async function removeConfirmed(
     process.exitCode = 1;
   } else {
     log.success('teamai uninstalled');
+  }
+}
+
+/** Stop the project's Codex team hooks that run from the dispatcher in ~/.codex/hooks.json (#915). */
+async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  try {
+    await stopCodexTeamHookDispatch(teamConfig, localConfig);
+  } catch (e) {
+    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
   }
 }
 
