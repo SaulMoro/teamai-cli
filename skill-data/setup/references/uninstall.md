@@ -60,6 +60,10 @@ and give it your team repo URL."*
 
 ## Notes
 
+- Project uninstall keeps the shared Claude/Codex team hooks in the main checkout
+  while another checkout uses them. A targeted uninstall releases only the selected
+  tool. When the main checkout has no install, the shared manifest and its empty
+  `.teamai` directory are removed after the last team hook is removed.
 - For OpenCode, uninstall also removes the rules globs teamai added to
   `instructions` in `opencode.json`, including the relative `rules/*.md` an
   earlier release wrote in user scope. In a project it removes

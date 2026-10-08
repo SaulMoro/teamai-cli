@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +40,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     path.join(project, '.codex', 'hooks.json'),
   ];
 
-  beforeAll(() => {
+  beforeEach(() => {
     if (!fs.existsSync(CLI)) throw new Error('Run npm run build before e2e tests');
     sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-373-e2e-'));
     home = path.join(sandbox, 'home');
@@ -89,14 +89,16 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: projectA, env: gitEnv });
     execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'fixture'], { cwd: projectA, env: gitEnv });
     execFileSync('git', ['worktree', 'add', '-q', '-b', 'worktree-a', worktreeA], { cwd: projectA, env: gitEnv });
-    // Both legacy configs point at the same team repo; git resolves their main checkout.
+  });
+
+  const installWorktreeConfig = (): void => {
     fs.mkdirSync(path.join(worktreeA, '.teamai'), { recursive: true });
     fs.writeFileSync(path.join(worktreeA, '.teamai', 'config.yaml'),
       fs.readFileSync(path.join(projectA, '.teamai', 'config.yaml'), 'utf8')
         .replace(`projectRoot: ${projectA}`, `projectRoot: ${worktreeA}`));
-  });
+  };
 
-  afterAll(() => { if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true }); });
+  afterEach(() => { if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true }); });
 
   it('injects both projects, gates execution by cwd, and removes only the caller project', async () => {
     const a = await runCLI(projectA, home);
@@ -146,6 +148,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
   });
 
   it('shares one ungated Claude/Codex team-hook file in the main checkout with a linked worktree', async () => {
+    installWorktreeConfig();
     const main = await runCLI(projectA, home);
     expect(main.code, main.output).toBe(0);
     const before = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
@@ -186,6 +189,9 @@ describe('issue #373 project hook isolation (real CLI)', () => {
   };
 
   it('removes the duplicate team hooks an older CLI appended from a linked worktree', async () => {
+    installWorktreeConfig();
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
     const single = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
     seedOlderWorktreeInstall();
 
@@ -198,6 +204,9 @@ describe('issue #373 project hook isolation (real CLI)', () => {
   });
 
   it('keeps one main checkout team hook when a linked worktree with an older install removes its own', async () => {
+    installWorktreeConfig();
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
     const single = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
     for (const args of [['hooks', 'remove'], ['uninstall', '--force']]) {
       seedOlderWorktreeInstall();
@@ -205,6 +214,60 @@ describe('issue #373 project hook isolation (real CLI)', () => {
       expect(removed.code, removed.output).toBe(0);
       expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8')), args.join(' ')).toEqual(single);
     }
+  });
+
+  it.each([['hooks', 'remove'], ['uninstall', '--force']])(
+    'main checkout %s releases its duplicated hooks and preserves the worktree copy',
+    async (...args) => {
+      installWorktreeConfig();
+      const injected = await runCLI(projectA, home);
+      expect(injected.code, injected.output).toBe(0);
+      const single = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
+      seedOlderWorktreeInstall();
+      const removed = await runCLI(projectA, home, args);
+      expect(removed.code, removed.output).toBe(0);
+      expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'))).toEqual(single);
+    },
+  );
+
+  it.each(['main', 'worktree'])('keeps the shared hook after main reinjects an older duplicated install, then %s removes', async (checkout) => {
+    installWorktreeConfig();
+    const injected = await runCLI(projectA, home);
+    expect(injected.code, injected.output).toBe(0);
+    seedOlderWorktreeInstall();
+    const reinjected = await runCLI(projectA, home);
+    expect(reinjected.code, reinjected.output).toBe(0);
+    const removed = await runCLI(checkout === 'main' ? projectA : worktreeA, home, ['hooks', 'remove']);
+    expect(removed.code, removed.output).toBe(0);
+    for (const file of mainFiles(projectA)) expect(readSettings(file).hooks.Stop).toHaveLength(1);
+  });
+
+  it.each([[true, false], [true, true], [false, false]])('targeted Claude uninstall preserves Codex ownership with main = %s and legacy tracking = %s', async (mainInstalled, legacyTracking) => {
+    installWorktreeConfig();
+    if (mainInstalled) {
+      const injected = await runCLI(projectA, home);
+      expect(injected.code, injected.output).toBe(0);
+    } else {
+      fs.rmSync(path.join(projectA, '.teamai', 'config.yaml'));
+    }
+    const injected = await runCLI(worktreeA, home);
+    expect(injected.code, injected.output).toBe(0);
+    const manifestFile = path.join(projectA, '.teamai', 'managed-main-checkout-hooks.json');
+    if (legacyTracking) {
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      manifest.checkouts = manifest.checkouts.codex;
+      fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    }
+    const removed = await runCLI(worktreeA, home, ['uninstall', '--agent', 'claude', '--force']);
+    expect(removed.code, removed.output).toBe(0);
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    expect(manifest.checkouts.codex).toContain(fs.realpathSync(worktreeA));
+    expect(manifest.codex).toHaveLength(1);
+    if (mainInstalled) {
+      const removedMain = await runCLI(projectA, home, ['hooks', 'remove']);
+      expect(removedMain.code, removedMain.output).toBe(0);
+    }
+    expect(readSettings(mainFiles(projectA)[1]).hooks.Stop).toHaveLength(1);
   });
 
   it('shares one main checkout team hook between two worktree installs when the main checkout has none', async () => {

@@ -2708,12 +2708,30 @@ describe('uninstall', () => {
     for (const manifest of manifests) expect(manifest).toMatch(/workspaces[/\\][a-f0-9]+[/\\]managed-main-checkout-hooks\.json$/);
   });
 
+  async function useRealMainHooks(mainDir: string): Promise<void> {
+    const actual = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actual.reconcileHooks);
+    const manifestPath = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    const manifest = await fse.readJson(manifestPath);
+    for (const tool of ['claude', 'codex']) {
+      if (!manifest[tool]?.length) continue;
+      const record = manifest[tool][0];
+      const entry = { matcher: '*', hooks: [{ type: 'command', command: record.command }],
+        ...(tool === 'claude' ? { description: `[teamai:hook:${record.id}] lint` } : {}),
+      };
+      const file = path.join(mainDir, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+      await fse.outputJson(file, { hooks: { Stop: [entry] } });
+      if (tool === 'codex') Object.assign(record, { codexEntryIndex: 0, codexEntry: entry });
+    }
+    await fse.writeJson(manifestPath, manifest);
+  }
+
   it('cleans up synthetic main checkout hooks manifest and empty .teamai when the last worktree uninstalls', async () => {
     const mainDir = path.join(tmpDir, 'repo-main');
     const worktreeDir = path.join(tmpDir, 'repo-wt');
     await fse.ensureDir(mainDir);
     execFileSync('git', ['init', mainDir]);
-    execFileSync('git', ['-C', mainDir, 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init']);
     execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
 
     const homeDir = path.join(tmpDir, 'home');
@@ -2726,10 +2744,12 @@ describe('uninstall', () => {
       claude: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
     });
 
+    await useRealMainHooks(mainDir);
+
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/bash');
     const localConfig = makeLocalConfig(worktreeDir, repoPath, { scope: 'project', projectRoot: worktreeDir });
-    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { ...makeTeamConfig().toolPaths, codex: { settings: '.codex/hooks.json' } } }) });
 
     await uninstall({ force: true });
 
@@ -2738,12 +2758,12 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(worktreeDir, '.teamai'))).toBe(false);
   });
 
-  it('preserves shared main checkout manifest when main checkout uninstalls while a worktree remains', async () => {
+  it.each([false, true])('main uninstall preserves worktree ownership when the shared hook file was deleted = %s', async (fileDeleted) => {
     const mainDir = path.join(tmpDir, 'repo-main-preserve');
     const worktreeDir = path.join(tmpDir, 'repo-wt-preserve');
     await fse.ensureDir(mainDir);
     execFileSync('git', ['init', mainDir]);
-    execFileSync('git', ['-C', mainDir, 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init']);
     execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
 
     const homeDir = path.join(tmpDir, 'home');
@@ -2764,10 +2784,13 @@ describe('uninstall', () => {
       hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'npm run lint' }] }] },
     });
 
+    await useRealMainHooks(mainDir);
+    if (fileDeleted) await fse.remove(mainClaudeSettings);
+
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/bash');
     const localConfig = makeLocalConfig(mainDir, repoPath, { scope: 'project', projectRoot: mainDir });
-    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { ...makeTeamConfig().toolPaths, codex: { settings: '.codex/hooks.json' } } }) });
 
     await uninstall({ force: true });
 
@@ -2777,11 +2800,128 @@ describe('uninstall', () => {
     expect(await fse.pathExists(sharedManifest)).toBe(true);
     const manifest = await fse.readJson(sharedManifest);
     expect(manifest.checkouts.claude).toEqual([realWt]);
-    // mockReconcileHooks was not called with removeAll on the shared main checkout hooks
-    const removedShared = mockReconcileHooks.mock.calls.some(
-      (c) => String(c[0]).includes('settings.local.json') && c[3]?.manifestPath === sharedManifest
-    );
-    expect(removedShared).toBe(false);
+    if (!fileDeleted) expect((await fse.readJson(mainClaudeSettings)).hooks.Stop).toHaveLength(1);
+  });
+
+  it('uninstall --agent claude with main and worktree installs preserves worktree Codex registration in shared manifest', async () => {
+    const mainDir = path.join(tmpDir, 'repo-main-agent-filter');
+    const worktreeDir = path.join(tmpDir, 'repo-wt-agent-filter');
+    await fse.ensureDir(mainDir);
+    execFileSync('git', ['init', mainDir]);
+    execFileSync('git', ['-C', mainDir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
+
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(worktreeDir, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(mainDir, '.teamai', 'config.yaml'), 'scope: project');
+    await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+    const realMain = await fse.realpath(mainDir);
+    const realWt = await fse.realpath(worktreeDir);
+    const sharedManifest = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(sharedManifest, {
+      checkouts: {
+        claude: [realMain, realWt],
+        codex: [realMain, realWt],
+      },
+      claude: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+      codex: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+
+    await useRealMainHooks(mainDir);
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const localConfig = makeLocalConfig(worktreeDir, repoPath, { scope: 'project', projectRoot: worktreeDir });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { ...makeTeamConfig().toolPaths, codex: { settings: '.codex/hooks.json' } } }) });
+
+    await uninstall({ force: true, agent: 'claude' });
+
+    const manifest = await fse.readJson(sharedManifest);
+    expect(manifest.checkouts.claude).toEqual([realMain]);
+    expect(manifest.checkouts.codex).toEqual([realMain, realWt]);
+  });
+
+  it('uninstall --agent claude with no main install preserves synthetic manifest when Codex remains', async () => {
+    const mainDir = path.join(tmpDir, 'repo-main-agent-filter-synth');
+    const worktreeDir = path.join(tmpDir, 'repo-wt-agent-filter-synth');
+    await fse.ensureDir(mainDir);
+    execFileSync('git', ['init', mainDir]);
+    execFileSync('git', ['-C', mainDir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
+
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(worktreeDir, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+    const realWt = await fse.realpath(worktreeDir);
+    const syntheticManifest = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(syntheticManifest, {
+      checkouts: {
+        claude: [realWt],
+        codex: [realWt],
+      },
+      claude: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+      codex: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+
+    await useRealMainHooks(mainDir);
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const localConfig = makeLocalConfig(worktreeDir, repoPath, { scope: 'project', projectRoot: worktreeDir });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { ...makeTeamConfig().toolPaths, codex: { settings: '.codex/hooks.json' } } }) });
+
+    await uninstall({ force: true, agent: 'claude' });
+
+    expect(await fse.pathExists(syntheticManifest)).toBe(true);
+    const manifest = await fse.readJson(syntheticManifest);
+    expect(manifest.codex).toBeDefined();
+    expect(manifest.checkouts.codex).toEqual([realWt]);
+  });
+
+  it.each(['claude', 'codex'])('uninstall from main releases one duplicated %s hook and preserves the worktree copy', async (tool) => {
+    const mainDir = path.join(tmpDir, 'repo-main-v022-uninst');
+    const worktreeDir = path.join(tmpDir, 'repo-wt-v022-uninst');
+    await fse.ensureDir(mainDir);
+    execFileSync('git', ['init', mainDir]);
+    execFileSync('git', ['-C', mainDir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', mainDir, 'worktree', 'add', worktreeDir]);
+
+    const homeDir = path.join(tmpDir, 'home');
+    const repoPath = path.join(mainDir, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.outputFile(path.join(mainDir, '.teamai', 'config.yaml'), 'scope: project');
+    await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+    const sharedManifest = path.join(mainDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(sharedManifest, {
+      [tool]: [{ id: 'lint', event: 'Stop', command: 'npm run lint' }],
+    });
+    await useRealMainHooks(mainDir);
+    const manifest = await fse.readJson(sharedManifest);
+    const wtManifest = path.join(worktreeDir, '.teamai', 'managed-main-checkout-hooks.json');
+    await fse.outputJson(wtManifest, {
+      [tool]: manifest[tool].map((record: Record<string, unknown>) => ({ ...record,
+        ...(tool === 'codex' ? { codexEntryIndex: 1 } : {}),
+      })),
+    });
+    const mainSettings = path.join(mainDir, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+    const settings = await fse.readJson(mainSettings);
+    const [entry] = settings.hooks.Stop;
+    settings.hooks.Stop.push(entry);
+    await fse.writeJson(mainSettings, settings);
+
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/bash');
+    const localConfig = makeLocalConfig(mainDir, repoPath, { scope: 'project', projectRoot: mainDir });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { ...makeTeamConfig().toolPaths, codex: { settings: '.codex/hooks.json' } } }) });
+
+    await uninstall({ force: true });
+
+    expect((await fse.readJson(mainSettings)).hooks.Stop).toEqual([entry]);
   });
 
   // #667: hook discovery must resolve the settings *file* at the scope hooks

@@ -895,6 +895,35 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
 
     expect((await fse.readJson(file)).hooks.Stop).toEqual([entry]);
   });
+
+  it.each(['claude', 'codex'])('removeAll from main in v0.22 duplicated state releases main entry and preserves worktree entry for %s', async (tool) => {
+    const worktreeDir = await fse.mkdtemp(path.join(os.tmpdir(), 'wt-duplicated-'));
+    vi.mocked(listWorktrees).mockResolvedValue([project, worktreeDir]);
+
+    try {
+      await writeYaml(STOP_LINT);
+      await reconcileTeamHooksForConfig(teamConfig, localConfig());
+      const file = path.join(project, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+      const json = await fse.readJson(file);
+      const [entry] = json.hooks.Stop;
+      json.hooks.Stop.push(entry);
+      await fse.writeJson(file, json);
+
+      // Simulate worktree having its own manifest from older install
+      const wtManifestPath = path.join(worktreeDir, '.teamai', 'managed-main-checkout-hooks.json');
+      await fse.outputJson(wtManifestPath, {
+        [tool]: [{ id: 'lint', event: 'Stop', command: entry.hooks ? entry.hooks[0].command : entry.command }],
+      });
+      await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+      await reconcileTeamHooksForConfig(teamConfig, localConfig(), { removeAll: true });
+
+      // One duplicated entry was released, one remains for the worktree
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([entry]);
+    } finally {
+      await fse.remove(worktreeDir);
+    }
+  });
 });
 
 describe('reconcileTeamHooksForConfig — legacy projectRoot sweep', () => {

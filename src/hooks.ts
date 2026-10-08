@@ -317,6 +317,8 @@ export interface ReconcileHooksOptions {
    * when the manifest records them; a matching command alone is not ownership.
    */
   teamOnly?: boolean;
+  /** Shared main-checkout ownership to reconcile before changing this file. */
+  mainCheckout?: MainCheckoutHooks;
 }
 
 /** One injected team hook recorded in the manifest. */
@@ -364,39 +366,34 @@ export function getToolCheckouts(manifest: SharedHooksManifest, tool: string): s
 }
 
 export function setToolCheckouts(manifest: SharedHooksManifest, tool: string, checkouts: string[]): void {
-  if (!manifest.checkouts || Array.isArray(manifest.checkouts)) {
+  if (Array.isArray(manifest.checkouts)) {
+    const checkouts = manifest.checkouts;
+    manifest.checkouts = Object.fromEntries(MAIN_CHECKOUT_TEAM_HOOK_TOOLS.map((tool) => [tool, [...checkouts]]));
+  } else if (!manifest.checkouts) {
     manifest.checkouts = {};
   }
   (manifest.checkouts as Record<string, string[]>)[tool] = checkouts;
 }
 
-export async function unregisterCheckoutFromSharedManifest(manifestPath: string, checkout: string): Promise<void> {
-  const expanded = expandHome(manifestPath);
-  if (!await pathExists(expanded)) return;
-  const manifest = await readJson<SharedHooksManifest>(expanded);
+/** Release registration even when the checkout's hook file was already deleted. */
+export async function unregisterCheckoutFromSharedManifest(
+  manifestPath: string,
+  checkout: string,
+  tools: readonly string[],
+): Promise<void> {
+  const manifest = await readJson<SharedHooksManifest>(expandHome(manifestPath));
   if (!manifest) return;
-  let changed = false;
   const canonical = canonicalProjectRoot(checkout);
-  if (Array.isArray(manifest.checkouts)) {
-    const filtered = manifest.checkouts.filter((c) => canonicalProjectRoot(c) !== canonical);
-    if (filtered.length !== manifest.checkouts.length) {
-      manifest.checkouts = filtered;
-      changed = true;
-    }
-  } else if (manifest.checkouts && typeof manifest.checkouts === 'object') {
-    for (const [tool, list] of Object.entries(manifest.checkouts as Record<string, string[]>)) {
-      if (Array.isArray(list)) {
-        const filtered = list.filter((c) => canonicalProjectRoot(c) !== canonical);
-        if (filtered.length !== list.length) {
-          (manifest.checkouts as Record<string, string[]>)[tool] = filtered;
-          changed = true;
-        }
-      }
-    }
+  let changed = false;
+  for (const tool of MAIN_CHECKOUT_TEAM_HOOK_TOOLS) {
+    if (!tools.includes(tool)) continue;
+    const registered = getToolCheckouts(manifest, tool);
+    const remaining = registered.filter((root) => canonicalProjectRoot(root) !== canonical);
+    if (remaining.length === registered.length) continue;
+    setToolCheckouts(manifest, tool, remaining);
+    changed = true;
   }
-  if (changed) {
-    await writeJson(expanded, manifest);
-  }
+  if (changed) await writeJson(expandHome(manifestPath), manifest);
 }
 
 /** Team hooks to record in the manifest for a tool (empty when removing). */
@@ -616,6 +613,18 @@ async function otherWorktreeInstalled(root: string, current: string): Promise<bo
     const canonical = canonicalProjectRoot(worktree);
     if (canonical === canonicalRoot || canonical === canonicalCurrent) continue;
     if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) return true;
+  }
+  return false;
+}
+
+async function otherWorktreeHasOwnManifest(root: string, current: string, tool: string): Promise<boolean> {
+  const canonicalCurrent = canonicalProjectRoot(current);
+  const canonicalRoot = canonicalProjectRoot(root);
+  for (const worktree of await listWorktrees(root)) {
+    const canonical = canonicalProjectRoot(worktree);
+    if (canonical === canonicalRoot || canonical === canonicalCurrent) continue;
+    const manifest = await readManifest(path.join(getTeamaiHome('project', worktree), 'managed-main-checkout-hooks.json'));
+    if (manifest[tool]?.length) return true;
   }
   return false;
 }
@@ -1504,6 +1513,18 @@ export async function reconcileHooks(
   teamDefs: HookDef[] = [],
   opts: ReconcileHooksOptions = {},
 ): Promise<void> {
+  if (opts.mainCheckout) {
+    const target = opts.mainCheckout;
+    return reconcileMainCheckoutTeamHooks(settingsPath, tool, teamDefs, {
+      manifestPath: target.manifestPath,
+      legacyManifestPath: getManagedHooksPath('project', target.root),
+      checkoutManifestPath: target.checkoutManifestPath,
+      sharedWithOtherInstall: target.sharedWithOtherInstall,
+      current: target.current,
+      root: target.root,
+      removeAll: opts.removeAll,
+    });
+  }
   const teamActive = !!opts.manifestPath;
   const manifest = opts.manifestPath ? await readManifest(opts.manifestPath) : null;
   // Pre-#370 Codex hooks used this same file. Persist their authority in the
@@ -2203,7 +2224,8 @@ async function reconcileMainCheckoutTeamHooks(
     let othersUsingHook = false;
     if (canonicalCurrent && canonicalRoot) {
       let checkouts = getToolCheckouts(manifest, tool);
-      if (checkouts.length === 0 && manifest[tool]) {
+      const tracked = Array.isArray(manifest.checkouts) || Object.hasOwn(manifest.checkouts ?? {}, tool);
+      if (!tracked && manifest[tool]) {
         checkouts = await discoverInstalledCheckouts(canonicalRoot);
       }
       const liveWorktrees = new Set((await listWorktrees(canonicalRoot)).map(canonicalProjectRoot));
@@ -2219,9 +2241,14 @@ async function reconcileMainCheckoutTeamHooks(
     }
 
     if (othersUsingHook) {
+      const otherHasOwnManifest = canonicalRoot
+        ? await otherWorktreeHasOwnManifest(canonicalRoot, canonicalCurrent ?? canonicalRoot, tool)
+        : false;
       await writeJson(expandHome(opts.manifestPath), manifest);
       if (checkoutManifestPath) {
         await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
+      } else if (otherHasOwnManifest) {
+        await reconcileHooks(file, tool, teamDefs, { manifestPath: opts.manifestPath, removeAll: true, teamOnly: true });
       }
       return;
     }
@@ -2235,17 +2262,29 @@ async function reconcileMainCheckoutTeamHooks(
     }
   }
 
-  // Adopt this checkout's old records before reconciling, as reconcileHooks
-  // does for legacyManifestPath, and retire them only once that succeeded.
-  const checkout = checkoutManifestPath ? await readManifest(checkoutManifestPath) : null;
-  if (checkout?.[tool]?.length) {
-    manifest[tool] = [...((manifest[tool] as ManagedHookRecord[]) ?? []), ...checkout[tool]];
-    await writeJson(expandHome(opts.manifestPath), manifest);
+  // Injection consolidates every checkout's old ownership before deduplicating.
+  // Leaving one old record behind would let a later removal take the shared copy.
+  // Direct removal still consumes only this checkout's records.
+  const checkoutPaths = new Set(checkoutManifestPath ? [checkoutManifestPath] : []);
+  if (!opts.removeAll && canonicalRoot) {
+    for (const worktree of await listWorktrees(canonicalRoot)) {
+      if (canonicalProjectRoot(worktree) === canonicalRoot) continue;
+      checkoutPaths.add(path.join(getTeamaiHome('project', worktree), 'managed-main-checkout-hooks.json'));
+    }
   }
+  checkoutPaths.delete(opts.manifestPath);
+  const adopted: Array<{ path: string; manifest: ManagedHooksManifest }> = [];
+  for (const checkoutPath of checkoutPaths) {
+    const checkout = await readManifest(checkoutPath);
+    if (!checkout[tool]?.length) continue;
+    manifest[tool] = [...((manifest[tool] as ManagedHookRecord[]) ?? []), ...checkout[tool]];
+    adopted.push({ path: checkoutPath, manifest: checkout });
+  }
+  if (adopted.length > 0) await writeJson(expandHome(opts.manifestPath), manifest);
   await reconcileHooks(file, tool, teamDefs, { ...reconcileOpts, teamOnly: true });
-  if (checkout?.[tool]?.length && checkoutManifestPath) {
-    delete checkout[tool];
-    await writeJson(expandHome(checkoutManifestPath), checkout);
+  for (const checkout of adopted) {
+    delete checkout.manifest[tool];
+    await writeJson(expandHome(checkout.path), checkout.manifest);
   }
 
   if (!opts.removeAll && canonicalCurrent) {
