@@ -2556,7 +2556,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(acks.map((ack) => ack.status)).toEqual(['success', 'success']);
     expect(ignored(app, '.claude/skills/http-skill/SKILL.md')).toBe(true);
     expect(ignored(app, '.claude/rules/http-rule.md')).toBe(true);
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
     expect(git(['status', '--porcelain', '-uall', '--', '.claude'], app)).toBe('?? .claude/rules/mine.md\n');
     expect(await fse.readJson(path.join(tmpDir, '.teamai', 'local-agent', 'git-exclude.json')))
       .toEqual({ 'local-agent': [path.join(app, '.git', 'info', 'exclude')] });
@@ -2642,7 +2642,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
 
     await run([skill(1, 'main-skill', app), rule(2, 'wt-rule', worktree), rule(3, 'other-rule', other)], app);
 
-    expect(blockOf(app)).toEqual(['/.claude/rules/wt-rule.md', '/.claude/skills/main-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/wt-rule.md', '/.claude/skills/main-skill/SKILL.md']);
     expect(ignored(worktree, '.claude/rules/wt-rule.md')).toBe(true);
     expect(blockOf(other)).toEqual(['/.claude/rules/other-rule.md']);
 
@@ -2651,7 +2651,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     git(['worktree', 'prune'], app);
     await run([rule(4, 'other-rule', other, '2.0.0')], other);
 
-    expect(blockOf(app)).toEqual(['/.claude/skills/main-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/skills/main-skill/SKILL.md']);
     expect(blockOf(other)).toEqual(['/.claude/rules/other-rule.md']);
   });
 
@@ -2659,7 +2659,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     await flag(true);
     const app = await repo('app');
     await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
     // The skill's cache cannot be deleted, so its uninstall fails.
     const workspaces = path.join(app, '.teamai', 'workspaces');
     const [id] = fs.readdirSync(workspaces);
@@ -2681,7 +2681,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     await flag(true);
     const app = await repo('app');
     await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
 
     await flag(false);
     await run([], app, 'claude', 'prompt_submit');
@@ -2689,7 +2689,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
 
     await flag(true);
     await run([], app, 'claude', 'prompt_submit');
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
 
     // Nothing changed since: the run does not look at the exclude file.
     const exclude = path.join(app, '.git', 'info', 'exclude');
@@ -2703,7 +2703,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     await flag(true);
     const app = await repo('app');
     await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
     // The workspace now follows a git-mode config with no override, whose team clone has no teamai.yaml.
     const clone = path.join(tmpDir, '.teamai', 'team-repo');
     await fse.ensureDir(clone);
@@ -2714,7 +2714,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
 
     await run([], app, 'claude', 'prompt_submit');
 
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
     const { localAgentGitExcludeNotices, readGitExcludeNotices } = await import('../git-exclude-notices.js');
     expect((await readGitExcludeNotices(localAgentGitExcludeNotices())).lastFailure?.message).toBe(
       `teamai could not read sharing.gitExclude from the team's teamai.yaml (${path.join(clone, 'teamai.yaml')}), `
@@ -2731,6 +2731,6 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
       + `Fix or restore teamai.yaml in the team repository, or set \`gitExcludeEnabled\` in ${path.join(tmpDir, '.teamai', 'config.yaml')}.`,
     );
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'other-rule.md'))).toBe(false);
-    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md']);
   });
 });
