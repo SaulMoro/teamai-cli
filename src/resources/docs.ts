@@ -7,7 +7,6 @@ import { expandHome, listDirs, pruneEmptyDirs } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
-import { isPastVersionOf } from '../utils/git.js';
 import { describeKeptEntry, describeMembersDirLeft, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
 import { blobIdOf, historicalVersions, type HistoricalVersion } from '../utils/team-history.js';
 
@@ -443,9 +442,12 @@ async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: st
       if (await passesThroughLink(localDocsDir, path.join(dir, file))) continue;
       const current = await readBytes(deployed);
       if (current === null) continue;
-      const source = await readBytes(path.join(desired.sourceDir, dir, file));
-      const unchanged = source !== null && (current.equals(source)
-        || await isPastVersionOf(localConfig.repo.localPath, deployed, `docs/${dir}/${file}`));
+      // The type is part of the proof (#993): a file is teamai's only as a team file, today's or one from
+      // the history, never as the target of a team link.
+      const sourceFile = path.join(desired.sourceDir, dir, file);
+      const source = (await fse.lstat(sourceFile).catch(() => null))?.isFile() ? await readBytes(sourceFile) : null;
+      const unchanged = (source !== null && current.equals(source))
+        || await isTeamaiCopy(deployed, { repoPath: localConfig.repo.localPath, pathspec: `docs/${dir}/${file}` });
       if (!unchanged) {
         kept.push(`${dir}/${file}`);
         continue;

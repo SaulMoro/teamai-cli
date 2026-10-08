@@ -483,6 +483,31 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(first.output).toContain(membersLine(guide, 'docs/guide.md'));
   });
 
+  it('keeps a member\'s file of a deactivated docs namespace with the bytes of a team doc that is a link', () => {
+    const roles = [
+      'version: 1', 'roles:',
+      '  - id: frontend', '    resources:', '      knowledge: []', '      skills: []', '      docs: [frontend]',
+      '  - id: backend', '    resources:', '      knowledge: []', '      skills: []', '      docs: [backend]', '',
+    ].join('\n');
+    const t = team('ns-link-bytes', {
+      'manifest/roles.yaml': roles, 'docs/frontend/target.md': '# Shared\n', 'docs/backend/b.md': '# B\n',
+    });
+    fs.symlinkSync('target.md', path.join(t.seed, 'docs', 'frontend', 'linked.md'));
+    t.publish({}, 'link');
+    const dir = business('ns-link-bytes-biz');
+    teamaiOk(['init', t.url, '--provider', 'git', '--agent', 'claude', '--scope', 'project', '--force', '--role', 'frontend'], dir);
+    const linked = path.join(dir, '.teamai', 'docs', 'frontend', 'linked.md');
+    expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+    // The member replaces the delivered link with a file of their own holding the same text.
+    fs.rmSync(linked);
+    writeFile(linked, '# Shared\n');
+
+    teamaiOk(['roles', 'set', 'backend'], dir);
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(linked)).toBe('# Shared\n');
+    expect(pulled.output).toContain('frontend/linked.md');
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),
