@@ -18,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeKeptDir, describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
+  blockingEntries, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -839,13 +839,21 @@ export class SkillsHandler extends ResourceHandler {
           warnOnce(describeMembersLink(membersLink, item.relativePath));
           continue;
         }
-        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)));
+        // An entry of the member's of the other type blocks only the files under it (#993): the rest is delivered.
+        const blocked = await blockingEntries(dest, item.sourcePath);
+        for (const rel of blocked) {
+          const entry = path.join(dest, ...rel.split('/'));
+          if (ledger) ledger.members.push({ dest: entry, teamRelPath: `${item.relativePath}/${rel}` });
+          else warnOnce(describeMembersFile(entry, `${item.relativePath}/${rel}`));
+        }
+        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)), blocked);
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {
         log.warn(`Failed to sync skill ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
   }

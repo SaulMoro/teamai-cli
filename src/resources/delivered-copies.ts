@@ -81,6 +81,8 @@ export interface DeliveryLedger {
    * `everyTool` when no tool the agent targets received it.
    */
   readonly held: { name: string; reason: string; tools?: string[]; everyTool: boolean }[];
+  /** Copies that failed with an error, already reported: the pull is not synced, and the next one is full. */
+  readonly failed: { name: string; tool: string }[];
 }
 
 export function openLedger(
@@ -93,6 +95,7 @@ export function openLedger(
     members: [],
     otherRecords,
     held: [],
+    failed: [],
     agentModels: Object.fromEntries(Object.entries(agentModels ?? {}).map(([stem, byTool]) => [stem, { ...byTool }])),
   };
 }
@@ -397,15 +400,27 @@ export async function judgeCopy(previous: DeliveredHashes | undefined, item: Res
   return verdict;
 }
 
-/** Whether an entry other than a regular file sits at `rel` under `dir`, or a non-directory at one of its parents. */
-async function blocksFile(dir: string, rel: string): Promise<boolean> {
-  const parts = rel.split(/[\\/]/);
-  for (let i = 1; i <= parts.length; i++) {
-    const stat = await fse.lstat(path.join(dir, ...parts.slice(0, i))).catch(() => null);
-    if (stat === null) return false;
-    if (i < parts.length ? !stat.isDirectory() : !stat.isFile()) return true;
+/**
+ * The entries in skill copy `dest` that are the member's because they are of the other type than what
+ * teamai delivers there (#993): a directory or another non-file where the skill at `sourcePath` has a
+ * file, or a non-directory where one of its directories goes. Pull leaves each one, and the files it
+ * would cover, undelivered. Relative paths, `/`-separated.
+ */
+export async function blockingEntries(dest: string, sourcePath: string): Promise<string[]> {
+  const blocked = new Set<string>();
+  for (const rel of await listFilesRecursive(sourcePath)) {
+    if (!(await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) continue;
+    const parts = rel.split(/[\\/]/);
+    for (let i = 1; i <= parts.length; i++) {
+      const stat = await fse.lstat(path.join(dest, ...parts.slice(0, i))).catch(() => null);
+      if (stat === null) break;
+      if (i < parts.length ? !stat.isDirectory() : !stat.isFile()) {
+        blocked.add(parts.slice(0, i).join('/'));
+        break;
+      }
+    }
   }
-  return false;
+  return [...blocked];
 }
 
 /**
@@ -419,9 +434,6 @@ async function overwritesMembersFile(previous: DeliveredHashes, item: ResourceIt
     const file = path.join(target.dest, rel);
     if (previous[file] !== undefined) continue;
     if (await isLink(file)) return true;
-    // A directory at the file's path, or a file where one of its directories goes, is the member's:
-    // teamai writes neither, and the copy would fail over it.
-    if (await blocksFile(target.dest, rel)) return true;
     const disk = await fileHash(file);
     if (disk === null) continue;
     const bytes = await fse.readFile(path.join(item.sourcePath, rel));

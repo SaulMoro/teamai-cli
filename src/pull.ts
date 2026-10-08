@@ -1657,6 +1657,12 @@ async function pullForScope(
       for (const item of items) {
         await handler.pullItem(item, freshConfig, localConfig, ledger);
       }
+      // A copy that failed (each said as it happened) leaves the pull unsynced, as a kept file of the
+      // member's does: the revision stays, and the next pull is a full one that retries it.
+      if (ledger.failed.splice(0).length > 0) {
+        membersFilesKept = true;
+        if (result) result.resourceSyncFailed = true;
+      }
       // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
       if (ledger.held.length > 0) agentModelsHeld = true;
       const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;

@@ -214,7 +214,9 @@ export async function writeJsonAtomic(
  * With `onLink`, a link in `src` is not copied (nor followed): `onLink` gets its
  * path relative to `src`. Without it, links are copied as links.
  */
-export async function copyDir(src: string, dest: string, onLink?: (relativePath: string) => void): Promise<void> {
+export async function copyDir(
+  src: string, dest: string, onLink?: (relativePath: string) => void, skip: readonly string[] = [],
+): Promise<void> {
   const destExpanded = expandHome(dest);
   try {
     const stat = await fse.lstat(destExpanded);
@@ -229,6 +231,9 @@ export async function copyDir(src: string, dest: string, onLink?: (relativePath:
     overwrite: true,
     filter: async (srcPath: string) => {
       if (isIgnored(path.basename(srcPath))) return false;
+      // An entry `skip` names, and everything under it, is left as the destination has it.
+      const rel = path.relative(srcExpanded, srcPath).split(path.sep).join('/');
+      if (skip.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) return false;
       if (onLink === undefined || srcPath === srcExpanded || !(await fse.lstat(srcPath)).isSymbolicLink()) return true;
       onLink(path.relative(srcExpanded, srcPath).split(path.sep).join('/'));
       return false;

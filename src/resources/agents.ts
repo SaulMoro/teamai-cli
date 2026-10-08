@@ -749,6 +749,7 @@ export class AgentsHandler extends ResourceHandler {
         log.debug(`Rendered agent ${item.name} → ${tool} (${render.ext})`);
       } catch (e) {
         log.warn(`Failed to sync agent ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
   }
