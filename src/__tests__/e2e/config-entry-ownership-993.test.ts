@@ -315,6 +315,31 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '').not.toContain('[mcp_servers.plain-api]');
   });
 
+  it('leaves a Claude settings file that does not parse as it is, and writes its hooks once it parses', () => {
+    const t = team('hook-broken', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const homeSettings = path.join(home, '.claude', 'settings.json');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = { home: fs.readFileSync(homeSettings, 'utf8'), local: fs.readFileSync(localSettings, 'utf8') };
+    // The member is mid-edit of both files.
+    const broken = '{ "permissions": { "allow": ["Bash(npm test)"] }, \n';
+    writeFile(homeSettings, broken);
+    writeFile(localSettings, broken);
+    t.publish({ 'hooks/hooks.yaml': hooksYaml('echo team-stop-v2') }, 'v2');
+    try {
+      const pulled = teamai(['pull'], dir);
+      expect(fs.readFileSync(homeSettings, 'utf8'), pulled.output).toBe(broken);
+      expect(fs.readFileSync(localSettings, 'utf8')).toBe(broken);
+      expect(pulled.output).toContain(`${homeSettings} does not parse`);
+    } finally {
+      writeFile(homeSettings, repaired.home);
+      writeFile(localSettings, repaired.local);
+    }
+    pull(dir);
+    expect(claudeTeamStops(dir).map((e) => e.hooks[0].command).join('\n')).toContain('echo team-stop-v2');
+  });
+
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
     // The co-author setting shares settings.local.json with the team hooks (#993 bug 7).
     const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') }, ['  coAuthor:', '    enabled: false']);
