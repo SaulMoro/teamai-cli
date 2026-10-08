@@ -1231,15 +1231,16 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 为该 checkout 使用的路径，即主 checkout 的真实路径，因此所有 worktree 共用一份（`--separate-git-dir` 仓库的 linked worktree
 用 git 目录；submodule 的 linked worktree 用其在 `.git/modules` 下的目录）。这样解析后的 token 不会进入工作区，Claude Code
 加载这些 server 时无需批准，团队自己的 `.mcp.json` 保持原样。teamai 在那里只改动自己的条目，`teamai uninstall` 也只移除这些
-条目。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的 server，保留你改动过的 teamai server 并给出提示；
-文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull 会把这些 server 移回去。
+条目，覆盖它记录过的每个 key，包括 worktree 已删除的 key。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的
+server，保留你改动过的 teamai server 并给出提示；文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull
+会把这些 server 移回去，并从每个记录过的 key 中移除它们。
 项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
 
 CodeBuddy 的项目级 server 也以同样方式移到 CodeBuddy 的 local scope：`CODEBUDDY_CONFIG_DIR`（未设置时为你的 home 目录）中
 `.codebuddy.json` 的 `projects[<key>].mcpServers`。CodeBuddy 按其运行目录作为 key，因此 `<key>` 是每个 worktree 根目录的真实路径，
 每个 worktree 各有一份：pull 会写入它，git 创建 worktree 时运行的 pull 也会写入。与以前一样，在子目录中启动的 CodeBuddy 看不到
 项目级 server。对于已不存在的 worktree，下一次 pull 会从它的 key 中移除 teamai 的 server，保留你自己的 server。teamai 只改动自己的条目，
-该文件的其他内容保持不变，`teamai uninstall` 也只移除 teamai 的 server。移出和移回 `.mcp.json` 的方式与上文 Claude 相同，
+该文件的其他内容保持不变，`teamai uninstall` 也只移除 teamai 的 server，覆盖它记录过的每个 key。移出和移回 `.mcp.json` 的方式与上文 Claude 相同，
 因此开启此选项后不会有 pull 写入 `.mcp.json`。
 
 TeamAI 仅在所有权记录证明已完成顶层写入且内容仍匹配时，才删除 `mcpServers` 旁的 Copilot 顶层条目。旧记录缺少位置证据时，即使内容与团队定义相同，也保留顶层条目。顶层所有权记录不授权修改 `mcpServers` 下的同名成员条目；更新跳过该冲突，移除时只清理受管理的顶层副本。缺少位置标记的记录只有在哈希匹配嵌套条目且不同时匹配顶层条目时，才能认领嵌套条目。完成的嵌套写入记录 `bare: false`；位置记录写入失败时，所有权仍未得到证明。HTTP 本地代理首次安装先只读检查 Git 保护，再保存临时所有权记录，随后添加排除规则和文件记录，最后写入凭据。初始所有权记录写入失败不会改变 Git 排除规则或 MCP 配置。
@@ -2314,7 +2315,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
   内置 hooks 和服务端下发的 hooks 均支持 OpenCode **1.18.23** 和 **V2**（已对照 2.0.23 验证）。每个插件默认导出一个定义：V1 调用 `server`，V2 调用 `setup`。上述命名 hook 与 `shell.env` 对应 V1；V2 将 `session.prompt` 和 `tool.execute.after` 映射为相同分发，将 `shell` / `subagent` 规范为 `bash` / `task`，并使用宿主原生的 `OPENCODE_SESSION_ID` 为 shell 中的 recall 归属会话。生命周期订阅限定在插件的目录内，卸载时取消。升级 TeamAI 后运行 `teamai hooks inject` 或 `teamai pull`，然后重启 OpenCode，替换报 “Plugin must export a default definition” 的旧插件。
 - **V2 上的规则与指令。** OpenCode V2 会解析 `instructions`，但不加载其中任何文件，因此上述 rule glob 和团队 instructions 条目只对 V1 生效。在 V2 上由同一个 `teamai-hooks.ts` 插件自行添加：它的 `setup` 注册会话 `context` hook，并在压缩时添加相同文本；在任何目录下都读取 `~/.config/opencode/teamai-context.md` 和 `~/.config/opencode/rules/**/*.md`，再从会话目录向上找到最近一个包含 `teamai-context.md` 或 `rules/` 的 `.opencode/`，添加其中的 `teamai-context.md` 和全部 `.opencode/rules/**/*.md`，按路径排序。插件在每次请求时读取这些文件，不调用 `teamai`。V1 通过 `instructions` 的交付保持不变。由于由插件承载，`teamai hooks remove` 也会让 V2 会话失去团队规则和指令。`teamai doctor` 运行 `opencode --version`（缺失或无法解析时视为 V1）；在 V2 上，`Team rules are active in opencode` 和 `opencode adds the team instructions to its prompt` 检查插件是否按当前 teamai 写入的内容安装，而不是检查 `instructions`。
 - **MCP** server 位于共享 `opencode.json` 的 `mcp` 键下（详见上文 MCP 章节）。
-- **开启 git exclude 选项时的 OpenCode V2。** 当 `sharing.gitExclude` 开启（见[让分发的文件不进入 git](#让分发的文件不进入-git)）、`opencode --version` 报告 V2（每条命令只询问一次；缺失或无法读取按 V1 处理），且 pull 已按当前 teamai 的写法安装好 teamai 插件时，teamai 不会向项目的 opencode.json 文件写入任何内容。pull 把团队 MCP server 写入 `.opencode/teamai-mcp.json`：这个文件只属于 teamai，列在 git exclude 块中；若它将含有解析出的值，只有在 git exclude 块已包含它之后才会写入。插件在 OpenCode 打开项目时读取它（沿用同样的向上查找最近 `.opencode/` 的逻辑，现在只含该文件的 `.opencode/` 也会命中），并只为该项目加入这些 server。随后 pull 从根目录的 `opencode.json` 移除 teamai 的 MCP server，从 `.opencode/opencode.json` 移除 teamai 的 `instructions` 条目（包括升级前写入的），并删除因此变空的文件。只有在 git 未跟踪该文件、且其中只有 teamai 的条目时才会这样做：团队提交的文件，或含有你自己条目的文件，会保持原样，`teamai doctor` 会在 `No OpenCode V1 entries are left in shared config files` 下指出它。V2 会忽略这些 `instructions`，并再次加载这些 server；等项目中没有人再使用 V1 时，请自行删除 teamai 的条目。pull 会先重写旧版 teamai 留下的插件再做判断，因此迁移在同一次 pull 中完成。没有最新插件时（无法写入、工具因没有 shell 被跳过，或在 `teamai hooks remove` 之后、下一次 pull 重新安装之前），pull 会保留 V1 条目，因为那时 V2 只能从它们获得内容，`teamai doctor` 会在插件缺失的检查旁说明这一点。回到 V1 或关闭该选项后，下一次 pull 会重新写入 V1 条目并删除 `.opencode/teamai-mcp.json`。当前 teamai 的插件与之前的版本不同，因此在下一次 `teamai pull` 或 `teamai hooks inject` 之前，`teamai doctor` 在 V2 上会报告插件过期；插件在 OpenCode 打开项目时读取 server：pull 改变它们后请重启 OpenCode。
+- **开启 git exclude 选项时的 OpenCode V2。** 当 `sharing.gitExclude` 开启（见[让分发的文件不进入 git](#让分发的文件不进入-git)）、`opencode --version` 报告 V2（每条命令只询问一次；缺失或无法读取按 V1 处理），且 pull 已按当前 teamai 的写法安装好 teamai 插件时，teamai 不会向项目的 opencode.json 文件写入任何内容。pull 把团队 MCP server 写入 `.opencode/teamai-mcp.json`：这个文件只属于 teamai，列在 git exclude 块中；若它将含有解析出的值，只有在 git exclude 块已包含它之后才会写入。插件在 OpenCode 打开项目时读取它（沿用同样的向上查找最近 `.opencode/` 的逻辑，现在只含该文件的 `.opencode/` 也会命中），并只为该项目加入这些 server。随后 pull 从根目录的 `opencode.json` 移除 teamai 的 MCP server，从 `.opencode/opencode.json` 移除 teamai 的 `instructions` 条目（包括升级前写入的），并删除因此变空的文件。只有在 git 未跟踪该文件时才会这样做，并保留其中你自己的 server、条目和键：团队提交的文件会保持原样，`teamai doctor` 会在 `No OpenCode V1 entries are left in shared config files` 下指出它。V2 会忽略这些 `instructions`，并再次加载这些 server；等项目中没有人再使用 V1 时，请自行删除 teamai 的条目。pull 会先重写旧版 teamai 留下的插件再做判断，因此迁移在同一次 pull 中完成。没有最新插件时（无法写入、工具因没有 shell 被跳过，或在 `teamai hooks remove` 之后、下一次 pull 重新安装之前），pull 会保留 V1 条目，因为那时 V2 只能从它们获得内容，`teamai doctor` 会在插件缺失的检查旁说明这一点。回到 V1 或关闭该选项后，下一次 pull 会重新写入 V1 条目并删除 `.opencode/teamai-mcp.json`。当前 teamai 的插件与之前的版本不同，因此在下一次 `teamai pull` 或 `teamai hooks inject` 之前，`teamai doctor` 在 V2 上会报告插件过期；插件在 OpenCode 打开项目时读取 server：pull 改变它们后请重启 OpenCode。
 
 ### Pi Coding Agent
 
