@@ -1469,8 +1469,9 @@ function keepsLocalAgentBlock(plan: RemovalPlan, owner: string): boolean {
  * while the file it names is there. Each block that cannot go is named with
  * the lines to delete by hand; a repository that is gone is skipped. An
  * `incomplete` uninstall keeps every line whose file is still in a checkout.
+ * Returns the exclude files whose blocks could not be removed.
  */
-async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: ReadonlySet<string>, incomplete: boolean): Promise<void> {
+async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: ReadonlySet<string>, incomplete: boolean): Promise<string[]> {
   const { modelFilesBehind } = await import('./local-agent.js');
   const results = await removeGitExclude('all', {
     files: plan.gitExcludeFiles,
@@ -1492,6 +1493,8 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
       log.info(`Removed this project's ${dropped.length} line(s) from the local agent's git exclude block in ${excludeFile}`);
     }
   }
+  return results.filter(({ write }) => ['locked', 'notWritable', 'writeFailed', 'notReadable'].includes(write.kind))
+    .map(({ excludeFile }) => excludeFile);
 }
 
 /**
@@ -1721,7 +1724,7 @@ async function teardownPlugins(): Promise<void> {
 async function executeRemoval(
   plan: RemovalPlan,
   heldMcp: ReadonlySet<string>,
-): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }> }> {
+): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }>; blocksLeft: string[] }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
@@ -1997,12 +2000,18 @@ async function executeRemoval(
 
   // (f2) teamai's git exclude blocks (#915): after the files they hid, before
   // the partition state that records which exclude files hold them.
-  // An incomplete one keeps the data home, so the record of these files, for the retry.
-  if (plan.includeShared) await removePlannedGitExcludeBlocks(plan, heldMcp, hooksLeft.length > 0 || pendingOpencode.length > 0);
+  // An incomplete one keeps the data home, so the record of these files, for the retry; so does a block that stays.
+  const blocksLeft = plan.includeShared
+    ? await removePlannedGitExcludeBlocks(plan, heldMcp, hooksLeft.length > 0 || pendingOpencode.length > 0)
+    : [];
 
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
-  if (plan.teamaiHomeExists && hooksLeft.length > 0) {
-    log.warn(`Kept ${plan.teamaiHome}: it holds the record of teamai's hooks in ${hooksLeft.map((h) => h.what).join(', ')}, which could not be removed. `
+  if (plan.teamaiHomeExists && (hooksLeft.length > 0 || blocksLeft.length > 0)) {
+    const held = [
+      ...hooksLeft.length > 0 ? [`teamai's hooks in ${hooksLeft.map((h) => h.what).join(', ')}`] : [],
+      ...blocksLeft.length > 0 ? [`teamai's git exclude blocks in ${blocksLeft.join(', ')}`] : [],
+    ];
+    log.warn(`Kept ${plan.teamaiHome}: it holds the record of ${held.join(' and ')}, which could not be removed. `
       + 'Fix those files, then run `teamai uninstall` again.');
   } else if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
@@ -2032,7 +2041,7 @@ async function executeRemoval(
       log.debug(`Hermes uninstall cleanup skipped: ${(e as Error).message}`);
     }
   }
-  return { pendingOpencode, hooksLeft };
+  return { pendingOpencode, hooksLeft, blocksLeft };
 }
 
 /** Remove everything under `root` but `keep` and the directories on the way to it. */
@@ -2149,6 +2158,7 @@ async function removeConfirmed(
     // Exclusion is a config write even when there are no local files to delete.
     await dropToolGitExcludePaths(localConfig, teamConfig, agentKey!);
     await excludeUninstalledAgent(localConfig, agentKey!);
+    if (agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
     log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
     return;
   }
@@ -2242,16 +2252,10 @@ async function removeConfirmed(
     }
   }
 
-  const { pendingOpencode, hooksLeft } = await executeRemoval(plan, heldMcp);
-  const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0;
+  const { pendingOpencode, hooksLeft, blocksLeft } = await executeRemoval(plan, heldMcp);
+  const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0;
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
-  if (!agentKey || agentKey === 'codex') {
-    try {
-      await stopCodexTeamHookDispatch(teamConfig, localConfig);
-    } catch (e) {
-      log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
-    }
-  }
+  if (!agentKey || agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
   if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
@@ -2286,11 +2290,20 @@ async function removeConfirmed(
   }
 
   if (incomplete) {
-    const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what)];
+    const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what), ...blocksLeft];
     log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
     process.exitCode = 1;
   } else {
     log.success('teamai uninstalled');
+  }
+}
+
+/** Stop the project's Codex team hooks that run from the dispatcher in ~/.codex/hooks.json (#915). */
+async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  try {
+    await stopCodexTeamHookDispatch(teamConfig, localConfig);
+  } catch (e) {
+    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
   }
 }
 

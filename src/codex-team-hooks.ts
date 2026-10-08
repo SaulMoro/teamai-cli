@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getTeamHookDispatchCommand } from './builtin-hooks.js';
 import { CODEX_TOOL_ID, getTeamaiHomeDir } from './types.js';
-import { ensureDir, readJson, readJsonObject, writeJson } from './utils/fs.js';
+import { ensureDir, readJson, readJsonObject, writeJson, writeJsonAtomic } from './utils/fs.js';
 import { log, setStderrOnly } from './utils/logger.js';
 
 /** One team hook a project runs through the dispatcher, as pull resolved it. */
@@ -96,7 +96,7 @@ export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamH
     }
     if (JSON.stringify(index) !== before) {
       if (Object.keys(index.projects).length === 0) await fs.promises.rm(file, { force: true });
-      else await writeJson(file, index);
+      else await writeJsonAtomic(file, index);
     }
     return true;
   } finally {

@@ -348,6 +348,26 @@ describe('single-repo mode', () => {
   });
 });
 
+describe('uninstall --agent codex', () => {
+  it('stops the team hooks of a project whose Codex gets nothing but them', () => {
+    const m = machine('uninstall-agent', {
+      committed: { '.codex/hooks.json': TEAM_OWN_HOOKS },
+      hooks: [{ id: 'team-stop', event: 'Stop', command: 'echo team-stop' }],
+    });
+    expect(dispatcherEvents(m.homeHooks())).toEqual(['Stop']);
+    // Without the built-in skill, nothing of Codex's is left in the project but the team hooks.
+    fs.rmSync(path.join(m.dir, '.codex', 'skills'), { recursive: true });
+
+    const r = m.ok(['uninstall', '--agent', 'codex', '--force']);
+    expect(r.output).toContain('Excluded codex from this project');
+    expect(dispatcherEvents(m.homeHooks())).toEqual([]);
+    expect(read(path.join(m.dir, '.codex', 'hooks.json'))).toBe(TEAM_OWN_HOOKS);
+    // The next pull leaves them stopped: Codex is excluded from the project.
+    m.ok(['pull']);
+    expect(dispatcherEvents(m.homeHooks())).toEqual([]);
+  });
+});
+
 /** Every file named `name` under `dir`, recursively. */
 function filesNamed(dir: string, name: string): string[] {
   if (!fs.existsSync(dir)) return [];

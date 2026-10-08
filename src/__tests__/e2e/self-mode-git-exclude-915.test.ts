@@ -291,4 +291,35 @@ describe('a single-repo team keeps what teamai delivers out of git (#915)', () =
     expect(m.notIgnored([LOCAL_SETTINGS], wt)).toEqual([]);
     expect(m.status(wt)).toEqual([]);
   });
+
+  it('each worktree gives Claude its own branch\'s MCP servers, out of git, though Claude files every worktree under one key', async () => {
+    const server = (name: string): string => `  - name: ${name}\n    transport: http\n    url: https://${name}.example.com/mcp\n`;
+    const m = member('self-mcp', { committed: { '.teamai/mcp/mcp.yaml': `servers:\n${server('main-api')}` } });
+    m.ok(['init', '.', '--provider', 'git', '--agent', 'claude']);
+    const wt = path.join(sandbox, `self-mcp-linked-${attempt}`);
+    m.git(['worktree', 'add', '-q', '-b', 'feature', wt]);
+    // Its post-checkout hook pulls there in the background: let it finish, or the next pull finds the lock held.
+    await detached.waitForExit();
+    writeFile(path.join(wt, '.teamai', 'mcp', 'mcp.yaml'), `servers:\n${server('main-api')}${server('feature-api')}`);
+    m.git(['commit', '-q', '-am', 'feature server'], wt);
+    /** The servers Claude Code reads in `checkout`: its `.mcp.json` and the local scope of the key every worktree shares. */
+    const claudeServers = (checkout: string): string[] => {
+      const mcpJson = path.join(checkout, '.mcp.json');
+      const tree = fs.existsSync(mcpJson) ? JSON.parse(fs.readFileSync(mcpJson, 'utf8')).mcpServers ?? {} : {};
+      const claudeJson = path.join(m.home, '.claude.json');
+      const projects = fs.existsSync(claudeJson) ? JSON.parse(fs.readFileSync(claudeJson, 'utf8')).projects ?? {} : {};
+      return [...Object.keys(tree), ...Object.keys(projects[m.dir]?.mcpServers ?? {})].sort();
+    };
+
+    for (const step of ['first', 'second']) {
+      m.ok(['pull'], wt);
+      await detached.waitForExit();
+      m.ok(['pull']);
+      await detached.waitForExit();
+      expect(claudeServers(m.dir), step).toEqual(['main-api']);
+      expect(claudeServers(wt), step).toEqual(['feature-api', 'main-api']);
+      expect(m.status(), step).toEqual(MEMBER_STATUS);
+      expect(m.status(wt), step).toEqual([]);
+    }
+  });
 });
