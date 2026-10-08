@@ -2322,7 +2322,7 @@ async function reconcileTargets(
     // The tool's other place for them (#915): what teamai wrote there goes, as sharing.gitExclude moved them.
     if (LOCAL_SCOPE_MCP_TOOLS[target.tool] && target.projectScope) {
       wrote = await leaveMcpLocation(teamConfig, localConfig, target, {
-        desired, kept, manifest, changes, vars: desiredContext.vars, history, options, restoreConfigs,
+        desired, kept, manifest, claimTargets, changes, vars: desiredContext.vars, history, options, restoreConfigs,
       }) || wrote;
     }
     // CodeBuddy's local scope of a worktree that is gone (#915).
@@ -2650,6 +2650,8 @@ async function leaveMcpLocation(
     desired: ReadonlyMap<string, DesiredMcpEntry>;
     kept: ReadonlySet<string>;
     manifest: ManagedMcpManifest;
+    /** Every tool mapping a file, detected or not: whose entries it holds (#993). */
+    claimTargets: readonly McpTarget[];
     changes: McpChange[];
     vars: Record<string, string>;
     history: () => Promise<TeamMcpHistory>;
@@ -2665,7 +2667,7 @@ async function leaveMcpLocation(
   if (other.projectKey && !records?.length) return false;
   const claimed = other.projectKey
     ? new Set<string>()
-    : await claimedByOtherTools(await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }), other, ctx.manifest);
+    : await claimedByOtherTools(ctx.claimTargets, other, ctx.manifest);
   // A copy the member changed since teamai wrote it is theirs: it stays where it is, named, and its record goes.
   const installed = await installedMcpEntries(other);
   const edited = (records ?? []).filter((r) => !claimed.has(r.name) && installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
