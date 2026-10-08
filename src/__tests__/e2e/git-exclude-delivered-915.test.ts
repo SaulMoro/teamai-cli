@@ -524,12 +524,11 @@ const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skill
 
 /**
  * What git may still show: paths the delivered block does not cover yet (MCP
- * configs, `.codex/hooks.json`). Nothing the
+ * configs). Nothing the
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
   /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
-  /^\.codex\/hooks\.json$/,
 ];
 const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
 /** A delivered path of each writer and kind, as the member's tools read them. */

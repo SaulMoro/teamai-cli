@@ -5,7 +5,7 @@ import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from 
 import { gitExcludeFile, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord } from './git-exclude.js';
 import {
   migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, hasUnrecordedTeamHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile,
-  teamHookHistory, type TeamHookHistory,
+  stopCodexTeamHookDispatch, teamHookHistory, type TeamHookHistory,
 } from './hooks.js';
 import {
   removeOpenClawHooks,
@@ -2060,6 +2060,14 @@ async function removeConfirmed(
   }
 
   const pendingOpencode = await executeRemoval(plan, heldMcp);
+  // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
+  if (!agentKey || agentKey === 'codex') {
+    try {
+      await stopCodexTeamHookDispatch(teamConfig, localConfig);
+    } catch (e) {
+      log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
+    }
+  }
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
   if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey);

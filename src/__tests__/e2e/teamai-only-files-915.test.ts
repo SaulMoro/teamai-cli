@@ -287,7 +287,7 @@ describe('what is never teamai-only', () => {
     expect(m.status()).toContain(' M .cursor/mcp.json');
   });
 
-  it('a single-repo team\'s .codex/hooks.json, which holds the built-in hooks beside the team\'s', () => {
+  it('a single-repo team\'s .codex/hooks.json, which holds the built-in hooks', () => {
     const caseDir = fs.mkdtempSync(path.join(sandbox, 'self-codex-'));
     const home = path.join(caseDir, 'home');
     fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
@@ -317,7 +317,8 @@ describe('what is never teamai-only', () => {
     run(process.execPath, [CLI, 'pull'], realDir);
 
     const hooks = read(path.join(realDir, '.codex', 'hooks.json'));
-    expect(hooks).toContain('echo team-stop');
+    // The team hooks run from the dispatcher in ~/.codex/hooks.json.
+    expect(hooks).not.toContain('echo team-stop');
     expect(hooks).toContain('hook-dispatch session-start');
     expect(read(path.join(realDir, '.git', 'info', 'exclude'))).not.toContain('/.codex/hooks.json');
     expect(run('git', ['status', '--porcelain', '-uall'], realDir)).toContain('?? .codex/hooks.json');
