@@ -1,7 +1,7 @@
 import { realpath, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError, detectProjectConfig } from './config.js';
-import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, canonicalProjectRoot, unregisterCheckoutFromSharedManifest, type MainCheckoutHooks, type SharedHooksManifest } from './hooks.js';
+import { reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, canonicalProjectRoot, getToolCheckouts, unregisterCheckoutFromSharedManifest, type MainCheckoutHooks, type SharedHooksManifest } from './hooks.js';
 import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
@@ -22,6 +22,7 @@ import {
   TEAMAI_TEAM_RULES_START,
   TEAMAI_TEAM_RULES_END,
   getDataHome,
+  getTeamaiHome,
   getManagedHooksPath,
   isAgentExcluded,
   managedMcpManifestPath,
@@ -160,6 +161,8 @@ interface RemovalPlan {
   mainCheckouts?: MainCheckoutHooks[];
   projectRoot?: string;
   toolsToMerge?: string[];
+  /** One project installation shared by its checkouts, rather than separate legacy installs. */
+  sharedPartition?: boolean;
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
@@ -628,6 +631,8 @@ async function buildRemovalPlan(
 ): Promise<RemovalPlan> {
   const baseDir = resolveBaseDir(localConfig);
   const teamaiHome = getDataHome(localConfig);
+  const sharedPartition = localConfig.scope === 'project' && !!localConfig.projectRoot
+    && path.resolve(teamaiHome) !== path.resolve(getTeamaiHome('project', localConfig.projectRoot));
   const standaloneHookManifestPath = getManagedHooksPath(
     localConfig.scope,
     localConfig.projectRoot,
@@ -707,7 +712,7 @@ async function buildRemovalPlan(
     const mainHasInstall = mainConfig !== null;
 
     if (currentCanonical === rootCanonical) {
-      if (mainCheckout.sharedWithOtherInstall) {
+      if (!sharedPartition && mainCheckout.sharedWithOtherInstall) {
         preserveSharedManifest = mainCheckout.manifestPath;
       }
     } else {
@@ -897,6 +902,7 @@ async function buildRemovalPlan(
     mainCheckouts,
     projectRoot: localConfig.projectRoot,
     toolsToMerge,
+    sharedPartition,
   };
 
   // A single instruction file can be the target of several agents (for
@@ -1270,7 +1276,10 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, mainCheckout } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath,
-        ...(teamOnly ? { teamOnly, legacyManifestPath, mainCheckout } : {}),
+        ...(teamOnly ? { teamOnly, legacyManifestPath,
+          // Uninstalling a partition removes this tool for the whole installation.
+          mainCheckout: plan.sharedPartition && !mainCheckout?.worktreeScoped ? undefined : mainCheckout,
+        } : {}),
       });
     } catch (e) {
       log.warn(`Failed to remove hooks from ${settingsPath}: ${(e as Error).message}`);
@@ -1280,7 +1289,14 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
   if (plan.projectRoot && plan.toolsToMerge) {
     for (const target of plan.mainCheckouts ?? []) {
       try {
-        await unregisterCheckoutFromSharedManifest(target.manifestPath, plan.projectRoot, plan.toolsToMerge);
+        const manifest = plan.sharedPartition && !target.worktreeScoped
+          ? await readJson<SharedHooksManifest>(target.manifestPath) : null;
+        const checkouts = manifest
+          ? Array.from(new Set(plan.toolsToMerge.flatMap((tool) => getToolCheckouts(manifest, tool))))
+          : [plan.projectRoot];
+        for (const checkout of checkouts) {
+          await unregisterCheckoutFromSharedManifest(target.manifestPath, checkout, plan.toolsToMerge);
+        }
       } catch (e) {
         log.warn(`Failed to unregister checkout from shared hooks manifest: ${(e as Error).message}`);
       }

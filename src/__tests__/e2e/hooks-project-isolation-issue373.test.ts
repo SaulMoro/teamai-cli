@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_HOOK_OTHER_HOST_SKIP } from '../../hooks.js';
+import { projectSlug } from '../../utils/partition.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -358,6 +359,35 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     const removedSecond = await runCLI(worktrees[1], home, ['hooks', 'remove']);
     expect(removedSecond.code, removedSecond.output).toBe(0);
     for (const file of mainFiles(worktrees[1])) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
+  });
+
+  it.each([
+    { caller: 'main', targeted: false }, { caller: 'linked', targeted: false },
+    { caller: 'main', targeted: true }, { caller: 'linked', targeted: true },
+  ])('removes selected shared partition hooks from $caller with targeted = $targeted', async ({ caller, targeted }) => {
+    const partition = path.join(home, '.teamai', 'projects', projectSlug(fs.realpathSync(projectA)));
+    fs.mkdirSync(path.dirname(partition), { recursive: true });
+    fs.renameSync(path.join(projectA, '.teamai'), partition);
+    const configFile = path.join(partition, 'config.yaml');
+    fs.writeFileSync(configFile, fs.readFileSync(configFile, 'utf8')
+      .replace(path.join(projectA, '.teamai', 'team-repo'), path.join(partition, 'team-repo')));
+    for (const checkout of [projectA, worktreeA]) {
+      const injected = await runCLI(checkout, home);
+      expect(injected.code, injected.output).toBe(0);
+    }
+    const uninstalled = await runCLI(caller === 'main' ? projectA : worktreeA, home,
+      ['uninstall', '--force', ...(targeted ? ['--agent', 'claude'] : [])]);
+    expect(uninstalled.code, uninstalled.output).toBe(0);
+    expect(readSettings(mainFiles(projectA)[0]).hooks.Stop ?? []).toHaveLength(0);
+    expect(readSettings(mainFiles(projectA)[1]).hooks.Stop ?? []).toHaveLength(targeted ? 1 : 0);
+    expect(fs.existsSync(partition)).toBe(targeted);
+    if (targeted) {
+      const manifest = JSON.parse(fs.readFileSync(path.join(partition, 'managed-main-checkout-hooks.json'), 'utf8'));
+      expect(manifest.checkouts.claude ?? []).toEqual([]);
+      expect(manifest.checkouts.codex).toHaveLength(2);
+      expect(manifest.codex).toHaveLength(1);
+      expect(fs.readFileSync(configFile, 'utf8')).toContain('claude');
+    }
   });
 
   it('shares one main checkout team hook between two worktree installs when the main checkout has none', async () => {

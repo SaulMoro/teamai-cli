@@ -66,6 +66,9 @@ and give it your team repo URL."*
   worktrees remove their own hook files independently. When the main checkout has
   no install, the shared manifest and its empty `.teamai` directory are removed
   after the last team hook is removed.
+- A migrated data partition is one installation shared by its checkouts. Uninstall
+  removes the selected tools' shared hooks and registrations for that installation.
+  Full uninstall removes the partition; targeted uninstall keeps the other tools.
 - For OpenCode, uninstall also removes the rules globs teamai added to
   `instructions` in `opencode.json`, including the relative `rules/*.md` an
   earlier release wrote in user scope. In a project it removes
