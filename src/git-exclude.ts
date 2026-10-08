@@ -557,8 +557,10 @@ export interface GitExcludeSync {
  * Make `owner`'s blocks hold exactly `paths` (absolute, landed): each path's
  * line in the exclude file of the repository it lands in, and no block in a
  * recorded file that receives none. A tracked file gets no line; a directory
- * with tracked descendants keeps its line; both are reported. `dryRun` writes
- * nothing, not even `info/` or a lock file.
+ * with tracked descendants keeps its line; both are reported. While git cannot
+ * place a path (`gitFailed`), no one can say which exclude file holds its line,
+ * so the run only adds: no block loses a line and every recorded file stays
+ * recorded. `dryRun` writes nothing, not even `info/` or a lock file.
  */
 export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, options: { dryRun?: boolean } = {}): Promise<GitExcludeSync> {
   markersOf(owner.name);
@@ -573,6 +575,7 @@ export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, opti
     else byFile.set(placement.placed.excludeFile, [...byFile.get(placement.placed.excludeFile) ?? [], placement.placed]);
   }
   for (const recorded of await owner.record?.files() ?? []) if (!byFile.has(recorded)) byFile.set(recorded, []);
+  const addOnly = result.gitFailed.length > 0;
 
   const add: string[] = [];
   const drop: string[] = [];
@@ -580,8 +583,9 @@ export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, opti
     const checkFailed: GitCheckFailure[] = [];
     const tracked = await trackedPaths(placed, checkFailed);
     // A line stays while any path it names is untracked somewhere or is a directory.
-    const lines = [...new Set(placed.filter((p) => p.directory || !tracked.some((t) => t.path === p.path)).map((p) => p.line))].sort();
-    const outcome = await writeOwnerLines(excludeFile, owner.name, () => lines, options.dryRun);
+    const wanted = placed.filter((p) => p.directory || !tracked.some((t) => t.path === p.path)).map((p) => p.line);
+    const next = (current: string[]): string[] => [...new Set([...addOnly ? current : [], ...wanted])].sort();
+    const { lines, ...outcome } = await writeOwnerLines(excludeFile, owner.name, next, options.dryRun);
     const reincluded = options.dryRun || outcome.write.kind !== 'written' && outcome.write.kind !== 'unchanged'
       ? []
       : await reincludedPaths(placed.filter((p) => lines.includes(p.line)), checkFailed);
@@ -594,30 +598,32 @@ export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, opti
 
 /**
  * Set `owner`'s lines in `excludeFile` to `next(current lines)` under the
- * shared lock, after the read-only writability check. A missing exclude file
- * that would get no block is left missing (a deleted repository, or nothing to write).
+ * shared lock, after the read-only writability check, and say which lines the
+ * block holds after it (when the write failed: would hold). A missing exclude
+ * file that would get no block is left missing (a deleted repository, or nothing to write).
  */
 async function writeOwnerLines(
   excludeFile: string,
   owner: string,
-  next: (current: string[]) => string[] | null,
+  next: (current: string[]) => string[],
   dryRun = false,
-): Promise<{ write: GitExcludeWrite; added: string[]; dropped: string[]; damaged: DamagedMarker[] }> {
+): Promise<{ write: GitExcludeWrite; lines: string[]; added: string[]; dropped: string[]; damaged: DamagedMarker[] }> {
+  const diff = (current: string[], lines: string[]): { lines: string[]; added: string[]; dropped: string[] } => ({
+    lines,
+    added: lines.filter((l) => !current.includes(l)),
+    dropped: current.filter((l) => !lines.includes(l)),
+  });
   let before: string;
   try {
     before = (await readExisting(excludeFile)) ?? '';
   } catch (e) {
     if (!(e instanceof NotReadableError)) throw e;
-    return { write: { kind: 'notReadable', path: excludeFile, message: e.message }, added: [], dropped: [], damaged: [] };
+    return { write: { kind: 'notReadable', path: excludeFile, message: e.message }, lines: next([]), added: [], dropped: [], damaged: [] };
   }
   const parsed = parseExclude(before);
   const damaged = parsed.damaged.filter((d) => d.owner === owner);
-  const diff = (current: string[], lines: string[]): { added: string[]; dropped: string[] } => ({
-    added: lines.filter((l) => !current.includes(l)),
-    dropped: current.filter((l) => !lines.includes(l)),
-  });
   const current = ownerLines(parsed, owner) ?? [];
-  const planned = next(current) ?? current;
+  const planned = next(current);
   if (withOwnerLines(before, owner, planned) === null) return { write: { kind: 'unchanged' }, ...diff(current, planned), damaged };
   if (dryRun) return { write: { kind: 'pending' }, ...diff(current, planned), damaged };
   const blocker = await writeBlocker(excludeFile);
@@ -632,9 +638,8 @@ async function writeOwnerLines(
   try {
     const write = await updateFileLocked(excludeFile, (content) => {
       const lines = ownerLines(parseExclude(content), owner) ?? [];
-      const wanted = next(lines) ?? lines;
-      changes = diff(lines, wanted);
-      return withOwnerLines(content, owner, wanted);
+      changes = diff(lines, next(lines));
+      return withOwnerLines(content, owner, changes.lines);
     });
     return { write: { kind: write }, ...changes, damaged };
   } catch (e) {
