@@ -1400,6 +1400,14 @@ and leaves yours there. teamai touches only its own entries, every other key of 
 `teamai uninstall` removes exactly teamai's servers. The move out of `.mcp.json` and back works as for Claude
 above, so with the option on no pull writes `.mcp.json`.
 
+On an HTTP-backed team the local agent follows the same option, read for each workspace: its `install_mcp` puts
+Claude's and CodeBuddy's servers in those local scopes, under the same keys, and writes no `.mcp.json`;
+`uninstall_mcp` and `teamai uninstall` remove exactly the servers it recorded there. A server an earlier install left
+in `.mcp.json` moves at the local agent's next sync; a copy you changed stays there, named, as yours, and so does an
+entry another tool's record still claims there. With the option off nothing moves, and while teamai cannot read it
+the local agent installs nothing for Claude or CodeBuddy in that workspace and says why. `teamai doctor` names a
+server the local agent recorded that is still in `.mcp.json`.
+
 TeamAI removes a bare Copilot entry beside `mcpServers` only when its ownership record proves a completed bare write and the entry still matches that write. Older records without placement evidence leave the bare entry alone, even if it matches the team definition. A bare ownership record does not authorize changes to a same-named member entry under `mcpServers`; update skips that collision and removal cleans only the owned bare copy. An unmarked record can claim a keyed entry only when its hash matches that entry and does not also match the bare entry. Completed keyed writes record `bare: false`; a failed placement-record write leaves ownership unproven. New HTTP local-agent installs check Git protection without changing it, persist provisional ownership, then add the exclusion and file record before writing a credential. A failed initial ownership write changes neither Git exclusions nor the MCP config.
 
 An HTTP local-agent update keeps the existing JSON MCP ownership record until the config write succeeds. If saving the new record then fails, it restores the previous config. `uninstall_mcp` removes the entry before dropping its ownership record; a failed config write or an unreadable config keeps that record for a retry, and a failed manifest write restores the entry. A failed MCP reconcile restores each config it wrote before saving ownership, including a file shared by multiple tools. A restoration failure reports both errors and the affected files: repair the config and ownership record before retrying. Git protection remains while a credential is still present.

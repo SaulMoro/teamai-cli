@@ -42,7 +42,8 @@ A server with a `${VAR}` the tool cannot expand itself gets the resolved value
 written into its project config (`.mcp.json`, `.cursor/mcp.json`, ...). With
 `sharing.gitExclude` on, Claude's and CodeBuddy's servers go to their local
 scopes in `~/.claude.json` and `.codebuddy.json` instead, outside the project,
-and the next pull moves teamai's servers out of `.mcp.json`. Before
+and the next pull (on an HTTP-backed team, the local agent's next sync) moves
+teamai's servers out of `.mcp.json`. Before
 that write, teamai lists the file in the clone's `.git/info/exclude`, inside a
 `# [teamai:mcp-exclude:start]` block; the committed `.gitignore` is never touched.
 A file under a symlinked directory is listed and checked where the write lands

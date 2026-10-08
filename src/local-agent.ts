@@ -54,6 +54,16 @@ import {
   sameMcpFile,
   userMcpFile,
   USER_MCP_LOOKUP,
+  claimedByOtherTools,
+  deleteEmptiedMcpFile,
+  describeMcpLocation,
+  loadMcpManifest,
+  mcpManifestKey,
+  mcpRelocated,
+  projectMcpLocations,
+  resolveMcpTargets,
+  saveMcpManifest,
+  type McpTarget,
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
@@ -3555,6 +3565,72 @@ function updateManifestRecord(
   manifest[key] = records;
 }
 
+/**
+ * `tool`'s two places for a workspace's project MCP servers (#915), as a pull
+ * resolves them: the project's file (`tree`) and, for Claude and CodeBuddy,
+ * the tool's local scope (`local`), with `config`, the workspace's config the
+ * places were resolved with (the member's tool roots: Claude's local scope is
+ * in its user config). Null for a tool that has no local scope.
+ */
+async function workspaceMcpLocations(
+  config: LocalAgentConfig, localConfig: LocalConfig, tool: string, workspacePath: string,
+): Promise<{ tree: McpTarget; local: McpTarget; config: LocalConfig } | null> {
+  const withRoots = { ...localConfig, toolRoots: await memberToolRoots(workspacePath) };
+  const places = await projectMcpLocations(createLocalAgentTeamConfig(config.endpoint), withRoots, tool);
+  return places && { ...places, config: withRoots };
+}
+
+/**
+ * The MCP records of `localConfig`'s scope, as `install_mcp` and
+ * `uninstall_mcp` keep them, and how to save them. Project scope: the
+ * workspace's own manifest under the partition (it migrates legacy shared
+ * records on first read), with the records of its local scopes (#915), which
+ * every checkout of the project shares (`saveMcpManifest`). User scope: the
+ * single global file. The ownership key needs no workspace segment.
+ */
+async function loadLocalAgentMcpManifest(
+  localConfig: LocalConfig, dataHome: string,
+): Promise<{ manifestPath: string; manifest: ManagedMcpManifest; save: () => Promise<void> }> {
+  if (localConfig.scope === 'project' && localConfig.projectRoot) {
+    const scoped = { ...localConfig, dataHome };
+    const { manifestPath, manifest } = await loadMcpManifest(scoped, false);
+    return { manifestPath, manifest, save: () => saveMcpManifest(scoped, manifestPath, manifest) };
+  }
+  const manifestPath = managedMcpManifestPath(dataHome);
+  const manifest = (await readJson<ManagedMcpManifest>(manifestPath)) ?? {};
+  return { manifestPath, manifest, save: () => writeJsonAtomic(manifestPath, manifest) };
+}
+
+/**
+ * Take the servers of `records` out of `other`, the place for them in a
+ * workspace the git exclude flag does not pick now (#915), once they are
+ * written and recorded in the other place (`target`): a copy the member
+ * changed stays, named. From the project's file, a server another tool's
+ * record there still claims stays too (Claude while tclaude reads
+ * `.mcp.json`), and a file left holding nothing is deleted, unless git
+ * tracks it.
+ */
+async function leaveOtherMcpLocation(
+  config: LocalAgentConfig,
+  places: { tree: McpTarget; config: LocalConfig },
+  other: McpTarget,
+  serverKey: string,
+  records: readonly ManagedMcpRecord[],
+  target: string,
+  manifest: ManagedMcpManifest,
+): Promise<void> {
+  const fromTree = other.projectKey === undefined;
+  const claimed = fromTree
+    ? await claimedByOtherTools(
+      await resolveMcpTargets(createLocalAgentTeamConfig(config.endpoint), places.config, { includeUndetected: true }), places.tree, manifest)
+    : new Set<string>();
+  let removed = false;
+  for (const record of records) {
+    if (!claimed.has(record.name)) removed = await removeMovedMcpEntry(other, serverKey, record.name, target, record.hash) || removed;
+  }
+  if (removed && fromTree) await deleteEmptiedMcpFile(other.file).catch(() => false);
+}
+
 async function installMcpServer(
   config: LocalAgentConfig,
   command: LocalAgentCommand,
@@ -3594,34 +3670,33 @@ async function installMcpServer(
 
   const baseDir = resolveToolBaseDir(tool, localConfig);
   const mappedFile = path.join(baseDir, mcpRel);
+  // Claude's and CodeBuddy's go to the tool's local scope while the workspace's git exclude flag moves them, as a
+  // pull's do (#915); the other place is where an earlier install may have left this server.
+  const places = projectScope && workspacePath ? await workspaceMcpLocations(config, localConfig, tool, workspacePath) : null;
+  const relocated = places !== null
+    && await mcpRelocated(await localAgentTeamConfig(config.endpoint, scope, workspacePath, `install ${slug}`), places.config, tool);
+  const active = places && (relocated ? places.local : places.tree);
+  const other = places && (relocated ? places.tree : places.local);
   // CodeBuddy reads only the first of its user MCP files that exists (#993), as a pull writes it.
   const lookup = !projectScope && USER_MCP_LOOKUP[tool] !== undefined;
-  const targetFile = lookup ? await userMcpFile(tool, mcpRel, baseDir) : mappedFile;
+  const targetFile = active?.file ?? (lookup ? await userMcpFile(tool, mcpRel, baseDir) : mappedFile);
+  const target = describeMcpLocation({ file: targetFile, projectKey: active?.projectKey });
   const fileOf = (record: ManagedMcpRecord): string =>
     recordedFileOf({ file: targetFile, ...(lookup ? { mappedFile } : {}) }, record);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
-  // Project scope uses THIS worktree's own manifest file (per-worktree under the
-  // partition; migrates legacy shared records on first read). User scope uses the
-  // single global file. The ownership key needs no workspace segment.
-  let manifestPath: string;
-  let manifest: ManagedMcpManifest;
-  if (projectScope && workspacePath) {
-    const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
-    ({ manifestPath, manifest } = await loadProjectMcpManifest(dataHome, workspacePath));
-  } else {
-    manifestPath = managedMcpManifestPath(dataHome);
-    manifest = (await readJson<ManagedMcpManifest>(manifestPath)) ?? {};
-  }
-  const manifestKey = managedMcpManifestKey(tool, projectScope);
+  const { manifestPath, manifest, save } = await loadLocalAgentMcpManifest(localConfig, dataHome);
+  const manifestKey = active ? mcpManifestKey(active) : managedMcpManifestKey(tool, projectScope);
   // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
   // By real path, as reconciliation compares them: a lookup file linked to another is that file.
   const records = manifest[manifestKey] ?? [];
   const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(fileOf(r), targetFile)));
   const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
-  const movedFrom = records.find((r: ManagedMcpRecord, i) => r.name === slug && !inTarget[i]);
+  const otherKey = other ? mcpManifestKey(other) : undefined;
+  const movedFrom = records.find((r: ManagedMcpRecord, i) => r.name === slug && !inTarget[i])
+    ?? (otherKey ? manifest[otherKey]?.find((r) => r.name === slug) : undefined);
   const file = lookup ? targetFile : undefined;
 
   if (format === 'codex') {
@@ -3633,7 +3708,7 @@ async function installMcpServer(
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
     updateManifestRecord(manifest, manifestKey, slug, hash);
-    await writeJsonAtomic(manifestPath, manifest);
+    await save();
     source = spliceCodexBlock(source, slug, block);
     await writeCodexAtomic(targetFile, source);
   } else {
@@ -3641,18 +3716,19 @@ async function installMcpServer(
     const serverKey = MCP_SERVER_KEY[format];
     const hash = entryHash(entry);
     const allowBare = format === 'copilot' && projectScope;
-    const doc = await readJsonDoc(targetFile, serverKey, allowBare);
+    const doc = await readJsonDoc(targetFile, serverKey, allowBare, active?.projectKey);
     if (!doc) {
       throw new Error(`install_mcp: cannot parse ${targetFile}`);
     }
     if (doc.servers[slug] !== undefined && !ownsJsonMcpEntry(doc, slug, owned, allowBare)) {
-      throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
+      throw new Error(`install_mcp: server "${slug}" exists in ${tool} config${active?.projectKey ? ` (${target})` : ''} and is not managed by teamai`);
     }
     // The copy a bare install left before another tool added the key would keep the old value beside this one (#882).
     // Judged by the record as it was before this install updates it.
     const bareCopy = isTeamaiBareCopy(doc, slug, owned);
     // Check Git without changing it until ownership is persisted. Recheck protection before writing the credential (#882).
-    const credential = projectScope && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
+    // A local scope is outside the working tree: no git exclusion applies to it.
+    const credential = projectScope && !active?.projectKey && await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry, true);
     // A record of this server in the file CodeBuddy no longer reads is existing ownership too (#993).
     const previousRecord = owned.find((record) => record.name === slug) ?? movedFrom;
     const previousData = previousRecord ? structuredClone(doc.data) : undefined;
@@ -3660,7 +3736,7 @@ async function installMcpServer(
     // still persist a provisional record before adding a Git exclusion (#882).
     if (!previousRecord) {
       updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, undefined, file);
-      await writeJsonAtomic(manifestPath, manifest);
+      await save();
     }
     if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
     if (bareCopy) delete doc.data[slug];
@@ -3669,8 +3745,13 @@ async function installMcpServer(
     if (allowBare || previousRecord) {
       // Placement is evidence of a completed write, not just an attempted install.
       updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, allowBare ? doc.bare : undefined, file);
+      // A record in the tool's other place goes with the copy there, once this write holds the server.
+      if (otherKey && manifest[otherKey]) {
+        manifest[otherKey] = manifest[otherKey].filter((r) => r.name !== slug);
+        if (manifest[otherKey].length === 0) delete manifest[otherKey];
+      }
       try {
-        await writeJsonAtomic(manifestPath, manifest);
+        await save();
       } catch (error) {
         if (previousData) {
           try {
@@ -3686,33 +3767,45 @@ async function installMcpServer(
         throw error;
       }
     }
-    if (movedFrom) await removeMovedMcpEntry(fileOf(movedFrom), serverKey, slug, targetFile, movedFrom.hash);
+    if (movedFrom && places && other) {
+      await leaveOtherMcpLocation(config, places, other, serverKey, [movedFrom], target, manifest);
+    } else if (movedFrom) {
+      await removeMovedMcpEntry({ file: fileOf(movedFrom) }, serverKey, slug, target, movedFrom.hash);
+    }
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
 }
 
 /**
- * Take `slug` out of `file`, where an earlier install wrote it and which
- * CodeBuddy no longer reads (#993): this install wrote it to `targetFile` and
- * recorded it there. A failure leaves the old entry, and says where.
+ * Take `slug` out of `from`, where an earlier install wrote it and which the
+ * tool no longer gets it from: a user MCP file CodeBuddy no longer reads
+ * (#993), or a project's `.mcp.json` or the tool's local scope, the place for
+ * it the git exclude flag no longer picks (#915). This install wrote it to
+ * `target` and recorded it there. A failure leaves the old entry, and says
+ * where. Whether it took it out.
  */
-async function removeMovedMcpEntry(file: string, serverKey: string, slug: string, targetFile: string, recordedHash: string): Promise<void> {
+async function removeMovedMcpEntry(
+  from: Pick<McpTarget, 'file' | 'projectKey'>, serverKey: string, slug: string, target: string, recordedHash: string,
+): Promise<boolean> {
+  const file = describeMcpLocation(from);
   try {
-    const doc = await readJsonDoc(file, serverKey);
+    const doc = await readJsonDoc(from.file, serverKey, false, from.projectKey);
     if (!doc) throw new Error('it does not parse');
-    if (doc.servers[slug] === undefined) return;
+    if (doc.servers[slug] === undefined) return false;
     // A copy the member changed since teamai installed it is theirs: left where it is (#993).
     if (entryHash(doc.servers[slug]) !== recordedHash) {
-      log.warn(`Installed MCP server ${slug} in ${targetFile}, and kept the copy in ${file}: you changed it since teamai installed it. `
+      log.warn(`Installed MCP server ${slug} in ${target}, and kept the copy in ${file}: you changed it since teamai installed it. `
         + `Remove ${slug} from ${file} when you no longer need it.`);
-      return;
+      return false;
     }
     delete doc.servers[slug];
-    await writeJsonDoc(file, serverKey, doc);
+    await writeJsonDoc(from.file, serverKey, doc);
+    return true;
   } catch (error) {
-    log.warn(`Installed MCP server ${slug} in ${targetFile}, but could not remove the copy an earlier install left in ${file}: `
+    log.warn(`Installed MCP server ${slug} in ${target}, but could not remove the copy an earlier install left in ${file}: `
       + `${error instanceof Error ? error.message : String(error)}. Remove ${slug} from ${file} yourself.`);
+    return false;
   }
 }
 
@@ -3775,68 +3868,64 @@ async function uninstallMcpServer(
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
-  // Project scope uses THIS worktree's own manifest file (per-worktree under the
-  // partition; migrates legacy shared records on first read). User scope uses the
-  // single global file. The ownership key needs no workspace segment.
-  let manifestPath: string;
-  let manifest: ManagedMcpManifest;
-  if (projectScope && workspacePath) {
-    const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
-    ({ manifestPath, manifest } = await loadProjectMcpManifest(dataHome, workspacePath));
-  } else {
-    manifestPath = managedMcpManifestPath(dataHome);
-    manifest = (await readJson<ManagedMcpManifest>(manifestPath)) ?? {};
-  }
-  const manifestKey = managedMcpManifestKey(tool, projectScope);
-  const owned = manifest[manifestKey] ?? [];
-  const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
+  const { manifestPath, manifest, save } = await loadLocalAgentMcpManifest(localConfig, dataHome);
+  // Claude's and CodeBuddy's may be in the tool's local scope or in the project's file, whichever the git exclude
+  // flag picked when it was installed (#915): taken out wherever a record places it.
+  const places = projectScope && workspacePath ? await workspaceMcpLocations(config, localConfig, tool, workspacePath) : null;
+  const locations: Array<{ manifestKey: string; file?: string; projectKey?: string }> = places
+    ? [places.local, places.tree].map((place) => ({ manifestKey: mcpManifestKey(place), file: place.file, projectKey: place.projectKey }))
+    : [{ manifestKey: managedMcpManifestKey(tool, projectScope) }];
 
-  if (!ownedNames.has(slug)) return;
-  // CodeBuddy's user servers are where the install recorded them (#993); an older one recorded no file.
-  const recordedFile = !projectScope && USER_MCP_LOOKUP[tool] ? owned.find((r) => r.name === slug)?.file : undefined;
-  const targetFile = recordedFile ?? path.join(baseDir, mcpRel);
+  for (const { manifestKey, file, projectKey } of locations) {
+    const owned = manifest[manifestKey] ?? [];
+    if (!owned.some((r: ManagedMcpRecord) => r.name === slug)) continue;
+    // CodeBuddy's user servers are where the install recorded them (#993); an older one recorded no file.
+    const recordedFile = !projectScope && USER_MCP_LOOKUP[tool] ? owned.find((r) => r.name === slug)?.file : undefined;
+    const targetFile = file ?? recordedFile ?? path.join(baseDir, mcpRel);
+    const where = describeMcpLocation({ file: targetFile, projectKey });
 
-  let restoreConfig: (() => Promise<void>) | undefined;
-  if (format === 'codex') {
-    const source = (await readFileIfExists(targetFile)) ?? '';
-    const next = spliceCodexBlock(source, slug, null);
-    if (next !== source) {
-      await writeCodexAtomic(targetFile, next);
-      restoreConfig = () => writeCodexAtomic(targetFile, source);
-    }
-  } else {
-    const serverKey = MCP_SERVER_KEY[format];
-    const allowBare = format === 'copilot' && projectScope;
-    const doc = await readJsonDoc(targetFile, serverKey, allowBare);
-    if (!doc) throw new Error(`uninstall_mcp: cannot parse ${targetFile}. Ownership was kept; repair the config and uninstall the server again.`);
-    // Also a bare entry another tool's mcpServers now sits beside (#882).
-    const bareCopy = isTeamaiBareCopy(doc, slug, owned);
-    const ownsEntry = ownsJsonMcpEntry(doc, slug, owned, allowBare);
-    if ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy) {
-      const previousData = structuredClone(doc.data);
-      if (ownsEntry) delete doc.servers[slug];
-      if (bareCopy) delete doc.data[slug];
-      await writeJsonDoc(targetFile, serverKey, doc);
-      restoreConfig = () => writeMcpJson(targetFile, previousData);
-    }
-  }
-  manifest[manifestKey] = owned.filter((r: ManagedMcpRecord) => r.name !== slug);
-  if (manifest[manifestKey].length === 0) delete manifest[manifestKey];
-  try {
-    await writeJsonAtomic(manifestPath, manifest);
-  } catch (error) {
-    if (restoreConfig) {
-      try {
-        await restoreConfig();
-      } catch (restoreError) {
-        throw new Error(
-          `uninstall_mcp: ownership write failed (${error instanceof Error ? error.message : String(error)}), and restoring ${targetFile} failed `
-          + `(${restoreError instanceof Error ? restoreError.message : String(restoreError)}). The config may not match ${manifestPath}. Repair the config and ownership record after fixing both write errors, then uninstall the server again.`,
-          { cause: error },
-        );
+    let restoreConfig: (() => Promise<void>) | undefined;
+    if (format === 'codex') {
+      const source = (await readFileIfExists(targetFile)) ?? '';
+      const next = spliceCodexBlock(source, slug, null);
+      if (next !== source) {
+        await writeCodexAtomic(targetFile, next);
+        restoreConfig = () => writeCodexAtomic(targetFile, source);
+      }
+    } else {
+      const serverKey = MCP_SERVER_KEY[format];
+      const allowBare = format === 'copilot' && projectScope;
+      const doc = await readJsonDoc(targetFile, serverKey, allowBare, projectKey);
+      if (!doc) throw new Error(`uninstall_mcp: cannot parse ${targetFile}. Ownership was kept; repair the config and uninstall the server again.`);
+      // Also a bare entry another tool's mcpServers now sits beside (#882).
+      const bareCopy = isTeamaiBareCopy(doc, slug, owned);
+      const ownsEntry = ownsJsonMcpEntry(doc, slug, owned, allowBare);
+      if ((ownsEntry && doc.servers[slug] !== undefined) || bareCopy) {
+        const previousData = structuredClone(doc.data);
+        if (ownsEntry) delete doc.servers[slug];
+        if (bareCopy) delete doc.data[slug];
+        await writeJsonDoc(targetFile, serverKey, doc);
+        restoreConfig = () => writeMcpJson(targetFile, previousData);
       }
     }
-    throw error;
+    manifest[manifestKey] = owned.filter((r: ManagedMcpRecord) => r.name !== slug);
+    if (manifest[manifestKey].length === 0) delete manifest[manifestKey];
+    try {
+      await save();
+    } catch (error) {
+      if (restoreConfig) {
+        try {
+          await restoreConfig();
+        } catch (restoreError) {
+          throw new Error(
+            `uninstall_mcp: ownership write failed (${error instanceof Error ? error.message : String(error)}), and restoring ${where} failed `
+            + `(${restoreError instanceof Error ? restoreError.message : String(restoreError)}). The config may not match ${manifestPath}. Repair the config and ownership record after fixing both write errors, then uninstall the server again.`,
+            { cause: error },
+          );
+        }
+      }
+      throw error;
+    }
   }
   log.debug(`local-agent: uninstalled MCP server "${slug}" from ${tool} (scope=${scope})`);
 }
@@ -4114,6 +4203,8 @@ async function syncLocalAgent(context: LocalAgentContext): Promise<boolean> {
 async function protectWorkspaceMcpConfigs(config: LocalAgentConfig, cwd?: string): Promise<void> {
   const workspacePath = await resolveWorkspacePath(cwd);
   if (!workspacePath) return;
+  // First, what an earlier install left in a file the tool no longer gets it from (#915).
+  await moveWorkspaceMcpServers(config, workspacePath);
   try {
     const { resolveDataHomeForScope } = await import('./config.js');
     const dataHome = await resolveDataHomeForScope('project', workspacePath);
@@ -4127,6 +4218,111 @@ async function protectWorkspaceMcpConfigs(config: LocalAgentConfig, cwd?: string
       + 'The next session checks again; do not commit them meanwhile.',
     );
   }
+}
+
+/**
+ * Move the project MCP servers earlier installs recorded in a workspace's
+ * `.mcp.json` to the tool's local scope (#915), for Claude and CodeBuddy
+ * while the workspace's git exclude flag moves them there, as a pull does.
+ * The server sends no install again for a server already in place. A copy
+ * the member changed stays, named, and is theirs from then on; so does a
+ * server of the same name the member has in the local scope. A server
+ * another tool's record there still claims stays in `.mcp.json` for that
+ * tool. With the flag off or unknown, nothing moves.
+ */
+async function moveWorkspaceMcpServers(config: LocalAgentConfig, workspacePath: string): Promise<void> {
+  // An uninstall_teamai in this run removed the agent: nothing to move.
+  if (!await loadLocalAgentConfig({ dryRun: true })) return;
+  try {
+    const localConfig = await createResourceLocalConfig(config, 'project', getUserHome(), workspacePath);
+    const { loadProjectMcpManifest } = await import('./utils/mcp-manifest.js');
+    // Read first without writing anything: most syncs find nothing to move.
+    const { manifest: recorded } = await loadProjectMcpManifest(getDataHome(localConfig), workspacePath, { dryRun: true });
+    const tools = Object.keys(createLocalAgentTeamConfig(config.endpoint).toolPaths)
+      .filter((tool) => (recorded[managedMcpManifestKey(tool, true)]?.length ?? 0) > 0);
+    if (tools.length === 0 || await gitExcludeEnabledFor(workspacePath) !== true) return;
+    const teamConfig = await localAgentTeamConfig(config.endpoint, 'project', workspacePath, 'move MCP servers');
+    const { manifest, save } = await loadLocalAgentMcpManifest(localConfig, getDataHome(localConfig));
+    for (const tool of tools) {
+      const places = await workspaceMcpLocations(config, localConfig, tool, workspacePath);
+      if (!places || !await mcpRelocated(teamConfig, places.config, tool)) continue;
+      await moveToLocalScope(config, tool, places, manifest, save);
+    }
+  } catch (e) {
+    log.warn(`Could not move the MCP servers the local agent installed in ${workspacePath} out of the project: `
+      + `${e instanceof Error ? e.message : String(e)}. The next session start tries again.`);
+  }
+}
+
+/** `moveWorkspaceMcpServers` for one tool. */
+async function moveToLocalScope(
+  config: LocalAgentConfig,
+  tool: string,
+  places: { tree: McpTarget; local: McpTarget; config: LocalConfig },
+  manifest: ManagedMcpManifest,
+  save: () => Promise<void>,
+): Promise<void> {
+  const { tree, local } = places;
+  const treeKey = mcpManifestKey(tree);
+  const localKey = mcpManifestKey(local);
+  const records = manifest[treeKey] ?? [];
+  if (records.length === 0 || tree.format === 'codex') return;
+  const serverKey = MCP_SERVER_KEY[tree.format];
+  const there = describeMcpLocation(local);
+  const from = await readJsonDoc(tree.file, serverKey);
+  const to = await readJsonDoc(local.file, serverKey, false, local.projectKey);
+  if (!from || !to) {
+    log.warn(`Did not move the local agent's MCP servers for ${tool} from ${tree.file} to ${there}: `
+      + `${from ? local.file : tree.file} does not parse. Fix it; the next session start moves them.`);
+    return;
+  }
+  const owned = new Set((manifest[localKey] ?? []).map((record) => record.name));
+  const moved: ManagedMcpRecord[] = [];
+  const edited: string[] = [];
+  const left: ManagedMcpRecord[] = [];
+  for (const record of records) {
+    const entry = from.servers[record.name];
+    // Gone from the file: nothing to move, and the record goes.
+    if (entry === undefined) continue;
+    // A copy the member changed since teamai installed it is theirs: it stays where it is, and its record goes.
+    if (entryHash(entry) !== record.hash) {
+      edited.push(record.name);
+      continue;
+    }
+    const held = to.servers[record.name];
+    if (held !== undefined && !owned.has(record.name) && entryHash(held) !== record.hash) {
+      log.warn(`Kept MCP server ${record.name} in ${tree.file}: ${there} holds a server of that name that is not teamai's. `
+        + `Rename or remove one of them; the local agent moves ${record.name} at its next sync.`);
+      left.push(record);
+      continue;
+    }
+    if (!owned.has(record.name)) to.servers[record.name] = entry;
+    moved.push(record);
+  }
+  if (left.length === records.length) return;
+
+  const previous = structuredClone(to.data);
+  const wrote = moved.some((record) => !owned.has(record.name));
+  if (wrote) await writeJsonDoc(local.file, serverKey, to);
+  for (const record of moved) {
+    if (!owned.has(record.name)) updateManifestRecord(manifest, localKey, record.name, record.hash, false);
+  }
+  if (left.length > 0) manifest[treeKey] = left;
+  else delete manifest[treeKey];
+  try {
+    await save();
+  } catch (error) {
+    if (wrote) await writeMcpJson(local.file, previous).catch(() => undefined);
+    throw error;
+  }
+  for (const name of edited) {
+    log.warn(`Kept MCP server ${name} in ${tree.file}: you changed it since teamai installed it, so the local agent did not move it to ${there}. `
+      + `It is yours now; remove ${name} from ${tree.file} when you no longer need it.`);
+  }
+  if (moved.length === 0) return;
+  await leaveOtherMcpLocation(config, places, tree, serverKey, moved, there, manifest);
+  log.info(`Moved the local agent's MCP servers for ${tool} (${moved.map((record) => record.name).join(', ')}) from ${tree.file} to ${there}: `
+    + 'with sharing.gitExclude on, the tool reads them there.');
 }
 
 function statusFromEvent(event?: DashboardEvent): string {

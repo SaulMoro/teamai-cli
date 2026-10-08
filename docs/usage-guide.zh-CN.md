@@ -1242,6 +1242,12 @@ CodeBuddy 的项目级 server 也以同样方式移到 CodeBuddy 的 local scope
 该文件的其他内容保持不变，`teamai uninstall` 也只移除 teamai 的 server。移出和移回 `.mcp.json` 的方式与上文 Claude 相同，
 因此开启此选项后不会有 pull 写入 `.mcp.json`。
 
+使用 HTTP 后端的团队中，本地 agent 遵循同一选项（按每个工作区读取）：它的 `install_mcp` 把 Claude 和 CodeBuddy 的 server
+写入上述 local scope，使用相同的 key，不写 `.mcp.json`；`uninstall_mcp` 和 `teamai uninstall` 只移除它在那里记录的 server。
+以前的安装留在 `.mcp.json` 中的 server 会在本地 agent 下一次同步时移过去；你改动过的副本留在原处并给出提示，归你所有；
+其他工具的记录仍认领的条目也留在原处。选项关闭时不会移动任何内容；teamai 无法读取该选项时，本地 agent 不会在该工作区为
+Claude 或 CodeBuddy 安装任何内容，并说明原因。`teamai doctor` 会指出本地 agent 记录的、仍在 `.mcp.json` 中的 server。
+
 TeamAI 仅在所有权记录证明已完成顶层写入且内容仍匹配时，才删除 `mcpServers` 旁的 Copilot 顶层条目。旧记录缺少位置证据时，即使内容与团队定义相同，也保留顶层条目。顶层所有权记录不授权修改 `mcpServers` 下的同名成员条目；更新跳过该冲突，移除时只清理受管理的顶层副本。缺少位置标记的记录只有在哈希匹配嵌套条目且不同时匹配顶层条目时，才能认领嵌套条目。完成的嵌套写入记录 `bare: false`；位置记录写入失败时，所有权仍未得到证明。HTTP 本地代理首次安装先只读检查 Git 保护，再保存临时所有权记录，随后添加排除规则和文件记录，最后写入凭据。初始所有权记录写入失败不会改变 Git 排除规则或 MCP 配置。
 
 HTTP local-agent 更新 JSON MCP 配置时，先保留原有 ownership 记录，配置写入成功后才更新记录；如果随后保存记录失败，会恢复原配置。`uninstall_mcp` 先删除配置中的条目，再移除 ownership 记录：配置写入失败或无法读取时保留记录以便重试，manifest 写入失败时恢复条目。MCP reconcile 在保存 ownership 前失败时，会恢复本次已写入的所有配置，包括多个工具共用的文件。恢复本身也失败时，错误会同时说明两次失败及受影响的文件；修复配置与 ownership 记录后再重试。只要凭据仍在文件中，就继续保留 Git 排除保护。

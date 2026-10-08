@@ -373,7 +373,7 @@ function codebuddyLocalFile(): string {
  * `codebuddyProjectKey`. Null for another tool, outside project scope, or
  * when the team maps no project MCP file (for Claude, or no user MCP file).
  */
-async function projectMcpLocations(
+export async function projectMcpLocations(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   tool: string,
@@ -405,7 +405,7 @@ async function projectMcpLocations(
  * installed and enabled here: it keeps the file until its own local scope is
  * checked.
  */
-async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<boolean> {
+export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<boolean> {
   if (!LOCAL_SCOPE_MCP_TOOLS[tool] || !isGitExcludeEnabled(localConfig, teamConfig)) return false;
   if (tool !== 'claude') return true;
   const tclaude = teamConfig.toolPaths.tclaude;
@@ -924,7 +924,7 @@ export type UnrecordedMcpOwner = 'teamai' | 'another tool' | 'member';
  * the same key claim: an entry one of them wrote is not the member's, and is
  * left to that tool, as before #993.
  */
-async function claimedByOtherTools(
+export async function claimedByOtherTools(
   targets: readonly McpTarget[],
   target: McpTarget,
   manifest: Readonly<Record<string, ManagedMcpRecord[]>>,
@@ -1058,7 +1058,7 @@ async function shadowedBareCopilotServer(target: McpTarget): Promise<string | un
  * Project scope also holds the records of the local scopes for this
  * checkout's key (`mcpManifestKey`), kept apart (`saveMcpManifest`).
  */
-async function loadMcpManifest(
+export async function loadMcpManifest(
   localConfig: LocalConfig,
   dryRun: boolean | undefined,
 ): Promise<{ manifestPath: string; manifest: ManagedMcpManifest }> {
@@ -1106,7 +1106,7 @@ async function localMcpKeyOf(localConfig: LocalConfig): Promise<(key: string) =>
  * another checkout's keys there stay as they are, but for the keys in
  * `gone` (`leaveGoneCheckouts`), which go.
  */
-async function saveMcpManifest(
+export async function saveMcpManifest(
   localConfig: LocalConfig,
   manifestPath: string,
   manifest: ManagedMcpManifest,
@@ -2758,7 +2758,7 @@ async function leaveGoneCheckouts(
  * A symlink is the member's, and a file git tracks, or cannot say it does
  * not, stays.
  */
-async function deleteEmptiedMcpFile(file: string): Promise<boolean> {
+export async function deleteEmptiedMcpFile(file: string): Promise<boolean> {
   if (await fs.promises.lstat(file).then((stat) => stat.isSymbolicLink(), () => true)) return false;
   const doc = await readJsonDoc(file, MCP_SERVER_KEY.claude);
   if (!doc || Object.keys(doc.servers).length > 0 || Object.keys(doc.data).some((key) => key !== MCP_SERVER_KEY.claude)) return false;
