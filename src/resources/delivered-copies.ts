@@ -447,6 +447,21 @@ export async function blockingEntries(dest: string, sourcePath: string): Promise
 }
 
 /**
+ * What a skill delivered to `dest` around the member's `blocked` entries (`blockingEntries`)
+ * puts in the `delivered` git exclude block (#915): the directory when nothing blocked it, else
+ * each file it delivered, so no entry of the member's in it is listed.
+ */
+export async function deliveredSkillPaths(dest: string, sourcePath: string, blocked: readonly string[]): Promise<string[]> {
+  if (blocked.length === 0) return [dest];
+  const files: string[] = [];
+  for (const rel of await listFilesRecursive(sourcePath)) {
+    if (blocked.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) continue;
+    if ((await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) files.push(path.join(dest, ...rel.split('/')));
+  }
+  return files;
+}
+
+/**
  * Whether delivering skill `item` to `target` would write over a file that is the member's: one
  * off the record that is neither what teamai writes there now nor a team version of it.
  */

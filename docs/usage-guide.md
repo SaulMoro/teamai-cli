@@ -1705,7 +1705,7 @@ That file is local to your clone, shared by its worktrees, and never committed. 
 
 What the block lists:
 
-- skills, one line per skill directory: team, role, project and source skills, the CLI's `teamai` skill, and Codex's copies in `.agents/skills/<name>/`;
+- skills, one line per skill directory: team, role, project and source skills, the CLI's `teamai` skill, and Codex's copies in `.agents/skills/<name>/`. A team skill delivered around an entry of yours of the other type (a file where the team has a directory, or the reverse) is listed one file per line instead, so your entry stays visible;
 - rules one file per line, never a directory, so a file of your own beside them stays visible: namespace subdirectories (`.cursor/rules/fe/style.mdc`), flattened names (`.kiro/steering/fe.style.md`) and `.github/instructions/**/*.instructions.md` included;
 - agents, and the `teamai-recall` rule and agent;
 - your `teamai-context` files (`.claude/rules/teamai-context.md`, `.cursor/rules/teamai-context.mdc`, `.codebuddy/rules/teamai-context.md`, `.opencode/teamai-context.md`, `.github/instructions/teamai-context.instructions.md`);

@@ -29,7 +29,7 @@ import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } f
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
+  blockingEntries, deliveredSkillPaths, describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -448,6 +448,10 @@ async function reportWouldKeep(
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: you changed it since teamai delivered it.`);
       } else if (verdict.kind === 'member') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: ${notTeamaisReason(item.relativePath)}.`);
+      } else if (writer === 'skills') {
+        // As the write would list it: never an entry of the member's it delivers around.
+        const blocked = await blockingEntries(target.dest, item.sourcePath);
+        for (const file of await deliveredSkillPaths(target.dest, item.sourcePath, blocked)) ledger.recorder?.report(writer, file);
       } else if (writer) {
         ledger.recorder?.report(writer, target.dest);
       }

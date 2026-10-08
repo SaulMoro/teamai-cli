@@ -1549,7 +1549,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 该块列出：
 
-- skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本；
+- skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本。若团队 skill 绕开了你的一个类型不同的条目（团队是目录而你是文件，或反之）下发，则改为每个文件一行，你的条目保持可见；
 - rule 每个文件一行，从不列目录，因此你放在旁边的自己的文件仍然可见：包括命名空间子目录（`.cursor/rules/fe/style.mdc`）、扁平化的文件名（`.kiro/steering/fe.style.md`）以及 `.github/instructions/**/*.instructions.md`；
 - agent，以及 `teamai-recall` rule 和 agent；
 - 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、`.github/instructions/teamai-context.instructions.md`）；

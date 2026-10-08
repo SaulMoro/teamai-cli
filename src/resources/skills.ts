@@ -18,7 +18,7 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  blockingEntries, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
+  blockingEntries, deliveredSkillPaths, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
   membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
@@ -854,7 +854,7 @@ export class SkillsHandler extends ResourceHandler {
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
-        ledger?.recorder?.report('skills', dest);
+        if (ledger?.recorder) for (const file of await deliveredSkillPaths(dest, item.sourcePath, blocked)) ledger.recorder.report('skills', file);
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {
         ledger?.recorder?.failed('skills');
