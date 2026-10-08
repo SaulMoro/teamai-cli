@@ -120,6 +120,8 @@ interface MachineOptions {
   agents?: string;
   initArgs?: string[];
   init?: boolean;
+  /** Runs in the business repo after its first commit, before `init`. */
+  before?: (dir: string) => void;
 }
 
 function machine(base: string, opts: MachineOptions = {}): Machine {
@@ -182,6 +184,7 @@ function machine(base: string, opts: MachineOptions = {}): Machine {
   gitOk(['add', '-A'], dir);
   gitOk(['commit', '-q', '-m', 'app'], dir);
   for (const [rel, content] of Object.entries(opts.business ?? {})) writeFile(path.join(dir, rel), content);
+  opts.before?.(dir);
   const realDir = fs.realpathSync.native(dir);
 
   const teamai = (args: string[]): Run => run(process.execPath, [CLI, ...args], realDir);
@@ -516,19 +519,18 @@ const EXT_SOURCE = {
 /** Copilot and six other agents; Kiro writes namespaced rules flat. */
 const AGENTS = 'claude,codex,cursor,codebuddy,opencode,kiro,copilot';
 const MEMBERS_CURSOR_RULE = '---\ndescription: mine\nalwaysApply: true\n---\nMY OWN TEAM RULE\n';
-/** The member's files: their own, one at the path of a team rule (#993 keeps it), one in Codex's shared skills directory. */
-const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md'];
+/** The member's files: their own, one at the path of a team rule (#993 keeps it), one in Codex's shared skills directory, one in the docs mirror. */
+const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skills/my-own/SKILL.md', '.teamai/docs/mine.md'];
 
 /**
  * What git may still show: paths the delivered block does not cover yet (MCP
- * and OpenCode configs, `.codex/hooks.json`, the docs mirror). Nothing the
+ * and OpenCode configs, `.codex/hooks.json`). Nothing the
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
   /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
   /^opencode\.json$/, /^\.opencode\/opencode\.json$/,
   /^\.codex\/hooks\.json$/,
-  /^\.teamai\/docs\//, /^\.teamai\/\.ignore$/,
 ];
 const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];
 /** A delivered path of each writer and kind, as the member's tools read them. */
@@ -542,6 +544,7 @@ const DELIVERED = [
   '.claude/skills/teamai/SKILL.md', '.claude/rules/teamai-recall.md', '.claude/agents/teamai-recall.md', '.cursor/rules/teamai-recall.mdc',
   '.claude/skills/ext-skill/SKILL.md', '.agents/skills/fe-skill/SKILL.md', '.claude/skills/checkout-skill/SKILL.md',
   '.claude/skills/tracked-skill/extra.md',
+  '.teamai/docs/guide.md', '.teamai/.ignore',
 ];
 
 /** Status entries that are neither the member's files, a tracked file's change, nor on the allowlist. */
@@ -572,6 +575,7 @@ function fullMachine(base: string, opts: Partial<MachineOptions> = {}): Machine 
       'notes.md': 'mine\n',
       '.cursor/rules/team-rule.mdc': MEMBERS_CURSOR_RULE,
       '.agents/skills/my-own/SKILL.md': skillMd('my-own', 'Mine.'),
+      '.teamai/docs/mine.md': 'my notes\n',
       // A copy of a team skill another teamai run left in Codex's shared directory: Codex's copy goes there.
       '.agents/skills/fe-skill/SKILL.md': FE_SKILL,
     },
@@ -1186,5 +1190,169 @@ describe('explicit commands and layout migrations never delete a file the busine
     expect(m.status().filter((line) => line.includes('only-rule')), pulled.output).toEqual([]);
     expect(read(path.join(m.dir, mine))).toBe(rule('Mine'));
     expect(m.status()).toContain(`?? ${mine}`);
+  });
+});
+
+const DOCS_TOKEN = 'ZQX-DOCS-7731';
+const TEAM_DOCS = {
+  ...TEAM_SKILLS,
+  'docs/guide.md': `# Guide\n\nThe payment router id is ${DOCS_TOKEN}.\n`,
+  'docs/sub/deep.md': `# Deep\n\n${DOCS_TOKEN} again.\n`,
+  'docs/dir-doc.md': '# A doc the member has a directory in place of\n',
+  'docs/link-doc.md': '# A doc the member has a link in place of\n',
+  'docs/linked/inside.md': '# A doc under a directory the member has a link in place of\n',
+};
+/** What the member keeps in the docs mirror: a file of their own, a directory and a link at a doc's path, a link in place of a doc directory. */
+const MEMBERS_DOCS = ['.teamai/docs/dir-doc.md/notes.md', '.teamai/docs/link-doc.md', '.teamai/docs/linked', '.teamai/docs/mine.md'];
+const DOCS_ON = 'sharing:\n  gitExclude:\n    enabled: true\n';
+const MEMBERS_DOCS_FILES = { '.teamai/docs/mine.md': 'my notes\n', '.teamai/docs/dir-doc.md/notes.md': 'my directory\n' };
+
+function docsMachine(base: string, opts: Partial<MachineOptions> = {}): Machine {
+  return machine(base, {
+    team: DOCS_ON,
+    files: TEAM_DOCS,
+    // The member's links point at the business repo's own, committed content.
+    committed: { 'vendor-docs/readme.md': 'vendor\n' },
+    business: MEMBERS_DOCS_FILES,
+    before: (dir) => {
+      fs.symlinkSync('../../README.md', path.join(dir, '.teamai', 'docs', 'link-doc.md'));
+      fs.symlinkSync('../../vendor-docs', path.join(dir, '.teamai', 'docs', 'linked'));
+    },
+    ...opts,
+  });
+}
+
+/** The agents' grep tools run ripgrep with `--hidden`; without it on PATH, the search check is skipped. */
+const HAS_RG = spawnSync('rg', ['--version'], { encoding: 'utf8' }).status === 0;
+if (!HAS_RG) console.warn('Skipping the docs search check: ripgrep (rg) is not on PATH.');
+
+/** The files `rg --hidden` finds holding `token`, searching `m`'s business repo from its root. */
+function rgFind(m: Machine, token: string): string[] {
+  const r = spawnSync('rg', ['-l', '--hidden', '--no-config', '--glob', '!.git', token, '.'], { cwd: m.dir, encoding: 'utf8', env: env(m.home) });
+  return r.stdout.split('\n').filter(Boolean).map((file) => file.replace(/^\.\//, '')).sort();
+}
+
+/** Status entries under `.teamai/`. */
+const teamaiEntries = (m: Machine): string[] => m.status().filter((line) => line.slice(3).startsWith('.teamai/'));
+
+describe('the docs mirror stays out of git (#915)', () => {
+  it('lists one line per delivered doc and the docs search whitelist, and keeps every entry of the member\'s in the mirror visible and addable', () => {
+    const m = docsMachine('docs-default');
+
+    expect(fs.existsSync(path.join(m.dir, '.teamai', 'docs', 'sub', 'deep.md'))).toBe(true);
+    expect(teamaiEntries(m)).toEqual(MEMBERS_DOCS.map((file) => `?? ${file}`));
+    // Never the whole mirror, and nothing of the member's or under a link of theirs.
+    expect(m.deliveredLines().filter((line) => line.startsWith('/.teamai/')).sort())
+      .toEqual(['/.teamai/.ignore', '/.teamai/docs/guide.md', '/.teamai/docs/sub/deep.md']);
+    expect(read(path.join(m.dir, '.teamai', '.ignore'))).toBe('# [teamai:delivered:start]\n!/docs/**\n# [teamai:delivered:end]\n');
+
+    m.git(['add', '-A']);
+    const staged = m.git(['diff', '--cached', '--name-only']).split('\n').filter((file) => file.startsWith('.teamai/'));
+    expect(staged.sort()).toEqual(MEMBERS_DOCS);
+  });
+
+  it.skipIf(!HAS_RG)('lets a ripgrep search from the repository root find the excluded docs, which it skips without the whitelist', () => {
+    const m = docsMachine('docs-rg');
+    expect(teamaiEntries(m).filter((line) => /guide|deep/.test(line))).toEqual([]);
+
+    expect(rgFind(m, DOCS_TOKEN)).toEqual(['.teamai/docs/guide.md', '.teamai/docs/sub/deep.md']);
+    fs.renameSync(path.join(m.dir, '.teamai', '.ignore'), path.join(m.dir, 'ignore.bak'));
+    expect(rgFind(m, DOCS_TOKEN)).toEqual([]);
+  });
+
+  it('adds the whitelist to a member\'s own .teamai/.ignore, which stays visible, and removes only its block when the setting goes off', () => {
+    const mine = '# my search settings\r\n!/notes/\r\n';
+    const ignore = (m: Machine): string => path.join(m.dir, '.teamai', '.ignore');
+    const m = docsMachine('docs-own-ignore', { business: { ...MEMBERS_DOCS_FILES, '.teamai/.ignore': mine } });
+
+    expect(read(ignore(m))).toBe(`${mine}# [teamai:delivered:start]\r\n!/docs/**\r\n# [teamai:delivered:end]\r\n`);
+    expect(m.deliveredLines()).not.toContain('/.teamai/.ignore');
+    expect(m.deliveredLines()).toContain('/.teamai/docs/guide.md');
+    expect(m.status()).toContain('?? .teamai/.ignore');
+
+    m.setOverride(false);
+    m.ok(['pull']);
+    expect(read(ignore(m))).toBe(mine);
+    expect(m.status()).toEqual(expect.arrayContaining(['?? .teamai/.ignore', '?? .teamai/docs/guide.md']));
+  });
+
+  it('removes the whitelist file it created when the setting goes off, and writes it again when it comes back on, fast path included', () => {
+    // Nothing of the member's in the mirror: an entry pull keeps makes every pull a full sync.
+    const m = docsMachine('docs-flag', { business: {}, before: undefined });
+    const ignore = path.join(m.dir, '.teamai', '.ignore');
+    expect(fs.existsSync(ignore)).toBe(true);
+
+    m.setOverride(false);
+    const preview = m.ok(['pull', '--dry-run']);
+    expect(preview.output).toContain(`[dry-run] Would remove teamai's docs search whitelist from ${ignore}`);
+    expect(fs.existsSync(ignore)).toBe(true);
+    const off = m.ok(['pull']);
+    expect(off.output).toContain('Already synced');
+    expect(fs.existsSync(ignore), off.output).toBe(false);
+    expect(teamaiEntries(m)).toEqual(expect.arrayContaining(['?? .teamai/docs/guide.md', '?? .teamai/docs/sub/deep.md']));
+
+    m.setOverride(true);
+    m.ok(['pull']);
+    expect(read(ignore)).toBe('# [teamai:delivered:start]\n!/docs/**\n# [teamai:delivered:end]\n');
+    expect(teamaiEntries(m)).toEqual([]);
+  });
+
+  it('a doc the member edits leaves the block on the next full sync, visible and addable', () => {
+    const m = docsMachine('docs-edited', { business: {}, before: undefined });
+    fs.appendFileSync(path.join(m.dir, '.teamai', 'docs', 'guide.md'), 'My note.\n');
+    m.teamCommit({ 'docs/new.md': '# New\n' });
+
+    const pulled = m.ok(['pull']);
+
+    expect(read(path.join(m.dir, '.teamai', 'docs', 'guide.md')), pulled.output).toContain('My note.');
+    expect(m.deliveredLines()).toEqual(expect.arrayContaining(['/.teamai/docs/new.md', '/.teamai/docs/sub/deep.md']));
+    expect(m.deliveredLines()).not.toContain('/.teamai/docs/guide.md');
+    expect(teamaiEntries(m)).toEqual(['?? .teamai/docs/guide.md']);
+  });
+
+  it('with the docs elsewhere, lists one line per delivered doc there, writes no .teamai/.ignore, and keeps the member\'s file there visible', () => {
+    const m = docsMachine('docs-elsewhere', {
+      team: `${DOCS_ON}  docs:\n    localDir: "~/team-docs"\n`,
+      business: { 'team-docs/mine.md': 'my notes\n' },
+      before: undefined,
+    });
+
+    expect(fs.existsSync(path.join(m.dir, 'team-docs', 'guide.md'))).toBe(true);
+    expect(fs.existsSync(path.join(m.dir, '.teamai', '.ignore'))).toBe(false);
+    expect(m.deliveredLines().filter((line) => line.includes('docs')).sort()).toEqual([
+      '/team-docs/dir-doc.md', '/team-docs/guide.md', '/team-docs/link-doc.md', '/team-docs/linked/inside.md', '/team-docs/sub/deep.md',
+    ]);
+    expect(m.status().filter((line) => line.includes('docs'))).toEqual(['?? team-docs/mine.md']);
+  });
+
+  it('leaves a .teamai/.ignore the repository tracks as committed, through pull and uninstall', () => {
+    const committed = '!/notes/\n';
+    const m = docsMachine('docs-tracked-ignore', {
+      committed: { 'vendor-docs/readme.md': 'vendor\n', '.teamai/.ignore': committed }, business: {}, before: undefined,
+    });
+    const ignore = path.join(m.dir, '.teamai', '.ignore');
+
+    expect(read(ignore)).toBe(committed);
+    expect(m.deliveredLines()).not.toContain('/.teamai/.ignore');
+    expect(m.deliveredLines()).toContain('/.teamai/docs/guide.md');
+    expect(teamaiEntries(m)).toEqual([]);
+
+    m.ok(['uninstall', '--force']);
+    expect(read(ignore)).toBe(committed);
+  });
+
+  it('uninstall removes the whitelist: the file it created, and only its block from a member\'s own', () => {
+    const created = docsMachine('docs-uninstall', { business: {}, before: undefined });
+    const own = docsMachine('docs-uninstall-own', { business: { '.teamai/.ignore': '!/notes/\n' }, before: undefined });
+    expect(read(path.join(own.dir, '.teamai', '.ignore'))).toContain('!/docs/**');
+
+    for (const m of [created, own]) {
+      const plan = m.ok(['uninstall', '--dry-run']);
+      expect(plan.output).toContain(path.join(m.dir, '.teamai', '.ignore'));
+      m.ok(['uninstall', '--force']);
+    }
+
+    expect(fs.existsSync(path.join(created.dir, '.teamai', '.ignore'))).toBe(false);
+    expect(read(path.join(own.dir, '.teamai', '.ignore'))).toBe('!/notes/\n');
   });
 });

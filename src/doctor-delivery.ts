@@ -1456,20 +1456,41 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
 
 /**
  * Pull's line for each file it keeps where the team removed a doc, because it
- * is no version of that doc (#993): information, never a failure, since no
+ * is no version of that doc, and for each directory of the member's in such a
+ * doc's place (#993): information, never a failure, since no
  * pull removes it, and git sees it (#915). Nothing when the docs cannot be
  * read: the docs check says so.
  */
 export async function keptDocNotes(ctx: DoctorContext): Promise<string[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
-  const { describeKeptRemovedDoc, isPrunableDoc, listDocFiles, resolveDocsForDirectory, resolveDocsDestination } = await import('./resources/docs.js');
+  const {
+    describeKeptRemovedDoc, describeMembersDocDirectory, isPrunableDoc, listDocFiles, resolveDocsForDirectory, resolveDocsDestination,
+  } = await import('./resources/docs.js');
   try {
     const desired = await resolveDocsForDirectory(localConfig);
     const dest = resolveDocsDestination(teamConfig, localConfig);
-    const known = new Set([...desired.files, ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`))]);
+    const known = [...desired.files, ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`))];
+    const teamHas = (rel: string): boolean => known.some((file) => file === rel || file.startsWith(`${rel}/`));
     const notes: string[] = [];
-    for (const file of (await listDocFiles(dest)).filter((local) => !known.has(local))) {
+    // A directory of the member's where the team removed a doc file: pull keeps it whole, and doctor names it once.
+    const keptDirs = new Set<string>();
+    const underKeptDir = async (file: string): Promise<boolean> => {
+      const parts = file.split('/');
+      for (let depth = 1; depth < parts.length; depth++) {
+        const rel = parts.slice(0, depth).join('/');
+        if (keptDirs.has(rel)) return true;
+        if (teamHas(rel)) continue;
+        const line = await describeMembersDocDirectory(path.join(dest, rel), rel, localConfig.repo.localPath);
+        if (line === null) continue;
+        notes.push(line);
+        keptDirs.add(rel);
+        return true;
+      }
+      return false;
+    };
+    for (const file of (await listDocFiles(dest)).filter((local) => !known.includes(local))) {
+      if (await underKeptDir(file)) continue;
       const target = path.join(dest, file);
       if (await isPrunableDoc(target, file, localConfig.repo.localPath)) continue;
       const link = (await fs.promises.lstat(target).catch(() => null))?.isSymbolicLink() ?? false;

@@ -21,7 +21,9 @@ import {
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
 import { removedAgentOrigin, reportHeldAgents, type RedeployedCopy } from './resources/agents.js';
 import { ruleOrigin } from './resources/rules.js';
-import { listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination } from './resources/docs.js';
+import {
+  deliveredDocFiles, isTeamDocsDirectory, keepDocsSearchWhitelist, listStaleDocDirectories, membersDocs, resolveDesiredDocs, resolveDocsDestination,
+} from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
@@ -70,7 +72,7 @@ import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
 import {
   applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, describeForeign, describeUnreadableGitExcludeSetting,
-  type DeliveryRecorder, type GitExcludePaths, type ListedCheckout,
+  type DeliveryRecorder, type GitExcludePaths, type ListedCheckout, type WriterId,
 } from './git-exclude-delivered.js';
 import {
   clearGitExcludeFailure, isBackgroundPull, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
@@ -1660,18 +1662,27 @@ async function pullForScope(
         const fileCount = desired.files.length;
         const destination = resolveDocsDestination(freshConfig, localConfig);
         if (fileCount === 0 && await docsHandler.countDocFiles(destination) === 0
-          && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) continue;
+          && (await listStaleDocDirectories(desired.sourceDir, destination)).length === 0) {
+          ledger.recorder?.succeeded('docs');
+          continue;
+        }
         if (options.dryRun) {
           log.info(`[${scopeLabel}] [dry-run] Would sync ${fileCount} docs and remove stale local docs`);
-          for (const file of await membersDocs(desired, destination, localConfig.repo.localPath)) {
+          const members = await membersDocs(desired, destination, localConfig.repo.localPath);
+          for (const file of members) {
             log.info(`[${scopeLabel}] [dry-run] Would keep ${path.join(destination, file)}: ${notTeamaisReason(`docs/${file}`)}.`);
           }
+          if (!await isTeamDocsDirectory(destination, localConfig.repo.localPath)) {
+            for (const file of deliveredDocFiles(desired, members)) ledger.recorder?.report('docs', path.join(destination, file));
+          }
         } else {
-          if (await docsHandler.pullDocs(desired, freshConfig, localConfig) > 0) membersFilesKept = true;
+          if (await docsHandler.pullDocs(desired, freshConfig, localConfig, ledger.recorder) > 0) membersFilesKept = true;
           log.success(`[${scopeLabel}] Synced ${fileCount} docs`);
         }
+        ledger.recorder?.succeeded('docs');
         totalSynced += fileCount;
       } catch (e) {
+        ledger.recorder?.failed('docs');
         docsSyncFailed = true;
         if (result) result.docsSyncFailed = true;
         log.warn(`[${scopeLabel}] Failed to sync docs: ${e instanceof Error ? e.message : String(e)}`);
@@ -2968,17 +2979,22 @@ export async function syncDeliveredGitExclude(
   const state = await loadStateForScope(localConfig);
   const record = state.lastPullByWorkspace?.[key];
   const paths = await recorder.merge(record?.gitExcludePaths);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const enabled = resolveGitExclude(localConfig, teamConfig);
+  // The docs search whitelist follows the setting; unknown, it stays as it is too.
+  const whitelist = enabled === undefined ? null : await keepDocsSearchWhitelist(localConfig, teamConfig, enabled, paths.docs ?? []);
+  if (whitelist) setWriterPaths(paths, 'docs', whitelist.paths);
   if (record) {
     record.gitExcludePaths = paths;
     await saveStateForScope(state, localConfig);
   }
-  const enabled = resolveGitExclude(localConfig, await loadTeamConfig(localConfig.repo.localPath));
   if (enabled === undefined) {
     await failGitExcludeSync(localConfig, [describeUnreadableGitExcludeSetting(localConfig)], options);
     return false;
   }
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
   const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths);
+  if (whitelist?.failure) outcome.failures.push(whitelist.failure);
   for (const notice of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices]) await noticeGitExclude(localConfig, notice, options);
   if (outcome.failures.length === 0) {
     await clearGitExcludeFailure(localConfig);
@@ -3005,14 +3021,26 @@ async function previewDeliveredGitExclude(localConfig: LocalConfig, recorder: De
   if (!key || !localConfig.projectRoot) return;
   const state = await loadStateForScope(localConfig);
   const paths = await recorder.merge(state.lastPullByWorkspace?.[key]?.gitExcludePaths);
-  const enabled = resolveGitExclude(localConfig, await loadTeamConfig(localConfig.repo.localPath));
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const enabled = resolveGitExclude(localConfig, teamConfig);
   if (enabled === undefined) {
     log.info(`[dry-run] ${describeUnreadableGitExcludeSetting(localConfig)}`);
     return;
   }
+  const whitelist = await keepDocsSearchWhitelist(localConfig, teamConfig, enabled, paths.docs ?? [], { dryRun: true });
+  setWriterPaths(paths, 'docs', whitelist.paths);
+  if (whitelist.change === 'write') log.info(`[dry-run] Would write teamai's docs search whitelist in ${whitelist.file}`);
+  if (whitelist.change === 'remove') log.info(`[dry-run] Would remove teamai's docs search whitelist from ${whitelist.file}`);
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
   const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths, { dryRun: true });
+  if (whitelist.failure) outcome.failures.push(whitelist.failure);
   for (const message of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices, ...outcome.failures]) log.info(`[dry-run] ${message}`);
+}
+
+/** Set `writer`'s list in `paths`, dropping the key when it is empty, as `gitExcludePaths` stores it. */
+function setWriterPaths(paths: GitExcludePaths, writer: WriterId, list: string[]): void {
+  if (list.length > 0) paths[writer] = list;
+  else delete paths[writer];
 }
 
 /**

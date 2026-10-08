@@ -393,6 +393,23 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(doctor).toContain('✔ Team docs delivered');
   }, 120_000);
 
+  it('notes, with pull\'s own line and without failing, a directory of the member\'s where the team removed a doc', () => {
+    const m = member('kept-doc-dir');
+    m.teamCommit({ 'docs/guide.md': '# Guide\n', 'docs/other.md': '# Other\n' });
+    const app = m.project(path.join(caseDir('kept-doc-dir'), 'app'));
+    const guide = path.join(app, '.teamai', 'docs', 'guide.md');
+    fs.rmSync(guide);
+    write(path.join(guide, 'notes.md'), 'My notes.\n');
+    m.teamCommit({ 'docs/guide.md': null });
+
+    const kept = `Kept ${guide}: the team removed docs/guide.md, but this is a directory of yours in its place. Delete it when you no longer need it.`;
+    expect(m.teamai(['pull'], app)).toContain(kept);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain(kept);
+    expect(doctor).not.toContain(path.join(guide, 'notes.md'));
+    expect(doctor).toContain('✔ Team docs delivered');
+  }, 120_000);
+
   it('keeps a background pull\'s failure for the next interactive pull and doctor, until a sync succeeds; a busy lock is retried', async () => {
     const m = member('background');
     const app = m.project(path.join(caseDir('background'), 'app'));
