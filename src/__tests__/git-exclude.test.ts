@@ -561,6 +561,28 @@ describe('git exclude blocks (#915)', () => {
       expect(status(repo)).toBe('?? a.md\n');
     });
 
+    it('records each owner\'s files in its own state home, and removing one owner leaves the other\'s block and record', async () => {
+      await fse.outputFile(excludeFile, '');
+      await fse.outputFile(inRepo('a.md'), 'a\n');
+      await fse.outputFile(inRepo('b.md'), 'b\n');
+      const agentHome = path.join(tmp, 'state', 'local-agent');
+      const providerHome = path.join(tmp, 'state', 'providers', 'http', 'x');
+      const agent: GitExcludeOwner = { name: 'local-agent', record: stateHomeRecord(agentHome, 'local-agent') };
+      const http: GitExcludeOwner = { name: provider, record: stateHomeRecord(providerHome, provider) };
+
+      await sync(agent, [inRepo('a.md')]);
+      await sync(http, [inRepo('b.md')]);
+
+      expect(await fse.readJson(path.join(agentHome, 'git-exclude.json'))).toEqual({ 'local-agent': [excludeFile] });
+      expect(await fse.readJson(path.join(providerHome, 'git-exclude.json'))).toEqual({ [provider]: [excludeFile] });
+
+      await remove(agent);
+      expect(await read()).toBe('# [teamai:providers/http/x:start]\n/b.md\n# [teamai:providers/http/x:end]\n');
+      expect(await fse.readJson(path.join(providerHome, 'git-exclude.json'))).toEqual({ [provider]: [excludeFile] });
+      expect(await fse.readJson(path.join(agentHome, 'git-exclude.json'))).toEqual({});
+      expect(status(repo)).toBe('?? a.md\n');
+    });
+
     it('encodes every byte of a provider name outside [a-z0-9_-] as % and two lowercase hex digits', () => {
       expect(encodeOwnerSegment('My Prov/é.x%')).toBe('%4dy%20%50rov%2f%c3%a9%2ex%25');
     });

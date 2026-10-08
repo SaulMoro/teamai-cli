@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
 import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
-import { gitExcludeFile, MCP_EXCLUDE_OWNER, remove as removeGitExclude } from './git-exclude.js';
+import { gitExcludeFile, MCP_EXCLUDE_OWNER, remove as removeGitExclude, stateHomeRecord } from './git-exclude.js';
 import { mcpExcludePatternPath } from './mcp-git-exclude.js';
 import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile } from './hooks.js';
 import {
@@ -1319,7 +1319,8 @@ async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
 /**
  * Where this project's blocks are and which of them uninstall removes: the
  * exclude files its `delivered` owners recorded, the project's own (also when
- * the record lost it), and those holding its MCP lines (`plan.gitExcludes`).
+ * the record lost it), those holding its MCP lines (`plan.gitExcludes`), and
+ * those the HTTP local agent recorded in its state home, in any repository.
  * Every teamai block in them goes, but another project's: a `delivered`
  * block in a repository other than this project's, another partition's
  * `delivered/<id>`. Read-only.
@@ -1329,7 +1330,13 @@ async function planGitExcludeBlocks(plan: RemovalPlan, localConfig: LocalConfig)
   const here = deliveredOwner(localConfig);
   const elsewhere = deliveredOwnerElsewhere(localConfig);
   const ownFiles = new Set([...own ? [own] : [], ...await here.record?.files() ?? []]);
-  const files = new Set([...ownFiles, ...await elsewhere.record?.files() ?? [], ...plan.gitExcludes.keys()]);
+  let localAgentFiles: string[] = [];
+  try {
+    localAgentFiles = await stateHomeRecord(path.join(getUserHome(), '.teamai', 'local-agent'), 'local-agent').files();
+  } catch (e) {
+    log.warn(`Could not read where the local agent's git exclude blocks are: ${(e as Error).message}`);
+  }
+  const files = new Set([...ownFiles, ...await elsewhere.record?.files() ?? [], ...plan.gitExcludes.keys(), ...localAgentFiles]);
   plan.gitExcludeFiles = [...files];
   plan.othersGitExcludeBlock = (owner, excludeFile) =>
     (owner === here.name && !ownFiles.has(excludeFile)) || (owner.startsWith(`${here.name}/`) && owner !== elsewhere.name);
