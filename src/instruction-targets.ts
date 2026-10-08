@@ -697,6 +697,9 @@ export async function registerOpencodeContext(
   const paths = scopedToolPaths(teamConfig, localConfig).opencode;
   const contextFile = paths && await instructionTargetPath('opencode', paths, localConfig);
   if (!contextFile) return null;
+  // OpenCode V2 ignores the entry, and teamai's plugin reads the file (#915).
+  const { opencodeDeliversThroughPlugin } = await import('./opencode-hooks.js');
+  if (await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return null;
   const targeted = resolved.targets.some((target) => target.path === contextFile);
   const wanted = targeted && !resolved.opencodeFallback;
   if (!targeted && !resolved.stale.some((target) => target.path === contextFile)) return null;

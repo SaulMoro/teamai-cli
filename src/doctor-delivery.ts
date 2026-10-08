@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe, readJsonObject } from './utils/fs.js';
 import {
-  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, isAgentExcluded, managedMcpManifestKey, resolveToolBaseDir,
-  resolveToolRootDir, scopedToolPaths,
+  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, isAgentExcluded, isGitExcludeEnabled, managedMcpManifestKey,
+  resolveToolBaseDir, resolveToolRootDir, scopedToolPaths,
 } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
@@ -418,16 +418,21 @@ function olderRuleCopyMeaning(tool: string): string {
  * that teamai's plugin in HOME is installed as this build writes it; its
  * context hook is what adds `what`. Null on V1, which loads `instructions`.
  */
-async function opencodeV2PluginCheck(name: string, what: string): Promise<Check | null> {
+async function opencodeV2PluginCheck(ctx: DoctorContext, name: string, what: string): Promise<Check | null> {
   const { opencodeContextPlugin, opencodeMajorVersion } = await import('./opencode-hooks.js');
   if (await opencodeMajorVersion() < 2) return null;
   const { file, ready } = await opencodeContextPlugin();
+  const { localConfig, teamConfig } = ctx;
+  // Without the plugin a pull keeps what OpenCode V1 reads, which V2 then reads its MCP servers from (#915).
+  const keeps = localConfig.scope === 'project' && localConfig.repo.kind !== 'http' && teamConfig !== null && isGitExcludeEnabled(localConfig, teamConfig)
+    ? ' Until it is current, teamai keeps the entries OpenCode V1 reads in the project\'s opencode.json files; the next pull with the plugin in place takes them out.'
+    : '';
   return {
     name,
     source: 'local',
     check: async () => ready,
     fix: `${file} is missing or out of date. OpenCode V2 ignores \`instructions\` and gets ${what} only through this plugin. `
-      + 'Run `teamai hooks inject` to reinstall it.',
+      + `Run \`teamai hooks inject\` to reinstall it.${keeps}`,
   };
 }
 
@@ -453,7 +458,7 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   const checks: Check[] = [];
 
   const opencode = await handler.opencodeInstructionsTarget(teamConfig, localConfig, items);
-  const opencodeV2 = opencode === null ? null : await opencodeV2PluginCheck('Team rules are active in opencode', 'the team rules');
+  const opencodeV2 = opencode === null ? null : await opencodeV2PluginCheck(ctx, 'Team rules are active in opencode', 'the team rules');
   if (opencodeV2) {
     checks.push(opencodeV2);
   } else if (opencode !== null) {
@@ -1621,7 +1626,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   // writes them. Beside the Claude fallback V1 reads CLAUDE.md instead.
   const opencodeDelivered = opencodeFile !== undefined && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile);
   const opencodeV2 = opencodeDelivered
-    ? await opencodeV2PluginCheck('opencode adds the team instructions to its prompt', 'the team instructions')
+    ? await opencodeV2PluginCheck(ctx, 'opencode adds the team instructions to its prompt', 'the team instructions')
     : null;
   if (opencodeV2) {
     checks.push(opencodeV2);
@@ -1636,6 +1641,22 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
         ? `${config} could not be read as a JSON object, so the pull left it alone and OpenCode never loads ${opencodeFile}. `
           + `Fix the file or add "${entry}" to its "instructions" by hand, then run \`teamai pull\`.`
         : `${config} does not list "${entry}" under "instructions", and OpenCode reads no file it is not told about. ${pullNow}`,
+    });
+  }
+
+  // On OpenCode V2 a pull takes teamai's V1 entries only out of a file teamai alone wrote (#915).
+  const { opencodeV1Leftovers } = await import('./teamai-only-files.js');
+  const v1Left = await opencodeV1Leftovers(teamConfig, localConfig);
+  if (v1Left.length > 0) {
+    checks.push({
+      name: 'No OpenCode V1 entries are left in shared config files',
+      source: 'local',
+      informational: true,
+      check: async () => false,
+      fix: `OpenCode V2 gets the team instructions, rules and MCP servers through teamai's plugin, but teamai's entries for OpenCode V1 `
+        + `are still in ${v1Left.map(({ file, entries }) => `${file} (${entries.join(', ')})`).join(' and ')}: git tracks the file or it holds `
+        + 'entries teamai does not own, so pull leaves it as it is. V2 ignores `instructions` and loads those servers a second time. '
+        + 'Remove teamai\'s entries by hand once no one on the project uses OpenCode V1.',
     });
   }
 
