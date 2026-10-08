@@ -385,6 +385,18 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(removed.output).toContain(`Kept ${copy}: it holds notes.md, a file of yours`);
   });
 
+  it('source remove keeps a delivered source skill whose every file the member edited', () => {
+    const w = world('all-edited');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude']), dir);
+    const copy = path.join(dir, '.claude', 'skills', 'other-skill');
+    writeFile(path.join(copy, 'SKILL.md'), `${SOURCE_SKILL}\nMy own notes.\n`);
+
+    const removed = w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'SKILL.md'))).toBe(`${SOURCE_SKILL}\nMy own notes.\n`);
+    expect(removed.output).toContain(`Kept ${copy}: it holds SKILL.md, a file of yours`);
+  });
+
   it('source remove keeps a delivered source skill directory left holding only a file the member added', () => {
     const w = world('only-member-file');
     const dir = w.business('biz', { '.claude/.keep': '' });

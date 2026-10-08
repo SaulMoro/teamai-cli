@@ -2063,6 +2063,8 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 If core graph extraction or writing fails, the import reports an error without marking the commit as synced. The next incremental run retries that commit.
 
+For `--from-iwiki`, an MCP tool response with `isError: true` is a failed request, even when it contains text. A page whose document or metadata request fails is warned about and skipped before AI classification; successful pages still import. A failed page-tree request warns and yields no child pages.
+
 With `--dry-run`, `--from-repo` and `--from-repo-list` read each repo's target commit with `git ls-remote`, print `Would import <owner>/<repo> at <commit>` and whether the local cache is current, and stop there: nothing is cloned or fetched into the cache, the import lock is not taken, and no AI step runs. With `--incremental` and a cache containing `LAST_SYNC`, the preview queries that cache's current branch at its configured origin, matching the real fetch/reset. Full-clone previews, including a missing cache or `LAST_SYNC`, follow remote HEAD. If the cached branch was deleted remotely, a non-pruning wildcard fetch retains its cached origin ref; incremental preview uses that retained commit too. Pruning, an explicit deleted-branch fetch refspec, or a missing cached origin ref still selects the full-clone fallback. Other cached-branch query failures warn and preview the full-clone fallback. With `--output`, the preview reports the same `teamwiki/evidence/code/<slug>` destination beside the output file as a real import.
 
 `--from-mr` publishes its learning the way `teamai contribute` does by default, on the `teamai-learnings` branch: under `learnings/<namespace>/` when the active projects resolve to exactly one learnings namespace, otherwise at the shared `learnings/` root. If that fails, the learning stays queued on this machine and the next `teamai pull` publishes it; when a learnings checkout teamai refuses stopped it, no pull can until you deal with that checkout as the message says.
@@ -2205,6 +2207,7 @@ Hooks automatically injected by `teamai init`:
 
 ```bash
 teamai hooks list      # Show effective built-in and team hooks
+teamai hooks inject --dry-run # Preview without changing settings or managed-hook records
 teamai hooks inject    # Re-inject
 teamai hooks remove    # Remove
 ```
@@ -2972,7 +2975,7 @@ Notify external endpoints when team events happen. Each endpoint declares a `url
 
 ## Model profiles
 
-Model profiles point Claude Code, Codex, OpenCode, CodeBuddy, WorkBuddy, and Pi at a shared model gateway. Nothing changes an agent until you run `teamai models switch`; after that, `teamai pull` keeps the switched agents on the team's latest catalog.
+Model profiles point Claude Code, Codex, OpenCode, CodeBuddy, WorkBuddy, Pi, and OMP at a shared model gateway. Nothing changes an agent until you run `teamai models switch`; after that, `teamai pull` keeps the switched agents on the team's latest catalog.
 
 There are two sources, both in the same format:
 
@@ -3011,6 +3014,7 @@ Which agents can use a profile follows from its protocols:
 | OpenCode | any | `opencode.json`: one provider per protocol with every model |
 | CodeBuddy / WorkBuddy | `openai-chat-completions` | `models.json`: one entry per model |
 | Pi | any | `~/.pi/agent/models.json`: one provider keyed by the profile ref, holding every model. `settings.json` is left alone, so you pick the default with `/model` |
+| OMP | any | `~/.omp/agent/models.yml`: one provider keyed by the profile ref, holding every model — Pi's shape, in YAML |
 
 The example above has no `openai-responses` group, so Codex is left alone; add that protocol once your gateway serves those models over the Responses API.
 
@@ -3198,6 +3202,7 @@ That is expected for a built-in tool when `init` ran without `--agent` and witho
 
 ```bash
 teamai doctor        # Diagnose
+teamai hooks inject --dry-run # Preview first
 teamai hooks inject  # Re-inject
 ```
 
