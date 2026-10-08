@@ -18,6 +18,8 @@ export interface MockServerConfig {
   pendingCommands?: SkillCommand[];
   /** Slug → file map used to synthesize downloadable skill zips. */
   skillFiles?: Record<string, Record<string, string>>;
+  /** Slug → the `name:` its SKILL.md declares, when it is not the slug. */
+  skillNames?: Record<string, string>;
 }
 
 export interface MockServerHandle {
@@ -77,7 +79,7 @@ export async function startMockServer(config: MockServerConfig): Promise<MockSer
     // Skill zip download — SMH-style: no Bearer header, token in query.
     if (req.method === 'GET' && url.pathname === '/download') {
       const slug = url.searchParams.get('slug') ?? '';
-      const zip = buildSkillZip(slug, config.skillFiles?.[slug]);
+      const zip = buildSkillZip(slug, config.skillFiles?.[slug], { name: config.skillNames?.[slug] });
       res.writeHead(200, { 'Content-Type': 'application/zip' });
       res.end(Buffer.from(zip));
       return;

@@ -109,7 +109,10 @@ what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
 its last failure to update it (cleared by the next update that succeeds) and
 notices the next interactive pull says once and drops; `doctor` reads both.
 `pull --dry-run` previews the block from what its writers would write, writing
-nothing.
+nothing. `uninstall` reads `state.gitExcludeFiles` before it deletes the
+partition and, under the partition's sync lock, removes every teamai block
+from those files once it has deleted the files they hid; `uninstall --agent`
+filters the tool's paths out of every entry's `gitExcludePaths` and syncs again.
 Clearing `lastPullRev` still forces a full sync, which is how exclude, tags,
 roles, projects, init and bootstrap apply their changes: the pull that finds
 `lastPullRev` cleared resets every other checkout's entry to an empty `rev`,
