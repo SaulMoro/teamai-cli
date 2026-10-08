@@ -1738,6 +1738,15 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       }
     }
 
+    // A hook sync that already loaded the HTTP source would reinstall what the
+    // steps below remove: disable and tear it down first, under the lock that
+    // sync holds, as `source remove-http` does (#993).
+    if (plan.includeShared && plan.globalAdapters) {
+      const { shutdownLocalAgentHttp } = await import('./local-agent.js');
+      const retry = agentKey ? `teamai uninstall --agent ${agentKey}` : 'teamai uninstall';
+      if (await shutdownLocalAgentHttp(retry) === 'locked') return;
+    }
+
     // MCP cleanup must run before executeRemoval deletes ~/.teamai/: ownership is
     // tracked in managed-mcp.json inside that directory. Hooks already do this
     // inside executeRemoval for the same reason. MCP servers are shared
@@ -1884,7 +1893,9 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      await teardownPlugins();
+      // Its record of hooks that could not be removed stays for a retry.
+      const { shutdownLocalAgentHttp } = await import('./local-agent.js');
+      if (['locked', 'incomplete'].includes(await shutdownLocalAgentHttp('teamai uninstall'))) return;
       await remove(home);
       log.success(`Removed ${home}/`);
       log.success('teamai uninstalled');

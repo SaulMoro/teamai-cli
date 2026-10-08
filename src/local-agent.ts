@@ -3782,46 +3782,49 @@ export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool:
   return Object.entries(left).map(([slug, rec]) => ({ slug, tool: rec.tool }));
 }
 
+export async function removeLocalAgentHttp(): Promise<void> {
+  if (await shutdownLocalAgentHttp('teamai source remove-http') === 'none') {
+    log.info('No HTTP source configured — nothing to remove.');
+  }
+}
+
 /**
  * Tear down the HTTP local-agent bypass: uninstall every resource recorded in the
  * manifest (skills/rules/claudemd, across all scopes) from the AI tool dirs, then
  * clear its config and caches. Keep a disabled config to prevent fallback from
  * reconnecting, and any remaining hook ownership records for a retry.
  *
+ * Holds the lifecycle lock that sync and plugin reconciliation take, so neither
+ * can reinstall what this removes. A failure names `retry` as the command to
+ * repeat: `locked` removed nothing, `incomplete` kept hook records.
+ *
  * Best-effort per resource: a single failed uninstall is logged and skipped so a
  * stale entry cannot block the teardown.
  */
-export async function removeLocalAgentHttp(): Promise<void> {
-  if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) {
-    log.info('No HTTP source configured — nothing to remove.');
-    return;
-  }
+export async function shutdownLocalAgentHttp(retry: string): Promise<'none' | 'removed' | 'incomplete' | 'locked'> {
+  if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) return 'none';
   if (!await acquireLocalAgentLock()) {
     log.info('Waiting for the HTTP source sync lock before removal.');
     if (!await acquireLocalAgentLock(30_000)) {
-      log.error(`Could not lock HTTP source state at ${localAgentLockPath()}; removal did not run. `
-        + 'Wait for other HTTP source operations to finish, check directory permissions, then retry `teamai source remove-http`.');
+      log.error(`Could not lock HTTP source state at ${localAgentLockPath()}; nothing was removed. `
+        + `Wait for other HTTP source operations to finish, check directory permissions, then retry \`${retry}\`.`);
       process.exitCode = 1;
-      return;
+      return 'locked';
     }
   }
   try {
-    await removeLocalAgentHttpLocked();
+    return await removeLocalAgentHttpLocked(retry);
   } finally {
     await releaseLock(localAgentLockPath());
   }
 }
 
-async function removeLocalAgentHttpLocked(): Promise<void> {
+async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'removed' | 'incomplete'> {
   const config = await loadLocalAgentConfig();
   if (!config) {
     // An earlier run disabled the source but could not remove these agent hooks (#993).
-    if (Object.keys(await loadAgentHookManifest()).length > 0) {
-      await finishAgentHookTeardown();
-      return;
-    }
-    log.info('No HTTP source configured — nothing to remove.');
-    return;
+    if (Object.keys(await loadAgentHookManifest()).length > 0) return finishAgentHookTeardown(retry);
+    return 'none';
   }
 
   // No sync or plugin worker can write after this point until teardown finishes.
@@ -3847,13 +3850,13 @@ async function removeLocalAgentHttpLocked(): Promise<void> {
     }
   }
 
-  await finishAgentHookTeardown();
+  return finishAgentHookTeardown(retry);
 }
 
 /**
  * Clear the HTTP source, preserving failed hook records for a retry.
  */
-async function finishAgentHookTeardown(): Promise<void> {
+async function finishAgentHookTeardown(retry: string): Promise<'removed' | 'incomplete'> {
   const hooksLeft = await removeAllAgentHooks();
   const home = getLocalAgentHome();
   const keep = path.basename(getAgentHookManifestPath());
@@ -3865,11 +3868,12 @@ async function finishAgentHookTeardown(): Promise<void> {
   }
   if (hooksLeft.length > 0) {
     log.warn(`HTTP source disabled, but removal is incomplete: kept the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')} `
-      + `in ${home}, as they could not be removed. Fix the files named above, then run \`teamai source remove-http\` again.`);
+      + `in ${home}, as they could not be removed. Fix the files named above, then run \`${retry}\` again.`);
     process.exitCode = 1;
-    return;
+    return 'incomplete';
   }
   log.success('HTTP source removed (resources uninstalled, config cleared).');
+  return 'removed';
 }
 
 export async function bindCurrentProject(options?: { projectId?: number; skip?: boolean; cwd?: string }): Promise<void> {

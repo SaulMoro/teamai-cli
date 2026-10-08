@@ -1953,7 +1953,7 @@ describe('local-agent: cmds[] migration', () => {
       expect(process.exitCode).toBe(1);
       expect(await fse.readFile(configPath, 'utf8')).toBe(before);
       const { log } = await import('../utils/logger.js');
-      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('removal did not run'));
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('nothing was removed'));
     } finally {
       process.exitCode = exitCode;
       clock.mockRestore();

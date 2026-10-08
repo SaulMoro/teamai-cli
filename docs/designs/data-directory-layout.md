@@ -562,7 +562,7 @@ exit code 1; removal can retry without an active source. HTTP initialization
 replaces the disabled config to enable a source again.
 
 Sync, detached plugin reconciliation and HTTP source removal share `~/.teamai/.local-agent-sync-lock`, outside the
-cache directory cleanup. Each reloads config after acquiring the lock. Removal
+cache directory cleanup. A user-scope `teamai uninstall` removes the source the same way before its other steps. Each reloads config after acquiring the lock. Removal
 waits up to 30 seconds for the current operation, disables before teardown, and
 reports failure without teardown if the lock cannot be acquired. A hook sync
 skips while the lock is held; plugin reconciliation waits up to 30 seconds.
