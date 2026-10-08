@@ -442,6 +442,28 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(pulled.output).toContain(`Kept ${path.dirname(notes)}`);
   });
 
+  it('keeps a delivered skill when the team later adds a file where the member has a directory, or a directory where the member has a file', () => {
+    const t = team('skill-new-path-type', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-new-path-type-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+    writeFile(path.join(skill, 'notes.md', 'personal.txt'), 'MINE\n');
+    writeFile(path.join(skill, 'docs'), 'MY DOCS\n');
+    t.publish({ 'skills/team-skill/notes.md': 'TEAM NOTES\n', 'skills/team-skill/docs/guide.md': 'TEAM GUIDE\n' }, 'add files');
+
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(path.join(skill, 'notes.md', 'personal.txt'))).toBe('MINE\n');
+    expect(read(path.join(skill, 'docs'))).toBe('MY DOCS\n');
+    expect(pulled.output).toContain(`Kept ${skill}`);
+
+    fs.rmSync(path.join(skill, 'notes.md'), { recursive: true });
+    fs.rmSync(path.join(skill, 'docs'));
+    // What the kept message says to do.
+    teamaiOk(['pull', '--force'], dir);
+    expect(read(path.join(skill, 'notes.md'))).toBe('TEAM NOTES\n');
+    expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

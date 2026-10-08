@@ -397,6 +397,17 @@ export async function judgeCopy(previous: DeliveredHashes | undefined, item: Res
   return verdict;
 }
 
+/** Whether an entry other than a regular file sits at `rel` under `dir`, or a non-directory at one of its parents. */
+async function blocksFile(dir: string, rel: string): Promise<boolean> {
+  const parts = rel.split(/[\\/]/);
+  for (let i = 1; i <= parts.length; i++) {
+    const stat = await fse.lstat(path.join(dir, ...parts.slice(0, i))).catch(() => null);
+    if (stat === null) return false;
+    if (i < parts.length ? !stat.isDirectory() : !stat.isFile()) return true;
+  }
+  return false;
+}
+
 /**
  * Whether delivering skill `item` to `target` would write over a file that is the member's: one
  * off the record that is neither what teamai writes there now nor a team version of it.
@@ -408,6 +419,9 @@ async function overwritesMembersFile(previous: DeliveredHashes, item: ResourceIt
     const file = path.join(target.dest, rel);
     if (previous[file] !== undefined) continue;
     if (await isLink(file)) return true;
+    // A directory at the file's path, or a file where one of its directories goes, is the member's:
+    // teamai writes neither, and the copy would fail over it.
+    if (await blocksFile(target.dest, rel)) return true;
     const disk = await fileHash(file);
     if (disk === null) continue;
     const bytes = await fse.readFile(path.join(item.sourcePath, rel));
