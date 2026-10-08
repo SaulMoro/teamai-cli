@@ -146,6 +146,8 @@ teamai env unset GITHUB_TOKEN [--global]
 
 **不进入 git。** 只有在本地克隆的 `.git/info/exclude` 列出某个项目级 MCP 配置之后，解析后的值才会写入该文件（#882）；仓库没有 `.git/info/` 时 teamai 会创建它（#993）。exclude 规则挡不住 git 已跟踪的文件，因此无论是否为已声明密钥，解析后的值都不会写入 `git ls-files` 已跟踪的项目配置：pull 保持该文件原样（之前 pull 写入的条目保留），`pull`（警告）、`teamai mcp list`（`withheld:`）和 `teamai doctor`（`MCP servers delivered to <tool>` 失败）会指出该文件和修复方法：`git rm --cached <file>`，如果它曾随 token 一起提交过，还要轮换 token。因其他原因无法排除时（`.git/info` 或 exclude 文件不可写、另一个 teamai 命令占用它、git 出错），同样保持该文件原样，并给出对应的原因与修复方法。
 
+**对 Claude Code 而言不进入工作区（#915）。** 开启 `sharing.gitExclude` 后，Claude 的项目级 server 不再写入 `.mcp.json`：teamai 把它们写入 Claude Code 的 local scope，即 `~/.claude.json`（成员的工具根目录指向 `CLAUDE_CONFIG_DIR` 时位于其中）的 `projects[<key>].mcpServers`，其中 `<key>` 是 Claude Code 为该 checkout 使用的路径：主 checkout 的真实路径，主 checkout 及其每个 linked worktree 都用它（`--separate-git-dir` 仓库的 linked worktree 用 git 目录，submodule 的 linked worktree 用其在上层仓库 `.git/modules` 下的目录）。解析后的值因此不会进入工作区，无需为它写入 exclude，`git add -f` 也提交不了它；Claude Code 加载 local server 时不会像对待 `.mcp.json` 那样要求批准。teamai 为共用该 key 的所有 checkout 只记录一份写入记录，`teamai uninstall` 只移除这些 server；该文件的其他内容保持不变。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server（有记录的，或与团队历史中同名 server 的某个版本渲染结果相同的），保留成员自己的 server、成员改动过的 teamai server（会给出提示）以及 CodeBuddy 仍在其中写入的 server；文件中不再剩下任何内容且 git 未跟踪它时删除该文件；当所有 checkout 都不再含有解析后的值时，移除它的 exclude 行。关闭此选项后，下一次 pull 会把这些 server 移回去。项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
+
 ## 缺少密钥时保留 MCP 条目
 
 `mcp/mcp.yaml` 中的 `${VAR}` 可以引用已声明的密钥。会话开始时的 pull 运行在 agent 的环境里，而这个环境常常没有成员 shell 中导出的变量（从图形界面启动的工具，或在 `bash -lc` 下读不到的 zsh export），所以一个密钥可能这次 pull 能找到、下次就找不到。pull 找不到某个 server 所需的已声明密钥时：

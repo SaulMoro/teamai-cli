@@ -30,14 +30,15 @@ const MCP_OWNER = { name: MCP_EXCLUDE_OWNER };
 /**
  * Whether `target`'s file carries a value teamai resolved from a `${VAR}`: a
  * project-scope file holding one of `names` whose definition references a
- * variable the tool does not expand itself.
+ * variable the tool does not expand itself. Claude's local scope (#915) is
+ * outside the working tree: no exclusion protects it, and none is needed.
  */
 export function carriesResolvedValue(
   target: McpTarget,
   teamDefs: McpServerDef[],
   names: Iterable<string>,
 ): boolean {
-  if (!target.projectScope) return false;
+  if (!target.projectScope || target.projectKey) return false;
   const present = new Set(names);
   return teamDefs.some((def) => present.has(def.name)
     && referencedVars(def).length > 0
