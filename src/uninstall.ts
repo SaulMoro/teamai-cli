@@ -3,7 +3,6 @@ import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
 import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
 import { gitExcludeFile, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord } from './git-exclude.js';
-import { mcpExcludePatternPath } from './mcp-git-exclude.js';
 import {
   migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, hasUnrecordedTeamHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile,
   teamHookHistory, type TeamHookHistory,
@@ -1382,7 +1381,8 @@ async function planGitExcludeBlocks(plan: RemovalPlan, localConfig: LocalConfig)
   const ownFiles = new Set([...own ? [own] : [], ...await here.record?.files() ?? []]);
   let localAgentFiles: string[] = [];
   try {
-    localAgentFiles = await stateHomeRecord(path.join(getUserHome(), '.teamai', 'local-agent'), 'local-agent').files();
+    const stateHome = path.join(getUserHome(), '.teamai', 'local-agent');
+    localAgentFiles = [...await stateHomeRecord(stateHome, 'local-agent').files(), ...await stateHomeRecord(stateHome, 'credentials').files()];
   } catch (e) {
     log.warn(`Could not read where the local agent's git exclude blocks are: ${(e as Error).message}`);
   }
@@ -1446,20 +1446,18 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
   }
 }
 
-/** Whether a `credentials` line stays: the file it names is still in a checkout of this project's repository. */
+/**
+ * Whether a `credentials` line stays: a models file it keeps out of git still
+ * holds a key, in a checkout of this project or one the HTTP local agent knows
+ * (warned), or no such checkout reads that exclude file.
+ */
 async function keepsCredentialLine(plan: RemovalPlan, line: string, excludeFile: string): Promise<boolean> {
-  const rel = mcpExcludePatternPath(line);
-  const roots = await Promise.all(plan.checkouts.map(async (root) => (await gitExcludeFile(root))?.excludeFile === excludeFile ? root : null));
-  const present = (await Promise.all(roots.filter((root): root is string => root !== null).map(async (root) => {
-    const file = path.join(root, rel);
-    return await pathExists(file) ? file : null;
-  }))).filter((file): file is string => file !== null);
-  // A file of another repository, which this project's checkouts cannot judge, keeps its line too.
-  if (present.length === 0 && roots.some((root) => root !== null)) return false;
-  if (present.length > 0) {
-    log.warn(`Kept \`${line}\` in ${excludeFile}, so git still ignores ${present.join(', ')}: it may hold a credential. `
-      + `Delete it once you no longer need it, then delete that line from ${excludeFile} yourself, and the block's two marker lines with its last one.`);
-  }
+  const { modelFilesBehind } = await import('./local-agent.js');
+  const held = await modelFilesBehind(line, excludeFile, { roots: plan.checkouts, withKey: true });
+  if (held === null) return true;
+  if (held.length === 0) return false;
+  log.warn(`Kept \`${line}\` in ${excludeFile}, so git still ignores ${held.join(', ')}: it may hold a model API key. `
+    + `Delete the file once you no longer need it, then delete that line from ${excludeFile} yourself, and the block's two marker lines with its last one.`);
   return true;
 }
 
