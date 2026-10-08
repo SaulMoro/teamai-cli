@@ -1352,7 +1352,11 @@ create an earlier file (`codebuddy mcp add -s user` creates
 `~/.codebuddy/.mcp.json`), the next `teamai pull` moves teamai's own servers
 into it and leaves yours where they are; until then `teamai doctor` warns and
 `teamai mcp list` names the file they are in. `teamai mcp remove` and
-`teamai uninstall` remove them from the file that holds them. Earlier releases
+`teamai uninstall` remove them from the file that holds them. Pull and uninstall
+also take out of the files CodeBuddy does not read an entry with no record that
+equals a team version of the server, so a lost record does not leave one
+behind. A path that is a symlink to another of these files counts as that
+file: teamai writes through it and moves nothing between them. Earlier releases
 always created `~/.codebuddy/mcp.json`, which hides `~/.codebuddy.json`: when it
 holds nothing but teamai's servers and a later file exists, the next pull moves
 them to that file, deletes `~/.codebuddy/mcp.json` and says so once. In
