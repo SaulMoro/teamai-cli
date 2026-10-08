@@ -1323,6 +1323,20 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect((await fse.readJson(dotMcp())).mcpServers).toEqual({ 'my-user': MEMBER });
     });
 
+    it('moving a server to the file CodeBuddy now reads keeps the old copy the member edited', async () => {
+      await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
+      await install(9611, 'https://old.example.com/mcp');
+      const edited = { type: 'http', url: 'https://old.example.com/mcp', headers: { 'X-Mine': '1' } };
+      const old = await fse.readJson(mcp());
+      old.mcpServers['tm-user'] = edited;
+      await fse.writeJson(mcp(), old);
+      await fse.outputJson(dotMcp(), { mcpServers: { 'my-user': MEMBER } });
+
+      expect((await install(9612, 'https://new.example.com/mcp'))[0].status).toBe('success');
+      expect((await fse.readJson(dotMcp())).mcpServers['tm-user']).toEqual({ type: 'http', url: 'https://new.example.com/mcp' });
+      expect((await fse.readJson(mcp())).mcpServers).toEqual({ 'mine-old': MEMBER, 'tm-user': edited });
+    });
+
     it('keeps an older record that names no file when ~/.codebuddy/.mcp.json links to mcp.json', async () => {
       await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
       await install(9609, 'https://old.example.com/mcp');
