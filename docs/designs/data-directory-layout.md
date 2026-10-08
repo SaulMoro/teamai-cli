@@ -103,7 +103,11 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 (`liveCheckoutRecords`), less paths that hold a file outside another live
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
-partition's anchor hash. The docs writer reports each doc file it wrote, never
+partition's anchor hash. Skill writers (team, source, built-in, Codex's
+`.agents/skills`, the local agent) report each file they wrote into a skill,
+never its directory, which the git exclude module refuses to list, so a file
+the member adds inside a delivered skill stays visible; a tracked file there
+gets no line while the skill's other files keep theirs. The docs writer reports each doc file it wrote, never
 an entry of the member's it kept nor a doc beneath one; with the mirror at
 `<root>/.teamai/docs`, outside single-repo mode, the sync also keeps teamai's
 block (`!/docs/**`) in `<root>/.teamai/.ignore` so ripgrep-based search finds

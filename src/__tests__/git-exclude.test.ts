@@ -80,16 +80,34 @@ describe('git exclude blocks (#915)', () => {
   });
 
   describe('sync', () => {
-    it('lists a delivered file and a whole skill directory under the owner\'s markers, leaving the member\'s files visible', async () => {
+    it('lists each delivered file under the owner\'s markers, a skill\'s files one by one, leaving the member\'s files visible', async () => {
       await fse.outputFile(inRepo('.claude', 'rules', 'team.md'), 'rule\n');
       await fse.outputFile(inRepo('.claude', 'skills', 'deploy', 'SKILL.md'), 'skill\n');
+      await fse.outputFile(inRepo('.claude', 'skills', 'deploy', 'refs', 'guide.md'), 'guide\n');
+      await fse.outputFile(inRepo('.claude', 'skills', 'deploy', 'mine.md'), 'mine\n');
       await fse.outputFile(inRepo('.claude', 'rules', 'mine.md'), 'mine\n');
 
-      await sync(memoryOwner('local-agent'), [inRepo('.claude', 'rules', 'team.md'), inRepo('.claude', 'skills', 'deploy')]);
+      await sync(memoryOwner('local-agent'), [
+        inRepo('.claude', 'rules', 'team.md'), inRepo('.claude', 'skills', 'deploy', 'SKILL.md'), inRepo('.claude', 'skills', 'deploy', 'refs', 'guide.md'),
+      ]);
 
-      expect(await read()).toContain('# [teamai:local-agent:start]\n/.claude/rules/team.md\n/.claude/skills/deploy/\n# [teamai:local-agent:end]\n');
-      expect(status(repo)).toBe('?? .claude/rules/mine.md\n');
-      expect(await read()).not.toMatch(/\/\*$/m);
+      expect(await read()).toContain('# [teamai:local-agent:start]\n/.claude/rules/team.md\n/.claude/skills/deploy/SKILL.md\n'
+        + '/.claude/skills/deploy/refs/guide.md\n# [teamai:local-agent:end]\n');
+      expect(status(repo)).toBe('?? .claude/rules/mine.md\n?? .claude/skills/deploy/mine.md\n');
+      expect(await read()).not.toMatch(/\/\*?$/m);
+    });
+
+    it('lists no directory: a path that is one is refused, naming it, and git still sees what it holds', async () => {
+      await fse.outputFile(inRepo('.claude', 'skills', 'deploy', 'SKILL.md'), 'skill\n');
+      await fse.outputFile(inRepo('a.md'), 'a\n');
+
+      const result = await sync(memoryOwner('delivered'), [inRepo('.claude', 'skills', 'deploy'), inRepo('a.md')]);
+
+      expect(result.refused).toEqual([{
+        path: inRepo('.claude', 'skills', 'deploy'), problem: 'directory', message: expect.stringContaining(JSON.stringify(inRepo('.claude', 'skills', 'deploy'))),
+      }]);
+      expect(await read()).toContain('# [teamai:delivered:start]\n/a.md\n# [teamai:delivered:end]\n');
+      expect(status(repo)).toBe('?? .claude/skills/deploy/SKILL.md\n');
     });
 
     it('replaces the block: a path no longer given loses its line and shows again', async () => {
@@ -163,9 +181,9 @@ describe('git exclude blocks (#915)', () => {
         git(nested, 'init', '-q');
         await fse.outputFile(path.join(nested, 'skills', 'x', 'SKILL.md'), 'x\n');
 
-        await sync(memoryOwner('delivered'), [path.join(nested, 'skills', 'x')]);
+        await sync(memoryOwner('delivered'), [path.join(nested, 'skills', 'x', 'SKILL.md')]);
 
-        expect(await read(path.join(nested, '.git', 'info', 'exclude'))).toMatch(/^\/skills\/x\/$/m);
+        expect(await read(path.join(nested, '.git', 'info', 'exclude'))).toMatch(/^\/skills\/x\/SKILL\.md$/m);
         expect(status(nested)).toBe('');
         expect(await fse.pathExists(excludeFile) ? await read() : '').not.toContain('teamai');
       });
@@ -179,9 +197,9 @@ describe('git exclude blocks (#915)', () => {
         await fse.outputFile(inRepo('.claude', 'skills', 'x', 'SKILL.md'), 'x\n');
         expect(status(repo)).toBe(' M .claude\n');
 
-        await sync(memoryOwner('delivered'), [inRepo('.claude', 'skills', 'x')]);
+        await sync(memoryOwner('delivered'), [inRepo('.claude', 'skills', 'x', 'SKILL.md')]);
 
-        expect(await read(inRepo('.git', 'modules', '.claude', 'info', 'exclude'))).toMatch(/^\/skills\/x\/$/m);
+        expect(await read(inRepo('.git', 'modules', '.claude', 'info', 'exclude'))).toMatch(/^\/skills\/x\/SKILL\.md$/m);
         expect(status(repo)).toBe('');
       });
 
@@ -285,9 +303,9 @@ describe('git exclude blocks (#915)', () => {
         const skill = inRepo('.claude', 'skills', 'café');
         await fse.outputFile(path.join(skill, 'SKILL.md'), 'x\n');
 
-        await sync(memoryOwner('delivered'), [skill]);
+        await sync(memoryOwner('delivered'), [path.join(skill, 'SKILL.md')]);
 
-        expect(await read()).toContain(`/.claude/skills/${expected}/\n`);
+        expect(await read()).toContain(`/.claude/skills/${expected}/SKILL.md\n`);
         expect(status(repo)).toBe('');
       });
 
@@ -297,12 +315,12 @@ describe('git exclude blocks (#915)', () => {
         await fse.outputFile(inRepo('.claude', 'rules', 'Team.md'), 'x\n');
 
         await sync(memoryOwner('delivered'), [
-          inRepo('.CLAUDE', 'Skills', 'deploy'),
-          inRepo('.claude', 'skills', 'Deploy'),
+          inRepo('.CLAUDE', 'Skills', 'deploy', 'skill.md'),
+          inRepo('.claude', 'skills', 'Deploy', 'SKILL.md'),
           inRepo('.claude', 'rules', 'team.md'),
         ]);
 
-        expect(await read()).toContain('# [teamai:delivered:start]\n/.claude/rules/Team.md\n/.claude/skills/Deploy/\n# [teamai:delivered:end]\n');
+        expect(await read()).toContain('# [teamai:delivered:start]\n/.claude/rules/Team.md\n/.claude/skills/Deploy/SKILL.md\n# [teamai:delivered:end]\n');
         expect(status(repo)).toBe('');
       });
     });
@@ -314,21 +332,21 @@ describe('git exclude blocks (#915)', () => {
 
         const result = await sync(memoryOwner('delivered'), [inRepo('team.md')]);
 
-        expect(result.files[0].tracked).toEqual([{ path: inRepo('team.md'), checkout: repo, descendants: [] }]);
+        expect(result.files[0].tracked).toEqual([{ path: inRepo('team.md'), checkout: repo }]);
         expect(await fse.pathExists(excludeFile) ? await read() : '').not.toContain('/team.md');
       });
 
-      it('keeps the line of a skill directory with tracked files, reporting them: their changes stay visible, new files do not', async () => {
+      it('in a skill, reports the tracked file and lists the others: its changes stay visible, a new delivered file does not', async () => {
         const skill = inRepo('.claude', 'skills', 'x');
         await fse.outputFile(path.join(skill, 'SKILL.md'), 'v1\n');
         commit(repo, '.claude/skills/x/SKILL.md');
         await fse.outputFile(path.join(skill, 'SKILL.md'), 'v2\n');
         await fse.outputFile(path.join(skill, 'new.md'), 'n\n');
 
-        const result = await sync(memoryOwner('delivered'), [skill]);
+        const result = await sync(memoryOwner('delivered'), [path.join(skill, 'SKILL.md'), path.join(skill, 'new.md')]);
 
-        expect(result.files[0].tracked).toEqual([{ path: skill, checkout: repo, descendants: ['.claude/skills/x/SKILL.md'] }]);
-        expect(await read()).toMatch(/^\/\.claude\/skills\/x\/$/m);
+        expect(result.files[0].tracked).toEqual([{ path: path.join(skill, 'SKILL.md'), checkout: repo }]);
+        expect(result.files[0].lines).toEqual(['/.claude/skills/x/new.md']);
         expect(status(repo)).toBe(' M .claude/skills/x/SKILL.md\n');
       });
 
@@ -345,7 +363,7 @@ describe('git exclude blocks (#915)', () => {
 
         expect(result.files).toHaveLength(1);
         expect(result.files[0].lines).toEqual(['/team.md']);
-        expect(result.files[0].tracked).toEqual([{ path: path.join(worktree, 'team.md'), checkout: worktree, descendants: [] }]);
+        expect(result.files[0].tracked).toEqual([{ path: path.join(worktree, 'team.md'), checkout: worktree }]);
         expect(status(repo)).toBe('');
         await fse.appendFile(path.join(worktree, 'team.md'), 'edit\n');
         expect(status(worktree)).toBe(' M team.md\n');
@@ -625,6 +643,33 @@ describe('git exclude blocks (#915)', () => {
       expect(await read()).not.toContain(MCP_EXCLUDE_START);
     });
 
+    it.each(['delivered', 'local-agent'])('a secret owner lists a file only teamai\'s %s block ignores, so the file stays ignored once that block drops it', async (other) => {
+      const config = inRepo('.cursor', 'mcp.json');
+      const models = inRepo('.codebuddy', 'models.json');
+      await fse.outputFile(config, '{}\n');
+      await fse.outputFile(models, '{}\n');
+      await fse.outputFile(excludeFile, `# [teamai:${other}:start]\n/.codebuddy/models.json\n/.cursor/mcp.json\n# [teamai:${other}:end]\n`);
+      expect(status(repo)).toBe('');
+
+      const [{ result: mcp }] = await ensure({ name: 'mcp-exclude' }, [config]);
+      const [{ result: key }] = await ensure({ name: 'credentials' }, [models]);
+      await sync(memoryOwner(other, [excludeFile]), []);
+
+      expect(mcp).toEqual({ kind: 'excluded', added: true });
+      expect(key).toEqual({ kind: 'excluded', added: true });
+      expect(await read()).not.toContain(`# [teamai:${other}:start]`);
+      expect(status(repo)).toBe('');
+    });
+
+    it('adds no mcp-exclude line for a file a line of the member\'s in .git/info/exclude ignores, beside teamai\'s blocks', async () => {
+      await fse.outputFile(excludeFile, '# [teamai:delivered:start]\n/a.md\n# [teamai:delivered:end]\n/.mcp.json\n');
+
+      const [{ result }] = await ensure({ name: 'mcp-exclude' }, [inRepo('.mcp.json')]);
+
+      expect(result).toEqual({ kind: 'excluded', added: false });
+      expect(await read()).not.toContain(MCP_EXCLUDE_START);
+    });
+
     it('fails for a tracked file before writing anything, with #886\'s text', async () => {
       const file = inRepo('models.json');
       await fse.outputFile(file, '{}\n');
@@ -810,7 +855,7 @@ describe('git exclude blocks (#915)', () => {
           excludeFile,
           listed: [inRepo('listed.md'), inRepo('.claude', 'rules', 'back.md')],
           missing: [inRepo('missing.md')],
-          tracked: [{ path: inRepo('tracked.md'), checkout: repo, descendants: [] }],
+          tracked: [{ path: inRepo('tracked.md'), checkout: repo }],
           reincluded: [{ path: inRepo('.claude', 'rules', 'back.md'), rule: { source: inRepo('.claude', '.gitignore'), line: '1', pattern: '!rules/*.md' } }],
           stale: ['/stale.md'],
           damaged: [{ owner: 'delivered', line: 7, problem: 'unopened' }],

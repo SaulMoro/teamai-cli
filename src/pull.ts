@@ -29,7 +29,7 @@ import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } f
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  blockingEntries, deliveredSkillPaths, describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
+  blockingEntries, deliveredSkillFiles, describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -61,7 +61,7 @@ import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
 import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
-import { describeNoLongerTeamaiOnly, judgeTeamaiOnlyFiles, keptOutByMcpExclude, type SharedFileJudgement } from './teamai-only-files.js';
+import { describeNoLongerTeamaiOnly, describeUnknownTracking, judgeTeamaiOnlyFiles, keptOutByMcpExclude, type SharedFileJudgement } from './teamai-only-files.js';
 import { realFilePath } from './git-exclude.js';
 import type { EnvVariable } from './resources/env.js';
 import { declaredSecretKeys } from './resources/secrets.js';
@@ -451,7 +451,7 @@ async function reportWouldKeep(
       } else if (writer === 'skills') {
         // As the write would list it: never an entry of the member's it delivers around.
         const blocked = await blockingEntries(target.dest, item.sourcePath);
-        for (const file of await deliveredSkillPaths(target.dest, item.sourcePath, blocked)) ledger.recorder?.report(writer, file);
+        for (const file of await deliveredSkillFiles(item.sourcePath, target.dest, blocked)) ledger.recorder?.report(writer, file);
       } else if (writer) {
         ledger.recorder?.report(writer, target.dest);
       }
@@ -2894,11 +2894,11 @@ export async function pull(
   if (!options.dryRun && !isBackgroundPull(options) && await sayGitExcludeNotices(localAgentGitExcludeNotices())) {
     reported.add('local-agent-git-exclude-failure');
   }
-  if (reconcileProject) await reportTeamaiOnlyFiles(reconcileProject, deliveryRecorder, options);
+  const teamaiOnlyFailures = reconcileProject ? await reportTeamaiOnlyFiles(reconcileProject, deliveryRecorder, options) : [];
   if (reconcileProject && !options.dryRun) {
     if (!isBackgroundPull(options) && await sayGitExcludeNotices(reconcileProject)) reported.add('git-exclude-failure');
     try {
-      if (!await syncDeliveredGitExclude(reconcileProject, deliveryRecorder, options)) reported.add('git-exclude-sync');
+      if (!await syncDeliveredGitExclude(reconcileProject, deliveryRecorder, options, teamaiOnlyFailures)) reported.add('git-exclude-sync');
       // It named every path another checkout's own file leaves visible.
       reported.add('git-exclude-foreign');
     } catch (e) {
@@ -2988,6 +2988,7 @@ export async function pull(
  */
 export async function syncDeliveredGitExclude(
   localConfig: LocalConfig, recorder: DeliveryRecorder, options: Pick<GlobalOptions, 'silent' | 'gitHook'> = {},
+  failures: readonly string[] = [],
 ): Promise<boolean> {
   const key = await checkoutRecordKey(localConfig);
   if (!key || !localConfig.projectRoot) return true;
@@ -3010,6 +3011,7 @@ export async function syncDeliveredGitExclude(
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
   const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths);
   if (whitelist?.failure) outcome.failures.push(whitelist.failure);
+  if (enabled) outcome.failures.push(...failures);
   for (const notice of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices]) await noticeGitExclude(localConfig, notice, options);
   if (outcome.failures.length === 0) {
     await clearGitExcludeFailure(localConfig);
@@ -3027,13 +3029,15 @@ export async function syncDeliveredGitExclude(
  * While the resolved `sharing.gitExclude` is on, that pull says so, or a
  * background one keeps it for the next interactive pull, unless the
  * `mcp-exclude` block still keeps the file out of git. When the team config
- * cannot be read, or judging fails, the previous list stands.
+ * cannot be read, or judging fails, the previous list stands. A file git
+ * cannot say it tracks keeps its previous entry; returns a failure for each,
+ * for the `delivered` sync to say or keep.
  */
 async function reportTeamaiOnlyFiles(
   localConfig: LocalConfig, recorder: DeliveryRecorder, options: Pick<GlobalOptions, 'silent' | 'gitHook' | 'dryRun'>,
-): Promise<void> {
+): Promise<string[]> {
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  if (!teamConfig || !localConfig.projectRoot) return;
+  if (!teamConfig || !localConfig.projectRoot) return [];
   let judged: SharedFileJudgement[];
   try {
     judged = await judgeTeamaiOnlyFiles(teamConfig, localConfig);
@@ -3041,13 +3045,21 @@ async function reportTeamaiOnlyFiles(
     recorder.failed('teamai-only');
     log.warn(`Could not tell which shared config files hold only teamai's entries: ${(e as Error).message}. `
       + 'Their git exclude lines stay as the last pull left them. Fix the cause, then run `teamai pull` again.');
-    return;
+    return [];
   }
-  for (const { file, state } of judged) if (state === 'teamai-only') recorder.report('teamai-only', file);
-  recorder.judgedAll('teamai-only');
-  if (options.dryRun || resolveGitExclude(localConfig, teamConfig) !== true) return;
   const key = await checkoutRecordKey(localConfig);
   const listed = key ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[key]?.gitExcludePaths?.['teamai-only'] ?? [] : [];
+  // git could not say whether it tracks a file: only a confirmed answer replaces the last pull's entry for it.
+  const failures: string[] = [];
+  for (const judgement of judged) {
+    if (judgement.state === 'teamai-only') recorder.report('teamai-only', judgement.file);
+    if (judgement.state !== 'unknown') continue;
+    const kept = listed.includes(await realFilePath(judgement.file));
+    if (kept) recorder.report('teamai-only', judgement.file);
+    failures.push(await describeUnknownTracking(judgement, localConfig.projectRoot, kept));
+  }
+  recorder.judgedAll('teamai-only');
+  if (options.dryRun || resolveGitExclude(localConfig, teamConfig) !== true) return failures;
   const exits = judged.filter(({ state }) => state === 'mixed');
   const stillOut = exits.length > 0 ? await keptOutByMcpExclude(exits.map(({ file }) => file)) : new Set<string>();
   for (const { file } of exits) {
@@ -3055,6 +3067,7 @@ async function reportTeamaiOnlyFiles(
     if (!listed.includes(real) || stillOut.has(real)) continue;
     await noticeGitExclude(localConfig, await describeNoLongerTeamaiOnly(file, localConfig.projectRoot), options);
   }
+  return failures;
 }
 
 /** Say a failed `delivered` sync, or, in a background pull, keep it in place of the last one. */

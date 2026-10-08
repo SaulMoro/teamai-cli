@@ -157,6 +157,12 @@ interface RemovalPlan {
   gitExcludeBlocks: Array<{ excludeFile: string; owner: string; lines: string[] }>;
   /** Whether a block in a file is another project's: `delivered` outside this project's files, another partition's `delivered/<id>`. */
   othersGitExcludeBlock: (owner: string, excludeFile: string) => boolean;
+  /**
+   * The workspaces whose `local-agent` lines go when the HTTP local agent stays
+   * (a project uninstall): its blocks are rebuilt without them, so the
+   * workspaces it still serves keep theirs. null: every `local-agent` block goes.
+   */
+  localAgentWorkspacesDropped: string[] | null;
   /** This project's checkouts, live by record or listed by git (every recorded root when git cannot list them all). */
   checkouts: string[];
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
@@ -987,6 +993,7 @@ async function buildRemovalPlan(
     gitExcludeBlocks: [],
     docsSearchWhitelists: [],
     othersGitExcludeBlock: () => true,
+    localAgentWorkspacesDropped: null,
     checkouts: [],
     gitHook: null,
     teamaiHome,
@@ -1393,7 +1400,9 @@ async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
  * those the HTTP local agent recorded in its state home, in any repository.
  * Every teamai block in them goes, but another project's: a `delivered`
  * block in a repository other than this project's, another partition's
- * `delivered/<id>`. Read-only.
+ * `delivered/<id>`. A project uninstall leaves the local agent serving other
+ * workspaces, so only this project's `local-agent` lines go: what rebuilding
+ * its blocks without this project would drop. Read-only.
  */
 async function planGitExcludeBlocks(plan: RemovalPlan, localConfig: LocalConfig): Promise<void> {
   const own = localConfig.projectRoot ? (await gitExcludeFile(localConfig.projectRoot))?.excludeFile : undefined;
@@ -1411,13 +1420,28 @@ async function planGitExcludeBlocks(plan: RemovalPlan, localConfig: LocalConfig)
   plan.gitExcludeFiles = [...files];
   plan.othersGitExcludeBlock = (owner, excludeFile) =>
     (owner === here.name && !ownFiles.has(excludeFile)) || (owner.startsWith(`${here.name}/`) && owner !== elsewhere.name);
+  let localAgentDrops: Array<{ excludeFile: string; dropped: string[] }> | null = null;
+  if (localConfig.scope === 'project' && localConfig.projectRoot) {
+    const { rebuildLocalAgentGitExcludeWithout } = await import('./local-agent.js');
+    const without = [...new Set([localConfig.projectRoot, await realFilePath(localConfig.projectRoot)])];
+    localAgentDrops = await rebuildLocalAgentGitExcludeWithout(without, { dryRun: true });
+    if (localAgentDrops) plan.localAgentWorkspacesDropped = without;
+  }
   const preview = await removeGitExclude('all', {
     files: plan.gitExcludeFiles,
-    keep: ({ owner, excludeFile }) => plan.othersGitExcludeBlock(owner, excludeFile),
+    keep: ({ owner, excludeFile }) => plan.othersGitExcludeBlock(owner, excludeFile) || keepsLocalAgentBlock(plan, owner),
     dryRun: true,
   });
-  plan.gitExcludeBlocks = preview.flatMap(({ excludeFile, removed }) =>
-    removed.filter(({ lines }) => lines.length > 0).map(({ owner, lines }) => ({ excludeFile, owner, lines })));
+  plan.gitExcludeBlocks = [
+    ...preview.flatMap(({ excludeFile, removed }) =>
+      removed.filter(({ lines }) => lines.length > 0).map(({ owner, lines }) => ({ excludeFile, owner, lines }))),
+    ...(localAgentDrops ?? []).map(({ excludeFile, dropped }) => ({ excludeFile, owner: 'local-agent', lines: dropped })),
+  ];
+}
+
+/** Whether `owner`'s lines are left to the local agent's own rebuild (`plan.localAgentWorkspacesDropped`), not removed whole. */
+function keepsLocalAgentBlock(plan: RemovalPlan, owner: string): boolean {
+  return owner === 'local-agent' && plan.localAgentWorkspacesDropped !== null;
 }
 
 /**
@@ -1431,7 +1455,7 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
   const results = await removeGitExclude('all', {
     files: plan.gitExcludeFiles,
     keep: async ({ owner, line, excludeFile }) => {
-      if (plan.othersGitExcludeBlock(owner, excludeFile)) return true;
+      if (plan.othersGitExcludeBlock(owner, excludeFile) || keepsLocalAgentBlock(plan, owner)) return true;
       // A line uninstall did not find among this project's MCP configs is another project's.
       if (owner === MCP_EXCLUDE_OWNER) return heldMcp.has(`${excludeFile}\0${line}`) || !plan.gitExcludes.get(excludeFile)?.some((e) => e.pattern === line);
       if (owner === 'credentials') return keepsCredentialLine(plan, line, excludeFile);
@@ -1463,6 +1487,13 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
     for (const { owner, line, problem } of damaged) {
       if (problem === 'duplicate' || plan.othersGitExcludeBlock(owner, excludeFile)) continue;
       log.warn(`Kept line ${line} of ${excludeFile}: a \`# [teamai:${owner}:${problem === 'unclosed' ? 'start' : 'end'}]\` marker with no ${problem === 'unclosed' ? 'end' : 'start'}, which teamai leaves with the lines after it. Delete it, and any of the lines that are teamai's, yourself.`);
+    }
+  }
+  // The local agent stays: its blocks keep the workspaces it still serves, this project's lines go.
+  if (plan.localAgentWorkspacesDropped !== null) {
+    const { rebuildLocalAgentGitExcludeWithout } = await import('./local-agent.js');
+    for (const { excludeFile, dropped } of await rebuildLocalAgentGitExcludeWithout(plan.localAgentWorkspacesDropped) ?? []) {
+      log.info(`Removed this project's ${dropped.length} line(s) from the local agent's git exclude block in ${excludeFile}`);
     }
   }
 }

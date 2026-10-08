@@ -155,6 +155,31 @@ describe.skipIf(process.platform === 'win32')('a model API key the HTTP local ag
       .toBe('.codebuddy/mine.json');
   }, 120_000);
 
+  it('lists the models file in its own block while teamai\'s delivered block already ignores it, so the key stays out of git once the option goes off', async () => {
+    const m = await machine('covered', { flag: true });
+    const exclude = m.file('.git/info/exclude');
+    fs.appendFileSync(exclude, '# [teamai:delivered:start]\n/.codebuddy/models.json\n# [teamai:delivered:end]\n');
+    fs.writeFileSync(m.file(MODELS), '{\n  "models": []\n}\n');
+    expect(m.ignored(MODELS)).toBe(true);
+
+    const { acks } = await m.sessionStart([applyModels(m.project)]);
+    expect(acks.map((ack) => ack.status), acks[0]?.error).toEqual(['success']);
+    expect(m.credentialLines()).toEqual(['/.codebuddy/models.json']);
+
+    const projects = path.join(path.dirname(m.project), 'home', '.teamai', 'projects');
+    for (const dir of fs.readdirSync(projects)) {
+      const config = path.join(projects, dir, 'config.yaml');
+      if (fs.existsSync(config)) fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace('gitExcludeEnabled: true', 'gitExcludeEnabled: false'));
+    }
+    const pull = await m.cli(['pull'], m.project);
+    expect(pull.code, pull.output).toBe(0);
+
+    expect(fs.readFileSync(exclude, 'utf8')).not.toContain('# [teamai:delivered:start]');
+    expect(fs.readFileSync(m.file(MODELS), 'utf8')).toContain(MODEL_KEY);
+    expect(m.ignored(MODELS)).toBe(true);
+    expect(m.status()).toEqual([]);
+  }, 120_000);
+
   it('withholds the key from a models file git tracks, and names `git rm --cached`', async () => {
     const m = await machine('tracked');
     const committed = '{\n  "models": []\n}\n';
