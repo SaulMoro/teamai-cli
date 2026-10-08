@@ -93,9 +93,10 @@ import {
   type TeamaiConfig,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { gitCommonDir, isLiveCheckout, resolveAnchors } from './utils/git.js';
+import { completeWorktreeList, gitCommonDir, isLiveCheckout, resolveAnchors } from './utils/git.js';
 import {
-  remove as removeGitExclude, report as reportGitExclude, stateHomeRecord, sync as syncGitExclude, type GitExcludeOwner,
+  ensure as ensureGitExclude, gitExcludeFile, gitTracks, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
+  sync as syncGitExclude, type GitExcludeOwner,
 } from './git-exclude.js';
 import {
   clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
@@ -283,6 +284,8 @@ interface BuddyModelManifest {
   codebuddy?: Record<string, string>;
   workbuddy?: Record<string, string>;
   providersByAgent?: Record<string, Record<string, string>>;
+  /** Project scope: teamai created the project's models file, so it deletes it once nothing is left in it (#915). */
+  createdModelsFile?: boolean;
 }
 
 interface ModelConfigManifest extends BuddyModelManifest {
@@ -2771,15 +2774,161 @@ async function writeModelJson(filePath: string, data: unknown): Promise<void> {
   await writeJsonAtomic(targetPath, data, { mode: 0o600 });
 }
 
-async function ensureWorkspaceModelGitignore(workspacePath: string): Promise<void> {
-  const gitignorePath = path.join(workspacePath, '.codebuddy', '.gitignore');
-  const existing = await readFileSafe(gitignorePath);
-  if (existing === null) {
-    await writeFile(gitignorePath, '# Local model credentials\nmodels.json\n');
-    return;
+// ─── Model API keys out of git (#915) ─────────────────────────
+
+/** The `credentials` git exclude owner: model API keys written into a project, kept out of git whatever the flag. */
+function credentialsGitExcludeOwner(): GitExcludeOwner {
+  return { name: 'credentials', record: stateHomeRecord(getLocalAgentHome(), 'credentials') };
+}
+
+const MODEL_KEY_RERUN = 'apply the model config again';
+
+/**
+ * List `file` in the `credentials` block before a model API key goes into it.
+ * Only git confirming that it ignores the file, or the file being in no git
+ * repository, lets the key through; anything else throws why git could still
+ * commit it and how to fix that, so the key is not written.
+ */
+async function keepModelKeyOutOfGit(file: string): Promise<void> {
+  const [{ result }] = await ensureGitExclude(credentialsGitExcludeOwner(), [file], { rerun: MODEL_KEY_RERUN });
+  // Excluded, or outside any repository, where nothing could commit it.
+  if (!('reason' in result)) return;
+  throw new Error(`apply_model_config: withheld the model API key from ${file}: teamai could not keep the file out of git: ${result.reason}. `
+    + `The file is left as it was. ${result.fix}`);
+}
+
+const TEAMAI_MODEL_GITIGNORE = ['# Local model credentials', 'models.json'];
+
+/**
+ * Delete the `.codebuddy/.gitignore` an older teamai created for `models.json`,
+ * while it holds only those two lines and git does not track it. One the member
+ * or the team edited, or committed, stays.
+ */
+async function removeTeamaiModelGitignore(workspacePath: string): Promise<void> {
+  const file = path.join(workspacePath, '.codebuddy', '.gitignore');
+  const content = await readFileSafe(file);
+  if (content === null) return;
+  const lines = content.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+  if (lines.length !== TEAMAI_MODEL_GITIGNORE.length || lines.some((line, i) => line !== TEAMAI_MODEL_GITIGNORE[i])) return;
+  if ((await gitTracks(file)).kind === 'tracked') return;
+  await remove(file);
+}
+
+/** Whether a reconciled models document holds nothing: no model, and no other setting of the member's. */
+function holdsNoModels(document: unknown): boolean {
+  if (Array.isArray(document)) return document.length === 0;
+  return Object.entries(document as Record<string, unknown>).every(([key, value]) =>
+    (key === 'models' || key === 'availableModels') && Array.isArray(value) && value.length === 0);
+}
+
+/** Whether a models file may hold an API key: it exists and is not proven to hold none. */
+async function mayHoldModelKey(file: string): Promise<boolean> {
+  let content: string | null;
+  try {
+    content = await readFileSafe(file);
+  } catch {
+    return true;
   }
-  if (existing.split(/\r?\n/).some((line) => line.trim() === 'models.json')) return;
-  await writeFile(gitignorePath, `${existing.trimEnd()}\nmodels.json\n`);
+  if (content === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    const entries = Array.isArray(parsed) ? parsed : (parsed as { models?: unknown } | null)?.models;
+    if (entries === undefined && typeof parsed === 'object' && parsed !== null) return false;
+    if (!Array.isArray(entries)) return true;
+    return entries.some((entry) => typeof entry !== 'object' || entry === null
+      || ((entry as { apiKey?: unknown }).apiKey !== undefined && (entry as { apiKey?: unknown }).apiKey !== ''));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The checkouts the local agent knows: every workspace it was bound to or
+ * wrote models into, and the other checkouts of each one's repository when git
+ * names them all.
+ */
+async function localAgentCheckouts(): Promise<string[]> {
+  const config = await loadLocalAgentConfig().catch(() => null);
+  const manifest = (await readJson<ModelConfigManifest>(getModelManifestPath()).catch(() => null)) ?? {};
+  const workspaces = new Set([...Object.keys(config?.workspaceBindings ?? {}), ...Object.keys(manifest.workspaceModels ?? {})]);
+  const roots = new Set(workspaces);
+  for (const workspace of workspaces) {
+    const commonDir = await gitCommonDir(workspace);
+    for (const root of commonDir ? await completeWorktreeList(workspace, commonDir) ?? [] : []) roots.add(root);
+  }
+  return [...roots];
+}
+
+/**
+ * The model files a `credentials` line of `excludeFile` still keeps out of
+ * git: in each checkout that reads that exclude file, among `roots` and the
+ * ones the local agent knows, the file the line names when it is there
+ * (`withKey`: when it may hold a key). Null when none of those checkouts reads
+ * that exclude file, so nothing here can judge the line.
+ */
+export async function modelFilesBehind(
+  line: string,
+  excludeFile: string,
+  options: { roots?: string[]; withKey?: boolean } = {},
+): Promise<string[] | null> {
+  const { mcpExcludePatternPath } = await import('./mcp-git-exclude.js');
+  const rel = mcpExcludePatternPath(line);
+  let judged = false;
+  const files = new Set<string>();
+  for (const root of new Set([...options.roots ?? [], ...await localAgentCheckouts()])) {
+    const placed = await gitExcludeFile(root);
+    if (placed?.excludeFile !== excludeFile) continue;
+    judged = true;
+    const file = path.join(placed.root, rel);
+    const there = options.withKey
+      ? await mayHoldModelKey(file)
+      : await fs.promises.lstat(file).then(() => true, () => false);
+    if (there) files.add(file);
+  }
+  return judged ? [...files] : null;
+}
+
+/**
+ * Remove the `credentials` lines whose models file is gone from every checkout
+ * that reads their exclude file. Run once a models file was deleted.
+ */
+async function releaseModelKeyLines(): Promise<void> {
+  try {
+    const results = await removeGitExclude(credentialsGitExcludeOwner(), {
+      keep: async ({ line, excludeFile }) => (await modelFilesBehind(line, excludeFile))?.length !== 0,
+    });
+    for (const { excludeFile, write, removed } of results) {
+      const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
+        : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
+        : write.kind === 'writeFailed' ? write.error
+        : null;
+      const lines = removed.flatMap((block) => block.lines);
+      if (why !== null && lines.length > 0) {
+        log.warn(`Kept ${lines.join(', ')} in ${excludeFile}: ${why}. Delete it yourself, with the block's \`# [teamai:credentials:start]\` `
+          + 'and `# [teamai:credentials:end]` lines once it holds no other line.');
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not remove the git exclude lines of deleted model files: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Local-agent removal: take teamai's models out of every project's models
+ * file. A file left with nothing goes, and then its git exclude line.
+ */
+async function removeWorkspaceModels(): Promise<void> {
+  const manifest = (await readJson<ModelConfigManifest>(getModelManifestPath()).catch(() => null)) ?? {};
+  for (const [workspacePath, scopeManifest] of Object.entries(manifest.workspaceModels ?? {})) {
+    for (const agentKind of ['codebuddy', 'workbuddy'] as const) {
+      if (scopeManifest[agentKind] === undefined) continue;
+      try {
+        await reconcileBuddyModels([], true, scopeManifest, agentKind, workspacePath);
+      } catch (e) {
+        log.warn(`Could not remove teamai's models from ${buddyModelsPath(agentKind, workspacePath)}: ${(e as Error).message}`);
+      }
+    }
+  }
 }
 
 async function readBuddyModelEntries(
@@ -2851,7 +3000,6 @@ async function reconcileBuddyModels(
     nextManaged[model.model_id] = entryHash(entry);
   }
 
-  if (workspacePath) await ensureWorkspaceModelGitignore(workspacePath);
   if (doc) {
     doc.models = preserved;
     if (Array.isArray(doc.availableModels) && doc.availableModels.length > 0) {
@@ -2863,9 +3011,25 @@ async function reconcileBuddyModels(
       }
       doc.availableModels = available;
     }
-    await writeModelJson(targetFile, doc);
+  }
+  const document = doc ?? preserved;
+  const present = await fs.promises.lstat(targetFile).catch(() => null);
+  if (workspacePath && Object.keys(nextManaged).length === 0 && holdsNoModels(document)) {
+    if (!present || (scopeManifest.createdModelsFile && !present.isSymbolicLink() && (await gitTracks(targetFile)).kind !== 'tracked')) {
+      // Nothing left in a file teamai created, or no file: it goes, then its git exclude line.
+      await remove(targetFile);
+      delete scopeManifest.createdModelsFile;
+      await removeTeamaiModelGitignore(workspacePath);
+      await releaseModelKeyLines();
+    } else {
+      // A file teamai did not create, one git tracks, or a member's link stays, and so does its line.
+      await writeModelJson(targetFile, document);
+    }
   } else {
-    await writeModelJson(targetFile, preserved);
+    if (workspacePath && Object.keys(nextManaged).length > 0) await keepModelKeyOutOfGit(targetFile);
+    await writeModelJson(targetFile, document);
+    if (workspacePath && !present) scopeManifest.createdModelsFile = true;
+    if (workspacePath && Object.keys(nextManaged).length > 0) await removeTeamaiModelGitignore(workspacePath);
   }
   if (agentKind === 'codebuddy') scopeManifest.codebuddy = nextManaged;
   else scopeManifest.workbuddy = nextManaged;
@@ -4136,6 +4300,7 @@ export async function removeLocalAgentHttp(): Promise<void> {
 
   // Before the state home goes: it records which exclude files hold the block (#915).
   await removeLocalAgentGitExclude();
+  await removeWorkspaceModels();
   await removeAllAgentHooks();
   await remove(getLocalAgentHome());
   log.success('HTTP source removed (resources uninstalled, config cleared).');
