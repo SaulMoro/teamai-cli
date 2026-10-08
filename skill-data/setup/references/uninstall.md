@@ -115,8 +115,9 @@ and give it your team repo URL."*
 - In a project, uninstall also takes teamai's blocks out of `.git/info/exclude`
   once it has deleted the files they hid: the `delivered` block, the
   `delivered/<id>` block it keeps in another repository (a tool folder that is
-  a nested clone or submodule, a tool home kept in git), and every other
-  `# [teamai:…]` block in those files. A file the user creates later at one of
+  a nested clone or submodule, a tool home kept in git), the HTTP local
+  agent's `local-agent` block in every exclude file it recorded (another
+  repository's too), and every other `# [teamai:…]` block in those files. A file the user creates later at one of
   those paths is visible to git. Their own lines stay, and so does another
   project's block in a shared repository. A read-only exclude file is left as
   it is, and the warning lists the lines to delete by hand. Copies in other

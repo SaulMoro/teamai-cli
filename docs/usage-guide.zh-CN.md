@@ -1585,6 +1585,13 @@ MCP 与 OpenCode 的配置文件、`.codex/hooks.json` 以及文档镜像不会�
 
 **卸载。** `teamai uninstall` 在删除这些块所隐藏的文件之后移除 teamai 的块，`uninstall --agent <tool>` 只移除该工具的行；见[卸载](#卸载)。
 
+**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
+
+- 每次在项目中安装或移除 skill、rule 的会话启动结束时，agent 更新该块，并把写过的 exclude 文件记录在 `~/.teamai/local-agent/git-exclude.json`。已不存在的 checkout 不贡献任何行。pull 从不移除这个块。
+- 提示词（`CLAUDE.md` 片段）留在 agent 的缓存中，不会列出。
+- agent 要安装到的路径上若是你自己的文件，会被保留，安装失败并提示 ``Kept <path>: it is not teamai's (not in the local agent's records). Rename or delete it; the local agent installs <slug> on its next sync.`` 与下载内容相同的副本则归为 agent 所有。
+- `teamai uninstall` 从 agent 记录的每个 exclude 文件中移除该块，包括其他仓库的。`teamai source remove-http` 在卸载完每个资源后也会这样做。
+
 **单仓模式。** 该设置开启时：
 
 - 内置 hooks 仍留在已提交的工具设置（`.claude/settings.json`）里，因此新 clone 依然带有它们。团队的 Claude Code hooks（`.teamai/hooks/hooks.yaml`）写入每个 checkout 自己的 `.claude/settings.local.json`，该文件会被列出，因此 pull 不再改动已提交的设置。开启该设置后的第一次 pull 会把团队 hooks 从 `.claude/settings.json` 中移除一次：请提交这次改动。关闭后，下一次 pull 会把它们放回 `.claude/settings.json`，并在 `.claude/settings.local.json` 不再含有其他内容时删除它。
@@ -2893,7 +2900,7 @@ teamai uninstall --agent claude
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
-- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在其指向的文件仍存在时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
+- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 在其记录的每个 exclude 文件中的 `local-agent` 块（包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在其指向的文件仍存在时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
 - `~/.teamai/` 目录
 
 git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
