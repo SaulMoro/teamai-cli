@@ -3260,7 +3260,7 @@ async function reconcileHooksAllScopes(
         errors.push(`[${localConfig.scope}] Hooks: team config could not be loaded`);
         continue;
       }
-      const { deliveredHookFiles, reconcileTeamHooksForConfig } = await import('./hooks.js');
+      const { deliveredHookFiles, reconcileTeamHooksForConfig, unreadableHookFiles } = await import('./hooks.js');
       let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
       try {
         reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, {
@@ -3273,6 +3273,8 @@ async function reconcileHooksAllScopes(
         // What holds teamai's hook entries now, a file this pass left alone included (#915).
         if (scopeRecorder) {
           for (const file of await deliveredHookFiles(teamConfig, localConfig)) scopeRecorder.report('hooks', file);
+          // A file that does not parse may still hold them: its line stays while it is on disk.
+          if ((await unreadableHookFiles(teamConfig, localConfig)).length > 0) scopeRecorder.failed('hooks');
         }
       }
       // A dry run wrote nothing: its preview keeps the files that held entries before, too.
@@ -3471,10 +3473,10 @@ async function reconcileCoAuthorAllScopes(
       try {
         const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
         const { coAuthorLocalSettingsFile } = await import('./coauthor-reconcile.js');
-        const owned = teamConfig
+        const local = teamConfig
           ? await coAuthorLocalSettingsFile(teamConfig, projectConfig, (await loadStateForScope(projectConfig)).coAuthorManaged ?? {})
           : undefined;
-        if (owned) recorder.report('coauthor', owned);
+        if (local?.kind === 'holds') recorder.report('coauthor', local.file);
       } catch (e) {
         log.debug(`[dry-run] co-author preview skipped: ${(e as Error).message}`);
       }
@@ -3495,8 +3497,10 @@ async function reconcileCoAuthorAllScopes(
       const { changes, managed } = await reconcileCoAuthorForConfig(teamConfig, localConfig, state);
       if (scopeRecorder) {
         // Read back from the file: the "already applied" skip does not read it.
-        const owned = await coAuthorLocalSettingsFile(teamConfig, localConfig, managed);
-        if (owned) scopeRecorder.report('coauthor', owned);
+        const local = await coAuthorLocalSettingsFile(teamConfig, localConfig, managed);
+        if (local.kind === 'holds') scopeRecorder.report('coauthor', local.file);
+        // One that does not parse may still hold it: its line stays while it is on disk.
+        if (local.kind === 'unreadable') scopeRecorder.failed('coauthor');
         scopeRecorder.succeeded('coauthor');
       }
 
