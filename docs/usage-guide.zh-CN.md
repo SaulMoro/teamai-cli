@@ -1631,6 +1631,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - 提示词（`CLAUDE.md` 片段）留在 agent 的缓存中，不会列出。
 - agent 要安装到的路径上若是你自己的文件，会被保留，安装失败并提示 ``Kept <path>: it is not teamai's (not in the local agent's records). Rename or delete it; the local agent installs <slug> on its next sync.`` 与下载内容相同的副本则归为 agent 所有。
 - 项目的 `teamai uninstall` 只移除该项目的行：agent 仍为你的其他工作区服务，因此它们的行保留，无论在其他仓库中，还是在该项目与 linked worktree 共用的 exclude 文件中。卸载 user scope 会移除 agent，并从它记录的每个 exclude 文件中移除该块；`teamai source remove-http` 在卸载完每个资源后也会这样做。
+- 移除 skill 或 rule 时（agent 自己的卸载、`teamai uninstall` 或 `teamai source remove-http`），会移除 agent 为每个工具安装的副本（旧版本记录的条目没有工具信息时：每个工具的副本），且只删除仍与 agent 依据其缓存写入内容相同的文件。你在 skill 中新增的文件、你修改过的副本以及 git 跟踪的文件都会保留，并逐一指出。留在磁盘上的副本，其行会保留到文件消失为止。移除时无法写入的块（只读的 exclude 文件）仍保留在记录中，下一次 `teamai source remove-http` 或 `teamai uninstall` 会移除它。
 - agent 写入项目 `.codebuddy/models.json` 的模型 API key，无论该选项如何、也无论 teamai 的其他块是否已列出它，都会列入 `# [teamai:credentials:start]` 块，并且不会写到 git 会提交的位置（见 [HTTP 契约](#http-契约面向后端实现者) 中的 `apply_model_config`）。这些 exclude 文件也记录在同一个 `git-exclude.json` 中。
 
 **单仓模式。** 该设置开启时：
@@ -2959,7 +2960,7 @@ teamai uninstall --agent claude
 - 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。卸载未完成时，仍在磁盘上的文件的行全部保留，留待重试时移除。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
 - 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
-- `~/.teamai/` 目录
+- `~/.teamai/` 目录。卸载找不到任何配置时（在所有项目之外运行，且没有 user scope 配置，例如只用 `init --http` 设置过的机器），会移除该目录和 HTTP 源，并在此之前从其记录中提到的每个 exclude 文件里移除 teamai 的 git exclude 行；它留在磁盘上的文件，其行会保留并被指出
 
 git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
 
