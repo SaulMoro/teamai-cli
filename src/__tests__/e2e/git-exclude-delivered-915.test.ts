@@ -727,6 +727,51 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
     expect(unexpected(m), pulled.output).toEqual([]);
   });
 
+  it('keeps listing a hook file that does not parse, leaves it as it is, and writes the hooks once the member repairs it', () => {
+    const m = machine('hooks-broken', {
+      team: `${ON}  hooks:\n    autoApply: true\n    requireTeamScripts: false\n`,
+      files: { ...TEAM_SKILLS, 'hooks/hooks.yaml': TEAM_HOOKS },
+      agents: 'claude',
+    });
+    const local = path.join(m.dir, '.claude', 'settings.local.json');
+    expect(read(local)).toContain('echo team-stop');
+    expect(notIgnored(m, ['.claude/settings.local.json'])).toEqual([]);
+
+    const broken = `${read(local).trimEnd().slice(0, -1)},\n  "model": \n`;
+    fs.writeFileSync(local, broken);
+    const pulled = m.run(['pull', '--force']);
+    expect(pulled.output).toContain(local);
+    expect(pulled.output).toContain('does not parse');
+    expect(read(local)).toBe(broken);
+    expect(notIgnored(m, ['.claude/settings.local.json']), pulled.output).toEqual([]);
+    expect(m.status().filter((line) => line.includes('settings.local.json'))).toEqual([]);
+
+    fs.writeFileSync(local, `${JSON.stringify({ model: 'mine' }, null, 2)}\n`);
+    const repaired = m.ok(['pull', '--force']);
+    expect(read(local)).toContain('echo team-stop');
+    expect(JSON.parse(read(local)).model).toBe('mine');
+    expect(notIgnored(m, ['.claude/settings.local.json']), repaired.output).toEqual([]);
+  });
+
+  it('keeps listing .claude/settings.local.json while it does not parse after a co-author choice, and leaves it as it is', () => {
+    const m = machine('coauthor-broken', { team: `${ON}  coAuthor:\n    enabled: false\n`, agents: 'claude' });
+    const local = path.join(m.dir, '.claude', 'settings.local.json');
+    const written = read(local);
+    expect(notIgnored(m, ['.claude/settings.local.json'])).toEqual([]);
+
+    const broken = `${written.trimEnd().slice(0, -1)},\n  "model": \n`;
+    fs.writeFileSync(local, broken);
+    const pulled = m.run(['pull', '--force']);
+    expect(read(local)).toBe(broken);
+    expect(notIgnored(m, ['.claude/settings.local.json']), pulled.output).toEqual([]);
+    expect(m.status().filter((line) => line.includes('settings.local.json'))).toEqual([]);
+
+    fs.writeFileSync(local, written);
+    const repaired = m.ok(['pull', '--force']);
+    expect(read(local)).toBe(written);
+    expect(notIgnored(m, ['.claude/settings.local.json']), repaired.output).toEqual([]);
+  });
+
   it('keeps listing an agent copy a full sync holds for its model', () => {
     const m = machine('held-full', {
       team: ON,

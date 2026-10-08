@@ -405,25 +405,27 @@ async function applyCursor(file: string, enabled: boolean): Promise<boolean> {
 }
 
 /**
- * The project's `.claude/settings.local.json` while teamai has its entry there
- * (#915): the record says teamai wrote "strip" (`managed` false) and the file
+ * The project's `.claude/settings.local.json` and teamai's entry there (#915).
+ * `holds`: the record says teamai wrote "strip" (`managed` false) and the file
  * still holds an empty trailer. teamai owns `attribution` only then; the file
- * may hold anything else too.
+ * may hold anything else too. `unreadable`: the record says so but the file
+ * does not parse, so whether the entry is still there is unknown.
  */
 export async function coAuthorLocalSettingsFile(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   managed: Readonly<Record<string, boolean>>,
-): Promise<string | undefined> {
+): Promise<{ kind: 'holds' | 'unreadable'; file: string } | { kind: 'none' }> {
   const settings = scopedToolPaths(teamConfig, localConfig).claude?.settings;
-  if (localConfig.scope !== 'project' || !settings) return undefined;
+  if (localConfig.scope !== 'project' || !settings) return { kind: 'none' };
   const file = path.join(resolveBaseDir(localConfig), path.dirname(settings), 'settings.local.json');
-  if (managed[file] !== false) return undefined;
+  if (managed[file] !== false) return { kind: 'none' };
   const read = await readJsonObject(file);
+  if (read.kind === 'invalid') return { kind: 'unreadable', file };
   const attribution = read.kind === 'ok' ? read.value.attribution : undefined;
-  if (typeof attribution !== 'object' || attribution === null) return undefined;
+  if (typeof attribution !== 'object' || attribution === null) return { kind: 'none' };
   const { commit, pr } = attribution as Record<string, unknown>;
-  return commit === '' || pr === '' ? file : undefined;
+  return commit === '' || pr === '' ? { kind: 'holds', file } : { kind: 'none' };
 }
 
 // ─── Main entry ──────────────────────────────────────────────
