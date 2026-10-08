@@ -1323,6 +1323,23 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect((await fse.readJson(dotMcp())).mcpServers).toEqual({ 'my-user': MEMBER });
     });
 
+    it('keeps an older record that names no file when ~/.codebuddy/.mcp.json links to mcp.json', async () => {
+      await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
+      await install(9609, 'https://old.example.com/mcp');
+      const manifestPath = path.join(tmpDir, '.teamai', 'managed-mcp.json');
+      const manifest = await fse.readJson(manifestPath);
+      for (const record of manifest.codebuddy) delete record.file;
+      await fse.writeJson(manifestPath, manifest);
+      // One file under both names: CodeBuddy's first lookup file is a link to the second.
+      await fse.symlink('mcp.json', dotMcp());
+
+      expect((await install(9610, 'https://new.example.com/mcp'))[0].status).toBe('success');
+      expect((await fse.readJson(mcp())).mcpServers).toEqual({
+        'mine-old': MEMBER, 'tm-user': { type: 'http', url: 'https://new.example.com/mcp' },
+      });
+      expect((await fse.lstat(dotMcp())).isSymbolicLink()).toBe(true);
+    });
+
     it('uninstall removes a server from the file it was recorded in, which CodeBuddy no longer reads', async () => {
       await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
       await install(9607, 'https://team.example.com/mcp');

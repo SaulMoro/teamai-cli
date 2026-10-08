@@ -50,6 +50,7 @@ import {
   spliceCodexBlock,
   codexServerNames,
   recordedFileOf,
+  sameMcpFile,
   userMcpFile,
   USER_MCP_LOOKUP,
 } from './mcp-reconcile.js';
@@ -3071,9 +3072,12 @@ async function installMcpServer(
   }
   const manifestKey = managedMcpManifestKey(tool, projectScope);
   // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
-  const owned = (manifest[manifestKey] ?? []).filter((r: ManagedMcpRecord) => fileOf(r) === targetFile);
+  // By real path, as reconciliation compares them: a lookup file linked to another is that file.
+  const records = manifest[manifestKey] ?? [];
+  const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(fileOf(r), targetFile)));
+  const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
-  const movedFrom = (manifest[manifestKey] ?? []).find((r: ManagedMcpRecord) => r.name === slug && fileOf(r) !== targetFile);
+  const movedFrom = records.find((r: ManagedMcpRecord, i) => r.name === slug && !inTarget[i]);
   const file = lookup ? targetFile : undefined;
 
   if (format === 'codex') {
