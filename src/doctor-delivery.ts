@@ -1684,7 +1684,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     });
   }
 
-  // On OpenCode V2 a pull takes teamai's V1 entries only out of a file teamai alone wrote (#915).
+  // On OpenCode V2 a pull takes teamai's V1 entries only out of a file git does not track (#915).
   const { opencodeV1Leftovers } = await import('./teamai-only-files.js');
   const v1Left = await opencodeV1Leftovers(teamConfig, localConfig);
   if (v1Left.length > 0) {
@@ -1694,8 +1694,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
       informational: true,
       check: async () => false,
       fix: `OpenCode V2 gets the team instructions, rules and MCP servers through teamai's plugin, but teamai's entries for OpenCode V1 `
-        + `are still in ${v1Left.map(({ file, entries }) => `${file} (${entries.join(', ')})`).join(' and ')}: git tracks the file or it holds `
-        + 'entries teamai does not own, so pull leaves it as it is. V2 ignores `instructions` and loads those servers a second time. '
+        + `are still in ${v1Left.map(({ file, entries }) => `${file} (${entries.join(', ')})`).join(' and ')}: git tracks the file, or pull `
+        + 'cannot edit it, so pull leaves it as it is. V2 ignores `instructions` and loads those servers a second time. '
         + 'Remove teamai\'s entries by hand once no one on the project uses OpenCode V1.',
     });
   }
