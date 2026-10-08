@@ -345,6 +345,15 @@ function localAgentLockPath(): string {
   return path.join(getTeamaiHomePath(), '.local-agent-sync-lock');
 }
 
+/** Set on a command a sync runs while it holds the lock: the pid of that sync. */
+const LOCK_HOLDER_ENV = 'TEAMAI_LOCAL_AGENT_LOCK_HOLDER';
+
+/** Whether this process runs as a command of the sync that holds the lock, so holds it too. */
+async function holdsParentLocalAgentLock(): Promise<boolean> {
+  if (process.env[LOCK_HOLDER_ENV] !== String(process.ppid)) return false;
+  return (await readJson<{ pid?: number }>(localAgentLockPath()))?.pid === process.ppid;
+}
+
 async function acquireLocalAgentLock(waitMs = 0): Promise<boolean> {
   if (await acquireLock(localAgentLockPath())) return true;
   const deadline = Date.now() + waitMs;
@@ -3356,7 +3365,8 @@ async function runCmdCommand(
     const { stdout } = await execFileAsync(
       process.execPath,
       [entry, ...argv.slice(1)],
-      { timeout: 120_000, env: process.env, maxBuffer: 4 * 1024 * 1024 },
+      // The sync holds the lifecycle lock until this returns; an uninstall must not wait for it.
+      { timeout: 120_000, env: { ...process.env, [LOCK_HOLDER_ENV]: String(process.pid) }, maxBuffer: 4 * 1024 * 1024 },
     );
     const summary = stdout.trim().split('\n').slice(0, 3).join(' | ');
     log.debug(`${tag} cmd OK: ${command.cmd}${summary ? ` — ${summary}` : ''}`);
@@ -4346,7 +4356,9 @@ export async function removeLocalAgentHttp(): Promise<void> {
  */
 export async function shutdownLocalAgentHttp(retry: string): Promise<'none' | 'removed' | 'incomplete' | 'locked'> {
   if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) return 'none';
-  if (!await acquireLocalAgentLock()) {
+  // A server-pushed uninstall runs while its sync holds the lock.
+  const inherited = await holdsParentLocalAgentLock();
+  if (!inherited && !await acquireLocalAgentLock()) {
     log.info('Waiting for the HTTP source sync lock before removal.');
     if (!await acquireLocalAgentLock(30_000)) {
       log.error(`Could not lock HTTP source state at ${localAgentLockPath()}; nothing was removed. `
@@ -4358,7 +4370,7 @@ export async function shutdownLocalAgentHttp(retry: string): Promise<'none' | 'r
   try {
     return await removeLocalAgentHttpLocked(retry);
   } finally {
-    await releaseLock(localAgentLockPath());
+    if (!inherited) await releaseLock(localAgentLockPath());
   }
 }
 
