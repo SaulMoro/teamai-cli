@@ -612,7 +612,10 @@ fails, the command reports both failures and keeps credential files excluded.
 HTTP source removal keeps `~/.teamai/local-agent/config.json` as `{disabled:true}`,
 without an endpoint or credentials, so legacy config and environment fallback
 cannot reconnect. Failed agent-hook removals retain `agent-hooks.json` and report
-exit code 1; removal can retry without an active source. HTTP initialization
+exit code 1; removal can retry without an active source. So does
+`git-exclude.json` while an exclude file it records still holds a teamai block
+(one removal could not write, or the line of a copy it left on disk), so the
+next removal or `teamai uninstall` finds it. HTTP initialization
 replaces the disabled config to enable a source again.
 
 Sync, detached plugin reconciliation and HTTP source removal share `~/.teamai/.local-agent-sync-lock`, outside the

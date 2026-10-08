@@ -411,6 +411,21 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(blockLines(exclude, 'mcp-exclude')).toEqual([]);
     expect(out).not.toContain('Kept `/.mcp.json`');
   }, 120_000);
+
+  it('uninstalls right after `git worktree remove` in a --separate-git-dir repo, with no pull in between', async () => {
+    const m = member('removed-worktree');
+    const root = caseDir('removed-worktree');
+    const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`] });
+    const wt = await m.worktree(main, path.join(root, 'wt'));
+    m.git(['worktree', 'remove', '--force', wt], main);
+
+    const out = m.run(process.execPath, [CLI, 'uninstall', '--force'], main);
+
+    expect(out.code, out.output).toBe(0);
+    expect(out.output).toContain('teamai uninstalled');
+    expect(owners(excludeFileOf(m, main)), out.output).toEqual([]);
+    expect(visible(m, main).filter((file) => file.startsWith('.claude/')), out.output).toEqual([]);
+  }, 120_000);
 });
 
 describe.skipIf(process.platform === 'win32')('uninstall in HTTP mode (#915)', () => {

@@ -127,7 +127,13 @@ and give it your team repo URL."*
   that tool's lines (`.agents/skills` too for Codex) from every worktree,
   keeping a path another tool in use reads. `--dry-run` lists the blocks under
   `Git exclude blocks (teamai's):`. An incomplete uninstall keeps the line of
-  every file still on disk until the retry. If another pull or push holds the
+  every file still on disk until the retry. With no configuration found (a
+  machine set up only with `init --http`, uninstall run outside its projects),
+  uninstall removes `~/.teamai/` and the HTTP source, and first teamai's lines
+  from every exclude file its records name, but the line of a file it leaves on
+  disk (named). The local agent's skills and rules go only as far as they are
+  still what it installed: a file the user added inside a skill, an edited
+  copy, and a tracked file stay, named. If another pull or push holds the
   project's sync lock, uninstall changes nothing and exits 1: run it again.
 - A `credentials` line stays, with a warning, while the models file it names
   still holds an API key in any checkout of that repository. MCP lines
