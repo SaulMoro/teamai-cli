@@ -9,7 +9,6 @@ import {
 } from './types.js';
 import { getUserHome } from './utils/home.js';
 import {
-  readJson,
   writeJson,
   readFileSafe,
   readJsonObject,
@@ -299,7 +298,10 @@ function removeTopLevelJsonMember(source: string, key: string): string | null {
  * Returns true when the file changed.
  */
 async function applyClaude(file: string, enabled: boolean): Promise<boolean> {
-  const settings = (await readJson<Record<string, unknown>>(file)) ?? {};
+  // A file that does not parse is the member's to repair: writing it would replace all of it.
+  const read = await readJsonObject(file);
+  if (read.kind === 'invalid') throw new Error(`${file} is not a JSON object (${read.error}); left as it is`);
+  const settings = read.kind === 'ok' ? read.value : {};
   const attribution = (typeof settings.attribution === 'object' && settings.attribution !== null
     ? { ...(settings.attribution as Record<string, unknown>) }
     : {}) as Record<string, unknown>;
@@ -378,7 +380,9 @@ async function applyCodex(file: string, enabled: boolean): Promise<boolean> {
  * false. Returns true when the file changed.
  */
 async function applyCursor(file: string, enabled: boolean): Promise<boolean> {
-  const config = (await readJson<Record<string, unknown>>(file)) ?? {};
+  const read = await readJsonObject(file);
+  if (read.kind === 'invalid') throw new Error(`${file} is not a JSON object (${read.error}); left as it is`);
+  const config = read.kind === 'ok' ? read.value : {};
   const attribution = (typeof config.attribution === 'object' && config.attribution !== null
     ? { ...(config.attribution as Record<string, unknown>) }
     : {}) as Record<string, unknown>;
