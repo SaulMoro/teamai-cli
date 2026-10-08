@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { execCommand, type ExecResult } from './utils/exec.js';
-import { pathExists, readFileIfExists, readFileSafe, writeFileAtomic } from './utils/fs.js';
+import { pathExists, readFileIfExists, readFileSafe, symlinkTarget, writeFileAtomic } from './utils/fs.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
 
 // ─── Git exclude blocks ──────────────────────────────────────
@@ -213,16 +213,26 @@ export async function existingAncestor(file: string): Promise<string> {
 }
 
 /**
- * Where a write to `file` lands: the real path of its closest existing
- * directory, the rest appended. The appliers replace the file itself (tmp +
- * rename) but follow its directories, so every check of whether git would
- * commit the file judges this path (#886), and reads keep `file`.
+ * `file` with the real path of its closest existing directory, the rest
+ * appended: the entry itself, a symlink at `file` not followed.
  */
-export async function realFilePath(file: string): Promise<string> {
+async function realEntryPath(file: string): Promise<string> {
   const dir = await existingAncestor(file);
   // Native realpath: the on-disk spelling on a case-insensitive filesystem (#915).
   const real = await fs.promises.realpath(dir).catch(() => dir);
   return path.join(real, path.relative(dir, file));
+}
+
+/**
+ * Where a write to `file` lands: the file a symlink at `file` points to (a
+ * member's dotfiles link stays, and the write goes to its target), then the
+ * real path of its closest existing directory, the rest appended. Every check
+ * of whether git would commit the file judges this path, in the repository
+ * holding it (#886), and reads keep `file`.
+ */
+export async function realFilePath(file: string): Promise<string> {
+  // A link loop or an unreadable path: judged as the file itself, as the write would fail.
+  return realEntryPath(await symlinkTarget(file).catch(() => file));
 }
 
 /**
@@ -237,14 +247,15 @@ export type GitTracking =
 
 /**
  * `file` as a message names it, and the path to give git for it: the one a
- * write lands in, named with `file`, when a directory inside its checkout is a
- * symlink (#886), where git refuses `file` ("beyond a symbolic link"). A
- * symlink above the checkout (macOS /var) changes no path git uses.
+ * write lands in, named with `file`, when `file` is a symlink or a directory
+ * inside its checkout is one (#886), where git refuses `file` ("beyond a
+ * symbolic link"). A symlink above the checkout (macOS /var) changes no path git uses.
  */
 export async function gitPathOf(file: string): Promise<{ label: string; path: string }> {
   const landed = await realFilePath(file);
   if (landed === file) return { label: file, path: file };
-  const location = await gitExcludeFile(await existingAncestor(landed));
+  const linked = await symlinkTarget(file).catch(() => file) !== file;
+  const location = linked ? null : await gitExcludeFile(await existingAncestor(landed));
   const inCheckout = location ? path.relative(location.root, landed) : '';
   if (inCheckout && !inCheckout.startsWith('..') && file.endsWith(`${path.sep}${inCheckout}`)) return { label: file, path: file };
   return { label: `${landed} (where ${file} is written)`, path: landed };
@@ -268,10 +279,14 @@ export async function gitTracking(file: string): Promise<GitTracking> {
 /**
  * Whether git tracks `file` (#879): the next `git commit -a` commits a change to
  * it, and no exclude rule stops that. Read-only. `unknown` is git failing to
- * answer: never read it as untracked.
+ * answer: never read it as untracked. Judged where a write to it lands; with
+ * `at: 'entry'`, a symlink at `file` is judged itself, as a deletion removes the link.
  */
-export async function gitTracks(file: string): Promise<{ kind: 'tracked' } | { kind: 'untracked' } | { kind: 'unknown'; error: string }> {
-  file = await realFilePath(file);
+export async function gitTracks(
+  file: string,
+  at: 'landed' | 'entry' = 'landed',
+): Promise<{ kind: 'tracked' } | { kind: 'untracked' } | { kind: 'unknown'; error: string }> {
+  file = at === 'entry' ? await realEntryPath(file) : await realFilePath(file);
   // The file, or even its directory, may be gone from disk and still be in the index.
   const dir = await existingAncestor(file);
   const result = await runGit(['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path.relative(dir, file)], dir);

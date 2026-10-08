@@ -151,6 +151,42 @@ describe('teamai deletes only its own skill directories (#993)', () => {
     expect(removed.output).toContain(notTeamais(mine, 'remove'));
   });
 
+  it('keeps a member\'s link inside a delivered skill through pull, remove and uninstall, and a link at a built-in\'s name', () => {
+    // A team skill with a CLI built-in's name, which teamai remove reaches.
+    const m = machine('links', { ...TEAM, 'skills/team-wiki-codebase/SKILL.md': skillMd('team-wiki-codebase', 'Team wiki.') }, {});
+    const codex = path.join(m.dir, '.codex', 'skills', 'fe-skill');
+    const claude = path.join(m.dir, '.claude', 'skills', 'fe-skill');
+    // The member points a delivered file at one of their own, with the same bytes.
+    const linkTargets = [codex, claude].map((dir, i) => {
+      const target = path.join(sandbox, `links-${attempt}-${i}-SKILL.md`);
+      writeFile(target, read(path.join(dir, 'SKILL.md')));
+      fs.rmSync(path.join(dir, 'SKILL.md'));
+      fs.symlinkSync(target, path.join(dir, 'SKILL.md'));
+      return target;
+    });
+    // A link of theirs at a CLI built-in skill's name.
+    const builtinTarget = path.join(sandbox, `links-${attempt}-builtin`);
+    writeFile(path.join(builtinTarget, 'SKILL.md'), '---\nname: team-wiki-codebase\ndescription: mine\n---\nMine.\n');
+    const builtinLink = path.join(m.dir, '.claude', 'skills', 'team-wiki-codebase');
+    fs.rmSync(builtinLink, { recursive: true, force: true });
+    fs.symlinkSync(builtinTarget, builtinLink);
+
+    const pulled = m.ok(['pull', '--force']);
+    expect(fs.lstatSync(path.join(codex, 'SKILL.md')).isSymbolicLink(), pulled.output).toBe(true);
+    expect(pulled.output).toContain(`Kept ${path.join(codex, 'SKILL.md')}: it is a link of yours, so teamai does not replace it.`);
+
+    const removedBuiltin = m.ok(['remove', 'skills', 'team-wiki-codebase', '--force']);
+    expect(fs.lstatSync(builtinLink).isSymbolicLink(), removedBuiltin.output).toBe(true);
+
+    const removed = m.ok(['remove', 'skills', 'fe-skill', '--force']);
+    expect(fs.lstatSync(path.join(codex, 'SKILL.md')).isSymbolicLink(), removed.output).toBe(true);
+
+    const uninstalled = m.ok(['uninstall', '--force']);
+    expect(fs.lstatSync(path.join(claude, 'SKILL.md')).isSymbolicLink(), uninstalled.output).toBe(true);
+    expect(fs.lstatSync(builtinLink).isSymbolicLink()).toBe(true);
+    for (const target of linkTargets) expect(read(target)).toBe(TEAM['skills/fe-skill/SKILL.md']);
+  });
+
   it('teamai uninstall deletes teamai\'s copies of team skills and keeps the member\'s own, naming it', () => {
     const m = machine('uninstall', TEAM, { '.claude/skills/fe-skill/SKILL.md': MY_SKILL });
     const mine = path.join(m.dir, '.claude', 'skills', 'fe-skill');

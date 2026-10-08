@@ -5,6 +5,7 @@ import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, Team
 import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { warnOnce } from '../utils/warn-once.js';
 import { getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { isCliOwnedSkillName } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
@@ -17,7 +18,8 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  describeMembersDirLeft, judgeCopy, keepsEditedCopy, keepsTrackedCopy, ownsSkillDir, recordDelivered, type DeliveredHashes, type DeliveryLedger,
+  describeKeptDir, describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy, membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles,
+  type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -72,7 +74,10 @@ export async function resolveSkillDestination(
     // on every skill, for copies the write path treats as identical.
     if (!sourcePath) return sharedDestination;
     if (await pathExists(configuredDestination)) {
-      if (await dirContentEqual(sharedDestination, configuredDestination) && await dirContentEqual(configuredDestination, sourcePath)) {
+      // A link there is the member's: never deleted as a duplicate (#993).
+      if (await isLink(configuredDestination)) {
+        log.warn(describeMembersLink(configuredDestination, `skills/${skillName}`));
+      } else if (await dirContentEqual(sharedDestination, configuredDestination) && await dirContentEqual(configuredDestination, sourcePath)) {
         if (!await keepsTrackedCopy(configuredDestination, sharedDestination)) {
           await remove(configuredDestination);
           log.debug(`Removed identical TeamAI skill ${skillName} from ${configuredSkillsPath}`);
@@ -755,7 +760,10 @@ export class SkillsHandler extends ResourceHandler {
       dest,
       `Invalid skill destination outside team repo skills directory: ${item.relativePath}`,
     );
-    await copyDir(item.sourcePath, dest);
+    // A link in the member's skill stays theirs: teamai never puts links in the team repo (#993).
+    await copyDir(item.sourcePath, dest, (link) => {
+      log.warn(`Skipped ${link} in ${item.relativePath}: teamai does not push links to the team repo.`);
+    });
     const sourceFiles = new Set(await listFilesRecursive(item.sourcePath));
     const teamFiles = await listFilesRecursive(dest);
     for (const relativePath of teamFiles) {
@@ -829,7 +837,13 @@ export class SkillsHandler extends ResourceHandler {
       const { tool, dest } = target;
       try {
         if (ledger && await keepsEditedCopy(ledger, item, target)) continue;
-        await copyDir(item.sourcePath, dest);
+        // With no ledger (the local agent's install), nothing else judges a link of the member's there (#993).
+        const membersLink = ledger ? null : await membersLinkAt(dest);
+        if (membersLink !== null) {
+          warnOnce(describeMembersLink(membersLink, item.relativePath));
+          continue;
+        }
+        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)));
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
@@ -863,7 +877,7 @@ export class SkillsHandler extends ResourceHandler {
     }
     const previous = await (await import('../pull.js')).deliveredHashes(localConfig);
     const origin = skillOrigin(localConfig.repo.localPath, name);
-    const owned: { tool: string; skillDir: string }[] = [];
+    const owned: { tool: string; skillDir: string; files?: string[] }[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
       // Not ours to write to, so not ours to delete from. Above the OpenClaw
@@ -882,10 +896,20 @@ export class SkillsHandler extends ResourceHandler {
       }
       for (const skillDir of skillDirs) {
         if (!await pathExists(skillDir)) continue;
-        if (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources)) {
+        // A link is the member's even at a built-in's name, so it is judged before the name.
+        if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
           owned.push({ tool, skillDir });
-        } else {
-          log.warn(describeMembersDirLeft(skillDir, `skills/${name}`, 'remove'));
+          continue;
+        }
+        // Ownership is per file: teamai's go, the member's stay, and so does the directory (#993).
+        const files = await isLink(skillDir) ? { teamais: [], members: [] } : await teamaiSkillFiles(previous, skillDir, origin);
+        if (files.teamais.length === 0) {
+          log.warn(await describeKeptDir(skillDir, `skills/${name}`, 'remove'));
+          continue;
+        }
+        owned.push({ tool, skillDir, files: files.teamais });
+        for (const file of files.members) {
+          log.warn(describeMembersDirLeft(file, `skills/${name}/${path.relative(skillDir, file).split(path.sep).join('/')}`, 'remove'));
         }
       }
     }
@@ -899,10 +923,17 @@ export class SkillsHandler extends ResourceHandler {
     // Record tombstone so the resource won't be re-pushed
     await this.addTombstone(name, localConfig);
 
-    for (const { tool, skillDir } of owned) {
+    for (const { tool, skillDir, files } of owned) {
+      // Any file of it the repository tracks keeps the whole directory, named once.
       if (await keepsTrackedCopy(skillDir)) continue;
-      await remove(skillDir);
-      removed.push(skillDir);
+      if (files) {
+        for (const file of files) await remove(file);
+        await pruneEmptyDirs(skillDir);
+        removed.push(...files);
+      } else {
+        await remove(skillDir);
+        removed.push(skillDir);
+      }
       log.debug(`Removed skill ${name} from ${tool}`);
     }
 

@@ -27,7 +27,7 @@ import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } f
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  describeMembersDirLeft, forgetDelivered, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
+  describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -298,6 +298,8 @@ async function skillSafeToRemove(deployedDir: string, source: string | undefined
   // Recursive: a git repo nested anywhere under the skill (e.g. scripts/.git)
   // can hide stashes/unpushed history too, and dirContentEqual skips every .git.
   if (await hasVcsMetadataRecursive(deployedDir)) return false;
+  // The compare does not see links, and a link inside is the member's (#993).
+  if (await holdsNonRegular(deployedDir)) return false;
   return dirContentEqual(deployedDir, source, [CONTRIBUTORS_FILE]);
 }
 

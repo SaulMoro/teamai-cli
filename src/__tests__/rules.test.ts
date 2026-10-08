@@ -38,7 +38,7 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-import { RulesHandler, inlinedRulesText } from '../resources/rules.js';
+import { RulesHandler, inlinedRulesText, isLegacyLayoutCopy } from '../resources/rules.js';
 import { loadStateForScope } from '../config.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { openLedger, recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
@@ -1036,6 +1036,44 @@ scope: 'user',
     await handler.pullAllRules(teamConfig, localConfig);
     expect(await fse.readFile(context, 'utf8')).toBe('RESERVED-RULE, edited by the member');
   });
+
+  it('keeps a member\'s link named teamai-context in a rules directory, even when its target holds the delivered copy (#993)', async () => {
+    const teamRulesDir = path.join(localConfig.repo.localPath, 'rules');
+    await fse.writeFile(path.join(teamRulesDir, 'teamai-context.md'), 'RESERVED-RULE');
+    const context = path.join(homeDir, '.claude/rules', 'teamai-context.md');
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'RESERVED-RULE');
+    await fse.symlink(target, context);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect((await fse.lstat(context)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(target, 'utf8')).toBe('RESERVED-RULE');
+  });
+
+  it('never writes through a member\'s link at a rule path when installed without a delivery record (#993)', async () => {
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'team-rule.md'), 'team content');
+    const link = path.join(homeDir, '.claude/rules', 'team-rule.md');
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'mine');
+    await fse.symlink(target, link);
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(target, 'utf8')).toBe('mine');
+  });
+
+  it('never counts a member\'s link as a copy an older layout wrote, on record or with a built-in rule\'s name (#993)', async () => {
+    const target = path.join(tmpDir, 'mine.md');
+    await fse.writeFile(target, 'mine');
+    const link = path.join(homeDir, '.cursor', 'rules', 'teamai-recall.md');
+    await fse.ensureDir(path.dirname(link));
+    await fse.symlink(target, link);
+
+    expect(await isLegacyLayoutCopy(link, 'rules/teamai-recall.md', undefined, localConfig.repo.localPath)).toBe(false);
+    expect(await isLegacyLayoutCopy(link, 'rules/team-rule.md', { [link]: 'recorded' }, localConfig.repo.localPath)).toBe(false);
+  });
 });
 
 describe('RulesHandler.pullAllRules — OpenCode instructions activation', () => {
@@ -1579,6 +1617,20 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     commitTeamRepo(repoPath);
     await handler.removeItem('gone', teamConfig, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/gone.mdc'))).toBe(false);
+  });
+
+  it('removeItem deletes a copy holding what pull writes today, with no record or team history', async () => {
+    // A team checkout without history: today's render is the only proof.
+    await fse.writeFile(path.join(repoPath, 'rules', 'fresh.md'), 'bye');
+    await handler.pullAllRules(teamConfig, localConfig);
+    await fse.writeFile(path.join(homeDir, '.cursor/rules/fresh.md'), 'bye');
+    await fse.writeFile(path.join(homeDir, '.claude/rules/fresh.md'), 'my own notes');
+
+    await handler.removeItem('fresh', teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/fresh.mdc'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/fresh.md'))).toBe(false);
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules/fresh.md'), 'utf-8')).toBe('my own notes');
   });
 });
 

@@ -132,10 +132,14 @@ const claudeTeamStops = (dir: string): Array<{ hooks: Array<{ command: string }>
 const codexStops = (dir: string): string[] =>
   (readJson(path.join(dir, '.codex', 'hooks.json')).hooks?.Stop ?? []).map((e: { hooks: Array<{ command: string }> }) => e.hooks[0].command);
 
-/** Every main-checkout hook manifest under the sandbox HOME's data home. */
+/**
+ * Lose every hook manifest under the sandbox HOME's data home: the main
+ * checkout's, HOME's, and each checkout's own.
+ */
 function removeHookManifests(): void {
+  const names = new Set(['managed-main-checkout-hooks.json', 'managed-hooks.json']);
   const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? walk(path.join(dir, e.name)) : e.name === 'managed-main-checkout-hooks.json' ? [path.join(dir, e.name)] : []);
+    e.isDirectory() ? walk(path.join(dir, e.name)) : names.has(e.name) ? [path.join(dir, e.name)] : []);
   const found = walk(path.join(home, '.teamai'));
   expect(found.length).toBeGreaterThan(0);
   for (const file of found) fs.rmSync(file);
@@ -261,6 +265,11 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     init(t, pulled, 'claude');
     removeMcpManifests();
     t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    const preview = pull(pulled, '--dry-run');
+    expect(preview.output).toContain(
+      `Would remove MCP server plain-api from ${path.join(pulled, '.mcp.json')}: it equals a server the team has removed.`,
+    );
+    expect(mcpServer(pulled, 'plain-api')).toEqual({ type: 'http', url: 'https://team.example.com/v1' });
     pull(pulled);
     expect(mcpServer(pulled, 'plain-api')).toBeUndefined();
 
@@ -280,6 +289,18 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
     pull(dir);
     expect(mcpServer(dir, 'plain-api')).toEqual(mine);
+  });
+
+  it('keeps a member\'s server whose name the team history never had', () => {
+    const t = team('never-team', { 'mcp/mcp.yaml': mcpYaml('https://team.example.com/v1') });
+    const mine = { type: 'http', url: 'https://mine.example.com/mcp' };
+    const dir = business('never-team-biz', { '.mcp.json': JSON.stringify({ mcpServers: { 'my-own': mine } }) });
+    init(t, dir, 'claude');
+    removeMcpManifests();
+    t.publish({ 'mcp/mcp.yaml': 'servers: []\n' }, 'drop');
+    pull(dir);
+    expect(mcpServer(dir, 'plain-api')).toBeUndefined();
+    expect(mcpServer(dir, 'my-own')).toEqual(mine);
   });
 
   it('removes an unrecorded copy of a deleted server from Codex config too', () => {
@@ -382,4 +403,81 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(doctor.output).toContain(`Kept the Stop hook entry team-stop in ${settings}`);
     expect(doctor.output).toContain(`Kept the SessionStart hook entry in ${codexFile}`);
   });
+
+  it.each(['cursor', 'copilot', 'zcode'])('leaves one entry for a changed team hook in %s hooks, without the hook manifest', (tool) => {
+    fs.mkdirSync(path.join(home, `.${tool}`), { recursive: true });
+    const stop = (version: string): string => `hooks:\n  - id: ${tool}-stop\n    description: Stop\n    event: Stop\n    command: echo ${tool}-stop-${version}\n`;
+    const t = team(`hook-history-${tool}`, { 'hooks/hooks.yaml': stop('v1') });
+    const dir = business(`hook-history-${tool}-biz`);
+    init(t, dir, tool);
+    const file = hookFiles(dir)[tool];
+    expect(entriesMentioning(file, `echo ${tool}-stop-`)).toHaveLength(1);
+
+    removeHookManifests();
+    t.publish({ 'hooks/hooks.yaml': stop('v2') }, 'v2');
+    const pulled = pull(dir);
+    const entries = entriesMentioning(file, `echo ${tool}-stop-`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toContain(`echo ${tool}-stop-v2`);
+    expect(pulled.output).not.toContain('Kept the');
+  });
+
+  it('removes unrecorded team hook entries on uninstall, and keeps the member\'s own entries beside them', () => {
+    const tools = ['codex', 'cursor', 'copilot', 'zcode'];
+    for (const tool of tools) fs.mkdirSync(path.join(home, `.${tool}`), { recursive: true });
+    const t = team('hook-uninstall', {
+      'hooks/hooks.yaml': 'hooks:\n  - id: leaving-stop\n    description: Stop\n    event: Stop\n    command: echo leaving-stop\n',
+    });
+    const dir = business('hook-uninstall-biz');
+    init(t, dir, tools.join(','));
+    const files = hookFiles(dir);
+    for (const tool of tools) expect(entriesMentioning(files[tool], 'echo leaving-stop'), tool).toHaveLength(1);
+
+    // The member adds hooks of their own to the same files.
+    const own: Record<string, [string[], unknown]> = {
+      codex: [['hooks', 'Stop'], { hooks: [{ type: 'command', command: 'echo my-own-codex' }] }],
+      cursor: [['hooks', 'stop'], { command: 'echo my-own-cursor' }],
+      copilot: [['hooks', 'Stop'], { type: 'command', bash: 'echo my-own-copilot', command: 'echo my-own-copilot' }],
+      zcode: [['hooks', 'events', 'Stop'], { hooks: [{ type: 'process', command: 'bash', args: ['-lc', 'echo my-own-zcode'] }] }],
+    };
+    for (const [tool, [keys, entry]] of Object.entries(own)) {
+      const json = readJson(files[tool]);
+      const parent = keys.slice(0, -1).reduce((node, key) => node[key], json);
+      parent[keys.at(-1)!].push(entry);
+      fs.writeFileSync(files[tool], JSON.stringify(json, null, 2));
+    }
+
+    removeHookManifests();
+    const r = teamai(['uninstall', '--force'], dir);
+    expect(r.code, r.output).toBe(0);
+    for (const tool of tools) {
+      expect(entriesMentioning(files[tool], 'echo leaving-stop'), tool).toEqual([]);
+      expect(entriesMentioning(files[tool], `echo my-own-${tool}`), tool).toHaveLength(1);
+    }
+  });
 });
+
+/** Where a project's hooks for each tool live: Codex in the checkout, Copilot per checkout, the rest in HOME. */
+function hookFiles(dir: string): Record<string, string> {
+  return {
+    codex: path.join(dir, '.codex', 'hooks.json'),
+    cursor: path.join(home, '.cursor', 'hooks.json'),
+    copilot: path.join(dir, '.github', 'hooks', 'teamai.json'),
+    zcode: path.join(home, '.zcode', 'cli', 'config.json'),
+  };
+}
+
+/** The serialized entries, under any event of a hook file's `hooks`, that mention `needle`. */
+function entriesMentioning(file: string, needle: string): string[] {
+  if (!fs.existsSync(file)) return [];
+  const found: string[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const entry of node) if (JSON.stringify(entry).includes(needle)) found.push(JSON.stringify(entry));
+    } else if (node && typeof node === 'object') {
+      Object.values(node).forEach(visit);
+    }
+  };
+  visit(readJson(file).hooks);
+  return found;
+}

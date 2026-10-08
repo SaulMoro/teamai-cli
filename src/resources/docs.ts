@@ -8,8 +8,8 @@ import { log } from '../utils/logger.js';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isPastVersionOf } from '../utils/git.js';
-import { describeMembersFile, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
-import { blobIdOf, historicalVersions } from '../utils/team-history.js';
+import { describeKeptEntry, describeMembersDirLeft, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';
+import { blobIdOf, historicalVersions, type HistoricalVersion } from '../utils/team-history.js';
 
 /**
  * The single directory the team docs bundle is copied into. In project scope a
@@ -71,21 +71,74 @@ export async function listStaleDocDirectories(source: string | undefined, destin
 
 /**
  * Whether the prune may delete `file`, at `rel` in the mirror (`/`-separated),
- * which the team repo no longer has (#993): a link, a version of the team doc
- * once at that path, or a local-only file at a path the team repo's history
- * never had. Anything else at a removed team doc's path is the member's, and
- * so is any file while the history cannot be read: there is no proof either
- * way. Read-only.
+ * which the team repo no longer has (#993): only a version of the team doc once
+ * at that path (a link included, by its target). Anything else is the member's:
+ * an entry at a path the team history never had (no team version is no proof
+ * that teamai put it there), any other entry at a removed doc's path, and any
+ * entry while the history cannot be read. Read-only.
  */
 export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
-  if (!(await fse.lstat(file).catch(() => null))?.isFile()) return true;
+  const stat = await fse.lstat(file).catch(() => null);
+  if (!stat) return true;
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
-  if (versions === null) return false;
-  if (versions.length === 0) return true;
-  const bytes = await readBytes(file);
+  if (versions === null || versions.length === 0) return false;
+  return isDocVersion(file, stat, versions, repoPath);
+}
+
+/**
+ * Whether the mirror entry at `file` (`stat`, from lstat) is one of `versions` of a team doc,
+ * compared by git blob id. Anything but a file or a link is not: no team version can match it.
+ * git stores a link as a blob of its target, so a link the team delivered matches by id; it is
+ * never followed.
+ */
+async function isDocVersion(file: string, stat: fse.Stats, versions: readonly HistoricalVersion[], repoPath: string): Promise<boolean> {
+  if (versions.length === 0 || (!stat.isFile() && !stat.isSymbolicLink())) return false;
+  const bytes = stat.isSymbolicLink()
+    ? await fs.readlink(file).then((target) => Buffer.from(target), () => null)
+    : await readBytes(file);
   if (bytes === null) return false;
   const id = await blobIdOf(repoPath, bytes);
-  return versions.some((version) => version.blob === id);
+  // A link matches only a link the team had, a file only a file: the same bytes are not the same entry.
+  const link = stat.isSymbolicLink();
+  return versions.some((version) => version.blob === id && (version.mode === '120000') === link);
+}
+
+/**
+ * Remove from the docs mirror `dir` what is teamai's, for `uninstall` (#993): each file or link
+ * at `<rel>` that is a version of `docs/<rel>` in the team repo's history. Anything else is the
+ * member's and stays, named; hidden entries stay silently, as pull leaves them. A directory goes
+ * once nothing is left in it. While the history cannot be read, nothing goes, since nothing proves
+ * a doc teamai's. Returns the lines naming what stayed.
+ */
+export async function removeTeamDocs(dir: string, repoPath: string): Promise<string[]> {
+  const history = await historicalVersions(repoPath, 'docs');
+  if (history === null) {
+    return [`Kept ${dir}: the team repo's history cannot be read, so nothing proves a doc there teamai's, and uninstall left it.`];
+  }
+  const kept: string[] = [];
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await readEntries(current)) {
+      const target = path.join(current, entry.name);
+      // teamai never delivers a hidden entry: it is the member's, and keeps the mirror (and the data home around it).
+      if (entry.name.startsWith('.')) {
+        kept.push(`Kept ${target}: it is a hidden file of yours, so uninstall left it.`);
+        continue;
+      }
+      const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(target, entryRel);
+        if ((await fse.readdir(target)).length === 0) await fse.rmdir(target);
+        continue;
+      }
+      const versions = history.filter((version) => version.path === `docs/${entryRel}`);
+      if (await isDocVersion(target, await fse.lstat(target), versions, repoPath)) await fse.unlink(target);
+      else kept.push(describeMembersDirLeft(target, `docs/${entryRel}`, 'uninstall'));
+    }
+  };
+  await walk(dir, '');
+  // A linked mirror keeps its link: only what teamai delivered through it goes.
+  if ((await fse.lstat(dir)).isDirectory() && (await fse.readdir(dir)).length === 0) await fse.rmdir(dir);
+  return kept;
 }
 
 /**
@@ -104,8 +157,7 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (sourceEntry && !sourceEntry.isDirectory()) continue;
       // A directory where the team once had a doc file, holding anything that is
       // no team version, is the member's, put in place of that file: all of it stays (#993).
-      if (!sourceEntry && await wasTeamDocFile(repoPath, entryRel)
-        && !await isTeamaiSkillCopy(target, { repoPath, pathspec: `docs/${entryRel}` })) {
+      if (!sourceEntry && await isMembersDocDirectory(target, entryRel, repoPath)) {
         log.warn(
           `[${scope}] Kept ${target}: the team removed docs/${entryRel}, but this is a directory of yours in its place. `
           + 'Delete it when you no longer need it.',
@@ -117,7 +169,8 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
       if (!await isPrunableDoc(target, entryRel, repoPath)) {
-        log.warn(`[${scope}] ${describeKeptRemovedDoc(target, entryRel)}`);
+        const line = await describeKeptRemovedDoc(target, entryRel, repoPath, entry.isSymbolicLink());
+        if (line !== null) log.warn(`[${scope}] ${line}`);
         continue;
       }
       await fse.unlink(target);
@@ -125,9 +178,40 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
   }
 }
 
-/** Pull's line for a file it keeps at `docs/<rel>`, which the team removed, because it is no version of it (#993). */
-export function describeKeptRemovedDoc(target: string, rel: string): string {
-  return `Kept ${target}: the team removed docs/${rel}, but this copy matches no team version of it. Delete it when you no longer need it.`;
+/**
+ * Pull's line for an entry it keeps at `docs/<rel>`, a path the team repo no longer has,
+ * because it is no team version of that doc (#993). A link at a path the team never had is
+ * named as the member's; a file there is null: it stays without a word, like a personal rule.
+ */
+export async function describeKeptRemovedDoc(target: string, rel: string, repoPath: string, link: boolean): Promise<string | null> {
+  const neverTeams = (await historicalVersions(repoPath, `docs/${rel}`))?.length === 0;
+  if (neverTeams && !link) return null;
+  return neverTeams
+    ? `Kept ${target}: it is a link of yours, and the team does not have docs/${rel}. Delete it when you no longer need it.`
+    : `Kept ${target}: the team removed docs/${rel}, but this copy matches no team version of it. Delete it when you no longer need it.`;
+}
+
+/**
+ * Whether the mirror's directory `dir`, at `rel`, is one the member put where the team
+ * history had a doc file, holding anything that is no team version (#993): pull keeps it whole.
+ */
+async function isMembersDocDirectory(dir: string, rel: string, repoPath: string): Promise<boolean> {
+  return await wasTeamDocFile(repoPath, rel) && !await isTeamaiSkillCopy(dir, { repoPath, pathspec: `docs/${rel}` });
+}
+
+/**
+ * Whether the prune deletes the mirror's `file` at `rel`, a path the team repo no longer has:
+ * not inside a directory pull keeps whole, and `isPrunableDoc`. For doctor, which lists
+ * files rather than walking directories as the prune does. Read-only.
+ */
+export async function isPrunedDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
+  const parts = rel.split('/');
+  const root = file.slice(0, file.length - rel.length);
+  for (let depth = 1; depth < parts.length; depth++) {
+    const dirRel = parts.slice(0, depth).join('/');
+    if (await isMembersDocDirectory(path.join(root, dirRel), dirRel, repoPath)) return false;
+  }
+  return isPrunableDoc(file, rel, repoPath);
 }
 
 /** Whether the team history ever had a file at `docs/<rel>` itself, not only under it. */
@@ -326,6 +410,16 @@ async function sameLink(local: string, team: string): Promise<boolean> {
   return mine !== null && mine === theirs;
 }
 
+/** Whether `rel` under `root`, or a directory on the way to it, is a link (never followed). */
+async function passesThroughLink(root: string, rel: string): Promise<boolean> {
+  let current = root;
+  for (const part of rel.split(/[\\/]/)) {
+    current = path.join(current, part);
+    if (await isLink(current)) return true;
+  }
+  return false;
+}
+
 /** The file's bytes, or null when it is not a file this process can read. */
 async function readBytes(filePath: string): Promise<Buffer | null> {
   try {
@@ -349,6 +443,8 @@ async function withdrawInactiveNamespaces(desired: DesiredDocs, localDocsDir: st
     const kept: string[] = [];
     for (const file of files) {
       const deployed = path.join(localDocsDir, dir, file);
+      // A link of the member's at the doc or on the way to it: never read through or deleted in (#993).
+      if (await passesThroughLink(localDocsDir, path.join(dir, file))) continue;
       const current = await readBytes(deployed);
       if (current === null) continue;
       const source = await readBytes(path.join(desired.sourceDir, dir, file));
@@ -432,7 +528,7 @@ export class DocsHandler extends ResourceHandler {
     }
     const members = await membersDocs(desired, localDocsDir, localConfig.repo.localPath);
     for (const file of members) {
-      log.warn(`[${localConfig.scope}] ${describeMembersFile(path.join(localDocsDir, file), `docs/${file}`)}`);
+      log.warn(`[${localConfig.scope}] ${await describeKeptEntry(path.join(localDocsDir, file), `docs/${file}`)}`);
     }
     if (entries.length > 0) {
       await copyDocs(src, localDocsDir, new Set(desired.withheld.map(({ dir }) => dir)), new Set(members));

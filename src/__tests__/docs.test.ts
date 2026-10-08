@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import { DocsHandler } from '../resources/docs.js';
+import { log } from '../utils/logger.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { LocalConfigSchema, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
@@ -89,13 +90,20 @@ describe('DocsHandler pruning (#794)', () => {
     await fse.remove(root);
   });
 
-  it('mirrors the team bundle by default, removing existing local residue', async () => {
+  // Changed in #993: a file at a path the team history never had is the member's and stays; only
+  // teamai's copies of docs the team removed are pruned.
+  it('mirrors the team bundle, removing teamai\'s copies of removed docs and keeping the member\'s own files', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'retired.md'), 'retired');
+    commitTeamRepo(repo, 'retired');
+    await sync();
+    await fse.remove(path.join(source, 'retired.md'));
     await fse.outputFile(path.join(source, 'guide.md'), 'new');
     await fse.outputFile(path.join(destination, 'draft.md'), 'local');
-    // The history shows the team never had docs/draft.md (#993).
-    commitTeamRepo(path.join(root, 'repo'));
+    commitTeamRepo(repo, 'retire');
     await sync();
-    expect(await fse.pathExists(path.join(destination, 'draft.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(destination, 'retired.md'))).toBe(false);
+    expect(await fse.readFile(path.join(destination, 'draft.md'), 'utf8')).toBe('local');
     expect(await fse.readFile(path.join(destination, 'guide.md'), 'utf8')).toBe('new');
   });
 
@@ -208,6 +216,59 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(path.join(destination, 'guide', 'personal.md'), 'utf8')).toBe('mine');
   });
 
+  it('keeps a member\'s link that replaced a team doc when the team deletes that doc (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'guide.md'), 'team');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const outside = path.join(root, 'mine.md');
+    await fse.outputFile(outside, 'mine');
+    const link = path.join(destination, 'guide.md');
+    await fse.remove(link);
+    await fse.symlink(outside, link);
+    await fse.remove(path.join(source, 'guide.md'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(outside, 'utf8')).toBe('mine');
+  });
+
+  it('keeps a member\'s link whose target text equals a former team doc file\'s bytes (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    // An old regular doc whose whole content is the text a link to personal.md holds.
+    await fse.outputFile(path.join(source, 'guide.md'), 'personal.md');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const link = path.join(destination, 'guide.md');
+    await fse.remove(link);
+    await fse.symlink('personal.md', link);
+    await fse.remove(path.join(source, 'guide.md'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+  });
+
+  it('keeps a member\'s directory holding only a link where the team deleted a doc file (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'guide'), 'team file');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const outside = path.join(root, 'mine.md');
+    await fse.outputFile(outside, 'mine');
+    await fse.remove(path.join(destination, 'guide'));
+    await fse.ensureDir(path.join(destination, 'guide'));
+    const link = path.join(destination, 'guide', 'personal.md');
+    await fse.symlink(outside, link);
+    await fse.remove(path.join(source, 'guide'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(outside, 'utf8')).toBe('mine');
+  });
+
   it('keeps a directory containing hidden local entries at a team doc file\'s path (#993)', async () => {
     // No team version holds `.keep`: the directory is the member's, so pull leaves it whole.
     await fse.outputFile(path.join(destination, 'guide', 'nested', '.keep'), 'private');
@@ -243,13 +304,17 @@ describe('DocsHandler pruning (#794)', () => {
   });
 
   it.each(['missing', 'empty', 'hidden-only'])('prunes a %s team bundle while retaining hidden local files', async (state) => {
+    // docs/old/guide.md was a team doc, so the copy pull wrote is teamai's to prune (#993).
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'old', 'guide.md'), 'old');
+    commitTeamRepo(repo, 'old');
+    await fse.remove(path.join(source, 'old'));
     await fse.outputFile(path.join(destination, 'old', 'guide.md'), 'old');
     await fse.outputFile(path.join(destination, 'old', '.keep'), 'local');
     await fse.outputFile(path.join(destination, '.private', 'draft.md'), 'local');
     if (state === 'missing') await fse.remove(source);
     if (state === 'hidden-only') await fse.outputFile(path.join(source, '.private', 'team.md'), 'hidden');
-    // The history shows the team never had docs/old/guide.md (#993).
-    commitTeamRepo(path.join(root, 'repo'));
+    commitTeamRepo(repo, 'remove old');
     await sync();
     expect(await fse.pathExists(path.join(destination, 'old', 'guide.md'))).toBe(false);
     expect(await fse.readFile(path.join(destination, 'old', '.keep'), 'utf8')).toBe('local');
@@ -257,13 +322,21 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.pathExists(path.join(destination, '.private', 'team.md'))).toBe(false);
   });
 
-  it('unlinks stale directory links without traversing their targets', async () => {
+  // Changed in #993 from unlinking it: a link is the member's, so one at a path the team never had stays.
+  it('keeps and names a member\'s link at a path the team never had, without traversing its target (#993)', async () => {
     const outside = path.join(root, 'outside');
     await fse.outputFile(path.join(outside, 'keep.md'), 'local');
-    await fse.symlink(outside, path.join(destination, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    const link = path.join(destination, 'linked');
+    await fse.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    // The history shows the team never had docs/linked (#993).
+    commitTeamRepo(path.join(root, 'repo'));
+    const warn = vi.spyOn(log, 'warn');
     await sync();
-    expect(await fse.pathExists(path.join(destination, 'linked'))).toBe(false);
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
     expect(await fse.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('local');
+    expect(warn.mock.calls.map(([message]) => String(message)).join('\n')).toContain(
+      `Kept ${link}: it is a link of yours, and the team does not have docs/linked. Delete it when you no longer need it.`,
+    );
   });
 
   it('propagates a copy failure without pruning', async () => {

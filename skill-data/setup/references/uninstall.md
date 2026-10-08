@@ -132,7 +132,8 @@ and give it your team repo URL."*
   (the main checkout of a `--separate-git-dir` repo or a submodule too), after
   removing teamai's servers from each. A line names the path a write lands in: for a config
   under a symlinked directory, the link's target (`/config/mcp.json` for
-  `.cursor/` linking to `config/`). For one it cannot prove clean (including one written
+  `.cursor/` linking to `config/`); for a config that is itself a symlink, its
+  target, in that target's repository. For one it cannot prove clean (including one written
   under a `toolPaths` mapping since changed, at the built-in location of a tool
   the team dropped or moved that no other tool maps, or in a nested repository's
   linked worktree, that still holds servers, and one written for a tool since moved

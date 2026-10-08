@@ -431,6 +431,23 @@ projects:
     expect(tombstones.split('\n')).not.toContain('vr');
   });
 
+  it('keeps a member\'s link at the author\'s root copy, whatever the placement record says (#993)', async () => {
+    await fse.outputFile(path.join(repoPath, 'agents/fe/vr.yaml'), 'name: vr\ndescription: Mine\ninstructions: A.\n');
+    const target = path.join(tmpDir, 'mine', 'vr.md');
+    await fse.outputFile(target, '# my agent');
+    const link = path.join(homeDir, '.claude/agents/vr.md');
+    await fse.ensureDir(path.dirname(link));
+    await fse.symlink(target, link);
+    await fse.outputJson(path.join(getDataHome(localConfig), 'state.json'), {
+      placedAgents: { vr: 'agents/fe/vr.yaml' },
+    });
+
+    await handler.removeItem('fe/vr', teamConfig, localConfig);
+
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fse.readFile(target, 'utf-8')).toBe('# my agent');
+  });
+
   it('keeps the flattened local copy when no record proves it is this agent\'s', async () => {
     // Agents deploy flattened, so ~/.claude/agents/vr.md could be be/vr's
     // deployment. Without a record, removing fe/vr must not take it.
@@ -695,6 +712,24 @@ projects:
     await handler.cleanupInactiveNamespaces(teamConfig, localConfig, ['common']);
 
     expect(await fse.pathExists(deployed)).toBe(false);
+  });
+
+  it('keeps a member\'s link where an inactive namespace\'s agent was delivered, even when its target holds the render (#993)', async () => {
+    const sourcePath = path.join(repoPath, 'agents/fe-agents/reviewer.yaml');
+    await fse.outputFile(sourcePath, 'name: reviewer\ndescription: Theirs\ninstructions: Read it.\n');
+    await handler.pullItem(
+      { name: 'reviewer', type: 'agents', sourcePath, relativePath: 'agents/fe-agents/reviewer.yaml', namespace: 'fe-agents' },
+      teamConfig, localConfig,
+    );
+    const deployed = path.join(homeDir, '.claude/agents/reviewer.md');
+    const target = path.join(tmpDir, 'mine', 'reviewer.md');
+    await fse.move(deployed, target);
+    await fse.symlink(target, deployed);
+
+    await handler.cleanupInactiveNamespaces(teamConfig, localConfig, ['common']);
+
+    expect((await fse.lstat(deployed)).isSymbolicLink()).toBe(true);
+    expect(await fse.pathExists(target)).toBe(true);
   });
 
   it('prefers an active source over the placement record', async () => {
