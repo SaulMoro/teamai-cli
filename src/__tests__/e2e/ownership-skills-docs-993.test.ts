@@ -338,6 +338,22 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(initRun.output).toContain(`Kept ${path.join(skillDir, 'SKILL.md')}: it is a link of yours, so teamai does not replace it.`);
   });
 
+  it('uninstall keeps hidden files of the member\'s in the docs mirror, even when nothing else of theirs is there', () => {
+    const t = team('docs-hidden', { 'docs/guide.md': '# Guide\n' });
+    const dir = business('docs-hidden-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    writeFile(path.join(docs, '.draft'), 'MY HIDDEN DRAFT\n');
+    writeFile(path.join(docs, 'sub', '.notes'), 'MY HIDDEN NOTES\n');
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+
+    expect(fs.existsSync(path.join(docs, 'guide.md'))).toBe(false);
+    expect(read(path.join(docs, '.draft'))).toBe('MY HIDDEN DRAFT\n');
+    expect(read(path.join(docs, 'sub', '.notes'))).toBe('MY HIDDEN NOTES\n');
+    expect(uninstalled.output).toContain(`Kept ${path.join(docs, '.draft')}`);
+  });
+
   it('keeps a member\'s link in place of a team skill directory through pull, remove and uninstall, and names it', () => {
     const t = team('skill-leaf-link', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
     const mine = path.join(sandbox, 'skill-leaf-link-mine');

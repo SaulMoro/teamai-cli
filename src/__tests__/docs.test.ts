@@ -227,6 +227,22 @@ describe('DocsHandler pruning (#794)', () => {
     expect(await fse.readFile(outside, 'utf8')).toBe('mine');
   });
 
+  it('keeps a member\'s link whose target text equals a former team doc file\'s bytes (#993)', async () => {
+    const repo = path.join(root, 'repo');
+    // An old regular doc whose whole content is the text a link to personal.md holds.
+    await fse.outputFile(path.join(source, 'guide.md'), 'personal.md');
+    commitTeamRepo(repo, 'add guide');
+    await sync();
+    const link = path.join(destination, 'guide.md');
+    await fse.remove(link);
+    await fse.symlink('personal.md', link);
+    await fse.remove(path.join(source, 'guide.md'));
+    await fse.outputFile(path.join(source, 'other.md'), 'other');
+    commitTeamRepo(repo, 'remove guide');
+    await sync();
+    expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+  });
+
   it('keeps a member\'s directory holding only a link where the team deleted a doc file (#993)', async () => {
     const repo = path.join(root, 'repo');
     await fse.outputFile(path.join(source, 'guide'), 'team file');

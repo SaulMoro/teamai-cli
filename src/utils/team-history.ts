@@ -21,6 +21,8 @@ export interface HistoricalVersion {
   /** Repo-relative, `/`-separated. */
   path: string;
   blob: string;
+  /** git's file mode for it, `120000` for a link. */
+  mode?: string;
 }
 
 /**
@@ -42,13 +44,13 @@ export async function historicalVersions(repoPath: string, pathspec: string): Pr
   const seen = new Set<string>();
   const tokens = out.split('\0');
   for (let i = 0; i < tokens.length; i++) {
-    const header = /^\n*:\d+ \d+ ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*$/.exec(tokens[i]);
+    const header = /^\n*:(\d+) (\d+) ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*$/.exec(tokens[i]);
     if (!header) continue;
     const file = tokens[++i];
-    for (const blob of [header[2], header[1]]) {
+    for (const [blob, mode] of [[header[4], header[2]], [header[3], header[1]]] as const) {
       if (/^0+$/.test(blob) || seen.has(`${file}\0${blob}`)) continue;
       seen.add(`${file}\0${blob}`);
-      versions.push({ path: file, blob });
+      versions.push({ path: file, blob, mode });
     }
   }
   return versions;

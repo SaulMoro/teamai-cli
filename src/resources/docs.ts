@@ -100,7 +100,9 @@ async function isDocVersion(file: string, stat: fse.Stats, versions: readonly Hi
     : await readBytes(file);
   if (bytes === null) return false;
   const id = await blobIdOf(repoPath, bytes);
-  return versions.some((version) => version.blob === id);
+  // A link matches only a link the team had, a file only a file: the same bytes are not the same entry.
+  const link = stat.isSymbolicLink();
+  return versions.some((version) => version.blob === id && (version.mode === '120000') === link);
 }
 
 /**
@@ -118,8 +120,12 @@ export async function removeTeamDocs(dir: string, repoPath: string): Promise<str
   const kept: string[] = [];
   const walk = async (current: string, rel: string): Promise<void> => {
     for (const entry of await readEntries(current)) {
-      if (entry.name.startsWith('.')) continue;
       const target = path.join(current, entry.name);
+      // teamai never delivers a hidden entry: it is the member's, and keeps the mirror (and the data home around it).
+      if (entry.name.startsWith('.')) {
+        kept.push(`Kept ${target}: it is a hidden file of yours, so uninstall left it.`);
+        continue;
+      }
       const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         await walk(target, entryRel);
