@@ -339,6 +339,22 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(read(path.join(first, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
   });
 
+  it('source remove keeps a member\'s file at the path of a link the source has, which delivery skipped', () => {
+    const w = world('source-link-path');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    // The source skill holds a link; delivery never copies it.
+    const seed = path.join(path.dirname(w.home), 'source-seed');
+    fs.symlinkSync('SKILL.md', path.join(seed, 'skills', 'other-skill', 'linked.md'));
+    w.publishSource({});
+    w.ok(init(w, ['claude']), dir);
+    const copy = path.join(dir, '.claude', 'skills', 'other-skill');
+    expect(fs.existsSync(path.join(copy, 'linked.md'))).toBe(false);
+    writeFile(path.join(copy, 'linked.md'), 'MY FILE\n');
+
+    w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'linked.md'))).toBe('MY FILE\n');
+  });
+
   it('source remove keeps a delivered source skill directory holding a file the member added', () => {
     const w = world('extra-file');
     const dir = w.business('biz', { '.claude/.keep': '' });

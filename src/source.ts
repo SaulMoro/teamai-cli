@@ -1413,9 +1413,11 @@ async function legacyCopyKeeper(
       // without today's skill (withdrawn), nothing tells them apart: the record decides, as before.
       if (!history && !sourcePath) return false;
       for (const rel of await listFilesRecursive(skillDir)) {
-        if (path.basename(rel) === 'CONTRIBUTORS' || (sourcePath && await pathExists(path.join(sourcePath, rel)))) continue;
+        if (path.basename(rel) === 'CONTRIBUTORS') continue;
+        // Only a regular file the source has, or had, counts: a link in the source is never delivered.
+        if (sourcePath && (await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) continue;
         const versions = history ? await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`) : null;
-        if (versions === null || versions.length === 0) {
+        if (versions === null || !versions.some((version) => version.mode !== '120000')) {
           log.warn(`Kept ${skillDir}: it holds ${rel}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
           return true;
         }
