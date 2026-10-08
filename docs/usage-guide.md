@@ -1738,6 +1738,8 @@ The option is controlled by the same two-tier pattern as recall:
 
 **Previewing.** `teamai pull --dry-run` prints one line per block: ``[dry-run] Would list N path(s) and drop M in teamai's delivered git exclude block in <file>``, or, with the option off, ``[dry-run] Would remove teamai's delivered git exclude block from <file> (sharing.gitExclude is off)``. N counts the lines the block would hold: what this pull would write plus every other live checkout's list. The preview writes nothing: no exclude file, no `info/` directory, no lock file. Hook and co-author files are previewed as they hold teamai's entries now.
 
+**Uninstalling.** `teamai uninstall` removes teamai's blocks once it has deleted the files they hid, and `uninstall --agent <tool>` drops only that tool's lines; see [Uninstall](#uninstall).
+
 **Single-repo mode.** While the setting is on:
 
 - The built-in hooks stay in the committed tool settings (`.claude/settings.json`), so a fresh clone still has them. The team's Claude Code hooks (`.teamai/hooks/hooks.yaml`) go to each checkout's own `.claude/settings.local.json`, which is listed, so a pull no longer changes the committed settings. The first pull after the setting is turned on removes the team hooks from `.claude/settings.json` once: commit that change. Turned off, the next pull puts them back into `.claude/settings.json` and deletes `.claude/settings.local.json` when nothing else is left in it.
@@ -3113,15 +3115,20 @@ What gets removed:
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
 - In a project, teamai's git hook: the `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout`, `post-merge` and `post-rewrite` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
+- In a project, teamai's git exclude blocks, once the files they hid are deleted: the `delivered` block in the project's `.git/info/exclude`, the `delivered/<id>` block in another repository (a tool folder that is a nested clone or a submodule, a tool home kept in git), and any other teamai block in those files, so a file you later create at one of those paths is visible to git. Your own lines stay, and so does another project's block in a repository they share. A line for an MCP config teamai cannot prove free of a resolved value stays, with a warning (see [MCP servers](#mcp-servers)), judged in every checkout of the repository; so does a `credentials` line while the file it names is still there. A read-only exclude file is left as it is, with a warning listing the lines to delete by hand; one whose repository is gone is skipped
 - The `~/.teamai/` directory
 
 A skill, rule or agent copy git tracks is never deleted: uninstall names it with the `git rm -r <path>` that removes it from the repository, and its summary lists it under `Kept (tracked)`.
+
+Uninstall deletes the copies in the checkout it runs in. Another worktree's copies stay on disk and, once the blocks are gone, git shows them there. `--dry-run` lists the blocks it would remove under `Git exclude blocks (teamai's):`, one line per owner and file. Like a pull, uninstall holds the project's sync lock while it works, so a background pull cannot write a block back; when another pull or push holds it past a short wait, uninstall changes nothing and exits 1: run it again once that finishes.
 
 ### Uninstall a single tool (`--agent <tool>`)
 
 `--agent <tool>` removes only that tool's teamai resources (hooks, team instruction blocks, skills, rules, team-synced custom agents, and built-in agents). The tool name is a key of `toolPaths` (e.g. `claude`, `codex`, `codebuddy`) and is matched case-insensitively. An unknown tool name aborts without deleting anything, lists the available tools, and exits with a non-zero status.
 
 An instructions file several tools map is cleaned per block: a teamai block stays while a remaining tool on that file still writes it. The common case is `.codebuddy/rules/teamai-context.md`, which CodeBuddy and WorkBuddy share: `--agent workbuddy` keeps it while CodeBuddy is installed. A file an earlier release wrote the blocks to, such as the project `AGENTS.md`, is read by no tool now, so its teamai blocks go and your own text stays. A file teamai created goes with its last block; an instructions file you had before stays, even an empty one. A configured `claudemd` remains a member file even when its basename is `teamai-context.md`.
+
+In a project, the tool's lines leave the `delivered` git exclude blocks: uninstall drops the paths under the tool's folders (each `toolPaths` entry's top folder, and `.agents/skills` for Codex) from every checkout's list, then updates the blocks. A path another tool still in use reads keeps its line (WorkBuddy's `.codebuddy/rules`). The tool's copies in other worktrees stay on disk, visible to git.
 
 Shared resources (the env block, docs directory, and `~/.teamai/`) are removed **only when the target itself has teamai resources AND is the last tool still using teamai** — otherwise they are kept for the remaining tools. Targeting a tool with no local resources leaves shared resources in place, even if it is the only tool. Project uninstall still records the exclusion for Pi, Oh My Pi, Hermes and the Codex family, whose instruction channels are global.
 

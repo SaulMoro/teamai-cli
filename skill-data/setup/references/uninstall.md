@@ -112,9 +112,22 @@ and give it your team repo URL."*
   `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries in the repo's git
   config and the `# >>> teamai git hook` block in `.git/hooks/post-checkout`,
   `post-merge` and `post-rewrite`. Other hooks stay; a script left with only its shebang is deleted.
-- In a project, uninstall also takes teamai's lines out of `.git/info/exclude`
-  (the `# [teamai:mcp-exclude:start]` block) for MCP configs it proves hold no
-  resolved `${VAR}` value. A line names the path a write lands in: for a config
+- In a project, uninstall also takes teamai's blocks out of `.git/info/exclude`
+  once it has deleted the files they hid: the `delivered` block, the
+  `delivered/<id>` block it keeps in another repository (a tool folder that is
+  a nested clone or submodule, a tool home kept in git), and every other
+  `# [teamai:…]` block in those files. A file the user creates later at one of
+  those paths is visible to git. Their own lines stay, and so does another
+  project's block in a shared repository. A read-only exclude file is left as
+  it is, and the warning lists the lines to delete by hand. Copies in other
+  worktrees stay on disk and become visible there. `--agent <tool>` drops only
+  that tool's lines (`.agents/skills` too for Codex) from every worktree,
+  keeping a path another tool in use reads. `--dry-run` lists the blocks under
+  `Git exclude blocks (teamai's):`. If another pull or push holds the
+  project's sync lock, uninstall changes nothing and exits 1: run it again.
+- A `credentials` line stays while the file it names is still there. MCP lines
+  (the `# [teamai:mcp-exclude:start]` block) go only for MCP configs it proves
+  hold no resolved `${VAR}` value, judged in every worktree of the repository. A line names the path a write lands in: for a config
   under a symlinked directory, the link's target (`/config/mcp.json` for
   `.cursor/` linking to `config/`). For one it cannot prove clean (including one written
   under a `toolPaths` mapping since changed, at the built-in location of a tool

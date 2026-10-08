@@ -1,0 +1,413 @@
+/**
+ * E2E (#915): `teamai uninstall` and teamai's git exclude blocks.
+ *
+ * - A full uninstall deletes the files first, then removes every teamai block
+ *   from the exclude files it holds blocks in: the project's own, and those of
+ *   other repositories (a tool folder that is a nested clone). A file a member
+ *   creates afterwards at a path teamai delivered is visible to git again. The
+ *   block another project keeps in a shared repository stays.
+ * - A line for an MCP config that may still hold a resolved value stays, with
+ *   #886's warning, judged in every checkout of the repository, also the main
+ *   checkout of a `--separate-git-dir` repo seen from a linked worktree.
+ * - `uninstall --agent <tool>` drops that tool's lines from every checkout's
+ *   list and syncs the blocks again.
+ * - `uninstall --dry-run` lists the blocks per owner and file, and writes nothing.
+ * - A read-only exclude file is left as it is, with the lines to delete by
+ *   hand; an exclude file whose repository is gone is skipped.
+ * - In HTTP mode (an in-process mock backend), uninstall removes every skill
+ *   the local agent installed, also one installed under its SKILL.md name,
+ *   and keeps a member's skill the local agent has no record of.
+ *
+ * Each case gets its own HOME, team remote (a local bare repo reached through
+ * a synthetic HTTPS URL) and business repo. Fixture git calls that fire
+ * teamai's git hooks run with the member's HOME.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { trackDetachedProcesses } from '../helpers/detached-processes.js';
+import { startMockServer, type MockServerHandle } from '../helpers/mock-server.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..', '..', '..');
+const CLI = path.join(ROOT, 'dist', 'index.js');
+
+const GIT_ENV = {
+  GIT_AUTHOR_NAME: 'TeamAI CI',
+  GIT_AUTHOR_EMAIL: 'ci@teamai.test',
+  GIT_COMMITTER_NAME: 'TeamAI CI',
+  GIT_COMMITTER_EMAIL: 'ci@teamai.test',
+};
+const TOKEN = 'lab-token-value-5e1f';
+const isRoot = process.getuid?.() === 0;
+
+interface Run { code: number | null; output: string }
+
+let sandbox: string;
+let detached: ReturnType<typeof trackDetachedProcesses>;
+
+const write = (file: string, content: string): void => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+};
+const read = (file: string): string => fs.readFileSync(file, 'utf8');
+const skillMd = (name: string): string => `---\nname: ${name}\ndescription: ${name} fixture\n---\n\n${name} body.\n`;
+
+const TEAM = {
+  'manifest/roles.yaml': [
+    'version: 1', 'roles:',
+    '  - id: fe', '    resources:', '      knowledge: [fe]', '      skills: [fe]', '',
+  ].join('\n'),
+  'skills/fe/fe-skill/SKILL.md': skillMd('fe-skill'),
+  'rules/team-rule.md': '# Team\n\nTeam rule.\n',
+};
+const ON = 'sharing:\n  gitExclude:\n    enabled: true\n';
+/** The flag on, and one MCP server whose header teamai resolves into the project's `.mcp.json`. */
+const MCP_TEAM = {
+  ...TEAM,
+  'mcp/mcp.yaml': [
+    'servers:', '  - name: secret-api', '    transport: http', '    url: https://api.example.com/mcp',
+    '    headers:', '      Authorization: "Bearer ${LAB_TOKEN}"', '',
+  ].join('\n'),
+  'env/env.yaml': `variables:\n  - key: LAB_TOKEN\n    value: "${TOKEN}"\n`,
+};
+const MCP_ON = 'sharing:\n  gitExclude:\n    enabled: true\n  mcp:\n    autoApply: true\n';
+
+interface Member {
+  home: string;
+  run(command: string, args: string[], cwd: string): Run;
+  git(args: string[], cwd: string): string;
+  teamai(args: string[], cwd: string): string;
+  url: string;
+  /** A committed business repo at `dir` (`git init` with `initArgs`), set up with teamai in project scope. */
+  project(dir: string, opts?: { initArgs?: string[]; agents?: string; before?: (dir: string) => void }): string;
+  /** `git worktree add` (its post-checkout hook pulls there), then an explicit pull. */
+  worktree(repo: string, dir: string): Promise<string>;
+}
+
+function member(name: string, files: Record<string, string> = TEAM, sharing = ON): Member {
+  const base = fs.mkdtempSync(path.join(sandbox, `${name}-`));
+  const home = path.join(base, 'home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const env = (): NodeJS.ProcessEnv => {
+    const e: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...GIT_ENV,
+      HOME: home,
+      USERPROFILE: home,
+      XDG_CONFIG_HOME: path.join(home, '.config'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      SHELL: '/bin/bash',
+      FORCE_COLOR: '0',
+    };
+    delete e.CLAUDE_CONFIG_DIR;
+    delete e.CODEX_HOME;
+    e.NODE_OPTIONS = [e.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' ');
+    return e;
+  };
+  const run = (command: string, args: string[], cwd: string): Run => {
+    const r = spawnSync(command, args, { cwd, encoding: 'utf8', env: env(), stdio: ['ignore', 'pipe', 'pipe'] });
+    return { code: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const git = (args: string[], cwd: string): string => {
+    const r = run('git', args, cwd);
+    if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${r.output}`);
+    return r.output;
+  };
+  const teamai = (args: string[], cwd: string): string => {
+    const r = run(process.execPath, [CLI, ...args], cwd);
+    if (r.code !== 0) throw new Error(`teamai ${args.join(' ')} failed in ${cwd}: ${r.output}`);
+    return r.output;
+  };
+  const url = `https://git.example.com/team/${path.basename(base)}.git`;
+  const seed = path.join(base, 'seed');
+  const remote = path.join(base, 'team.git');
+  write(path.join(seed, 'teamai.yaml'), [`team: ${path.basename(base)}`, `repo: ${url}`, 'provider: git', 'reviewers: []', sharing].join('\n'));
+  for (const [rel, content] of Object.entries(files)) write(path.join(seed, rel), content);
+  git(['init', '-q', '-b', 'main'], seed);
+  git(['add', '-A'], seed);
+  git(['commit', '-q', '-m', 'seed'], seed);
+  git(['clone', '-q', '--bare', seed, remote], base);
+  git(['config', '--global', `url.${remote}.insteadOf`, url], base);
+
+  return {
+    home,
+    run,
+    git,
+    teamai,
+    url,
+    project: (dir, opts = {}) => {
+      write(path.join(dir, 'README.md'), '# app\n');
+      git(['init', '-q', '-b', 'main', ...opts.initArgs ?? []], dir);
+      opts.before?.(dir);
+      git(['add', '-A'], dir);
+      git(['commit', '-q', '-m', 'app'], dir);
+      const real = fs.realpathSync.native(dir);
+      teamai(['init', url, '--provider', 'git', '--agent', opts.agents ?? 'claude', '--scope', 'project', '--role', 'fe', '--force'], real);
+      return real;
+    },
+    worktree: async (repo, dir) => {
+      git(['worktree', 'add', '-q', dir, '-b', path.basename(dir)], repo);
+      await detached.waitForExit();
+      const real = fs.realpathSync.native(dir);
+      teamai(['pull'], real);
+      await detached.waitForExit();
+      return real;
+    },
+  };
+}
+
+const caseDir = (name: string): string => fs.mkdtempSync(path.join(sandbox, `${name}-`));
+
+const status = (m: Member, dir: string): string[] =>
+  m.git(['status', '--porcelain', '-uall'], dir).split('\n').filter(Boolean);
+
+/** What git offers to add in `dir`: untracked files its ignore rules leave visible. */
+const visible = (m: Member, dir: string): string[] =>
+  m.git(['ls-files', '--others', '--exclude-standard'], dir).split('\n').filter(Boolean);
+
+const excludeFileOf = (m: Member, dir: string): string =>
+  path.resolve(dir, m.git(['rev-parse', '--git-path', 'info/exclude'], dir).trim());
+
+/** The lines of `owner`'s block in `file`. */
+function blockLines(file: string, owner = 'delivered'): string[] {
+  const lines = fs.existsSync(file) ? read(file).split('\n') : [];
+  const start = lines.findIndex((line) => line.startsWith(`# [teamai:${owner}:start]`));
+  const end = lines.findIndex((line) => line === `# [teamai:${owner}:end]`);
+  return start < 0 || end < start ? [] : lines.slice(start + 1, end);
+}
+
+/** The owners of the teamai blocks in `file`. */
+const owners = (file: string): string[] => (fs.existsSync(file) ? read(file).split('\n') : [])
+  .flatMap((line) => /^# \[teamai:([a-z0-9/_%-]+):start\]/.exec(line)?.[1] ?? []);
+
+const partitionDirs = (m: Member): string[] => {
+  const projects = path.join(m.home, '.teamai', 'projects');
+  return fs.existsSync(projects) ? fs.readdirSync(projects).map((d) => path.join(projects, d)) : [];
+};
+
+beforeAll(() => {
+  if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+  sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-git-exclude-uninstall-e2e-')));
+  detached = trackDetachedProcesses(sandbox);
+});
+
+afterAll(async () => {
+  if (detached) await detached.waitForExit();
+  if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+}, 65_000);
+
+// The hook scripts are POSIX shell.
+describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclude blocks (#915)', () => {
+  it('leaves no teamai block in the project\'s exclude file or a nested clone\'s, so a member\'s new file at a delivered path is visible', () => {
+    const m = member('full');
+    const root = caseDir('full');
+    const app = m.project(path.join(root, 'app'), {
+      agents: 'claude,cursor',
+      before: (dir) => {
+        write(path.join(dir, '.cursor', 'README.md'), '# my cursor config\n');
+        m.git(['init', '-q', '-b', 'main'], path.join(dir, '.cursor'));
+        m.git(['add', '-A'], path.join(dir, '.cursor'));
+        m.git(['commit', '-q', '-m', 'mine'], path.join(dir, '.cursor'));
+        fs.appendFileSync(path.join(dir, '.git', 'info', 'exclude'), '/.cursor/\n');
+      },
+    });
+    const cursor = path.join(app, '.cursor');
+    const appExclude = excludeFileOf(m, app);
+    const cursorExclude = excludeFileOf(m, cursor);
+    expect(blockLines(appExclude)).toContain('/.claude/skills/fe-skill/');
+    expect(owners(cursorExclude)).toEqual([expect.stringMatching(/^delivered\/[0-9a-f]{16}$/)]);
+    // Another owner's block in the same file goes too.
+    fs.appendFileSync(appExclude, '# [teamai:local-agent:start]\n/.claude/skills/http-skill/\n# [teamai:local-agent:end]\n');
+
+    const out = m.teamai(['uninstall', '--force'], app);
+
+    expect(out).toContain('teamai uninstalled');
+    expect(read(appExclude)).not.toContain('# [teamai:');
+    expect(read(cursorExclude)).not.toContain('# [teamai:');
+    // The member's own line stays.
+    expect(read(appExclude).split('\n')).toContain('/.cursor/');
+    // Files the member creates where teamai delivered are the member's, and git sees them.
+    write(path.join(app, '.claude/skills/fe-skill/SKILL.md'), 'mine\n');
+    write(path.join(app, '.claude/rules/team-rule.md'), 'mine\n');
+    write(path.join(cursor, 'rules/team-rule.mdc'), 'mine\n');
+    expect(visible(m, app)).toEqual(expect.arrayContaining(['.claude/rules/team-rule.md', '.claude/skills/fe-skill/SKILL.md']));
+    expect(status(m, app)).toEqual(expect.arrayContaining(['?? .claude/rules/team-rule.md', '?? .claude/skills/fe-skill/SKILL.md']));
+    expect(visible(m, cursor)).toContain('rules/team-rule.mdc');
+  }, 120_000);
+
+  it('keeps the block another project holds in a tool home under version control', () => {
+    const m = member('tool-home');
+    fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });
+    m.git(['init', '-q', '-b', 'main'], m.home);
+    const root = caseDir('tool-home');
+    const first = m.project(path.join(root, 'first'), { agents: 'claude,hermes' });
+    m.project(path.join(root, 'second'), { agents: 'claude,hermes' });
+    const homeExclude = excludeFileOf(m, m.home);
+    const before = owners(homeExclude);
+    expect(before).toHaveLength(2);
+
+    m.teamai(['uninstall', '--force'], first);
+
+    const left = owners(homeExclude);
+    expect(left).toHaveLength(1);
+    expect(before).toContain(left[0]);
+    expect(blockLines(homeExclude, left[0])).toContain('/.hermes/skills/fe-skill/');
+  }, 120_000);
+
+  it('uninstall --dry-run lists the blocks by owner and file, and writes nothing', () => {
+    const m = member('dry-run');
+    const app = m.project(path.join(caseDir('dry-run'), 'app'));
+    const appExclude = excludeFileOf(m, app);
+    const content = read(appExclude);
+    const infoDir = path.dirname(appExclude);
+    const infoBefore = fs.readdirSync(infoDir).sort();
+    const partitionsBefore = partitionDirs(m).map((dir) => [dir, fs.readdirSync(dir).sort()]);
+
+    const out = m.teamai(['uninstall', '--dry-run'], app);
+
+    expect(out).toContain('Git exclude blocks (teamai\'s):');
+    expect(out).toContain(`delivered in ${appExclude}`);
+    expect(out).not.toContain('Git exclude entries for MCP configs');
+    expect(read(appExclude)).toBe(content);
+    expect(fs.readdirSync(infoDir).sort()).toEqual(infoBefore);
+    expect(partitionDirs(m).map((dir) => [dir, fs.readdirSync(dir).sort()])).toEqual(partitionsBefore);
+  }, 120_000);
+
+  it.skipIf(isRoot)('leaves a read-only exclude file as it is, naming the lines to delete, and skips a repository that is gone', () => {
+    const m = member('read-only');
+    const app = m.project(path.join(caseDir('read-only'), 'app'), {
+      agents: 'claude,cursor',
+      before: (dir) => {
+        write(path.join(dir, '.cursor', 'README.md'), '# my cursor config\n');
+        m.git(['init', '-q', '-b', 'main'], path.join(dir, '.cursor'));
+        m.git(['add', '-A'], path.join(dir, '.cursor'));
+        m.git(['commit', '-q', '-m', 'mine'], path.join(dir, '.cursor'));
+        fs.appendFileSync(path.join(dir, '.git', 'info', 'exclude'), '/.cursor/\n');
+      },
+    });
+    const appExclude = excludeFileOf(m, app);
+    const cursorExclude = excludeFileOf(m, path.join(app, '.cursor'));
+    expect(owners(cursorExclude)).toHaveLength(1);
+    // The nested clone's repository is deleted; its working files stay.
+    fs.rmSync(path.join(app, '.cursor', '.git'), { recursive: true, force: true });
+    const content = read(appExclude);
+    fs.chmodSync(appExclude, 0o444);
+    try {
+      const out = m.teamai(['uninstall', '--force'], app);
+
+      expect(read(appExclude)).toBe(content);
+      expect(out).toContain(appExclude);
+      expect(out).toContain('/.claude/skills/fe-skill/');
+      expect(out).not.toContain(cursorExclude);
+      expect(out).toContain('teamai uninstalled');
+    } finally {
+      fs.chmodSync(appExclude, 0o644);
+    }
+  }, 120_000);
+
+  it('uninstall --agent codex drops Codex\'s lines from every checkout\'s list and keeps the others', async () => {
+    const m = member('agent-codex');
+    const root = caseDir('agent-codex');
+    const main = m.project(path.join(root, 'main'), { agents: 'claude,codex' });
+    // teamai's copy in Codex's shared directory, so Codex's copy goes there.
+    write(path.join(main, '.agents', 'skills', 'fe-skill', 'SKILL.md'), skillMd('fe-skill'));
+    m.teamai(['pull', '--force'], main);
+    const wt = await m.worktree(main, path.join(root, 'wt'));
+    const exclude = excludeFileOf(m, main);
+    const codexLines = (): string[] => blockLines(exclude).filter((line) => line.startsWith('/.agents/') || line.startsWith('/.codex/'));
+    expect(codexLines()).toEqual(expect.arrayContaining(['/.agents/skills/fe-skill/', '/.codex/skills/fe-skill/']));
+
+    m.teamai(['uninstall', '--agent', 'codex', '--force'], main);
+
+    expect(codexLines()).toEqual([]);
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+    // The worktree's own Codex copy stays on disk, and is no longer hidden.
+    expect(status(m, wt)).toContain('?? .codex/skills/fe-skill/SKILL.md');
+    write(path.join(main, '.agents/skills/fe-skill/SKILL.md'), 'mine\n');
+    expect(status(m, main)).toContain('?? .agents/skills/fe-skill/SKILL.md');
+    // The worktree's list lost them too: its pull does not bring the lines back.
+    m.teamai(['pull'], wt);
+    expect(codexLines()).toEqual([]);
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+  }, 120_000);
+
+  it('keeps the MCP line while the main checkout of a --separate-git-dir repo holds a resolved value, uninstalling from a linked worktree', async () => {
+    const m = member('mcp-separate', MCP_TEAM, MCP_ON);
+    const root = caseDir('mcp-separate');
+    const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`] });
+    expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
+    const wt = await m.worktree(main, path.join(root, 'wt'));
+    const exclude = excludeFileOf(m, wt);
+    expect(blockLines(exclude, 'mcp-exclude')).toContain('/.mcp.json');
+
+    const out = m.teamai(['uninstall', '--force'], wt);
+
+    expect(fs.existsSync(path.join(wt, '.mcp.json')) ? read(path.join(wt, '.mcp.json')) : '').not.toContain(TOKEN);
+    expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
+    expect(blockLines(exclude, 'mcp-exclude')).toEqual(['/.mcp.json']);
+    expect(out).toContain(`Kept \`/.mcp.json\` in ${exclude}`);
+    expect(out).toContain(path.join(main, '.mcp.json'));
+    expect(status(m, main)).not.toContain('?? .mcp.json');
+  }, 120_000);
+});
+
+describe.skipIf(process.platform === 'win32')('uninstall in HTTP mode (#915)', () => {
+  let server: MockServerHandle | undefined;
+  afterAll(async () => { await server?.close(); });
+
+  it('removes every skill the local agent installed and keeps a member\'s skill it has no record of', async () => {
+    const API_KEY = 'e2e-http-key';
+    server = await startMockServer({ apiKey: API_KEY, skillNames: { 'renamed-slug': 'renamed-skill' } });
+    const base = fs.mkdtempSync(path.join(sandbox, 'http-'));
+    const home = path.join(base, 'home');
+    fs.mkdirSync(home);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+      GIT_CONFIG_NOSYSTEM: '1', SHELL: '/bin/bash', FORCE_COLOR: '0',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' '),
+    };
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.TEAMAI_API_TOKEN;
+    delete env.TEAMAI_API_KEY;
+    // Spawned asynchronously: the mock backend runs in this process.
+    const cli = (args: string[], cwd: string, input?: string): Promise<Run> => new Promise((resolve) => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk) => { output += String(chunk); });
+      child.stderr.on('data', (chunk) => { output += String(chunk); });
+      child.on('close', (code) => resolve({ code, output }));
+      child.stdin.end(input ?? '');
+    });
+    const project = path.join(base, 'app');
+    write(path.join(project, 'README.md'), '# app\n');
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: project, env });
+    const app = fs.realpathSync.native(project);
+    const initRun = await cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'project', '--agent', 'claude', '--force'], app);
+    expect(initRun.code, initRun.output).toBe(0);
+
+    const install = (id: number, slug: string) => ({
+      id, type: 'install_skill', skill_slug: slug, skill_version: '1.0.0',
+      download_url: `${server!.url}/download?slug=${slug}`, scope: 'workspace', workspace_path: app,
+    });
+    server.seedCommands([install(1, 'http-skill'), install(2, 'renamed-slug')] as never);
+    const session = await cli(['hook-dispatch', 'session-start', '--tool', 'claude'], app,
+      JSON.stringify({ cwd: app, session_id: 'http-session', hook_event_name: 'SessionStart', source: 'startup' }));
+    await detached.waitForExit();
+    expect(session.code, session.output).toBe(0);
+    const skills = path.join(app, '.claude', 'skills');
+    expect(fs.existsSync(path.join(skills, 'http-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(skills, 'renamed-skill', 'SKILL.md'))).toBe(true);
+    write(path.join(skills, 'my-skill', 'SKILL.md'), skillMd('my-skill'));
+
+    const out = await cli(['uninstall', '--force'], app);
+
+    expect(out.code, out.output).toBe(0);
+    expect(fs.existsSync(path.join(skills, 'http-skill'))).toBe(false);
+    expect(fs.existsSync(path.join(skills, 'renamed-skill'))).toBe(false);
+    expect(read(path.join(skills, 'my-skill', 'SKILL.md'))).toBe(skillMd('my-skill'));
+  }, 120_000);
+});
