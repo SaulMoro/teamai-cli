@@ -59,7 +59,7 @@ import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
 import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
-import { describeNoLongerTeamaiOnly, judgeTeamaiOnlyFiles, type SharedFileJudgement } from './teamai-only-files.js';
+import { describeNoLongerTeamaiOnly, judgeTeamaiOnlyFiles, keptOutByMcpExclude, type SharedFileJudgement } from './teamai-only-files.js';
 import { realFilePath } from './git-exclude.js';
 import type { EnvVariable } from './resources/env.js';
 import { declaredSecretKeys } from './resources/secrets.js';
@@ -2997,7 +2997,8 @@ export async function syncDeliveredGitExclude(
  * on every pull, fast path included, so a file that took in an entry teamai
  * does not own leaves the `delivered` block on the first pull that sees it.
  * While the resolved `sharing.gitExclude` is on, that pull says so, or a
- * background one keeps it for the next interactive pull. When the team config
+ * background one keeps it for the next interactive pull, unless the
+ * `mcp-exclude` block still keeps the file out of git. When the team config
  * cannot be read, or judging fails, the previous list stands.
  */
 async function reportTeamaiOnlyFiles(
@@ -3019,8 +3020,11 @@ async function reportTeamaiOnlyFiles(
   if (options.dryRun || resolveGitExclude(localConfig, teamConfig) !== true) return;
   const key = await checkoutRecordKey(localConfig);
   const listed = key ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[key]?.gitExcludePaths?.['teamai-only'] ?? [] : [];
-  for (const { file, state } of judged) {
-    if (state !== 'mixed' || !listed.includes(await realFilePath(file))) continue;
+  const exits = judged.filter(({ state }) => state === 'mixed');
+  const stillOut = exits.length > 0 ? await keptOutByMcpExclude(exits.map(({ file }) => file)) : new Set<string>();
+  for (const { file } of exits) {
+    const real = await realFilePath(file);
+    if (!listed.includes(real) || stillOut.has(real)) continue;
     await noticeGitExclude(localConfig, await describeNoLongerTeamaiOnly(file, localConfig.projectRoot), options);
   }
 }

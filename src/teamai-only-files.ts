@@ -3,6 +3,7 @@ import path from 'node:path';
 import { gitTracks, realFilePath } from './git-exclude.js';
 import { judgeTeamaiOnlyCodexHooks } from './hooks.js';
 import { instructionTargetPath } from './instruction-targets.js';
+import { findMcpGitExcludes } from './mcp-git-exclude.js';
 import { judgeTeamaiOnlyMcpConfigs } from './mcp-reconcile.js';
 import { opencodeContextReference } from './resources/opencode-config.js';
 import { RulesHandler } from './resources/rules.js';
@@ -60,6 +61,17 @@ export async function judgeTeamaiOnlyFiles(teamConfig: TeamaiConfig, localConfig
     });
   }
   return judged;
+}
+
+/**
+ * The real paths of those of `files` that teamai's `mcp-exclude` block keeps
+ * out of git whatever they hold, as they hold a value teamai resolved (#882):
+ * leaving the `delivered` block does not make them visible.
+ */
+export async function keptOutByMcpExclude(files: readonly string[]): Promise<Set<string>> {
+  const blocks = await findMcpGitExcludes(files.map((file) => path.dirname(file)));
+  const listed = [...blocks.values()].flat().flatMap(({ files: protectedFiles }) => protectedFiles);
+  return new Set(await Promise.all(listed.map((file) => realFilePath(file))));
 }
 
 /** The notice of a listed teamai-only file that now holds something teamai does not own. */

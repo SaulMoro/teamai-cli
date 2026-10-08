@@ -195,14 +195,14 @@ describe('a teamai-only MCP config', () => {
   });
 });
 
-/** Add the member's own server beside teamai's in a project MCP config, in its format. */
-function addMemberServer(file: string): void {
+/** Add the member's own server beside teamai's `teamServer` in a project MCP config, in its format. */
+function addMemberServer(file: string, teamServer = 'plain-api'): void {
   if (file.endsWith('.toml')) {
     fs.appendFileSync(file, '\n[mcp_servers.my-own]\nurl = "https://mine.example.com/mcp"\n');
     return;
   }
   const data = readJson(file);
-  const key = Object.keys(data).find((k) => typeof data[k] === 'object' && data[k] !== null && 'plain-api' in data[k]);
+  const key = Object.keys(data).find((k) => typeof data[k] === 'object' && data[k] !== null && teamServer in data[k]);
   if (!key) throw new Error(`no teamai server in ${file}: ${read(file)}`);
   data[key]['my-own'] = MEMBER_SERVER;
   writeJson(file, data);
@@ -258,12 +258,13 @@ function filesNamed(dir: string, name: string): string[] {
   });
 }
 
-/** Lose teamai's MCP records for every checkout, as a member who deleted them, or a CLI before them, would. */
-function loseMcpRecords(home: string): void {
-  const manifests = filesNamed(path.join(home, '.teamai'), 'managed-mcp.json');
+/** Lose teamai's `name` records for every checkout, as a member who deleted them, or a CLI before them, would. */
+function loseRecords(home: string, name: string): void {
+  const manifests = filesNamed(path.join(home, '.teamai'), name);
   expect(manifests.length).toBeGreaterThan(0);
   for (const file of manifests) fs.rmSync(file);
 }
+const loseMcpRecords = (home: string): void => loseRecords(home, 'managed-mcp.json');
 
 const PLAIN = mcpYaml(['plain-api', 'https://api.example.com/mcp']);
 
@@ -285,6 +286,63 @@ describe('what is never teamai-only', () => {
     expect(m.deliveredLines()).not.toContain('/.cursor/mcp.json');
     expect(m.status()).toContain(' M .cursor/mcp.json');
   });
+
+  it('a single-repo team\'s .codex/hooks.json, which holds the built-in hooks beside the team\'s', () => {
+    const caseDir = fs.mkdtempSync(path.join(sandbox, 'self-codex-'));
+    const home = path.join(caseDir, 'home');
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+      GIT_CONFIG_NOSYSTEM: '1', CODEX_HOME: path.join(home, '.codex'), PATH: `${fakeCodexDir}${path.delimiter}${process.env.PATH ?? ''}`, FORCE_COLOR: '0',
+    };
+    delete env.CLAUDE_CONFIG_DIR;
+    const run = (command: string, args: string[], cwd: string): string => {
+      const r = spawnSync(command, args, { cwd, encoding: 'utf8', env, input: '' });
+      if (r.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${r.stdout}${r.stderr}`);
+      return r.stdout;
+    };
+    const dir = path.join(caseDir, 'biz');
+    writeFile(path.join(dir, 'README.md'), '# app\n');
+    writeFile(path.join(dir, '.teamai', 'hooks', 'hooks.yaml'), hooksYaml('echo team-stop'));
+    run('git', ['init', '-q', '-b', 'main'], dir);
+    run('git', ['add', '-A'], dir);
+    run('git', ['commit', '-q', '-m', 'app'], dir);
+    // `init .` only parses the origin: an https URL on a closed local port.
+    run('git', ['remote', 'add', 'origin', `https://127.0.0.1:9/team/${path.basename(caseDir)}.git`], dir);
+    const realDir = fs.realpathSync.native(dir);
+    // init commits the file; untracked, it still holds the built-ins the team commits for every clone.
+    run(process.execPath, [CLI, 'init', '.', '--provider', 'git', '--agent', 'codex'], realDir);
+    run('git', ['rm', '-q', '--cached', '.codex/hooks.json'], realDir);
+    run('git', ['commit', '-q', '-m', 'untrack codex hooks'], realDir);
+    run(process.execPath, [CLI, 'pull'], realDir);
+
+    const hooks = read(path.join(realDir, '.codex', 'hooks.json'));
+    expect(hooks).toContain('echo team-stop');
+    expect(hooks).toContain('hook-dispatch session-start');
+    expect(read(path.join(realDir, '.git', 'info', 'exclude'))).not.toContain('/.codex/hooks.json');
+    expect(run('git', ['status', '--porcelain', '-uall'], realDir)).toContain('?? .codex/hooks.json');
+  });
+});
+
+describe('an MCP config holding a value teamai resolved', () => {
+  it('stays out of git once the member adds a server, and pull does not say git can see it', () => {
+    const m = machine('mcp-resolved', {
+      agents: 'cursor',
+      files: {
+        'mcp/mcp.yaml': 'servers:\n  - name: secret-api\n    transport: http\n    url: https://api.example.com/mcp\n'
+          + '    headers:\n      Authorization: "Bearer ${LAB_TOKEN}"\n',
+        'env/env.yaml': 'variables:\n  - key: LAB_TOKEN\n    value: "lab-token-0123456789"\n',
+      },
+    });
+    const file = path.join(m.dir, '.cursor', 'mcp.json');
+    expect(read(file)).toContain('lab-token-0123456789');
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
+
+    addMemberServer(file, 'secret-api');
+    expect(m.ok(['pull']).output).not.toContain('now holds entries teamai does not own');
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
+    expect(readJson(file).mcpServers['my-own']).toEqual(MEMBER_SERVER);
+  });
 });
 
 describe('ownership without a record', () => {
@@ -298,6 +356,18 @@ describe('ownership without a record', () => {
     m.ok(['pull']);
     expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
     expect(m.status()).not.toContain('?? .cursor/mcp.json');
+  });
+
+  it('lists a .codex/hooks.json written before the upgrade, whose team hooks teamai has no record of, by its content', () => {
+    const m = machine('codex-hooks-before-upgrade', { agents: 'codex', files: { 'hooks/hooks.yaml': hooksYaml('echo team-stop') } });
+    loseRecords(m.home, 'managed-main-checkout-hooks.json');
+    fs.writeFileSync(path.join(m.dir, '.git', 'info', 'exclude'), '');
+    expect(m.status()).toContain('?? .codex/hooks.json');
+
+    m.ok(['pull']);
+    expect(read(path.join(m.dir, '.codex', 'hooks.json'))).toContain('echo team-stop');
+    expect(m.deliveredLines()).toContain('/.codex/hooks.json');
+    expect(m.status()).not.toContain('?? .codex/hooks.json');
   });
 
   it('keeps out a file holding a member server no team version matches, and cleans and lists one holding a removed team server\'s copy', () => {
