@@ -1390,7 +1390,10 @@ only its own entries there, and `teamai uninstall` removes exactly those, under 
 whose worktree is gone. The next pull takes teamai's servers out of `.mcp.json`, keeps your own, keeps a teamai
 server you changed and names it, and deletes the file if nothing else is left in it and git does not track it.
 Turning the option off moves the servers back on the next pull and takes them out of every recorded key.
-While tclaude is installed and enabled in the project, Claude keeps `.mcp.json`, which tclaude reads.
+While tclaude is installed and enabled in the project, Claude keeps `.mcp.json`, which tclaude reads. In a
+single-repo team Claude keeps `.mcp.json` too: each worktree reads its own branch's `.teamai/mcp/mcp.yaml`, while
+Claude Code files every worktree under one key, so the next pull moves teamai's servers back from that key into
+each checkout's `.mcp.json`, which the git exclude block lists while it holds only teamai's servers.
 
 CodeBuddy's project servers move the same way, to CodeBuddy's local scope: `.codebuddy.json` in
 `CODEBUDDY_CONFIG_DIR`, or in your home directory, under `projects[<key>].mcpServers`. CodeBuddy keys it by the
@@ -1743,7 +1746,7 @@ What the block lists:
 - on OpenCode V2, `.opencode/teamai-mcp.json`, the file teamai's plugin reads the team MCP servers from (see [OpenCode](#opencode));
 - a shared config file that holds nothing but teamai's entries, while git does not track it: the project MCP configs `.cursor/mcp.json`, `.github/mcp.json`, `.codex/config.toml`, `.kiro/settings/mcp.json`, `.omp/mcp.json`, `.pi/mcp.json`, `.workbuddy/mcp.json` and, on OpenCode V1, the root `opencode.json`; `.codex/hooks.json`; and, on OpenCode V1, `.opencode/opencode.json`. Nothing but teamai's means every server, team hook or `instructions` entry in it is teamai's, and it has no other top-level key (`$schema` counts as one). An entry teamai has no record of counts as teamai's when it equals what teamai writes for a team server or hook, now or at an earlier team version, so a file written before you upgraded, or after its records were lost, is listed too; the `instructions` entries of `.opencode/opencode.json` have no record and count when they equal the ones teamai writes.
 
-`.mcp.json` (Claude's while tclaude is installed and enabled) and Qoder's `.qoder/settings.json` are not listed. With the option on, teamai writes Claude's and CodeBuddy's project MCP servers to their local scopes, in `~/.claude.json` and `.codebuddy.json`, instead of `.mcp.json` (see [MCP servers](#mcp-servers)), and no longer writes into `.github/copilot-instructions.md`: Copilot gets the blocks from `.github/instructions/teamai-context.instructions.md` instead (see [Where the blocks go](#where-the-blocks-go)), and the next pull removes teamai's blocks from the team's file. Turning the option off moves them back on the next pull.
+`.mcp.json` (Claude's while tclaude is installed and enabled; in a single-repo team it is listed while it holds only teamai's servers) and Qoder's `.qoder/settings.json` are not listed. With the option on, teamai writes Claude's and CodeBuddy's project MCP servers to their local scopes, in `~/.claude.json` and `.codebuddy.json`, instead of `.mcp.json` (see [MCP servers](#mcp-servers)), and no longer writes into `.github/copilot-instructions.md`: Copilot gets the blocks from `.github/instructions/teamai-context.instructions.md` instead (see [Where the blocks go](#where-the-blocks-go)), and the next pull removes teamai's blocks from the team's file. Turning the option off moves them back on the next pull.
 
 Your AI tools still load excluded skills, rules and agents: only git ignores them. A search that follows git's ignore rules (ripgrep, most editors' search, an agent's search tool) skips them, so open an excluded file by its path; `teamai skill path <name>` prints where a CLI built-in skill lives.
 

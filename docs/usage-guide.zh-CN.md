@@ -1234,7 +1234,7 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 条目，覆盖它记录过的每个 key，包括 worktree 已删除的 key。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的
 server，保留你改动过的 teamai server 并给出提示；文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull
 会把这些 server 移回去，并从每个记录过的 key 中移除它们。
-项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
+项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。单仓库（single-repo）团队中 Claude 也继续使用 `.mcp.json`：每个 worktree 读取各自分支的 `.teamai/mcp/mcp.yaml`，而 Claude Code 把所有 worktree 记在同一个 key 下，因此下一次 pull 会把 teamai 的 server 从该 key 移回每个 checkout 的 `.mcp.json`；该文件只含 teamai 的 server 时，git exclude 块会列出它。
 
 CodeBuddy 的项目级 server 也以同样方式移到 CodeBuddy 的 local scope：`CODEBUDDY_CONFIG_DIR`（未设置时为你的 home 目录）中
 `.codebuddy.json` 的 `projects[<key>].mcpServers`。CodeBuddy 按其运行目录作为 key，因此 `<key>` 是每个 worktree 根目录的真实路径，
@@ -1581,7 +1581,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - 在 OpenCode V2 上，teamai 插件读取团队 MCP server 的 `.opencode/teamai-mcp.json`（见 [OpenCode](#opencode)）；
 - 只含 teamai 条目、且 git 未跟踪的共享配置文件：项目 MCP 配置 `.cursor/mcp.json`、`.github/mcp.json`、`.codex/config.toml`、`.kiro/settings/mcp.json`、`.omp/mcp.json`、`.pi/mcp.json`、`.workbuddy/mcp.json` 以及 OpenCode V1 下根目录的 `opencode.json`；`.codex/hooks.json`；以及 OpenCode V1 下的 `.opencode/opencode.json`。「只含 teamai 条目」指其中每个 server、团队 hook 或 `instructions` 条目都属于 teamai，且没有其他顶层键（`$schema` 也算一个）。teamai 没有记录的条目，只要与 teamai 为某个团队 server 或 hook 写入的内容（当前或团队更早的版本）相同，也算 teamai 的，因此升级前写入的文件、或记录丢失后的文件同样会被列出；`.opencode/opencode.json` 的 `instructions` 条目没有记录，与 teamai 写入的条目相同即算。
 
-`.mcp.json`（安装并启用 tclaude 时 Claude 仍写入它）以及 Qoder 的 `.qoder/settings.json` 不会列出。开启此选项后，teamai 把 Claude 和 CodeBuddy 的项目级 MCP server 分别写入 `~/.claude.json` 和 `.codebuddy.json` 中各自的 local scope，而不是 `.mcp.json`（见 [MCP server](#mcp-server)），并且不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
+`.mcp.json`（安装并启用 tclaude 时 Claude 仍写入它；单仓库团队中只含 teamai 的 server 时会列出）以及 Qoder 的 `.qoder/settings.json` 不会列出。开启此选项后，teamai 把 Claude 和 CodeBuddy 的项目级 MCP server 分别写入 `~/.claude.json` 和 `.codebuddy.json` 中各自的 local scope，而不是 `.mcp.json`（见 [MCP server](#mcp-server)），并且不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
 
 被排除的 skill、rule 和 agent 仍会被 AI 工具加载：只有 git 忽略它们。遵循 git 忽略规则的搜索（ripgrep、大多数编辑器的搜索、agent 的搜索工具）会跳过它们，因此请按路径打开被排除的文件；`teamai skill path <name>` 会输出 CLI 内置 skill 所在的位置。
 

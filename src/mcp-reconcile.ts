@@ -15,6 +15,7 @@ import {
   isAgentExcluded,
   getDataHome,
   isGitExcludeEnabled,
+  isSelfMode,
   managedMcpManifestPath,
   managedMcpManifestKey,
   resolveToolBaseDir,
@@ -403,14 +404,17 @@ export async function projectMcpLocations(
 
 /**
  * Whether `tool`'s project MCP servers go to its local scope (#915): while
- * `sharing.gitExclude` is on. For Claude, not while tclaude, which reads the
- * `.mcp.json` the claude target writes and has a user config of its own, is
- * installed and enabled here: it keeps the file until its own local scope is
- * checked.
+ * `sharing.gitExclude` is on. For Claude, not in a single-repo (self) team,
+ * where each worktree reads its own branch's servers while Claude files every
+ * worktree under one key, so one worktree's pull would undo another's; and
+ * not while tclaude, which reads the `.mcp.json` the claude target writes and
+ * has a user config of its own, is installed and enabled here: it keeps the
+ * file until its own local scope is checked.
  */
 export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<boolean> {
   if (!LOCAL_SCOPE_MCP_TOOLS[tool] || !isGitExcludeEnabled(localConfig, teamConfig)) return false;
   if (tool !== 'claude') return true;
+  if (isSelfMode(localConfig)) return false;
   const tclaude = teamConfig.toolPaths.tclaude;
   const probe = tclaude && (tclaude.skills ?? tclaude.settings ?? tclaude.agents);
   return !probe || isAgentExcluded(localConfig, 'tclaude') || !await isToolInstalledForConfig('tclaude', probe, localConfig);
@@ -1221,6 +1225,8 @@ export async function unclaimedMcpServers(target: McpTarget, claimed: readonly s
  * Tools whose project MCP config is not judged teamai-only (#915): Claude's
  * and CodeBuddy's `.mcp.json`, whose servers have a per-member place outside
  * the project, and Qoder's `settings.json`, which also holds its settings.
+ * In a single-repo team Claude keeps `.mcp.json` (`mcpRelocated`), and it is
+ * judged.
  */
 const NOT_TEAMAI_ONLY_MCP_TOOLS = new Set(['claude', 'tclaude', 'codebuddy', 'qoder', 'qoder-cn']);
 
@@ -1245,7 +1251,7 @@ export async function judgeTeamaiOnlyMcpConfigs(
   const verdicts: Array<{ file: string; teamaiOnly: boolean }> = [];
   for (const file of new Set(targets.map((t) => t.file))) {
     const writers = targets.filter((t) => t.file === file);
-    if (writers.some((t) => NOT_TEAMAI_ONLY_MCP_TOOLS.has(t.tool))) continue;
+    if (writers.some((t) => NOT_TEAMAI_ONLY_MCP_TOOLS.has(t.tool) && !(t.tool === 'claude' && isSelfMode(localConfig)))) continue;
     if (!(await fs.promises.lstat(file).catch(() => null))?.isFile()) continue;
     const raw = await readFileSafe(file);
     if (raw === null || raw.trim() === '') continue;
@@ -2628,6 +2634,13 @@ async function removeFromOtherFiles(
   return wrote;
 }
 
+/** Why a tool reads its servers from `active`, as the start of a sentence. */
+function movedBecause(teamConfig: TeamaiConfig, localConfig: LocalConfig, active: Pick<McpTarget, 'projectKey'>): string {
+  if (active.projectKey) return 'with sharing.gitExclude on, ';
+  if (!isGitExcludeEnabled(localConfig, teamConfig)) return 'with sharing.gitExclude off, ';
+  return isSelfMode(localConfig) ? 'in a single-repo team, where each worktree has its own servers, ' : '';
+}
+
 /**
  * Take teamai's servers out of the place for them of `active`'s tool (Claude
  * or CodeBuddy) that `active` is not (#915): the project's `.mcp.json` while
@@ -2688,7 +2701,7 @@ async function leaveMcpLocation(
   else delete ctx.manifest[key];
   if (removed.length === 0 || ctx.options.removeAll) return wrote;
   log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${active.tool} (${removed.map((c) => c.server).join(', ')}) `
-    + `out of ${describeMcpLocation(other)}: with sharing.gitExclude ${active.projectKey ? 'on' : 'off'}, `
+    + `out of ${describeMcpLocation(other)}: ${movedBecause(teamConfig, localConfig, active)}`
     + `${LOCAL_SCOPE_MCP_TOOLS[active.tool]} reads them from ${describeMcpLocation(active)}.`);
   return wrote && !other.projectKey ? await deleteEmptiedMcpFile(other.file) || wrote : wrote;
 }
@@ -2798,7 +2811,8 @@ async function leaveOtherLocalScopes(
     ctx.manifest[key] = [];
     if (removed.length === 0 || ctx.options.removeAll) continue;
     log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${local.tool} (${removed.map((c) => c.server).join(', ')}) `
-      + `out of ${describeMcpLocation(target)}: with sharing.gitExclude off, ${LOCAL_SCOPE_MCP_TOOLS[local.tool]} reads them from each checkout's MCP file.`);
+      + `out of ${describeMcpLocation(target)}: ${movedBecause(teamConfig, localConfig, { projectKey: undefined })}`
+      + `${LOCAL_SCOPE_MCP_TOOLS[local.tool]} reads them from each checkout's MCP file.`);
   }
   return wrote;
 }
