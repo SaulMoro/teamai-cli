@@ -2739,7 +2739,7 @@ teamai source remove-http
 
 An HTTP source reports status and pulls skill commands via hook dispatch on every session. Only one HTTP source is supported per install. If the main repo is already in HTTP mode (`init --http`), `add-http` is unavailable (the main repo already occupies the HTTP config).
 
-`source remove-http` clears the endpoint, credentials and caches, keeping a disabled config so legacy settings or environment variables cannot reconnect. If a hook cannot be removed, its record stays and the command exits with code 1. Fix the settings file it names, then run the command again. `source add-http` or `init --http` enables a source again.
+`source remove-http` waits up to 30 seconds for an active HTTP sync or plugin reconciliation to finish. If it cannot acquire the shared lock, it exits with code 1 without starting teardown; retry after the active operation finishes and check the directory permissions. Once it holds the lock, it disables the source before teardown and clears the endpoint, credentials and caches, keeping a disabled config so legacy settings or environment variables cannot reconnect. If a hook cannot be removed, its record stays and the command exits with code 1. Fix the settings file it names, then run the command again. `source add-http` or `init --http` enables a source again.
 
 ---
 

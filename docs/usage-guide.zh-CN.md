@@ -2537,7 +2537,7 @@ teamai source remove-http
 
 HTTP 源通过 hook dispatch 在每次 session 中上报状态并拉取 skill 指令。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
 
-`source remove-http` 会清除 endpoint、凭据和缓存，并保留禁用配置，防止旧配置或环境变量重新连接。若某个 hook 无法移除，其记录会保留，命令以退出码 1 结束。修好命令指出的 settings 文件后再次运行即可。`source add-http` 或 `init --http` 可重新启用源。
+`source remove-http` 会等待正在运行的 HTTP 同步或插件协调结束，最多等待 30 秒。若无法获得共享锁，命令以退出码 1 结束且不开始清理；请等当前操作结束并检查目录权限后重试。获得锁后，命令会先禁用源，再清除 endpoint、凭据和缓存，并保留禁用配置，防止旧配置或环境变量重新连接。若某个 hook 无法移除，其记录会保留，命令以退出码 1 结束。修好命令指出的 settings 文件后再次运行即可。`source add-http` 或 `init --http` 可重新启用源。
 
 ---
 

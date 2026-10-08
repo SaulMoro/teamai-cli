@@ -561,6 +561,12 @@ cannot reconnect. Failed agent-hook removals retain `agent-hooks.json` and repor
 exit code 1; removal can retry without an active source. HTTP initialization
 replaces the disabled config to enable a source again.
 
+Sync, detached plugin reconciliation and HTTP source removal share `~/.teamai/.local-agent-sync-lock`, outside the
+cache directory cleanup. Each reloads config after acquiring the lock. Removal
+waits up to 30 seconds for the current operation, disables before teardown, and
+reports failure without teardown if the lock cannot be acquired. A hook sync
+skips while the lock is held; plugin reconciliation waits up to 30 seconds.
+
 `git worktree add` takes a path outside the repo, and the owning repo is still
 the business repo, whose refs every checkout shares. The search index is keyed
 per checkout, like managed MCP, because each checkout indexes its own branch's

@@ -1934,6 +1934,33 @@ describe('local-agent: cmds[] migration', () => {
     expect(manifest.hk1).toMatchObject({ tool: 'codebuddy', event: 'SessionStart', command: 'echo hi', timeout: 10 });
   });
 
+  it('remove-http reports failure and leaves the source intact when another operation keeps its lock', async () => {
+    await setupConfig();
+    const configPath = path.join(tmpDir, '.teamai', 'local-agent', 'config.json');
+    const before = await fse.readFile(configPath, 'utf8');
+    const lockPath = path.join(tmpDir, '.teamai', '.local-agent-sync-lock');
+    const { acquireLock, releaseLock } = await import('../update.js');
+    expect(await acquireLock(lockPath)).toBe(true);
+    const exitCode = process.exitCode;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => { now += 30_001; return now; });
+    try {
+      const { removeLocalAgentHttp, reportAndSyncLocalAgent } = await import('../local-agent.js');
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      expect(await reportAndSyncLocalAgent({ cwd: tmpDir, tool: 'codebuddy' })).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+      await removeLocalAgentHttp();
+      expect(process.exitCode).toBe(1);
+      expect(await fse.readFile(configPath, 'utf8')).toBe(before);
+      const { log } = await import('../utils/logger.js');
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('removal did not run'));
+    } finally {
+      process.exitCode = exitCode;
+      clock.mockRestore();
+      await releaseLock(lockPath);
+    }
+  });
+
   it.each(['none', 'legacy config', 'environment'])('remove-http disables the source with %s fallback but keeps an unreadable hook\'s record (#993)', async (fallback) => {
     await runResponse({ cmds: [{
       id: 24, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-broken',

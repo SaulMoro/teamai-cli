@@ -88,6 +88,7 @@ import {
 } from './types.js';
 import { getUserHome } from './utils/home.js';
 import { resolveAnchors } from './utils/git.js';
+import { acquireLock, releaseLock } from './update.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -313,6 +314,21 @@ function getTeamaiHomePath(): string {
 
 function getLocalAgentHome(): string {
   return path.join(getTeamaiHomePath(), LOCAL_AGENT_DIR);
+}
+
+function localAgentLockPath(): string {
+  // Source cleanup removes the local-agent directory's contents, so keep its lock outside it.
+  return path.join(getTeamaiHomePath(), '.local-agent-sync-lock');
+}
+
+async function acquireLocalAgentLock(waitMs = 0): Promise<boolean> {
+  if (await acquireLock(localAgentLockPath())) return true;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (await acquireLock(localAgentLockPath())) return true;
+  }
+  return false;
 }
 
 function getConfigPath(): string {
@@ -923,31 +939,14 @@ async function maybeReconcilePlugins(context: LocalAgentContext): Promise<void> 
   } catch (e) { log.debug(`[local-agent] plugin reconcile spawn skipped: ${(e as Error).message}`); }
 }
 
-/** Detached worker: pull get-config and reconcile plugins once, guarded by a reconcile lock. */
+/** Detached worker: reconcile plugins while sharing the HTTP source lifecycle lock. */
 export async function runPluginReconcileWorker(): Promise<void> {
-  const config = await loadLocalAgentConfig();
-  if (!config) return;
-  const lockPath = path.join(getLocalAgentHome(), 'plugin-reconcile.lock');
-  await ensureDir(path.dirname(lockPath));
-  let acquired = false;
+  if (!await loadLocalAgentConfig({ dryRun: true })) return;
+  // A session-start sync spawns this worker while holding the same lifecycle lock.
+  if (!await acquireLocalAgentLock(30_000)) return;
   try {
-    try {
-      const fd = await fs.promises.open(lockPath, 'wx');
-      await fd.close();
-      acquired = true;
-    } catch (e) {
-      if ((e as { code?: string }).code !== 'EEXIST') throw e;
-      try {
-        const st = await fs.promises.stat(lockPath);
-        if (Date.now() - st.mtimeMs > 30 * 60 * 1000) {
-          await fs.promises.rm(lockPath, { force: true });
-          const fd = await fs.promises.open(lockPath, 'wx');
-          await fd.close();
-          acquired = true;
-        }
-      } catch { /* ignore */ }
-      if (!acquired) return;
-    }
+    const config = await loadLocalAgentConfig();
+    if (!config) return;
     const tag = '[local-agent] [plugin-reconcile]';
     const statePath = getPluginPullStatePath();
     try {
@@ -989,7 +988,7 @@ export async function runPluginReconcileWorker(): Promise<void> {
       log.debug(`${tag} reconcile failed: ${(e as Error).message}`);
     }
   } finally {
-    if (acquired) await fs.promises.rm(lockPath, { force: true });
+    await releaseLock(localAgentLockPath());
   }
 }
 
@@ -3422,6 +3421,19 @@ async function processCommands(
 }
 
 export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promise<boolean> {
+  if (!await loadLocalAgentConfig({ dryRun: true })) return false;
+  if (!await acquireLocalAgentLock()) {
+    log.debug('[local-agent] sync skipped: could not acquire the HTTP source lock');
+    return false;
+  }
+  try {
+    return await syncLocalAgent(context);
+  } finally {
+    await releaseLock(localAgentLockPath());
+  }
+}
+
+async function syncLocalAgent(context: LocalAgentContext): Promise<boolean> {
   const config = await loadLocalAgentConfig();
   if (!config) return false;
 
@@ -3780,6 +3792,27 @@ export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool:
  * stale entry cannot block the teardown.
  */
 export async function removeLocalAgentHttp(): Promise<void> {
+  if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) {
+    log.info('No HTTP source configured — nothing to remove.');
+    return;
+  }
+  if (!await acquireLocalAgentLock()) {
+    log.info('Waiting for the HTTP source sync lock before removal.');
+    if (!await acquireLocalAgentLock(30_000)) {
+      log.error(`Could not lock HTTP source state at ${localAgentLockPath()}; removal did not run. `
+        + 'Wait for other HTTP source operations to finish, check directory permissions, then retry `teamai source remove-http`.');
+      process.exitCode = 1;
+      return;
+    }
+  }
+  try {
+    await removeLocalAgentHttpLocked();
+  } finally {
+    await releaseLock(localAgentLockPath());
+  }
+}
+
+async function removeLocalAgentHttpLocked(): Promise<void> {
   const config = await loadLocalAgentConfig();
   if (!config) {
     // An earlier run disabled the source but could not remove these agent hooks (#993).
@@ -3790,6 +3823,9 @@ export async function removeLocalAgentHttp(): Promise<void> {
     log.info('No HTTP source configured — nothing to remove.');
     return;
   }
+
+  // No sync or plugin worker can write after this point until teardown finishes.
+  await writeJsonAtomic(getConfigPath(), { disabled: true });
 
   // Tear down installed plugins before removing teamai's local-agent state.
   try {
