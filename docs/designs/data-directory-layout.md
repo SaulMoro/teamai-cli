@@ -114,6 +114,17 @@ teamai writes entries into (project MCP configs with no per-member place,
 `.codex/hooks.json`, `.opencode/opencode.json`) that git does not track and that
 hold only entries teamai's records own, so a file that takes in a member's entry
 leaves the block on the next pull, which says so.
+A `.codex/hooks.json` that is not teamai's alone (tracked, or holding a member's
+entry; always in self mode) gets no team hooks while the flag is on: pull takes
+teamai's entries out of it through its hook manifest and records the project's
+Codex team hooks in `~/.teamai/codex-team-hooks.json` (machine-wide, keyed by the
+main checkout, or by the checkout in self mode; locked by
+`codex-team-hooks.json.lock`; a project whose directory is gone is dropped). The
+same pull makes `~/.codex/hooks.json` hold one
+`teamai hook-dispatch <Event> --tool codex --team-hooks` entry per event any
+recorded project has hooks for, with the largest timeout, before the built-ins;
+at run time it resolves the project from the hook's `cwd` and runs that
+project's hooks from the index.
 `state.gitExcludeFiles` records, per owner, the exclude
 files holding its block. A pull nobody watches (session start, git hooks) keeps
 what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
