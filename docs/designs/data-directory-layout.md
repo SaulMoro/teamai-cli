@@ -113,7 +113,11 @@ fast path included, and replaces its previous list: the shared config files
 teamai writes entries into (project MCP configs with no per-member place,
 `.codex/hooks.json`, `.opencode/opencode.json`) that git does not track and that
 hold only entries teamai's records own, so a file that takes in a member's entry
-leaves the block on the next pull, which says so.
+leaves the block on the next pull, which says so. On OpenCode V2 with teamai's
+plugin current, the OpenCode MCP target is `.opencode/teamai-mcp.json` instead
+(teamai's whole, always listed; its records carry `file`), and the pull takes
+teamai's V1 entries out of the root `opencode.json` and `.opencode/opencode.json`
+when they are teamai-only.
 `state.gitExcludeFiles` records, per owner, the exclude
 files holding its block. A pull nobody watches (session start, git hooks) keeps
 what it could not say about the block in `<dataHome>/git-exclude-notices.json`:

@@ -2315,9 +2315,11 @@ async function syncManagedInstructions(
     const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, files);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
-    // Beside the Claude fallback V1 reads CLAUDE.md, so no entry is wanted.
+    // Beside the Claude fallback V1 reads CLAUDE.md, so no entry is wanted; nor
+    // on V2, whose teamai plugin reads the file (#915).
+    const { opencodeDeliversThroughPlugin } = await import('./opencode-hooks.js');
     if (!dryRun && !opencodeFallback && targets.some((target) => target.tools.includes('opencode'))
-      && Object.values(blocks).some(Boolean)) {
+      && Object.values(blocks).some(Boolean) && !await opencodeDeliversThroughPlugin(config, localConfig)) {
       const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
       const target = targets.find((target) => target.tools.includes('opencode'))!;
       const { config: file, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
@@ -3277,6 +3279,16 @@ async function reconcileHooksAllScopes(
         const applied = await applyInstructionPlan(cleanup, { dryRun: Boolean(options.dryRun) });
         for (const line of applied.report) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${line}: replacement instructions are ready`);
         for (const failure of applied.failures) log.warn(`[${localConfig.scope}] ${failure}`);
+      }
+      // With OpenCode's plugin current now, V2 needs no `instructions` entry (#915).
+      if (localConfig === projectConfig) {
+        try {
+          const { retireOpencodeV1Instructions } = await import('./teamai-only-files.js');
+          const retired = await retireOpencodeV1Instructions(teamConfig, localConfig, Boolean(options.dryRun));
+          if (retired) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${retired}`);
+        } catch (e) {
+          log.warn(`[${localConfig.scope}] Could not take teamai's OpenCode V1 instructions out of .opencode/opencode.json: ${(e as Error).message}. The next pull tries again.`);
+        }
       }
       // The hooks install the extensions and plugins that add team
       // instructions for Pi, OMP and Hermes (#945); say which cannot. The
