@@ -58,6 +58,7 @@ import { fileHash } from '../utils/fs.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { renderRuleForTool } from '../resources/rule-format.js';
+import { entryHash } from '../resources/mcp-format.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
@@ -1284,7 +1285,7 @@ describe('uninstall', () => {
 
   // Regression: MCP cleanup used to run after ~/.teamai/ was deleted, so the
   // ownership manifest was already gone and removeAll became a no-op.
-  it('卸载时移除 teamai 管理的 MCP server，并保留用户自建的', async () => {
+  it('removes unchanged managed MCP servers and keeps member servers', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -1296,7 +1297,7 @@ describe('uninstall', () => {
       },
     });
     await fse.writeJson(path.join(teamaiHome, 'managed-mcp.json'), {
-      claude: [{ name: 'team-mcp', hash: 'abc' }],
+      claude: [{ name: 'team-mcp', hash: entryHash({ type: 'http', url: 'https://team.example/mcp' }) }],
     });
 
     const teamConfig = makeTeamConfig({
@@ -1663,7 +1664,7 @@ describe('uninstall', () => {
       const file = path.join(projectRoot, '.mcp.json');
       await fse.writeJson(file, { mcpServers: { jira, docs: { type: 'http', url: 'https://docs.example/mcp' } } });
       await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
-        [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: 'h' }],
+        [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: entryHash({ type: 'http', url: 'https://docs.example/mcp' }) }],
       });
       const { trackResolvedMcpFiles, recordUnverifiedMcpServers } = await import('../mcp-resolved-files.js');
       await trackResolvedMcpFiles(localConfig, [{ tool: 'claude', file }]);
@@ -1720,7 +1721,7 @@ describe('uninstall', () => {
       await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira, mine } });
       withCodeBuddy(localConfig);
       await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
-        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: entryHash(jira) }],
         [managedMcpManifestKey('codebuddy', true)]: [],
       });
 
