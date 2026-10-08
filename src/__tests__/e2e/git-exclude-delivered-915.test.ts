@@ -568,7 +568,7 @@ const MEMBERS_FILES = [
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
-  /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
+  /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
 ];
 /** A delivered path of each writer and kind, as the member's tools read them. */
 const DELIVERED = [
