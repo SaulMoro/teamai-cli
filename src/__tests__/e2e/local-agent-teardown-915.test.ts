@@ -118,6 +118,15 @@ const installRule = (slug: string, workspace: string): MockCommand => ({
   scope: 'workspace',
   workspace_path: workspace,
 });
+const installSkill = (slug: string, workspace: string): MockCommand => ({
+  id: nextId++,
+  type: 'install_skill',
+  skill_slug: slug,
+  skill_version: '1.0.0',
+  download_url: `${server.url}/download?kind=skill&slug=${slug}`,
+  scope: 'workspace',
+  workspace_path: workspace,
+});
 
 const block = (project: string, owner = 'local-agent'): string[] | null => {
   const file = path.join(project, '.git', 'info', 'exclude');
@@ -157,12 +166,8 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     const m = machine('legacy');
     const app = await m.project('app');
     const status = (): string[] => m.git(['status', '--porcelain', '-uall'], app).out.split('\n').filter(Boolean);
-    const installSkill = (slug: string): MockCommand => ({
-      id: nextId++, type: 'install_skill', skill_slug: slug, skill_version: '1.0.0',
-      download_url: `${server.url}/download?kind=skill&slug=${slug}`, scope: 'workspace', workspace_path: app,
-    });
-    await m.sessionStart(app, 'claude', [installRule('legacy-rule', app), installSkill('legacy-skill')]);
-    await m.sessionStart(app, 'workbuddy', [installRule('legacy-rule', app), installSkill('legacy-skill')]);
+    await m.sessionStart(app, 'claude', [installRule('legacy-rule', app), installSkill('legacy-skill', app)]);
+    await m.sessionStart(app, 'workbuddy', [installRule('legacy-rule', app), installSkill('legacy-skill', app)]);
     const copies = ['.claude/rules/legacy-rule.md', '.claude/skills/legacy-skill/SKILL.md', '.workbuddy/skills/legacy-skill/SKILL.md'];
     for (const copy of copies) expect(fs.existsSync(path.join(app, copy)), copy).toBe(true);
     // The member committed WorkBuddy's copy, and has a rule of that name of their own for Cursor.
@@ -217,5 +222,29 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     expect(out.code, out.output).toBe(0);
     expect(block(app), `${removed.output}\n${out.output}`).toBeNull();
     expect(fs.existsSync(path.join(m.home, '.teamai')), out.output).toBe(false);
+  }, 180_000);
+
+  it('an uninstall that finds no configuration removes every teamai line whose file is gone, and keeps, and names, those of files it leaves', async () => {
+    const m = machine('home-only');
+    const app = await m.project('app');
+    await m.sessionStart(app, 'claude', [installRule('home-rule', app), installSkill('home-skill', app)]);
+    expect(block(app)).toEqual(['/.claude/rules/home-rule.md', '/.claude/skills/home-skill/SKILL.md']);
+    expect(block(app, 'delivered')).toEqual(['/.claude/skills/teamai/SKILL.md', '/.workbuddy/skills/teamai/SKILL.md']);
+    // The member removed WorkBuddy's copy of the CLI's skill.
+    fs.rmSync(path.join(app, '.workbuddy', 'skills'), { recursive: true });
+    const exclude = path.join(app, '.git', 'info', 'exclude');
+
+    // Outside the project, no configuration applies.
+    const out = await m.cli(['uninstall', '--force'], m.base);
+
+    expect(out.code, out.output).toBe(0);
+    expect(out.output).toContain('home directory only');
+    expect(fs.existsSync(path.join(m.home, '.teamai')), out.output).toBe(false);
+    expect(block(app), out.output).toBeNull();
+    expect(fs.existsSync(path.join(app, '.claude', 'rules', 'home-rule.md'))).toBe(false);
+    // This uninstall leaves the CLI's skill in the project: its line stays, named.
+    expect(block(app, 'delivered'), out.output).toEqual(['/.claude/skills/teamai/SKILL.md']);
+    expect(out.output).toContain(`Kept /.claude/skills/teamai/SKILL.md in ${exclude}, so git still ignores ${path.join(app, '.claude', 'skills', 'teamai', 'SKILL.md')}`);
+    expect(m.git(['status', '--porcelain', '-uall'], app).out, out.output).toBe('');
   }, 180_000);
 });

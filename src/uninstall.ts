@@ -2,7 +2,7 @@ import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { autoDetectInit, loadStateForScope, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
 import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
-import { gitExcludeFile, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord } from './git-exclude.js';
+import { gitExcludeFile, gitTracks, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord, type GitExcludeFileRemoval } from './git-exclude.js';
 import {
   migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, hasUnrecordedTeamHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile,
   stopCodexTeamHookDispatch, teamHookHistory, type TeamHookHistory,
@@ -1474,6 +1474,22 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
       return false;
     },
   });
+  sayGitExcludeRemoval(results, plan.othersGitExcludeBlock);
+  // The local agent stays: its blocks keep the workspaces it still serves, this project's lines go.
+  if (plan.localAgentWorkspacesDropped !== null) {
+    const { rebuildLocalAgentGitExcludeWithout } = await import('./local-agent.js');
+    for (const { excludeFile, dropped } of await rebuildLocalAgentGitExcludeWithout(plan.localAgentWorkspacesDropped) ?? []) {
+      log.info(`Removed this project's ${dropped.length} line(s) from the local agent's git exclude block in ${excludeFile}`);
+    }
+  }
+}
+
+/**
+ * Say what removing the blocks did to each exclude file: the blocks removed,
+ * the lines to delete by hand from a file teamai could not write, and the
+ * markers it cannot pair (but in `othersBlock`, another project's).
+ */
+function sayGitExcludeRemoval(results: GitExcludeFileRemoval[], othersBlock: (owner: string, excludeFile: string) => boolean): void {
   for (const { excludeFile, write, removed, damaged } of results) {
     const lines = removed.flatMap((block) => block.lines);
     const byHand = `Delete these lines from it yourself, with each block's \`# [teamai:<owner>:start]\` and \`# [teamai:<owner>:end]\` markers: ${lines.join(', ')}.`;
@@ -1497,16 +1513,95 @@ async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: Readonl
         break;
     }
     for (const { owner, line, problem } of damaged) {
-      if (problem === 'duplicate' || plan.othersGitExcludeBlock(owner, excludeFile)) continue;
+      if (problem === 'duplicate' || othersBlock(owner, excludeFile)) continue;
       log.warn(`Kept line ${line} of ${excludeFile}: a \`# [teamai:${owner}:${problem === 'unclosed' ? 'start' : 'end'}]\` marker with no ${problem === 'unclosed' ? 'end' : 'start'}, which teamai leaves with the lines after it. Delete it, and any of the lines that are teamai's, yourself.`);
     }
   }
-  // The local agent stays: its blocks keep the workspaces it still serves, this project's lines go.
-  if (plan.localAgentWorkspacesDropped !== null) {
-    const { rebuildLocalAgentGitExcludeWithout } = await import('./local-agent.js');
-    for (const { excludeFile, dropped } of await rebuildLocalAgentGitExcludeWithout(plan.localAgentWorkspacesDropped) ?? []) {
-      log.info(`Removed this project's ${dropped.length} line(s) from the local agent's git exclude block in ${excludeFile}`);
+}
+
+/** Where teamai's blocks are when uninstall finds no configuration: exclude files, and the checkouts that read them. */
+interface HomeGitExcludeBlocks {
+  files: string[];
+  roots: string[];
+}
+
+/**
+ * Where teamai's blocks are on a machine whose uninstall finds no
+ * configuration: the exclude files every record under `home` names (each
+ * project partition's state, the user scope's, the local agent's state home)
+ * and those of the checkouts these records know, with every checkout git
+ * lists for their repositories. Read before anything deletes the records.
+ */
+async function planHomeGitExcludeBlocks(home: string): Promise<HomeGitExcludeBlocks> {
+  const files = new Set<string>();
+  const candidates = new Set<string>();
+  try {
+    const stateHome = path.join(home, 'local-agent');
+    for (const owner of ['local-agent', 'credentials']) for (const file of await stateHomeRecord(stateHome, owner).files()) files.add(file);
+    const { localAgentCheckouts } = await import('./local-agent.js');
+    for (const root of await localAgentCheckouts()) candidates.add(root);
+    const { projectsRootDir, readAnchorFile } = await import('./utils/partition.js');
+    const partitions = (await listDirs(projectsRootDir())).map((dir) => path.join(projectsRootDir(), dir));
+    for (const dataHome of [home, ...partitions]) {
+      const state = await readJson<{ gitExcludeFiles?: Record<string, string[]>; lastPullByWorkspace?: Record<string, { root?: string }> }>(
+        path.join(dataHome, 'state.json'));
+      for (const file of Object.values(state?.gitExcludeFiles ?? {}).flat()) files.add(file);
+      for (const { root } of Object.values(state?.lastPullByWorkspace ?? {})) if (root) candidates.add(root);
+      const anchor = dataHome === home ? null : await readAnchorFile(dataHome);
+      if (anchor) candidates.add(anchor);
     }
+  } catch (e) {
+    log.warn(`Could not read where teamai's git exclude blocks are: ${(e as Error).message}`);
+  }
+  const roots = new Set<string>();
+  for (const candidate of candidates) {
+    if (!await pathExists(candidate)) continue;
+    for (const root of await listWorktrees(candidate)) roots.add(root);
+    const placed = await gitExcludeFile(candidate);
+    if (placed) {
+      roots.add(placed.root);
+      files.add(placed.excludeFile);
+    }
+  }
+  // `<common dir>/info/exclude`: git lists the checkouts from the common directory.
+  for (const file of files) for (const root of await listWorktrees(path.dirname(path.dirname(file)))) roots.add(root);
+  return { files: [...files], roots: [...roots] };
+}
+
+/**
+ * Remove every teamai block `planHomeGitExcludeBlocks` found (#915), but the
+ * lines of files still on disk and untracked in a checkout that reads that
+ * exclude file (for a `credentials` line, a file that may hold a key), and
+ * the lines of an exclude file no known checkout reads: git keeps ignoring
+ * what this uninstall leaves, and each is named.
+ */
+async function removeHomeGitExcludeBlocks(blocks: HomeGitExcludeBlocks): Promise<void> {
+  const { modelFilesBehind } = await import('./local-agent.js');
+  const left = new Map<string, Set<string>>();
+  const results = await removeGitExclude('all', {
+    files: blocks.files,
+    keep: async ({ owner, line, excludeFile }) => {
+      const behind = await modelFilesBehind(line, excludeFile, { roots: blocks.roots, withKey: owner === 'credentials' });
+      if (behind === null) return true;
+      let kept = false;
+      for (const file of behind) {
+        if ((await gitTracks(file, 'entry')).kind === 'tracked') continue;
+        left.set(excludeFile, (left.get(excludeFile) ?? new Set()).add(file));
+        kept = true;
+      }
+      return kept;
+    },
+  });
+  sayGitExcludeRemoval(results, () => false);
+  for (const { excludeFile, kept } of results) {
+    const lines = kept.flatMap((block) => block.lines);
+    if (lines.length === 0) continue;
+    const files = [...left.get(excludeFile) ?? []];
+    log.warn(files.length > 0
+      ? `Kept ${lines.join(', ')} in ${excludeFile}, so git still ignores ${files.join(', ')}, which this uninstall leaves on disk. `
+        + 'Delete those files once you no longer need them, then those lines yourself, with each block\'s `# [teamai:<owner>:start]` and `# [teamai:<owner>:end]` markers.'
+      : `Kept ${lines.join(', ')} in ${excludeFile}: teamai knows no checkout that reads it, so it cannot tell whether git still needs them. `
+        + 'Delete them yourself once the files they name are gone, with each block\'s `# [teamai:<owner>:start]` and `# [teamai:<owner>:end]` markers.');
   }
 }
 
@@ -2237,9 +2332,14 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
       process.exitCode = 1;
       return;
     }
+    // Read before the teardown and the removal below delete the records naming them (#915).
+    const blocks = await planHomeGitExcludeBlocks(home);
     // Its record of hooks that could not be removed stays for a retry.
     const { shutdownLocalAgentHttp } = await import('./local-agent.js');
-    if (['locked', 'incomplete'].includes(await shutdownLocalAgentHttp('teamai uninstall'))) return;
+    const shutdown = await shutdownLocalAgentHttp('teamai uninstall');
+    if (shutdown === 'locked') return;
+    await removeHomeGitExcludeBlocks(blocks);
+    if (shutdown === 'incomplete') return;
     await remove(home);
     log.success(`Removed ${home}/`);
     log.success('teamai uninstalled');
