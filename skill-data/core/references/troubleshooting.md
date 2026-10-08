@@ -47,6 +47,9 @@ This is the #1 onboarding issue. In order:
    local setup.
    In project scope, `teamai hooks remove` preserves other projects' gated team
    hooks in HOME, while removing the shared built-in hooks.
+   If `source remove-http` reports incomplete hook removal, the HTTP source is
+   disabled and the failed hooks stay on record. Fix the settings file it names,
+   then repeat `source remove-http` to finish removing them.
    If you initialized project scope but expected machine-wide resources, re-run
    with `--scope user`.
 5. **Tool has no hook surface** (e.g. Gemini CLI, JoyCode): there is no auto-sync;

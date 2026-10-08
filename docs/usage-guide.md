@@ -2739,6 +2739,8 @@ teamai source remove-http
 
 An HTTP source reports status and pulls skill commands via hook dispatch on every session. Only one HTTP source is supported per install. If the main repo is already in HTTP mode (`init --http`), `add-http` is unavailable (the main repo already occupies the HTTP config).
 
+`source remove-http` clears the endpoint, credentials and caches, keeping a disabled config so legacy settings or environment variables cannot reconnect. If a hook cannot be removed, its record stays and the command exits with code 1. Fix the settings file it names, then run the command again. `source add-http` or `init --http` enables a source again.
+
 ---
 
 ## Command Reference
@@ -3039,7 +3041,7 @@ teamai uninstall --agent claude
 
 What gets removed:
 - TeamAI-managed model settings are restored first when ownership is still intact
-- teamai hooks in AI tool settings. A settings file that does not parse is left as it is and named; teamai's data directory, which holds the record of the hooks in it, then stays too, the uninstall reports itself incomplete (exit code 1), and the tool is excluded, so the hooks left in place sync nothing back; `teamai uninstall` run again after you fix the file removes them. `teamai source remove-http` keeps the local agent's directory the same way for an agent hook it could not remove.
+- teamai hooks in AI tool settings. A settings file that does not parse is left as it is and named; teamai's data directory, which holds the record of the hooks in it, then stays too, the uninstall reports itself incomplete (exit code 1), and the tool is excluded, so the hooks left in place sync nothing back; `teamai uninstall` run again after you fix the file removes them. `teamai source remove-http` also preserves failed agent-hook records, disables the HTTP source, and exits with code 1.
 - The teamai blocks (culture, shared instructions, recall) in each tool's instruction file, and the files an earlier release wrote them to (your own content is preserved; a `teamai-context` file teamai wrote is removed whole, and OpenCode's `instructions` entry for it goes too when teamai added it, even when your own text keeps the file or the file is gone; an entry you listed yourself stays)
 - The team-rules block in the file a tool with no rules format reads in user scope (`~/.codex/AGENTS.md`, `~/.zcode/AGENTS.md`, `$DSH_HOME/AGENTS.md`, the OpenClaw workspace `AGENTS.md`, `~/.pi/agent/AGENTS.md`, `~/.joycode/rules.txt`), and the file when teamai created it for the block alone
 - Team-synced skills, including OpenClaw workspace skills (your own skills are preserved)

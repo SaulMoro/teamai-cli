@@ -2537,6 +2537,8 @@ teamai source remove-http
 
 HTTP 源通过 hook dispatch 在每次 session 中上报状态并拉取 skill 指令。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
 
+`source remove-http` 会清除 endpoint、凭据和缓存，并保留禁用配置，防止旧配置或环境变量重新连接。若某个 hook 无法移除，其记录会保留，命令以退出码 1 结束。修好命令指出的 settings 文件后再次运行即可。`source add-http` 或 `init --http` 可重新启用源。
+
 ---
 
 ## 命令参考
@@ -2817,7 +2819,7 @@ teamai uninstall --agent claude
 
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
-- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，卸载会报告未完成（退出码 1），并排除该工具，使留下的 hooks 不会把任何内容同步回来；修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 对无法移除的 agent hook 也会同样保留 local agent 目录。
+- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，卸载会报告未完成（退出码 1），并排除该工具，使留下的 hooks 不会把任何内容同步回来；修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 也会保留未移除的 agent hook 记录，禁用 HTTP 源，并以退出码 1 结束。
 - 各工具指令文件中的 teamai 块（文化、共享指令、recall），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 没有自身 rules 格式的工具在用户作用域读取的文件中的团队规则块（`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`、OpenClaw workspace 的 `AGENTS.md`、`~/.pi/agent/AGENTS.md`、`~/.joycode/rules.txt`）；该文件若是 teamai 只为这个块创建的，则整个删除
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）

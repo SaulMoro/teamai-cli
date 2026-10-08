@@ -38,6 +38,66 @@ describe('local-agent rules (#993)', () => {
     for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
+  it('remove-http disables the source after failed hook cleanup and removes the hook on retry', async () => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-remove-http-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const agentDir = path.join(home, '.teamai', 'local-agent');
+    const settingsPath = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const hook = { description: '[teamai:agent-hook:retry]', matcher: '*', hooks: [{ type: 'command', command: 'echo retry' }] };
+    const repaired = JSON.stringify({ hooks: { SessionStart: [hook] }, personal: true });
+    const broken = `${repaired},\n`;
+    fs.writeFileSync(settingsPath, broken);
+    fs.writeFileSync(path.join(agentDir, 'agent-hooks.json'), JSON.stringify({
+      retry: { tool: 'claude', event: 'SessionStart', command: 'echo retry' },
+    }));
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const env = { HOME: home, TEAMAI_HTTP_ENDPOINT: endpoint };
+    fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, token: 'fixture-token', createdAt: 'x', workspaceBindings: {} }));
+    // Older HTTP installations can restore config.json from this file.
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), [
+      'username: tester', 'updatePolicy: skip', 'repo:', '  kind: http', `  url: ${endpoint}`,
+      `  localPath: ${path.join(home, '.teamai', 'team-repo')}`, `  remote: ${endpoint}`, '',
+    ].join('\n'));
+    const dispatch = () => runCLI(['hook-dispatch', 'stop', '--tool', 'claude', '--bg-only'], env, sandbox,
+      JSON.stringify({ cwd: sandbox, hook_event_name: 'Stop', session_id: 'remove-http-retry' }));
+    try {
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBeGreaterThan(0);
+      const removed = await runCLI(['source', 'remove-http'], env, sandbox);
+      expect(removed.code, removed.output).toBe(1);
+      expect(removed.output).toContain('HTTP source disabled, but removal is incomplete');
+      expect(fs.readFileSync(settingsPath, 'utf8')).toBe(broken);
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir, 'agent-hooks.json'), 'utf8')).retry).toBeDefined();
+      const beforeDispatch = requests;
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBe(beforeDispatch);
+
+      fs.writeFileSync(settingsPath, repaired);
+      const retried = await runCLI(['source', 'remove-http'], env, sandbox);
+      expect(retried.code, retried.output).toBe(0);
+      expect(retried.output).toContain('HTTP source removed');
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      expect(settings.personal).toBe(true);
+      expect(JSON.stringify(settings)).not.toContain('[teamai:agent-hook:retry]');
+      expect(fs.existsSync(path.join(agentDir, 'agent-hooks.json'))).toBe(false);
+      const afterRetry = requests;
+      expect((await dispatch()).code).toBe(0);
+      expect(requests).toBe(afterRetry);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it('uninstall_rule removes the copy the local agent installed and keeps a member\'s file at that path', async () => {
     const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-local-agent-rules-')));
     sandboxes.push(sandbox);

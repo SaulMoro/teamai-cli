@@ -493,8 +493,9 @@ async function claudeUserRoot(): Promise<string> {
 }
 
 /** Resolve the current tool's settings file absolute path (user scope, $HOME base). */
-async function resolveToolSettingsPath(config: LocalAgentConfig, tool: string): Promise<string> {
-  const teamConfig = createLocalAgentTeamConfig(config.endpoint);
+async function resolveToolSettingsPath(config: LocalAgentConfig | null, tool: string): Promise<string> {
+  // Hook cleanup also runs after the source configuration has been cleared.
+  const teamConfig = createLocalAgentTeamConfig(config?.endpoint ?? 'local-agent');
   const toolPath = applyToolRoots(teamConfig.toolPaths, await memberToolRoots())[tool];
   if (!toolPath?.settings) {
     throw new Error(`unsupported tool: ${tool} (no settings path)`);
@@ -593,8 +594,10 @@ function mergeWorkspaceBindings(
 }
 
 export async function loadLocalAgentConfig(options: { dryRun?: boolean } = {}): Promise<LocalAgentConfig | null> {
-  const fileConfig = await readJson<LocalAgentConfig>(getConfigPath());
-  if (fileConfig?.endpoint) {
+  const fileConfig = await readJson<LocalAgentConfig | { disabled: true }>(getConfigPath());
+  // A removed source must not reconnect through legacy config or environment fallback.
+  if (fileConfig && 'disabled' in fileConfig && fileConfig.disabled === true) return null;
+  if (fileConfig && 'endpoint' in fileConfig && fileConfig.endpoint) {
     const config = {
       ...fileConfig,
       endpoint: normalizeEndpoint(fileConfig.endpoint),
@@ -3733,8 +3736,8 @@ export async function teardownLocalAgentPlugins(): Promise<void> {
  * are returned.
  */
 export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool: string }>> {
+  // Removal can leave hook records after disabling the source.
   const config = await loadLocalAgentConfig();
-  if (!config) return [];
   const manifest = await loadAgentHookManifest();
   const slugs = Object.keys(manifest);
   if (slugs.length === 0) return [];
@@ -3770,7 +3773,8 @@ export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool:
 /**
  * Tear down the HTTP local-agent bypass: uninstall every resource recorded in the
  * manifest (skills/rules/claudemd, across all scopes) from the AI tool dirs, then
- * remove the whole ~/.teamai/local-agent/ directory (config + manifest).
+ * clear its config and caches. Keep a disabled config to prevent fallback from
+ * reconnecting, and any remaining hook ownership records for a retry.
  *
  * Best-effort per resource: a single failed uninstall is logged and skipped so a
  * stale entry cannot block the teardown.
@@ -3778,6 +3782,11 @@ export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool:
 export async function removeLocalAgentHttp(): Promise<void> {
   const config = await loadLocalAgentConfig();
   if (!config) {
+    // An earlier run disabled the source but could not remove these agent hooks (#993).
+    if (Object.keys(await loadAgentHookManifest()).length > 0) {
+      await finishAgentHookTeardown();
+      return;
+    }
     log.info('No HTTP source configured — nothing to remove.');
     return;
   }
@@ -3802,14 +3811,28 @@ export async function removeLocalAgentHttp(): Promise<void> {
     }
   }
 
+  await finishAgentHookTeardown();
+}
+
+/**
+ * Clear the HTTP source, preserving failed hook records for a retry.
+ */
+async function finishAgentHookTeardown(): Promise<void> {
   const hooksLeft = await removeAllAgentHooks();
+  const home = getLocalAgentHome();
+  const keep = path.basename(getAgentHookManifestPath());
+  await writeJsonAtomic(getConfigPath(), { disabled: true });
+  for (const entry of await fse.readdir(home)) {
+    if (entry !== path.basename(getConfigPath()) && !(hooksLeft.length > 0 && entry === keep)) {
+      await remove(path.join(home, entry));
+    }
+  }
   if (hooksLeft.length > 0) {
-    // Their records are in the local agent's home: it stays, so running this again removes them.
-    log.warn(`Kept ${getLocalAgentHome()}: it holds the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')}, which could not be removed. `
-      + 'Fix the files named above, then run `teamai source remove-http` again.');
+    log.warn(`HTTP source disabled, but removal is incomplete: kept the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')} `
+      + `in ${home}, as they could not be removed. Fix the files named above, then run \`teamai source remove-http\` again.`);
+    process.exitCode = 1;
     return;
   }
-  await remove(getLocalAgentHome());
   log.success('HTTP source removed (resources uninstalled, config cleared).');
 }
 
