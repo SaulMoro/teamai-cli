@@ -1598,7 +1598,7 @@ export async function removeAgentHook(
 async function readHookFile<T>(file: string, fallback: T): Promise<T> {
   const read = await readJsonObject(file);
   if (read.kind === 'invalid') {
-    throw new Error(`${file} does not parse (${read.error}), so teamai left it as it is. Fix it, then run \`teamai pull\`.`);
+    throw new Error(`${file} does not parse (${read.error}), so teamai left it as it is. Fix it, then run the command again.`);
   }
   return read.kind === 'ok' ? read.value as T : fallback;
 }

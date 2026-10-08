@@ -1322,7 +1322,12 @@ async function teardownPlugins(): Promise<void> {
   }
 }
 
-async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeInstructions']> {
+/**
+ * Run `plan`. What it could not remove, so the uninstall is incomplete and its
+ * ownership stays for a retry: OpenCode `instructions` entries still listed, and
+ * hook files and agent hooks it could not clean (#993).
+ */
+async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: string[] }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
@@ -1616,7 +1621,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
       log.debug(`Hermes uninstall cleanup skipped: ${(e as Error).message}`);
     }
   }
-  return pendingOpencode;
+  return { pendingOpencode, hooksLeft };
 }
 
 /** Remove everything under `root` but `keep` and the directories on the way to it. */
@@ -1791,7 +1796,8 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       }
     }
 
-    const pendingOpencode = await executeRemoval(plan);
+    const { pendingOpencode, hooksLeft } = await executeRemoval(plan);
+    const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0;
 
     // The OpenCode entries uninstall removed are no longer teamai's to track;
     // one still listed (the write failed) stays recorded for the next try.
@@ -1813,12 +1819,14 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     // hook) does not resurrect this tool's resources. Only meaningful when the
     // shared ~/.teamai home survives (non-last-tool uninstall); on a last-tool
     // uninstall the home is deleted and there is nothing to persist.
-    if (agentKey && (!plan.includeShared || pendingOpencode.length > 0)) {
+    // So does an incomplete one: what is left in place must not be synced back for this tool.
+    if (agentKey && (!plan.includeShared || incomplete)) {
       await excludeUninstalledAgent(localConfig, agentKey);
     }
 
-    if (pendingOpencode.length > 0) {
-      log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and OpenCode ownership so removal can be retried. Repair permissions or JSON in ${pendingOpencode.map((ref) => ref.config).join(', ')}, then run the same uninstall command again.`);
+    if (incomplete) {
+      const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft];
+      log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
       process.exitCode = 1;
     } else {
       log.success('teamai uninstalled');

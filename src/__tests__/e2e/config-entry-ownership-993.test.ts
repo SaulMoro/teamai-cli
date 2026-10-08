@@ -351,12 +351,31 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     writeFile(localSettings, broken);
     const first = teamai(['uninstall', '--force'], dir);
     expect(fs.readFileSync(localSettings, 'utf8'), first.output).toBe(broken);
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).not.toContain('teamai uninstalled');
 
     writeFile(localSettings, repaired);
     const second = teamai(['uninstall', '--force'], dir);
     expect(second.code, second.output).toBe(0);
     expect(fs.readFileSync(localSettings, 'utf8'), second.output).not.toContain('echo team-stop-v1');
     expect(first.output).toContain(`${localSettings}, which could not be removed`);
+  });
+
+  it('excludes the tool when a targeted uninstall cannot remove its hooks', () => {
+    const t = team('hook-broken-targeted', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-targeted-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = fs.readFileSync(localSettings, 'utf8');
+    writeFile(localSettings, `${repaired.trimEnd()}, \n`);
+    const removed = teamai(['uninstall', '--agent', 'claude', '--force'], dir);
+    expect(removed.code, removed.output).toBe(1);
+    writeFile(localSettings, repaired);
+    // Excluded, so no pull syncs claude back over what is left.
+    const projects = path.join(home, '.teamai', 'projects');
+    const configs = fs.readdirSync(projects).map((id) => path.join(projects, id, 'config.yaml')).filter((f) => fs.existsSync(f))
+      .map((f) => fs.readFileSync(f, 'utf8')).filter((text) => text.includes(dir));
+    expect(configs.join('\n'), removed.output).toMatch(/disabledAgents:\s*\n\s*- claude/);
   });
 
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
