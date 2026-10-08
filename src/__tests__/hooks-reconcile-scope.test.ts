@@ -635,6 +635,35 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     }
   });
 
+  it('shares one copy of the main hooks between two worktree installs when the main checkout has none', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const second = `${worktree}-2`;
+    await fse.ensureDir(second);
+    vi.mocked(listWorktrees).mockResolvedValue([main, worktree, second]);
+    const stops = async () => [
+      (await fse.readJson(path.join(main, '.claude', 'settings.local.json'))).hooks.Stop.length,
+      (await fse.readJson(path.join(main, '.codex', 'hooks.json'))).hooks.Stop.length,
+    ];
+    // Detection attaches each worktree's own data home.
+    const at = (root: string): LocalConfig => ({ ...localConfig(), projectRoot: root, dataHome: path.join(root, '.teamai') });
+    try {
+      for (const root of [worktree, second]) await fse.outputFile(path.join(root, '.teamai', 'config.yaml'), '');
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree));
+      await reconcileTeamHooksForConfig(teamConfig, at(second));
+      expect(await stops()).toEqual([1, 1]);
+
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree), { removeAll: true });
+      expect(await stops()).toEqual([1, 1]);
+      await fse.remove(path.join(worktree, '.teamai'));
+      await reconcileTeamHooksForConfig(teamConfig, at(second), { removeAll: true });
+      expect(await stops()).toEqual([0, 0]);
+    } finally {
+      await fse.remove(worktree);
+      await fse.remove(second);
+    }
+  });
+
   it('removes the gated entries an older CLI left for this project, and keeps another project\'s', async () => {
     await writeYaml(STOP_LINT);
     const { main, worktree } = await mainWithWorktree();
@@ -695,7 +724,7 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
       ]);
       expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([oldEntry]);
       expect(await fse.readJson(legacyManifest)).toEqual({ cursor: cursorRecords });
-      const ownership = await fse.readJson(path.join(root, '.teamai', 'managed-main-checkout-hooks.json'));
+      const ownership = await fse.readJson(path.join(main, '.teamai', 'managed-main-checkout-hooks.json'));
       expect((ownership.codex ?? []).map((record: { command: string }) => record.command))
         .toEqual(removeAll ? [] : ['npm run lint']);
       if (!removeAll) {

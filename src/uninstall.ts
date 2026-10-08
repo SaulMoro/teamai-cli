@@ -676,19 +676,21 @@ async function buildRemovalPlan(
     }
   }
   for (const target of mainCheckouts) {
-    // A linked worktree with its own install takes back only what it recorded.
-    hookTargets.push(target.checkoutManifestPath ? {
-      baseDir: target.root,
-      manifestPath: target.checkoutManifestPath,
-      teamOnly: true,
-      fileFor: (tool) => mainCheckoutHookFile(target, tool),
-    } : {
-      baseDir: target.root,
-      manifestPath: target.manifestPath,
-      teamOnly: true,
-      legacyManifestPath: getManagedHooksPath('project', target.root),
-      fileFor: (tool) => mainCheckoutHookFile(target, tool),
-    });
+    const fileFor = (tool: string) => mainCheckoutHookFile(target, tool);
+    if (target.checkoutManifestPath) {
+      hookTargets.push({ baseDir: target.root, manifestPath: target.checkoutManifestPath, teamOnly: true, fileFor });
+    }
+    // A linked worktree takes back only what it recorded while another install
+    // still uses the shared entries.
+    if (!target.sharedWithOtherInstall) {
+      hookTargets.push({
+        baseDir: target.root,
+        manifestPath: target.manifestPath,
+        teamOnly: true,
+        legacyManifestPath: getManagedHooksPath('project', target.root),
+        fileFor,
+      });
+    }
   }
   // Hook discovery resolves its file name at the same scope as the targets: a
   // non-self project scope discovers under HOME, so the tool paths there must be

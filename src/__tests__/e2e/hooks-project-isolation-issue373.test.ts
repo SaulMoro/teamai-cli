@@ -206,4 +206,39 @@ describe('issue #373 project hook isolation (real CLI)', () => {
       expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8')), args.join(' ')).toEqual(single);
     }
   });
+
+  it('shares one main checkout team hook between two worktree installs when the main checkout has none', async () => {
+    const projectC = path.join(sandbox, 'project-c');
+    const teamRepo = path.join(sandbox, 'team-c');
+    const worktrees = [path.join(sandbox, 'worktree-c1'), path.join(sandbox, 'worktree-c2')];
+    fs.cpSync(path.join(projectA, '.teamai', 'team-repo'), teamRepo, { recursive: true });
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'TeamAI CI', GIT_AUTHOR_EMAIL: 'ci@teamai.test',
+      GIT_COMMITTER_NAME: 'TeamAI CI', GIT_COMMITTER_EMAIL: 'ci@teamai.test',
+    };
+    fs.mkdirSync(projectC);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: projectC, env: gitEnv });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'fixture'], { cwd: projectC, env: gitEnv });
+    for (const [i, worktree] of worktrees.entries()) {
+      execFileSync('git', ['worktree', 'add', '-q', '-b', `worktree-c${i + 1}`, worktree], { cwd: projectC, env: gitEnv });
+      fs.mkdirSync(path.join(worktree, '.teamai'));
+      fs.writeFileSync(path.join(worktree, '.teamai', 'config.yaml'),
+        fs.readFileSync(path.join(projectB, '.teamai', 'config.yaml'), 'utf8')
+          .replace(path.join(projectB, '.teamai', 'team-repo'), teamRepo)
+          .replace(`projectRoot: ${projectB}`, `projectRoot: ${worktree}`));
+    }
+    const stops = (): number[] => mainFiles(projectC).map((file) => (readSettings(file).hooks.Stop ?? []).length);
+
+    for (const worktree of worktrees) {
+      const injected = await runCLI(worktree, home);
+      expect(injected.code, injected.output).toBe(0);
+    }
+    expect(stops()).toEqual([1, 1]);
+    for (const [worktree, left] of [[worktrees[0], [1, 1]], [worktrees[1], [0, 0]]] as const) {
+      const removed = await runCLI(worktree, home, ['uninstall', '--force']);
+      expect(removed.code, removed.output).toBe(0);
+      expect(stops(), worktree).toEqual(left);
+    }
+  });
 });

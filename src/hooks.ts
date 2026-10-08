@@ -24,6 +24,7 @@ import {
   CODEX_TOOL_ID,
   DEFAULT_CODEX_ROOT,
   getDataHome,
+  getTeamaiHome,
   isSelfMode,
   managedMcpManifestKey,
   managedMcpManifestPath,
@@ -484,6 +485,11 @@ export interface MainCheckoutHooks {
    * are adopted so the entries it appended are reconciled once.
    */
   checkoutManifestPath?: string;
+  /**
+   * Another checkout's install also uses the entries in `manifestPath`, so
+   * removal from this one takes back only `checkoutManifestPath`'s records.
+   */
+  sharedWithOtherInstall?: boolean;
   /** Configured project-scope targets; Claude uses settings.local.json beside its settings file. */
   files: Readonly<Record<string, string>>;
 }
@@ -514,18 +520,40 @@ export async function resolveMainCheckoutHooks(
   }
   // Every checkout shares the main checkout's files, so their ownership lives
   // in the main checkout's data home. An un-migrated linked worktree has a data
-  // home of its own, where a separate record would append the entries again.
+  // home of its own, in the checkout, where a separate record would append the
+  // entries again. A main checkout without a config of its own still has one
+  // data home: the in-checkout one its config would use.
+  const current = canonicalProjectRoot(localConfig.projectRoot);
+  const checkoutHome = getDataHome(localConfig);
+  const checkoutManifestPath = path.join(checkoutHome, manifestName);
+  if (root === current || checkoutHome !== getTeamaiHome('project', localConfig.projectRoot)) {
+    return { root, worktreeScoped, manifestPath: checkoutManifestPath, files };
+  }
   const { detectProjectConfig } = await import('./config.js');
-  const shared = root === canonicalProjectRoot(localConfig.projectRoot) ? null : await detectProjectConfig(root);
-  const manifestPath = path.join(getDataHome(shared ?? localConfig), manifestName);
-  const checkoutManifestPath = path.join(getDataHome(localConfig), manifestName);
+  const mainConfig = await detectProjectConfig(root);
+  const sharedHome = mainConfig ? getDataHome(mainConfig) : getTeamaiHome('project', root);
+  if (sharedHome === checkoutHome) return { root, worktreeScoped, manifestPath: checkoutManifestPath, files };
   return {
     root,
     worktreeScoped,
-    manifestPath,
-    ...(checkoutManifestPath === manifestPath ? {} : { checkoutManifestPath }),
+    manifestPath: path.join(sharedHome, manifestName),
+    checkoutManifestPath,
+    sharedWithOtherInstall: mainConfig !== null || await otherWorktreeInstalled(root, current),
     files,
   };
+}
+
+/**
+ * Whether a linked worktree of `root` other than `current` has an un-migrated
+ * install of its own (a migrated one would have made the main checkout's
+ * config resolvable).
+ */
+async function otherWorktreeInstalled(root: string, current: string): Promise<boolean> {
+  for (const worktree of await listWorktrees(root)) {
+    if (worktree === root || worktree === current) continue;
+    if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) return true;
+  }
+  return false;
 }
 
 /**
@@ -2024,6 +2052,7 @@ export async function reconcileHooksToAllTools(
           manifestPath: opts.mainCheckout.manifestPath,
           legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
           checkoutManifestPath: opts.mainCheckout.checkoutManifestPath,
+          sharedWithOtherInstall: opts.mainCheckout.sharedWithOtherInstall,
           removeAll: opts.removeAll,
         });
         reconciledMainTools.add(tool);
@@ -2045,14 +2074,20 @@ async function reconcileMainCheckoutTeamHooks(
   file: string,
   tool: string,
   teamDefs: HookDef[],
-  opts: { manifestPath: string; legacyManifestPath: string; checkoutManifestPath?: string; removeAll?: boolean },
+  opts: {
+    manifestPath: string;
+    legacyManifestPath: string;
+    checkoutManifestPath?: string;
+    sharedWithOtherInstall?: boolean;
+    removeAll?: boolean;
+  },
 ): Promise<void> {
-  const { checkoutManifestPath, ...reconcileOpts } = opts;
+  const { checkoutManifestPath, sharedWithOtherInstall, ...reconcileOpts } = opts;
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
-  // A linked worktree with its own install removes only what it recorded; the
-  // main checkout's install keeps the shared entries.
-  if (opts.removeAll && checkoutManifestPath) {
+  // A linked worktree removes only what it recorded while another install
+  // still uses the shared entries.
+  if (opts.removeAll && checkoutManifestPath && sharedWithOtherInstall) {
     await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
     return;
   }
