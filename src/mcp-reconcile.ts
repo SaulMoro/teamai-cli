@@ -771,15 +771,18 @@ export type UnrecordedMcpOwner = 'teamai' | 'another tool' | 'member';
  * the same key claim: an entry one of them wrote is not the member's, and is
  * left to that tool, as before #993.
  */
-function claimedByOtherTools(
+async function claimedByOtherTools(
   targets: readonly McpTarget[],
   target: McpTarget,
   manifest: Readonly<Record<string, ManagedMcpRecord[]>>,
-): Set<string> {
-  return new Set(targets
-    .filter((t) => t.tool !== target.tool && t.file === target.file && sameServerKey(t.format, target.format))
-    .flatMap((t) => manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? [])
-    .map((record) => record.name));
+): Promise<Set<string>> {
+  const claimed = new Set<string>();
+  for (const t of targets) {
+    // By real path: a tool whose path links to another's file reads that file.
+    if (t.tool === target.tool || !sameServerKey(t.format, target.format) || !await sameMcpFile(t.file, target.file)) continue;
+    for (const record of manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? []) claimed.add(record.name);
+  }
+  return claimed;
 }
 
 /**
@@ -843,7 +846,7 @@ export async function memberMcpServers(
   const { manifest } = await loadMcpManifest(localConfig, true);
   const { owned: ownedRecords } = await splitByFile(target, manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []);
   const owned = new Set(ownedRecords.map((r) => r.name));
-  const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, claimedByOtherTools(targets, target, manifest));
+  const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, await claimedByOtherTools(targets, target, manifest));
   const member: string[] = [];
   for (const name of desired.keys()) {
     const entry = installed.get(name);
@@ -2002,7 +2005,7 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, claimedByOtherTools(targets, resolved, manifest), history);
+    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(targets, resolved, manifest), history);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;

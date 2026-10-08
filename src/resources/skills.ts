@@ -7,7 +7,7 @@ import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDi
 import { log } from '../utils/logger.js';
 import { warnOnce } from '../utils/warn-once.js';
 import { getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { isCliOwnedSkillName } from '../builtin-skills.js';
+import { isCliOwnedSkillName, ownedSkillFiles, prunedWhole, removeOwnedFiles } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
 import { getHermesHome } from '../hermes-home.js';
 import {
@@ -877,19 +877,22 @@ export class SkillsHandler extends ResourceHandler {
     }
     const previous = await (await import('../pull.js')).deliveredHashes(localConfig);
     const origin = skillOrigin(localConfig.repo.localPath, name);
-    const owned: { tool: string; skillDir: string; files?: string[] }[] = [];
+    const owned: { tool: string; skillDir: string; files?: string[]; packagedBase?: string }[] = [];
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
       // Not ours to write to, so not ours to delete from. Above the OpenClaw
       // branch, so the workspace copy is covered by the same gate.
       if (isAgentExcluded(localConfig, tool)) continue;
       const skillDirs: string[] = [];
+      let toolBase: string;
       if (tool === 'openclaw') {
         const wsDir = await resolveOpenclawWorkspaceDir();
         if (!wsDir) continue;
+        toolBase = wsDir;
         skillDirs.push(path.join(wsDir, 'skills', name));
       } else {
         const baseDir = resolveToolBaseDir(tool, localConfig);
+        toolBase = baseDir;
         skillDirs.push(path.join(baseDir, toolPath.skills, name));
         // Codex also reads, and pull may deliver into, the shared directory.
         if (tool === CODEX_TOOL) skillDirs.push(path.join(baseDir, SHARED_AGENT_SKILLS_PATH, name));
@@ -897,7 +900,13 @@ export class SkillsHandler extends ResourceHandler {
       for (const skillDir of skillDirs) {
         if (!await pathExists(skillDir)) continue;
         // A link is the member's even at a built-in's name, so it is judged before the name.
-        if (!await isLink(skillDir) && (isCliOwnedSkillName(name) || await ownsSkillDir(previous, skillDir, origin, sources))) {
+        // A built-in's name loses the team's files and those a release packaged there, as on uninstall:
+        // anything the member added stays.
+        if (!await isLink(skillDir) && isCliOwnedSkillName(name)) {
+          owned.push({ tool, skillDir, files: (await teamaiSkillFiles(previous, skillDir, origin)).teamais, packagedBase: toolBase });
+          continue;
+        }
+        if (!await isLink(skillDir) && await ownsSkillDir(previous, skillDir, origin, sources)) {
           owned.push({ tool, skillDir });
           continue;
         }
@@ -923,10 +932,17 @@ export class SkillsHandler extends ResourceHandler {
     // Record tombstone so the resource won't be re-pushed
     await this.addTombstone(name, localConfig);
 
-    for (const { tool, skillDir, files } of owned) {
+    for (const { tool, skillDir, files, packagedBase } of owned) {
       // Any file of it the repository tracks keeps the whole directory, named once.
       if (await keepsTrackedCopy(skillDir)) continue;
-      if (files) {
+      if (packagedBase) {
+        for (const file of files ?? []) await remove(file);
+        removed.push(...files ?? []);
+        const result = await removeOwnedFiles(skillDir, await ownedSkillFiles(name), packagedBase);
+        if (prunedWhole(result)) removed.push(skillDir);
+        else if (result.notRemoved.length > 0) log.warn(`Could not delete packaged files under ${skillDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}. Fix the permissions and run \`teamai remove\` again, or delete the directory yourself.`);
+        else log.warn(`Kept ${skillDir}: it holds files TeamAI did not put there. The packaged files were removed; delete the rest yourself once you have saved what you need.`);
+      } else if (files) {
         for (const file of files) await remove(file);
         await pruneEmptyDirs(skillDir);
         removed.push(...files);

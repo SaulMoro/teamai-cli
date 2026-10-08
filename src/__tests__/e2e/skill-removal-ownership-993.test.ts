@@ -187,6 +187,18 @@ describe('teamai deletes only its own skill directories (#993)', () => {
     for (const target of linkTargets) expect(read(target)).toBe(TEAM['skills/fe-skill/SKILL.md']);
   });
 
+  it('teamai remove of a built-in skill deletes its packaged files and keeps a file the member added', () => {
+    const m = machine('builtin-notes', { ...TEAM, 'skills/team-wiki-codebase/SKILL.md': skillMd('team-wiki-codebase', 'Team wiki.') }, {});
+    const builtin = path.join(m.dir, '.claude', 'skills', 'team-wiki-codebase');
+    expect(fs.existsSync(path.join(builtin, 'SKILL.md'))).toBe(true);
+    writeFile(path.join(builtin, 'notes.md'), 'My notes.\n');
+
+    const removed = m.ok(['remove', 'skills', 'team-wiki-codebase', '--force']);
+    expect(read(path.join(builtin, 'notes.md')), removed.output).toBe('My notes.\n');
+    expect(fs.existsSync(path.join(builtin, 'SKILL.md'))).toBe(false);
+    expect(removed.output).toContain(`Kept ${builtin}`);
+  });
+
   it('teamai uninstall deletes teamai\'s copies of team skills and keeps the member\'s own, naming it', () => {
     const m = machine('uninstall', TEAM, { '.claude/skills/fe-skill/SKILL.md': MY_SKILL });
     const mine = path.join(m.dir, '.claude', 'skills', 'fe-skill');

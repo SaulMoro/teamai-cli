@@ -1892,6 +1892,8 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 如果核心知识图谱提取或写入失败，导入会报错，且不会将该提交标记为已同步。下次增量导入会重试该提交。
 
+使用 `--from-iwiki` 时，MCP 工具响应中的 `isError: true` 表示请求失败，即使响应包含文本。正文或元数据请求失败的页面会告警并在 AI 分类之前跳过；成功获取的页面仍会导入。页面树请求失败时会告警，并返回空的子页面列表。
+
 加 `--dry-run` 时，`--from-repo` 与 `--from-repo-list` 用 `git ls-remote` 读取每个仓库的目标提交，打印 `Would import <owner>/<repo> at <commit>` 以及本地缓存是否最新，然后停止：不会 clone 或 fetch 到缓存，不会获取导入锁，也不会运行任何 AI 步骤。使用 `--incremental` 且缓存含 `LAST_SYNC` 时，预览会查询该缓存配置的 origin 上当前分支的提交，与真实 fetch/reset 一致。完整克隆预览（包括缺少缓存或 `LAST_SYNC`）跟随远端 HEAD。若缓存分支已从远端删除，不执行 prune 的通配 fetch 会保留缓存 origin 引用，增量预览也使用该保留提交。启用 prune、显式 fetch 已删除分支或缺少缓存 origin 引用时，仍预览完整克隆回退。其他缓存分支查询失败时，预览会警告并预览完整克隆回退。 指定 `--output` 时，预览会显示与真实导入相同的输出文件旁 `teamwiki/evidence/code/<slug>` 目标目录。
 
 `--from-mr` 与 `teamai contribute` 的默认行为一样，把提取的经验发布到 `teamai-learnings` 分支：激活项目合计解析出恰好一个 learnings namespace 时放在 `learnings/<namespace>/` 下，否则放在共享的 `learnings/` 根目录。发布失败时，经验留在本机队列中，下次 `teamai pull` 会发布它；若阻止发布的是 teamai 拒绝使用的 learnings 检出，则在你按提示处理该检出之前，任何 pull 都无法发布它。
@@ -2034,6 +2036,7 @@ teamai session save --push --include-prompt  # 额外带上（脱敏后的）首
 
 ```bash
 teamai hooks list      # 查看生效的内置和团队 hooks
+teamai hooks inject --dry-run # 预览，不修改工具设置或受管 hook 记录
 teamai hooks inject    # 重新注入
 teamai hooks remove    # 移除
 ```
@@ -2767,7 +2770,7 @@ skill 使用统计同样读取记录的根目录，迁移后的工具的 skills 
 
 ## 模型配置
 
-模型配置让 Claude Code、Codex、OpenCode、CodeBuddy、WorkBuddy 和 Pi 使用同一个模型网关。只有执行 `teamai models switch` 才会修改 Agent 配置；切换之后，`teamai pull` 会让已切换的 Agent 跟随团队目录的最新内容。
+模型配置让 Claude Code、Codex、OpenCode、CodeBuddy、WorkBuddy、Pi 和 OMP 使用同一个模型网关。只有执行 `teamai models switch` 才会修改 Agent 配置；切换之后，`teamai pull` 会让已切换的 Agent 跟随团队目录的最新内容。
 
 配置有两个来源，格式完全相同：
 
@@ -2806,6 +2809,7 @@ profiles:
 | OpenCode | 任意 | `opencode.json`：每种协议一个 provider，包含全部模型 |
 | CodeBuddy / WorkBuddy | `openai-chat-completions` | `models.json`：每个模型一个条目 |
 | Pi | 任意 | `~/.pi/agent/models.json`：一个以 profile 引用为键的 provider，包含全部模型。不改动 `settings.json`，默认模型由你用 `/model` 选择 |
+| OMP | 任意 | `~/.omp/agent/models.yml`：一个以 profile 引用为键的 provider，包含全部模型——与 Pi 结构相同，只是 YAML |
 
 上例没有 `openai-responses` 分组，因此不会修改 Codex；确认网关的 Responses 接口支持这些模型后，再加上该协议即可。
 
@@ -2973,6 +2977,7 @@ teamai init --repo https://github.com/yourorg/yourrepo --force
 
 ```bash
 teamai doctor        # 诊断
+teamai hooks inject --dry-run # 先预览
 teamai hooks inject  # 重新注入
 ```
 

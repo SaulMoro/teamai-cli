@@ -14,6 +14,8 @@ GitHub Actions 上的 `e2e` job 跑全量端到端测试（init / push / pull / 
 
 为了避免多个 PR/push 同时操作同一个 fixture 仓造成状态污染，e2e job 用 `concurrency: e2e-fixture-repo` 串行排队跑（不取消正在跑的，让它跑完留下干净状态）。
 
+Fork PR 运行 `fork-e2e`（无 token，远程用例自动跳过）。测试内不得重新编译 `dist/` 或重新安装 OpenCode binary：worker 之间共享。
+
 ---
 
 ## 必需的配置
@@ -82,7 +84,15 @@ GitHub repo → **Settings → Secrets and variables → Actions → Variables �
 
 ---
 
-## 本地复现 CI 的 e2e
+## 本地验证改动
+
+多数用例只用本地 fixture，无需 token。开发时只跑受影响的文件；修改 e2e runner、共享 fixture 或隔离机制时跑全量 `npm run test:e2e`（资源较少可加 `--maxWorkers=2`）：
+
+```bash
+npm run test:e2e -- <test-file>
+```
+
+## 本地复现 CI 的远程 e2e
 
 e2e 的 setup 文件 `src/__tests__/helpers/isolate-e2e-env.ts` 会为每个测试文件创建一个临时沙盒 HOME（自带 git 身份 `.gitconfig`），并在 PATH 前放一个运行本次 `dist/` 的 `teamai`，测试结束后删除整个沙盒。所以不需要自己 `export HOME`，也不会碰到你真实的 `~/.teamai/` 和 `~/.gitconfig`。远程用例（`src/__tests__/e2e/e2e.test.ts`）在 `beforeAll` 里用 token 把 fixture 仓 clone 进沙盒 HOME 并写好 `~/.teamai/config.yaml`（`prepareRemoteTeamHome`），无需手动准备。
 
