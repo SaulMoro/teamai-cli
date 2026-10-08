@@ -391,7 +391,9 @@ export async function membersDocs(desired: DesiredDocs, localDocsDir: string, re
     }
     if (!stat?.isFile()) continue;
     const current = await readBytes(local);
-    const source = await readBytes(path.join(desired.sourceDir, file));
+    // Equal bytes prove a copy only of a team file: a team link's target bytes do not make a file teamai's.
+    const sourceFile = path.join(desired.sourceDir, file);
+    const source = (await fse.lstat(sourceFile).catch(() => null))?.isFile() ? await readBytes(sourceFile) : null;
     if (current === null || (source !== null && current.equals(source))) continue;
     if (!await teamais(local, file)) members.add(file);
   }

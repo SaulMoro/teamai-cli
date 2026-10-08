@@ -79,7 +79,7 @@ function writeFile(file: string, content: string): void {
 const read = (file: string): string => fs.readFileSync(file, 'utf8');
 
 /** A team: the bare remote its synthetic URL reaches, and a way to publish to it. */
-interface Team { url: string; publish(files: Record<string, string | null>, message: string): void }
+interface Team { url: string; seed: string; publish(files: Record<string, string | null>, message: string): void }
 
 function team(base: string, files: Record<string, string>): Team {
   const name = `${base}-${++attempt}`;
@@ -100,7 +100,7 @@ function team(base: string, files: Record<string, string>): Team {
   publish(files, 'seed');
   gitOk(['clone', '-q', '--bare', seed, remote], sandbox);
   gitOk(['config', '--global', `url.${remote}.insteadOf`, url], sandbox);
-  return { url, publish };
+  return { url, seed, publish };
 }
 
 /** A git business repo holding `files` before teamai is set up in it. */
@@ -468,6 +468,19 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     teamaiOk(['pull'], dir);
     expect(read(path.join(skill, 'assets'))).toBe('TEAM ASSETS\n');
     expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+  });
+
+  it('keeps a member\'s own doc with the bytes of a team doc that is a link', () => {
+    const t = team('doc-link-bytes', { 'docs/content.md': '# Shared\n' });
+    fs.symlinkSync('content.md', path.join(t.seed, 'docs', 'guide.md'));
+    t.publish({}, 'link guide');
+    const dir = business('doc-link-bytes-biz', { '.teamai/docs/guide.md': '# Shared\n' });
+    const guide = path.join(dir, '.teamai', 'docs', 'guide.md');
+
+    const first = init(t, dir);
+    expect(fs.lstatSync(guide).isSymbolicLink(), first.output).toBe(false);
+    expect(read(guide)).toBe('# Shared\n');
+    expect(first.output).toContain(membersLine(guide, 'docs/guide.md'));
   });
 
   it('keeps a recorded skill the member edited whole, as before', () => {
