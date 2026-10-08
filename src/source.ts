@@ -28,6 +28,7 @@ import {
   describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
+import { warnOnce } from './utils/warn-once.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspace, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import { getUserHome } from './utils/home.js';
@@ -215,10 +216,33 @@ async function readSourceManifest(manifestPath: string): Promise<SourceInstallMa
     || (manifest.repositoryId !== undefined && typeof manifest.repositoryId !== 'string')) {
     throw new Error(`Invalid source ownership record: ${manifestPath}`);
   }
-  // A destination outside the scope root is checked against its tool's home.
-  for (const target of Object.values(manifest.installedPaths ?? {}).flat()) {
-    if (path.isAbsolute(target) && !await externalToolHomeOf(target)) {
-      throw new Error(`Invalid source ownership record: ${manifestPath}`);
+  // A destination outside the scope root is checked against its tool's home. One recorded in a
+  // home that has since moved (OpenClaw configured to another workspace) is no longer managed:
+  // it is dropped from the record and its copy left as it is. Any other is an invalid record.
+  for (const [skill, targets] of Object.entries(manifest.installedPaths ?? {})) {
+    const kept: string[] = [];
+    let dropped = 0;
+    for (const target of targets) {
+      if (!path.isAbsolute(target) || await externalToolHomeOf(target)) {
+        kept.push(target);
+        continue;
+      }
+      const home = manifest.installedHomes?.[target];
+      const relative = typeof home === 'string' && path.isAbsolute(home) ? path.relative(home, target) : '';
+      if (!isRelativeDescendant(relative) || relative.split(path.sep).length < 2) {
+        throw new Error(`Invalid source ownership record: ${manifestPath}`);
+      }
+      warnOnce(`${target} is no longer in a tool's home (${home} moved), so teamai no longer manages that copy and leaves it as it is.`);
+      delete manifest.installedPhysicalPaths?.[target];
+      delete manifest.installedHomes?.[target];
+      dropped += 1;
+    }
+    // An empty list on disk (a quarantined skill) is left as it is; only one this pass emptied goes.
+    if (dropped === 0) continue;
+    if (kept.length > 0) manifest.installedPaths![skill] = kept;
+    else {
+      delete manifest.installedPaths![skill];
+      manifest.installedSkills = manifest.installedSkills.filter((name) => name !== skill);
     }
   }
   return manifest;
@@ -229,7 +253,16 @@ async function loadSourceManifest(sourceName: string, localConfig: LocalConfig):
 }
 
 async function saveSourceManifest(sourceName: string, localConfig: LocalConfig, manifest: SourceInstallManifest): Promise<void> {
-  await writeJson(getSourceManifestPath(sourceName, localConfig), manifest);
+  // The home each absolute destination lies in now, so a later move of that home is recognized (#993).
+  const installedHomes: Record<string, string> = {};
+  for (const target of Object.values(manifest.installedPaths ?? {}).flat()) {
+    if (!path.isAbsolute(target)) continue;
+    const home = await externalToolHomeOf(target);
+    if (home) installedHomes[target] = home;
+  }
+  await writeJson(getSourceManifestPath(sourceName, localConfig), {
+    ...manifest, ...(Object.keys(installedHomes).length > 0 ? { installedHomes } : { installedHomes: undefined }),
+  });
 }
 
 /**

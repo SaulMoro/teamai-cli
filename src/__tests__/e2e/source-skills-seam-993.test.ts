@@ -314,6 +314,31 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(removed.code).toBe(0);
   });
 
+  it('keeps pulling after OpenClaw is configured to another workspace, and leaves the copy in the old one', () => {
+    const w = world('ows-moved');
+    const first = path.join(path.dirname(w.home), 'ows-a');
+    const second = path.join(path.dirname(w.home), 'ows-b');
+    fs.mkdirSync(first, { recursive: true });
+    fs.mkdirSync(second, { recursive: true });
+    const config = path.join(w.home, '.openclaw', 'openclaw.json');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, JSON.stringify({ agents: { defaults: { workspace: first } } }));
+    w.ok(init(w, ['openclaw'], 'user'), w.home);
+    expect(read(path.join(first, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
+
+    fs.writeFileSync(config, JSON.stringify({ agents: { defaults: { workspace: second } } }));
+    const pulled = w.run(['pull', '--force'], w.home);
+    expect(pulled.output).not.toContain('Invalid source ownership record');
+    expect(pulled.code).toBe(0);
+    expect(read(path.join(second, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
+    expect(read(path.join(first, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
+
+    const removed = w.run(['source', 'remove', 'other'], w.home);
+    expect(removed.code).toBe(0);
+    expect(fs.existsSync(path.join(second, 'skills', 'other-skill'))).toBe(false);
+    expect(read(path.join(first, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
+  });
+
   it('puts the source skill in the same directory as the team skill for every built-in tool', () => {
     const w = world('all');
     const toolPaths = TeamaiConfigSchema.parse({ team: 't', repo: 'r' }).toolPaths;
