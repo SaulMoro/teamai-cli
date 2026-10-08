@@ -1554,11 +1554,24 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - agent，以及 `teamai-recall` rule 和 agent；
 - 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、`.github/instructions/teamai-context.instructions.md`）；
 - Copilot 的 `.github/hooks/teamai.json`，以及 teamai 在其中有条目（团队 hook 或 co-author 设置）时的 `.claude/settings.local.json`，无论其中还有什么；
+- pull 镜像到 `sharing.docs.localDir` 的团队文档，每篇文档一行，从不列目录，因此你放在那里的自己的文件仍然可见；你修改过的文档也会从下一次同步文档的 pull（团队有变更，或 `pull --force`）起变为可见；pull 在那里保留的你的条目（文档路径上的目录或链接）本身及其下的内容都不会列出。镜像位于默认的 `.teamai/docs/` 时，还会列出 `.teamai/.ignore`（见下文）；
 - 只含 teamai 条目、且 git 未跟踪的共享配置文件：项目 MCP 配置 `.cursor/mcp.json`、`.github/mcp.json`、`.codex/config.toml`、`.kiro/settings/mcp.json`、`.omp/mcp.json`、`.pi/mcp.json`、`.workbuddy/mcp.json` 和 OpenCode 根目录的 `opencode.json`；`.codex/hooks.json`；以及 OpenCode 的 `.opencode/opencode.json`。「只含 teamai 条目」指其中每个 server、团队 hook 或 `instructions` 条目都属于 teamai，且没有其他顶层键（`$schema` 也算一个）。teamai 没有记录的条目，只要与 teamai 为某个团队 server 或 hook 写入的内容（当前或团队更早的版本）相同，也算 teamai 的，因此升级前写入的文件、或记录丢失后的文件同样会被列出；`.opencode/opencode.json` 的 `instructions` 条目没有记录，与 teamai 写入的条目相同即算。
 
-Claude Code 和 CodeBuddy 的 `.mcp.json`、Qoder 的 `.qoder/settings.json` 以及文档镜像不会列出。开启此选项后，teamai 不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
+Claude Code 和 CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json` 不会列出。开启此选项后，teamai 不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
 
 被排除的 skill、rule 和 agent 仍会被 AI 工具加载：只有 git 忽略它们。遵循 git 忽略规则的搜索（ripgrep、大多数编辑器的搜索、agent 的搜索工具）会跳过它们，因此请按路径打开被排除的文件；`teamai skill path <name>` 会输出 CLI 内置 skill 所在的位置。
+
+团队文档仍可被搜索到。镜像位于默认的 `.teamai/docs/` 时，pull 会在 `.teamai/.ignore` 中维护一个 teamai 的块。ripgrep 会读取该文件而 git 不会，因此基于 ripgrep 的搜索（Claude Code、Cursor、Copilot 和 OpenCode 的 grep 工具，Codex 的文件搜索）会重新纳入这些文档：
+
+```
+# [teamai:delivered:start]
+!/docs/**
+# [teamai:delivered:end]
+```
+
+- 你在 `.teamai/.ignore` 中自己写的行保持原样。只有当 teamai 的块是该文件的全部内容时，该文件才会列入 `delivered` 块；含有你自己的行时，git 会显示它。你的仓库跟踪的 `.teamai/.ignore` 保持提交时的样子。
+- 只有在此选项开启、且文档分发到 `.teamai/docs/` 时才有该块。关闭此选项、单仓库模式（其 `.teamai/` 属于团队，从不排除在 git 之外）以及 `teamai uninstall` 都会移除该块，文件中没有其他内容时连同文件一起删除。
+- docs 目录设置在其他位置（`sharing.docs.localDir`）时不会写 `.ignore`：其中的文档会被列出，遵循 git 忽略规则的搜索会跳过它们。跳过隐藏目录的搜索，以及你自己的忽略规则覆盖整个 `.teamai/` 时的任何搜索，也会跳过它们。此时请按路径搜索 docs 目录：即 `sharing.docs.localDir`，默认为 `.teamai/docs/`，`teamai pull --help` 中也有说明。
 
 该选项采用与 recall 相同的两级配置：
 
@@ -2920,6 +2933,7 @@ teamai uninstall --agent claude
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
 - 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 在其记录的每个 exclude 文件中的 `local-agent` 块（包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
+- 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
 - `~/.teamai/` 目录
 

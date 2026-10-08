@@ -151,7 +151,7 @@ function ownerLines(parsed: ParsedExclude, owner: string): string[] | null {
  * its first block; a duplicate goes. Everything outside teamai's markers stays
  * byte for byte. Null when nothing changes.
  */
-function withOwnerLines(content: string, owner: string, lines: string[]): string | null {
+export function withOwnerLines(content: string, owner: string, lines: string[]): string | null {
   const parsed = parseExclude(content);
   const { start, end } = markersOf(owner);
   const eol = isLegacy(owner) ? '\n' : /\r?\n/.exec(content)?.[0] ?? '\n';

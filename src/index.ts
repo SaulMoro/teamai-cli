@@ -173,7 +173,7 @@ program
 
 program
   .command('pull')
-  .description('Pull team resources and inject into local AI tools')
+  .description('Pull team resources and inject into local AI tools. Team docs land in sharing.docs.localDir: .teamai/docs/ in a project by default, a hidden directory, so search that path directly')
   .option('--silent', 'Silent mode (for hooks)')
   .option('--force', 'Force full sync even if repo is unchanged')
   .action(async (cmdOpts) => {
