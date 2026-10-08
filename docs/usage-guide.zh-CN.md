@@ -1735,7 +1735,7 @@ pull 会列出所修改的每个文件：
 
 若请求更新的块存在不完整或重复的标记，整个文件保持不变，包括其他托管块。修复提示中的标记后，再运行 `teamai pull`。
 
-与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。teamai 从不修改 `.gitignore` 或 git 索引；它在 `.git/info/exclude` 中列出哪些内容，见[让分发的文件不进入 git](#让分发的文件不进入-git)。该选项开启时，你的 `teamai-context` 文件也在其中：工具仍会加载它，遵循 git 忽略规则的搜索会跳过它（与被排除的 skill 和 rule 一样）；请按路径打开它。
+与 teamai 目标同名但并非 teamai 写入的文件保持不变，也不会被列入 OpenCode 的 `instructions`（你自己为它列的条目保留不动），pull 会给出警告。名为 `teamai-context` 的团队 rule 不会被分发，因为它会落在该文件上；pull 会指出它，并删除早期版本分发的副本（除非你改过它）。若该副本不是工具的指令文件（OpenCode 的 `.opencode/rules/`、Kiro 的 `.kiro/steering/`），仓库已跟踪的副本会保留并被指出，与其他被跟踪的副本一样。teamai 从不修改 `.gitignore` 或 git 索引；它在 `.git/info/exclude` 中列出哪些内容，见[让分发的文件不进入 git](#让分发的文件不进入-git)。该选项开启时，你的 `teamai-context` 文件也在其中：工具仍会加载它，遵循 git 忽略规则的搜索会跳过它（与被排除的 skill 和 rule 一样）；请按路径打开它。
 
 ### 查看效果
 

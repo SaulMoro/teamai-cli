@@ -28,6 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackDetachedProcesses } from '../helpers/detached-processes.js';
+import { renderRuleForTool } from '../../resources/rule-format.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -1049,6 +1050,7 @@ describe('explicit commands and layout migrations never delete a file the busine
       opts: { files: { 'manifest/roles.yaml': ROLES, 'rules/fe/my-rule.md': rule('Mine') }, initArgs: ['--role', 'fe'] },
       setup: (m) => {
         commit(m, {}, ['.claude/rules/fe/my-rule.md']);
+        // Written by hand: a real push records placedRules only after its PR merges.
         const state = JSON.parse(read(m.statePath())) as Record<string, unknown>;
         fs.writeFileSync(m.statePath(), JSON.stringify({ ...state, placedRules: { 'my-rule': 'rules/fe/my-rule.md' } }, null, 2));
       },
@@ -1125,6 +1127,18 @@ describe('explicit commands and layout migrations never delete a file the busine
       trigger: (m) => `${m.ok(['roles', 'set', 'fe']).output}${m.ok(['pull']).output}`,
       kept: '.claude/skills/dup/extra.md',
     },
+    // An earlier release's copy of a team rule named teamai-context, where nothing rewrites that path:
+    // OpenCode's instruction file is .opencode/teamai-context.md, and Kiro takes none.
+    ...([
+      ['opencode', '.opencode/rules/teamai-context.md'],
+      ['kiro', '.kiro/steering/teamai-context.md'],
+    ] as const).map(([tool, kept]): TrackedRow => ({
+      name: `${tool}'s teamai-context rule copy`,
+      opts: { files: { ...TEAM_SKILLS, 'rules/teamai-context.md': rule('Context') }, agents: `claude,${tool}` },
+      setup: (m) => commit(m, { [kept]: renderRuleForTool(tool, rule('Context')) }),
+      trigger: (m) => m.ok(['pull', '--force']).output,
+      kept,
+    })),
     {
       // A reference file an earlier release shipped in the teamai skill, which the package no longer ships.
       name: 'a retired file of the packaged teamai skill',
