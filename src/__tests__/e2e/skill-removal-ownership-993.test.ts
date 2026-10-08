@@ -187,6 +187,26 @@ describe('teamai deletes only its own skill directories (#993)', () => {
     for (const target of linkTargets) expect(read(target)).toBe(TEAM['skills/fe-skill/SKILL.md']);
   });
 
+  it('teamai remove and uninstall keep a git repository the member made inside a delivered skill', () => {
+    const m = machine('skill-git', TEAM, {});
+    const claude = path.join(m.dir, '.claude', 'skills', 'fe-skill');
+    const codex = path.join(m.dir, '.codex', 'skills', 'fe-skill');
+    const git = (args: string[], cwd: string): void => {
+      const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stdout}${r.stderr}`);
+    };
+    for (const skill of [claude, codex]) {
+      git(['init', '-q', '-b', 'main'], skill);
+      git(['add', '-A'], skill);
+      git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'my local work'], skill);
+    }
+
+    m.ok(['remove', 'skills', 'fe-skill', '--force']);
+    expect(fs.existsSync(path.join(claude, '.git', 'HEAD'))).toBe(true);
+    m.ok(['uninstall', '--force']);
+    expect(fs.existsSync(path.join(codex, '.git', 'HEAD'))).toBe(true);
+  });
+
   it('teamai remove of a built-in skill deletes its packaged files and keeps a file the member added', () => {
     const m = machine('builtin-notes', { ...TEAM, 'skills/team-wiki-codebase/SKILL.md': skillMd('team-wiki-codebase', 'Team wiki.') }, {});
     const builtin = path.join(m.dir, '.claude', 'skills', 'team-wiki-codebase');

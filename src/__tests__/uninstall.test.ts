@@ -634,7 +634,7 @@ describe('uninstall', () => {
     if (legacy) expect(await actualHooks.hasTeamaiHooks(projectHooks, tool)).toBe(false);
   });
 
-  it.each(['pi', 'omp', 'hermes', 'codex'])('keeps global %s delivery and names it with the command that removes it', async (tool) => {
+  it.each(['pi', 'omp', 'hermes', 'codex', 'opencode'])('keeps global %s delivery and names it with the command that removes it', async (tool) => {
     const homeDir = path.join(tmpDir, 'home');
     const projectRoot = path.join(tmpDir, 'only-project');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
@@ -652,6 +652,9 @@ describe('uninstall', () => {
       const { injectOmpHooks, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('../omp-hooks.js');
       await injectOmpHooks();
       kept = path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE);
+    } else if (tool === 'opencode') {
+      kept = path.join(homeDir, '.config', 'opencode', 'plugin', 'teamai-hooks.ts');
+      await fse.outputFile(kept, '// [teamai] hooks plugin');
     } else if (tool === 'hermes') {
       const { injectHermesHooks, getInstructionsPluginDir } = await import('../hermes-hooks.js');
       await injectHermesHooks();
@@ -1918,7 +1921,7 @@ describe('uninstall', () => {
     expect(await fse.readJson(ocConfig)).toEqual({ hooks: { internal: { entries: { mine: { enabled: true } } } } });
   });
 
-  it('project scope 卸载同时清掉用户级和项目级的 OpenCode plugin', async () => {
+  it('project-scope uninstall keeps the user OpenCode plugin and removes the project copy', async () => {
     const projectRoot = path.join(tmpDir, 'oc-project');
     const homeDir = path.join(tmpDir, 'home');
     const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
@@ -1949,7 +1952,8 @@ describe('uninstall', () => {
 
     await uninstall({ force: true });
 
-    expect(await fse.pathExists(path.join(userPlugin, 'teamai-hooks.ts'))).toBe(false);
+    // The user plugin delivers to every OpenCode project and the user scope: a project uninstall keeps it.
+    expect(await fse.pathExists(path.join(userPlugin, 'teamai-hooks.ts'))).toBe(true);
     expect(await fse.pathExists(path.join(projectPlugin, 'teamai-hooks.ts'))).toBe(false);
     // Agent-hook sweep must delete inside the plugin dir, not a cwd-relative path.
     expect(await fse.pathExists(path.join(projectPlugin, 'teamai-agent-legacy.ts'))).toBe(false);

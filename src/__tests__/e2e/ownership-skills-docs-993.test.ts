@@ -442,6 +442,34 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(pulled.output).toContain(`Kept ${path.dirname(notes)}`);
   });
 
+  it('leaves undelivered only the files a member\'s entry of the other type blocks, and delivers them once it is gone', () => {
+    const t = team('skill-new-path-type', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-new-path-type-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+    writeFile(path.join(skill, 'assets', 'mine.txt'), 'MINE\n');
+    writeFile(path.join(skill, 'docs'), 'MY DOCS\n');
+    t.publish({
+      'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team, v2.'),
+      'skills/team-skill/assets': 'TEAM ASSETS\n',
+      'skills/team-skill/docs/guide.md': 'TEAM GUIDE\n',
+    }, 'add files');
+
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(path.join(skill, 'assets', 'mine.txt'))).toBe('MINE\n');
+    expect(read(path.join(skill, 'docs'))).toBe('MY DOCS\n');
+    expect(pulled.output).toContain(`Kept ${path.join(skill, 'assets')}: it is not teamai's`);
+    expect(pulled.output).toContain(`Kept ${path.join(skill, 'docs')}: it is not teamai's`);
+    // The rest of the skill is delivered.
+    expect(read(path.join(skill, 'SKILL.md'))).toContain('Team, v2.');
+
+    fs.rmSync(path.join(skill, 'assets'), { recursive: true });
+    fs.rmSync(path.join(skill, 'docs'));
+    teamaiOk(['pull'], dir);
+    expect(read(path.join(skill, 'assets'))).toBe('TEAM ASSETS\n');
+    expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

@@ -84,6 +84,8 @@ export interface DeliveryLedger {
    * `everyTool` when no tool the agent targets received it.
    */
   readonly held: { name: string; reason: string; tools?: string[]; everyTool: boolean }[];
+  /** Copies that failed with an error, already reported: the pull is not synced, and the next one is full. */
+  readonly failed: { name: string; tool: string }[];
   /**
    * Where a writer reports the paths it delivered into the project checkout
    * and whether it delivered all it meant to (#915). Only pull's project
@@ -102,6 +104,7 @@ export function openLedger(
     members: [],
     otherRecords,
     held: [],
+    failed: [],
     agentModels: Object.fromEntries(Object.entries(agentModels ?? {}).map(([stem, byTool]) => [stem, { ...byTool }])),
   };
 }
@@ -229,7 +232,7 @@ export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
 ): Promise<boolean> {
   // A link in place of the directory, or any non-regular entry inside it, is the member's.
-  if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir)) return false;
+  if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir) || await holdsGitDir(dir)) return false;
   // A CONTRIBUTORS file too: teamai's only on the same proof, never by its name.
   for (const rel of await listFilesRecursive(dir)) {
     const file = path.join(dir, rel);
@@ -257,7 +260,8 @@ export async function ownsSkillDir(
   previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin, sources: readonly ResourceItem[] = [],
 ): Promise<boolean> {
   // A link at or anywhere inside the directory is the member's: deleting the directory would take it.
-  if (await isLink(dir) || await holdsNonRegular(dir)) return false;
+  // So is a repository the member made in it.
+  if (await isLink(dir) || await holdsNonRegular(dir) || await holdsGitDir(dir)) return false;
   // On record, the directory is teamai's only when no file in it is the member's own (#993):
   // removing it would take a file the member added beside teamai's.
   if (recordedUnder(previous ?? {}, dir).length > 0) return !await holdsMembersFile(previous ?? {}, dir, origin);
@@ -349,6 +353,19 @@ export async function holdsNonRegular(dir: string): Promise<boolean> {
   return await firstNonRegular(dir) !== null;
 }
 
+/**
+ * Whether `dir` holds, anywhere below it, a `.git` entry: a repository the member made there.
+ * `listFilesRecursive` skips it, so no file check sees it; deleting the directory would take
+ * the member's local commits with it.
+ */
+export async function holdsGitDir(dir: string): Promise<boolean> {
+  for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name === '.git') return true;
+    if (entry.isDirectory() && await holdsGitDir(path.join(dir, entry.name))) return true;
+  }
+  return false;
+}
+
 /** The path of the first entry `holdsNonRegular` finds under `dir`, or null. */
 async function firstNonRegular(dir: string): Promise<string | null> {
   for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -404,6 +421,29 @@ export async function judgeCopy(previous: DeliveredHashes | undefined, item: Res
     return { kind: 'keep', teamChanged: true };
   }
   return verdict;
+}
+
+/**
+ * The entries in skill copy `dest` that are the member's because they are of the other type than what
+ * teamai delivers there (#993): a directory or another non-file where the skill at `sourcePath` has a
+ * file, or a non-directory where one of its directories goes. Pull leaves each one, and the files it
+ * would cover, undelivered. Relative paths, `/`-separated.
+ */
+export async function blockingEntries(dest: string, sourcePath: string): Promise<string[]> {
+  const blocked = new Set<string>();
+  for (const rel of await listFilesRecursive(sourcePath)) {
+    if (!(await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) continue;
+    const parts = rel.split(/[\\/]/);
+    for (let i = 1; i <= parts.length; i++) {
+      const stat = await fse.lstat(path.join(dest, ...parts.slice(0, i))).catch(() => null);
+      if (stat === null) break;
+      if (i < parts.length ? !stat.isDirectory() : !stat.isFile()) {
+        blocked.add(parts.slice(0, i).join('/'));
+        break;
+      }
+    }
+  }
+  return [...blocked];
 }
 
 /**

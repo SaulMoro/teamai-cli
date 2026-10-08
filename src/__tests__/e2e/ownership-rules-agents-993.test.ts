@@ -348,6 +348,26 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(rule)).toBe(TEAM_RULE);
   });
 
+  it('does not count a pull whose skill copy failed as synced: the next pull retries it', () => {
+    const t = team('copy-failed', { 'skills/team-skill/SKILL.md': '# Team skill\n' });
+    const dir = business('copy-failed-biz');
+    init(t, dir);
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+    t.publish({ 'skills/team-skill/SKILL.md': '# Team skill, v2\n' }, 'v2');
+    const copy = path.join(skill, 'SKILL.md');
+    fs.chmodSync(copy, 0o444);
+    fs.chmodSync(skill, 0o555);
+    try {
+      const failed = teamai(['pull'], dir);
+      expect(failed.output).toContain('Failed to sync skill team-skill to claude');
+    } finally {
+      fs.chmodSync(skill, 0o755);
+      fs.chmodSync(copy, 0o644);
+    }
+    teamaiOk(['pull'], dir);
+    expect(read(copy)).toContain('# Team skill, v2');
+  });
+
   it('keeps a member\'s entry of the other type at a delivered path, and delivers once it is gone', () => {
     const t = team('type-conflict', { 'rules/team-rule.md': TEAM_RULE, 'skills/team-skill/SKILL.md': '# Team skill\n' });
     const dir = business('type-conflict-biz', {
