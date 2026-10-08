@@ -1475,10 +1475,10 @@ async function legacyCopyKeeper(
       };
       const files = await listFilesRecursive(skillDir);
       const origins = await Promise.all(files.map((rel) => fromSource(rel)));
-      // A file at a path the skill never had is the member's. Otherwise only a copy this source's
-      // files prove it delivered can hold a file of the member's: a copy from a replaced repository,
-      // or one an in-repo alias placed, is left to the record, as before.
-      const proven = origins.some((origin) => origin === 'today' || origin === 'history');
+      // A file the source never had at that path, or never with those bytes, is the member's, once
+      // this source proves the copy its own: by a file of it, or by having the skill in its history.
+      // A copy from a replaced repository, or one an in-repo alias placed, is left to the record, as before.
+      const proven = hadSkill || origins.some((origin) => origin === 'today' || origin === 'history');
       const member = files[origins.findIndex((origin) => origin === 'foreign' || (proven && origin === 'changed'))];
       if (member !== undefined) {
         log.warn(`Kept ${skillDir}: it holds ${member}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
