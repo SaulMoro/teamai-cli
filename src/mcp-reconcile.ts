@@ -1966,7 +1966,10 @@ async function reconcileTargets(
     if (wroteTarget === null) continue;
     if (target.mappedFile) {
       for (const record of nextRecords) record.file = target.file;
-      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judge, options, restoreConfigs, leaving?.former);
+      // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
+      const judgeFor = async (file: string): Promise<McpEntryJudge> => judgeUnrecordedMcpEntry(
+        localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(targets, { ...resolved, file }, manifest), history);
+      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {
         const names: string[] = [];
@@ -2248,7 +2251,7 @@ async function removeFromOtherFiles(
   elsewhere: ManagedMcpRecord[],
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
-  judge: McpEntryJudge,
+  judgeFor: (file: string) => Promise<McpEntryJudge>,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
   /** A file `deleteLeftMcpFile` deletes and reports. */
@@ -2273,7 +2276,7 @@ async function removeFromOtherFiles(
   for (const [real, { file, records }] of byFile) {
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
-    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, judge, options, restoreConfigs);
+    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
     if (result === null) {
       nextRecords.push(...records);
       continue;

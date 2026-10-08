@@ -50,7 +50,7 @@ const TEAM_SERVER = { type: 'http', url: 'https://team.example.com/mcp' };
 const MEMBER_SERVER = { type: 'stdio', command: 'my-user-server', args: [] };
 
 /** A member's machine: its own HOME, and a team whose MCP server goes to CodeBuddy. */
-function machine(name: string, extraServers: Array<{ name: string; url: string }> = []) {
+function machine(name: string, extraServers: Array<{ name: string; url: string }> = [], tools = ['codebuddy']) {
   // A fresh directory per call: the runner retries a failed case once.
   const dir = fs.mkdtempSync(path.join(sandbox, `${name}-`));
   const home = path.join(dir, 'home');
@@ -95,7 +95,7 @@ function machine(name: string, extraServers: Array<{ name: string; url: string }
   ].join('\n'));
   const writeTeamMcp = (servers: Array<{ name: string; url: string }>): void => {
     writeFile(path.join(seed, 'mcp', 'mcp.yaml'), servers.length === 0 ? 'servers: []\n' : ['servers:', ...servers.flatMap((s) => [
-      `  - name: ${s.name}`, '    transport: http', `    url: ${s.url}`, '    tools: [codebuddy]',
+      `  - name: ${s.name}`, '    transport: http', `    url: ${s.url}`, `    tools: [${tools.join(', ')}]`,
     ]), ''].join('\n'));
   };
   writeTeamMcp([{ name: 'tm-user', url: TEAM_SERVER.url }, ...extraServers]);
@@ -130,10 +130,27 @@ function machine(name: string, extraServers: Array<{ name: string; url: string }
     gitOk(['push', '-q', remote, 'main'], seed);
   };
   const loseManifest = (): void => fs.rmSync(path.join(home, '.teamai', 'managed-mcp.json'));
-  return { home, file, servers, init, teamai, teamaiOk, forgetRecordedFile, publishTeamMcp, loseManifest };
+  return { home, url, file, servers, init, teamai, teamaiOk, forgetRecordedFile, publishTeamMcp, loseManifest };
 }
 
 describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', () => {
+  it('leaves another tool\'s server in a CodeBuddy lookup file that links to that tool\'s file', () => {
+    const m = machine('linked-lookup', [], ['claude', 'codebuddy']);
+    const claudeFile = path.join(m.home, '.claude.json');
+    writeFile(claudeFile, JSON.stringify({ mcpServers: {} }));
+    fs.symlinkSync(claudeFile, m.file.mcp);
+    writeFile(m.file.dotMcp, JSON.stringify({ mcpServers: { 'my-user': MEMBER_SERVER } }));
+    fs.mkdirSync(path.join(m.home, '.claude'), { recursive: true });
+    m.teamaiOk('init', m.url, '--provider', 'git', '--agent', 'claude,codebuddy', '--scope', 'user', '--force');
+    expect(m.servers(m.file.dotMcp)).toEqual({ 'my-user': MEMBER_SERVER, 'tm-user': TEAM_SERVER });
+    expect(m.servers(claudeFile)).toEqual({ 'tm-user': TEAM_SERVER });
+
+    m.teamaiOk('pull', '--force');
+    // Claude's server, read by CodeBuddy's later lookup file through the link, is Claude's.
+    expect(m.servers(claudeFile)).toEqual({ 'tm-user': TEAM_SERVER });
+    expect(fs.lstatSync(m.file.mcp).isSymbolicLink()).toBe(true);
+  });
+
   it('creates ~/.codebuddy/.mcp.json when no CodeBuddy user MCP file exists, and keeps a server the member adds there', () => {
     const m = machine('fresh');
     m.init();
