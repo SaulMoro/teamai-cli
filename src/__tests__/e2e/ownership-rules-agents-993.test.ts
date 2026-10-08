@@ -348,6 +348,29 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(read(rule)).toBe(TEAM_RULE);
   });
 
+  it('keeps a member\'s entry of the other type at a delivered path, and delivers once it is gone', () => {
+    const t = team('type-conflict', { 'rules/team-rule.md': TEAM_RULE, 'skills/team-skill/SKILL.md': '# Team skill\n' });
+    const dir = business('type-conflict-biz', {
+      '.claude/rules/team-rule.md/mine.md': 'MINE\n',
+      '.claude/skills/team-skill': 'MY FILE\n',
+    });
+    const rule = path.join(dir, '.claude', 'rules', 'team-rule.md');
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+
+    const first = init(t, dir);
+    expect(first.output).toContain(`Kept ${rule}: it is not teamai's`);
+    expect(first.output).toContain(`Kept ${skill}: it is not teamai's`);
+    expect(read(path.join(rule, 'mine.md'))).toBe('MINE\n');
+    expect(read(skill)).toBe('MY FILE\n');
+
+    fs.rmSync(rule, { recursive: true });
+    fs.rmSync(skill);
+    teamaiOk(['pull'], dir);
+
+    expect(read(rule)).toBe(TEAM_RULE);
+    expect(read(path.join(skill, 'SKILL.md'))).toContain('# Team skill');
+  });
+
   it('delivers a held agent once its model alias resolves, even when the pull that held it found the checkout at the team revision', () => {
     const t = team('held-at-rev', {
       'models/aliases.yaml': 'aliases:\n  strong:\n    claude: { model: opus }\n',

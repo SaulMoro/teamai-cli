@@ -489,7 +489,11 @@ describe('local-agent: apply_model_config', () => {
 
     const projectConfig = await fse.readJson(path.join(workspace, '.codebuddy/models.json'));
     expect(projectConfig.models[0].id).toBe('deepseek-v3-0324');
-    expect(await fse.readFile(path.join(workspace, '.codebuddy/.gitignore'), 'utf8')).toContain('models.json');
+    // Outside any git repository nothing could commit it: the key is written, with no git exclude line,
+    // no record of one, and no .gitignore (#915).
+    expect(projectConfig.models[0].apiKey).toBe('proxy-token');
+    expect(await fse.pathExists(path.join(workspace, '.codebuddy/.gitignore'))).toBe(false);
+    expect(await fse.pathExists(path.join(home, '.teamai/local-agent/git-exclude.json'))).toBe(false);
     expect(await fse.pathExists(path.join(home, '.workbuddy/models.json'))).toBe(false);
     expect(acks[0]?.status).toBe('success');
   });

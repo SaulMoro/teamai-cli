@@ -1765,6 +1765,7 @@ The option is controlled by the same two-tier pattern as recall:
 - Prompts (`CLAUDE.md` fragments) stay in the agent's cache and are not listed.
 - A file of your own at a path the agent would install to is kept, and the install fails with ``Kept <path>: it is not teamai's (not in the local agent's records). Rename or delete it; the local agent installs <slug> on its next sync.`` A copy equal to the download is taken over as the agent's.
 - `teamai uninstall` removes the block from every exclude file the agent recorded, another repository's included. `teamai source remove-http` does the same once it has uninstalled each resource.
+- A model API key the agent writes to a project's `.codebuddy/models.json` is listed in a `# [teamai:credentials:start]` block whatever the option, and is not written where git would commit it (see [HTTP Contract](#http-contract-for-backend-implementers), `apply_model_config`). Those exclude files are recorded in the same `git-exclude.json`.
 
 **Single-repo mode.** While the setting is on:
 
@@ -1992,8 +1993,19 @@ user-level `~/.codebuddy/models.json` (`{ "models": [...] }`). WorkBuddy uses
 `~/.workbuddy/models.json`; both the current `{ "models": [...] }` shape and the legacy
 top-level array are accepted, and an existing file keeps its shape. A workspace-scoped
 CodeBuddy or WorkBuddy task uses `<workspace>/.codebuddy/models.json`, matching the
-embedded model loader; that credential-bearing file is added to
-`<workspace>/.codebuddy/.gitignore`. Workspace delivery is accepted only for a path
+embedded model loader. That file holds the API key, so it is always kept out of git,
+whatever the git exclude setting: before writing it, teamai lists it in the `credentials`
+block of the repository's `.git/info/exclude` and writes the key only once git confirms
+it ignores the file (a workspace outside any git repository gets the key with no line). If
+git tracks the file, a rule in a `.gitignore` re-includes it, the exclude file cannot be
+written, or git cannot confirm, the key is not written and the task fails with the reason
+and the fix (for a tracked file, `git rm --cached` it). A task with no models removes
+teamai's entries; when nothing else is left in a file teamai created, the file is deleted,
+then its line. A file teamai did not create, one git tracks, or a link stays, and so does
+its line. The same happens for every workspace when `teamai source remove-http` removes the
+HTTP source. teamai no longer creates
+`<workspace>/.codebuddy/.gitignore`, and deletes the one an earlier version created while it
+holds only its two lines. Workspace delivery is accepted only for a path
 already present in the reporter's workspace bindings. User-owned entries with the same
 model ID are preserved. Claude
 gets an explicit profile at `~/.claude/teamai-models.json`
@@ -2063,6 +2075,8 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 ```
 
 If core graph extraction or writing fails, the import reports an error without marking the commit as synced. The next incremental run retries that commit.
+
+For `--from-iwiki`, an MCP tool response with `isError: true` is a failed request, even when it contains text. A page whose document or metadata request fails is warned about and skipped before AI classification; successful pages still import. A failed page-tree request warns and yields no child pages.
 
 With `--dry-run`, `--from-repo` and `--from-repo-list` read each repo's target commit with `git ls-remote`, print `Would import <owner>/<repo> at <commit>` and whether the local cache is current, and stop there: nothing is cloned or fetched into the cache, the import lock is not taken, and no AI step runs. With `--incremental` and a cache containing `LAST_SYNC`, the preview queries that cache's current branch at its configured origin, matching the real fetch/reset. Full-clone previews, including a missing cache or `LAST_SYNC`, follow remote HEAD. If the cached branch was deleted remotely, a non-pruning wildcard fetch retains its cached origin ref; incremental preview uses that retained commit too. Pruning, an explicit deleted-branch fetch refspec, or a missing cached origin ref still selects the full-clone fallback. Other cached-branch query failures warn and preview the full-clone fallback. With `--output`, the preview reports the same `teamwiki/evidence/code/<slug>` destination beside the output file as a real import.
 
@@ -2206,6 +2220,7 @@ Hooks automatically injected by `teamai init`:
 
 ```bash
 teamai hooks list      # Show effective built-in and team hooks
+teamai hooks inject --dry-run # Preview without changing settings or managed-hook records
 teamai hooks inject    # Re-inject
 teamai hooks remove    # Remove
 ```
@@ -2973,7 +2988,7 @@ Notify external endpoints when team events happen. Each endpoint declares a `url
 
 ## Model profiles
 
-Model profiles point Claude Code, Codex, OpenCode, CodeBuddy, WorkBuddy, and Pi at a shared model gateway. Nothing changes an agent until you run `teamai models switch`; after that, `teamai pull` keeps the switched agents on the team's latest catalog.
+Model profiles point Claude Code, Codex, OpenCode, CodeBuddy, WorkBuddy, Pi, and OMP at a shared model gateway. Nothing changes an agent until you run `teamai models switch`; after that, `teamai pull` keeps the switched agents on the team's latest catalog.
 
 There are two sources, both in the same format:
 
@@ -3012,6 +3027,7 @@ Which agents can use a profile follows from its protocols:
 | OpenCode | any | `opencode.json`: one provider per protocol with every model |
 | CodeBuddy / WorkBuddy | `openai-chat-completions` | `models.json`: one entry per model |
 | Pi | any | `~/.pi/agent/models.json`: one provider keyed by the profile ref, holding every model. `settings.json` is left alone, so you pick the default with `/model` |
+| OMP | any | `~/.omp/agent/models.yml`: one provider keyed by the profile ref, holding every model — Pi's shape, in YAML |
 
 The example above has no `openai-responses` group, so Codex is left alone; add that protocol once your gateway serves those models over the Responses API.
 
@@ -3141,7 +3157,7 @@ What gets removed:
 - Team-synced custom agents and CLI built-in agents (your own agents are preserved)
 - The env block in your shell profile — every candidate file (`.zshrc`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`) carrying a block that sources this scope's own `env.sh` is cleaned, not only the one file `pull` would choose today; a block sourcing a different scope's `env.sh` is left alone
 - In a project, teamai's git hook: the `hook.teamai-post-checkout`, `hook.teamai-post-merge` and `hook.teamai-post-rewrite` entries in the repository's git config, and the marked block in `.git/hooks/post-checkout`, `post-merge` and `post-rewrite` (a script left with only its shebang, the one teamai created, is deleted). Other hooks are kept
-- In a project, teamai's git exclude blocks, once the files they hid are deleted: the `delivered` block in the project's `.git/info/exclude`, the `delivered/<id>` block in another repository (a tool folder that is a nested clone or a submodule, a tool home kept in git), the HTTP local agent's `local-agent` block in every exclude file it recorded (another repository's too), and any other teamai block in those files, so a file you later create at one of those paths is visible to git. Your own lines stay, and so does another project's block in a repository they share. A line for an MCP config teamai cannot prove free of a resolved value stays, with a warning (see [MCP servers](#mcp-servers)), judged in every checkout of the repository; so does a `credentials` line while the file it names is still there. A read-only exclude file is left as it is, with a warning listing the lines to delete by hand; one whose repository is gone is skipped
+- In a project, teamai's git exclude blocks, once the files they hid are deleted: the `delivered` block in the project's `.git/info/exclude`, the `delivered/<id>` block in another repository (a tool folder that is a nested clone or a submodule, a tool home kept in git), the HTTP local agent's `local-agent` block in every exclude file it recorded (another repository's too), and any other teamai block in those files, so a file you later create at one of those paths is visible to git. Your own lines stay, and so does another project's block in a repository they share. A line for an MCP config teamai cannot prove free of a resolved value stays, with a warning (see [MCP servers](#mcp-servers)), judged in every checkout of the repository; so does a `credentials` line while the models file it names still holds an API key, in any checkout of that repository. A read-only exclude file is left as it is, with a warning listing the lines to delete by hand; one whose repository is gone is skipped
 - teamai's docs search whitelist block in each checkout's `.teamai/.ignore`, and the file when nothing else is in it (see [Keeping Delivered Files Out of Git](#keeping-delivered-files-out-of-git)).
 - The team docs in the docs directory (`sharing.docs.localDir`): each file, or link, that holds a version of that doc from the team repo's history. Anything else there stays and is named (`Kept <path>: it is not teamai's ... so uninstall left it.`): a file at a removed doc's path or at one the team never had, a directory or a link of yours. The directories holding it stay too, inside `~/.teamai/` as well. While the team repo's history cannot be read, the docs directory stays whole
 - The `~/.teamai/` directory
@@ -3200,6 +3216,7 @@ That is expected for a built-in tool when `init` ran without `--agent` and witho
 
 ```bash
 teamai doctor        # Diagnose
+teamai hooks inject --dry-run # Preview first
 teamai hooks inject  # Re-inject
 ```
 

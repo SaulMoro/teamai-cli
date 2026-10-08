@@ -52,9 +52,8 @@ jobs:
           name: coverage
           path: coverage/
 
-  build:
-    name: Build
-    needs: lint-and-test
+  prepare-build:
+    name: Prepare build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -85,9 +84,19 @@ jobs:
           name: dist
           path: dist/
 
+  # Keep the existing Build check gated on the unit matrix while E2E can
+  # consume the prepared artifact as soon as it is available.
+  build:
+    name: Build
+    needs: [lint-and-test, prepare-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm build and unit matrix passed
+        run: echo "Build and unit test matrix passed."
+
   fork-e2e:
     name: E2E (fork-safe, no credentials)
-    needs: build
+    needs: prepare-build
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     runs-on: ubuntu-latest
     permissions:
@@ -116,11 +125,11 @@ jobs:
       # The e2e setup file (src/__tests__/helpers/isolate-e2e-env.ts) gives each
       # test file a sandbox HOME with its own git identity.
       - name: Run E2E (no remote credentials)
-        run: npm run test:e2e
+        run: npx vitest run --config vitest.e2e.config.ts
 
   e2e:
     name: E2E (GitHub provider, full surface)
-    needs: build
+    needs: prepare-build
     if: ${{ vars.TEAMAI_TEST_REPO_URL != '' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     # E2E shares one fixture repo. Serialize across all branches/PRs so
