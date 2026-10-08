@@ -128,6 +128,17 @@ const installSkill = (slug: string, workspace: string): MockCommand => ({
   workspace_path: workspace,
 });
 
+const installPrompt = (slug: string, workspace: string): MockCommand => ({
+  id: nextId++,
+  type: 'install_rule',
+  rule_type: 'prompt',
+  rule_slug: slug,
+  rule_version: '1.0.0',
+  download_url: `${server.url}/download?kind=rule&slug=${slug}`,
+  scope: 'workspace',
+  workspace_path: workspace,
+});
+
 const block = (project: string, owner = 'local-agent'): string[] | null => {
   const file = path.join(project, '.git', 'info', 'exclude');
   const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
@@ -193,6 +204,26 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     expect(out.output).toContain(`Kept ${members}`);
     expect(block(app), out.output).toBeNull();
     expect(status(), out.output).toEqual(['?? .cursor/rules/legacy-rule.mdc']);
+  }, 180_000);
+
+  it('remove-http removes a project prompt from the instruction file of every tool it reached, and their lines', async () => {
+    const m = machine('prompt');
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude,workbuddy', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    fs.appendFileSync(path.join(m.home, '.teamai', 'config.yaml'), 'gitExcludeEnabled: true\n');
+    // A repository with no teamai project of its own: no project pull rewrites the files.
+    const app = m.repository('app');
+    await m.sessionStart(app, 'claude', [installPrompt('team-prompt', app)]);
+    await m.sessionStart(app, 'workbuddy', [installPrompt('team-prompt', app)]);
+    const files = ['.claude/rules/teamai-context.md', '.codebuddy/rules/teamai-context.md'];
+    for (const file of files) expect(fs.readFileSync(path.join(app, file), 'utf8'), file).toContain('team-prompt');
+    expect(block(app)).toEqual(files.map((file) => `/${file}`));
+
+    const out = await m.cli(['source', 'remove-http'], app);
+
+    expect(out.code, out.output).toBe(0);
+    for (const file of files) expect(fs.existsSync(path.join(app, file)), `${file}\n${out.output}`).toBe(false);
+    expect(block(app), out.output).toBeNull();
   }, 180_000);
 
   it('a block remove-http could not remove is still found, and removed, by a later teamai uninstall', async () => {

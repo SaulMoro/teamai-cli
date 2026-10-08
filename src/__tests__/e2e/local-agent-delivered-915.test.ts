@@ -117,6 +117,18 @@ const install = (id: number, kind: 'skill' | 'rule', slug: string, workspace: st
   workspace_path: workspace,
 });
 
+/** A project prompt (`handle_type: prompt`), which the agent compiles into the tool's instruction file. */
+const prompt = (id: number, action: 'install' | 'uninstall', slug: string, workspace: string): MockCommand => ({
+  id,
+  type: `${action}_rule`,
+  rule_type: 'prompt',
+  rule_slug: slug,
+  rule_version: '1.0.0',
+  ...action === 'install' ? { download_url: `${server.url}/download?kind=rule&slug=${slug}` } : {},
+  scope: 'workspace',
+  workspace_path: workspace,
+});
+
 const block = (project: string): string[] | null => {
   const file = path.join(project, '.git', 'info', 'exclude');
   const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
@@ -218,6 +230,34 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(block(app), out.output).toEqual(['/.claude/rules/wt-rule.md']);
     expect(m.git(['status', '--porcelain', '-uall'], wt).out).not.toContain('wt-rule');
     expect(m.git(['status', '--porcelain', '-uall'], side).out).not.toContain('side-rule');
+  }, 180_000);
+
+  it('lists the instruction file a project prompt goes to, and drops it once the prompt is uninstalled', async () => {
+    const m = machine('prompt');
+    // A workspace with no project config of its own: the member's user setting decides, and no project pull rewrites the file.
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    fs.appendFileSync(path.join(m.home, '.teamai', 'config.yaml'), 'gitExcludeEnabled: true\n');
+    const app = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'prompt-app-')));
+    fs.mkdirSync(path.join(app, '.claude', 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(app, '.claude', 'rules', 'mine.md'), '# Mine\n');
+    m.git(['init', '-q', '-b', 'main'], app);
+    const status = (): string[] => m.git(['status', '--porcelain', '-uall', '.claude'], app).out.split('\n').filter(Boolean);
+    const context = path.join(app, '.claude', 'rules', 'teamai-context.md');
+
+    await m.sessionStart(app, [prompt(41, 'install', 'team-prompt', app)]);
+    expect(server.acks.filter(({ id }) => id === 41).map(({ body }) => (body as { status: string }).status)).toEqual(['success']);
+    expect(fs.readFileSync(context, 'utf8')).toContain('team-prompt');
+    expect(block(app)).toEqual(['/.claude/rules/teamai-context.md']);
+    expect(status()).toEqual(['?? .claude/rules/mine.md']);
+
+    await m.sessionStart(app, [prompt(42, 'uninstall', 'team-prompt', app)]);
+    expect(server.acks.filter(({ id }) => id === 42).map(({ body }) => (body as { status: string }).status)).toEqual(['success']);
+    expect(fs.existsSync(context)).toBe(false);
+    expect(block(app)).toBeNull();
+    // The path is the member's again: a file there is visible.
+    fs.writeFileSync(context, '# My context\n');
+    expect(status()).toEqual(['?? .claude/rules/mine.md', '?? .claude/rules/teamai-context.md']);
   }, 180_000);
 
   it('follows the flag at the next session start with no install from the backend', async () => {

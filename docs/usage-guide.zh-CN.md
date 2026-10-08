@@ -1631,9 +1631,9 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 **卸载。** `teamai uninstall` 在删除这些块所隐藏的文件之后移除 teamai 的块，`uninstall --agent <tool>` 只移除该工具的行；见[卸载](#卸载)。
 
-**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，每个安装的文件一行（你在已安装的 skill 中添加的文件仍然可见），写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
+**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules，以及其项目 prompt 为所送达的每个工具写入的 teamai 自有文件（`.claude/rules/teamai-context.md`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、Copilot 的 `.github/instructions/teamai-context.instructions.md`），有自己的块 `# [teamai:local-agent:start]`，每个安装的文件一行（你在已安装的 skill 中添加的文件仍然可见），写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
 
-- 每次会话启动结束时，agent 都会根据自己的记录和各项目的选项更新该块，因此开启或关闭该选项后，无需安装任何新内容，下一次会话启动即生效。agent 的其他运行（每次提问、工具调用和停止时）只在项目中安装或移除了 skill、rule 之后，或其记录、某个 `config.yaml` 自上次更新以来有变化时才更新该块。写过的 exclude 文件记录在 `~/.teamai/local-agent/git-exclude.json`。已不存在的 checkout 不贡献任何行。pull 从不移除这个块。
+- 每次会话启动结束时，agent 都会根据自己的记录和各项目的选项更新该块，因此开启或关闭该选项后，无需安装任何新内容，下一次会话启动即生效。agent 的其他运行（每次提问、工具调用和停止时）只在项目中安装或移除了 skill、rule 或 prompt 之后，或其记录、某个 `config.yaml` 自上次更新以来有变化时才更新该块。写过的 exclude 文件记录在 `~/.teamai/local-agent/git-exclude.json`。已不存在的 checkout 不贡献任何行。pull 从不移除这个块。
 - agent 无法更新该块时（exclude 文件不可写、git 出错），会把失败记录在 `~/.teamai/local-agent/git-exclude-notices.json`，直到某次更新成功：下一次交互式 `teamai pull` 打印一次，前缀为 `A local agent sync (<time>)`；在此之前 `teamai doctor` 的 `Last local agent sync could not keep its git exclude block up to date` 检查失败。agent 安装过内容的项目若遵循一个 git 模式配置，而其团队 `teamai.yaml` 无法读取、又未设置 `gitExcludeEnabled`，则保留已有的行，agent 将其记录为失败并指出要修复的文件；期间该项目中的每次安装或卸载都会失败、不写入任何内容，并指出项目、无法读取的文件以及两种解决办法：修复或恢复该 `teamai.yaml`，或在该项目的 `config.yaml` 中设置 `gitExcludeEnabled`。
 - 提示词（`CLAUDE.md` 片段）留在 agent 的缓存中，不会列出。
 - agent 要安装到的路径上若是你自己的文件，会被保留，安装失败并提示 ``Kept <path>: it is not teamai's (not in the local agent's records). Rename or delete it; the local agent installs <slug> on its next sync.`` 与下载内容相同的副本则归为 agent 所有。

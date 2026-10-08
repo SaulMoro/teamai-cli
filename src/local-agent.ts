@@ -69,8 +69,8 @@ import {
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
-  applyInstructionPlan, deliversInstructionsByHook, instructionHookChannel, instructionHookText, instructionHookTextFor, instructionTargetAt,
-  instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  applyInstructionPlan, deliversInstructionsByHook, holdsInstructionBlocks, instructionHookChannel, instructionHookText, instructionHookTextFor,
+  instructionTargetAt, instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
   retiredFilesOfReached, nativeProjectInstructions,
 } from './instruction-targets.js';
 import { opencodeClaudeFallback } from './resources/opencode-config.js';
@@ -233,6 +233,7 @@ interface ManifestResource {
    * The tools this entry was written to (#915). An entry an older CLI wrote
    * has none: it counts as recorded for a tool whose copy equals the installed
    * version or sits under `dir_name`, and gains the field on its next install.
+   * For a claudemd entry, the tools the compiled block reached.
    */
   tools?: string[];
 }
@@ -2218,6 +2219,8 @@ async function installDownloadedResource(input: {
     // The tools this install wrote to, and every other rule entry it wrote (#915).
     let tools: string[] | undefined;
     const reachedRules: string[] = [];
+    // The tools the compiled claudemd block reached: it carries every other prompt of the scope too.
+    let reachedPrompts: string[] = [];
     const recorded = getManifestScope(await loadManifest(), input.scope, input.workspacePath)[manifestKind(input.kind)][input.slug];
 
     if (input.kind === 'skill') {
@@ -2281,7 +2284,7 @@ async function installDownloadedResource(input: {
       const previous = await readFileSafe(dest);
       await fse.copyFile(mdFile, dest);
       try {
-        await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+        reachedPrompts = await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
       } catch (error) {
         // Session hooks read the cache directly: a prompt that was not
         // delivered must not reach them, nor push out the ones that were.
@@ -2289,6 +2292,7 @@ async function installDownloadedResource(input: {
         else await fse.writeFile(dest, previous);
         throw error;
       }
+      tools = recorded?.tools ?? [];
     }
 
     const version = commandVersion(input.command, input.kind);
@@ -2307,6 +2311,7 @@ async function installDownloadedResource(input: {
       const entry = scopeManifest.rules[name];
       if (entry?.tools && !entry.tools.includes(tool)) entry.tools = [...entry.tools, tool].sort();
     }
+    recordPromptReach(scopeManifest, reachedPrompts);
     await saveManifest(manifest);
     return version;
   } finally {
@@ -2352,8 +2357,10 @@ async function uninstallResource(input: {
   // every tool. A copy goes only while it is what the agent writes today from
   // the cached source, judged before the source is deleted; a skill file by
   // file. Without an entry no copy is the agent's.
-  const entry = input.kind === 'claudemd' ? undefined : scopeManifest[manifestKind(input.kind)][input.slug];
-  const tools = input.kind === 'claudemd' ? [input.tool ?? 'workbuddy'] : entry ? entry.tools ?? Object.keys(fullTeamConfig.toolPaths) : [];
+  // A claudemd entry's block is synced again for every tool it reached, or, for an older CLI's entry, the command's.
+  const entry = scopeManifest[manifestKind(input.kind)][input.slug];
+  const tools = input.kind === 'claudemd' ? entry?.tools ?? [input.tool ?? 'workbuddy']
+    : entry ? entry.tools ?? Object.keys(fullTeamConfig.toolPaths) : [];
   const teamConfig = {
     ...fullTeamConfig,
     toolPaths: Object.fromEntries(tools.flatMap((tool) => fullTeamConfig.toolPaths[tool] ? [[tool, fullTeamConfig.toolPaths[tool]]] : [])),
@@ -2382,7 +2389,7 @@ async function uninstallResource(input: {
     const previous = await readFileSafe(dest);
     await remove(dest);
     try {
-      await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
+      recordPromptReach(scopeManifest, await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig));
     } catch (error) {
       if (previous !== null) await fse.writeFile(dest, previous);
       throw error;
@@ -2391,6 +2398,16 @@ async function uninstallResource(input: {
 
   delete scopeManifest[manifestKind(input.kind)][input.slug];
   await saveManifest(manifest);
+}
+
+/**
+ * Add the tools a claudemd sync reached to every claudemd entry of the scope
+ * (#915): the block it delivered compiles all of them.
+ */
+function recordPromptReach(scope: ManifestScope, reached: readonly string[]): void {
+  for (const entry of Object.values(scope.claudemd ?? {})) {
+    entry.tools = [...new Set([...entry.tools ?? [], ...reached])].sort();
+  }
 }
 
 /**
@@ -2433,6 +2450,14 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
   }, new SkillsHandler());
   await collect(scope.rules, (slug) => ({ name: slug, type: 'rules', sourcePath: path.join(repoPath, 'rules', `${slug}.md`), relativePath: `rules/${slug}.md` }),
     new RulesHandler());
+  // The instruction file teamai owns of each tool the claudemd block reached, while it holds teamai's blocks, as pull lists its own.
+  for (const tool of new Set(Object.values(scope.claudemd ?? {}).flatMap((entry) => entry.tools ?? []))) {
+    const toolPath = fullTeamConfig.toolPaths[tool];
+    const file = toolPath && await instructionTargetFile(tool, toolPath, 'project', true);
+    if (!file) continue;
+    const target = await instructionTargetAt(tool, path.resolve(resolveToolBaseDir(tool, localConfig), file), 'project', toolPath, true);
+    if (target.owned && await holdsInstructionBlocks(target.path)) copies.push(target.path);
+  }
   return copies;
 }
 
@@ -2530,7 +2555,7 @@ async function localAgentGitExcludeInput(): Promise<string> {
   const { projectsRootDir } = await import('./utils/partition.js');
   const projects = (await loadManifest()).scopes;
   const entries = Object.keys(projects).filter((key) => parseScopeKey(key).scope === 'project').sort()
-    .map((key) => [key, projects[key].skills, projects[key].rules]);
+    .map((key) => [key, projects[key].skills, projects[key].rules, projects[key].claudemd]);
   const configs = [path.join(getTeamaiHomePath(), 'config.yaml'),
     ...(await listDirs(projectsRootDir())).sort().map((dir) => path.join(projectsRootDir(), dir, 'config.yaml'))];
   const parts = [JSON.stringify(entries)];
@@ -2626,9 +2651,10 @@ export async function localAgentInstructionText(cwd: string, tool = ''): Promise
 }
 
 /**
- * Deliver the HTTP agent's claudemd block to `teamConfig`'s one tool, and
+ * Deliver the HTTP agent's claudemd block to `teamConfig`'s tools, and
  * strip the blocks earlier releases left in files no installed tool of
- * `fullTeamConfig` reads now, as pull does (#945).
+ * `fullTeamConfig` reads now, as pull does (#945). Returns the tools whose
+ * target holds the block now (#915).
  */
 async function syncClaudemd(
   teamConfig: TeamaiConfig,
@@ -2636,7 +2662,7 @@ async function syncClaudemd(
   repoPath: string,
   workspacePath: string | undefined,
   fullTeamConfig: TeamaiConfig,
-): Promise<void> {
+): Promise<string[]> {
   const { files, block } = await cachedClaudemdBlock(repoPath);
   let syncedAny = false;
   // Why each tool got nothing, for the ACK when none did.
@@ -2771,6 +2797,7 @@ async function syncClaudemd(
   if (!syncedAny && (files.length > 0 || skipped.length > 0)) {
     throw new Error(['CLAUDE.md sync landed on no tool: every configured target was skipped.', ...skipped].join(' '));
   }
+  return reached;
 }
 
 /**
@@ -4174,10 +4201,10 @@ async function processCommands(
   return modelConfigApplied;
 }
 
-/** Whether `command` installs or removes a project skill or rule, which the `local-agent` block lists (#915). */
+/** Whether `command` installs or removes a project skill, rule or prompt, which the `local-agent` block lists (#915). */
 function changesProjectCopies(command: LocalAgentCommand): boolean {
   return normalizeScope(command.scope) === 'project'
-    && (commandKind(command) === 'skill' || commandKind(command) === 'rule') && commandAction(command) !== null;
+    && commandKind(command) !== null && commandAction(command) !== null;
 }
 
 export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promise<boolean> {
