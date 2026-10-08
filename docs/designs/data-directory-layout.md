@@ -609,6 +609,11 @@ config write fails. File records added by that failed run are cleaned up before
 Git protection is checked against the restored configs. If restoration also
 fails, the command reports both failures and keeps credential files excluded.
 
+For an HTTP workspace without project config, the resource cache and MCP records
+remain under that workspace's `.teamai/`. With git exclude enabled, `local-agent`
+lists its generated `.gitignore` and the existing MCP record files by exact path.
+Member files stay visible, and tracked files are never excluded.
+
 HTTP source removal keeps `~/.teamai/local-agent/config.json` as `{disabled:true}`,
 without an endpoint or credentials, so legacy config and environment fallback
 cannot reconnect. Failed agent-hook removals retain `agent-hooks.json` and report

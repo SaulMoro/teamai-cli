@@ -248,13 +248,13 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     await m.sessionStart(app, [prompt(41, 'install', 'team-prompt', app)]);
     expect(server.acks.filter(({ id }) => id === 41).map(({ body }) => (body as { status: string }).status)).toEqual(['success']);
     expect(fs.readFileSync(context, 'utf8')).toContain('team-prompt');
-    expect(block(app)).toEqual(['/.claude/rules/teamai-context.md']);
+    expect(block(app)).toEqual(['/.claude/rules/teamai-context.md', '/.teamai/.gitignore']);
     expect(status()).toEqual(['?? .claude/rules/mine.md']);
 
     await m.sessionStart(app, [prompt(42, 'uninstall', 'team-prompt', app)]);
     expect(server.acks.filter(({ id }) => id === 42).map(({ body }) => (body as { status: string }).status)).toEqual(['success']);
     expect(fs.existsSync(context)).toBe(false);
-    expect(block(app)).toBeNull();
+    expect(block(app)).toEqual(['/.teamai/.gitignore']);
     // The path is the member's again: a file there is visible.
     fs.writeFileSync(context, '# My context\n');
     expect(status()).toEqual(['?? .claude/rules/mine.md', '?? .claude/rules/teamai-context.md']);
@@ -314,6 +314,28 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(status()).toEqual(['?? mine.md']);
     expect(m.git(['status', '--porcelain', '-uall'], committed).out).toBe('');
     expect(fs.existsSync(path.join(committed, '.teamai', '.gitignore'))).toBe(true);
+  }, 180_000);
+
+  it('keeps workspace MCP cache files out of git without hiding a member file', async () => {
+    const m = machine('mcp-cache');
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    fs.appendFileSync(path.join(m.home, '.teamai', 'config.yaml'), 'gitExcludeEnabled: true\n');
+    const app = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'mcp-cache-app-')));
+    m.git(['init', '-q', '-b', 'main'], app);
+    fs.mkdirSync(path.join(app, '.teamai'));
+    fs.writeFileSync(path.join(app, '.teamai', 'mine.md'), '# Mine\n');
+    await m.sessionStart(app, [{ id: 61, type: 'install_mcp', scope: 'workspace', workspace_path: app,
+      slug: 'cache-api', version: '1.0.0', mcp_config: { transport: 'stdio', command: 'cache-api-server' } }]);
+    expect(server.acks.filter(({ id }) => id === 61).map(({ body }) => (body as { status: string }).status)).toEqual(['success']);
+    expect(m.git(['status', '--porcelain', '-uall'], app).out).toBe('?? .teamai/mine.md\n');
+    expect(m.git(['add', '--dry-run', '-A'], app).out).toBe("add '.teamai/mine.md'\n");
+    const config = path.join(m.home, '.teamai', 'config.yaml');
+    fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace('gitExcludeEnabled: true', 'gitExcludeEnabled: false'));
+
+    await m.sessionStart(app, []);
+    expect(block(app)).toBeNull();
+    expect(m.git(['status', '--porcelain', '-uall'], app).out).toContain('?? .teamai/managed-local-mcp.json');
   }, 180_000);
 
   it('follows the flag at the next session start with no install from the backend', async () => {

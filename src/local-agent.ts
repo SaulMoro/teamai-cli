@@ -2475,6 +2475,15 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
   }
   const gitignore = await workspaceCacheGitignore(workspacePath, repoPath);
   if (gitignore) copies.push(gitignore);
+  const dataHome = getDataHome(localConfig);
+  if (dataHome.startsWith(path.join(workspacePath, '.teamai') + path.sep) || dataHome === path.join(workspacePath, '.teamai')) {
+    const projectManifest = managedMcpManifestPath(dataHome, workspacePath);
+    const { resolvedMcpFilesPath } = await import('./mcp-resolved-files.js');
+    for (const file of [path.join(dataHome, 'managed-local-mcp.json'), projectManifest,
+      resolvedMcpFilesPath(localConfig)]) {
+      if (file && await pathExists(file)) copies.push(file);
+    }
+  }
   return copies;
 }
 
@@ -2500,7 +2509,8 @@ async function syncLocalAgentGitExclude(
   try {
     const paths: string[] = [];
     const unknown: string[] = [];
-    for (const [key, scope] of Object.entries((await loadManifest()).scopes)) {
+    const scopes = (await loadManifest()).scopes;
+    for (const [key, scope] of Object.entries(scopes)) {
       const { scope: kind, workspacePath } = parseScopeKey(key);
       if (kind !== 'project' || !workspacePath || without.includes(workspacePath) || !await isLiveWorkspace(workspacePath)) continue;
       const enabled = await gitExcludeEnabledFor(workspacePath);
@@ -3940,6 +3950,11 @@ async function installMcpServer(
       await removeMovedMcpEntry({ file: fileOf(movedFrom) }, serverKey, slug, target, movedFrom.hash);
     }
   }
+  if (projectScope && workspacePath) {
+    const resources = await loadManifest();
+    getManifestScope(resources, 'project', workspacePath);
+    await saveManifest(resources);
+  }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
 }
@@ -4221,7 +4236,7 @@ async function processCommands(
 /** Whether `command` installs or removes a project skill, rule or prompt, which the `local-agent` block lists (#915). */
 function changesProjectCopies(command: LocalAgentCommand): boolean {
   return normalizeScope(command.scope) === 'project'
-    && commandKind(command) !== null && commandAction(command) !== null;
+    && ((commandKind(command) !== null && commandAction(command) !== null) || command.type === 'install_mcp' || command.type === 'uninstall_mcp');
 }
 
 export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promise<boolean> {
@@ -4351,11 +4366,11 @@ async function syncLocalAgent(context: LocalAgentContext): Promise<boolean> {
   }
   // Every session start, and after project installs and uninstalls, failed ones included (a failure may have
   // written part of its copies), also when the sync failed: the manifest and the flags decide, not the backend.
-  await keepLocalAgentGitExclude(config, context.event?.type === 'session_start' || changedProjectCopies);
   // Also when the sync failed: what an install wrote is on disk either way. Also after an uninstall_teamai:
   // one that removed teamai's servers and records leaves nothing to list, and one that failed or kept the
   // shared files (another agent remains) leaves what still needs keeping out of git.
   await protectWorkspaceMcpConfigs(config, context.cwd);
+  await keepLocalAgentGitExclude(config, context.event?.type === 'session_start' || changedProjectCopies);
 
   return true;
 }
