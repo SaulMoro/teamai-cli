@@ -528,7 +528,7 @@ const MEMBERS_FILES = ['notes.md', '.cursor/rules/team-rule.mdc', '.agents/skill
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
-  /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
+  /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
   /^\.codex\/hooks\.json$/,
 ];
 const RULES_DIRS = ['/.claude/rules/', '/.cursor/rules/', '/.codebuddy/rules/', '/.opencode/rules/', '/.kiro/steering/', '/.github/instructions/'];

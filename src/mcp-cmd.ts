@@ -66,7 +66,7 @@ export async function mcpList(_options: GlobalOptions): Promise<void> {
   // The team env already resolved above: resolving it again repeats its warnings.
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, { teamEnv });
   const { vars } = desiredContext;
-  // Project scope reads THIS worktree's own per-worktree manifest, and Claude's local scope's records (#915); user the global file.
+  // Project scope reads THIS worktree's own per-worktree manifest, and the local scopes' records (#915); user the global file.
   const manifest = await readMcpManifest(localConfig);
 
   console.log(`Team MCP servers — mcp/ (${servers.length}):`);

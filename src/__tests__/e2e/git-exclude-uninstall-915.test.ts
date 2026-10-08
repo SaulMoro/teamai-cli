@@ -67,7 +67,7 @@ const TEAM = {
   'rules/team-rule.md': '# Team\n\nTeam rule.\n',
 };
 const ON = 'sharing:\n  gitExclude:\n    enabled: true\n';
-/** The flag on, and one MCP server whose header teamai resolves into the project's `.mcp.json`. */
+/** One MCP server whose header teamai resolves into the project's `.mcp.json`. */
 const MCP_TEAM = {
   ...TEAM,
   'mcp/mcp.yaml': [
@@ -76,7 +76,7 @@ const MCP_TEAM = {
   ].join('\n'),
   'env/env.yaml': `variables:\n  - key: LAB_TOKEN\n    value: "${TOKEN}"\n`,
 };
-const MCP_ON = 'sharing:\n  gitExclude:\n    enabled: true\n  mcp:\n    autoApply: true\n';
+const MCP_OFF = 'sharing:\n  gitExclude:\n    enabled: false\n  mcp:\n    autoApply: true\n';
 
 interface Member {
   home: string;
@@ -365,9 +365,10 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
   }, 120_000);
 
   it('removes teamai\'s server and its resolved value from the main checkout of a --separate-git-dir repo, then its MCP line, uninstalling from a linked worktree', async () => {
-    const m = member('mcp-separate', MCP_TEAM, MCP_ON);
+    const m = member('mcp-separate', MCP_TEAM, MCP_OFF);
     const root = caseDir('mcp-separate');
-    // CodeBuddy: with sharing.gitExclude on, Claude's servers go to its local scope, not to .mcp.json.
+    // sharing.gitExclude off: with it on, Claude and CodeBuddy take the servers from their local scopes, and
+    // nothing writes .mcp.json. The MCP line does not depend on it.
     const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`], agents: 'codebuddy' });
     expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
     const wt = await m.worktree(main, path.join(root, 'wt'));

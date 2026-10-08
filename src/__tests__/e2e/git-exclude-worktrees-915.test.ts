@@ -78,7 +78,7 @@ const MCP_TEAM = {
   ].join('\n'),
   'env/env.yaml': `variables:\n  - key: LAB_TOKEN\n    value: "${TOKEN}"\n`,
 };
-const MCP_ON = 'sharing:\n  gitExclude:\n    enabled: true\n  mcp:\n    autoApply: true\n';
+const MCP_OFF = 'sharing:\n  gitExclude:\n    enabled: false\n  mcp:\n    autoApply: true\n';
 const HOOKS_ON = [
   'sharing:', '  gitExclude:', '    enabled: true', '  hooks:', '    autoApply: true', '    requireTeamScripts: false', '',
 ].join('\n');
@@ -266,9 +266,10 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
   }, 120_000);
 
   it('keeps the MCP line while the main checkout of a --separate-git-dir repo holds the resolved value a linked worktree\'s pull dropped, until the main checkout pulls', async () => {
-    const m = member('mcp-separate', MCP_TEAM, MCP_ON);
+    const m = member('mcp-separate', MCP_TEAM, MCP_OFF);
     const root = caseDir('mcp-separate');
-    // CodeBuddy: with sharing.gitExclude on, Claude's servers go to its local scope, not to .mcp.json.
+    // sharing.gitExclude off: with it on, Claude and CodeBuddy take the servers from their local scopes, and
+    // nothing writes .mcp.json. The MCP line does not depend on it.
     const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`], agents: 'codebuddy' });
     const wt = await m.worktree(main, path.join(root, 'wt'));
     const exclude = excludeFileOf(m, wt);
@@ -285,7 +286,7 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
     expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
     expect(mcpLines(exclude)).toEqual(['/.mcp.json']);
     expect(out).not.toContain('Removed /.mcp.json');
-    expect(status(m, main)).toEqual([]);
+    expect(status(m, main).filter((line) => line.endsWith('.mcp.json'))).toEqual([]);
 
     const mainOut = m.teamai(['pull'], main);
 
