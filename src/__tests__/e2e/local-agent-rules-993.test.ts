@@ -39,17 +39,19 @@ describe('local-agent rules (#993)', () => {
     for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it.each(['hook sync', 'plugin reconciliation'])('remove-http waits for in-flight %s before clearing source state', async (operation) => {
-    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-http-shutdown-')));
-    sandboxes.push(sandbox);
-    const home = path.join(sandbox, 'home');
+  /**
+   * An HTTP source in `home` whose `operation` (a Stop hook sync or plugin reconciliation)
+   * has loaded its config and is paused on the server's reply until `release`. The
+   * hook sync's reply asks it to install `late-rule` into CodeBuddy.
+   */
+  async function pausedHttpOperation(home: string, sandbox: string, operation: string, env: Record<string, string>) {
     const agentDir = path.join(home, '.teamai', 'local-agent');
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(path.join(home, '.codebuddy'), { recursive: true });
-    let releaseSync!: () => void;
-    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
-    let syncStarted!: () => void;
-    const syncReady = new Promise<void>((resolve) => { syncStarted = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
     let endpoint = '';
     const server = createServer(async (request, response) => {
       if (request.url === '/late-rule.md') {
@@ -58,8 +60,8 @@ describe('local-agent rules (#993)', () => {
       }
       response.setHeader('Content-Type', 'application/json');
       if (request.url?.endsWith(operation === 'hook sync' ? '/local-agent/sync' : '/local-agent/get-config')) {
-        syncStarted();
-        await syncGate;
+        started();
+        await gate;
         response.end(JSON.stringify(operation === 'plugin reconciliation' ? { plugins: [] } : { ok: true, cmds: [{
           id: 1, type: 'install_rule', handle_type: 'rule', slug: 'late-rule', version: '1',
           scope: 'user', download_url: `${endpoint}/late-rule.md`,
@@ -71,31 +73,92 @@ describe('local-agent rules (#993)', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify({ endpoint, createdAt: 'x', workspaceBindings: {} }));
-    const env = { HOME: home };
-    const sync = runCLI(operation === 'plugin reconciliation' ? ['source', 'reconcile-plugins']
+    const run = runCLI(operation === 'plugin reconciliation' ? ['source', 'reconcile-plugins']
       : ['hook-dispatch', 'stop', '--tool', 'workbuddy', '--bg-only'], env, sandbox,
       JSON.stringify({ cwd: sandbox, hook_event_name: 'Stop', session_id: 'http-shutdown' }));
+    return {
+      agentDir, run, ready, release,
+      close: async () => {
+        release();
+        await run;
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      },
+    };
+  }
+
+  /** Run `args`, resolving `waiting` once it waits for the HTTP source lock. */
+  function runWaitingForLock(args: string[], env: Record<string, string>, cwd: string) {
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => { started = resolve; });
+    const run = runCLI(args, env, cwd, '', (output) => {
+      if (output.includes('Waiting for the HTTP source sync')) started();
+    });
+    return { run, waiting };
+  }
+
+  it.each(['hook sync', 'plugin reconciliation'])('remove-http waits for in-flight %s before clearing source state', async (operation) => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-http-shutdown-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const env = { HOME: home };
+    const sync = await pausedHttpOperation(home, sandbox, operation, env);
     let removal: ReturnType<typeof runCLI> | undefined;
     try {
-      await syncReady;
-      let removalWaiting!: () => void;
-      const waiting = new Promise<void>((resolve) => { removalWaiting = resolve; });
-      removal = runCLI(['source', 'remove-http'], env, sandbox, '', (output) => {
-        if (output.includes('Waiting for the HTTP source sync')) removalWaiting();
-      });
+      await sync.ready;
+      const remove = runWaitingForLock(['source', 'remove-http'], env, sandbox);
+      removal = remove.run;
       // Release the response after removal finishes or starts waiting for the active operation.
-      await Promise.race([removal, waiting]);
-      releaseSync();
-      const [synced, removed] = await Promise.all([sync, removal]);
+      await Promise.race([removal, remove.waiting]);
+      sync.release();
+      const [synced, removed] = await Promise.all([sync.run, removal]);
       expect(synced.code, synced.output).toBe(0);
       expect(removed.code, removed.output).toBe(0);
       expect(fs.existsSync(path.join(home, '.codebuddy', 'rules', 'late-rule.md')), `${synced.output}\n${removed.output}`).toBe(false);
-      expect(JSON.parse(fs.readFileSync(path.join(agentDir, 'config.json'), 'utf8'))).toEqual({ disabled: true });
-      expect(fs.readdirSync(agentDir), `${synced.output}\n${removed.output}`).toEqual(['config.json']);
+      expect(JSON.parse(fs.readFileSync(path.join(sync.agentDir, 'config.json'), 'utf8'))).toEqual({ disabled: true });
+      expect(fs.readdirSync(sync.agentDir), `${synced.output}\n${removed.output}`).toEqual(['config.json']);
     } finally {
-      releaseSync();
-      await Promise.all([sync, removal]);
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await Promise.all([sync.close(), removal]);
+    }
+  });
+
+  it.each(['HTTP-only', 'user-scope team'])('uninstall of an %s install waits for an in-flight hook sync and leaves nothing it installed', async (install) => {
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-993-uninstall-http-')));
+    sandboxes.push(sandbox);
+    const home = path.join(sandbox, 'home');
+    const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
+    if (install === 'user-scope team') {
+      // A full install, whose uninstall plans from the team config.
+      const url = 'https://git.example.com/team/http-uninstall.git';
+      const seed = path.join(sandbox, 'seed');
+      const git = (args: string[], cwd: string) => execFileSync('git', args, { cwd, env: { ...process.env, ...env }, stdio: 'pipe' });
+      fs.mkdirSync(seed, { recursive: true });
+      fs.mkdirSync(path.join(home, '.workbuddy'), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'teamai.yaml'), `team: http-uninstall\nrepo: ${url}\nprovider: git\nreviewers: []\n`);
+      git(['init', '-q', '-b', 'main'], seed);
+      git(['add', '-A'], seed);
+      git(['-c', 'user.email=e2e@example.com', '-c', 'user.name=e2e', 'commit', '-q', '-m', 'seed'], seed);
+      git(['clone', '-q', '--bare', seed, path.join(sandbox, 'team.git')], sandbox);
+      git(['config', '--global', `url.${path.join(sandbox, 'team.git')}.insteadOf`, url], sandbox);
+      const init = await runCLI(['init', url, '--provider', 'git', '--agent', 'workbuddy', '--scope', 'user', '--force'], env, sandbox);
+      expect(init.code, init.output).toBe(0);
+    }
+    const sync = await pausedHttpOperation(home, sandbox, 'hook sync', env);
+    let uninstall: ReturnType<typeof runCLI> | undefined;
+    try {
+      await sync.ready;
+      const remove = runWaitingForLock(['uninstall', '--force'], env, sandbox);
+      uninstall = remove.run;
+      await Promise.race([uninstall, remove.waiting]);
+      sync.release();
+      const [synced, uninstalled] = await Promise.all([sync.run, uninstall]);
+      const outputs = `${synced.output}\n${uninstalled.output}`;
+      expect(synced.code, synced.output).toBe(0);
+      expect(uninstalled.code, uninstalled.output).toBe(0);
+      expect(uninstalled.output).toContain('teamai uninstalled');
+      expect(fs.existsSync(path.join(home, '.codebuddy', 'rules', 'late-rule.md')), outputs).toBe(false);
+      expect(fs.existsSync(path.join(home, '.teamai')), outputs).toBe(false);
+    } finally {
+      await Promise.all([sync.close(), uninstall]);
     }
   });
 
