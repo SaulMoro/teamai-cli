@@ -171,4 +171,32 @@ describe('issue #373 project hook isolation (real CLI)', () => {
       }
     }
   });
+
+  it('removes the duplicate team hooks an older CLI appended from a linked worktree', async () => {
+    const single = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
+    // v0.22.0 recorded the worktree's copy in the worktree's own data home and
+    // appended a second entry to each main-checkout file.
+    const ownership = JSON.parse(fs.readFileSync(path.join(projectA, '.teamai', 'managed-main-checkout-hooks.json'), 'utf8'));
+    ownership.codex[0].codexEntryIndex = 1;
+    fs.writeFileSync(path.join(worktreeA, '.teamai', 'managed-main-checkout-hooks.json'), JSON.stringify(ownership));
+    for (const file of mainFiles(projectA)) {
+      const settings = readSettings(file);
+      settings.hooks.Stop.push(settings.hooks.Stop[0]);
+      fs.writeFileSync(file, JSON.stringify(settings, null, 2));
+    }
+
+    const linked = await runCLI(worktreeA, home);
+    expect(linked.code, linked.output).toBe(0);
+    expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'))).toEqual(single);
+    const main = await runCLI(projectA, home);
+    expect(main.code, main.output).toBe(0);
+    expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'))).toEqual(single);
+  });
+
+  it('keeps the main checkout team hooks when a linked worktree removes its own', async () => {
+    const shared = mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'));
+    const removed = await runCLI(worktreeA, home, 'remove');
+    expect(removed.code, removed.output).toBe(0);
+    expect(mainFiles(projectA).map((file) => fs.readFileSync(file, 'utf8'))).toEqual(shared);
+  });
 });

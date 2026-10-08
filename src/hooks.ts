@@ -478,6 +478,12 @@ export interface MainCheckoutHooks {
   worktreeScoped: boolean;
   /** Manifest of the team hooks written in this target root. */
   manifestPath: string;
+  /**
+   * The manifest an older CLI kept for this target in the current checkout's
+   * own data home, when that differs from `manifestPath` (#373). Its records
+   * are adopted so the entries it appended are reconciled once.
+   */
+  checkoutManifestPath?: string;
   /** Configured project-scope targets; Claude uses settings.local.json beside its settings file. */
   files: Readonly<Record<string, string>>;
 }
@@ -501,10 +507,25 @@ export async function resolveMainCheckoutHooks(
     const relative = tool === 'claude' ? path.join(path.dirname(settings), 'settings.local.json') : settings;
     return [[tool, path.join(root, relative)]];
   }));
-  const manifestRoot = worktreeScoped
-    ? path.join(getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(root))
-    : getDataHome(localConfig);
-  return { root, worktreeScoped, manifestPath: path.join(manifestRoot, 'managed-main-checkout-hooks.json'), files };
+  const manifestName = 'managed-main-checkout-hooks.json';
+  if (worktreeScoped) {
+    const manifestRoot = path.join(getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(root));
+    return { root, worktreeScoped, manifestPath: path.join(manifestRoot, manifestName), files };
+  }
+  // Every checkout shares the main checkout's files, so their ownership lives
+  // in the main checkout's data home. An un-migrated linked worktree has a data
+  // home of its own, where a separate record would append the entries again.
+  const { detectProjectConfig } = await import('./config.js');
+  const shared = root === canonicalProjectRoot(localConfig.projectRoot) ? null : await detectProjectConfig(root);
+  const manifestPath = path.join(getDataHome(shared ?? localConfig), manifestName);
+  const checkoutManifestPath = path.join(getDataHome(localConfig), manifestName);
+  return {
+    root,
+    worktreeScoped,
+    manifestPath,
+    ...(checkoutManifestPath === manifestPath ? {} : { checkoutManifestPath }),
+    files,
+  };
 }
 
 /**
@@ -1995,6 +2016,7 @@ export async function reconcileHooksToAllTools(
         await reconcileMainCheckoutTeamHooks(mainFile, tool, defs, {
           manifestPath: opts.mainCheckout.manifestPath,
           legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
+          checkoutManifestPath: opts.mainCheckout.checkoutManifestPath,
           removeAll: opts.removeAll,
         });
         reconciledMainTools.add(tool);
@@ -2016,11 +2038,30 @@ async function reconcileMainCheckoutTeamHooks(
   file: string,
   tool: string,
   teamDefs: HookDef[],
-  opts: { manifestPath: string; legacyManifestPath: string; removeAll?: boolean },
+  opts: { manifestPath: string; legacyManifestPath: string; checkoutManifestPath?: string; removeAll?: boolean },
 ): Promise<void> {
+  const { checkoutManifestPath, ...reconcileOpts } = opts;
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
-  await reconcileHooks(file, tool, teamDefs, { ...opts, teamOnly: true });
+  // A linked worktree with its own install removes only what it recorded; the
+  // main checkout's install keeps the shared entries.
+  if (opts.removeAll && checkoutManifestPath) {
+    await reconcileHooks(file, tool, teamDefs, { manifestPath: checkoutManifestPath, removeAll: true, teamOnly: true });
+    return;
+  }
+  // Adopt this checkout's old records before reconciling, as reconcileHooks
+  // does for legacyManifestPath, and retire them only once that succeeded.
+  const checkout = checkoutManifestPath ? await readManifest(checkoutManifestPath) : null;
+  if (checkout?.[tool]?.length) {
+    const manifest = await readManifest(opts.manifestPath);
+    manifest[tool] = [...(manifest[tool] ?? []), ...checkout[tool]];
+    await writeJson(expandHome(opts.manifestPath), manifest);
+  }
+  await reconcileHooks(file, tool, teamDefs, { ...reconcileOpts, teamOnly: true });
+  if (checkout?.[tool]?.length && checkoutManifestPath) {
+    delete checkout[tool];
+    await writeJson(expandHome(checkoutManifestPath), checkout);
+  }
 }
 
 /** What a Codex trust pass for one scope works on. */

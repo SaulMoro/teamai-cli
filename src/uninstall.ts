@@ -676,7 +676,13 @@ async function buildRemovalPlan(
     }
   }
   for (const target of mainCheckouts) {
-    hookTargets.push({
+    // A linked worktree with its own install takes back only what it recorded.
+    hookTargets.push(target.checkoutManifestPath ? {
+      baseDir: target.root,
+      manifestPath: target.checkoutManifestPath,
+      teamOnly: true,
+      fileFor: (tool) => mainCheckoutHookFile(target, tool),
+    } : {
       baseDir: target.root,
       manifestPath: target.manifestPath,
       teamOnly: true,
