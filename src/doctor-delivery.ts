@@ -198,12 +198,12 @@ async function differingCopyLabel(
   item: ResourceItem, target: DeliveryTarget, olderLabel: string, localConfig: LocalConfig, memberLines: string[], recordedLabel?: string,
 ): Promise<string> {
   const { deliveredHashes } = await import('./pull.js');
-  const { describeMembersFile, judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry, judgeCopy, recordedUnchanged } = await import('./resources/delivered-copies.js');
   const previous = await deliveredHashes(localConfig);
   const verdict = await judgeCopy(previous, item, target);
   if (verdict.kind === 'keep') return CHANGED_BY_YOU;
   if (verdict.kind === 'member') {
-    memberLines.push(describeMembersFile(target.dest, item.relativePath));
+    memberLines.push(await describeKeptEntry(target.dest, item.relativePath));
     return MEMBERS_OWN;
   }
   return recordedLabel !== undefined && await recordedUnchanged(previous, target.dest) ? recordedLabel : olderLabel;
@@ -266,12 +266,12 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
   // Pull's line for each skill directory of the member's own, by the tool it is in.
   const memberLines = new Map<string, string[]>();
   const { deliveredHashes } = await import('./pull.js');
-  const { describeMembersFile, judgeCopy } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry, judgeCopy } = await import('./resources/delivered-copies.js');
   const previous = await deliveredHashes(localConfig);
   const { byTool } = await walkDelivery(getHandler('skills'), ctx, items, async (target, item) => {
     if (!await pathExists(target.dest)) return labels[0];
     if ((await judgeCopy(previous, item, target)).kind === 'member') {
-      linesFor(memberLines, target.tool).push(describeMembersFile(target.dest, item.relativePath));
+      linesFor(memberLines, target.tool).push(await describeKeptEntry(target.dest, item.relativePath));
       return MEMBERS_OWN;
     }
     return await skillIsDiscoverable(target.dest, item.name) ? null : labels[1];
@@ -1386,7 +1386,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   if (!teamConfig) return [];
 
   const {
-    isPrunableDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
+    isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
   } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
@@ -1421,9 +1421,11 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   // A file pull keeps because it is no team version of a removed doc is the member's, not stale (#993).
   const staleFiles: string[] = [];
   for (const file of localFiles.filter((local) => !known.has(local))) {
-    if (await isPrunableDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
+    if (await isPrunedDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
   }
   const stale = [...staleFiles, ...staleDirectories];
+  // Only the member's own files there, and no team doc: nothing for this check to say (#993).
+  if (teamFiles.length === 0 && stale.length === 0) return [];
 
   // isFile, not merely "something is there": a directory sitting on the
   // expected name, or a symlink with nothing behind it, would satisfy a plain
@@ -1434,7 +1436,8 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   }
   // Files at a team doc's path that hold no team version of it: pull keeps them (#993).
   const members = await membersDocs(desired, dest, localConfig.repo.localPath);
-  const { describeMembersFile } = await import('./resources/delivered-copies.js');
+  const { describeKeptEntry } = await import('./resources/delivered-copies.js');
+  const memberLines = await Promise.all(members.map((file) => describeKeptEntry(path.join(dest, file), `docs/${file}`)));
 
   return [{
     name: 'Team docs delivered',
@@ -1446,7 +1449,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
       ...(missing.length || stale.length
         ? ['Run `teamai pull --force` to restore the docs mirror; a plain pull skips an already-synced revision.']
         : []),
-      ...members.map((file) => describeMembersFile(path.join(dest, file), `docs/${file}`)),
+      ...memberLines,
     ].join(' '),
   }];
 }
@@ -1467,7 +1470,11 @@ export async function keptDocNotes(ctx: DoctorContext): Promise<string[]> {
     const known = new Set([...desired.files, ...desired.withheld.flatMap(({ dir, files }) => files.map((file) => `${dir}/${file}`))]);
     const notes: string[] = [];
     for (const file of (await listDocFiles(dest)).filter((local) => !known.has(local))) {
-      if (!await isPrunableDoc(path.join(dest, file), file, localConfig.repo.localPath)) notes.push(describeKeptRemovedDoc(path.join(dest, file), file));
+      const target = path.join(dest, file);
+      if (await isPrunableDoc(target, file, localConfig.repo.localPath)) continue;
+      const link = (await fs.promises.lstat(target).catch(() => null))?.isSymbolicLink() ?? false;
+      const line = await describeKeptRemovedDoc(target, file, localConfig.repo.localPath, link);
+      if (line !== null) notes.push(line);
     }
     return notes;
   } catch {

@@ -315,6 +315,8 @@ export interface SourceInstallManifest {
   installedPaths?: Record<string, string[]>;
   /** Original physical destination for each recorded relative deployment path. */
   installedPhysicalPaths?: Record<string, string>;
+  /** For each absolute destination, the tool home it lay in when recorded (#993): a home that moved since leaves the copy unmanaged. */
+  installedHomes?: Record<string, string>;
 }
 
 /** TTL for source repo pull: don't re-pull within this duration (ms). */

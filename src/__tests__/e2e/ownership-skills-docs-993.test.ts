@@ -238,7 +238,7 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     init(t, dir);
     expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
     expect(read(path.join(docs, 'gone.md'))).toBe('# Gone v2\n');
-    // A local-only draft at a path the team never had is the mirror's to prune, as before.
+    // A draft at a path the team never had is the member's: it stays, unnamed.
     writeFile(path.join(docs, 'draft.md'), 'draft\n');
 
     t.publish({ 'docs/old.md': null, 'docs/gone.md': null }, 'remove docs');
@@ -249,10 +249,197 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
       `Kept ${path.join(docs, 'old.md')}: the team removed docs/old.md, but this copy matches no team version of it. Delete it when you no longer need it.`,
     );
     expect(fs.existsSync(path.join(docs, 'gone.md'))).toBe(false);
-    expect(fs.existsSync(path.join(docs, 'draft.md'))).toBe(false);
+    expect(read(path.join(docs, 'draft.md'))).toBe('draft\n');
+    expect(pulled.output).not.toContain(path.join(docs, 'draft.md'));
     expect(read(path.join(docs, 'guide.md'))).toBe('# Guide\n');
     // Pull keeps it, so doctor does not ask pull --force to remove it.
     expect(teamai(['doctor'], dir).output).not.toContain('Stale docs');
+  });
+
+  it('keeps a member\'s link that replaced a team doc when the team deletes that doc, without following it', () => {
+    const t = team('docs-link', { 'docs/guide.md': '# Guide\n', 'docs/keep.md': '# Keep\n' });
+    const dir = business('docs-link-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    const mine = path.join(sandbox, 'docs-link-mine.md');
+    writeFile(mine, 'MY GUIDE\n');
+    const link = path.join(docs, 'guide.md');
+    fs.rmSync(link);
+    fs.symlinkSync(mine, link);
+
+    t.publish({ 'docs/guide.md': null }, 'remove guide');
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(mine)).toBe('MY GUIDE\n');
+    expect(pulled.output).toContain(`Kept ${link}: the team removed docs/guide.md`);
+  });
+
+  it('uninstall removes teamai\'s docs from the mirror and keeps the member\'s files, directories and links, naming them', () => {
+    const t = team('docs-uninstall', { 'docs/guide.md': '# Guide\n', 'docs/sub/deep.md': '# Deep\n', 'docs/old.md': '# Old\n' });
+    const dir = business('docs-uninstall-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    t.publish({ 'docs/old.md': null }, 'remove old');
+    teamaiOk(['pull'], dir);
+    // At a removed doc's path, at paths the team never had, and a link to a file of the member's.
+    writeFile(path.join(docs, 'old.md'), 'MY OLD NOTES\n');
+    writeFile(path.join(docs, 'notes.md'), 'MY NOTES\n');
+    writeFile(path.join(docs, 'mine', 'draft.md'), 'MY DRAFT\n');
+    const external = path.join(sandbox, `docs-uninstall-${attempt}.md`);
+    writeFile(external, '# Guide\n');
+    fs.symlinkSync(external, path.join(docs, 'linked.md'));
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+
+    expect(fs.existsSync(path.join(docs, 'guide.md')), uninstalled.output).toBe(false);
+    expect(fs.existsSync(path.join(docs, 'sub'))).toBe(false);
+    expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
+    expect(read(path.join(docs, 'notes.md'))).toBe('MY NOTES\n');
+    expect(read(path.join(docs, 'mine', 'draft.md'))).toBe('MY DRAFT\n');
+    expect(fs.lstatSync(path.join(docs, 'linked.md')).isSymbolicLink()).toBe(true);
+    expect(read(external)).toBe('# Guide\n');
+    expect(uninstalled.output).toContain(`Kept ${path.join(docs, 'old.md')}: it is not teamai's (no delivery record, `
+      + 'and it matches no team version of docs/old.md), so uninstall left it.');
+  });
+
+  it('keeps a member\'s directory holding a link where the team deleted a doc file, without following it', () => {
+    const t = team('docs-dir-link', { 'docs/guide': '# Guide file\n', 'docs/keep.md': '# Keep\n' });
+    const dir = business('docs-dir-link-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    const mine = path.join(sandbox, 'docs-dir-link-mine.md');
+    writeFile(mine, 'MY NOTES\n');
+    fs.rmSync(path.join(docs, 'guide'));
+    fs.mkdirSync(path.join(docs, 'guide'));
+    const link = path.join(docs, 'guide', 'personal.md');
+    fs.symlinkSync(mine, link);
+
+    t.publish({ 'docs/guide': null }, 'remove guide');
+    teamaiOk(['pull'], dir);
+
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(mine)).toBe('MY NOTES\n');
+  });
+
+  it('keeps a member\'s skill directory holding a link at a team skill\'s path, and never writes through the link', () => {
+    const t = team('skill-link', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const external = path.join(sandbox, 'skill-link-mine.md');
+    writeFile(external, skillMd('team-skill', 'Team.'));
+    const dir = business('skill-link-biz', { '.claude/skills/.keep': '' });
+    const skillDir = path.join(dir, '.claude', 'skills', 'team-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.symlinkSync(external, path.join(skillDir, 'SKILL.md'));
+    t.publish({ 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team v2.') }, 'v2');
+
+    const initRun = init(t, dir);
+    expect(fs.lstatSync(path.join(skillDir, 'SKILL.md')).isSymbolicLink()).toBe(true);
+    expect(read(external)).toBe(skillMd('team-skill', 'Team.'));
+    // Named by the link itself (#993).
+    expect(initRun.output).toContain(`Kept ${path.join(skillDir, 'SKILL.md')}: it is a link of yours, so teamai does not replace it.`);
+  });
+
+  it('uninstall keeps hidden files of the member\'s in the docs mirror, even when nothing else of theirs is there', () => {
+    const t = team('docs-hidden', { 'docs/guide.md': '# Guide\n' });
+    const dir = business('docs-hidden-biz');
+    const docs = path.join(dir, '.teamai', 'docs');
+    init(t, dir);
+    writeFile(path.join(docs, '.draft'), 'MY HIDDEN DRAFT\n');
+    writeFile(path.join(docs, 'sub', '.notes'), 'MY HIDDEN NOTES\n');
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+
+    expect(fs.existsSync(path.join(docs, 'guide.md'))).toBe(false);
+    expect(read(path.join(docs, '.draft'))).toBe('MY HIDDEN DRAFT\n');
+    expect(read(path.join(docs, 'sub', '.notes'))).toBe('MY HIDDEN NOTES\n');
+    expect(uninstalled.output).toContain(`Kept ${path.join(docs, '.draft')}`);
+  });
+
+  it('keeps a member\'s link in place of a team skill directory through pull, remove and uninstall, and names it', () => {
+    const t = team('skill-leaf-link', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const mine = path.join(sandbox, 'skill-leaf-link-mine');
+    writeFile(path.join(mine, 'SKILL.md'), skillMd('team-skill', 'Team.'));
+    const dir = business('skill-leaf-link-biz', { '.claude/skills/.keep': '' });
+    const link = path.join(dir, '.claude', 'skills', 'team-skill');
+    fs.symlinkSync(mine, link, 'dir');
+
+    const initRun = init(t, dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(initRun.output).toContain(
+      `Kept ${link}: it is a link of yours, so teamai does not replace it. Remove the link to receive skills/team-skill from the team.`,
+    );
+    teamai(['remove', 'skills', 'team-skill', '--force'], dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    teamai(['uninstall', '--force'], dir);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(path.join(mine, 'SKILL.md'))).toBe(skillMd('team-skill', 'Team.'));
+  });
+
+  it('keeps a delivered skill directory holding a file the member added, through remove, uninstall and a team removal', () => {
+    const files = { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.'), 'skills/gone-skill/SKILL.md': skillMd('gone-skill', 'Gone.') };
+    const t = team('skill-extra-file', files);
+    const dir = business('skill-extra-file-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const teamSkill = path.join(dir, '.claude', 'skills', 'team-skill');
+    const goneSkill = path.join(dir, '.claude', 'skills', 'gone-skill');
+    writeFile(path.join(teamSkill, 'notes.md'), 'MY NOTES\n');
+    writeFile(path.join(goneSkill, 'notes.md'), 'MY GONE NOTES\n');
+
+    // The team removes a skill: the copy holding the member's file stays.
+    t.publish({ 'skills/gone-skill/SKILL.md': null, 'skills/.removed': 'gone-skill\n' }, 'remove gone-skill');
+    teamaiOk(['pull'], dir);
+    expect(read(path.join(goneSkill, 'notes.md'))).toBe('MY GONE NOTES\n');
+
+    // remove takes teamai's files and leaves the member's, naming it.
+    const removed = teamai(['remove', 'skills', 'team-skill', '--force'], dir);
+    expect(read(path.join(teamSkill, 'notes.md'))).toBe('MY NOTES\n');
+    expect(fs.existsSync(path.join(teamSkill, 'SKILL.md'))).toBe(false);
+    expect(removed.output).toContain(`Kept ${path.join(teamSkill, 'notes.md')}`);
+  });
+
+  it('uninstall takes teamai\'s files from a delivered skill and leaves the file the member added', () => {
+    const t = team('skill-extra-uninstall', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-extra-uninstall-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const teamSkill = path.join(dir, '.claude', 'skills', 'team-skill');
+    writeFile(path.join(teamSkill, 'notes.md'), 'MY NOTES\n');
+
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+    expect(read(path.join(teamSkill, 'notes.md'))).toBe('MY NOTES\n');
+    expect(fs.existsSync(path.join(teamSkill, 'SKILL.md'))).toBe(false);
+    expect(uninstalled.output).toContain(`Kept ${path.join(teamSkill, 'notes.md')}`);
+  });
+
+  it('treats a CONTRIBUTORS file the member put in a delivered skill as theirs, through remove and uninstall', () => {
+    const t = team('skill-contributors', {
+      'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.'),
+      'skills/other-skill/SKILL.md': skillMd('other-skill', 'Other.'),
+    });
+    const dir = business('skill-contributors-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const teamSkill = path.join(dir, '.claude', 'skills', 'team-skill');
+    const otherSkill = path.join(dir, '.claude', 'skills', 'other-skill');
+    writeFile(path.join(teamSkill, 'CONTRIBUTORS'), 'me\n');
+    writeFile(path.join(otherSkill, 'CONTRIBUTORS'), 'me too\n');
+
+    teamai(['remove', 'skills', 'team-skill', '--force'], dir);
+    expect(read(path.join(teamSkill, 'CONTRIBUTORS'))).toBe('me\n');
+    expect(fs.existsSync(path.join(teamSkill, 'SKILL.md'))).toBe(false);
+    teamaiOk(['uninstall', '--force'], dir);
+    expect(read(path.join(otherSkill, 'CONTRIBUTORS'))).toBe('me too\n');
+    expect(fs.existsSync(path.join(otherSkill, 'SKILL.md'))).toBe(false);
+  });
+
+  it('keeps a file the member added to a delivered skill when the team later adds one at that path', () => {
+    const t = team('skill-new-path', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-new-path-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const notes = path.join(dir, '.claude', 'skills', 'team-skill', 'notes.md');
+    writeFile(notes, 'MY NOTES\n');
+    t.publish({ 'skills/team-skill/notes.md': 'TEAM NOTES\n' }, 'add notes');
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(notes)).toBe('MY NOTES\n');
+    expect(pulled.output).toContain(`Kept ${path.dirname(notes)}`);
   });
 
   it('keeps a recorded skill the member edited whole, as before', () => {

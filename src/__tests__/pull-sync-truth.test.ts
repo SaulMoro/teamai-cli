@@ -218,8 +218,11 @@ describe('pull reports what reached the tool directory (#585)', () => {
       state.lastPullTargets = [];
       await fse.outputFile(path.join(homeDir, 'docs', 'stale.md'), 'stale');
       await fse.outputFile(path.join(repoPath, 'env', 'env.yaml'), 'variables:\n  - key: DOCS_TEST\n    value: delivered\n');
-      // The history shows the team never had docs/stale.md, so the prune may delete it (#993).
-      commitTeamRepo(repoPath);
+      // docs/stale.md was a team doc the team since removed, so the prune may delete the copy (#993).
+      await fse.outputFile(path.join(repoPath, 'docs', 'stale.md'), 'stale');
+      commitTeamRepo(repoPath, 'stale');
+      await fse.remove(path.join(repoPath, 'docs', 'stale.md'));
+      commitTeamRepo(repoPath, 'remove stale');
       if (failure === 'copy') ioSpy = vi.spyOn(fse, 'copy').mockRejectedValueOnce(new Error('copy failed'));
       if (failure === 'prune') ioSpy = vi.spyOn(fse, 'unlink').mockRejectedValueOnce(new Error('prune failed'));
       if (failure === 'unsafe destination') teamConfig.sharing.docs.localDir = homeDir;

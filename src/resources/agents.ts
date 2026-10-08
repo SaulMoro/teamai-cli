@@ -16,7 +16,7 @@ import { placedResourcePath } from '../push-namespaces.js';
 import { itemCandidate, resolveNamespacedItems, type NamespaceResolution } from '../namespace-resolver.js';
 import { getFileContentAtRev, getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import {
-  describeMembersDirLeft, forgetDelivered, isTeamaiCopy, judgeRemoval, keepsEditedCopy, keepsTrackedCopy, recordDelivered, recordedUnchanged,
+  describeMembersDirLeft, forgetDelivered, isLink, isTeamaiCopy, judgeRemoval, keepsEditedCopy, keepsTrackedCopy, recordDelivered, recordedUnchanged,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 import { warnOnce } from '../utils/warn-once.js';
@@ -878,6 +878,8 @@ export class AgentsHandler extends ResourceHandler {
       for (const localName of localNames) {
         for (const ext of AGENT_FILE_EXTENSIONS) {
           const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
+          // A link is the member's, whatever the records say: teamai never deletes one (#993).
+          if (await isLink(filePath)) continue;
           // The author's root copy is this agent's by the placement record, which proves it here.
           if (localName === name && await pathExists(filePath)
             && !await ownsAgentCopy(localConfig, filePath, stem, tool, previous)) {
@@ -1033,6 +1035,8 @@ export class AgentsHandler extends ResourceHandler {
         const expected = await this.renderedForTool(item, tool, aliases);
         if (!expected || activeDestinations.has(`${item.name}${expected.ext}`)) continue;
         const deployed = path.join(destDir, `${item.name}${expected.ext}`);
+        // A link is the member's, whatever its target holds (#993).
+        if (await isLink(deployed)) continue;
         const current = await readFileSafe(deployed);
         if (current === null) continue;
         const recorded = records[item.name]?.[tool];
@@ -1582,9 +1586,10 @@ export function agentOrigin(repoPath: string, stem: string, tool: ToolName, alia
   };
 }
 
-/** `agentOrigin` for a copy of a removed agent; undefined for a tool teamai renders no agents for. */
-export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin | undefined> {
-  if (!isKnownTool(tool)) return undefined;
+/** `agentOrigin` for a copy of a removed agent; for a tool teamai renders no agents for, the team agents verbatim. */
+export async function removedAgentOrigin(localConfig: LocalConfig, stem: string, tool: string): Promise<CopyOrigin> {
+  // A tool teamai renders no agents for still gets a proof: the team agents' own bytes, verbatim (#993).
+  if (!isKnownTool(tool)) return { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };
   return agentOrigin(localConfig.repo.localPath, stem, tool, await loadModelAliases(localConfig));
 }
 
@@ -1598,9 +1603,9 @@ export async function removedAgentOrigin(localConfig: LocalConfig, stem: string,
 export async function ownsAgentCopy(
   localConfig: LocalConfig, file: string, stem: string, tool: string, previous: DeliveredHashes | undefined,
 ): Promise<boolean> {
+  if (await isLink(file)) return false;
   if (BUILTIN_AGENT_NAMES.has(stem) || previous?.[file] !== undefined) return true;
-  const origin = await removedAgentOrigin(localConfig, stem, tool)
-    ?? { repoPath: localConfig.repo.localPath, pathspec: `:(glob)agents/**/${stem}.*` };
+  const origin = await removedAgentOrigin(localConfig, stem, tool);
   return isTeamaiCopy(file, origin);
 }
 

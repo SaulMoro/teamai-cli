@@ -117,8 +117,9 @@ Every other command, every flag, and the flags `--help` hides live in the
 generated reference below. Read it instead of guessing a flag.
 
 `teamai pull` mirrors the non-hidden docs you receive into `sharing.docs.localDir`,
-removing stale and local-only documents; an edited doc of a docs namespace you left
-is kept and named. Use a dedicated directory; preview with `--dry-run`.
+removing teamai's copies of documents the team removed; the user's own files there
+stay, and an edited doc of a docs namespace you left is kept and named. Preview
+with `--dry-run`.
 
 `teamai pull` keeps a skill, rule or agent copy the user changed since teamai
 delivered it, `--force` included, and names it (`Kept <path>: ...`). To share

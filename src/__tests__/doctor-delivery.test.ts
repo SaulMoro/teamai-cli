@@ -430,37 +430,60 @@ describe('doctor — skills delivered on disk', () => {
       // The history proves which local files a pull may prune (#993).
       commitTeamRepo(repoPath);
 
-      expect(await (await docsCheck())!.check()).toBe(true);
+      // No check at all is as good as a passing one: nothing is reported (#993).
+      expect(await (await docsCheck())?.check() ?? true).toBe(true);
 
-      await fse.outputFile(path.join(homeDir, 'team-docs', 'beta', 'retired.md'), '# gone upstream\n');
+      // A copy of a doc the team has since removed is stale; a file of the member's would not be (#993).
+      await writeTeamDoc('beta', 'retired.md');
+      commitTeamRepo(repoPath, 'retired');
+      await fse.remove(path.join(repoPath, 'docs', 'beta', 'retired.md'));
+      commitTeamRepo(repoPath, 'remove retired');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'beta', 'retired.md'), '# doc\n');
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('beta/retired.md');
       expect(check!.fix).not.toContain('billing.md');
     });
 
+    it('does not report as stale a directory of the member\'s that pull keeps where the team deleted a doc file (#993)', async () => {
+      await writeTeamDoc('guide');
+      commitTeamRepo(repoPath, 'add guide');
+      await fse.remove(path.join(repoPath, 'docs', 'guide'));
+      await writeTeamDoc('other.md');
+      commitTeamRepo(repoPath, 'remove guide');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'other.md'), '# doc\n');
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'guide', 'personal.md'), 'mine');
+      const check = await docsCheck();
+      expect(check?.fix ?? '').not.toContain('guide/personal.md');
+    });
+
     it('reports missing and stale docs together without changing local files', async () => {
+      // docs/old/retired.md was a team doc, so the local copy is stale once the team removed it (#993).
+      await writeTeamDoc('old', 'retired.md');
+      commitTeamRepo(repoPath, 'retired');
+      await fse.remove(path.join(repoPath, 'docs', 'old'));
       await writeTeamDoc('guide.md');
+      commitTeamRepo(repoPath, 'remove retired');
       const stale = path.join(homeDir, 'team-docs', 'old', 'retired.md');
-      await fse.outputFile(stale, 'stale');
-      // The history shows the team never had docs/old/retired.md (#993).
-      commitTeamRepo(repoPath);
+      await fse.outputFile(stale, '# doc\n');
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('Missing from');
       expect(check!.fix).toContain('guide.md');
       expect(check!.fix).toContain('Stale docs');
       expect(check!.fix).toContain('old/retired.md');
-      expect(await fse.readFile(stale, 'utf8')).toBe('stale');
+      expect(await fse.readFile(stale, 'utf8')).toBe('# doc\n');
     });
 
     it.each(['missing', 'empty', 'hidden-only'])('detects stale docs when the team bundle is %s', async (state) => {
+      // docs/old.md was a team doc, so the local copy is stale once the team removed it (#993).
+      await writeTeamDoc('old.md');
+      commitTeamRepo(repoPath, 'old');
+      await fse.remove(path.join(repoPath, 'docs'));
       if (state === 'empty') await fse.ensureDir(path.join(repoPath, 'docs'));
       if (state === 'hidden-only') await writeTeamDoc('.keep');
-      await fse.outputFile(path.join(homeDir, 'team-docs', 'old.md'), 'stale');
-      // The history shows the team never had docs/old.md (#993).
-      await fse.ensureDir(repoPath);
-      commitTeamRepo(repoPath);
+      await fse.outputFile(path.join(homeDir, 'team-docs', 'old.md'), '# doc\n');
+      commitTeamRepo(repoPath, 'remove old');
       const check = await docsCheck();
       expect(await check!.check()).toBe(false);
       expect(check!.fix).toContain('Stale docs');
@@ -493,15 +516,18 @@ describe('doctor — skills delivered on disk', () => {
       expect(await docsCheck()).toBeUndefined();
     });
 
-    it('reports a stale directory link without traversing its target', async () => {
+    // Changed in #993 from reporting it as stale: pull keeps a member's link at a path the team never had.
+    it('does not call a member\'s directory link at a path the team never had stale, nor traverse its target (#993)', async () => {
       const outside = path.join(tempDir, 'outside');
       await fse.outputFile(path.join(outside, 'keep.md'), 'outside');
       await fse.ensureDir(path.join(homeDir, 'team-docs'));
       await fse.symlink(outside, path.join(homeDir, 'team-docs', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+      // The history shows the team never had docs/linked (#993).
+      commitTeamRepo(repoPath);
       const check = await docsCheck();
-      expect(await check!.check()).toBe(false);
-      expect(check!.fix).toContain('linked');
-      expect(check!.fix).not.toContain('keep.md');
+      expect(await check?.check() ?? true).toBe(true);
+      expect(check?.fix ?? '').not.toContain('linked');
+      expect(check?.fix ?? '').not.toContain('keep.md');
       expect(await fse.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('outside');
     });
 

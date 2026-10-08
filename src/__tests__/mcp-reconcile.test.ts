@@ -1699,7 +1699,7 @@ servers:
       expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
     });
 
-    it('writes a symlinked Codex project config at its own path, never into the tracked file it links to', async () => {
+    it('withholds a resolved value from a symlinked Codex project config whose target git tracks, and keeps the link', async () => {
       const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
       const tracked = path.join(projectRoot, 'config', 'codex.toml');
       const link = path.join(projectRoot, '.codex', 'config.toml');
@@ -1713,9 +1713,25 @@ servers:
       await reconcileMcpForConfig(withCodex, projectConfig);
 
       expect(await fse.readFile(tracked, 'utf-8')).toBe('model = "gpt-5"\n');
-      expect((await fse.lstat(link)).isSymbolicLink()).toBe(false);
-      expect(await fse.readFile(link, 'utf-8')).toContain('super-secret-value');
-      expect(await excludeOf(projectRoot)).toMatch(/^\/\.codex\/config\.toml$/m);
+      expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`git already tracks ${path.join(await fse.realpath(projectRoot), 'config', 'codex.toml')}`));
+    });
+
+    it('writes a resolved value into the untracked target of a symlinked Codex project config, and lists the target', async () => {
+      const withCodex = { ...teamConfig, toolPaths: { ...TOOL_PATHS, codex: { ...TOOL_PATHS.codex, mcpProject: '.codex/config.toml' } } } as TeamaiConfig;
+      const target = path.join(projectRoot, 'config', 'codex.toml');
+      const link = path.join(projectRoot, '.codex', 'config.toml');
+      await fse.outputFile(target, 'model = "gpt-5"\n');
+      await fse.ensureDir(path.join(projectRoot, '.codex', 'skills'));
+      await fse.symlink(path.join('..', 'config', 'codex.toml'), link);
+      await writeMcpYaml(`${withSecret}    tools: [codex]\n`);
+
+      await reconcileMcpForConfig(withCodex, projectConfig);
+
+      expect((await fse.lstat(link)).isSymbolicLink()).toBe(true);
+      expect(await fse.readFile(target, 'utf-8')).toContain('model = "gpt-5"');
+      expect(await fse.readFile(target, 'utf-8')).toContain('super-secret-value');
+      expect(await excludeOf(projectRoot)).toMatch(/^\/config\/codex\.toml$/m);
     });
 
     describe('a config an older teamai wrote under a mapping an earlier teamai.yaml made', () => {

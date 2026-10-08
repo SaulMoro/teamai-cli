@@ -46,6 +46,7 @@ import { entryLayout, reportEntryResolution, resolveEntriesFor } from './namespa
 import {
   readJson,
   writeJsonAtomic,
+  symlinkTarget,
   readFileSafe,
   readFileIfExists,
   pathExists,
@@ -120,6 +121,11 @@ export interface McpChange {
 }
 
 const UNRECORDED_SERVER_REASON = 'a server with this name already exists and is not managed by teamai';
+
+/** The dry-run line for an unrecorded copy of a server the team removed, which a run would remove (#993). */
+function describeRemovedServerPreview(target: McpTarget, name: string): string {
+  return `Would remove MCP server ${name} from ${target.file}: it equals a server the team has removed.`;
+}
 
 /** The dry-run line for an unrecorded server pull would record as teamai's without rewriting it (#993). */
 function describeAdoptionPreview(target: McpTarget, name: string): string {
@@ -331,6 +337,14 @@ export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, r
 }
 
 /**
+ * Whether two paths name one file: a lookup path may be a symlink to another
+ * (`~/.codebuddy/.mcp.json` -> `mcp.json`), and is then not another file (#993).
+ */
+async function sameMcpFile(a: string, b: string): Promise<boolean> {
+  return a === b || await realFilePath(a) === await realFilePath(b);
+}
+
+/**
  * For a target whose tool reads the first of several files (#993): teamai's
  * servers its records place in another file, which the tool does not read,
  * by file. Read-only; for `doctor` and `teamai mcp list`.
@@ -341,7 +355,7 @@ export async function shadowedMcpRecords(localConfig: LocalConfig, target: McpTa
   const { manifest } = await loadMcpManifest(localConfig, true);
   for (const record of manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []) {
     const file = recordedFileOf(target, record);
-    if (file === target.file || !(await installedMcpEntries({ ...target, file }))?.has(record.name)) continue;
+    if (await sameMcpFile(file, target.file) || !(await installedMcpEntries({ ...target, file }))?.has(record.name)) continue;
     shadowed.set(file, [...shadowed.get(file) ?? [], record.name]);
   }
   return shadowed;
@@ -520,11 +534,25 @@ export async function writeJsonDoc(
   options?: { mode?: number },
 ): Promise<void> {
   if (doc.bare) {
-    await writeJsonAtomic(file, doc.servers, options);
+    await writeMcpJson(file, doc.servers, options);
     return;
   }
   doc.data[serverKey] = doc.servers;
-  await writeJsonAtomic(file, doc.data, options);
+  await writeMcpJson(file, doc.data, options);
+}
+
+/**
+ * Write a JSON MCP config atomically. A symlink at `file` is the member's (a
+ * dotfiles setup): the write lands in the file it points to and the link
+ * stays, and the git checks judge that file (`realFilePath`).
+ */
+export async function writeMcpJson(file: string, data: unknown, options?: { mode?: number }): Promise<void> {
+  await writeJsonAtomic(await symlinkTarget(file), data, options);
+}
+
+/** Undo a write that created `file`: the file created goes, and a symlink at `file` stays. */
+async function removeCreatedMcpFile(file: string): Promise<void> {
+  await fs.promises.rm(await symlinkTarget(file), { force: true });
 }
 
 // ─── Codex TOML target I/O ───────────────────────────────────
@@ -725,13 +753,14 @@ function renderMcpEntry(
   return { entry: { entry, hash: entryHash(entry), resolvedValue }, passthrough };
 }
 
-/** Whether any revision of the team repo's MCP files defines a server (#993). Never for an HTTP-mode team. */
-async function teamMcpHistoryHasServers(localConfig: LocalConfig): Promise<boolean> {
-  if (localConfig.repo.kind === 'http') return false;
-  const layout = entryLayout('mcp');
-  const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
-  return (versions ?? []).some((version) => path.posix.basename(version.path) === layout.file
-    && (parseTeamMcpServers(version.content.toString('utf8'))?.length ?? 0) > 0);
+/** Every revision of the team repo's MCP files (#993), or null when unreadable or an HTTP-mode team. */
+type TeamMcpHistory = Array<{ path: string; content: Buffer }> | null;
+
+/** The team's MCP history, read once, on first use. One per reconcile run, shared by every target. */
+function teamMcpHistory(localConfig: LocalConfig): () => Promise<TeamMcpHistory> {
+  return once(async () => (localConfig.repo.kind === 'http'
+    ? null
+    : historicalContents(localConfig.repo.localPath, entryLayout('mcp').dir)));
 }
 
 /** Whose an entry is that `target`'s own MCP record does not claim (#993). */
@@ -769,11 +798,11 @@ function judgeUnrecordedMcpEntry(
   desired: ReadonlyMap<string, DesiredMcpEntry>,
   vars: Record<string, string>,
   claimed: ReadonlySet<string>,
+  history: () => Promise<TeamMcpHistory> = teamMcpHistory(localConfig),
 ): McpEntryJudge {
   const renders = once(async (): Promise<Map<string, unknown[]> | null> => {
-    if (localConfig.repo.kind === 'http') return null;
     const layout = entryLayout('mcp');
-    const versions = await historicalContents(localConfig.repo.localPath, layout.dir);
+    const versions = await history();
     if (versions === null) return null;
     const entries = new Map<string, unknown[]>();
     for (const version of versions) {
@@ -812,8 +841,8 @@ export async function memberMcpServers(
   const installed = await installedMcpEntries(target, { underKeyOnly: true });
   if (!installed) return [];
   const { manifest } = await loadMcpManifest(localConfig, true);
-  const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? [])
-    .filter((r) => recordedFileOf(target, r) === target.file).map((r) => r.name));
+  const { owned: ownedRecords } = await splitByFile(target, manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []);
+  const owned = new Set(ownedRecords.map((r) => r.name));
   const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, claimedByOtherTools(targets, target, manifest));
   const member: string[] = [];
   for (const name of desired.keys()) {
@@ -975,6 +1004,29 @@ export async function resolvedValueEvidence(
 export async function unclaimedMcpServers(target: McpTarget, claimed: readonly string[]): Promise<string[]> {
   const unclaimed = [...(await installedMcpEntries(target))?.keys() ?? []].filter((name) => !claimed.includes(name));
   return unclaimed.length === 0 || (await gitTracks(target.file)).kind === 'tracked' ? [] : unclaimed;
+}
+
+/** Whether any target's file, or another file of its tool's lookup order (#993), holds an MCP server, recorded or not. */
+async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boolean> {
+  for (const target of targets) {
+    for (const file of [target.file, ...target.lookupFiles ?? []]) {
+      if (((await installedMcpEntries({ ...target, file }))?.size ?? 0) > 0) return true;
+    }
+  }
+  return false;
+}
+
+/** `records` split into those of servers in `target`'s file, by real path (#993), and those placed in another file. */
+async function splitByFile(
+  target: McpTarget,
+  records: readonly ManagedMcpRecord[],
+): Promise<{ owned: ManagedMcpRecord[]; elsewhere: ManagedMcpRecord[] }> {
+  const owned: ManagedMcpRecord[] = [];
+  const elsewhere: ManagedMcpRecord[] = [];
+  for (const record of records) {
+    (await sameMcpFile(recordedFileOf(target, record), target.file) ? owned : elsewhere).push(record);
+  }
+  return { owned, elsewhere };
 }
 
 /** `load`, run once, on the first call. */
@@ -1759,8 +1811,12 @@ async function releaseMcpGitExcludes(
   // Every checkout sharing a line judges it, also the main checkout `git worktree list` leaves out (#915).
   const { projectCheckouts } = await import('./pull.js');
   const dirs = [projectRoot, ...await projectCheckouts(localConfig)];
-  for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) dirs.push(path.dirname(target.file));
-  for (const file of Object.keys((await readResolvedMcpFiles(localConfig)).files)) dirs.push(path.dirname(file));
+  const files = [
+    ...(await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })).map((target) => target.file),
+    ...Object.keys((await readResolvedMcpFiles(localConfig)).files),
+  ];
+  // Also where a symlink there points: the line of a linked file is in its target's repository.
+  for (const file of files) dirs.push(path.dirname(file), path.dirname(await realFilePath(file)));
   const excludes = await findMcpGitExcludes(dirs);
   if (excludes.size === 0) return;
   // Keyed as findMcpGitExcludes keys them: by real path (macOS /var).
@@ -1837,9 +1893,10 @@ async function reconcileTargets(
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
   const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
-  // A server the team deleted can still sit unrecorded in a tool's file (#993): only a team
-  // history with no MCP server at all proves there is nothing to look for.
-  if (teamDefs.length === 0 && nothingOwned && !await teamMcpHistoryHasServers(localConfig)) return { changes, wrote };
+  // A server the team deleted can still sit unrecorded in a tool's file (#993): only target
+  // files with no server at all prove there is nothing to look for, without reading the history.
+  if (teamDefs.length === 0 && nothingOwned && !await someMcpEntryInstalled(targets)) return { changes, wrote };
+  const history = teamMcpHistory(localConfig);
   // The files an earlier pull recorded, and each record this run rebuilds after it was lost (#882).
   const ledger = localConfig.scope === 'project' && !options.dryRun ? (await readResolvedMcpFiles(localConfig)).files : {};
   const listed = new Set(Object.keys(ledger));
@@ -1868,14 +1925,13 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, claimedByOtherTools(targets, resolved, manifest));
+    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, claimedByOtherTools(targets, resolved, manifest), history);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
     const records = [...manifest[manifestKey] ?? [], ...leaving?.adopted ?? []];
     // Records of servers in another file the tool does not read (#993) are moved out of it below.
-    const owned = records.filter((r) => recordedFileOf(target, r) === target.file);
-    const elsewhere = records.filter((r) => recordedFileOf(target, r) !== target.file);
+    const { owned, elsewhere } = await splitByFile(target, records);
     const ownedNames = new Set(owned.map((r) => r.name));
     const nextRecords: ManagedMcpRecord[] = [];
     // Their old records, so a manifest this run writes still claims them.
@@ -1914,7 +1970,8 @@ async function reconcileTargets(
       const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judge, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {
-        const names = elsewhere.filter((r) => recordedFileOf(target, r) === leaving.former).map((r) => r.name);
+        const names: string[] = [];
+        for (const r of elsewhere) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
         wrote = await deleteLeftMcpFile(target, leaving.former, names, options, restoreConfigs) || wrote;
       }
     }
@@ -2151,6 +2208,7 @@ async function applyJson(
   // server from the team history (#993), and goes like any other server teamai no longer delivers.
   for (const [name, entry] of Object.entries(doc.servers)) {
     if (desired.has(name) || ownedNames.has(name) || await judge(name, entry) !== 'teamai') continue;
+    if (options.dryRun) log.info(describeRemovedServerPreview(target, name));
     delete doc.servers[name];
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });
@@ -2170,18 +2228,21 @@ async function applyJson(
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
   if (!restoreConfigs.has(target.file)) {
     restoreConfigs.set(target.file, existed
-      ? () => writeJsonAtomic(target.file, previousData)
-      : () => fs.promises.rm(target.file, { force: true }));
+      ? () => writeMcpJson(target.file, previousData)
+      : () => removeCreatedMcpFile(target.file));
   }
   return true;
 }
 
 /**
  * Take teamai's servers out of the files its records `elsewhere` place them
- * in, which `target`'s tool does not read (#993): a pull writes them to the
- * file it reads, uninstall and `teamai mcp remove` remove them. Only entries
- * those records claim are touched. A file that does not parse keeps them, and
- * their records (`nextRecords`). Whether it wrote a file.
+ * in, and out of the other files of the tool's lookup order, none of which
+ * `target`'s tool reads (#993): a pull writes them to the file it reads,
+ * uninstall and `teamai mcp remove` remove them. Only entries those records
+ * claim, or that `judge` proves teamai's (a lost record), are touched; a file
+ * is compared by real path, so an alias of `target.file` is never touched. A
+ * file that does not parse keeps them, and their records (`nextRecords`).
+ * Whether it wrote a file.
  */
 async function removeFromOtherFiles(
   target: McpTarget,
@@ -2194,13 +2255,23 @@ async function removeFromOtherFiles(
   /** A file `deleteLeftMcpFile` deletes and reports. */
   leaving?: string,
 ): Promise<boolean> {
-  const byFile = new Map<string, ManagedMcpRecord[]>();
-  for (const record of elsewhere) {
-    const file = recordedFileOf(target, record);
-    byFile.set(file, [...byFile.get(file) ?? [], record]);
+  const here = await realFilePath(target.file);
+  const byFile = new Map<string, { file: string; records: ManagedMcpRecord[] }>();
+  const add = async (file: string, records: ManagedMcpRecord[]): Promise<void> => {
+    const real = await realFilePath(file);
+    if (real === here) return;
+    const group = byFile.get(real) ?? { file, records: [] };
+    group.records.push(...records);
+    byFile.set(real, group);
+  };
+  for (const record of elsewhere) await add(recordedFileOf(target, record), [record]);
+  // With no record left there, an entry teamai wrote is still found by `judge`; a file holding no server is not read.
+  for (const file of target.lookupFiles ?? []) {
+    if (((await installedMcpEntries({ ...target, file }))?.size ?? 0) > 0) await add(file, []);
   }
+  const left = leaving ? await realFilePath(leaving) : undefined;
   let wrote = false;
-  for (const [file, records] of byFile) {
+  for (const [real, { file, records }] of byFile) {
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
     const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, judge, options, restoreConfigs);
@@ -2210,8 +2281,8 @@ async function removeFromOtherFiles(
     }
     wrote ||= result;
     changes.push(...removed);
-    if (!options.removeAll && removed.length > 0 && file !== leaving) {
-      log.info(`${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${target.tool} (${[...names].join(', ')}) out of ${file}: `
+    if (!options.removeAll && removed.length > 0 && real !== left) {
+      log.info(`${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${target.tool} (${removed.map((c) => c.server).join(', ')}) out of ${file}: `
         + `${target.tool} reads only ${target.file}, the first of its user MCP files that exists.`);
     }
   }
@@ -2234,9 +2305,12 @@ async function leaveFormerMcpFile(
   const index = rel ? USER_MCP_LOOKUP[target.tool]?.indexOf(rel) ?? -1 : -1;
   const former = target.lookupFiles?.[index];
   if (!former || target.file !== former) return null;
+  // A symlink there is the member's, never deleted: the tool keeps reading it, and teamai writes through it.
+  if (await fs.promises.lstat(former).then((stat) => stat.isSymbolicLink(), () => false)) return null;
   let next: string | undefined;
   for (const candidate of target.lookupFiles?.slice(index + 1) ?? []) {
-    if (await pathExists(candidate)) {
+    // A later path that is a link to `former` is not another file: moving there would move nothing.
+    if (await pathExists(candidate) && !await sameMcpFile(candidate, former)) {
       next = candidate;
       break;
     }
@@ -2267,6 +2341,9 @@ async function deleteLeftMcpFile(
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
+  // Never a link, and never the file `target.file` writes to through one.
+  if (await fs.promises.lstat(former).then((stat) => stat.isSymbolicLink(), () => false)
+    || await sameMcpFile(former, target.file)) return false;
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const raw = await readFileSafe(former);
   const doc = await readJsonDoc(former, serverKey);
@@ -2340,6 +2417,7 @@ async function applyCodex(
     if (desired.has(name) || ownedNames.has(name) || await judge(name, codexBlockIn(source, name)) !== 'teamai') continue;
     const next = spliceCodexBlock(source, name, null);
     if (next === source) continue;
+    if (options.dryRun) log.info(describeRemovedServerPreview(target, name));
     source = next;
     dirty = true;
     changes.push({ tool: target.tool, server: name, action: 'removed' });
@@ -2354,7 +2432,7 @@ async function applyCodex(
   await writeCodexAtomic(target.file, source);
   if (!restoreConfigs.has(target.file)) {
     restoreConfigs.set(target.file, previous === null
-      ? () => fs.promises.rm(target.file, { force: true })
+      ? () => removeCreatedMcpFile(target.file)
       : () => writeCodexAtomic(target.file, previous));
   }
   return true;
@@ -2363,20 +2441,29 @@ async function applyCodex(
 /**
  * Make an unchanged config readable by this user only, without rewriting it:
  * an entry a CLI before #879 wrote holds its resolved value in a file that may
- * still be 0644.
+ * still be 0644. A symlink is followed, as the value sits in its target; a
+ * target another user owns is left as it is, and named.
  */
 async function tightenMode(file: string): Promise<void> {
-  const { mode } = await fs.promises.stat(file);
-  if ((mode & 0o077) !== 0) await fs.promises.chmod(file, 0o600);
+  const { mode, uid } = await fs.promises.stat(file);
+  if ((mode & 0o077) === 0) return;
+  const self = process.getuid?.();
+  if (self !== undefined && uid !== self) {
+    log.warn(`${await realFilePath(file)} holds a value teamai resolved and other users can read it, but it is not yours, so teamai `
+      + `left its mode as it is. Ask its owner to make it readable by you only, or point ${file} at a file you own.`);
+    return;
+  }
+  await fs.promises.chmod(file, 0o600);
 }
 
 /**
  * Write a Codex config.toml atomically, readable by this user only: it may
- * hold resolved values. A symlink at `file` is replaced, as `writeJsonAtomic`
- * does for the JSON configs: git protection judges `file`, so a value must
- * never land in the file it links to (#882).
+ * hold resolved values. A symlink at `file` is the member's: the write lands
+ * in the file it points to and the link stays, and the git checks judge that
+ * file (`realFilePath`).
  */
 export async function writeCodexAtomic(file: string, content: string): Promise<void> {
+  file = await symlinkTarget(file);
   await fs.promises.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {

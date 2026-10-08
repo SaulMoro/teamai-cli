@@ -46,6 +46,7 @@ import {
   isTeamaiBareCopy,
   ownsJsonMcpEntry,
   writeJsonDoc,
+  writeMcpJson,
   writeCodexAtomic,
   spliceCodexBlock,
   codexServerNames,
@@ -3369,7 +3370,7 @@ async function installMcpServer(
       } catch (error) {
         if (previousData) {
           try {
-            await writeJsonAtomic(targetFile, previousData);
+            await writeMcpJson(targetFile, previousData);
           } catch (restoreError) {
             throw new Error(
               `install_mcp: ownership write failed (${error instanceof Error ? error.message : String(error)}), and restoring ${targetFile} failed `
@@ -3506,7 +3507,7 @@ async function uninstallMcpServer(
       if (ownsEntry) delete doc.servers[slug];
       if (bareCopy) delete doc.data[slug];
       await writeJsonDoc(targetFile, serverKey, doc);
-      restoreConfig = () => writeJsonAtomic(targetFile, previousData);
+      restoreConfig = () => writeMcpJson(targetFile, previousData);
     }
   }
   manifest[manifestKey] = owned.filter((r: ManagedMcpRecord) => r.name !== slug);
