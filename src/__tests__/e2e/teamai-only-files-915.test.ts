@@ -53,6 +53,8 @@ const MEMBER_SERVER = { type: 'http', url: 'https://mine.example.com/mcp' };
 interface Machine {
   dir: string;
   home: string;
+  /** The environment every command of this machine runs with; a test may change it. */
+  env: NodeJS.ProcessEnv;
   run(args: string[]): Run;
   ok(args: string[]): Run;
   git(args: string[]): string;
@@ -137,6 +139,7 @@ function machine(base: string, opts: MachineOptions): Machine {
   return {
     dir: realDir,
     home,
+    env,
     run: teamai,
     ok,
     git: (args) => gitOk(args, realDir),
@@ -393,6 +396,45 @@ describe('ownership without a record', () => {
     expect(readJson(file).mcpServers['my-own']).toEqual(MEMBER_SERVER);
     expect(m.deliveredLines()).not.toContain('/.cursor/mcp.json');
     expect(m.status()).toContain('?? .cursor/mcp.json');
+  });
+});
+
+/**
+ * Put a `git` first on `m`'s PATH that fails, as a broken repository would,
+ * every `ls-files` or `check-ignore` naming a path that ends in `suffix`, and
+ * runs the real git for anything else.
+ */
+function failGitFor(m: Machine, suffix: string): void {
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8', env: m.env }).stdout.trim();
+  const bin = fs.mkdtempSync(path.join(path.dirname(m.dir), 'failing-git-'));
+  writeFile(path.join(bin, 'git'), [
+    '#!/bin/sh',
+    'query=no; named=no',
+    'for arg in "$@"; do',
+    '  case "$arg" in ls-files|check-ignore) query=yes ;; esac',
+    `  case "$arg" in *${suffix}) named=yes ;; esac`,
+    'done',
+    'if [ "$query" = yes ] && [ "$named" = yes ]; then echo "fatal: index file corrupt" >&2; exit 128; fi',
+    `exec "${realGit}" "$@"`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(path.join(bin, 'git'), 0o755);
+  m.env.PATH = `${bin}${path.delimiter}${m.env.PATH ?? ''}`;
+}
+
+describe('a listed teamai-only file git cannot answer for', () => {
+  it('keeps its line, and pull and doctor say git could not tell', () => {
+    const m = machine('mcp-git-unknown', { agents: 'cursor', files: { 'mcp/mcp.yaml': PLAIN } });
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+
+    failGitFor(m, 'mcp.json');
+    const pulled = m.run(['pull']);
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+    expect(pulled.output).toContain('git could not say whether it tracks .cursor/mcp.json');
+
+    const doctor = m.run(['doctor']);
+    expect(doctor.output).toContain('git could not say what');
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
   });
 });
 

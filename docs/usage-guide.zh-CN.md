@@ -1583,6 +1583,7 @@ Claude Code 和 CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json
 - 改动在下一次 `teamai pull` 生效，包括会话开始时的 pull，即使该 pull 发现团队仓库未变（"Already synced"）也一样：无需 `--force`。单仓模式下，对 `.teamai/teamai.yaml` 未提交的修改同样生效。
 - 只列出 teamai 在本 checkout 中写入、或确认归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。因你改过而被 pull 保留的副本，以及 teamai 不再分发、但仍留在磁盘上的副本（例如团队移除最后一个 source 之后的 source skill）同样如此。
 - 共享配置文件一旦含有其他内容（你自己的 server、hook 或 `instructions` 条目，或其他顶层键），就不再只属于 teamai。下一次 pull（包括会话开始时的 pull）会移除它的行，让 git 看到你的条目，并提示 ``<path> now holds entries teamai does not own, so git can see it.``。移除你的条目后，之后的 pull 会再次列出该文件。含有 teamai 解析值的 MCP 配置无论还含有什么，都留在 `mcp-exclude` 块中（见 [MCP Server](#mcp-server)），因此 git 仍看不到它，pull 也不会提示。
+- 当 git 无法回答它是否跟踪这样的文件时（索引损坏、git 出错），该文件保留上一次 pull 给它的行，pull 失败并提示 ``git could not say whether it tracks <path>: <error>.``。后台 pull 会把这条失败留给下一次交互式 pull 和 `doctor`。
 - 已知限制：这类文件始终未被跟踪。如果队友提交了同一路径的文件、而你运行 `git pull`，git 会直接覆盖你被排除的副本，不会询问。teamai 的条目会在你下一次 `teamai pull` 时回来，合并进这个已被跟踪的文件，但你在上一次 teamai 运行之后添加的条目会丢失。
 - 一个块服务于该克隆的所有 worktree：它列出每个仍存在的 checkout 上一次 pull 在那里分发的内容，因此在一个 worktree 中 pull 不会移除另一个 worktree 的行，用 `git init --separate-git-dir` 创建的仓库以及作为 submodule 的项目也是如此。你移除或 prune 的 worktree，其行会在任一 checkout 的下一次 pull 中移除。
 - 某个路径在另一个 checkout 中是你自己的文件（teamai 没有在那里分发它）时，该路径不写入任何行，因为这一行也会把那个文件隐藏：pull 会指出该路径，git 在每个 checkout 中都会显示它。linked worktree 中你自己的 `.claude/settings.local.json` 不在此列。某个 checkout 跟踪、而另一个 checkout 中由 teamai 分发且未被跟踪的文件仍会列出；被跟踪的那份的改动 git 照样显示。
