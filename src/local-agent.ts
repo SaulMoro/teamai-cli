@@ -68,7 +68,10 @@ import {
   resolveToolBaseDir,
   scopedToolPaths,
   applyToolRoots,
+  getDataHome,
   isGitExcludeEnabled,
+  isUnmigratedDataHome,
+  resolveGitExclude,
   resolveToolRootDir,
   CLAUDE_TOOL_ID,
   DEFAULT_CLAUDE_ROOT,
@@ -92,8 +95,11 @@ import {
 import { getUserHome } from './utils/home.js';
 import { gitCommonDir, isLiveCheckout, resolveAnchors } from './utils/git.js';
 import {
-  remove as removeGitExclude, stateHomeRecord, sync as syncGitExclude, type GitExcludeOwner,
+  remove as removeGitExclude, report as reportGitExclude, stateHomeRecord, sync as syncGitExclude, type GitExcludeOwner,
 } from './git-exclude.js';
+import {
+  clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
+} from './git-exclude-notices.js';
 import { contentHash, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin } from './resources/skills.js';
 
@@ -710,23 +716,42 @@ function createLocalAgentTeamConfig(endpoint: string): TeamaiConfig {
 /**
  * Whether the member keeps what teamai delivers into `workspacePath` out of
  * git (#915): the resolved flag of the config governing it, its project's,
- * else the user scope's.
+ * else the user scope's. Unknown when that config, or the git-mode team's
+ * teamai.yaml with no override in the config, cannot be read: `cause` says
+ * which, `fix` what to do (`resolveGitExclude`).
  */
-async function gitExcludeEnabledFor(workspacePath: string): Promise<boolean> {
+async function gitExcludeEnabledFor(workspacePath: string): Promise<boolean | { cause: string; fix: string }> {
   const { loadTeamConfig, resolveConfigForDir } = await import('./config.js');
-  const config = await resolveConfigForDir(workspacePath);
+  let unreadable: { cause: string; fix: string } | undefined;
+  const config = await resolveConfigForDir(workspacePath, (configPath, error) => {
+    unreadable = { cause: `teamai could not read ${configPath} (${error})`, fix: `Fix ${configPath}` };
+  });
+  if (unreadable) return unreadable;
   if (!config) return false;
-  return isGitExcludeEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {});
+  const enabled = resolveGitExclude(config, await loadTeamConfig(config.repo.localPath));
+  if (enabled !== undefined) return enabled;
+  const override = isUnmigratedDataHome(config) ? '' : `, or set \`gitExcludeEnabled\` in ${path.join(getDataHome(config), 'config.yaml')}`;
+  return {
+    cause: `teamai could not read sharing.gitExclude from the team's teamai.yaml (${path.join(config.repo.localPath, 'teamai.yaml')})`,
+    fix: `Fix or restore teamai.yaml in the team repository${override}`,
+  };
 }
 
 /**
  * The resource cache's team config for one install, carrying the workspace's
  * git exclude flag so every writer and the instruction targets read the same
- * value (#915).
+ * value (#915). While the flag is unknown nothing is written: either value
+ * could move a file the other placed. `change` names what was refused
+ * ("install <slug>", "uninstall <slug>").
  */
-async function localAgentTeamConfig(endpoint: string, scope: LocalAgentScope, workspacePath?: string): Promise<TeamaiConfig> {
+async function localAgentTeamConfig(endpoint: string, scope: LocalAgentScope, workspacePath: string | undefined, change: string): Promise<TeamaiConfig> {
   const teamConfig = createLocalAgentTeamConfig(endpoint);
-  if (scope !== 'project' || !workspacePath || !await gitExcludeEnabledFor(workspacePath)) return teamConfig;
+  if (scope !== 'project' || !workspacePath) return teamConfig;
+  const enabled = await gitExcludeEnabledFor(workspacePath);
+  if (typeof enabled === 'object') {
+    throw new Error(`${enabled.cause}, so the local agent did not ${change} in ${workspacePath}: it wrote nothing there. ${enabled.fix}.`);
+  }
+  if (!enabled) return teamConfig;
   return { ...teamConfig, sharing: { ...teamConfig.sharing, gitExclude: { enabled: true } } };
 }
 
@@ -2058,7 +2083,7 @@ async function installDownloadedResource(input: {
 
   const downloadedPath = await downloadResource(input.command.download_url);
   try {
-    const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath);
+    const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath, `install ${input.slug}`);
     const tool = input.tool ?? 'workbuddy';
     const toolPath = fullTeamConfig.toolPaths[tool];
     if (!toolPath) {
@@ -2206,7 +2231,7 @@ async function uninstallResource(input: {
   tool?: string;
 }): Promise<void> {
   const repoPath = await getResourceRepoPath(input.scope, input.workspacePath);
-  const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath);
+  const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath, `uninstall ${input.slug}`);
   const tool = input.tool ?? 'workbuddy';
   const toolPath = fullTeamConfig.toolPaths[tool];
   if (!toolPath) {
@@ -2282,31 +2307,98 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
  * the manifest records in project workspaces that are live checkouts and keep
  * teamai's deliveries out of git (#915). Each copy's line goes to the exclude
  * file of the repository it lands in; a block no workspace needs any more goes.
+ * Nobody may watch the run, so a failure is also kept until the next sync
+ * succeeds, for the next interactive pull and `doctor`, and a path no line can
+ * name is kept as a notice.
  */
 async function syncLocalAgentGitExclude(config: LocalAgentConfig): Promise<void> {
-  const paths: string[] = [];
-  for (const [key, scope] of Object.entries((await loadManifest()).scopes)) {
-    const { scope: kind, workspacePath } = parseScopeKey(key);
-    if (kind !== 'project' || !workspacePath) continue;
-    if (!await isLiveWorkspace(workspacePath) || !await gitExcludeEnabledFor(workspacePath)) continue;
-    paths.push(...await recordedProjectCopies(config, workspacePath, scope));
-  }
-  const result = await syncGitExclude(localAgentGitExcludeOwner(), paths);
-  const rerun = 'The next session start that installs or removes a skill or rule tries again.';
-  for (const { excludeFile, write, reincluded } of result.files) {
-    const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
-      : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
-      : write.kind === 'writeFailed' ? write.error
-      : null;
-    if (why !== null) log.warn(`Could not update the local agent's git exclude block in ${excludeFile}: ${why}. ${rerun}`);
-    for (const { path: seen, rule } of reincluded) {
-      log.warn(`git still sees ${seen}: ${rule ? `\`${rule.pattern}\` (${rule.source}:${rule.line}) re-includes it` : 'a rule in your git ignore files re-includes it'}. Remove that rule.`);
+  const rerun = 'The next session start tries again.';
+  const notices = localAgentGitExcludeNotices();
+  const failures: string[] = [];
+  try {
+    const paths: string[] = [];
+    const unknown: string[] = [];
+    for (const [key, scope] of Object.entries((await loadManifest()).scopes)) {
+      const { scope: kind, workspacePath } = parseScopeKey(key);
+      if (kind !== 'project' || !workspacePath || !await isLiveWorkspace(workspacePath)) continue;
+      const enabled = await gitExcludeEnabledFor(workspacePath);
+      if (enabled === false) continue;
+      const copies = await recordedProjectCopies(config, workspacePath, scope);
+      if (enabled === true) {
+        paths.push(...copies);
+        continue;
+      }
+      unknown.push(...copies);
+      failures.push(`${enabled.cause}, so it left the local agent's git exclude lines for ${workspacePath} as they were. `
+        + `${enabled.fix}, then start a new session.`);
     }
+    // A workspace whose flag is unknown keeps the lines it has: neither added nor dropped.
+    if (unknown.length > 0) {
+      paths.push(...(await reportGitExclude(localAgentGitExcludeOwner(), unknown)).files.flatMap((file) => file.listed));
+    }
+    const result = await syncGitExclude(localAgentGitExcludeOwner(), paths);
+    for (const { excludeFile, write, reincluded } of result.files) {
+      const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
+        : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
+        : write.kind === 'writeFailed' ? write.error
+        : null;
+      if (why !== null) failures.push(`Could not update the local agent's git exclude block in ${excludeFile}: ${why}. ${rerun}`);
+      for (const { path: seen, rule } of reincluded) {
+        failures.push(`git still sees ${seen}: ${rule ? `\`${rule.pattern}\` (${rule.source}:${rule.line}) re-includes it` : 'a rule in your git ignore files re-includes it'}. Remove that rule.`);
+      }
+    }
+    for (const { message } of result.refused) {
+      log.warn(message);
+      await noticeGitExclude(notices, message, { silent: true });
+    }
+    for (const { path: failed, error } of result.gitFailed) {
+      failures.push(`Could not keep ${failed} out of git: git could not place it (${error}). ${rerun}`);
+    }
+  } catch (e) {
+    failures.push(`Could not update the local agent's git exclude blocks: ${(e as Error).message}. ${rerun}`);
   }
-  for (const { message } of result.refused) log.warn(message);
-  for (const { path: failed, error } of result.gitFailed) {
-    log.warn(`Could not keep ${failed} out of git: git could not place it (${error}). ${rerun}`);
-  }
+  for (const failure of failures) log.warn(failure);
+  if (failures.length > 0) await recordGitExcludeFailure(notices, failures.join(' '));
+  else await clearGitExcludeFailure(notices);
+}
+
+/**
+ * What the `local-agent` blocks are built from, short of asking git (#915):
+ * the manifest's project entries, and every config a workspace's flag can be
+ * read from (each project partition's and the user scope's).
+ */
+async function localAgentGitExcludeInput(): Promise<string> {
+  const { projectsRootDir } = await import('./utils/partition.js');
+  const projects = (await loadManifest()).scopes;
+  const entries = Object.keys(projects).filter((key) => parseScopeKey(key).scope === 'project').sort()
+    .map((key) => [key, projects[key].skills, projects[key].rules]);
+  const configs = [path.join(getTeamaiHomePath(), 'config.yaml'),
+    ...(await listDirs(projectsRootDir())).sort().map((dir) => path.join(projectsRootDir(), dir, 'config.yaml'))];
+  const parts = [JSON.stringify(entries)];
+  for (const file of configs) parts.push(file, (await readFileSafe(file)) ?? '');
+  return contentHash(parts.join('\0'));
+}
+
+/**
+ * Bring the `local-agent` blocks in step with the manifest and each
+ * workspace's flag (#915). `force` (a session start, or a batch that installed
+ * or removed a project skill or rule) always syncs; any other run syncs only
+ * when the input changed since the last sync, so it costs no git call.
+ */
+async function keepLocalAgentGitExclude(config: LocalAgentConfig, force: boolean): Promise<void> {
+  // An uninstall_teamai in this run removed the agent: nothing to keep, and nothing to recreate.
+  if (!await pathExists(getConfigPath())) return;
+  const synced = path.join(getLocalAgentHome(), 'git-exclude-synced.json');
+  const input = await localAgentGitExcludeInput().catch((e: unknown) => {
+    log.persist(`git exclude: could not read the local agent's git exclude input: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
+  if (!force && input !== null && (await readJson<Record<string, string>>(synced))?.['local-agent'] === input) return;
+  await syncLocalAgentGitExclude(config);
+  if (input === null) return;
+  await writeJson(synced, { 'local-agent': input }).catch((e: unknown) => {
+    log.persist(`git exclude: could not write ${synced}: ${e instanceof Error ? e.message : String(e)}`);
+  });
 }
 
 /** Remove the `local-agent` block from every exclude file the state home records, naming any it cannot write (#915). */
@@ -3649,16 +3741,13 @@ async function processCommands(
       }
     }
   }
-  // After project installs and uninstalls, failed ones included: a failure may have written part of its copies.
-  if (commands.some((command) => normalizeScope(command.scope) === 'project'
-    && (commandKind(command) === 'skill' || commandKind(command) === 'rule') && commandAction(command) !== null)) {
-    try {
-      await syncLocalAgentGitExclude(config);
-    } catch (e) {
-      log.warn(`Could not update the local agent's git exclude blocks: ${(e as Error).message}`);
-    }
-  }
   return modelConfigApplied;
+}
+
+/** Whether `command` installs or removes a project skill or rule, which the `local-agent` block lists (#915). */
+function changesProjectCopies(command: LocalAgentCommand): boolean {
+  return normalizeScope(command.scope) === 'project'
+    && (commandKind(command) === 'skill' || commandKind(command) === 'rule') && commandAction(command) !== null;
 }
 
 export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promise<boolean> {
@@ -3722,6 +3811,7 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     }
   }
 
+  let changedProjectCopies = false;
   try {
     if (!skipReport) {
       const reportPayload = await buildReportPayload(config, context);
@@ -3755,6 +3845,7 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     const commands = cmds && cmds.length > 0 ? cmds : (syncResponse.commands ?? []);
     if (commands.length > 0) {
       log.debug(`${tag} sync returned ${commands.length} command(s): ${commands.map((c) => `${c.type}#${c.id}`).join(', ')}`);
+      changedProjectCopies = commands.some(changesProjectCopies);
       const modelConfigApplied = await processCommands(config, commands, context);
       if (modelConfigApplied && !skipReport) {
         const reportPayload = await buildReportPayload(config, context);
@@ -3771,6 +3862,9 @@ export async function reportAndSyncLocalAgent(context: LocalAgentContext): Promi
     log.error(`${tag} sync FAILED: ${error}`);
     await appendErrorLog({ error, context });
   }
+  // Every session start, and after project installs and uninstalls, failed ones included (a failure may have
+  // written part of its copies), also when the sync failed: the manifest and the flags decide, not the backend.
+  await keepLocalAgentGitExclude(config, context.event?.type === 'session_start' || changedProjectCopies);
   // Also when the sync failed: what an install wrote is on disk either way. Also after an uninstall_teamai:
   // one that removed teamai's servers and records leaves nothing to list, and one that failed or kept the
   // shared files (another agent remains) leaves what still needs keeping out of git.

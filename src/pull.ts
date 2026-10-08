@@ -73,7 +73,8 @@ import {
   type DeliveryRecorder, type GitExcludePaths, type ListedCheckout,
 } from './git-exclude-delivered.js';
 import {
-  clearGitExcludeFailure, isBackgroundPull, noticeGitExclude, recordGitExcludeFailure, sayGitExcludeNotices,
+  clearGitExcludeFailure, isBackgroundPull, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
+  sayGitExcludeNotices,
 } from './git-exclude-notices.js';
 
 // A timed-out report still owns its success bookkeeping. Do not start another
@@ -2864,6 +2865,10 @@ export async function pull(
   //     contended scope is skipped: the lock's holder syncs.
   //     A background pull keeps what it has to say; the next interactive one
   //     says it first, once.
+  //     The local agent's sessions keep theirs in its state home, whatever the scope.
+  if (!options.dryRun && !isBackgroundPull(options) && await sayGitExcludeNotices(localAgentGitExcludeNotices())) {
+    reported.add('local-agent-git-exclude-failure');
+  }
   if (reconcileProject && !options.dryRun) {
     if (!isBackgroundPull(options) && await sayGitExcludeNotices(reconcileProject)) reported.add('git-exclude-failure');
     try {
