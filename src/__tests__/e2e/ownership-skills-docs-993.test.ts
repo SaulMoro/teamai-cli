@@ -238,7 +238,7 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     init(t, dir);
     expect(read(path.join(docs, 'old.md'))).toBe('MY OLD NOTES\n');
     expect(read(path.join(docs, 'gone.md'))).toBe('# Gone v2\n');
-    // A local-only draft at a path the team never had is the mirror's to prune, as before.
+    // A draft at a path the team never had is the member's: it stays, unnamed.
     writeFile(path.join(docs, 'draft.md'), 'draft\n');
 
     t.publish({ 'docs/old.md': null, 'docs/gone.md': null }, 'remove docs');
@@ -249,7 +249,8 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
       `Kept ${path.join(docs, 'old.md')}: the team removed docs/old.md, but this copy matches no team version of it. Delete it when you no longer need it.`,
     );
     expect(fs.existsSync(path.join(docs, 'gone.md'))).toBe(false);
-    expect(fs.existsSync(path.join(docs, 'draft.md'))).toBe(false);
+    expect(read(path.join(docs, 'draft.md'))).toBe('draft\n');
+    expect(pulled.output).not.toContain(path.join(docs, 'draft.md'));
     expect(read(path.join(docs, 'guide.md'))).toBe('# Guide\n');
     // Pull keeps it, so doctor does not ask pull --force to remove it.
     expect(teamai(['doctor'], dir).output).not.toContain('Stale docs');
@@ -427,6 +428,18 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     teamaiOk(['uninstall', '--force'], dir);
     expect(read(path.join(otherSkill, 'CONTRIBUTORS'))).toBe('me too\n');
     expect(fs.existsSync(path.join(otherSkill, 'SKILL.md'))).toBe(false);
+  });
+
+  it('keeps a file the member added to a delivered skill when the team later adds one at that path', () => {
+    const t = team('skill-new-path', { 'skills/team-skill/SKILL.md': skillMd('team-skill', 'Team.') });
+    const dir = business('skill-new-path-biz', { '.claude/skills/.keep': '' });
+    init(t, dir);
+    const notes = path.join(dir, '.claude', 'skills', 'team-skill', 'notes.md');
+    writeFile(notes, 'MY NOTES\n');
+    t.publish({ 'skills/team-skill/notes.md': 'TEAM NOTES\n' }, 'add notes');
+    const pulled = teamaiOk(['pull'], dir);
+    expect(read(notes)).toBe('MY NOTES\n');
+    expect(pulled.output).toContain(`Kept ${path.dirname(notes)}`);
   });
 
   it('keeps a recorded skill the member edited whole, as before', () => {

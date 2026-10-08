@@ -90,13 +90,20 @@ describe('DocsHandler pruning (#794)', () => {
     await fse.remove(root);
   });
 
-  it('mirrors the team bundle by default, removing existing local residue', async () => {
+  // Changed in #993: a file at a path the team history never had is the member's and stays; only
+  // teamai's copies of docs the team removed are pruned.
+  it('mirrors the team bundle, removing teamai\'s copies of removed docs and keeping the member\'s own files', async () => {
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'retired.md'), 'retired');
+    commitTeamRepo(repo, 'retired');
+    await sync();
+    await fse.remove(path.join(source, 'retired.md'));
     await fse.outputFile(path.join(source, 'guide.md'), 'new');
     await fse.outputFile(path.join(destination, 'draft.md'), 'local');
-    // The history shows the team never had docs/draft.md (#993).
-    commitTeamRepo(path.join(root, 'repo'));
+    commitTeamRepo(repo, 'retire');
     await sync();
-    expect(await fse.pathExists(path.join(destination, 'draft.md'))).toBe(false);
+    expect(await fse.pathExists(path.join(destination, 'retired.md'))).toBe(false);
+    expect(await fse.readFile(path.join(destination, 'draft.md'), 'utf8')).toBe('local');
     expect(await fse.readFile(path.join(destination, 'guide.md'), 'utf8')).toBe('new');
   });
 
@@ -297,13 +304,17 @@ describe('DocsHandler pruning (#794)', () => {
   });
 
   it.each(['missing', 'empty', 'hidden-only'])('prunes a %s team bundle while retaining hidden local files', async (state) => {
+    // docs/old/guide.md was a team doc, so the copy pull wrote is teamai's to prune (#993).
+    const repo = path.join(root, 'repo');
+    await fse.outputFile(path.join(source, 'old', 'guide.md'), 'old');
+    commitTeamRepo(repo, 'old');
+    await fse.remove(path.join(source, 'old'));
     await fse.outputFile(path.join(destination, 'old', 'guide.md'), 'old');
     await fse.outputFile(path.join(destination, 'old', '.keep'), 'local');
     await fse.outputFile(path.join(destination, '.private', 'draft.md'), 'local');
     if (state === 'missing') await fse.remove(source);
     if (state === 'hidden-only') await fse.outputFile(path.join(source, '.private', 'team.md'), 'hidden');
-    // The history shows the team never had docs/old/guide.md (#993).
-    commitTeamRepo(path.join(root, 'repo'));
+    commitTeamRepo(repo, 'remove old');
     await sync();
     expect(await fse.pathExists(path.join(destination, 'old', 'guide.md'))).toBe(false);
     expect(await fse.readFile(path.join(destination, 'old', '.keep'), 'utf8')).toBe('local');

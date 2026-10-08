@@ -1424,6 +1424,8 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
     if (await isPrunedDoc(path.join(dest, file), file, localConfig.repo.localPath)) staleFiles.push(file);
   }
   const stale = [...staleFiles, ...staleDirectories];
+  // Only the member's own files there, and no team doc: nothing for this check to say (#993).
+  if (teamFiles.length === 0 && stale.length === 0) return [];
 
   // isFile, not merely "something is there": a directory sitting on the
   // expected name, or a symlink with nothing behind it, would satisfy a plain

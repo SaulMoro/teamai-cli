@@ -189,7 +189,7 @@ describe('pull: docs by namespace', () => {
     expect(await exists('frontend/components.md')).toBe(true);
     await fse.outputFile(local('frontend/styling.md'), '# Styling, my notes\n');
     await fse.outputFile(local('frontend/mine.md'), '# Only mine\n');
-    // The history shows the team never had docs/frontend/mine.md (#993).
+    // The history shows the team never had docs/frontend/mine.md, so it is the member's (#993).
     commitTeamRepo(repoPath);
 
     as('devops');
@@ -197,8 +197,8 @@ describe('pull: docs by namespace', () => {
 
     expect(await exists('frontend/components.md')).toBe(false);
     expect(await fse.readFile(local('frontend/styling.md'), 'utf8')).toBe('# Styling, my notes\n');
-    // Not a team file: the docs mirror prunes it, as anywhere in the destination (#817).
-    expect(await exists('frontend/mine.md')).toBe(false);
+    // Not a team file, so the member's own: it stays (#993; the mirror used to prune it).
+    expect(await exists('frontend/mine.md')).toBe(true);
     expect(warned(/frontend\/styling\.md/)).toBe(true);
     expect(warned(/components\.md/)).toBe(false);
     expect(await exists('devops/deploy.md')).toBe(true);

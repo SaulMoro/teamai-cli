@@ -71,19 +71,17 @@ export async function listStaleDocDirectories(source: string | undefined, destin
 
 /**
  * Whether the prune may delete `file`, at `rel` in the mirror (`/`-separated),
- * which the team repo no longer has (#993): a version of the team doc once at
- * that path (a link included, by its target), or a local-only file at a path
- * the team repo's history never had. Anything else at a removed team doc's
- * path is the member's, and so is a link at a path the team never had (teamai
- * never creates one there) and any file while the history cannot be read:
- * there is no proof either way. Read-only.
+ * which the team repo no longer has (#993): only a version of the team doc once
+ * at that path (a link included, by its target). Anything else is the member's:
+ * an entry at a path the team history never had (no team version is no proof
+ * that teamai put it there), any other entry at a removed doc's path, and any
+ * entry while the history cannot be read. Read-only.
  */
 export async function isPrunableDoc(file: string, rel: string, repoPath: string): Promise<boolean> {
   const stat = await fse.lstat(file).catch(() => null);
   if (!stat) return true;
   const versions = await historicalVersions(repoPath, `docs/${rel}`);
-  if (versions === null) return false;
-  if (versions.length === 0) return !stat.isSymbolicLink();
+  if (versions === null || versions.length === 0) return false;
   return isDocVersion(file, stat, versions, repoPath);
 }
 
@@ -171,8 +169,10 @@ async function pruneDocs(source: string | undefined, destination: string, repoPa
       if (!sourceEntry && (await fse.readdir(target)).length === 0) await fse.rmdir(target);
     } else if (!sourceEntry) {
       if (!await isPrunableDoc(target, entryRel, repoPath)) {
-        // A link at a path the team never had is said as such; any other entry kept is at a removed doc's path.
-        const neverTeams = entry.isSymbolicLink() && (await historicalVersions(repoPath, `docs/${entryRel}`))?.length === 0;
+        // A file of the member's at a path the team never had stays without a word, like a personal rule;
+        // a link there is named, and any other entry kept is at a removed doc's path.
+        const neverTeams = (await historicalVersions(repoPath, `docs/${entryRel}`))?.length === 0;
+        if (neverTeams && !entry.isSymbolicLink()) continue;
         log.warn(neverTeams
           ? `[${scope}] Kept ${target}: it is a link of yours, and the team does not have docs/${entryRel}. `
             + 'Delete it when you no longer need it.'
