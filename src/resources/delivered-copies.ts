@@ -223,7 +223,7 @@ export async function isTeamaiSkillCopy(
   dir: string, origin: CopyOrigin, current: ReadonlyMap<string, string | null> = new Map(),
 ): Promise<boolean> {
   // A link in place of the directory, or any non-regular entry inside it, is the member's.
-  if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir)) return false;
+  if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir) || await holdsGitDir(dir)) return false;
   // A CONTRIBUTORS file too: teamai's only on the same proof, never by its name.
   for (const rel of await listFilesRecursive(dir)) {
     const file = path.join(dir, rel);
@@ -251,7 +251,8 @@ export async function ownsSkillDir(
   previous: DeliveredHashes | undefined, dir: string, origin: CopyOrigin, sources: readonly ResourceItem[] = [],
 ): Promise<boolean> {
   // A link at or anywhere inside the directory is the member's: deleting the directory would take it.
-  if (await isLink(dir) || await holdsNonRegular(dir)) return false;
+  // So is a repository the member made in it.
+  if (await isLink(dir) || await holdsNonRegular(dir) || await holdsGitDir(dir)) return false;
   // On record, the directory is teamai's only when no file in it is the member's own (#993):
   // removing it would take a file the member added beside teamai's.
   if (recordedUnder(previous ?? {}, dir).length > 0) return !await holdsMembersFile(previous ?? {}, dir, origin);
@@ -341,6 +342,19 @@ export async function isLink(file: string): Promise<boolean> {
  */
 export async function holdsNonRegular(dir: string): Promise<boolean> {
   return await firstNonRegular(dir) !== null;
+}
+
+/**
+ * Whether `dir` holds, anywhere below it, a `.git` entry: a repository the member made there.
+ * `listFilesRecursive` skips it, so no file check sees it; deleting the directory would take
+ * the member's local commits with it.
+ */
+export async function holdsGitDir(dir: string): Promise<boolean> {
+  for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name === '.git') return true;
+    if (entry.isDirectory() && await holdsGitDir(path.join(dir, entry.name))) return true;
+  }
+  return false;
 }
 
 /** The path of the first entry `holdsNonRegular` finds under `dir`, or null. */

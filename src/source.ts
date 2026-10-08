@@ -25,7 +25,7 @@ import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
 import {
-  describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
+  describeKeptEntry, describeMembersLink, describeSkippedLink, holdsGitDir, holdsNonRegular, isLink, isTeamaiSkillCopy, membersLinkAt,
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { warnOnce } from './utils/warn-once.js';
@@ -1359,7 +1359,7 @@ async function getSkillRemovalPaths(skillName: string, baseDir: string, otherOwn
       continue;
     }
     // A link the member put inside the copy is theirs: deleting the directory would take it (#993).
-    if (await holdsNonRegular(skillDir) || (keep && await keep(skillDir))) {
+    if (await holdsNonRegular(skillDir) || await holdsGitDir(skillDir) || (keep && await keep(skillDir))) {
       plan.kept.push(recorded);
       continue;
     }
@@ -1398,7 +1398,7 @@ async function isSourceSkillCopy(dir: string, repoDir: string, skillName: string
  * byte, as `isTeamaiSkillCopy` judges without history: an empty directory holds nothing of the member's.
  */
 async function isCopyOfCurrent(dir: string, current: ReadonlyMap<string, string | null>): Promise<boolean> {
-  if (await isLink(dir) || await holdsNonRegular(dir)) return false;
+  if (await isLink(dir) || await holdsNonRegular(dir) || await holdsGitDir(dir)) return false;
   const files = await listFilesRecursive(dir);
   for (const rel of files) {
     const next = current.get(path.join(dir, rel));
