@@ -2734,7 +2734,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(blockOf(other)).toEqual(['/.claude/rules/other-rule.md']);
   });
 
-  it.skipIf(process.getuid?.() === 0)('removing the local agent drops its block after the per-entry loop, even when an entry fails', async () => {
+  it.skipIf(process.getuid?.() === 0)('removing the local agent drops its block after the per-entry loop, but the line of a copy a failed entry left', async () => {
     await flag(true);
     const app = await repo('app');
     await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
@@ -2752,8 +2752,9 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     }
 
     expect(fs.existsSync(path.join(app, '.claude', 'skills', 'http-skill'))).toBe(true);
-    expect(blockOf(app)).toBeNull();
-    expect(fs.readFileSync(path.join(app, '.git', 'info', 'exclude'), 'utf8')).not.toContain('teamai:');
+    expect(fs.existsSync(path.join(app, '.claude', 'rules', 'http-rule.md'))).toBe(false);
+    // The copy left on disk stays out of git until it is gone.
+    expect(blockOf(app)).toEqual(['/.claude/skills/http-skill/SKILL.md']);
   });
 
   it('follows a flag change at a run that brings no command, and leaves the block alone while nothing it is built from changed', async () => {
