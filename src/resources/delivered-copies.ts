@@ -367,6 +367,10 @@ async function isMembersCopy(previous: DeliveredHashes | undefined, item: Resour
   if (target.origin === undefined) return false;
   // A link at the delivered path is the member's: teamai never writes through, replaces or deletes it.
   if (await isLink(target.dest)) return true;
+  // An entry of the other type (a file where a skill directory goes, a directory where a file
+  // goes) is the member's: teamai writes neither, and delivering over it would fail.
+  const existing = await fse.lstat(target.dest).catch(() => null);
+  if (existing && existing.isDirectory() !== (item.type === 'skills')) return true;
   if (item.type === 'skills') {
     if (!await isDirectory(target.dest)) return false;
     // A link the member put inside the skill is theirs, on record or not: copying over it would replace it.
