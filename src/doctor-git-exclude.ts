@@ -254,12 +254,9 @@ export async function deliveredGitExcludeNotes(ctx: DoctorContext): Promise<stri
     }
   } else if (enabled) {
     for (const file of files) {
-      for (const { path: tracked, checkout, descendants } of file.tracked) {
-        const what = descendants.length > 0
-          ? `git tracks ${nameList(descendants)} in it in ${checkout}, so their changes stay visible`
-          : `git tracks it in ${checkout}, so teamai lists no line for it`;
-        notes.push(`${rel(tracked)} is delivered by teamai, but ${what}. `
-          + `Run \`git rm -r --cached ${path.relative(checkout, tracked).split(path.sep).join('/')}\` there and commit if the repository should not hold it.`);
+      for (const { path: tracked, checkout } of file.tracked) {
+        notes.push(`${rel(tracked)} is delivered by teamai, but git tracks it in ${checkout}, so teamai lists no line for it. `
+          + `Run \`git rm --cached ${path.relative(checkout, tracked).split(path.sep).join('/')}\` there and commit if the repository should not hold it.`);
       }
       if (file.stale.length > 0) notes.push(`Stale lines in teamai's delivered git exclude block in ${file.excludeFile}: ${nameList(file.stale)}. The next \`teamai pull\` drops them.`);
     }

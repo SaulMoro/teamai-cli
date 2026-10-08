@@ -1541,7 +1541,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 /.claude/rules/fe/style.md
 /.claude/rules/teamai-context.md
 /.claude/settings.local.json
-/.claude/skills/code-review/
+/.claude/skills/code-review/SKILL.md
 # [teamai:delivered:end]
 ```
 
@@ -1549,7 +1549,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 该块列出：
 
-- skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本；
+- skill 每个文件一行，从不列 skill 目录，因此你在已分发的 skill 中自己添加的文件仍然可见、可以添加：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，Codex 在 `.agents/skills/<name>/` 中的副本，以及 Copilot 在 `.github/skills/<name>/` 中的副本；
 - rule 每个文件一行，从不列目录，因此你放在旁边的自己的文件仍然可见：包括命名空间子目录（`.cursor/rules/fe/style.mdc`）、扁平化的文件名（`.kiro/steering/fe.style.md`）以及 `.github/instructions/**/*.instructions.md`；
 - agent，以及 `teamai-recall` rule 和 agent；
 - 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、`.github/instructions/teamai-context.instructions.md`）；
@@ -1589,7 +1589,7 @@ Claude Code 和 CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json
 - 某个路径在另一个 checkout 中是你自己的文件（teamai 没有在那里分发它）时，该路径不写入任何行，因为这一行也会把那个文件隐藏：pull 会指出该路径，git 在每个 checkout 中都会显示它。linked worktree 中你自己的 `.claude/settings.local.json` 不在此列。某个 checkout 跟踪、而另一个 checkout 中由 teamai 分发且未被跟踪的文件仍会列出；被跟踪的那份的改动 git 照样显示。
 - 本身是 submodule 或嵌套克隆的工具目录（例如用 `git submodule add` 加入的 `.claude`），以及纳入 git 管理的工具 home（Hermes 的 `~/.hermes/skills`），其行写入那个仓库自己的 `.git/info/exclude`，放在以项目命名的块中（`# [teamai:delivered/<id>:start]`）。superproject 不再把该 submodule 显示为已修改，共用同一工具 home 的各项目只管理自己的块。
 - 切换角色或项目后，下一次 pull 会移除原选择对应的行。pull 未重写但仍归 teamai 所有的副本（因模型无法解析而暂缓的 agent、团队 hook 文件无法解析时的 hook 文件）仍会列出。
-- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用），无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.`` teamai 绝不删除 git 跟踪的文件。布局迁移改在别处写入该资源时（例如 Cursor rule 旧的 `.md` 副本），会保留已跟踪的旧副本，并补充一句：``The resource now lives at <new path>, and the tool may load both until the repository removes this copy.`` `teamai remove`、`teamai source remove` 和 `teamai uninstall` 会删除其余内容，并以同样方式指出每个已跟踪的路径；uninstall 的摘要把它们列在 `Kept (tracked)` 下。
+- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用）；在 skill 中只有被跟踪的那个文件不列出，该 skill 的其他已分发文件仍各有一行。无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.`` teamai 绝不删除 git 跟踪的文件。布局迁移改在别处写入该资源时（例如 Cursor rule 旧的 `.md` 副本），会保留已跟踪的旧副本，并补充一句：``The resource now lives at <new path>, and the tool may load both until the repository removes this copy.`` `teamai remove`、`teamai source remove` 和 `teamai uninstall` 会删除其余内容，并以同样方式指出每个已跟踪的路径；uninstall 的摘要把它们列在 `Kept (tracked)` 下。
 - 关闭后，下一次 pull 只移除该项目的 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 团队的 `teamai.yaml` 缺失或校验失败、且你没有设置 `gitExcludeEnabled` 时，该设置是未知的，而不是关闭：pull 保持 `delivered` 块原样并按失败处理，提示 ``teamai could not read sharing.gitExclude from the team's teamai.yaml (<path>), so it left its delivered git exclude blocks as they were. …``；`teamai doctor` 以同一行失败，并把来源显示为 `team config unreadable`。修复或恢复 `teamai.yaml`，或设置 `gitExcludeEnabled`，然后运行 `teamai pull`。HTTP 模式没有团队设置：由你的 `gitExcludeEnabled` 或默认值决定。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
@@ -1606,7 +1606,7 @@ Claude Code 和 CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json
 
 **卸载。** `teamai uninstall` 在删除这些块所隐藏的文件之后移除 teamai 的块，`uninstall --agent <tool>` 只移除该工具的行；见[卸载](#卸载)。
 
-**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
+**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，每个安装的文件一行（你在已安装的 skill 中添加的文件仍然可见），写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
 
 - 每次会话启动结束时，agent 都会根据自己的记录和各项目的选项更新该块，因此开启或关闭该选项后，无需安装任何新内容，下一次会话启动即生效。agent 的其他运行（每次提问、工具调用和停止时）只在项目中安装或移除了 skill、rule 之后，或其记录、某个 `config.yaml` 自上次更新以来有变化时才更新该块。写过的 exclude 文件记录在 `~/.teamai/local-agent/git-exclude.json`。已不存在的 checkout 不贡献任何行。pull 从不移除这个块。
 - agent 无法更新该块时（exclude 文件不可写、git 出错），会把失败记录在 `~/.teamai/local-agent/git-exclude-notices.json`，直到某次更新成功：下一次交互式 `teamai pull` 打印一次，前缀为 `A local agent sync (<time>)`；在此之前 `teamai doctor` 的 `Last local agent sync could not keep its git exclude block up to date` 检查失败。agent 安装过内容的项目若遵循一个 git 模式配置，而其团队 `teamai.yaml` 无法读取、又未设置 `gitExcludeEnabled`，则保留已有的行，agent 将其记录为失败并指出要修复的文件；期间该项目中的每次安装或卸载都会失败、不写入任何内容，并指出项目、无法读取的文件以及两种解决办法：修复或恢复该 `teamai.yaml`，或在该项目的 `config.yaml` 中设置 `gitExcludeEnabled`。

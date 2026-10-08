@@ -25,7 +25,8 @@ import {
   CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetForTool,
 } from './resources/skills.js';
 import {
-  describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, keepsTrackedCopy, membersLinkAt,
+  deliveredSkillFiles, describeKeptEntry, describeMembersLink, describeSkippedLink, holdsNonRegular, isLink, isTeamaiSkillCopy, keepsTrackedCopy,
+  membersLinkAt,
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { warnOnce } from './utils/warn-once.js';
@@ -1006,7 +1007,9 @@ async function pullSingleSource(
       const label = oldInstalled.has(skill.name) ? 'update' : 'new';
       log.info(`[dry-run] [source:${source.name}] Would pull ${skill.name} (${label})`);
       // Where it would land, for the preview of the delivered git exclude block (#915).
-      for (const targetDir of targets) recorder?.report('sources', targetDir);
+      for (const targetDir of targets) {
+        for (const file of await deliveredSkillFiles(skill.sourcePath, targetDir)) recorder?.report('sources', file);
+      }
       deployed.push(skill.name);
       continue;
     }
@@ -1020,8 +1023,8 @@ async function pullSingleSource(
         skippedLinks.add(link);
         log.warn(`[source:${source.name}] ${describeSkippedLink(link, `${source.name}/${skill.name}`)}`);
       });
-      // What this pull landed, never what the manifest keeps (#915).
-      recorder?.report('sources', targetDir);
+      // The files this pull landed, never the directory or what the manifest keeps (#915).
+      for (const file of await deliveredSkillFiles(skill.sourcePath, targetDir)) recorder?.report('sources', file);
       const relativeTarget = recordedDestination(baseDir, targetDir);
       const skillPaths = installedPaths[skill.name] ??= [];
       if (!skillPaths.includes(relativeTarget)) skillPaths.push(relativeTarget);

@@ -101,7 +101,7 @@ import {
 import {
   clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
 } from './git-exclude-notices.js';
-import { contentHash, ownsSkillDir } from './resources/delivered-copies.js';
+import { contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin } from './resources/skills.js';
 
 const execFileAsync = promisify(execFile);
@@ -2284,24 +2284,30 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
   const fullTeamConfig = createLocalAgentTeamConfig(config.endpoint);
   const localConfig = await createResourceLocalConfig(config, 'project', repoPath, workspacePath);
   const copies: string[] = [];
-  const collect = async (entries: Record<string, ManifestResource>, targetsFor: (teamConfig: TeamaiConfig, slug: string, entry: ManifestResource) => Promise<DeliveryTarget[]>) => {
+  const collect = async (
+    entries: Record<string, ManifestResource>,
+    itemFor: (slug: string, entry: ManifestResource) => ResourceItem,
+    handler: SkillsHandler | RulesHandler,
+  ) => {
     for (const [slug, entry] of Object.entries(entries ?? {})) {
+      const item = itemFor(slug, entry);
       for (const tool of entry.tools ?? []) {
         const toolPath = fullTeamConfig.toolPaths[tool];
         if (!toolPath) continue;
-        for (const { dest } of await targetsFor({ ...fullTeamConfig, toolPaths: { [tool]: toolPath } }, slug, entry)) {
-          if (await pathExists(dest)) copies.push(dest);
+        for (const { dest } of await handler.deliveryTargets({ ...fullTeamConfig, toolPaths: { [tool]: toolPath } }, localConfig, item)) {
+          // A skill is the files the agent installed from its cache, never the directory: a file the member adds there stays visible.
+          const files = item.type === 'skills' ? await deliveredSkillFiles(item.sourcePath, dest) : [dest];
+          for (const file of files) if (await pathExists(file)) copies.push(file);
         }
       }
     }
   };
-  await collect(scope.skills, (teamConfig, slug, entry) => {
+  await collect(scope.skills, (slug, entry) => {
     const name = entry.dir_name ?? slug;
-    return new SkillsHandler().deliveryTargets(teamConfig, localConfig,
-      { name, type: 'skills', sourcePath: path.join(repoPath, 'skills', name), relativePath: `skills/${name}` });
-  });
-  await collect(scope.rules, (teamConfig, slug) => new RulesHandler().deliveryTargets(teamConfig, localConfig,
-    { name: slug, type: 'rules', sourcePath: path.join(repoPath, 'rules', `${slug}.md`), relativePath: `rules/${slug}.md` }));
+    return { name, type: 'skills', sourcePath: path.join(repoPath, 'skills', name), relativePath: `skills/${name}` };
+  }, new SkillsHandler());
+  await collect(scope.rules, (slug) => ({ name: slug, type: 'rules', sourcePath: path.join(repoPath, 'rules', `${slug}.md`), relativePath: `rules/${slug}.md` }),
+    new RulesHandler());
   return copies;
 }
 

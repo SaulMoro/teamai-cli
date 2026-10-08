@@ -414,10 +414,14 @@ async function writeBlocker(excludeFile: string): Promise<{ path: string; notDir
 
 // ─── Lines ────────────────────────────────────────────────────
 
-/** A path no exclude line can name safely: refused rather than turned into a rule that hides something else. */
+/**
+ * A path no exclude line can name safely: refused rather than turned into a
+ * rule that hides something else. A directory is one: its line would hide a
+ * file the member adds there, so owners list the files they wrote.
+ */
 export interface RefusedPath {
   path: string;
-  problem: 'newline' | 'trailingSpace';
+  problem: 'newline' | 'trailingSpace' | 'directory';
   message: string;
 }
 
@@ -428,7 +432,6 @@ interface Placed {
   root: string;
   rel: string;
   line: string;
-  directory: boolean;
 }
 
 type Placement = { kind: 'placed'; placed: Placed } | { kind: 'refused'; refused: RefusedPath } | { kind: 'outsideRepo' } | { kind: 'gitFailed'; error: string };
@@ -507,7 +510,7 @@ class GitContext {
   /**
    * Where `file`'s line goes and how it reads: anchored at the toplevel of the
    * repository it lands in (a submodule, a nested clone, or one a symlinked
-   * directory leads into), spelled as on disk, `/<path>/` for a directory.
+   * directory leads into), spelled as on disk. A directory is refused.
    */
   async place(file: string): Promise<Placement> {
     const refused = refusal(file);
@@ -518,11 +521,11 @@ class GitContext {
     if ('error' in location) return await insideRepository(dir) ? { kind: 'gitFailed', error: location.error } : { kind: 'outsideRepo' };
     let rel = `${location.prefix}${path.relative(dir, landed).split(path.sep).join('/')}`;
     if (await this.precomposes(location.root)) rel = rel.normalize('NFC');
-    const directory = await fse.lstat(landed).then((s) => s.isDirectory(), () => false);
-    return {
-      kind: 'placed',
-      placed: { path: file, excludeFile: location.excludeFile, root: location.root, rel, line: `${escapeLine(rel)}${directory ? '/' : ''}`, directory },
-    };
+    if (await fse.lstat(landed).then((s) => s.isDirectory(), () => false)) {
+      const message = `${JSON.stringify(file)} is a directory, and teamai lists only the files it delivers in a git exclude block, so git can still see what it holds`;
+      return { kind: 'refused', refused: { path: file, problem: 'directory', message } };
+    }
+    return { kind: 'placed', placed: { path: file, excludeFile: location.excludeFile, root: location.root, rel, line: escapeLine(rel) } };
   }
 }
 
@@ -541,11 +544,10 @@ export interface GitCheckFailure {
   error: string;
 }
 
-/** A delivered path git tracks in `checkout`: a file, or a directory's tracked `descendants`. */
+/** A delivered file git tracks in `checkout`. */
 export interface TrackedPath {
   path: string;
   checkout: string;
-  descendants: string[];
 }
 
 export interface GitExcludeFileSync {
@@ -571,8 +573,8 @@ export interface GitExcludeSync {
 /**
  * Make `owner`'s blocks hold exactly `paths` (absolute, landed): each path's
  * line in the exclude file of the repository it lands in, and no block in a
- * recorded file that receives none. A tracked file gets no line; a directory
- * with tracked descendants keeps its line; both are reported. While git cannot
+ * recorded file that receives none. A tracked file gets no line and is
+ * reported; a directory is refused (each file is a line). While git cannot
  * place a path (`gitFailed`), no one can say which exclude file holds its line,
  * so the run only adds: no block loses a line and every recorded file stays
  * recorded. `dryRun` writes nothing, not even `info/` or a lock file.
@@ -597,8 +599,8 @@ export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, opti
   for (const [excludeFile, placed] of byFile) {
     const checkFailed: GitCheckFailure[] = [];
     const tracked = await trackedPaths(placed, checkFailed);
-    // A line stays while any path it names is untracked somewhere or is a directory.
-    const wanted = placed.filter((p) => p.directory || !tracked.some((t) => t.path === p.path)).map((p) => p.line);
+    // A line stays while any path it names is untracked somewhere.
+    const wanted = placed.filter((p) => !tracked.some((t) => t.path === p.path)).map((p) => p.line);
     const next = (current: string[]): string[] => [...new Set([...addOnly ? current : [], ...wanted])].sort();
     const { lines, ...outcome } = await writeOwnerLines(excludeFile, owner.name, next, options.dryRun);
     const reincluded = options.dryRun || outcome.write.kind !== 'written' && outcome.write.kind !== 'unchanged'
@@ -675,8 +677,7 @@ async function trackedPaths(placed: Placed[], failed: GitCheckFailure[]): Promis
     }
     const files = listed.stdout.split('\0').filter(Boolean);
     for (const p of group) {
-      const descendants = p.directory ? files.filter((f) => f.startsWith(`${p.rel}/`)) : [];
-      if (p.directory ? descendants.length > 0 : files.includes(p.rel)) tracked.push({ path: p.path, checkout: root, descendants });
+      if (files.includes(p.rel)) tracked.push({ path: p.path, checkout: root });
     }
   }
   return tracked;
@@ -693,7 +694,7 @@ async function reincludedPaths(placed: Placed[], failed: GitCheckFailure[]): Pro
 
 /**
  * Paths among `placed` git would still offer for a commit (untracked and not
- * ignored), each with a file of it git offers (a directory's first one): one
+ * ignored), each with the file git offers: one
  * `ls-files --others` per checkout.
  */
 async function offeredPaths(placed: Placed[], failed: GitCheckFailure[]): Promise<Map<Placed, string>> {
@@ -706,7 +707,7 @@ async function offeredPaths(placed: Placed[], failed: GitCheckFailure[]): Promis
     }
     const visible = listed.stdout.split('\0').filter(Boolean);
     for (const p of group) {
-      const offered = visible.find((f) => f === p.rel || p.directory && f.startsWith(`${p.rel}/`));
+      const offered = visible.find((f) => f === p.rel);
       if (offered) found.set(p, path.join(root, offered));
     }
   }
@@ -807,6 +808,9 @@ async function ensureOne(
   if (inIndex.kind === 'unknown') return { result: { kind: 'gitFailed', error: inIndex.error, reason: inIndex.error, fix: repair } };
   // Where the write lands. It and its directory need not exist yet: git is asked from the nearest one that does.
   const placement = await context.place(file);
+  if (placement.kind === 'refused') {
+    return { result: { kind: 'refused', problem: placement.refused.problem, reason: placement.refused.message, fix: `Rename it, then ${rerun}.` } };
+  }
   if (placement.kind !== 'placed') {
     const error = tracking.kind === 'unknown' ? tracking.error : 'git could not locate .git/info/exclude';
     return { result: { kind: 'gitFailed', error, reason: error, fix: repair } };
@@ -1067,7 +1071,7 @@ export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<str
     const checkFailed: GitCheckFailure[] = [];
     const tracked = await trackedPaths(placed, checkFailed);
     const listed = placed.filter((p) => lines.includes(p.line));
-    const missing = notReadable ? [] : placed.filter((p) => !lines.includes(p.line) && (p.directory || !tracked.some((t) => t.path === p.path)));
+    const missing = notReadable ? [] : placed.filter((p) => !lines.includes(p.line) && !tracked.some((t) => t.path === p.path));
     const offered = await offeredPaths(placed, checkFailed);
     result.files.push({
       excludeFile,

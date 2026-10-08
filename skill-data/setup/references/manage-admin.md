@@ -192,7 +192,8 @@ necessarily the project's manifest id.
 ## Keep delivered files out of git
 
 With `sharing.gitExclude.enabled: true` in `teamai.yaml`, each member's pull lists
-the skills, rules (one file per line), agents, `teamai-context` files, hook
+the skills and rules (one file per line, never a skill's directory, so a file a
+member adds to a delivered skill stays visible), agents, `teamai-context` files, hook
 files and team docs (one file per line) it delivered into a project, and each shared
 config file (MCP, `.codex/hooks.json`, OpenCode's) while it holds only teamai's entries,
 in teamai's `delivered` block in the clone's

@@ -303,6 +303,17 @@ export async function teamaiSkillFiles(
 }
 
 /**
+ * The files a delivery of the skill at `source` writes into `dest`, absolute:
+ * each regular file `copyDir` copies (no link, no ignored name), so a file the
+ * member adds in `dest` is never one of them (#915). `blocked` (paths from the
+ * skill's root) were left undelivered, with everything under them.
+ */
+export async function deliveredSkillFiles(source: string, dest: string, blocked: readonly string[] = []): Promise<string[]> {
+  const delivered = (rel: string): boolean => !blocked.some((entry) => rel === entry || rel.startsWith(`${entry}/`));
+  return (await listFilesRecursive(source)).filter(delivered).map((rel) => path.join(dest, ...rel.split('/')));
+}
+
+/**
  * Whether the recorded skill directory `dir` holds a file that is the member's own: not on
  * `previous` and, with an `origin`, no version of that file of the skill in the history.
  * Without an origin, any file off the record is the member's.

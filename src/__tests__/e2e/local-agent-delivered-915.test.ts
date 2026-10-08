@@ -155,7 +155,7 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     // Flag on: git ignores both installs, and still sees the member's files.
     expect(ignored(app, '.claude/skills/renamed-skill/SKILL.md')).toBe(true);
     expect(ignored(app, '.claude/rules/http-rule.md')).toBe(true);
-    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/']);
+    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/SKILL.md']);
     expect(status(app)).toEqual(['?? .claude/rules/members-rule.md', '?? .claude/rules/mine.md']);
     expect(m.git(['ls-files', '--others', '--exclude-standard', '.claude/rules'], app).out.split('\n').filter(Boolean).sort())
       .toEqual(['.claude/rules/members-rule.md', '.claude/rules/mine.md']);
@@ -164,10 +164,16 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(status(side)).toEqual(expect.arrayContaining(['?? .claude/rules/side-rule.md', '?? .claude/skills/side-skill/SKILL.md']));
 
     // Turned on in the second project: its next install lists its copies there.
+    // A file the member adds inside an installed skill stays theirs: visible and addable.
+    const myNotes = path.join(app, '.claude', 'skills', 'renamed-skill', 'my-notes.md');
+    fs.writeFileSync(myNotes, '# My notes\n');
     m.setFlag(side, true);
     await m.sessionStart(side, [install(6, 'rule', 'side-rule-2', side)]);
-    expect(block(side)).toEqual(['/.claude/rules/side-rule-2.md', '/.claude/rules/side-rule.md', '/.claude/skills/side-skill/']);
-    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/']);
+    expect(block(side)).toEqual(['/.claude/rules/side-rule-2.md', '/.claude/rules/side-rule.md', '/.claude/skills/side-skill/SKILL.md']);
+    expect(block(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/renamed-skill/SKILL.md']);
+    expect(status(app)).toContain('?? .claude/skills/renamed-skill/my-notes.md');
+    expect(m.git(['add', '--dry-run', '-A'], app).out).toContain("add '.claude/skills/renamed-skill/my-notes.md'");
+    fs.rmSync(myNotes);
 
     const out = await m.cli(['uninstall', '--force'], app);
 
@@ -195,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     // Turned on: a session start alone lists both copies.
     m.setFlag(app, true);
     await m.sessionStart(app, []);
-    expect(block(app)).toEqual(['/.claude/rules/flip-rule.md', '/.claude/skills/flip-skill/']);
+    expect(block(app)).toEqual(['/.claude/rules/flip-rule.md', '/.claude/skills/flip-skill/SKILL.md']);
     expect(status().filter((line) => /flip-/.test(line))).toEqual([]);
 
     // Turned off: a session start alone drops the block, and git sees both again.
