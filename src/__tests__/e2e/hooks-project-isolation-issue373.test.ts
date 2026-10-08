@@ -361,6 +361,35 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     for (const file of mainFiles(worktrees[1])) expect(readSettings(file).hooks.Stop ?? []).toHaveLength(0);
   });
 
+  it.each([false, true])('clears absent shared hook ownership with targeted uninstall = %s', async (targeted) => {
+    installWorktreeConfig();
+    const teamRepo = path.join(sandbox, 'absent-hook-team');
+    fs.renameSync(path.join(projectA, '.teamai', 'team-repo'), teamRepo);
+    const configFile = path.join(worktreeA, '.teamai', 'config.yaml');
+    fs.writeFileSync(configFile, fs.readFileSync(configFile, 'utf8')
+      .replace(path.join(projectA, '.teamai', 'team-repo'), teamRepo));
+    fs.rmSync(path.join(projectA, '.teamai'), { recursive: true });
+    const injected = await runCLI(worktreeA, home);
+    expect(injected.code, injected.output).toBe(0);
+    for (const file of targeted ? mainFiles(projectA).slice(0, 1) : mainFiles(projectA)) fs.rmSync(file);
+    const removed = await runCLI(worktreeA, home,
+      ['uninstall', '--force', ...(targeted ? ['--agent', 'claude'] : [])]);
+    expect(removed.code, removed.output).toBe(0);
+    const manifestFile = path.join(projectA, '.teamai', 'managed-main-checkout-hooks.json');
+    if (targeted) {
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      expect(manifest.claude ?? []).toEqual([]);
+      expect(manifest.codex).toHaveLength(1);
+      expect(manifest.checkouts.codex).toEqual([fs.realpathSync(worktreeA)]);
+      expect(readSettings(mainFiles(projectA)[1]).hooks.Stop).toHaveLength(1);
+      const remaining = await runCLI(worktreeA, home, ['uninstall', '--force']);
+      expect(remaining.code, remaining.output).toBe(0);
+    }
+    expect(fs.existsSync(manifestFile)).toBe(false);
+    expect(fs.existsSync(path.join(projectA, '.teamai'))).toBe(false);
+    expect(fs.existsSync(path.join(worktreeA, '.teamai'))).toBe(false);
+  });
+
   it.each([false, true])('retains shared partition hooks for an uninjected linked worktree with legacy tracking = %s', async (legacyTracking) => {
     const partition = path.join(home, '.teamai', 'projects', projectSlug(fs.realpathSync(projectA)));
     fs.mkdirSync(path.dirname(partition), { recursive: true });

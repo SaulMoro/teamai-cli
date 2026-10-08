@@ -2726,7 +2726,7 @@ describe('uninstall', () => {
     await fse.writeJson(manifestPath, manifest);
   }
 
-  it('cleans up synthetic main checkout hooks manifest and empty .teamai when the last worktree uninstalls', async () => {
+  it.each([false, true])('cleans up synthetic main checkout hooks when the last worktree uninstalls with hook file deleted = %s', async (fileDeleted) => {
     const mainDir = path.join(tmpDir, 'repo-main');
     const worktreeDir = path.join(tmpDir, 'repo-wt');
     await fse.ensureDir(mainDir);
@@ -2745,6 +2745,7 @@ describe('uninstall', () => {
     });
 
     await useRealMainHooks(mainDir);
+    if (fileDeleted) await fse.remove(path.join(mainDir, '.claude', 'settings.local.json'));
 
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/bash');

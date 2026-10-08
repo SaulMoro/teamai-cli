@@ -63,6 +63,7 @@ import {
   pathExists,
   readFileSafe,
   readJson,
+  writeJson,
   writeFile,
   ensureDir,
   remove,
@@ -1297,6 +1298,21 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
         for (const checkout of checkouts) {
           await unregisterCheckoutFromSharedManifest(target.manifestPath, checkout, plan.toolsToMerge);
         }
+        const updated = await readJson<SharedHooksManifest>(target.manifestPath);
+        if (!updated) continue;
+        let changed = false;
+        for (const tool of plan.toolsToMerge) {
+          if (!updated[tool]) continue;
+          const tracked = Array.isArray(updated.checkouts) || Object.hasOwn(updated.checkouts ?? {}, tool);
+          const others = tracked ? getToolCheckouts(updated, tool).length > 0 : target.sharedWithOtherInstall;
+          if (!plan.sharedPartition && others) continue;
+          const file = mainCheckoutHookFile(target, tool);
+          if (file && !await pathExists(file)) {
+            delete updated[tool];
+            changed = true;
+          }
+        }
+        if (changed) await writeJson(target.manifestPath, updated);
       } catch (e) {
         log.warn(`Failed to unregister checkout from shared hooks manifest: ${(e as Error).message}`);
       }

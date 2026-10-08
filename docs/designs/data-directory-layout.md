@@ -528,6 +528,7 @@ every checkout, so that is where they live now:
 │                                              removing a legacy Codex copy shifts surviving checkout records only after matching their full entry at the old position
 │                                              uninstall of a shared partition removes the selected tool's hooks and registrations for that whole installation before deleting its authority
 │                                              the synthetic main-checkout manifest and empty .teamai directory go only after the last hook record is removed
+│                                              uninstall also retires selected tool records for missing hook files after their last checkout releases ownership
 │                                              removal releases one Claude entry per record, so an identical copy another checkout records stays
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target, without sibling registrations
