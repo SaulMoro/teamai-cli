@@ -2725,7 +2725,11 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     // Nor does it install there meanwhile: either value could place a file where the other would not.
     const acks = await run([rule(3, 'other-rule', app)], app);
     expect(acks[0]?.status).toBe('failed');
-    expect(acks[0]?.error).toContain(`so the local agent changed nothing in ${app}.`);
+    expect(acks[0]?.error).toBe(
+      `teamai could not read sharing.gitExclude from the team's teamai.yaml (${path.join(clone, 'teamai.yaml')}), `
+      + `so the local agent did not install other-rule in ${app}: it wrote nothing there. `
+      + `Fix or restore teamai.yaml in the team repository, or set \`gitExcludeEnabled\` in ${path.join(tmpDir, '.teamai', 'config.yaml')}.`,
+    );
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'other-rule.md'))).toBe(false);
     expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/']);
   });

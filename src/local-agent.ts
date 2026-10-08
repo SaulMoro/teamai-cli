@@ -741,14 +741,15 @@ async function gitExcludeEnabledFor(workspacePath: string): Promise<boolean | { 
  * The resource cache's team config for one install, carrying the workspace's
  * git exclude flag so every writer and the instruction targets read the same
  * value (#915). While the flag is unknown nothing is written: either value
- * could move a file the other placed.
+ * could move a file the other placed. `change` names what was refused
+ * ("install <slug>", "uninstall <slug>").
  */
-async function localAgentTeamConfig(endpoint: string, scope: LocalAgentScope, workspacePath?: string): Promise<TeamaiConfig> {
+async function localAgentTeamConfig(endpoint: string, scope: LocalAgentScope, workspacePath: string | undefined, change: string): Promise<TeamaiConfig> {
   const teamConfig = createLocalAgentTeamConfig(endpoint);
   if (scope !== 'project' || !workspacePath) return teamConfig;
   const enabled = await gitExcludeEnabledFor(workspacePath);
   if (typeof enabled === 'object') {
-    throw new Error(`${enabled.cause}, so the local agent changed nothing in ${workspacePath}. ${enabled.fix}.`);
+    throw new Error(`${enabled.cause}, so the local agent did not ${change} in ${workspacePath}: it wrote nothing there. ${enabled.fix}.`);
   }
   if (!enabled) return teamConfig;
   return { ...teamConfig, sharing: { ...teamConfig.sharing, gitExclude: { enabled: true } } };
@@ -2082,7 +2083,7 @@ async function installDownloadedResource(input: {
 
   const downloadedPath = await downloadResource(input.command.download_url);
   try {
-    const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath);
+    const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath, `install ${input.slug}`);
     const tool = input.tool ?? 'workbuddy';
     const toolPath = fullTeamConfig.toolPaths[tool];
     if (!toolPath) {
@@ -2230,7 +2231,7 @@ async function uninstallResource(input: {
   tool?: string;
 }): Promise<void> {
   const repoPath = await getResourceRepoPath(input.scope, input.workspacePath);
-  const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath);
+  const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath, `uninstall ${input.slug}`);
   const tool = input.tool ?? 'workbuddy';
   const toolPath = fullTeamConfig.toolPaths[tool];
   if (!toolPath) {
