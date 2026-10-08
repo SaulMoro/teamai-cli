@@ -109,7 +109,11 @@ what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
 its last failure to update it (cleared by the next update that succeeds) and
 notices the next interactive pull says once and drops; `doctor` reads both.
 `pull --dry-run` previews the block from what its writers would write, writing
-nothing. `uninstall` reads `state.gitExcludeFiles` before it deletes the
+nothing. A checkout whose config still loads from `<workspace>/.teamai/` (the
+migration kept the legacy layout, or a dry run previews one) does not read its
+member `gitExcludeEnabled`: each worktree of that layout has its own config, and
+they share one exclude file, so only the team's setting or the default applies.
+`uninstall` reads `state.gitExcludeFiles` before it deletes the
 partition and, under the partition's sync lock, removes every teamai block
 from those files once it has deleted the files they hid; `uninstall --agent`
 filters the tool's paths out of every entry's `gitExcludePaths` and syncs again.
