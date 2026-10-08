@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -76,13 +75,6 @@ function stubSync(command: Record<string, unknown>) {
     return new Response(JSON.stringify({ ok: true }));
   }));
   return acks;
-}
-
-/** A project workspace: a git repository, where a model API key can be kept out of git (#915). */
-async function repository(dir: string): Promise<void> {
-  await fse.ensureDir(dir);
-  const result = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(result.stderr);
 }
 
 const deliveredModel = {
@@ -474,7 +466,7 @@ describe('local-agent: apply_model_config', () => {
 
   it('writes a workspace-scoped WorkBuddy model to the project models file', async () => {
     const workspace = path.join(home, 'project');
-    await repository(workspace);
+    await fse.ensureDir(workspace);
     const configPath = path.join(home, '.teamai/local-agent/config.json');
     const config = await fse.readJson(configPath);
     config.workspaceBindings[workspace] = {
@@ -497,40 +489,13 @@ describe('local-agent: apply_model_config', () => {
 
     const projectConfig = await fse.readJson(path.join(workspace, '.codebuddy/models.json'));
     expect(projectConfig.models[0].id).toBe('deepseek-v3-0324');
-    // Kept out of git through the repository's exclude file, not a committable .gitignore (#915).
-    expect(spawnSync('git', ['check-ignore', '-q', '.codebuddy/models.json'], { cwd: workspace }).status).toBe(0);
+    // Outside any git repository nothing could commit it: the key is written, with no git exclude line,
+    // no record of one, and no .gitignore (#915).
+    expect(projectConfig.models[0].apiKey).toBe('proxy-token');
     expect(await fse.pathExists(path.join(workspace, '.codebuddy/.gitignore'))).toBe(false);
+    expect(await fse.pathExists(path.join(home, '.teamai/local-agent/git-exclude.json'))).toBe(false);
     expect(await fse.pathExists(path.join(home, '.workbuddy/models.json'))).toBe(false);
     expect(acks[0]?.status).toBe('success');
-  });
-
-  it('withholds a workspace-scoped model API key outside a git repository, and says why', async () => {
-    const workspace = path.join(home, 'not-a-repository');
-    await fse.ensureDir(workspace);
-    const configPath = path.join(home, '.teamai/local-agent/config.json');
-    const config = await fse.readJson(configPath);
-    config.workspaceBindings[workspace] = {
-      projectId: 5,
-      projectName: 'Project 5',
-      boundAt: '2026-09-09T00:00:00.000Z',
-      ideType: 'codebuddy',
-    };
-    await fse.writeJson(configPath, config);
-    const acks = stubSync({
-      id: 49,
-      type: 'apply_model_config',
-      scope: 'workspace',
-      workspace_path: workspace,
-      cmd: JSON.stringify(deliveredModel),
-    });
-
-    const { reportAndSyncLocalAgent } = await import('../local-agent.js');
-    await reportAndSyncLocalAgent({ cwd: workspace, tool: 'codebuddy', status: 'running' });
-
-    expect(acks[0]).toMatchObject({ id: 49, status: 'failed' });
-    expect(acks[0]?.error).toMatch(/withheld the model API key from .*models\.json: teamai could not keep the file out of git: git finds no repository holding /);
-    expect(acks[0]?.error).toContain('Open the workspace from its git checkout, then apply the model config again.');
-    expect(await fse.pathExists(path.join(workspace, '.codebuddy/models.json'))).toBe(false);
   });
 
   it('rejects a workspace-scoped model for an unbound path', async () => {
@@ -557,7 +522,7 @@ describe('local-agent: apply_model_config', () => {
 
   it('supports a workspace-scoped CodeBuddy model without writing WorkBuddy user config', async () => {
     const workspace = path.join(home, 'code-project');
-    await repository(workspace);
+    await fse.ensureDir(workspace);
     const configPath = path.join(home, '.teamai/local-agent/config.json');
     const config = await fse.readJson(configPath);
     config.workspaceBindings[workspace] = {
@@ -1075,7 +1040,7 @@ describe('local-agent: report local model inventory', () => {
 
   it('reports a workspace-scoped WorkBuddy model under that workspace', async () => {
     const workspace = path.join(home, 'project');
-    await repository(workspace);
+    await fse.ensureDir(workspace);
     const configPath = path.join(home, '.teamai/local-agent/config.json');
     const config = await fse.readJson(configPath);
     config.workspaceBindings[workspace] = {

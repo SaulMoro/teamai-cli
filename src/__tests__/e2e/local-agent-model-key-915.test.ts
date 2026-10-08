@@ -222,6 +222,24 @@ describe.skipIf(process.platform === 'win32')('a model API key the HTTP local ag
     expect(other.status()).toEqual([]);
   }, 120_000);
 
+  it('keeps a models file teamai did not create, and its line, when nothing of teamai\'s is left in it', async () => {
+    const m = await machine('removal-not-created');
+    fs.writeFileSync(m.file(MODELS), '{\n  "models": []\n}\n');
+    await m.sessionStart([applyModels(m.project)]);
+    expect(fs.readFileSync(m.file(MODELS), 'utf8')).toContain(MODEL_KEY);
+
+    expect((await m.sessionStart([applyModels(m.project, [])])).acks.map((ack) => ack.status)).toEqual(['success']);
+    expect(fs.readFileSync(m.file(MODELS), 'utf8')).not.toContain(MODEL_KEY);
+    expect(m.credentialLines()).toEqual(['/.codebuddy/models.json']);
+
+    const out = await m.cli(['source', 'remove-http'], m.project);
+
+    expect(out.code, out.output).toBe(0);
+    expect(fs.existsSync(m.file(MODELS))).toBe(true);
+    expect(m.credentialLines()).toEqual(['/.codebuddy/models.json']);
+    expect(m.status()).toEqual([]);
+  }, 120_000);
+
   it('removing the HTTP source deletes the file, then its line', async () => {
     const m = await machine('remove-http');
     await m.sessionStart([applyModels(m.project)]);

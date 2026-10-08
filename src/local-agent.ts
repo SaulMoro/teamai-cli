@@ -277,6 +277,8 @@ interface BuddyModelManifest {
   codebuddy?: Record<string, string>;
   workbuddy?: Record<string, string>;
   providersByAgent?: Record<string, Record<string, string>>;
+  /** Project scope: teamai created the project's models file, so it deletes it once nothing is left in it (#915). */
+  createdModelsFile?: boolean;
 }
 
 interface ModelConfigManifest extends BuddyModelManifest {
@@ -2690,19 +2692,16 @@ const MODEL_KEY_RERUN = 'apply the model config again';
 
 /**
  * List `file` in the `credentials` block before a model API key goes into it.
- * Only git confirming that it ignores the file lets the key through; anything
- * else throws why git could still commit it and how to fix that, so the key is
- * not written.
+ * Only git confirming that it ignores the file, or the file being in no git
+ * repository, lets the key through; anything else throws why git could still
+ * commit it and how to fix that, so the key is not written.
  */
 async function keepModelKeyOutOfGit(file: string): Promise<void> {
   const [{ result }] = await ensureGitExclude(credentialsGitExcludeOwner(), [file], { rerun: MODEL_KEY_RERUN });
-  if (result.kind === 'excluded') return;
-  const { reason, fix } = 'reason' in result ? result : {
-    reason: `git finds no repository holding ${file}`,
-    fix: `Open the workspace from its git checkout, then ${MODEL_KEY_RERUN}.`,
-  };
-  throw new Error(`apply_model_config: withheld the model API key from ${file}: teamai could not keep the file out of git: ${reason}. `
-    + `The file is left as it was. ${fix}`);
+  // Excluded, or outside any repository, where nothing could commit it.
+  if (!('reason' in result)) return;
+  throw new Error(`apply_model_config: withheld the model API key from ${file}: teamai could not keep the file out of git: ${result.reason}. `
+    + `The file is left as it was. ${result.fix}`);
 }
 
 const TEAMAI_MODEL_GITIGNORE = ['# Local model credentials', 'models.json'];
@@ -2921,19 +2920,22 @@ async function reconcileBuddyModels(
     }
   }
   const document = doc ?? preserved;
+  const present = await fs.promises.lstat(targetFile).catch(() => null);
   if (workspacePath && Object.keys(nextManaged).length === 0 && holdsNoModels(document)) {
-    // Nothing left in the project's file: it goes (never one git tracks, nor a member's link), then its git exclude line.
-    const link = await fs.promises.lstat(targetFile).then((stat) => stat.isSymbolicLink(), () => false);
-    if (link || (await gitTracks(targetFile)).kind === 'tracked') {
-      await writeModelJson(targetFile, document);
-    } else {
+    if (!present || (scopeManifest.createdModelsFile && !present.isSymbolicLink() && (await gitTracks(targetFile)).kind !== 'tracked')) {
+      // Nothing left in a file teamai created, or no file: it goes, then its git exclude line.
       await remove(targetFile);
+      delete scopeManifest.createdModelsFile;
       await removeTeamaiModelGitignore(workspacePath);
       await releaseModelKeyLines();
+    } else {
+      // A file teamai did not create, one git tracks, or a member's link stays, and so does its line.
+      await writeModelJson(targetFile, document);
     }
   } else {
     if (workspacePath && Object.keys(nextManaged).length > 0) await keepModelKeyOutOfGit(targetFile);
     await writeModelJson(targetFile, document);
+    if (workspacePath && !present) scopeManifest.createdModelsFile = true;
     if (workspacePath && Object.keys(nextManaged).length > 0) await removeTeamaiModelGitignore(workspacePath);
   }
   if (agentKind === 'codebuddy') scopeManifest.codebuddy = nextManaged;
