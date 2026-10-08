@@ -2854,6 +2854,7 @@ async function leaveLocalScope(
 export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: Record<string, string>): Promise<string[]> {
   const manifestPath = path.join(dataHome, 'managed-local-mcp.json');
   const manifest = await readManifest(manifestPath);
+  const recorded = Object.keys(manifest).length > 0;
   const userMcp = applyToolRoots(TeamaiConfigSchema.shape.toolPaths.parse(undefined), toolRoots).claude?.mcp;
   const files: Record<string, string | undefined> = {
     claude: userMcp && path.join(getUserHome(), userMcp),
@@ -2882,7 +2883,7 @@ export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: R
     }
   }
   if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
-  if (left.size > 0) await writeJsonAtomic(manifestPath, manifest);
+  if (recorded) await writeJsonAtomic(manifestPath, manifest);
   return [...left];
 }
 

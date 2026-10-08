@@ -2989,6 +2989,8 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 若删除 teamai 添加的 OpenCode 条目失败，卸载以错误状态退出，并保留共享数据目录和所有权记录，即使 OpenCode 是最后一个工具。修复配置或权限后，重试同一卸载命令。
 
+在没有项目配置的工作区中，在该工作区运行 `teamai uninstall --force`，即可移除其 `.teamai/managed-local-mcp.json` 中记录的 local scope MCP server。无论有没有 user scope 配置，卸载都会读取该工作区的记录。若工具配置无法读取或写入，记录会保留，命令会指出文件并以退出码 1 结束。修好该文件后，在同一个工作区重复运行命令。它不会扫描其他没有项目配置的工作区。
+
 项目级卸载会保留并指出你在 teamai 写入后改动过的已记录 MCP server，无论它位于 `.mcp.json` 还是工具的 local scope。你自己的 server 也会保留。
 
 项目级卸载保留 Pi 和 Oh My Pi 的全局扩展、Hermes 的全局插件和配置、OpenCode 的用户级插件（它也为 V2 提供规则和指令）、Codex 系列的用户级 hooks 以及服务端下发的 agent hooks，因为本机的用户级安装、HTTP agent 或其他项目可能仍在使用它们，并在摘要中列出。若没有其他安装使用它们，请在卸载前于该项目中运行 `teamai hooks remove`，它会移除这些内容。定向项目级 Codex 卸载保留项目配置以记录排除设置，仅清理项目拥有的资源和旧 hook 副本。单工具卸载在项目配置仍保留时，将该工具加入此项目的排除列表。用户级卸载才移除这些全局投递通道。

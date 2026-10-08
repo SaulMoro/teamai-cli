@@ -1598,6 +1598,13 @@ async function removeHomeLocalScopeMcpServers(): Promise<string[]> {
       : (await loadLocalConfig())?.toolRoots;
     for (const file of await removeLocalScopeMcpServers(dataHome, toolRoots)) left.add(file);
   }
+  const { resolveAnchors } = await import('./utils/git.js');
+  const workspace = (await resolveAnchors(process.cwd()))?.workspaceRoot;
+  if (workspace) {
+    const dataHome = path.join(workspace, '.teamai');
+    const toolRoots = await resolveMemberToolRoots(workspace, { selfHeal: false });
+    for (const file of await removeLocalScopeMcpServers(dataHome, toolRoots)) left.add(file);
+  }
   return [...left];
 }
 
@@ -2218,6 +2225,15 @@ async function removeConfirmed(
     const { shutdownLocalAgentHttp } = await import('./local-agent.js');
     const retry = agentKey ? `teamai uninstall --agent ${agentKey}` : 'teamai uninstall';
     if (await shutdownLocalAgentHttp(retry) === 'locked') return;
+    if (localConfig.scope === 'user') {
+      const left = await removeHomeLocalScopeMcpServers();
+      if (left.length > 0) {
+        log.warn(`Uninstall incomplete: kept teamai's MCP records so removal can be retried. `
+          + `Repair the JSON or permissions of ${left.join(', ')}, then run \`teamai uninstall\` again in this workspace.`);
+        process.exitCode = 1;
+        return;
+      }
+    }
   }
 
   // MCP cleanup must run before executeRemoval deletes ~/.teamai/: ownership is

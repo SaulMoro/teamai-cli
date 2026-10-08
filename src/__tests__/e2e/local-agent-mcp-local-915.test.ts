@@ -319,6 +319,33 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent installs a p
     }
   }, 180_000);
 
+  it.each([true, false])('uninstall in a workspace without project config reaches its local MCP records with user config %s', async (configured) => {
+    const m = machine('workspace-uninstall');
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    const userConfig = path.join(m.home, '.teamai', 'config.yaml');
+    fs.appendFileSync(userConfig, 'gitExcludeEnabled: true\n');
+    const app = fs.realpathSync.native(fs.mkdtempSync(path.join(m.base, 'workspace-')));
+    m.git(['init', '-q', '-b', 'main'], app);
+    const id = configured ? 81 : 91;
+    await m.sessionStart(app, 'claude', [installMcp(id, 'workspace-api', app)]);
+    expect(ackStatus([id])).toEqual(['success']);
+    const records = path.join(app, '.teamai', 'managed-local-mcp.json');
+    expect(fs.existsSync(records)).toBe(true);
+    if (!configured) fs.rmSync(userConfig);
+    const good = fs.readFileSync(m.claudeJson, 'utf8');
+    fs.writeFileSync(m.claudeJson, '{ broken json');
+    const failed = await m.cli(['uninstall', '--force'], app);
+    expect(failed.code, failed.output).toBe(1);
+    expect(failed.output).toContain(m.claudeJson);
+    expect(fs.existsSync(records)).toBe(true);
+    fs.writeFileSync(m.claudeJson, good);
+    const out = await m.cli(['uninstall', '--force'], app);
+    expect(out.code, out.output).toBe(0);
+    expect(Object.keys(servers(m.readJson(m.claudeJson), app) ?? {}), out.output).toEqual([]);
+    expect(fs.readFileSync(m.claudeJson, 'utf8')).not.toContain(TOKEN);
+  }, 180_000);
+
   it('an uninstall that finds no configuration, after remove-http, takes its servers out of both local scopes, and keeps the member\'s and an edited copy, named', async () => {
     const m = machine('home-only');
     const app = await m.project('app');

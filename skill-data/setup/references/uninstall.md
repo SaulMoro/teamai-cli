@@ -137,7 +137,7 @@ and give it your team repo URL."*
   local scopes that are still as it wrote them (a changed copy stays, named).
   If such a file does not parse, `~/.teamai/` and the records stay and it exits
   1, naming the file: fix it and rerun. `teamai source remove-http` leaves
-  those servers but keeps their records, for this uninstall to remove. The local agent's skills and rules go only as far as they are
+  those servers but keeps their records, for this uninstall to remove. In a workspace with no project config, run uninstall there: it also reads that workspace's `.teamai/managed-local-mcp.json`, with or without user config. A failed removal keeps those records and exits 1; repair the named file and retry in the same workspace. It does not scan other unconfigured workspaces. The local agent's skills and rules go only as far as they are
   still what it installed: a file the user added inside a skill, an edited
   copy, and a tracked file stay, named. If another pull or push holds the
   project's sync lock, uninstall changes nothing and exits 1: run it again.

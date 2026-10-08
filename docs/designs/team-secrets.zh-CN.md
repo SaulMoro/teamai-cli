@@ -150,6 +150,8 @@ teamai env unset GITHUB_TOKEN [--global]
 
 **对 CodeBuddy 而言不进入工作区（#915）。** CodeBuddy 的项目级 server 以同样方式移到 CodeBuddy 的 local scope：`CODEBUDDY_CONFIG_DIR`（未设置时为 HOME）中 `.codebuddy.json` 的 `projects[<key>].mcpServers`。CodeBuddy 按其运行目录作为 local scope 的 key，不会向上查找仓库根目录，因此 `<key>` 是每个 worktree 根目录的真实路径（即 teamai 以前写入 `.mcp.json` 的位置，也是 CodeBuddy 唯一读取它的位置）。写入记录按 worktree 区分：pull 写入当前 checkout 的 key，git 创建 worktree 时运行的 pull 也会写入；对于已不再是该仓库 checkout 的 worktree（依据记录的 checkout 和完整的 worktree 列表判断，从不单凭 `git worktree list`），下一次 pull 会从它的 key 中移除 teamai 的 server，保留成员自己的 server 以及成员改动过的副本（会给出提示）。这些记录与 Claude 的记录放在一起，按工具和 key 区分。`teamai uninstall` 只移除 teamai 的 server，该文件的其他内容保持不变；移出和移回 `.mcp.json` 的方式，以及卸载和关闭此选项时清理每个记录过的 key，都与 Claude 相同。两者都移走后，开启此选项时不会有 pull 写入 `.mcp.json`，HTTP 模式下本地 agent 的 `install_mcp` 也不会：它按每个工作区读取该选项，写入同样的 local scope、使用同样的 key，并与 pull 的记录放在一起（`managed-local-mcp.json`，按工具和 key 区分），因此 `teamai uninstall` 只移除它的 server。`teamai source remove-http` 不移除这些 server，但保留其记录，因此之后的 `teamai uninstall` 会移除它们；找不到任何配置的卸载（在项目之外运行）只移除仍与 teamai 写入时相同的 server，改动过的副本保留并被指出；存放它们的文件无法读取或写入时，保留 `~/.teamai` 及其记录，并以退出码 1 结束。它的下一次同步会移走以前的安装记录在 `.mcp.json` 中的 server（先写入、记录，再从 `.mcp.json` 中移除）；成员改动过的副本留在原处并给出提示，其记录被移除；其他工具的记录仍认领的条目留给该工具。无法读取该选项时，它不会在该工作区为 Claude 或 CodeBuddy 安装任何内容，也不会移动任何内容。
 
+在没有项目配置的工作区中，在该工作区运行 `teamai uninstall --force`，即可移除其 `.teamai/managed-local-mcp.json` 中记录的 local scope MCP server。无论有没有 user scope 配置，卸载都会读取该工作区的记录。若工具配置无法读取或写入，记录会保留，命令会指出文件并以退出码 1 结束。修好该文件后，在同一个工作区重复运行命令。它不会扫描其他没有项目配置的工作区。
+
 项目级卸载会保留并指出你在 teamai 写入后改动过的已记录 MCP server，无论它位于项目文件还是工具的 local scope。未改动的受管 server 会被移除。
 
 ## 缺少密钥时保留 MCP 条目
