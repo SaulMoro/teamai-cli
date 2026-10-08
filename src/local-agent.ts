@@ -2318,18 +2318,24 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
  * file of the repository it lands in; a block no workspace needs any more goes.
  * Nobody may watch the run, so a failure is also kept until the next sync
  * succeeds, for the next interactive pull and `doctor`, and a path no line can
- * name is kept as a notice.
+ * name is kept as a notice. `without` leaves those workspaces out (a project
+ * `teamai uninstall` removes), so a file another workspace shares keeps only
+ * that workspace's lines; `dryRun` writes and keeps nothing and says what each
+ * exclude file would drop.
  */
-async function syncLocalAgentGitExclude(config: LocalAgentConfig): Promise<void> {
-  const rerun = 'The next session start tries again.';
+async function syncLocalAgentGitExclude(
+  config: LocalAgentConfig, options: { without?: readonly string[]; dryRun?: boolean; rerun?: string } = {},
+): Promise<Array<{ excludeFile: string; dropped: string[] }>> {
+  const { without = [], dryRun = false, rerun = 'The next session start tries again.' } = options;
   const notices = localAgentGitExcludeNotices();
   const failures: string[] = [];
+  const changed: Array<{ excludeFile: string; dropped: string[] }> = [];
   try {
     const paths: string[] = [];
     const unknown: string[] = [];
     for (const [key, scope] of Object.entries((await loadManifest()).scopes)) {
       const { scope: kind, workspacePath } = parseScopeKey(key);
-      if (kind !== 'project' || !workspacePath || !await isLiveWorkspace(workspacePath)) continue;
+      if (kind !== 'project' || !workspacePath || without.includes(workspacePath) || !await isLiveWorkspace(workspacePath)) continue;
       const enabled = await gitExcludeEnabledFor(workspacePath);
       if (enabled === false) continue;
       const copies = await recordedProjectCopies(config, workspacePath, scope);
@@ -2345,7 +2351,9 @@ async function syncLocalAgentGitExclude(config: LocalAgentConfig): Promise<void>
     if (unknown.length > 0) {
       paths.push(...(await reportGitExclude(localAgentGitExcludeOwner(), unknown)).files.flatMap((file) => file.listed));
     }
-    const result = await syncGitExclude(localAgentGitExcludeOwner(), paths);
+    const result = await syncGitExclude(localAgentGitExcludeOwner(), paths, { dryRun });
+    for (const { excludeFile, dropped } of result.files) if (dropped.length > 0) changed.push({ excludeFile, dropped });
+    if (dryRun) return changed;
     for (const { excludeFile, write, reincluded } of result.files) {
       const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
         : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
@@ -2366,9 +2374,26 @@ async function syncLocalAgentGitExclude(config: LocalAgentConfig): Promise<void>
   } catch (e) {
     failures.push(`Could not update the local agent's git exclude blocks: ${(e as Error).message}. ${rerun}`);
   }
+  if (dryRun) return changed;
   for (const failure of failures) log.warn(failure);
   if (failures.length > 0) await recordGitExcludeFailure(notices, failures.join(' '));
   else await clearGitExcludeFailure(notices);
+  return changed;
+}
+
+/**
+ * For a project `teamai uninstall` that leaves the local agent in place:
+ * rebuild its `local-agent` blocks from its records without `workspaces`, so
+ * other workspaces keep their lines, in a shared exclude file too (#915).
+ * `null` when no local agent is set up on this machine. `dryRun` says what
+ * each exclude file would drop.
+ */
+export async function rebuildLocalAgentGitExcludeWithout(
+  workspaces: readonly string[], options: { dryRun?: boolean } = {},
+): Promise<Array<{ excludeFile: string; dropped: string[] }> | null> {
+  const config = await loadLocalAgentConfig({ dryRun: true });
+  if (!config) return null;
+  return syncLocalAgentGitExclude(config, { ...options, without: workspaces, rerun: 'The next session start tries again.' });
 }
 
 /**
