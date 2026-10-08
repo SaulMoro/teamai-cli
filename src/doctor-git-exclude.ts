@@ -2,9 +2,11 @@ import path from 'node:path';
 import { loadStateForScope } from './config.js';
 import type { Check, DoctorContext } from './doctor.js';
 import type { DamagedMarker, GitExcludeReport } from './git-exclude.js';
-import { describeForeign, deliveredUnion, reportDeliveredGitExclude, type DeliveredUnion } from './git-exclude-delivered.js';
+import {
+  describeForeign, describeUnreadableGitExcludeSetting, deliveredUnion, reportDeliveredGitExclude, type DeliveredUnion,
+} from './git-exclude-delivered.js';
 import { readGitExcludeNotices, type GitExcludeNotices } from './git-exclude-notices.js';
-import { getDataHome, isGitExcludeEnabled, isUnmigratedDataHome } from './types.js';
+import { getDataHome, isUnmigratedDataHome, resolveGitExclude } from './types.js';
 import { execCommand } from './utils/exec.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
 
@@ -18,7 +20,8 @@ import { withoutGitRepositoryEnv } from './utils/git-env.js';
 /** What doctor learns about the blocks, once per run (checks and notes share it). */
 interface Inspection {
   projectRoot: string;
-  enabled: boolean;
+  /** `undefined`: the team's teamai.yaml could not be read, and no override decides (resolveGitExclude). */
+  enabled: boolean | undefined;
   /** Where the resolved setting comes from, as a member reads it. */
   source: string;
   /** The partition config holding the member's override. */
@@ -50,8 +53,10 @@ async function inspectOnce(ctx: DoctorContext): Promise<Inspection | null> {
   // Not read on that layout (isGitExcludeEnabled).
   const member = unmigrated ? undefined : localConfig.gitExcludeEnabled;
   const team = teamConfig?.sharing?.gitExclude?.enabled;
+  const enabled = resolveGitExclude(localConfig, teamConfig);
   const source = member !== undefined ? `gitExcludeEnabled: ${member} in ${configPath}`
     : team !== undefined ? `sharing.gitExclude.enabled: ${team} in the team's teamai.yaml`
+    : enabled === undefined ? 'team config unreadable'
     : 'the default';
   const state = await loadStateForScope(localConfig);
   const records = state.lastPullByWorkspace ?? {};
@@ -64,7 +69,7 @@ async function inspectOnce(ctx: DoctorContext): Promise<Inspection | null> {
   const own = records[await checkoutKey(projectRoot)];
   return {
     projectRoot,
-    enabled: isGitExcludeEnabled(localConfig, teamConfig ?? {}),
+    enabled,
     source,
     configPath,
     unmigrated: unmigrated ? dataHome : null,
@@ -147,6 +152,15 @@ export async function buildDeliveredGitExcludeChecks(ctx: DoctorContext): Promis
     const relative = path.relative(projectRoot, file);
     return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative.split(path.sep).join('/');
   };
+  if (enabled === undefined) {
+    checks.push({
+      name: 'Delivered team resources are kept out of git',
+      source: 'local',
+      reportedByPull: 'git-exclude-sync',
+      check: async () => false,
+      fix: describeUnreadableGitExcludeSetting(ctx.localConfig),
+    });
+  }
   if (enabled) {
     const problems: string[] = [];
     for (const r of reports) {
@@ -205,19 +219,19 @@ export async function deliveredGitExcludeNotes(ctx: DoctorContext): Promise<stri
     const relative = path.relative(projectRoot, file);
     return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative.split(path.sep).join('/');
   };
-  const notes = [`Git exclude for delivered team resources: ${enabled ? 'on' : 'off'}, from ${source}.`];
+  const notes = [`Git exclude for delivered team resources: ${enabled === undefined ? 'unknown' : enabled ? 'on' : 'off'}, from ${source}.`];
   if (unmigrated) {
     notes.push(`This checkout keeps teamai's data in ${unmigrated}, an un-migrated layout, so its \`gitExcludeEnabled\` is not read: `
       + 'the setting comes from the team\'s teamai.yaml or the default until a pull migrates the data.');
   }
   const files = reports.flatMap((r) => r.files);
-  if (!enabled) {
+  if (enabled === false) {
     const visible = [...new Set(files.flatMap((f) => f.visible))].map(rel);
     if (visible.length > 0) {
       notes.push(`Delivered team resources are visible to git: ${visible.length} untracked (first ${FIRST}: ${visible.slice(0, FIRST).join(', ')}). `
         + `To keep them out of git, set \`sharing.gitExclude.enabled: true\` in teamai.yaml (the whole team)${unmigrated ? '' : ` or \`gitExcludeEnabled: true\` in ${configPath} (only you)`}, then run \`teamai pull\`.`);
     }
-  } else {
+  } else if (enabled) {
     for (const file of files) {
       for (const { path: tracked, checkout, descendants } of file.tracked) {
         const what = descendants.length > 0

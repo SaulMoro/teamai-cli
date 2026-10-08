@@ -15,18 +15,23 @@
  * - A background pull (session start, git hooks) keeps its failure and its
  *   notices for the next interactive pull and `doctor`; the failure goes with
  *   the next sync that succeeds, a notice once a pull has said it.
+ * - While the team's teamai.yaml cannot be read and the member sets no
+ *   `gitExcludeEnabled`, the setting is unknown, not off: pull leaves the
+ *   blocks as they are and fails, and doctor fails. HTTP mode has no team
+ *   setting, so there the member's alone decides.
  *
  * Each case gets its own HOME, team remote (a local bare repo reached through
  * a synthetic HTTPS URL) and business repo. Fixture git calls that fire
  * teamai's git hooks run with the member's HOME.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackDetachedProcesses } from '../helpers/detached-processes.js';
+import { startMockServer, type MockServerHandle } from '../helpers/mock-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -195,6 +200,19 @@ function setOverride(m: Member, value: boolean): void {
   lines.splice(lines.length - 1, 0, `gitExcludeEnabled: ${value}`);
   fs.writeFileSync(config, lines.join('\n'));
 }
+
+/** The member's clone of the team repository, from the partition config. */
+function teamClone(m: Member): string {
+  const found = /^ {2}localPath: (.+)$/m.exec(read(m.partitionConfig()));
+  if (!found) throw new Error(`no repo.localPath in ${m.partitionConfig()}`);
+  return found[1].trim();
+}
+
+/** What pull and doctor say while the team's setting cannot be read. */
+const unreadableSetting = (m: Member): string =>
+  `teamai could not read sharing.gitExclude from the team's teamai.yaml (${path.join(teamClone(m), 'teamai.yaml')}), `
+  + 'so it left its delivered git exclude blocks as they were. '
+  + `Fix or restore teamai.yaml in the team repository, or set \`gitExcludeEnabled\` in ${m.partitionConfig()}, then run \`teamai pull\`.`;
 
 /** Hold the exclude file's lock as another live teamai process would. */
 function holdLock(excludeFile: string): () => void {
@@ -477,4 +495,133 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(m.teamai(['doctor'], main)).not.toContain('From a background pull');
     expect(status(m, main)).toEqual(['?? .claude/rules/new-rule.md']);
   }, 180_000);
+
+  it('leaves the block as it is while the team\'s teamai.yaml is missing, fails the pull, its preview and doctor, and a pull after the fix clears it', () => {
+    const m = member('unreadable');
+    const app = m.project(path.join(caseDir('unreadable'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const listed = read(exclude);
+    expect(blockLines(exclude)).toContain('/.claude/rules/team-rule.md');
+    const teamYaml = path.join(teamClone(m), 'teamai.yaml');
+    const aside = `${teamYaml}.aside`;
+    fs.renameSync(teamYaml, aside);
+    const unreadable = unreadableSetting(m);
+
+    try {
+      const pulled = m.run(process.execPath, [CLI, 'pull'], app);
+      expect(read(exclude)).toBe(listed);
+      expect(status(m, app)).toEqual([]);
+      expect(pulled.output.split(unreadable)).toHaveLength(2);
+
+      expect(m.teamai(['pull', '--dry-run'], app)).toContain(`[dry-run] ${unreadable}`);
+      expect(read(exclude)).toBe(listed);
+
+      const doctor = m.teamai(['doctor'], app);
+      expect(doctor).toContain('Git exclude for delivered team resources: unknown, from team config unreadable.');
+      expect(doctor).toContain('✖ Delivered team resources are kept out of git');
+      expect(doctor).toContain(unreadable);
+    } finally {
+      fs.renameSync(aside, teamYaml);
+    }
+
+    expect(m.teamai(['pull'], app)).not.toContain('could not read sharing.gitExclude');
+    expect(read(exclude)).toBe(listed);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('✔ Delivered team resources are kept out of git');
+    expect(doctor).not.toContain('could not read sharing.gitExclude');
+  }, 120_000);
+
+  it('a background pull keeps the block while the team\'s teamai.yaml does not validate, and keeps the failure until the team fixes it', async () => {
+    const m = member('invalid');
+    const app = m.project(path.join(caseDir('invalid'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const listed = read(exclude);
+    const valid = read(path.join(teamClone(m), 'teamai.yaml'));
+    m.teamCommit({ 'teamai.yaml': `${valid}toolPaths: not-a-map\n` });
+    const unreadable = unreadableSetting(m);
+
+    await m.sessionStart(app);
+    expect(read(exclude)).toBe(listed);
+    expect(status(m, app)).toEqual([]);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain('✖ Last background pull could not keep teamai\'s git exclude blocks up to date');
+    expect(doctor).toContain(unreadable);
+
+    m.teamCommit({ 'teamai.yaml': valid });
+    m.teamai(['pull'], app);
+    expect(read(exclude)).toBe(listed);
+    const fixed = m.teamai(['doctor'], app);
+    expect(fixed).not.toContain('Last background pull');
+    expect(fixed).toContain('✔ Delivered team resources are kept out of git');
+  }, 120_000);
+
+  it('with the member\'s gitExcludeEnabled set, syncs the block as usual while the team\'s teamai.yaml is missing', () => {
+    const m = member('unreadable-override');
+    const app = m.project(path.join(caseDir('unreadable-override'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    setOverride(m, true);
+    fs.renameSync(path.join(teamClone(m), 'teamai.yaml'), path.join(teamClone(m), 'teamai.yaml.aside'));
+    write(exclude, read(exclude).replace('/.claude/skills/teamai/\n', ''));
+
+    const pulled = m.run(process.execPath, [CLI, 'pull'], app);
+    expect(pulled.output).not.toContain('could not read sharing.gitExclude');
+    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/');
+    expect(status(m, app)).toEqual([]);
+    const doctor = m.teamai(['doctor'], app);
+    expect(doctor).toContain(`Git exclude for delivered team resources: on, from gitExcludeEnabled: true in ${m.partitionConfig()}.`);
+    expect(doctor).toContain('✔ Delivered team resources are kept out of git');
+  }, 120_000);
+});
+
+describe.skipIf(process.platform === 'win32')('the git exclude setting in HTTP mode (#915)', () => {
+  let server: MockServerHandle | undefined;
+  afterAll(async () => { await server?.close(); });
+
+  it('reads no team setting: without the member\'s gitExcludeEnabled the setting is off, with no teamai.yaml too', async () => {
+    const API_KEY = 'e2e-http-key';
+    server = await startMockServer({ apiKey: API_KEY });
+    const base = fs.mkdtempSync(path.join(sandbox, 'http-'));
+    const home = path.join(base, 'home');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+      GIT_CONFIG_NOSYSTEM: '1', FORCE_COLOR: '0',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' '),
+    };
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.TEAMAI_API_TOKEN;
+    delete env.TEAMAI_API_KEY;
+    // Spawned asynchronously: the mock backend runs in this process.
+    const cli = (args: string[], cwd: string): Promise<Run> => new Promise((resolve) => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk) => { output += String(chunk); });
+      child.stderr.on('data', (chunk) => { output += String(chunk); });
+      child.on('close', (code) => resolve({ code, output }));
+    });
+    const project = path.join(base, 'app');
+    write(path.join(project, 'README.md'), '# app\n');
+    fs.mkdirSync(path.join(project, '.claude'));
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: project, env });
+    const app = fs.realpathSync.native(project);
+    const init = await cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'project', '--agent', 'claude', '--force'], app);
+    expect(init.code, init.output).toBe(0);
+    const projects = path.join(home, '.teamai', 'projects');
+    const config = path.join(projects, fs.readdirSync(projects)[0], 'config.yaml');
+    const stub = path.join(/^ {2}localPath: (.+)$/m.exec(read(config))![1].trim(), 'teamai.yaml');
+    const exclude = path.join(app, '.git', 'info', 'exclude');
+
+    write(config, `${read(config)}gitExcludeEnabled: true\n`);
+    const on = await cli(['pull'], app);
+    expect(on.code, on.output).toBe(0);
+    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/');
+
+    write(config, read(config).replace('gitExcludeEnabled: true\n', ''));
+    fs.rmSync(stub);
+    const off = await cli(['pull'], app);
+    expect(off.output).not.toContain('could not read sharing.gitExclude');
+    expect(blockLines(exclude)).toEqual([]);
+    const doctor = await cli(['doctor'], app);
+    expect(doctor.output).toContain('Git exclude for delivered team resources: off, from the default.');
+  }, 120_000);
 });

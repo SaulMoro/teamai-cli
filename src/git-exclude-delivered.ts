@@ -13,7 +13,7 @@ import {
   type GitExcludeReport,
   type GitExcludeWrite,
 } from './git-exclude.js';
-import { getDataHome, type LocalConfig } from './types.js';
+import { getDataHome, isUnmigratedDataHome, type LocalConfig } from './types.js';
 import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
@@ -209,6 +209,17 @@ export function describeForeign(foreign: ForeignPath[]): string[] {
     if (!named.has(file)) named.set(file, `Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
   }
   return [...named.values()];
+}
+
+/**
+ * The failure pull and doctor name when `sharing.gitExclude` cannot be
+ * resolved (resolveGitExclude), so the blocks are left as they are.
+ */
+export function describeUnreadableGitExcludeSetting(localConfig: LocalConfig): string {
+  const override = isUnmigratedDataHome(localConfig) ? '' : `, or set \`gitExcludeEnabled\` in ${path.join(getDataHome(localConfig), 'config.yaml')}`;
+  return `teamai could not read sharing.gitExclude from the team's teamai.yaml (${path.join(localConfig.repo.localPath, 'teamai.yaml')}), `
+    + 'so it left its delivered git exclude blocks as they were. '
+    + `Fix or restore teamai.yaml in the team repository${override}, then run \`teamai pull\`.`;
 }
 
 // ─── Sync ─────────────────────────────────────────────────────
