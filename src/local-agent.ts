@@ -12,6 +12,7 @@ import {
   fileHash,
   listDirs,
   listFilesRecursive,
+  pruneEmptyDirs,
   pathExists,
   readFileSafe,
   readFileIfExists,
@@ -104,7 +105,7 @@ import {
   type TeamaiConfig,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { completeWorktreeList, gitCommonDir, isLiveCheckout, resolveAnchors } from './utils/git.js';
+import { completeWorktreeList, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import {
   ensure as ensureGitExclude, gitExcludeFile, gitTracks, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
   sync as syncGitExclude, type GitExcludeOwner,
@@ -112,8 +113,8 @@ import {
 import {
   clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
 } from './git-exclude-notices.js';
-import { blockingEntries, contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
-import { skillOrigin } from './resources/skills.js';
+import { blockingEntries, contentHash, deliveredSkillFiles, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir } from './resources/delivered-copies.js';
+import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
 import { acquireLock, releaseLock } from './update.js';
 
 const execFileAsync = promisify(execFile);
@@ -868,6 +869,72 @@ async function membersRuleCopy(
     };
     if (await recordsCopy(entry, tool, dest, equalsInstalled)) continue;
     return dest;
+  }
+  return null;
+}
+
+/**
+ * Which files of `dest`, a tool's copy of the local agent's skill or rule
+ * `name` (a skill: its directory name), are teamai's (#915). Null when no
+ * manifest entry records that copy for `tool`; an entry an older CLI wrote,
+ * without tools, counts for every tool. Otherwise `teamais` are the files
+ * equal to what the agent writes there today from its cached source, and
+ * `members` every other entry (a file the member added or edited, a link, a
+ * repository). Read-only; judge before the cache is deleted. `config`: the
+ * source's, when a teardown already disabled it.
+ */
+export async function localAgentCopyFiles(
+  kind: 'skill' | 'rule', name: string, tool: string, dest: string, config?: LocalAgentConfig,
+): Promise<{ teamais: string[]; members: string[] } | null> {
+  config ??= await loadLocalAgentConfig({ dryRun: true }) ?? undefined;
+  if (!config) return null;
+  const fullTeamConfig = createLocalAgentTeamConfig(config.endpoint);
+  const toolPath = fullTeamConfig.toolPaths[tool];
+  if (!toolPath) return null;
+  const real = async (file: string): Promise<string> => fs.promises.realpath(file).catch(() => path.resolve(file));
+  const at = await real(dest);
+  for (const [key, scopeManifest] of Object.entries((await loadManifest()).scopes)) {
+    const entries = Object.entries((kind === 'skill' ? scopeManifest.skills : scopeManifest.rules) ?? {});
+    const entry = entries.find(([slug, e]) => (kind === 'skill' ? e.dir_name ?? slug : slug) === name)?.[1];
+    if (!entry || (entry.tools && !entry.tools.includes(tool))) continue;
+    const { scope, workspacePath } = parseScopeKey(key);
+    const repoPath = await getResourceRepoPath(scope, workspacePath);
+    const localConfig = await createResourceLocalConfig(config, scope, repoPath, workspacePath);
+    const teamConfig = { ...fullTeamConfig, toolPaths: { [tool]: toolPath } };
+    const sourcePath = path.join(repoPath, kind === 'skill' ? 'skills' : 'rules', kind === 'skill' ? name : `${name}.md`);
+    const item: ResourceItem = { name, type: kind === 'skill' ? 'skills' : 'rules', sourcePath, relativePath: path.relative(repoPath, sourcePath).split(path.sep).join('/') };
+    const handler = kind === 'skill' ? new SkillsHandler() : new RulesHandler();
+    let target: DeliveryTarget | undefined;
+    for (const candidate of await handler.deliveryTargets(teamConfig, localConfig, item)) {
+      if (await real(candidate.dest) === at) target = candidate;
+    }
+    if (!target) continue;
+    if (kind === 'rule') {
+      const disk = await fileHash(dest);
+      const teamais = disk !== null && ((target.content !== undefined && disk === contentHash(target.content)) || disk === await fileHash(sourcePath));
+      return teamais ? { teamais: [dest], members: [] } : { teamais: [], members: [dest] };
+    }
+    if (await isLink(dest)) return { teamais: [], members: [dest] };
+    // What the agent writes there today: each cached file, SKILL.md with its frontmatter repaired.
+    const expected = new Map<string, string>();
+    for (const rel of await pathExists(sourcePath) ? await listFilesRecursive(sourcePath) : []) {
+      const bytes = await fse.readFile(path.join(sourcePath, rel));
+      const text = bytes.toString('utf-8');
+      const written = rel === 'SKILL.md' ? withSkillFrontmatter(text, name) : text;
+      expected.set(rel.split(path.sep).join('/'), contentHash(written === text ? bytes : written));
+    }
+    const result = { teamais: [] as string[], members: [] as string[] };
+    const walk = async (dir: string, rel: string): Promise<void> => {
+      for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+        const file = path.join(dir, entry.name);
+        const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) await walk(file, entryRel);
+        else if (entry.isFile() && expected.get(entryRel) === await fileHash(file)) result.teamais.push(file);
+        else result.members.push(file);
+      }
+    };
+    await walk(dest, '');
+    return result;
   }
   return null;
 }
@@ -2247,6 +2314,23 @@ async function installDownloadedResource(input: {
   }
 }
 
+/**
+ * Delete teamai's files of the skill copy at `dest` (#915): the directory
+ * when every file in it is teamai's, else those files only, naming each the
+ * member's. A file git tracks stays (named).
+ */
+async function removeSkillCopy(dest: string, name: string, files: { teamais: string[]; members: string[] }): Promise<void> {
+  if (files.members.length === 0) {
+    if (!await keepsTrackedCopy(dest)) await remove(dest);
+    return;
+  }
+  for (const file of files.teamais) if (!await keepsTrackedCopy(file)) await remove(file);
+  await pruneEmptyDirs(dest);
+  for (const file of files.members) {
+    log.warn(describeMembersDirLeft(file, `skills/${name}/${path.relative(dest, file).split(path.sep).join('/')}`, 'the local agent'));
+  }
+}
+
 async function uninstallResource(input: {
   config: LocalAgentConfig;
   kind: CommandResourceKind;
@@ -2257,21 +2341,40 @@ async function uninstallResource(input: {
 }): Promise<void> {
   const repoPath = await getResourceRepoPath(input.scope, input.workspacePath);
   const fullTeamConfig = await localAgentTeamConfig(input.config.endpoint, input.scope, input.workspacePath, `uninstall ${input.slug}`);
-  const tool = input.tool ?? 'workbuddy';
-  const toolPath = fullTeamConfig.toolPaths[tool];
-  if (!toolPath) {
-    throw new Error(`Unknown tool "${tool}": no toolPaths entry found`);
+  if (input.tool && !fullTeamConfig.toolPaths[input.tool]) {
+    throw new Error(`Unknown tool "${input.tool}": no toolPaths entry found`);
   }
-  const teamConfig = { ...fullTeamConfig, toolPaths: { [tool]: toolPath } };
   const localConfig = await createResourceLocalConfig(input.config, input.scope, repoPath, input.workspacePath);
   const manifest = await loadManifest();
   const scopeManifest = getManifestScope(manifest, input.scope, input.workspacePath);
+  // The entry and its cached source go, and with them each copy the entry
+  // records (#915): for the tools it names, or, for an older CLI's entry,
+  // every tool. A copy goes only while it is what the agent writes today from
+  // the cached source, judged before the source is deleted; a skill file by
+  // file. Without an entry no copy is the agent's.
+  const entry = input.kind === 'claudemd' ? undefined : scopeManifest[manifestKind(input.kind)][input.slug];
+  const tools = input.kind === 'claudemd' ? [input.tool ?? 'workbuddy'] : entry ? entry.tools ?? Object.keys(fullTeamConfig.toolPaths) : [];
+  const teamConfig = {
+    ...fullTeamConfig,
+    toolPaths: Object.fromEntries(tools.flatMap((tool) => fullTeamConfig.toolPaths[tool] ? [[tool, fullTeamConfig.toolPaths[tool]]] : [])),
+  };
 
   if (input.kind === 'skill') {
     // The directory was created under the SKILL.md name (recorded as dir_name);
     // remove by that name, falling back to the slug for older installs.
-    const dirName = scopeManifest.skills[input.slug]?.dir_name ?? input.slug;
-    await new SkillsHandler().removeItem(dirName, teamConfig, localConfig);
+    const dirName = entry?.dir_name ?? input.slug;
+    const sourcePath = path.join(repoPath, 'skills', dirName);
+    const item: ResourceItem = { name: dirName, type: 'skills', sourcePath, relativePath: `skills/${dirName}` };
+    const copies: Array<{ dest: string; files: { teamais: string[]; members: string[] } }> = [];
+    for (const [tool, toolPath] of Object.entries(teamConfig.toolPaths)) {
+      for (const { dest } of await new SkillsHandler().deliveryTargets({ ...teamConfig, toolPaths: { [tool]: toolPath } }, localConfig, item)) {
+        const files = await pathExists(dest) ? await localAgentCopyFiles('skill', dirName, tool, dest, input.config) : null;
+        if (files) copies.push({ dest, files });
+      }
+    }
+    // A cache that cannot go fails the entry before any copy goes, so a retry finds both.
+    await remove(sourcePath);
+    for (const { dest, files } of copies) await removeSkillCopy(dest, dirName, files);
   } else if (input.kind === 'rule') {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
@@ -2457,10 +2560,28 @@ async function keepLocalAgentGitExclude(config: LocalAgentConfig, force: boolean
   });
 }
 
-/** Remove the `local-agent` block from every exclude file the state home records, naming any it cannot write (#915). */
-async function removeLocalAgentGitExclude(): Promise<void> {
+/**
+ * Remove the `local-agent` block from every exclude file the state home
+ * records, naming any it cannot write (#915). A line stays while a file it
+ * names is still on disk untracked (a copy the teardown kept) in a checkout reading that
+ * exclude file, among `roots` and those git lists for its repository, or when
+ * none of them does; the record then keeps that exclude file.
+ */
+async function removeLocalAgentGitExclude(roots: string[]): Promise<void> {
   try {
-    for (const { excludeFile, write, removed } of await removeGitExclude(localAgentGitExcludeOwner())) {
+    const checkouts = new Set(roots);
+    for (const file of await localAgentGitExcludeOwner().record?.files() ?? []) {
+      // `<common dir>/info/exclude`: git lists the checkouts from the common directory.
+      for (const root of await listWorktrees(path.dirname(path.dirname(file)))) checkouts.add(root);
+    }
+    const keep = async ({ line, excludeFile }: { line: string; excludeFile: string }): Promise<boolean> => {
+      const left = await modelFilesBehind(line, excludeFile, { roots: [...checkouts] });
+      if (left === null) return true;
+      // A file the repository tracks is not hidden by its line.
+      for (const file of left) if ((await gitTracks(file, 'entry')).kind !== 'tracked') return true;
+      return false;
+    };
+    for (const { excludeFile, write, removed } of await removeGitExclude(localAgentGitExcludeOwner(), { keep })) {
       const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
         : write.kind === 'notWritable' || write.kind === 'notReadable' ? write.message
         : write.kind === 'writeFailed' ? write.error
@@ -2896,14 +3017,16 @@ async function mayHoldModelKey(file: string): Promise<boolean> {
 }
 
 /**
- * The checkouts the local agent knows: every workspace it was bound to or
- * wrote models into, and the other checkouts of each one's repository when git
- * names them all.
+ * The checkouts the local agent knows: every workspace it was bound to,
+ * installed skills or rules in, or wrote models into, and the other checkouts
+ * of each one's repository when git names them all. Read it before a teardown
+ * deletes those records.
  */
-async function localAgentCheckouts(): Promise<string[]> {
+export async function localAgentCheckouts(): Promise<string[]> {
   const config = await loadLocalAgentConfig().catch(() => null);
   const manifest = (await readJson<ModelConfigManifest>(getModelManifestPath()).catch(() => null)) ?? {};
-  const workspaces = new Set([...Object.keys(config?.workspaceBindings ?? {}), ...Object.keys(manifest.workspaceModels ?? {})]);
+  const installed = Object.keys((await loadManifest().catch(() => null))?.scopes ?? {}).flatMap((key) => parseScopeKey(key).workspacePath ?? []);
+  const workspaces = new Set([...Object.keys(config?.workspaceBindings ?? {}), ...Object.keys(manifest.workspaceModels ?? {}), ...installed]);
   const roots = new Set(workspaces);
   for (const workspace of workspaces) {
     const commonDir = await gitCommonDir(workspace);
@@ -2913,7 +3036,7 @@ async function localAgentCheckouts(): Promise<string[]> {
 }
 
 /**
- * The model files a `credentials` line of `excludeFile` still keeps out of
+ * The files a line of `excludeFile` (a `credentials` line: model files) still keeps out of
  * git: in each checkout that reads that exclude file, among `roots` and the
  * ones the local agent knows, the file the line names when it is there
  * (`withKey`: when it may hold a key). Null when none of those checkouts reads
@@ -4551,7 +4674,7 @@ export async function removeLocalAgentHttp(): Promise<void> {
  * stale entry cannot block the teardown.
  */
 export async function shutdownLocalAgentHttp(retry: string): Promise<'none' | 'removed' | 'incomplete' | 'locked'> {
-  if (!await loadLocalAgentConfig({ dryRun: true }) && Object.keys(await loadAgentHookManifest()).length === 0) return 'none';
+  if (!await loadLocalAgentConfig({ dryRun: true }) && !await disabledSourceLeftovers()) return 'none';
   // A server-pushed uninstall runs while its sync holds the lock.
   const inherited = await holdsParentLocalAgentLock();
   if (!inherited && !await acquireLocalAgentLock()) {
@@ -4573,10 +4696,12 @@ export async function shutdownLocalAgentHttp(retry: string): Promise<'none' | 'r
 async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'removed' | 'incomplete'> {
   const config = await loadLocalAgentConfig();
   if (!config) {
-    // An earlier run disabled the source but could not remove these agent hooks (#993).
-    if (Object.keys(await loadAgentHookManifest()).length > 0) return finishAgentHookTeardown(retry);
-    return 'none';
+    if (!await disabledSourceLeftovers()) return 'none';
+    await removeLocalAgentGitExclude(await localAgentCheckouts());
+    return finishAgentHookTeardown(retry);
   }
+  // Read before the marker and the teardown below delete what names them (#915).
+  const checkouts = await localAgentCheckouts();
 
   // No sync or plugin worker can write after this point until teardown finishes.
   await writeJsonAtomic(getConfigPath(), { disabled: true });
@@ -4602,23 +4727,37 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
   }
 
   // Before the state home goes: it records which exclude files hold the block (#915).
-  await removeLocalAgentGitExclude();
+  await removeLocalAgentGitExclude(checkouts);
   await removeWorkspaceModels();
   return finishAgentHookTeardown(retry);
 }
 
 /**
- * Clear the HTTP source, preserving failed hook records for a retry.
+ * What an earlier run that disabled the source could not remove: agent hooks
+ * (#993), or the `local-agent` block in an exclude file it records (#915).
+ */
+async function disabledSourceLeftovers(): Promise<boolean> {
+  if (Object.keys(await loadAgentHookManifest()).length > 0) return true;
+  return (await localAgentGitExcludeOwner().record?.files().catch(() => []) ?? []).length > 0;
+}
+
+/**
+ * Clear the HTTP source, preserving failed hook records for a retry, and the
+ * record of exclude files still holding a teamai block (#915), so the next
+ * `source remove-http` or `teamai uninstall` finds them.
  */
 async function finishAgentHookTeardown(retry: string): Promise<'removed' | 'incomplete'> {
   const hooksLeft = await removeAllAgentHooks();
   const home = getLocalAgentHome();
-  const keep = path.basename(getAgentHookManifestPath());
+  const keep = new Set([path.basename(getConfigPath())]);
+  if (hooksLeft.length > 0) keep.add(path.basename(getAgentHookManifestPath()));
+  const gitExcludeRecord = path.join(home, 'git-exclude.json');
+  if (Object.keys(await readJson<Record<string, unknown>>(gitExcludeRecord).catch(() => null) ?? {}).length > 0) {
+    keep.add(path.basename(gitExcludeRecord));
+  }
   await writeJsonAtomic(getConfigPath(), { disabled: true });
   for (const entry of await fse.readdir(home)) {
-    if (entry !== path.basename(getConfigPath()) && !(hooksLeft.length > 0 && entry === keep)) {
-      await remove(path.join(home, entry));
-    }
+    if (!keep.has(entry)) await remove(path.join(home, entry));
   }
   if (hooksLeft.length > 0) {
     log.warn(`HTTP source disabled, but removal is incomplete: kept the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')} `
