@@ -1323,6 +1323,24 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect((await fse.readJson(dotMcp())).mcpServers).toEqual({ 'my-user': MEMBER });
     });
 
+    it('keeps the old file\'s record when moving a server to the file CodeBuddy now reads fails', async () => {
+      await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
+      await install(9613, 'https://old.example.com/mcp');
+      await fse.outputJson(dotMcp(), { mcpServers: { 'my-user': MEMBER } });
+      await fse.chmod(dotMcp(), 0o444);
+      await fse.chmod(path.dirname(dotMcp()), 0o555);
+      try {
+        expect((await install(9614, 'https://new.example.com/mcp'))[0].status).toBe('failed');
+      } finally {
+        await fse.chmod(path.dirname(dotMcp()), 0o755);
+        await fse.chmod(dotMcp(), 0o644);
+      }
+      // Still recorded where it is: uninstall finds it there.
+      expect((await uninstall(9615))[0].status).toBe('success');
+      expect((await fse.readJson(mcp())).mcpServers).toEqual({ 'mine-old': MEMBER });
+      expect((await fse.readJson(dotMcp())).mcpServers).toEqual({ 'my-user': MEMBER });
+    });
+
     it('moving a server to the file CodeBuddy now reads keeps the old copy the member edited', async () => {
       await fse.outputJson(mcp(), { mcpServers: { 'mine-old': MEMBER } });
       await install(9611, 'https://old.example.com/mcp');
