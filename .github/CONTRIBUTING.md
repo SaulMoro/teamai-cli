@@ -97,19 +97,13 @@ Your PR also gets an informational `Code Erosion` report (SlopCodeBench verbosit
 - Mock external I/O (git, fetch, child_process) at the module boundary.
 - Avoid relying on real network access unless guarded by an env variable (like `TEAMAI_TEST_TOKEN`).
 
-For local iterations, run the E2E files covering the changed behavior:
+Iterate on the affected E2E files; run the full suite when changing the E2E runner, shared fixtures, or test isolation:
 
 ```bash
-npm run test:e2e -- src/__tests__/e2e/git-hook-new-worktree.test.ts
-# Select a case within the affected file:
-npm run test:e2e -- <test-file> -t "<test-name>"
+npm run test:e2e -- <test-file> [-t "<test-name>"]   # add --maxWorkers=2 on constrained machines
 ```
 
-`npm run test:e2e` builds once before starting Vitest. Test files run with up to four workers locally and two in CI. On a resource-constrained machine, pass `--maxWorkers=2` after `--`. E2E tests must use the prepared build rather than rebuild it while other files use the CLI. Vitest prepares the shared OpenCode binary once before workers start; tests must not reinstall it.
-
-Most cases use local fixtures. Cases requiring remote credentials skip when those credentials are absent; see [CI E2E setup](../docs/ci-e2e-setup.md) for the live fixture configuration.
-
-Run the full local suite with `npm run test:e2e` when changing the E2E runner, shared fixtures, or test isolation. CI runs the full suite. A PR changing CLI runtime behavior needs a representative real-CLI verification of the affected behavior, which can be a focused E2E run. Include the exact command and result in the PR. Docs-only and tests-only changes do not require a real-CLI verification record.
+Workers share the prepared `dist/` and OpenCode binary: never rebuild or reinstall them inside a test. Cases needing remote credentials skip without them ([CI E2E setup](../docs/ci-e2e-setup.md)). PRs changing runtime behavior (not docs- or tests-only) include one real-CLI verification, such as a focused E2E run, with its command and result.
 
 ## Bug Reports & Feature Requests
 
