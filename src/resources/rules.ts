@@ -574,6 +574,10 @@ export class RulesHandler extends ResourceHandler {
       teamConfig, localConfig, [{ name, type: 'rules', sourcePath: teamFile, relativePath: `rules/${name}.md` }],
       ledger.previous,
     );
+    // What pull writes today from the team rule also proves a copy teamai's,
+    // so it is read before the rule goes: a checkout without history, such as
+    // the local agent's resource cache, has no other proof.
+    const current = await readFileSafe(teamFile);
 
     // Remove from team repo (always `.md`)
     if (await pathExists(teamFile)) {
@@ -628,6 +632,7 @@ export class RulesHandler extends ResourceHandler {
           // The team file is gone from the working tree only: its history still proves a copy teamai's.
           // The author's root copy is this rule's by the placement record, which proves it here.
           if (localName === name && await pathExists(filePath) && ledger.previous?.[filePath] === undefined
+            && !await holdsCurrentRule(filePath, tool, current)
             && !await isTeamaiCopy(filePath, ruleOrigin(tool, localConfig.repo.localPath, `rules/${name}.md`))) {
             log.warn(describeMembersDirLeft(filePath, `rules/${name}.md`, 'remove'));
             continue;
@@ -1433,6 +1438,16 @@ export function ruleOrigin(tool: string, repoPath: string, relativePath: string)
     pathspec: relativePath,
     ...(renders.length > 0 ? { renders: renders.map((render) => (content: Buffer) => render(content.toString('utf-8'))) } : {}),
   };
+}
+
+/**
+ * Whether `file` holds the team rule `raw` as pull writes it for `tool` today,
+ * or verbatim, as an older layout's `.md` copy does.
+ */
+async function holdsCurrentRule(file: string, tool: string, raw: string | null): Promise<boolean> {
+  if (raw === null) return false;
+  const disk = await readFileSafe(file);
+  return disk === raw || disk === renderRuleForTool(tool, raw);
 }
 
 /**

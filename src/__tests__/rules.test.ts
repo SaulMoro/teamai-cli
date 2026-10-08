@@ -1618,6 +1618,20 @@ describe('RulesHandler — .mdc handling (Cursor, JoyCode)', () => {
     await handler.removeItem('gone', teamConfig, localConfig);
     expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/gone.mdc'))).toBe(false);
   });
+
+  it('removeItem deletes a copy holding what pull writes today, with no record or team history', async () => {
+    // A team checkout without history: today's render is the only proof.
+    await fse.writeFile(path.join(repoPath, 'rules', 'fresh.md'), 'bye');
+    await handler.pullAllRules(teamConfig, localConfig);
+    await fse.writeFile(path.join(homeDir, '.cursor/rules/fresh.md'), 'bye');
+    await fse.writeFile(path.join(homeDir, '.claude/rules/fresh.md'), 'my own notes');
+
+    await handler.removeItem('fresh', teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/fresh.mdc'))).toBe(false);
+    expect(await fse.pathExists(path.join(homeDir, '.cursor/rules/fresh.md'))).toBe(false);
+    expect(await fse.readFile(path.join(homeDir, '.claude/rules/fresh.md'), 'utf-8')).toBe('my own notes');
+  });
 });
 
 describe('RulesHandler — Kiro and Qoder rule formats (#946)', () => {
