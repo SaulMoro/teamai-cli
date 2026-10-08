@@ -30,7 +30,7 @@ import {
   managedMcpWorkspaceId,
   resolveToolRootDir,
 } from './types.js';
-import { builtinHookDefs, applyBuiltinOverride, getRawDispatchCommand, skipToolsWithoutShell, toolUsesCmdShell } from './builtin-hooks.js';
+import { builtinHookDefs, applyBuiltinOverride, getRawDispatchCommand, skipToolsWithoutShell } from './builtin-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
 import { resolveTeamHooks } from './resources/hooks.js';
 import { getUserHome } from './utils/home.js';
@@ -355,6 +355,27 @@ function canonicalProjectRoot(projectRoot: string): string {
 }
 
 /**
+ * The same project root as the shell that runs the hook names its cwd.
+ *
+ * On Windows every hook runner is an MSYS shell — CodeBuddy's required Git
+ * Bash, WorkBuddy's bundled PortableGit — and MSYS exposes a drive-letter path
+ * as `/c/proj`, never as the `C:\proj` a Windows path resolves to. A gate that
+ * compares `$PWD` against the Windows spelling therefore never matches, and the
+ * project's team hooks silently never run: `canonicalProjectRoot()` returns the
+ * native form, so the comparison has to be made in the form the shell uses.
+ *
+ * Drive roots lose their trailing separator (`C:\` → `/c`), which is how MSYS
+ * spells them. A path that already has no drive letter (Linux, macOS) is
+ * returned unchanged, and so is a UNC path (`\\server\share`), whose MSYS form
+ * this does not attempt.
+ */
+function msysProjectRoot(root: string): string {
+  const drive = /^([A-Za-z]):[\\/]*(.*)$/.exec(root);
+  if (!drive) return root;
+  return `/${drive[1].toLowerCase()}/${drive[2].replace(/\\/g, '/')}`.replace(/\/+$/, '') || '/';
+}
+
+/**
  * Embed a Windows path in a cmd.exe command line so the child receives it
  * byte-for-byte.
  *
@@ -374,6 +395,11 @@ function cmdLiteral(value: string): string {
 /**
  * cmd.exe equivalent of the POSIX project gate, as a prefix that resolves to
  * true only inside `root`.
+ *
+ * Read-only: this gate is only ever matched against (isGatedForProject), never
+ * rendered. 0.26.0 wrote it for CodeBuddy on Windows; those entries are still
+ * on disk, and recognising them is what lets a re-render replace the gate
+ * instead of stacking a second one.
  *
  * The cwd is read with a bare `cd`, whose output goes straight into the pipe:
  * unlike `echo %CD%`, the directory name is never part of a parsed command, so
@@ -397,29 +423,34 @@ function cmdProjectGate(root: string): string {
 
 /**
  * Keep a project-scope team hook from firing in every project on the machine.
- * The gate is rendered in the syntax of the shell that will actually run it:
- * cmd.exe for tools whose Windows hook runner is cmd.exe — a POSIX
- * `if [ "$PWD" ... ]` there is a syntax error that kills the whole command,
- * gate and payload alike, before it ever runs — and POSIX sh for every other
- * tool.
  *
- * Exit-status contract, identical for both renderings: outside the project the
- * gate is a no-op that exits 0, and inside it the command's own status is
- * passed through. A gate mismatch that returned non-zero would make CodeBuddy
- * read the hook as `allowed:false` and BLOCK every UserPromptSubmit outside the
- * project, so the cmd form must not inherit `findstr`'s failure status. That is
- * also why the cmd form is not `${gate} || exit /b 0 && (…)`: the `||` would
- * swallow a genuine payload failure along with the mismatch, losing the
- * pass-through the POSIX `if …; then …; fi` gives for free.
+ * Every tool runs hook commands through a POSIX shell on every platform
+ * (WorkBuddy's bundled MSYS sh, CodeBuddy's required Git Bash, `bash -lc` for
+ * the rest), so the gate is always the POSIX form. Outside the project it is a
+ * no-op that exits 0 and inside it the payload's own status is passed through:
+ * a gate mismatch that returned non-zero would make CodeBuddy read the hook as
+ * `allowed:false` and BLOCK every UserPromptSubmit outside the project.
+ *
+ * A Windows root is tested in both spellings. The shell names its cwd the MSYS
+ * way (`/c/proj`); the native form is kept because it is what previous versions
+ * wrote, so a re-render recognises and replaces those entries instead of
+ * stacking a second gate beside them. On a non-Windows root the two forms are
+ * identical and the gate carries one test.
+ *
+ * Legacy cmd.exe gates are still recognised on read by isGatedForProject(), so
+ * a re-render replaces 0.26.0's cmd gate instead of stacking a second one.
  */
-function gateTeamHookCommand(command: string, projectRoot: string | undefined, tool: string): string {
+function gateTeamHookCommand(command: string, projectRoot: string | undefined): string {
   if (!projectRoot) return command;
   const root = canonicalProjectRoot(projectRoot);
-  if (toolUsesCmdShell(tool)) {
-    return `${cmdProjectGate(root)} & if not errorlevel 1 (${command}) else exit /b 0`;
-  }
+  const msys = msysProjectRoot(root);
   const quoted = shellQuote(root);
-  return `if [ "$PWD" = ${quoted} ] || case "$PWD" in ${quoted}/*) true;; *) false;; esac; then (${command}); fi`;
+  if (msys === root) {
+    return `if [ "$PWD" = ${quoted} ] || case "$PWD" in ${quoted}/*) true;; *) false;; esac; then (${command}); fi`;
+  }
+  const shellQuoted = shellQuote(msys);
+  return `if [ "$PWD" = ${quoted} ] || [ "$PWD" = ${shellQuoted} ]`
+    + ` || case "$PWD" in ${quoted}/*|${shellQuoted}/*) true;; *) false;; esac; then (${command}); fi`;
 }
 
 /** Recognise a project gate written by either renderer (entries outlive a platform switch). */
@@ -438,13 +469,25 @@ function isProjectGatedCommand(command: string): boolean {
  * and that host's own teamai hooks are installed. The prefix checks the hook
  * file; it does not skip a claude-only setup. Built-in hooks take the same
  * exit inside hook-dispatch instead of here.
+ *
+ * `tool` here keys the cursor/copilot wrapper, which is orthogonal to the
+ * project gate: the gate lost its per-tool form once every render became POSIX
+ * (CodeBuddy's Windows hooks run through Git Bash), but this wrapper still
+ * needs to know which tool it is rendering for.
  */
 function skipWhenAnotherHostLoadsClaudeSettings(command: string, tool: string): string {
   if (tool !== 'claude') return command;
   return `${CLAUDE_HOOK_OTHER_HOST_SKIP}${command}`;
 }
 
-const POSIX_GATE_ROOT_RE = /^if \[ "\$PWD" = ('(?:[^']|'"'"')*') \] \|\| case "\$PWD" in /;
+/**
+ * Matches a POSIX gate and captures its *first* quoted root, which is always
+ * the native spelling: on Windows the MSYS spelling follows as an optional
+ * second test, on a non-Windows root the two are the same and only one is
+ * written. Reading the native form back keeps the root comparable with the
+ * Windows paths the callers hold.
+ */
+const POSIX_GATE_ROOT_RE = /^if \[ "\$PWD" = ('(?:[^']|'"'"')*') \](?: \|\| \[ "\$PWD" = '(?:[^']|'"'"')*' \])? \|\| case "\$PWD" in /;
 
 /**
  * The project root a POSIX gate was rendered for, or null for an ungated or
@@ -557,7 +600,7 @@ function scopedTeamDefs(teamDefs: HookDef[], projectRoot: string | undefined, to
     command: skipWhenAnotherHostLoadsClaudeSettings(def.command, tool),
   }));
   if (!projectRoot) return prepared;
-  return prepared.map((def) => ({ ...def, command: gateTeamHookCommand(def.command, projectRoot, tool) }));
+  return prepared.map((def) => ({ ...def, command: gateTeamHookCommand(def.command, projectRoot) }));
 }
 
 function manifestRecordsForTool(teamDefs: HookDef[], tool: string, removeAll: boolean, projectRoot?: string): ManagedHookRecord[] {
@@ -1357,7 +1400,7 @@ export async function reconcileHooks(
   const priorRecords = opts.teamHookProjectRoot
     ? allPriorRecords.filter((r) => isGatedForProject(r.command, opts.teamHookProjectRoot!))
     : allPriorRecords;
-  const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
+const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
   const desiredTeamCommands = new Set(scopedDefs.filter((d) => !d.tools || d.tools.includes(tool)).map((d) => d.command));
   const priorTeamCommands = new Set(priorRecords.map((r) => r.command));
 
