@@ -481,6 +481,7 @@ export class RulesHandler extends ResourceHandler {
       } catch (e) {
         ledger?.recorder?.failed('rules');
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
   }
@@ -1226,6 +1227,9 @@ export class RulesHandler extends ResourceHandler {
   ): Promise<void> {
     const target = await this.opencodeInstructionsTarget(teamConfig, localConfig, rules);
     if (target === null) return;
+    // OpenCode V2 ignores the globs, and teamai's plugin adds the rules (#915).
+    const { opencodeDeliversThroughPlugin } = await import('../opencode-hooks.js');
+    if (await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return;
 
     const { readOpencodeInstructionList, reconcileOpencodeInstructionSet } = await import('./opencode-config.js');
     try {

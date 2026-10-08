@@ -268,7 +268,8 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
   it('keeps the MCP line while the main checkout of a --separate-git-dir repo holds the resolved value a linked worktree\'s pull dropped, until the main checkout pulls', async () => {
     const m = member('mcp-separate', MCP_TEAM, MCP_ON);
     const root = caseDir('mcp-separate');
-    const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`] });
+    // CodeBuddy: with sharing.gitExclude on, Claude's servers go to its local scope, not to .mcp.json.
+    const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`], agents: 'codebuddy' });
     const wt = await m.worktree(main, path.join(root, 'wt'));
     const exclude = excludeFileOf(m, wt);
     expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);

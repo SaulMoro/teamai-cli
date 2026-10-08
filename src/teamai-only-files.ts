@@ -4,8 +4,9 @@ import { gitTracks, realFilePath } from './git-exclude.js';
 import { judgeTeamaiOnlyCodexHooks } from './hooks.js';
 import { instructionTargetPath } from './instruction-targets.js';
 import { findMcpGitExcludes } from './mcp-git-exclude.js';
-import { judgeTeamaiOnlyMcpConfigs } from './mcp-reconcile.js';
-import { opencodeContextReference } from './resources/opencode-config.js';
+import { judgeTeamaiOnlyMcpConfigs, opencodeV1Servers } from './mcp-reconcile.js';
+import { opencodeDeliversThroughPlugin } from './opencode-hooks.js';
+import { opencodeContextReference, readOpencodeInstructionList } from './resources/opencode-config.js';
 import { RulesHandler } from './resources/rules.js';
 import { resolveToolBaseDir, scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
 import { readFileSafe } from './utils/fs.js';
@@ -98,24 +99,79 @@ async function shownPath(file: string, projectRoot: string): Promise<string> {
 }
 
 /**
- * OpenCode's `.opencode/opencode.json`, when it exists and holds anything,
- * and whether it holds only teamai's `instructions`: entries equal to the ones
- * teamai writes there (the rules glob of `opencodeInstructionsTarget`, and the
- * `teamai-context` entry), at least one, and no other top-level key. There is
- * no record of them; equality is the proof. A symlink is the member's.
+ * OpenCode's `.opencode/opencode.json` in this project, and which of its
+ * `instructions` entries are teamai's: equal to the ones teamai writes there
+ * (the rules glob of `opencodeInstructionsTarget`, and the `teamai-context`
+ * entry). There is no record of them; equality is the proof. Null when
+ * OpenCode gets no rules here.
  */
-async function judgeOpencodeInstructions(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<{ file: string; teamaiOnly: boolean } | null> {
+async function opencodeInstructionEntries(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+): Promise<{ file: string; ours: (entry: unknown) => boolean } | null> {
   const target = await new RulesHandler().opencodeInstructionsTarget(teamConfig, localConfig, []);
   if (target === null) return null;
   const file = target.configFile;
-  if (!(await fs.promises.lstat(file).catch(() => null))?.isFile()) return null;
-  const raw = await readFileSafe(file);
-  if (raw === null || raw.trim() === '') return null;
   const paths = scopedToolPaths(teamConfig, localConfig).opencode;
   const contextFile = paths ? await instructionTargetPath('opencode', paths, localConfig) : undefined;
   const context = contextFile ? opencodeContextReference(contextFile, 'project', resolveToolBaseDir('opencode', localConfig)) : null;
-  const ours = (entry: unknown): boolean => typeof entry === 'string'
-    && (target.owns(entry) || (context?.config === file && entry === context.entry));
+  return {
+    file,
+    ours: (entry) => typeof entry === 'string' && (target.owns(entry) || (context?.config === file && entry === context.entry)),
+  };
+}
+
+/**
+ * On OpenCode V2 with teamai's plugin (#915): delete `.opencode/opencode.json`
+ * when git does not track it and it holds only teamai's `instructions`, which
+ * V2 ignores; the plugin adds the team instructions and rules. A file git
+ * tracks, or one holding anything else, is left (`opencodeV1Leftovers`).
+ * Run after the pull reconciled the plugin. What it did or, with `dryRun`,
+ * would do; null for nothing.
+ */
+export async function retireOpencodeV1Instructions(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  dryRun: boolean,
+): Promise<string | null> {
+  if (!await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return null;
+  const verdict = await judgeOpencodeInstructions(teamConfig, localConfig);
+  if (!verdict?.teamaiOnly || (await gitTracks(verdict.file, 'entry')).kind !== 'untracked') return null;
+  if (!dryRun) await fs.promises.rm(verdict.file, { force: true });
+  return `${dryRun ? 'Would delete' : 'Deleted'} ${verdict.file}: it held only teamai's \`instructions\` entries, which OpenCode V2 ignores; `
+    + 'teamai\'s plugin adds the team instructions and rules.';
+}
+
+/**
+ * On OpenCode V2 with teamai's plugin (#915): the project's opencode.json
+ * files that still hold the entries teamai wrote for OpenCode V1, as git
+ * tracks them or they hold something else, so a pull left them. Read-only,
+ * for doctor.
+ */
+export async function opencodeV1Leftovers(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<Array<{ file: string; entries: string[] }>> {
+  if (!await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return [];
+  const left: Array<{ file: string; entries: string[] }> = [];
+  const servers = await opencodeV1Servers(teamConfig, localConfig);
+  if (servers) left.push({ file: servers.file, entries: servers.names });
+  const instructions = await opencodeInstructionEntries(teamConfig, localConfig);
+  const listed = instructions && await readOpencodeInstructionList(instructions.file);
+  const ours = (listed ?? []).filter((entry): entry is string => instructions?.ours(entry) === true);
+  if (instructions && ours.length > 0) left.push({ file: instructions.file, entries: ours });
+  return left;
+}
+
+/**
+ * OpenCode's `.opencode/opencode.json`, when it exists and holds anything,
+ * and whether it holds only teamai's `instructions` (`opencodeInstructionEntries`),
+ * at least one, and no other top-level key. A symlink is the member's.
+ */
+async function judgeOpencodeInstructions(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<{ file: string; teamaiOnly: boolean } | null> {
+  const entries = await opencodeInstructionEntries(teamConfig, localConfig);
+  if (entries === null) return null;
+  const { file, ours } = entries;
+  if (!(await fs.promises.lstat(file).catch(() => null))?.isFile()) return null;
+  const raw = await readFileSafe(file);
+  if (raw === null || raw.trim() === '') return null;
   let data: unknown;
   try {
     data = JSON.parse(raw);

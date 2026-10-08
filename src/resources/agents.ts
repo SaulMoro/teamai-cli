@@ -754,6 +754,7 @@ export class AgentsHandler extends ResourceHandler {
       } catch (e) {
         ledger?.recorder?.failed('agents');
         log.warn(`Failed to sync agent ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
     if (ledger?.recorder) await this.reportHeldCopies(agentItem, teamConfig, localConfig, aliases, ledger);

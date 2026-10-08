@@ -51,6 +51,7 @@ import {
   spliceCodexBlock,
   codexServerNames,
   recordedFileOf,
+  sameMcpFile,
   userMcpFile,
   USER_MCP_LOOKUP,
 } from './mcp-reconcile.js';
@@ -101,7 +102,7 @@ import {
 import {
   clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
 } from './git-exclude-notices.js';
-import { contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
+import { blockingEntries, contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin } from './resources/skills.js';
 
 const execFileAsync = promisify(execFile);
@@ -2296,7 +2297,7 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
         if (!toolPath) continue;
         for (const { dest } of await handler.deliveryTargets({ ...fullTeamConfig, toolPaths: { [tool]: toolPath } }, localConfig, item)) {
           // A skill is the files the agent installed from its cache, never the directory: a file the member adds there stays visible.
-          const files = item.type === 'skills' ? await deliveredSkillFiles(item.sourcePath, dest) : [dest];
+          const files = item.type === 'skills' ? await deliveredSkillFiles(item.sourcePath, dest, await blockingEntries(dest, item.sourcePath)) : [dest];
           for (const file of files) if (await pathExists(file)) copies.push(file);
         }
       }
@@ -3603,9 +3604,12 @@ async function installMcpServer(
   }
   const manifestKey = managedMcpManifestKey(tool, projectScope);
   // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
-  const owned = (manifest[manifestKey] ?? []).filter((r: ManagedMcpRecord) => fileOf(r) === targetFile);
+  // By real path, as reconciliation compares them: a lookup file linked to another is that file.
+  const records = manifest[manifestKey] ?? [];
+  const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(fileOf(r), targetFile)));
+  const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
-  const movedFrom = (manifest[manifestKey] ?? []).find((r: ManagedMcpRecord) => r.name === slug && fileOf(r) !== targetFile);
+  const movedFrom = records.find((r: ManagedMcpRecord, i) => r.name === slug && !inTarget[i]);
   const file = lookup ? targetFile : undefined;
 
   if (format === 'codex') {
@@ -3669,7 +3673,7 @@ async function installMcpServer(
         throw error;
       }
     }
-    if (movedFrom) await removeMovedMcpEntry(fileOf(movedFrom), serverKey, slug, targetFile);
+    if (movedFrom) await removeMovedMcpEntry(fileOf(movedFrom), serverKey, slug, targetFile, movedFrom.hash);
   }
   log.debug(`local-agent: installed MCP server "${slug}" for ${tool} (scope=${scope})`);
   return command.version;
@@ -3680,11 +3684,17 @@ async function installMcpServer(
  * CodeBuddy no longer reads (#993): this install wrote it to `targetFile` and
  * recorded it there. A failure leaves the old entry, and says where.
  */
-async function removeMovedMcpEntry(file: string, serverKey: string, slug: string, targetFile: string): Promise<void> {
+async function removeMovedMcpEntry(file: string, serverKey: string, slug: string, targetFile: string, recordedHash: string): Promise<void> {
   try {
     const doc = await readJsonDoc(file, serverKey);
     if (!doc) throw new Error('it does not parse');
     if (doc.servers[slug] === undefined) return;
+    // A copy the member changed since teamai installed it is theirs: left where it is (#993).
+    if (entryHash(doc.servers[slug]) !== recordedHash) {
+      log.warn(`Installed MCP server ${slug} in ${targetFile}, and kept the copy in ${file}: you changed it since teamai installed it. `
+        + `Remove ${slug} from ${file} when you no longer need it.`);
+      return;
+    }
     delete doc.servers[slug];
     await writeJsonDoc(file, serverKey, doc);
   } catch (error) {

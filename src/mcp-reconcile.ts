@@ -14,6 +14,7 @@ import {
   getEnvBackupPath,
   isAgentExcluded,
   getDataHome,
+  isGitExcludeEnabled,
   managedMcpManifestPath,
   managedMcpManifestKey,
   resolveToolBaseDir,
@@ -36,7 +37,7 @@ import {
 } from './resources/mcp-format.js';
 import { mcpEntryReader, parseTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
 import { historicalContents } from './utils/team-history.js';
-import { describeMembersFile } from './resources/delivered-copies.js';
+import { describeMembersFile, keepsTrackedCopy } from './resources/delivered-copies.js';
 import { envName, envTable } from './resources/env-key.js';
 import { declaredSecretKeys, type SecretDeclarations } from './resources/secrets.js';
 import { resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
@@ -68,6 +69,7 @@ import {
   type GitExclusion,
 } from './mcp-git-exclude.js';
 import { gitTracks, realFilePath } from './git-exclude.js';
+import { opencodeDeliversThroughPlugin, opencodeMcpFile } from './opencode-hooks.js';
 import { createGit, getFileContentAtRev } from './utils/git.js';
 import {
   readResolvedMcpFiles,
@@ -298,6 +300,87 @@ export interface McpTarget {
   mappedFile?: string;
   /** With `mappedFile`: every file of the tool's lookup order, in order. */
   lookupFiles?: string[];
+  /**
+   * Claude's local scope (#915): `file` is Claude Code's user config, and the
+   * servers are in `projects[projectKey].mcpServers` there, under the key
+   * Claude Code files the checkout under (`claudeProjectKey`). Outside the
+   * working tree, so no git exclusion applies to it.
+   */
+  projectKey?: string;
+}
+
+/**
+ * The key Claude Code files a checkout under in the `projects` map of its
+ * user config (#915), as Claude Code 2.1 derives it: the checkout's real
+ * path, or for a linked worktree the repository's common git directory, read
+ * from the worktree's `.git` file and `commondir`, without its trailing
+ * `.git` segment. So every worktree of an ordinary repository shares the main
+ * checkout's key, while a linked worktree of a `--separate-git-dir`
+ * repository is filed under the git directory, and one of a submodule under
+ * its `.git/modules/<name>` directory. NFC, as Claude Code normalizes it.
+ */
+export async function claudeProjectKey(checkoutRoot: string): Promise<string> {
+  const root = await fs.promises.realpath(checkoutRoot).catch(() => path.resolve(checkoutRoot));
+  try {
+    const dotGit = (await fs.promises.readFile(path.join(root, '.git'), 'utf8')).trim();
+    if (!dotGit.startsWith('gitdir:')) return root.normalize('NFC');
+    const gitDir = path.resolve(root, dotGit.slice('gitdir:'.length).trim());
+    const common = await fs.promises.realpath(
+      path.resolve(gitDir, (await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim()),
+    );
+    return (path.basename(common) === '.git' ? path.dirname(common) : common).normalize('NFC');
+  } catch {
+    // A `.git` directory, or a `.git` file of a checkout that is not a linked worktree (no `commondir`).
+    return root.normalize('NFC');
+  }
+}
+
+/** Where `target`'s records live in the MCP manifest: Claude's local scope by its key, as no checkout owns it. */
+export function mcpManifestKey(target: Pick<McpTarget, 'tool' | 'projectScope' | 'projectKey'>): string {
+  return target.projectKey ? `${target.tool}:local:${target.projectKey}` : managedMcpManifestKey(target.tool, target.projectScope);
+}
+
+/** A file or a local scope, as a member finds it. */
+export function describeMcpLocation(target: Pick<McpTarget, 'file' | 'projectKey'>): string {
+  return target.projectKey ? `${target.file} (projects[${JSON.stringify(target.projectKey)}])` : target.file;
+}
+
+/**
+ * Claude's two places for this project's team MCP servers (#915): the
+ * project's `.mcp.json` (as the team maps it) and its local scope in Claude
+ * Code's user config, keyed by `claudeProjectKey`. Null outside project
+ * scope, or when the team maps no project MCP file or user MCP file for
+ * Claude.
+ */
+async function claudeMcpLocations(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+): Promise<{ tree: McpTarget; local: McpTarget } | null> {
+  const { projectRoot } = localConfig;
+  const project = teamConfig.toolPaths.claude?.mcpProject;
+  const user = scopedToolPaths(teamConfig, { scope: 'user', toolRoots: localConfig.toolRoots }).claude?.mcp;
+  if (localConfig.scope !== 'project' || !projectRoot || !project || !user) return null;
+  return {
+    tree: { tool: 'claude', format: 'claude', file: path.join(resolveToolBaseDir('claude', localConfig), project), projectScope: true },
+    local: {
+      tool: 'claude', format: 'claude', projectScope: true,
+      file: path.join(resolveToolBaseDir('claude', { ...localConfig, scope: 'user' }), user),
+      projectKey: await claudeProjectKey(projectRoot),
+    },
+  };
+}
+
+/**
+ * Whether Claude's project MCP servers go to its local scope (#915): while
+ * `sharing.gitExclude` is on, unless tclaude, which reads the `.mcp.json`
+ * the claude target writes and has a user config of its own, is installed
+ * and enabled here: it keeps the file until its own local scope is checked.
+ */
+async function claudeMcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<boolean> {
+  if (!isGitExcludeEnabled(localConfig, teamConfig)) return false;
+  const tclaude = teamConfig.toolPaths.tclaude;
+  const probe = tclaude && (tclaude.skills ?? tclaude.settings ?? tclaude.agents);
+  return !probe || isAgentExcluded(localConfig, 'tclaude') || !await isToolInstalledForConfig('tclaude', probe, localConfig);
 }
 
 /**
@@ -340,7 +423,7 @@ export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, r
  * Whether two paths name one file: a lookup path may be a symlink to another
  * (`~/.codebuddy/.mcp.json` -> `mcp.json`), and is then not another file (#993).
  */
-async function sameMcpFile(a: string, b: string): Promise<boolean> {
+export async function sameMcpFile(a: string, b: string): Promise<boolean> {
   return a === b || await realFilePath(a) === await realFilePath(b);
 }
 
@@ -405,7 +488,11 @@ export async function resolveMcpTargets(
 
     const baseDir = resolveToolBaseDir(tool, localConfig);
     const mappedFile = path.join(baseDir, rel);
-    const file = projectScope ? mappedFile : await userMcpFile(tool, rel, baseDir);
+    // OpenCode V2 takes a project's servers from teamai's own file, through its plugin (#915).
+    const opencodeProject = tool === 'opencode' && projectScope && !builtinFallback;
+    const file = opencodeProject && await opencodeDeliversThroughPlugin(teamConfig, localConfig)
+      ? opencodeMcpFile(baseDir)
+      : projectScope ? mappedFile : await userMcpFile(tool, rel, baseDir);
 
     const probe = paths.skills ?? paths.settings ?? paths.agents;
     if (!probe) continue;
@@ -415,12 +502,24 @@ export async function resolveMcpTargets(
       continue;
     }
 
+    // Claude reads them from its local scope instead (#915). Not for the files in the project, which the
+    // undetected view lists for the git exclusion of what an earlier pull wrote there.
+    if (tool === 'claude' && projectScope && !builtinFallback && !options.includeUndetected
+      && await claudeMcpRelocated(teamConfig, localConfig)) {
+      const local = (await claudeMcpLocations(teamConfig, localConfig))?.local;
+      if (local) {
+        targets.push(local);
+        continue;
+      }
+    }
+
     targets.push({
       tool, format, file, projectScope,
       ...builtinFallback ? { builtinFallback: true as const } : {},
       ...installed ? {} : { undetected: true as const },
       ...!projectScope && USER_MCP_LOOKUP[tool]
         ? { mappedFile, lookupFiles: USER_MCP_LOOKUP[tool].map((candidate) => path.join(baseDir, candidate)) } : {},
+      ...opencodeProject ? { mappedFile } : {},
     });
   }
   return targets;
@@ -490,6 +589,8 @@ export interface JsonDoc {
    * These may belong to the member or come from a previous bare write (#882).
    */
   beside?: Record<string, unknown>;
+  /** Claude's local scope (#915): the servers are under `projects[projectKey]`, not at the top level. */
+  projectKey?: string;
 }
 
 const SERVER_KEYS = new Set<string>(Object.values(MCP_SERVER_KEY));
@@ -504,14 +605,26 @@ export async function readJsonDoc(
   file: string,
   serverKey: string,
   allowBare = false,
+  /** Claude's local scope (#915): read the servers of `projects[projectKey]`. */
+  projectKey?: string,
 ): Promise<JsonDoc | null> {
-  if (!await pathExists(file)) return { data: {}, servers: {}, bare: false };
+  const local = projectKey === undefined ? {} : { projectKey };
+  if (!await pathExists(file)) return { data: {}, servers: {}, bare: false, ...local };
   const raw = await readFileSafe(file);
   if (raw === null) return null;
-  if (raw.trim() === '') return { data: {}, servers: {}, bare: allowBare };
+  if (raw.trim() === '') return { data: {}, servers: {}, bare: allowBare, ...local };
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
     if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+    if (projectKey !== undefined) {
+      const projects = data.projects ?? {};
+      if (typeof projects !== 'object' || projects === null || Array.isArray(projects)) return null;
+      const project = (projects as Record<string, unknown>)[projectKey] ?? {};
+      if (typeof project !== 'object' || project === null || Array.isArray(project)) return null;
+      const servers = (project as Record<string, unknown>)[serverKey] ?? {};
+      if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null;
+      return { data, servers: { ...servers }, bare: false, projectKey };
+    }
     const bare = allowBare && !(serverKey in data);
     const servers = bare ? data : (data[serverKey] as Record<string, unknown>) ?? {};
     if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null;
@@ -535,6 +648,17 @@ export async function writeJsonDoc(
 ): Promise<void> {
   if (doc.bare) {
     await writeMcpJson(file, doc.servers, options);
+    return;
+  }
+  if (doc.projectKey !== undefined) {
+    // Every other key of the project's entry and of the file is carried over. An entry left holding
+    // nothing but an empty server map goes: Claude Code reads a missing one as the same.
+    const projects = (doc.data.projects ?? {}) as Record<string, Record<string, unknown>>;
+    const project = { ...projects[doc.projectKey], [serverKey]: doc.servers };
+    if (Object.keys(doc.servers).length === 0 && Object.keys(project).length === 1) delete projects[doc.projectKey];
+    else projects[doc.projectKey] = project;
+    doc.data.projects = projects;
+    await writeMcpJson(file, doc.data, options);
     return;
   }
   doc.data[serverKey] = doc.servers;
@@ -780,7 +904,7 @@ async function claimedByOtherTools(
   for (const t of targets) {
     // By real path: a tool whose path links to another's file reads that file.
     if (t.tool === target.tool || !sameServerKey(t.format, target.format) || !await sameMcpFile(t.file, target.file)) continue;
-    for (const record of manifest[managedMcpManifestKey(t.tool, t.projectScope)] ?? []) claimed.add(record.name);
+    for (const record of manifest[mcpManifestKey(t)] ?? []) claimed.add(record.name);
   }
   return claimed;
 }
@@ -844,7 +968,7 @@ export async function memberMcpServers(
   const installed = await installedMcpEntries(target, { underKeyOnly: true });
   if (!installed) return [];
   const { manifest } = await loadMcpManifest(localConfig, true);
-  const { owned: ownedRecords } = await splitByFile(target, manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []);
+  const { owned: ownedRecords } = await splitByFile(target, manifest[mcpManifestKey(target)] ?? []);
   const owned = new Set(ownedRecords.map((r) => r.name));
   const judge = judgeUnrecordedMcpEntry(localConfig, target, desired, vars, await claimedByOtherTools(targets, target, manifest));
   const member: string[] = [];
@@ -883,7 +1007,7 @@ export async function installedMcpEntries(
   }
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
-  const doc = await readJsonDoc(target.file, serverKey, allowBare);
+  const doc = await readJsonDoc(target.file, serverKey, allowBare, target.projectKey);
   if (doc === null) return null;
   return new Map([...options.underKeyOnly ? [] : Object.entries(doc.beside ?? {}), ...Object.entries(doc.servers)]);
 }
@@ -902,6 +1026,8 @@ async function shadowedBareCopilotServer(target: McpTarget): Promise<string | un
  * PER-WORKTREE manifest under the partition (migrating this worktree's records
  * out of any legacy shared file on first read, unless `dryRun`); user scope
  * keeps the single global file. Either way a reconcile owns exactly one file.
+ * Project scope also holds the records of Claude's local scope for this
+ * checkout's key (`mcpManifestKey`), kept apart (`saveMcpManifest`).
  */
 async function loadMcpManifest(
   localConfig: LocalConfig,
@@ -909,10 +1035,52 @@ async function loadMcpManifest(
 ): Promise<{ manifestPath: string; manifest: ManagedMcpManifest }> {
   const dataHome = getDataHome(localConfig);
   if (localConfig.scope === 'project' && localConfig.projectRoot) {
-    return loadProjectMcpManifest(dataHome, localConfig.projectRoot, { dryRun });
+    const loaded = await loadProjectMcpManifest(dataHome, localConfig.projectRoot, { dryRun });
+    const local = await readManifest(localMcpManifestPath(localConfig));
+    const ours = await localMcpKeyOf(localConfig);
+    for (const [key, records] of Object.entries(local)) if (ours(key) && Array.isArray(records)) loaded.manifest[key] = records;
+    return loaded;
   }
   const manifestPath = managedMcpManifestPath(dataHome);
   return { manifestPath, manifest: await readManifest(manifestPath) };
+}
+
+/** The manifest `loadMcpManifest` reads, without writing anything. For `teamai mcp list`. */
+export async function readMcpManifest(localConfig: LocalConfig): Promise<ManagedMcpManifest> {
+  return (await loadMcpManifest(localConfig, true)).manifest;
+}
+
+/**
+ * The records of Claude's local scope (#915), by key: one file for every
+ * checkout of the project, since every worktree of a repository shares the
+ * main checkout's key, and no checkout's own manifest can speak for it.
+ */
+function localMcpManifestPath(localConfig: LocalConfig): string {
+  return path.join(getDataHome(localConfig), 'managed-local-mcp.json');
+}
+
+/** Whether a manifest key is one of the local-scope keys of `localConfig`'s checkout. */
+async function localMcpKeyOf(localConfig: LocalConfig): Promise<(key: string) => boolean> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return () => false;
+  const suffix = `:local:${await claudeProjectKey(localConfig.projectRoot)}`;
+  return (key) => key.endsWith(suffix);
+}
+
+/**
+ * Write what `loadMcpManifest` read: the checkout's own records to its
+ * manifest, and its local-scope records into the shared file, re-read so
+ * another checkout's keys there stay as they are.
+ */
+async function saveMcpManifest(localConfig: LocalConfig, manifestPath: string, manifest: ManagedMcpManifest): Promise<void> {
+  const ours = await localMcpKeyOf(localConfig);
+  await writeJsonAtomic(manifestPath, Object.fromEntries(Object.entries(manifest).filter(([key]) => !ours(key))));
+  if (localConfig.scope !== 'project') return;
+  const file = localMcpManifestPath(localConfig);
+  const shared = await readManifest(file);
+  const before = JSON.stringify(shared);
+  for (const key of Object.keys(shared)) if (ours(key)) delete shared[key];
+  for (const [key, records] of Object.entries(manifest)) if (ours(key) && records.length > 0) shared[key] = records;
+  if (JSON.stringify(shared) !== before) await writeJsonAtomic(file, shared);
 }
 
 /**
@@ -938,7 +1106,7 @@ export async function keptMcpEntries(
 
   for (const target of targets) {
     if (mcpTargetExcluded(localConfig, target)) continue;
-    const owned = new Set((manifest[managedMcpManifestKey(target.tool, target.projectScope)] ?? []).map((r) => r.name));
+    const owned = new Set((manifest[mcpManifestKey(target)] ?? []).map((r) => r.name));
     const installed = await installedMcpEntries(target);
     for (const name of desiredMcpForTarget(target, teamDefs, ctx).kept) {
       if (!owned.has(name) || !installed?.has(name)) continue;
@@ -1041,6 +1209,11 @@ export async function judgeTeamaiOnlyMcpConfigs(
     if (!(await fs.promises.lstat(file).catch(() => null))?.isFile()) continue;
     const raw = await readFileSafe(file);
     if (raw === null || raw.trim() === '') continue;
+    // The file OpenCode V2 gets the servers from through teamai's plugin is teamai's whole.
+    if (writers.some((t) => t.tool === 'opencode' && t.mappedFile !== undefined && t.file !== t.mappedFile)) {
+      verdicts.push({ file, teamaiOnly: true });
+      continue;
+    }
     // The names teamai's records claim in this file, for the tools keeping their servers under `key`.
     const claimed = (key: string | null): Set<string> => new Set(writers
       .filter((t) => (t.format === 'codex' ? null : MCP_SERVER_KEY[t.format as Exclude<McpFormat, 'codex'>]) === key)
@@ -1084,6 +1257,22 @@ export async function judgeTeamaiOnlyMcpConfigs(
     verdicts.push({ file, teamaiOnly: owned > 0 && !foreign });
   }
   return verdicts;
+}
+
+/**
+ * On OpenCode V2 with teamai's plugin (#915): teamai's servers a pull left in
+ * the project MCP file OpenCode V1 reads, as git tracks it or it holds
+ * something else, with that file. Null when there are none. Read-only, for doctor.
+ */
+export async function opencodeV1Servers(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<{ file: string; names: string[] } | null> {
+  const target = (await resolveMcpTargets(teamConfig, localConfig)).find((t) => t.tool === 'opencode' && t.projectScope);
+  if (!target?.mappedFile || target.file === target.mappedFile || mcpTargetExcluded(localConfig, target)) return null;
+  const { manifest } = await loadMcpManifest(localConfig, true);
+  const installed = await installedMcpEntries({ ...target, file: target.mappedFile });
+  const names = (manifest[managedMcpManifestKey(target.tool, true)] ?? [])
+    .filter((record) => recordedFileOf(target, record) === target.mappedFile && installed?.has(record.name))
+    .map((record) => record.name);
+  return names.length > 0 ? { file: target.mappedFile, names: [...new Set(names)] } : null;
 }
 
 /** Whether any target's file, or another file of its tool's lookup order (#993), holds an MCP server, recorded or not. */
@@ -1983,7 +2172,7 @@ async function reconcileTargets(
   const rebuilt: Array<{ target: McpTarget; records: ManagedMcpRecord[] }> = [];
   // The tools with no record in managed-mcp.json when this pull began (#882): theirs are marked below.
   const unrecorded = new Set(localConfig.scope === 'project' && !options.dryRun
-    ? targets.filter((t) => manifest[managedMcpManifestKey(t.tool, true)] === undefined).map((t) => t.tool) : []);
+    ? targets.filter((t) => !t.projectKey && manifest[managedMcpManifestKey(t.tool, true)] === undefined).map((t) => t.tool) : []);
 
   const desiredContext = await buildDesiredMcpContext(teamConfig, localConfig, options);
   // A failed declaration is not "no secrets": read as none, every server whose
@@ -2000,7 +2189,7 @@ async function reconcileTargets(
     // manifest entry is left as is: an excluded tool is skipped, not cleaned,
     // and `removeAll` (uninstall) still reaches every tool.
     if (!removeAll && mcpTargetExcluded(localConfig, resolved)) continue;
-    const manifestKey = managedMcpManifestKey(resolved.tool, resolved.projectScope);
+    const manifestKey = mcpManifestKey(resolved);
 
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
@@ -2045,7 +2234,12 @@ async function reconcileTargets(
     wrote = wroteTarget || wrote;
     // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
     if (wroteTarget === null) continue;
-    if (target.mappedFile) {
+    if (target.mappedFile && target.tool === 'opencode') {
+      const other = target.file === target.mappedFile ? opencodeMcpFile(resolveToolBaseDir('opencode', localConfig)) : target.mappedFile;
+      const judgeOther = judgeUnrecordedMcpEntry(localConfig, { ...target, file: other }, desired, desiredContext.vars,
+        await claimedByOtherTools(targets, { ...target, file: other }, manifest), history);
+      wrote = await moveOpencodeServers(target, other, elsewhere, nextRecords, changes, judgeOther, options, restoreConfigs) || wrote;
+    } else if (target.mappedFile) {
       for (const record of nextRecords) record.file = target.file;
       const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judge, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
@@ -2075,6 +2269,13 @@ async function reconcileTargets(
     // Not while the file's other servers are unnoted: it would say the same.
     if (nextRecords.length > 0 || (target.projectScope && manifest[manifestKey] !== undefined && !marked)) manifest[manifestKey] = nextRecords;
     else delete manifest[manifestKey];
+
+    // Claude's other place for them (#915): what teamai wrote there goes, as sharing.gitExclude moved them.
+    if (target.tool === 'claude' && target.projectScope) {
+      wrote = await leaveClaudeMcpLocation(teamConfig, localConfig, target, {
+        desired, kept, manifest, changes, vars: desiredContext.vars, history, options, restoreConfigs,
+      }) || wrote;
+    }
   }
 
   // A record of a tool that had none when this pull began, of a file holding a server no record claims, is
@@ -2097,13 +2298,13 @@ async function reconcileTargets(
         else delete record.unnoted;
       }
     }
-    await writeJsonAtomic(manifestPath, manifest);
+    await saveMcpManifest(localConfig, manifestPath, manifest);
   }
   // Only committed ownership retains a file record added by this run. On failure,
   // the outer cleanup removes it before inspecting the restored configs.
   for (let index = recorded.length - 1; index >= 0; index--) {
     const target = recorded[index];
-    if (manifest[managedMcpManifestKey(target.tool, target.projectScope)]?.some((record) => record.resolved === true)) recorded.splice(index, 1);
+    if (manifest[mcpManifestKey(target)]?.some((record) => record.resolved === true)) recorded.splice(index, 1);
   }
   return { changes, wrote };
 }
@@ -2219,7 +2420,7 @@ async function applyJson(
 ): Promise<boolean | null> {
   const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
-  const doc = await readJsonDoc(target.file, serverKey, allowBare);
+  const doc = await readJsonDoc(target.file, serverKey, allowBare, target.projectKey);
   if (!doc) {
     log.warn(`Could not parse ${target.file} — skipping MCP injection for ${target.tool}`);
     return null;
@@ -2370,6 +2571,82 @@ async function removeFromOtherFiles(
 }
 
 /**
+ * Take teamai's servers out of Claude's place for them that `active` is not
+ * (#915): the project's `.mcp.json` while sharing.gitExclude moves them to
+ * Claude's local scope, that local scope once it is off; `removeAll` takes
+ * them out of both. Only entries teamai's records claim there, or that equal
+ * a render of their name today or in the team's history
+ * (`judgeUnrecordedMcpEntry`), go: a name CodeBuddy's record claims in
+ * `.mcp.json`, which it still writes, stays with CodeBuddy, a server kept
+ * for a missing secret stays where it is, and a member's own server stays.
+ * A local scope teamai holds no record of is not read. A `.mcp.json` left
+ * holding nothing is deleted, unless git tracks it. Whether it wrote a file.
+ */
+async function leaveClaudeMcpLocation(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  active: McpTarget,
+  ctx: {
+    desired: ReadonlyMap<string, DesiredMcpEntry>;
+    kept: ReadonlySet<string>;
+    manifest: ManagedMcpManifest;
+    changes: McpChange[];
+    vars: Record<string, string>;
+    history: () => Promise<TeamMcpHistory>;
+    options: McpReconcileOptions;
+    restoreConfigs: Map<string, () => Promise<void>>;
+  },
+): Promise<boolean> {
+  const places = await claudeMcpLocations(teamConfig, localConfig);
+  if (!places) return false;
+  const other = active.projectKey ? places.tree : places.local;
+  const key = mcpManifestKey(other);
+  const records = ctx.manifest[key];
+  if (other.projectKey && !records?.length) return false;
+  const claimed = other.projectKey
+    ? new Set<string>()
+    : await claimedByOtherTools(await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }), other, ctx.manifest);
+  // A copy the member changed since teamai wrote it is theirs: it stays where it is, named, and its record goes.
+  const installed = await installedMcpEntries(other);
+  const edited = (records ?? []).filter((r) => !claimed.has(r.name) && installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
+  for (const { name } of ctx.options.removeAll ? [] : edited) {
+    log.warn(`Kept MCP server ${name} in ${describeMcpLocation(other)}: you changed it since teamai wrote it. teamai writes the team's ${name} `
+      + `to ${describeMcpLocation(active)} now; remove ${name} from ${describeMcpLocation(other)} when you no longer need it.`);
+  }
+  const owned = (records ?? []).filter((record) => !claimed.has(record.name) && (ctx.options.removeAll || !edited.includes(record)));
+  const keep = new Map(ctx.options.removeAll ? [] : owned.filter((r) => ctx.kept.has(r.name)).map((r) => [r.name, r]));
+  const judge = judgeUnrecordedMcpEntry(localConfig, other, ctx.desired, ctx.vars, claimed, ctx.history);
+  const next: ManagedMcpRecord[] = [];
+  const removed: McpChange[] = [];
+  const wrote = await applyJson(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
+  // Not read: its records stay.
+  if (wrote === null) return false;
+  ctx.changes.push(...removed);
+  // As for a target: an emptied project record says teamai owns nothing left in that file (#882).
+  if (next.length > 0 || (!other.projectKey && records !== undefined && !records.some((r) => r.unnoted))) ctx.manifest[key] = next;
+  else delete ctx.manifest[key];
+  if (removed.length === 0 || ctx.options.removeAll) return wrote;
+  log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for claude (${removed.map((c) => c.server).join(', ')}) `
+    + `out of ${describeMcpLocation(other)}: with sharing.gitExclude ${active.projectKey ? 'on' : 'off'}, Claude reads them from ${describeMcpLocation(active)}.`);
+  return wrote && !other.projectKey ? await deleteEmptiedMcpFile(other.file) || wrote : wrote;
+}
+
+/**
+ * Delete a project MCP file a cleanup just emptied, when it holds nothing at
+ * all, no other key either, so nothing but teamai's servers made it (#915).
+ * A symlink is the member's, and a file git tracks, or cannot say it does
+ * not, stays.
+ */
+async function deleteEmptiedMcpFile(file: string): Promise<boolean> {
+  if (await fs.promises.lstat(file).then((stat) => stat.isSymbolicLink(), () => true)) return false;
+  const doc = await readJsonDoc(file, MCP_SERVER_KEY.claude);
+  if (!doc || Object.keys(doc.servers).length > 0 || Object.keys(doc.data).some((key) => key !== MCP_SERVER_KEY.claude)) return false;
+  if (await keepsTrackedCopy(file) || (await gitTracks(file)).kind === 'unknown') return false;
+  await fs.promises.rm(file, { force: true });
+  return true;
+}
+
+/**
  * The later file of `target`'s lookup order to write to instead of the file
  * every teamai before #993 created there (`FORMER_USER_MCP_FILE`), when that
  * file is the one the tool reads and holds nothing but teamai's servers: no
@@ -2436,6 +2713,102 @@ async function deleteLeftMcpFile(
   await fs.promises.rm(former, { force: true });
   if (!restoreConfigs.has(former)) restoreConfigs.set(former, () => fs.promises.writeFile(former, raw));
   return true;
+}
+
+/**
+ * Take teamai's OpenCode servers out of `other` (#915), the project MCP file
+ * OpenCode does not get them from now: on V2 with teamai's plugin, the root
+ * opencode.json V1 reads, as V2 reads it too and would load them twice; back
+ * on V1, `.opencode/teamai-mcp.json`. Teamai's servers are those `elsewhere`
+ * records there, or that `judge` proves teamai's (a lost record). On V2, only
+ * from a file git does not track that holds nothing else: a file the team or
+ * the member shares is left, its records with it, and doctor names it. A file
+ * left with nothing is deleted, never one git tracks. `uninstall` and
+ * `teamai mcp remove` clear either file. Whether it wrote a file.
+ */
+/**
+ * Delete an OpenCode project MCP file a reconcile left holding no server and
+ * nothing else, unless git tracks it; `raw` is what it held before, for the
+ * restore. Whether it deleted it.
+ */
+async function deleteEmptiedOpencodeFile(file: string, raw: string, restoreConfigs: Map<string, () => Promise<void>>): Promise<boolean> {
+  const serverKey = MCP_SERVER_KEY.opencode;
+  const left = await readJsonDoc(file, serverKey);
+  if (!left || !await pathExists(file) || Object.keys(left.servers).length > 0 || Object.keys(left.data).some((key) => key !== serverKey)
+    || (await gitTracks(file, 'entry')).kind !== 'untracked') return false;
+  await fs.promises.rm(file, { force: true });
+  if (!restoreConfigs.has(file)) restoreConfigs.set(file, () => fs.promises.writeFile(file, raw));
+  return true;
+}
+
+async function moveOpencodeServers(
+  target: McpTarget,
+  other: string,
+  elsewhere: ManagedMcpRecord[],
+  nextRecords: ManagedMcpRecord[],
+  changes: McpChange[],
+  judge: McpEntryJudge,
+  options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
+): Promise<boolean> {
+  const v2 = target.file !== target.mappedFile;
+  for (const record of nextRecords) {
+    if (v2) record.file = target.file;
+    else delete record.file;
+  }
+  // teamai's own file, once it holds no server.
+  const own = v2 && !options.dryRun && nextRecords.length === 0 ? await readFileSafe(target.file) : null;
+  const ownDeleted = own !== null && await deleteEmptiedOpencodeFile(target.file, own, restoreConfigs);
+  return await moveOpencodeServersOut(target, other, elsewhere, nextRecords, changes, judge, options, restoreConfigs) || ownDeleted;
+}
+
+/** `moveOpencodeServers` for the file the servers leave. */
+async function moveOpencodeServersOut(
+  target: McpTarget,
+  other: string,
+  elsewhere: ManagedMcpRecord[],
+  nextRecords: ManagedMcpRecord[],
+  changes: McpChange[],
+  judge: McpEntryJudge,
+  options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
+): Promise<boolean> {
+  const v2 = target.file !== target.mappedFile;
+  const keep = (): false => {
+    nextRecords.push(...elsewhere);
+    return false;
+  };
+  const stat = await fs.promises.lstat(other).catch(() => null);
+  // Gone: nothing of teamai's is left there. A symlink is the member's.
+  if (!stat || await sameMcpFile(other, target.file)) return false;
+  if (!stat.isFile()) return keep();
+  const untracked = async (): Promise<boolean> => (await gitTracks(other, 'entry')).kind === 'untracked';
+  if (!options.removeAll && !await untracked()) return keep();
+  const serverKey = MCP_SERVER_KEY.opencode;
+  const doc = await readJsonDoc(other, serverKey);
+  if (!doc) return keep();
+  if (v2 && !options.removeAll) {
+    if (Object.keys(doc.data).some((key) => key !== serverKey)) return keep();
+    for (const [name, entry] of Object.entries(doc.servers)) {
+      if (!elsewhere.some((record) => record.name === name) && await judge(name, entry) !== 'teamai') return keep();
+    }
+  }
+  const raw = await readFileSafe(other);
+  const removed: McpChange[] = [];
+  const names = new Set(elsewhere.map((record) => record.name));
+  const result = await applyJson({ ...target, file: other }, new Map(), new Map(), elsewhere, names, [], removed, judge, options, restoreConfigs);
+  if (result === null) return keep();
+  if (options.removeAll) changes.push(...removed);
+  const deleted = !options.dryRun && raw !== null && await deleteEmptiedOpencodeFile(other, raw, restoreConfigs);
+  if (!options.removeAll && removed.length > 0) {
+    const servers = removed.map((change) => change.server).join(', ');
+    log.info(v2
+      ? `${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for opencode (${servers}) out of ${other}${deleted ? ' and deleted it, as it held nothing else' : ''}: `
+        + `OpenCode V2 gets them from ${target.file} through teamai's plugin.`
+      : `${options.dryRun ? 'Would move' : 'Moved'} teamai's MCP servers for opencode (${servers}) from ${other} back to ${target.file}${deleted ? ` and deleted ${other}` : ''}: `
+        + 'teamai\'s plugin adds them only on OpenCode V2 with sharing.gitExclude on.');
+  }
+  return result || deleted;
 }
 
 async function applyCodex(

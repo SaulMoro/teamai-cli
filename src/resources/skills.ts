@@ -18,8 +18,8 @@ import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy, membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles,
-  type DeliveredHashes, type DeliveryLedger,
+  blockingEntries, deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
+  membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -843,16 +843,24 @@ export class SkillsHandler extends ResourceHandler {
           warnOnce(describeMembersLink(membersLink, item.relativePath));
           continue;
         }
-        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)));
+        // An entry of the member's of the other type blocks only the files under it (#993): the rest is delivered.
+        const blocked = await blockingEntries(dest, item.sourcePath);
+        for (const rel of blocked) {
+          const entry = path.join(dest, ...rel.split('/'));
+          if (ledger) ledger.members.push({ dest: entry, teamRelPath: `${item.relativePath}/${rel}` });
+          else warnOnce(describeMembersFile(entry, `${item.relativePath}/${rel}`));
+        }
+        await copyDir(item.sourcePath, dest, (link) => warnOnce(describeSkippedLink(link, item.relativePath)), blocked);
         await removeLeftoverVersionFiles(item.sourcePath, dest, otherVersions, ledger?.previous);
         await ensureSkillFrontmatter(dest, item.name);
         if (ledger) await recordDelivered(ledger.hashes, dest, item.sourcePath);
-        // The files it wrote, never the directory: a file the member adds there stays visible (#915).
-        if (ledger?.recorder) for (const file of await deliveredSkillFiles(item.sourcePath, dest)) ledger.recorder.report('skills', file);
+        // The files it wrote, never the directory, nor an entry of the member's it delivered around (#915).
+        if (ledger?.recorder) for (const file of await deliveredSkillFiles(item.sourcePath, dest, blocked)) ledger.recorder.report('skills', file);
         log.debug(`Synced skill ${item.name} → ${tool}`);
       } catch (e) {
         ledger?.recorder?.failed('skills');
         log.warn(`Failed to sync skill ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
   }

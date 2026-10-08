@@ -39,7 +39,10 @@ MCP definitions travel with the team repo like skills/rules — edit, then the
 members pick them up on sync.
 
 A server with a `${VAR}` the tool cannot expand itself gets the resolved value
-written into its project config (`.mcp.json`, `.cursor/mcp.json`, ...). Before
+written into its project config (`.mcp.json`, `.cursor/mcp.json`, ...). With
+`sharing.gitExclude` on, Claude's servers go to Claude Code's local scope in
+`~/.claude.json` instead, outside the project, and the next pull moves teamai's
+servers out of `.mcp.json`. Before
 that write, teamai lists the file in the clone's `.git/info/exclude`, inside a
 `# [teamai:mcp-exclude:start]` block; the committed `.gitignore` is never touched.
 A file under a symlinked directory is listed and checked where the write lands

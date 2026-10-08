@@ -29,7 +29,7 @@ import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } f
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
-  deliveredSkillFiles, describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
+  blockingEntries, deliveredSkillFiles, describeMembersDirLeft, forgetDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
 import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
@@ -449,7 +449,9 @@ async function reportWouldKeep(
       } else if (verdict.kind === 'member') {
         log.info(`[${scopeLabel}] [dry-run] Would keep ${target.dest}: ${notTeamaisReason(item.relativePath)}.`);
       } else if (writer === 'skills') {
-        for (const file of await deliveredSkillFiles(item.sourcePath, target.dest)) ledger.recorder?.report(writer, file);
+        // As the write would list it: never an entry of the member's it delivers around.
+        const blocked = await blockingEntries(target.dest, item.sourcePath);
+        for (const file of await deliveredSkillFiles(item.sourcePath, target.dest, blocked)) ledger.recorder?.report(writer, file);
       } else if (writer) {
         ledger.recorder?.report(writer, target.dest);
       }
@@ -1789,6 +1791,12 @@ async function pullForScope(
       }
       // A copy it failed to write has said so already (see DeliveryRecorder).
       if (type === 'skills' || type === 'agents') ledger.recorder?.succeeded(type);
+      // A copy that failed (each said as it happened) leaves the pull unsynced, as a kept file of the
+      // member's does: the revision stays, and the next pull is a full one that retries it.
+      if (ledger.failed.splice(0).length > 0) {
+        membersFilesKept = true;
+        if (result) result.resourceSyncFailed = true;
+      }
       // Agents whose model cannot be resolved reach no tool: said once per reason, and not counted as synced.
       if (ledger.held.length > 0) agentModelsHeld = true;
       const held = ledger.held.length > 0 ? reportHeldAgents(ledger) : 0;
@@ -2307,9 +2315,11 @@ async function syncManagedInstructions(
     const registered = await registerOpencodeContext(config, localConfig, resolved, dryRun, files);
     if (registered && dryRun) log.info(`[dry-run] ${registered}`);
     else if (registered) log.debug(registered);
-    // Beside the Claude fallback V1 reads CLAUDE.md, so no entry is wanted.
+    // Beside the Claude fallback V1 reads CLAUDE.md, so no entry is wanted; nor
+    // on V2, whose teamai plugin reads the file (#915).
+    const { opencodeDeliversThroughPlugin } = await import('./opencode-hooks.js');
     if (!dryRun && !opencodeFallback && targets.some((target) => target.tools.includes('opencode'))
-      && Object.values(blocks).some(Boolean)) {
+      && Object.values(blocks).some(Boolean) && !await opencodeDeliversThroughPlugin(config, localConfig)) {
       const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
       const target = targets.find((target) => target.tools.includes('opencode'))!;
       const { config: file, entry } = opencodeContextReference(target.path, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
@@ -3282,6 +3292,16 @@ async function reconcileHooksAllScopes(
         const applied = await applyInstructionPlan(cleanup, { dryRun: Boolean(options.dryRun) });
         for (const line of applied.report) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${line}: replacement instructions are ready`);
         for (const failure of applied.failures) log.warn(`[${localConfig.scope}] ${failure}`);
+      }
+      // With OpenCode's plugin current now, V2 needs no `instructions` entry (#915).
+      if (localConfig === projectConfig) {
+        try {
+          const { retireOpencodeV1Instructions } = await import('./teamai-only-files.js');
+          const retired = await retireOpencodeV1Instructions(teamConfig, localConfig, Boolean(options.dryRun));
+          if (retired) log.info(`${options.dryRun ? '[dry-run]' : `[${localConfig.scope}]`} ${retired}`);
+        } catch (e) {
+          log.warn(`[${localConfig.scope}] Could not take teamai's OpenCode V1 instructions out of .opencode/opencode.json: ${(e as Error).message}. The next pull tries again.`);
+        }
       }
       // The hooks install the extensions and plugins that add team
       // instructions for Pi, OMP and Hermes (#945); say which cannot. The

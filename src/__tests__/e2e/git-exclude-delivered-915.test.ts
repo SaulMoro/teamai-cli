@@ -564,12 +564,11 @@ const MEMBERS_FILES = [
 
 /**
  * What git may still show: paths the delivered block does not cover yet (MCP
- * and OpenCode configs, `.codex/hooks.json`). Nothing the
+ * configs, `.codex/hooks.json`). Nothing the
  * writers above deliver is on it.
  */
 const STILL_VISIBLE = [
   /^\.mcp\.json$/, /^\.cursor\/mcp\.json$/, /^\.github\/mcp\.json$/, /^\.codex\/config\.toml$/, /^\.kiro\/settings\/mcp\.json$/,
-  /^opencode\.json$/, /^\.opencode\/opencode\.json$/,
   /^\.codex\/hooks\.json$/,
 ];
 /** A delivered path of each writer and kind, as the member's tools read them. */
@@ -772,6 +771,27 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
     expect(m.status(), withdrawn.output).toContain('?? .claude/skills/ext-skill/SKILL.md');
     m.git(['add', '-A']);
     expect(m.git(['diff', '--cached', '--name-only'])).toContain('.claude/skills/ext-skill/SKILL.md');
+  });
+
+  it('lists a skill delivered around a member\'s entry of the other type file by file, and the member\'s entry stays visible', () => {
+    const m = machine('blocked-skill', { team: ON, agents: 'claude' });
+    const skill = path.join(m.dir, '.claude', 'skills', 'fe-skill');
+    fs.writeFileSync(path.join(skill, 'docs'), 'MY DOCS\n');
+    m.teamCommit({ 'skills/fe-skill/docs/guide.md': 'TEAM GUIDE\n', 'skills/fe-skill/extra.md': 'TEAM EXTRA\n' });
+
+    const pulled = m.ok(['pull']);
+    expect(pulled.output).toContain(`Kept ${path.join(skill, 'docs')}: it is not teamai's`);
+    expect(m.deliveredLines(), pulled.output).toEqual(expect.arrayContaining(['/.claude/skills/fe-skill/SKILL.md', '/.claude/skills/fe-skill/extra.md']));
+    expect(m.deliveredLines().filter((line) => line === '/.claude/skills/fe-skill/' || line.startsWith('/.claude/skills/fe-skill/docs'))).toEqual([]);
+    expect(m.teamSkillEntries(), pulled.output).toEqual(['?? .claude/skills/fe-skill/docs']);
+
+    // Once the member's entry is gone, the whole skill is delivered, and each of its files listed.
+    fs.rmSync(path.join(skill, 'docs'));
+    const again = m.ok(['pull']);
+    expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+    expect(m.deliveredLines(), again.output).toContain('/.claude/skills/fe-skill/docs/guide.md');
+    expect(m.deliveredLines()).not.toContain('/.claude/skills/fe-skill/');
+    expect(m.teamSkillEntries(), again.output).toEqual([]);
   });
 });
 
