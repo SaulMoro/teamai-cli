@@ -29,7 +29,7 @@ import {
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { warnOnce } from './utils/warn-once.js';
-import { historicalVersions } from './utils/team-history.js';
+import { blobIdOf, historicalVersions } from './utils/team-history.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspace, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import { getUserHome } from './utils/home.js';
@@ -816,7 +816,7 @@ async function pullSingleSource(
     getRetainedSkillPaths(skill, oldManifest!, baseDir)
       .map((relative) => ({ path: getSourcePhysicalPin(oldManifest!, baseDir, relative), relative, skillName: skill })));
   const plannedTargets: Array<{ path: string; skillName: string; lexicalPath: string; replacesSymlink: boolean }> = [];
-  const plans: Array<{ skill: (typeof skillsToDeploy)[number]; targets: string[]; codexSkillsPath?: string; conflictingPath?: string; conflictingRecord?: string }> = [];
+  const plans: Array<{ skill: (typeof skillsToDeploy)[number]; targets: string[]; retained: string[]; codexSkillsPath?: string; conflictingPath?: string; conflictingRecord?: string }> = [];
   // The source manifest is the delivery record (#993). A destination this
   // installation, or another one of the same repository, records for the skill
   // is the source's. Any other existing copy is the source's only on proof
@@ -849,6 +849,8 @@ async function pullSingleSource(
     // resolver's duplicate cleanup must not delete a path before
     // cross-installation ownership is checked.
     const targets: string[] = [];
+    // Recorded copies holding a file of the member's where the source now has one: kept on record, not copied.
+    const retained: string[] = [];
     let codexSkillsPath: string | undefined;
     let conflictingPath: string | undefined;
     let conflictingRecord: string | undefined;
@@ -887,10 +889,19 @@ async function pullSingleSource(
         log.warn(`[source:${source.name}] ${await describeKeptEntry(target, `${source.name}/${skill.name}`, 'source')}`);
         continue;
       }
+      if (!conflictingPath && await pathExists(target)) {
+        const colliding = await membersFileInTheWay(target, skill.sourcePath, repoDir, skill.name);
+        if (colliding) {
+          log.warn(`[source:${source.name}] Kept ${target}: ${colliding} there is yours, and ${source.name}/${skill.name} now has a file at that path. `
+            + `Rename or delete ${colliding}, then run teamai pull, to receive the source version.`);
+          retained.push(target);
+          continue;
+        }
+      }
       if (tool === CODEX_TOOL && target !== path.join(baseDir, toolPath.skills, skill.name)) codexSkillsPath = toolPath.skills;
       targets.push(target);
     }
-    if (targets.length > 0) plans.push({ skill, targets, codexSkillsPath, conflictingPath, conflictingRecord });
+    if (targets.length > 0 || retained.length > 0) plans.push({ skill, targets, retained, codexSkillsPath, conflictingPath, conflictingRecord });
   }
 
   // Directory copies merge content. Crossing an existing parent/child boundary
@@ -964,7 +975,7 @@ async function pullSingleSource(
     }
   }
 
-  for (const { skill, targets, conflictingPath, conflictingRecord } of plans) {
+  for (const { skill, targets, retained, conflictingPath, conflictingRecord } of plans) {
     if (conflictingPath) {
       log.warn(`[source:${source.name}] Skipping "${skill.name}": another source repository owns ${conflictingPath}. Remove that installation before pulling this skill. Ownership record: ${conflictingRecord}`);
       continue;
@@ -992,6 +1003,13 @@ async function pullSingleSource(
       // copyDir may replace a leaf symlink: pin the actual post-copy location.
       installedPhysicalPaths[relativeTarget] = await resolveSourcePhysicalPath(targetDir);
     }
+    for (const targetDir of retained) {
+      const relativeTarget = recordedDestination(baseDir, targetDir);
+      const skillPaths = installedPaths[skill.name] ??= [];
+      if (!skillPaths.includes(relativeTarget)) skillPaths.push(relativeTarget);
+      installedPhysicalPaths[relativeTarget] = await resolveSourcePhysicalPath(targetDir);
+    }
+    if (targets.length === 0) continue;
 
     if (oldInstalled.has(skill.name)) {
       updatedCount++;
@@ -1387,6 +1405,30 @@ async function isCopyOfCurrent(dir: string, current: ReadonlyMap<string, string 
 }
 
 /**
+ * The path, relative to `target`, of a file of the member's that copying source skill `skillName`
+ * would replace (#993), or null: an existing file at a path the source delivers that is neither
+ * the source's bytes today nor a version from the source history (a link there is the member's too).
+ */
+async function membersFileInTheWay(target: string, sourcePath: string, repoDir: string, skillName: string): Promise<string | null> {
+  // Without history nothing tells a file of the member's from an older source version: the record decides, as before.
+  if (!await pathExists(path.join(repoDir, '.git'))) return null;
+  for (const rel of await listFilesRecursive(sourcePath)) {
+    const source = path.join(sourcePath, rel);
+    if (!(await fse.lstat(source).catch(() => null))?.isFile()) continue;
+    const dest = path.join(target, rel);
+    const stat = await fse.lstat(dest).catch(() => null);
+    if (!stat) continue;
+    if (!stat.isFile()) return rel;
+    if (await fileHash(dest) === await fileHash(source)) continue;
+    const versions = await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`);
+    if (versions === null) return null;
+    const blob = await blobIdOf(repoDir, await fse.readFile(dest));
+    if (!versions.some((version) => version.blob === blob && version.mode !== '120000')) return rel;
+  }
+  return null;
+}
+
+/**
  * Earlier releases put source skills in the scope root's `.hermes/skills` and
  * `.openclaw/skills`, which neither tool reads (#993 bug 8). A recorded copy
  * there is deleted when it is a copy of the source skill, else kept, named,
@@ -1412,14 +1454,21 @@ async function legacyCopyKeeper(
       // A file the source has, or ever had, is the source's, edited or not. Without history and
       // without today's skill (withdrawn), nothing tells them apart: the record decides, as before.
       if (!history && !sourcePath) return false;
-      for (const rel of await listFilesRecursive(skillDir)) {
-        // Only a regular file the source has, or had, counts (CONTRIBUTORS too): a link in the source is never delivered.
-        if (sourcePath && (await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) continue;
-        const versions = history ? await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`) : null;
-        if (versions === null || !versions.some((version) => version.mode !== '120000')) {
-          log.warn(`Kept ${skillDir}: it holds ${rel}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
-          return true;
-        }
+      const pathspec = skillOrigin(repoDir, skillName).pathspec;
+      const fromSource = async (rel: string): Promise<'today' | 'history' | 'none'> => {
+        if (sourcePath && (await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) return 'today';
+        const versions = history ? await historicalVersions(repoDir, `${pathspec}/${rel}`) : null;
+        return versions?.some((version) => version.mode !== '120000') ? 'history' : 'none';
+      };
+      const files = await listFilesRecursive(skillDir);
+      const origins = await Promise.all(files.map((rel) => fromSource(rel)));
+      // Only a copy this source's files prove it delivered can hold a file of the member's: a copy
+      // from a replaced repository, or one an in-repo alias placed, is left to the record, as before.
+      if (!origins.some((origin) => origin !== 'none')) return false;
+      const member = files[origins.indexOf('none')];
+      if (member !== undefined) {
+        log.warn(`Kept ${skillDir}: it holds ${member}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
+        return true;
       }
       return false;
     }

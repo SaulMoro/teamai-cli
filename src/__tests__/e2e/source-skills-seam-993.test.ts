@@ -355,6 +355,18 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(read(path.join(copy, 'linked.md'))).toBe('MY FILE\n');
   });
 
+  it('keeps a file the member added to a delivered source skill when the source later adds one at that path', () => {
+    const w = world('source-new-path');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude']), dir);
+    const copy = path.join(dir, '.claude', 'skills', 'other-skill');
+    writeFile(path.join(copy, 'notes.md'), 'MY NOTES\n');
+    w.publishSource({ 'skills/other-skill/notes.md': 'SOURCE NOTES\n' });
+    const pulled = w.ok(['pull', '--force'], dir);
+    expect(read(path.join(copy, 'notes.md'))).toBe('MY NOTES\n');
+    expect(pulled.output).toContain(`Kept ${copy}: notes.md there is yours`);
+  });
+
   it('source remove keeps a delivered source skill directory holding a file the member added', () => {
     const w = world('extra-file');
     const dir = w.business('biz', { '.claude/.keep': '' });

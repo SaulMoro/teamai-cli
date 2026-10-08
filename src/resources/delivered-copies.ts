@@ -384,7 +384,38 @@ async function isMembersCopy(previous: DeliveredHashes | undefined, item: Resour
 export async function judgeCopy(previous: DeliveredHashes | undefined, item: ResourceItem, target: DeliveryTarget): Promise<CopyVerdict> {
   if (await isMembersCopy(previous, item, target)) return { kind: 'member' };
   if (previous === undefined) return { kind: 'write' };
-  return classifyCopy(await withDisk(previous, await nextHashes(previous, item, target)));
+  const verdict = classifyCopy(await withDisk(previous, await nextHashes(previous, item, target)));
+  // A recorded skill the member added a file to, at a path the team now delivers too, is kept
+  // whole like an edited one: writing would replace the member's file (#993).
+  if (verdict.kind === 'write' && recordedUnder(previous, target.dest).length > 0 && await overwritesMembersFile(previous, item, target)) {
+    return { kind: 'keep', teamChanged: true };
+  }
+  return verdict;
+}
+
+/**
+ * Whether delivering skill `item` to `target` would write over a file that is the member's: one
+ * off the record that is neither what teamai writes there now nor a team version of it.
+ */
+async function overwritesMembersFile(previous: DeliveredHashes, item: ResourceItem, target: DeliveryTarget): Promise<boolean> {
+  if (item.type !== 'skills' || target.origin === undefined) return false;
+  const { withSkillFrontmatter } = await import('./skills.js');
+  for (const rel of await listFilesRecursive(item.sourcePath)) {
+    const file = path.join(target.dest, rel);
+    if (previous[file] !== undefined) continue;
+    if (await isLink(file)) return true;
+    const disk = await fileHash(file);
+    if (disk === null) continue;
+    const bytes = await fse.readFile(path.join(item.sourcePath, rel));
+    const text = bytes.toString('utf-8');
+    const written = rel === SKILL_MD ? withSkillFrontmatter(text, item.name) : text;
+    if (disk === contentHash(written === text ? bytes : written)) continue;
+    const fileOrigin: CopyOrigin = {
+      repoPath: target.origin.repoPath, pathspec: `${target.origin.pathspec}/${rel}`, renders: rel === SKILL_MD ? target.origin.renders : undefined,
+    };
+    if (!await isTeamaiCopy(file, fileOrigin)) return true;
+  }
+  return false;
 }
 
 /**
