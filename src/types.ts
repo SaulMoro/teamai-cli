@@ -211,6 +211,21 @@ export function isGitExcludeEnabled(
   return member ?? teamConfig.sharing?.gitExclude?.enabled ?? false;
 }
 
+/**
+ * isGitExcludeEnabled with the team config as `loadTeamConfig` returns it.
+ * `undefined` when nothing can decide: git mode, no member override, and the
+ * team's teamai.yaml could not be read or validated. That is not "off": a
+ * caller leaves what the setting governs as it is. HTTP mode has no team
+ * setting, so the member's override or the default decides there.
+ */
+export function resolveGitExclude(
+  localConfig: Parameters<typeof isGitExcludeEnabled>[0] & { repo: { kind?: string } },
+  teamConfig: Parameters<typeof isGitExcludeEnabled>[1] | null,
+): boolean | undefined {
+  if (teamConfig || localConfig.repo.kind === 'http') return isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  return isUnmigratedDataHome(localConfig) ? undefined : localConfig.gitExcludeEnabled;
+}
+
 /** Whether a project config was read from the checkout's own `.teamai/` rather than its partition. */
 export function isUnmigratedDataHome(localConfig: { scope?: string; projectRoot?: string; dataHome?: string }): boolean {
   const { scope, projectRoot, dataHome } = localConfig;

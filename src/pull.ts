@@ -47,7 +47,7 @@ import {
   getDataHome,
   getProjectSearchIndexPath,
   isRecallEnabled,
-  isGitExcludeEnabled,
+  resolveGitExclude,
   isAgentExcluded,
   scopedToolPaths,
   SYNC_LOCK_FILENAME,
@@ -69,7 +69,7 @@ import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
 import {
-  applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, describeForeign,
+  applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, describeForeign, describeUnreadableGitExcludeSetting,
   type DeliveryRecorder, type GitExcludePaths, type ListedCheckout,
 } from './git-exclude-delivered.js';
 import {
@@ -2945,9 +2945,11 @@ export async function pull(
  * teamai's `delivered` git exclude blocks the union of every live checkout's
  * list (deliveredUnion) while the resolved `sharing.gitExclude` is on, naming
  * each path left out as foreign in another checkout, or remove the blocks
- * when it is off. The list is kept either way. Runs on every pull, fast path
- * included. A background pull (`options`, see isBackgroundPull) keeps what it
- * has to say for the next interactive pull and `doctor` instead of saying it.
+ * when it is off. When the setting cannot be read (resolveGitExclude), the
+ * blocks are left as they are and the sync fails. The list is kept either
+ * way. Runs on every pull, fast path included. A background pull (`options`,
+ * see isBackgroundPull) keeps what it has to say for the next interactive
+ * pull and `doctor` instead of saying it.
  * Returns whether the blocks are as they should be; a failure is said (or
  * kept) here, and a success clears the one a background pull kept.
  */
@@ -2963,8 +2965,11 @@ export async function syncDeliveredGitExclude(
     record.gitExcludePaths = paths;
     await saveStateForScope(state, localConfig);
   }
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  const enabled = isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  const enabled = resolveGitExclude(localConfig, await loadTeamConfig(localConfig.repo.localPath));
+  if (enabled === undefined) {
+    await failGitExcludeSync(localConfig, [describeUnreadableGitExcludeSetting(localConfig)], options);
+    return false;
+  }
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
   const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths);
   for (const notice of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices]) await noticeGitExclude(localConfig, notice, options);
@@ -2993,8 +2998,11 @@ async function previewDeliveredGitExclude(localConfig: LocalConfig, recorder: De
   if (!key || !localConfig.projectRoot) return;
   const state = await loadStateForScope(localConfig);
   const paths = await recorder.merge(state.lastPullByWorkspace?.[key]?.gitExcludePaths);
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
-  const enabled = isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  const enabled = resolveGitExclude(localConfig, await loadTeamConfig(localConfig.repo.localPath));
+  if (enabled === undefined) {
+    log.info(`[dry-run] ${describeUnreadableGitExcludeSetting(localConfig)}`);
+    return;
+  }
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
   const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths, { dryRun: true });
   for (const message of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices, ...outcome.failures]) log.info(`[dry-run] ${message}`);
