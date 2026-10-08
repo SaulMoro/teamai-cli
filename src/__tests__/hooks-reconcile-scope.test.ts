@@ -825,6 +825,21 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     expect((await codexProject()).hooks.Stop).toEqual([]);
     expect((await claudeLocal()).hooks.Stop).toEqual([]);
   });
+
+  it.each(['claude', 'codex'])('removeAll releases one duplicated %s main hook per ownership record', async (tool) => {
+    await writeYaml(STOP_LINT);
+    await reconcileTeamHooksForConfig(teamConfig, localConfig());
+    const file = path.join(project, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+    const json = await fse.readJson(file);
+    const [entry] = json.hooks.Stop;
+    json.hooks.Stop.push(entry);
+    await fse.writeJson(file, json);
+    expect((await mainManifest())[tool]).toHaveLength(1);
+
+    await reconcileTeamHooksForConfig(teamConfig, localConfig(), { removeAll: true });
+
+    expect((await fse.readJson(file)).hooks.Stop).toEqual([entry]);
+  });
 });
 
 describe('reconcileTeamHooksForConfig — legacy projectRoot sweep', () => {
