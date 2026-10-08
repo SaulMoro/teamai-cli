@@ -508,6 +508,27 @@ describe('ownership of unrecorded skills and docs (#993 bug 12)', () => {
     expect(pulled.output).toContain('frontend/linked.md');
   });
 
+  it('never writes through or deletes behind a docs mirror that is a link of the member\'s', () => {
+    const t = team('docs-root-link', { 'docs/guide.md': '# Guide\n', 'docs/extra.md': '# Extra\n' });
+    const dir = business('docs-root-link-biz');
+    init(t, dir);
+    const mirror = path.join(dir, '.teamai', 'docs');
+    // The member points the mirror at a directory of their own, holding a file equal to a team doc.
+    const personal = path.join(sandbox, `personal-docs-${attempt}`);
+    writeFile(path.join(personal, 'guide.md'), '# Guide\n');
+    fs.rmSync(mirror, { recursive: true });
+    fs.symlinkSync(personal, mirror);
+
+    const pulled = teamaiOk(['pull', '--force'], dir);
+    expect(fs.readdirSync(personal)).toEqual(['guide.md']);
+    const uninstalled = teamaiOk(['uninstall', '--force'], dir);
+    expect(fs.existsSync(path.join(personal, 'guide.md')), uninstalled.output).toBe(true);
+    expect(read(path.join(personal, 'guide.md'))).toBe('# Guide\n');
+    expect(fs.lstatSync(mirror).isSymbolicLink()).toBe(true);
+    expect(pulled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+    expect(uninstalled.output).toContain(`Kept ${mirror}: it is a link of yours`);
+  });
+
   it('keeps a recorded skill the member edited whole, as before', () => {
     const t = team('edited', {
       'skills/team-skill/SKILL.md': skillMd('team-skill', 'Version one.'),

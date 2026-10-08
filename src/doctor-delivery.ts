@@ -1388,7 +1388,7 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   if (!teamConfig) return [];
 
   const {
-    isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
+    describeLinkedDocsRoot, isLinkedDocsRoot, isPrunedDoc, listDocFiles, listStaleDocDirectories, membersDocs, resolveDocsForDirectory, resolveDocsDestination,
   } = await import('./resources/docs.js');
   // The set pull delivers: no dotfiles, nothing of a docs namespace this member
   // does not have active (#707). Manifests that cannot be read leave nothing to
@@ -1401,6 +1401,10 @@ export async function buildDocsCheck(ctx: DoctorContext): Promise<Check[]> {
   }
 
   const dest = resolveDocsDestination(teamConfig, localConfig);
+  // Pull delivers nothing through a linked root, and no pull can change that (#993).
+  if (await isLinkedDocsRoot(dest)) {
+    return [{ name: 'Team docs delivered', source: 'local', check: async () => false, fix: describeLinkedDocsRoot(dest, 'pull') }];
+  }
   let localFiles: string[];
   let staleDirectories: string[];
   try {

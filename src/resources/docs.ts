@@ -103,6 +103,20 @@ async function isDocVersion(file: string, stat: fse.Stats, versions: readonly Hi
 }
 
 /**
+ * Whether the docs mirror's root `dir` is itself a link (#993): the member's, pointing at a directory
+ * of their own. teamai never writes through it, walks it or deletes anything behind it.
+ */
+export async function isLinkedDocsRoot(dir: string): Promise<boolean> {
+  return (await fse.lstat(dir).catch(() => null))?.isSymbolicLink() ?? false;
+}
+
+/** The line naming a linked docs root, for the command that left it. */
+export function describeLinkedDocsRoot(dir: string, command: 'pull' | 'uninstall'): string {
+  return `Kept ${dir}: it is a link of yours, so ${command === 'pull' ? 'teamai delivers no docs through it' : 'uninstall left it and what it points at'}. `
+    + (command === 'pull' ? 'Make sharing.docs.localDir a directory, or remove the link, then run `teamai pull`.' : 'Delete it when you no longer need it.');
+}
+
+/**
  * Remove from the docs mirror `dir` what is teamai's, for `uninstall` (#993): each file or link
  * at `<rel>` that is a version of `docs/<rel>` in the team repo's history. Anything else is the
  * member's and stays, named; hidden entries stay silently, as pull leaves them. A directory goes
@@ -110,6 +124,7 @@ async function isDocVersion(file: string, stat: fse.Stats, versions: readonly Hi
  * a doc teamai's. Returns the lines naming what stayed.
  */
 export async function removeTeamDocs(dir: string, repoPath: string): Promise<string[]> {
+  if (await isLinkedDocsRoot(dir)) return [describeLinkedDocsRoot(dir, 'uninstall')];
   const history = await historicalVersions(repoPath, 'docs');
   if (history === null) {
     return [`Kept ${dir}: the team repo's history cannot be read, so nothing proves a doc there teamai's, and uninstall left it.`];
@@ -135,7 +150,7 @@ export async function removeTeamDocs(dir: string, repoPath: string): Promise<str
     }
   };
   await walk(dir, '');
-  // A linked mirror keeps its link: only what teamai delivered through it goes.
+  // The mirror itself goes once nothing is left in it.
   if ((await fse.lstat(dir)).isDirectory() && (await fse.readdir(dir)).length === 0) await fse.rmdir(dir);
   return kept;
 }
@@ -514,6 +529,12 @@ export class DocsHandler extends ResourceHandler {
     const src = desired.sourceDir;
     // Validate the source before touching the destination, including an empty bundle.
     const entries = await readEntries(src);
+    // A root that is a link is the member's: nothing is copied, pruned or withdrawn through it (#993).
+    // It holds the docs back, as a file of the member's does, so the next pull tries again.
+    if (await isLinkedDocsRoot(localDocsDir)) {
+      log.warn(`[${localConfig.scope}] ${describeLinkedDocsRoot(localDocsDir, 'pull')}`);
+      return 1;
+    }
     await fse.ensureDir(localDocsDir);
     const destination = await fse.realpath(localDocsDir);
     const repo = await fse.realpath(localConfig.repo.localPath);
