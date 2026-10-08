@@ -805,11 +805,18 @@ async function reconcileClaudeFormat(
   const desiredTeamIds = new Set(
     teamDefs.filter((d) => !d.tools || d.tools.includes(tool)).map((d) => d.key),
   );
+  // Removal releases one entry per record, as Codex does by position: an older
+  // CLI could append an identical entry that another checkout records (#373).
+  // Reconciling keeps matching every copy, since it writes the desired one back.
+  const unreleased = opts.removeAll ? [...priorRecords] : priorRecords;
   const isManaged = (event: string, e: HookMatcher): boolean => {
     if (opts.teamOnly) {
-      return isExactBuiltinEntry(event, tool, e) || (e.hooks?.length === 1 && priorRecords.some((r) =>
+      if (isExactBuiltinEntry(event, tool, e)) return true;
+      const index = e.hooks?.length === 1 ? unreleased.findIndex((r) =>
         r.event === event && (r.matcher ?? '*') === (e.matcher ?? '*') && r.command === e.hooks[0].command
-        && teamHookIdOf(e.description) === r.id));
+        && teamHookIdOf(e.description) === r.id) : -1;
+      if (index >= 0 && opts.removeAll) unreleased.splice(index, 1);
+      return index >= 0;
     }
     if (isBuiltinClaudeEntry(e) || (!!opts.removeAll && isAgentClaudeEntry(e))) return true;
     if (!teamActive || !isTeamClaudeEntry(e)) return false;

@@ -521,6 +521,7 @@ every checkout, so that is where they live now:
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
 │                                              an un-migrated linked worktree injects through the main checkout's copy, importing then retiring the one v0.22.0 kept
 │                                              in its own data home; its removal/uninstall touches only the entries that own copy records (#373)
+│                                              removal releases one Claude entry per record, so an identical copy another checkout records stays
 └── workspaces/<managedMcpWorkspaceId(root)>/
     ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
