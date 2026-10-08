@@ -121,7 +121,7 @@ leaves the block on the next pull, which says so. On OpenCode V2 with teamai's
 plugin current, the OpenCode MCP target is `.opencode/teamai-mcp.json` instead
 (teamai's whole, always listed; its records carry `file`), and the pull takes
 teamai's V1 entries out of the root `opencode.json` and `.opencode/opencode.json`
-when they are teamai-only.
+when git does not track them, keeping the member's entries there.
 A `.codex/hooks.json` that is not teamai's alone (tracked, or holding a member's
 entry; always in self mode) gets no team hooks while the flag is on: pull takes
 teamai's entries out of it through its hook manifest and records the project's

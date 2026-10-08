@@ -2778,9 +2778,9 @@ async function deleteLeftMcpFile(
  * OpenCode does not get them from now: on V2 with teamai's plugin, the root
  * opencode.json V1 reads, as V2 reads it too and would load them twice; back
  * on V1, `.opencode/teamai-mcp.json`. Teamai's servers are those `elsewhere`
- * records there, or that `judge` proves teamai's (a lost record). On V2, only
- * from a file git does not track that holds nothing else: a file the team or
- * the member shares is left, its records with it, and doctor names it. A file
+ * records there, or that `judge` proves teamai's (a lost record). Only from a
+ * file git does not track, where the member's servers and keys stay: a file
+ * git tracks is left, its records with it, and doctor names it. A file
  * left with nothing is deleted, never one git tracks. `uninstall` and
  * `teamai mcp remove` clear either file. Whether it wrote a file.
  */
@@ -2845,12 +2845,6 @@ async function moveOpencodeServersOut(
   const serverKey = MCP_SERVER_KEY.opencode;
   const doc = await readJsonDoc(other, serverKey);
   if (!doc) return keep();
-  if (v2 && !options.removeAll) {
-    if (Object.keys(doc.data).some((key) => key !== serverKey)) return keep();
-    for (const [name, entry] of Object.entries(doc.servers)) {
-      if (!elsewhere.some((record) => record.name === name) && await judge(name, entry) !== 'teamai') return keep();
-    }
-  }
   const raw = await readFileSafe(other);
   const removed: McpChange[] = [];
   const names = new Set(elsewhere.map((record) => record.name));

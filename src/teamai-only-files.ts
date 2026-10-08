@@ -6,7 +6,7 @@ import { instructionTargetPath } from './instruction-targets.js';
 import { findMcpGitExcludes } from './mcp-git-exclude.js';
 import { judgeTeamaiOnlyMcpConfigs, opencodeV1Servers } from './mcp-reconcile.js';
 import { opencodeDeliversThroughPlugin } from './opencode-hooks.js';
-import { opencodeContextReference, readOpencodeInstructionList } from './resources/opencode-config.js';
+import { opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructionSet } from './resources/opencode-config.js';
 import { RulesHandler } from './resources/rules.js';
 import { resolveToolBaseDir, scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
 import { readFileSafe } from './utils/fs.js';
@@ -122,12 +122,12 @@ async function opencodeInstructionEntries(
 }
 
 /**
- * On OpenCode V2 with teamai's plugin (#915): delete `.opencode/opencode.json`
- * when git does not track it and it holds only teamai's `instructions`, which
- * V2 ignores; the plugin adds the team instructions and rules. A file git
- * tracks, or one holding anything else, is left (`opencodeV1Leftovers`).
- * Run after the pull reconciled the plugin. What it did or, with `dryRun`,
- * would do; null for nothing.
+ * On OpenCode V2 with teamai's plugin (#915): take teamai's `instructions`
+ * entries, which V2 ignores, out of `.opencode/opencode.json` when git does
+ * not track it, and delete the file when it held nothing else; the plugin adds
+ * the team instructions and rules. The member's entries and keys stay. A file
+ * git tracks is left (`opencodeV1Leftovers`). Run after the pull reconciled
+ * the plugin. What it did or, with `dryRun`, would do; null for nothing.
  */
 export async function retireOpencodeV1Instructions(
   teamConfig: TeamaiConfig,
@@ -136,16 +136,23 @@ export async function retireOpencodeV1Instructions(
 ): Promise<string | null> {
   if (!await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return null;
   const verdict = await judgeOpencodeInstructions(teamConfig, localConfig);
-  if (!verdict?.teamaiOnly || (await gitTracks(verdict.file, 'entry')).kind !== 'untracked') return null;
-  if (!dryRun) await fs.promises.rm(verdict.file, { force: true });
-  return `${dryRun ? 'Would delete' : 'Deleted'} ${verdict.file}: it held only teamai's \`instructions\` entries, which OpenCode V2 ignores; `
-    + 'teamai\'s plugin adds the team instructions and rules.';
+  if (!verdict || (await gitTracks(verdict.file, 'entry')).kind !== 'untracked') return null;
+  const outcome = 'which OpenCode V2 ignores; teamai\'s plugin adds the team instructions and rules.';
+  if (verdict.teamaiOnly) {
+    if (!dryRun) await fs.promises.rm(verdict.file, { force: true });
+    return `${dryRun ? 'Would delete' : 'Deleted'} ${verdict.file}: it held only teamai's \`instructions\` entries, ${outcome}`;
+  }
+  const entries = await opencodeInstructionEntries(teamConfig, localConfig);
+  const ours = ((await readOpencodeInstructionList(verdict.file)) ?? []).filter((entry): entry is string => entries?.ours(entry) === true);
+  if (!entries || ours.length === 0) return null;
+  if (!dryRun && !await reconcileOpencodeInstructionSet(verdict.file, [], entries.ours, 'team instructions')) return null;
+  return `${dryRun ? 'Would take' : 'Took'} teamai's \`instructions\` entries (${ours.join(', ')}) out of ${verdict.file}, ${outcome}`;
 }
 
 /**
  * On OpenCode V2 with teamai's plugin (#915): the project's opencode.json
  * files that still hold the entries teamai wrote for OpenCode V1, as git
- * tracks them or they hold something else, so a pull left them. Read-only,
+ * tracks them (or a pull cannot edit them), so a pull left them. Read-only,
  * for doctor.
  */
 export async function opencodeV1Leftovers(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<Array<{ file: string; entries: string[] }>> {
