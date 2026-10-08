@@ -383,9 +383,11 @@ inactive `checkout` on every filesystem. When a namespace stops being active,
 pull removes the local copies that are byte-equal to the team file, or to any
 earlier commit of it (`isPastVersionOf`: the team edited it after delivery), and keeps
 edited ones, naming them. The docs mirror (#817) targets this resolved set: it
-copies only the delivered files and prunes every local file the team repo does
-not have, inside a withheld namespace too, but never a local copy of a withheld
-namespace's team doc; those follow the byte-equal rule. The search index and
+copies only the delivered files and prunes a local file the team repo no longer
+has only when it is a version of that doc from the team history (#993), inside a
+withheld namespace too, but never a local copy of a withheld namespace's team doc;
+those follow the byte-equal rule. A file at a path the team history never had is
+the member's and stays. The search index and
 `doctor`'s `Team docs delivered` use the same filter as pull: doctor expects
 only the delivered files, and does not report a withheld namespace's team doc
 as stale, since pull names the edited copies it keeps.
@@ -511,8 +513,8 @@ never links: a link at any delivered path (skill directory, rule or agent file,
 docs mirror entry, source skill destination), or anywhere inside a delivered
 skill directory, is the member's, never followed, written through, replaced or
 deleted by pull, `remove`, `uninstall` or a cleanup sweep, and pull names it
-(`describeMembersLink`). The mirror prune keeps a link at a path the team never
-had, and delivery skips a link inside a team or source skill. A forced
+(`describeMembersLink`). The mirror prune keeps any file or link at a path the
+team never had, and delivery skips a link inside a team or source skill. A forced
 full sync elsewhere keeps each checkout's `delivered`.
 `doctor` does not fail on a kept copy; next to another problem it lists one
 as "changed by you (kept by pull)". A member's own file fails the delivery
