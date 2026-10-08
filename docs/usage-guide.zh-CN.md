@@ -1185,7 +1185,7 @@ namespace 文件；只有当根文件未定义、而多个 namespace 文件都�
 |---|---|---|
 | claude | `~/.claude.json` | `<project>/.mcp.json`；开启 [`sharing.gitExclude`](#让分发的文件不进入-git) 后为 `~/.claude.json` 的 `projects[<主 checkout>]`（见下文） |
 | cursor | `~/.cursor/mcp.json` | `<project>/.cursor/mcp.json` |
-| codebuddy | `~/.codebuddy/.mcp.json`、`~/.codebuddy/mcp.json`、`~/.codebuddy.json` 中第一个存在的文件（见下文） | `<project>/.mcp.json` |
+| codebuddy | `~/.codebuddy/.mcp.json`、`~/.codebuddy/mcp.json`、`~/.codebuddy.json` 中第一个存在的文件（见下文） | `<project>/.mcp.json`；开启 [`sharing.gitExclude`](#让分发的文件不进入-git) 后为 `~/.codebuddy.json` 的 `projects[<worktree 根目录>]`（见下文） |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
 | codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
@@ -1231,9 +1231,16 @@ TeamAI 不会迁移或删除旧文件。Claude Code 也读取根目录的 `.mcp.
 为该 checkout 使用的路径，即主 checkout 的真实路径，因此所有 worktree 共用一份（`--separate-git-dir` 仓库的 linked worktree
 用 git 目录；submodule 的 linked worktree 用其在 `.git/modules` 下的目录）。这样解析后的 token 不会进入工作区，Claude Code
 加载这些 server 时无需批准，团队自己的 `.mcp.json` 保持原样。teamai 在那里只改动自己的条目，`teamai uninstall` 也只移除这些
-条目。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的 server 和 CodeBuddy 仍在其中写入的 server，保留你改动过的
-teamai server 并给出提示；文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull 会把这些 server 移回去。
+条目。下一次 pull 会从 `.mcp.json` 中移除 teamai 的 server，保留你自己的 server，保留你改动过的 teamai server 并给出提示；
+文件中不再剩下任何内容且 git 未跟踪它时删除该文件。关闭此选项后，下一次 pull 会把这些 server 移回去。
 项目中安装并启用了 tclaude 时，Claude 继续使用 tclaude 读取的 `.mcp.json`。
+
+CodeBuddy 的项目级 server 也以同样方式移到 CodeBuddy 的 local scope：`CODEBUDDY_CONFIG_DIR`（未设置时为你的 home 目录）中
+`.codebuddy.json` 的 `projects[<key>].mcpServers`。CodeBuddy 按其运行目录作为 key，因此 `<key>` 是每个 worktree 根目录的真实路径，
+每个 worktree 各有一份：pull 会写入它，git 创建 worktree 时运行的 pull 也会写入。与以前一样，在子目录中启动的 CodeBuddy 看不到
+项目级 server。对于已不存在的 worktree，下一次 pull 会从它的 key 中移除 teamai 的 server，保留你自己的 server。teamai 只改动自己的条目，
+该文件的其他内容保持不变，`teamai uninstall` 也只移除 teamai 的 server。移出和移回 `.mcp.json` 的方式与上文 Claude 相同，
+因此开启此选项后不会有 pull 写入 `.mcp.json`。
 
 TeamAI 仅在所有权记录证明已完成顶层写入且内容仍匹配时，才删除 `mcpServers` 旁的 Copilot 顶层条目。旧记录缺少位置证据时，即使内容与团队定义相同，也保留顶层条目。顶层所有权记录不授权修改 `mcpServers` 下的同名成员条目；更新跳过该冲突，移除时只清理受管理的顶层副本。缺少位置标记的记录只有在哈希匹配嵌套条目且不同时匹配顶层条目时，才能认领嵌套条目。完成的嵌套写入记录 `bare: false`；位置记录写入失败时，所有权仍未得到证明。HTTP 本地代理首次安装先只读检查 Git 保护，再保存临时所有权记录，随后添加排除规则和文件记录，最后写入凭据。初始所有权记录写入失败不会改变 Git 排除规则或 MCP 配置。
 
@@ -1245,9 +1252,9 @@ Copilot 使用原生 `mcpServers` 结构：`stdio` 写成 `type: "local"`，远�
 
 teamai 会**把每个 `${VAR}` 解析成取值后原样写入**各工具的配置文件，并以 `0600` 写入该文件，已有的 `0644` 文件也会收紧（不含已解析值的配置保持原权限；新建文件权限为 `0600`）。它不依赖任何工具自身的环境变量展开——因为那种展开很脆弱：最典型的是，以 GUI 方式（Dock/Launchpad）启动的 IDE 不会继承你 shell 中 `export` 的变量，`${VAR}` 占位符会展开为空、导致服务端 401。解析成明文可以保证无论工具如何启动，token 都在。
 
-> ⚠️ **解析后的 token 会落盘。** 项目级 MCP 配置（`.mcp.json`、`.github/mcp.json`、`.cursor/mcp.json`、`.codex/config.toml`、`opencode.json`）因此含有明文密钥。只要这类文件将含有 teamai 解析出的值且 git 会跟踪它，teamai 就会在写入该值之前把路径写入本地克隆的 `.git/info/exclude`（仓库没有 `.git/info/` 时会先创建它，例如用 `git init --template=` 创建的仓库），放在 `# [teamai:mcp-exclude:start]` 块中（同一仓库的各 worktree 共用该文件）。经由符号链接目录访问的配置（例如 `.cursor/` 指向 `config/`）按写入实际落到的位置判断：写入 exclude、检查和报告的都是该路径（`/config/mcp.json`），已被跟踪时会同时给出两个路径。配置文件本身是符号链接时（例如 `.mcp.json` 指向 dotfiles 仓库中的文件），链接保持不变：写入落到它指向的文件，写入 exclude、检查和报告的都是该文件，且使用它所在仓库的 `.git/info/exclude`；该仓库已跟踪这个文件时，值不会写入。本次 pull 未写入的文件同样适用：之前为某个现已禁用的工具写入的文件，团队已从 `toolPaths` 移除或改到别处的工具的内置位置上的文件（只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录描述的是另一个文件或没有文件；当前由另一个工具映射的文件，例如 Claude 映射的 CodeBuddy 的 `.mcp.json`，则在含有该工具未写入的 server 时算数，见下文），在团队此后改动的 `toolPaths` 映射下写入的文件（每个 worktree 会把写入过解析值的文件记录在其 `managed-mcp.json` 旁的 `managed-mcp-files.json` 中；对于旧版 teamai 在有这份记录之前写入的文件，第一次 pull 会读取一次团队仓库中 `teamai.yaml` 历史里的每个 `mcpProject` 路径，以及 teamai 此后改掉的内置路径（CodeBuddy 的 `.codebuddy/mcp.json`），以克隆中现有的历史为限，且只看项目内的文件，跳过同一工具当前仍映射的路径；这类文件只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录只描述当前路径（当前由另一个工具映射的文件，则在含有该工具未写入的 server 时算数，见下文），在那次 pull 之前 `teamai doctor` 也会检查这些文件；被 git 跟踪的文件不会写入 exclude（写入也不起作用），但无论其内容如何都会记为已跟踪，待 git 不再跟踪它（`git rm --cached`）后按其他此类文件的规则判断，直到它从磁盘和 git 中都消失才会被遗忘），或仍含已从 `mcp.yaml` 删除的 server 的文件。pull 写入的带解析值的条目只要未被改动就一直算数，即使团队后来把其中的 `${VAR}` 改成了字面值。worktree 中完全没有 `managed-mcp.json` 时（记录丢失，或在其第一次 pull 之前），未被 git 跟踪的配置只要含有任何记录都未认领的 server 就算数，你自己的 server 也包括在内：pull 会像重建丢失的记录时那样把这些 server 记入 `managed-mcp-files.json`，在它们离开该文件之前该路径一直保留；`teamai doctor` 也按同样方式检查。`managed-mcp.json` 中没有某个工具的记录时（记录丢失，或这是 teamai 对该工具的第一次投递），pull 为该工具写入第一份记录的配置也按此处理。git 无法判断是否忽略的路径，只要 `git ls-files` 显示该文件未被跟踪，也会照样写入，但只有在 git 确认忽略该路径（`git check-ignore`）之后才会写入值；在此之前，以及 git 连是否跟踪该文件也无法判断时，都按 git 出错处理。若无法写入——`.git/info` 或 exclude 文件不可写、另一个 teamai 命令在短暂等待后仍占用 exclude 文件、git 已跟踪该文件、你自己的 git 忽略文件中有规则重新包含了它（例如 `!/.mcp.json`；警告会指出该规则），或 git 出错——teamai 会保持该文件原样（之前 pull 写入的条目保留），给出原因与修复方法的警告，`teamai mcp list` 和 `teamai doctor` 也会针对 pull 会写入它的每个工具，把该 server 报告为未写入（withheld）；请让文件可写（或对已跟踪的文件执行 `git rm --cached`，或删除重新包含它的规则），再运行 `teamai pull`。已被跟踪的文件会优先报告，且不会写入任何路径。不会改动已提交的 `.gitignore`，git 已忽略的路径不会重复添加，pull、`teamai mcp remove` 和 `teamai uninstall` 会从块中移除某个路径（移除最后一个路径时连同整个块），前提是该文件已不存在、不含任何 MCP server，或在命令运行前 teamai 的写入记录（`managed-mcp.json`）就已存在、可以解析且记有该文件所属工具的条目的情况下（对于两个工具共用的文件，例如 Claude 和 CodeBuddy 共用的 `.mcp.json`：需记有 `managed-mcp-files.json` 中写入过解析值的每个工具的条目；若其中没有列出任何工具，则需记有映射到它的每个工具的条目；空的、无法读取或被截断的记录不能作为依据；pull 重建记录时、或在 `managed-mcp.json` 中没有该工具的记录时写入记录时，若无法把文件中的其他 server 记入 `managed-mcp-files.json`，该记录在之后某次 pull 记下它们之前也不能作为依据）不含以下任何一项：带解析值的团队 server、清理后仍残留的 teamai 条目、teamai 重建丢失的 `managed-mcp.json` 时文件中已有的 server、仍在环境中设置的变量的值（8 个字符以上）。在已改动的映射下写入的文件、团队已移除或改到别处的工具的内置位置上的文件（当前有另一个工具映射到它的除外），或位于嵌套仓库某个关联 worktree 中的文件，须已不存在或不含任何 MCP server。为团队此后改到别处的工具写入（有记录、在上述历史中找到，或位于该工具的内置位置）、但仍被另一个工具的映射指向的文件，只要含有当前映射到它的工具未写入的 server（以它们的 `managed-mcp.json` 记录为准），也会保留该路径；与其他在已改动映射下写入的文件一样，你自己的 server 也会让它保留。`teamai uninstall` 会先从仓库每个 checkout 中的该文件移除 teamai 的 server，再逐一按此判断（包括 `--separate-git-dir` 仓库或 submodule 的主 checkout，从 linked worktree 运行时也是如此）；pull 和 `teamai mcp remove` 只对当前 worktree 的文件按此判断，只要其他任一 checkout 中的该文件仍含 MCP server，就保留该路径，直到在那里运行的 pull 将其清理：那个 worktree 上次 pull 写入的条目（例如团队后来改成字面值的 `${VAR}`）只能由在那里运行的 pull 判断。某次 pull 写入了路径、随后却没有把值写进该文件（文件无法解析，或其中有你自己的同名 server）时，该路径会在这次 pull 结束时移除，它在 `managed-mcp-files.json` 中的记录也会一并移除。否则，或对无法检查的文件（例如无法解析），会保留该路径，`teamai uninstall` 会给出警告，说明文件及原因：请先从中移除 teamai 的 server，再自行删除那一行（删到最后一行时连同块的首尾标记）。`teamai doctor` 会报告 git 仍会提交或无法判断的这类文件——例如已被跟踪的文件：请 `git rm --cached` 并轮换 token。Copilot 项目级配置中直接写在顶层（bare）的 server，在另一个工具也向同一文件写入 `mcpServers` 之后同样算数；其中属于 teamai 的，在团队删除它们后会被移除。对于 HTTP 模式的团队（`teamai init --http`），server 不由 pull 写入，而由本地 agent 的 `install_mcp` 写入，写入的是值本身而非 `${VAR}` 引用，因此项目级 server 只要带有任何 header、env 值或参数、URL（token 可能就在路径里），或带参数的命令行，就视为含有凭据；只有不带参数的 stdio 命令不算。安装时会先把该文件写入 exclude 并记入 `managed-mcp-files.json`；若无法写入（原因同上），则不写入任何内容，并把本次安装报告为失败，附上原因。旧版本地 agent 写入了凭据却未写入 exclude 的文件，会由本地 agent 在该工作区的下一次同步（其 hook 在每个会话中都会运行一次）以及在那里运行的 `teamai pull` 写入 exclude 并记入 `managed-mcp-files.json`，判断方式与下文 `teamai doctor` 相同；dry run 不写入任何内容。除 `teamai uninstall` 外，没有命令会移除这样的路径。`teamai doctor` 按本地 agent 的记录检查这些文件：记录为带有凭据的 server，或旧版安装写入的带凭据的条目；没有该工具的记录时，`managed-mcp-files.json` 列出的文件只要还有 server 也算；对它指出的文件，请自行把路径加入 `.git/info/exclude`，或 `git rm --cached` 并轮换 token。
+> ⚠️ **解析后的 token 会落盘。** 项目级 MCP 配置（`.mcp.json`、`.github/mcp.json`、`.cursor/mcp.json`、`.codex/config.toml`、`opencode.json`）因此含有明文密钥。只要这类文件将含有 teamai 解析出的值且 git 会跟踪它，teamai 就会在写入该值之前把路径写入本地克隆的 `.git/info/exclude`（仓库没有 `.git/info/` 时会先创建它，例如用 `git init --template=` 创建的仓库），放在 `# [teamai:mcp-exclude:start]` 块中（同一仓库的各 worktree 共用该文件）。经由符号链接目录访问的配置（例如 `.cursor/` 指向 `config/`）按写入实际落到的位置判断：写入 exclude、检查和报告的都是该路径（`/config/mcp.json`），已被跟踪时会同时给出两个路径。配置文件本身是符号链接时（例如 `.mcp.json` 指向 dotfiles 仓库中的文件），链接保持不变：写入落到它指向的文件，写入 exclude、检查和报告的都是该文件，且使用它所在仓库的 `.git/info/exclude`；该仓库已跟踪这个文件时，值不会写入。本次 pull 未写入的文件同样适用：之前为某个现已禁用的工具写入的文件，团队已从 `toolPaths` 移除或改到别处的工具的内置位置上的文件（只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录描述的是另一个文件或没有文件；当前由另一个工具映射的文件，例如 Claude 映射的 CodeBuddy 的 `.mcp.json`，则在含有该工具未写入的 server 时算数，见下文），在团队此后改动的 `toolPaths` 映射下写入的文件（每个 worktree 会把写入过解析值的文件记录在其 `managed-mcp.json` 旁的 `managed-mcp-files.json` 中；对于旧版 teamai 在有这份记录之前写入的文件，第一次 pull 会读取一次团队仓库中 `teamai.yaml` 历史里的每个 `mcpProject` 路径，以及 teamai 此后改掉的内置路径（CodeBuddy 的 `.codebuddy/mcp.json`），以克隆中现有的历史为限，且只看项目内的文件，跳过同一工具当前仍映射的路径；这类文件只要含有任何 MCP server 就算数，因为 teamai 对该工具的记录只描述当前路径（当前由另一个工具映射的文件，则在含有该工具未写入的 server 时算数，见下文），在那次 pull 之前 `teamai doctor` 也会检查这些文件；被 git 跟踪的文件不会写入 exclude（写入也不起作用），但无论其内容如何都会记为已跟踪，待 git 不再跟踪它（`git rm --cached`）后按其他此类文件的规则判断，直到它从磁盘和 git 中都消失才会被遗忘），或仍含已从 `mcp.yaml` 删除的 server 的文件。pull 写入的带解析值的条目只要未被改动就一直算数，即使团队后来把其中的 `${VAR}` 改成了字面值。worktree 中完全没有 `managed-mcp.json` 时（记录丢失，或在其第一次 pull 之前），未被 git 跟踪的配置只要含有任何记录都未认领的 server 就算数，你自己的 server 也包括在内：pull 会像重建丢失的记录时那样把这些 server 记入 `managed-mcp-files.json`，在它们离开该文件之前该路径一直保留；`teamai doctor` 也按同样方式检查。`managed-mcp.json` 中没有某个工具的记录时（记录丢失，或这是 teamai 对该工具的第一次投递），pull 为该工具写入第一份记录的配置也按此处理。git 无法判断是否忽略的路径，只要 `git ls-files` 显示该文件未被跟踪，也会照样写入，但只有在 git 确认忽略该路径（`git check-ignore`）之后才会写入值；在此之前，以及 git 连是否跟踪该文件也无法判断时，都按 git 出错处理。若无法写入——`.git/info` 或 exclude 文件不可写、另一个 teamai 命令在短暂等待后仍占用 exclude 文件、git 已跟踪该文件、你自己的 git 忽略文件中有规则重新包含了它（例如 `!/.mcp.json`；警告会指出该规则），或 git 出错——teamai 会保持该文件原样（之前 pull 写入的条目保留），给出原因与修复方法的警告，`teamai mcp list` 和 `teamai doctor` 也会针对 pull 会写入它的每个工具，把该 server 报告为未写入（withheld）；请让文件可写（或对已跟踪的文件执行 `git rm --cached`，或删除重新包含它的规则），再运行 `teamai pull`。已被跟踪的文件会优先报告，且不会写入任何路径。不会改动已提交的 `.gitignore`，你自己的规则已忽略的路径不会重复添加（只被 teamai 自己的块忽略的路径，例如[让分发的文件不进入 git](#让分发的文件不进入-git)中的 `delivered` 块，仍会写入一行，因为这些块会随该选项、团队配置和 `uninstall --agent` 变化），pull、`teamai mcp remove` 和 `teamai uninstall` 会从块中移除某个路径（移除最后一个路径时连同整个块），前提是该文件已不存在、不含任何 MCP server，或在命令运行前 teamai 的写入记录（`managed-mcp.json`）就已存在、可以解析且记有该文件所属工具的条目的情况下（对于两个工具共用的文件，例如 Claude 和 CodeBuddy 共用的 `.mcp.json`：需记有 `managed-mcp-files.json` 中写入过解析值的每个工具的条目；若其中没有列出任何工具，则需记有映射到它的每个工具的条目；空的、无法读取或被截断的记录不能作为依据；pull 重建记录时、或在 `managed-mcp.json` 中没有该工具的记录时写入记录时，若无法把文件中的其他 server 记入 `managed-mcp-files.json`，该记录在之后某次 pull 记下它们之前也不能作为依据）不含以下任何一项：带解析值的团队 server、清理后仍残留的 teamai 条目、teamai 重建丢失的 `managed-mcp.json` 时文件中已有的 server、仍在环境中设置的变量的值（8 个字符以上）。在已改动的映射下写入的文件、团队已移除或改到别处的工具的内置位置上的文件（当前有另一个工具映射到它的除外），或位于嵌套仓库某个关联 worktree 中的文件，须已不存在或不含任何 MCP server。为团队此后改到别处的工具写入（有记录、在上述历史中找到，或位于该工具的内置位置）、但仍被另一个工具的映射指向的文件，只要含有当前映射到它的工具未写入的 server（以它们的 `managed-mcp.json` 记录为准），也会保留该路径；与其他在已改动映射下写入的文件一样，你自己的 server 也会让它保留。`teamai uninstall` 会先从仓库每个 checkout 中的该文件移除 teamai 的 server，再逐一按此判断（包括 `--separate-git-dir` 仓库或 submodule 的主 checkout，从 linked worktree 运行时也是如此）；pull 和 `teamai mcp remove` 只对当前 worktree 的文件按此判断，只要其他任一 checkout 中的该文件仍含 MCP server，就保留该路径，直到在那里运行的 pull 将其清理：那个 worktree 上次 pull 写入的条目（例如团队后来改成字面值的 `${VAR}`）只能由在那里运行的 pull 判断。某次 pull 写入了路径、随后却没有把值写进该文件（文件无法解析，或其中有你自己的同名 server）时，该路径会在这次 pull 结束时移除，它在 `managed-mcp-files.json` 中的记录也会一并移除。否则，或对无法检查的文件（例如无法解析），会保留该路径，`teamai uninstall` 会给出警告，说明文件及原因：请先从中移除 teamai 的 server，再自行删除那一行（删到最后一行时连同块的首尾标记）。`teamai doctor` 会报告 git 仍会提交或无法判断的这类文件——例如已被跟踪的文件：请 `git rm --cached` 并轮换 token。Copilot 项目级配置中直接写在顶层（bare）的 server，在另一个工具也向同一文件写入 `mcpServers` 之后同样算数；其中属于 teamai 的，在团队删除它们后会被移除。对于 HTTP 模式的团队（`teamai init --http`），server 不由 pull 写入，而由本地 agent 的 `install_mcp` 写入，写入的是值本身而非 `${VAR}` 引用，因此项目级 server 只要带有任何 header、env 值或参数、URL（token 可能就在路径里），或带参数的命令行，就视为含有凭据；只有不带参数的 stdio 命令不算。安装时会先把该文件写入 exclude 并记入 `managed-mcp-files.json`；若无法写入（原因同上），则不写入任何内容，并把本次安装报告为失败，附上原因。旧版本地 agent 写入了凭据却未写入 exclude 的文件，会由本地 agent 在该工作区的下一次同步（其 hook 在每个会话中都会运行一次）以及在那里运行的 `teamai pull` 写入 exclude 并记入 `managed-mcp-files.json`，判断方式与下文 `teamai doctor` 相同；dry run 不写入任何内容。除 `teamai uninstall` 外，没有命令会移除这样的路径。`teamai doctor` 按本地 agent 的记录检查这些文件：记录为带有凭据的 server，或旧版安装写入的带凭据的条目；没有该工具的记录时，`managed-mcp-files.json` 列出的文件只要还有 server 也算；对它指出的文件，请自行把路径加入 `.git/info/exclude`，或 `git rm --cached` 并轮换 token。
 
-Claude Code 可能把来自仓库的 `.mcp.json` 标为待批准，需在交互式会话中确认一次。local scope 中的 server（开启 `sharing.gitExclude` 时，见上文）无需批准。
+Claude Code 可能把来自仓库的 `.mcp.json` 标为待批准，需在交互式会话中确认一次。local scope 中的 server（开启 `sharing.gitExclude` 时，见上文）无需批准，CodeBuddy 的也是如此。
 
 ```bash
 teamai mcp list              # 查看 server、各自来自哪个文件、密钥状态与安装位置
@@ -1550,7 +1557,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 /.claude/rules/fe/style.md
 /.claude/rules/teamai-context.md
 /.claude/settings.local.json
-/.claude/skills/code-review/
+/.claude/skills/code-review/SKILL.md
 # [teamai:delivered:end]
 ```
 
@@ -1558,7 +1565,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 
 该块列出：
 
-- skill，每个 skill 目录一行：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，以及 Codex 在 `.agents/skills/<name>/` 中的副本。若团队 skill 绕开了你的一个类型不同的条目（团队是目录而你是文件，或反之）下发，则改为每个文件一行，你的条目保持可见；
+- skill 每个文件一行，从不列 skill 目录，因此你在已分发的 skill 中自己添加的文件仍然可见、可以添加：团队、角色、项目和 source 的 skill，CLI 自带的 `teamai` skill，Codex 在 `.agents/skills/<name>/` 中的副本，以及 Copilot 在 `.github/skills/<name>/` 中的副本；你在已分发 skill 中类型不同的条目（团队是目录而你是文件，或反之）及其下的内容不会列出，因此保持可见；
 - rule 每个文件一行，从不列目录，因此你放在旁边的自己的文件仍然可见：包括命名空间子目录（`.cursor/rules/fe/style.mdc`）、扁平化的文件名（`.kiro/steering/fe.style.md`）以及 `.github/instructions/**/*.instructions.md`；
 - agent，以及 `teamai-recall` rule 和 agent；
 - 你的 `teamai-context` 文件（`.claude/rules/teamai-context.md`、`.cursor/rules/teamai-context.mdc`、`.codebuddy/rules/teamai-context.md`、`.opencode/teamai-context.md`、`.github/instructions/teamai-context.instructions.md`）；
@@ -1567,7 +1574,7 @@ AI 编码工具会在它生成的提交上打一个 `Co-Authored-By:` / attribut
 - 在 OpenCode V2 上，teamai 插件读取团队 MCP server 的 `.opencode/teamai-mcp.json`（见 [OpenCode](#opencode)）；
 - 只含 teamai 条目、且 git 未跟踪的共享配置文件：项目 MCP 配置 `.cursor/mcp.json`、`.github/mcp.json`、`.codex/config.toml`、`.kiro/settings/mcp.json`、`.omp/mcp.json`、`.pi/mcp.json`、`.workbuddy/mcp.json` 以及 OpenCode V1 下根目录的 `opencode.json`；`.codex/hooks.json`；以及 OpenCode V1 下的 `.opencode/opencode.json`。「只含 teamai 条目」指其中每个 server、团队 hook 或 `instructions` 条目都属于 teamai，且没有其他顶层键（`$schema` 也算一个）。teamai 没有记录的条目，只要与 teamai 为某个团队 server 或 hook 写入的内容（当前或团队更早的版本）相同，也算 teamai 的，因此升级前写入的文件、或记录丢失后的文件同样会被列出；`.opencode/opencode.json` 的 `instructions` 条目没有记录，与 teamai 写入的条目相同即算。
 
-CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json` 不会列出。开启此选项后，teamai 把 Claude 的项目级 MCP server 写入 `~/.claude.json` 中 Claude Code 的 local scope，而不是 `.mcp.json`（见 [MCP server](#mcp-server)），并且不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
+`.mcp.json`（安装并启用 tclaude 时 Claude 仍写入它）以及 Qoder 的 `.qoder/settings.json` 不会列出。开启此选项后，teamai 把 Claude 和 CodeBuddy 的项目级 MCP server 分别写入 `~/.claude.json` 和 `.codebuddy.json` 中各自的 local scope，而不是 `.mcp.json`（见 [MCP server](#mcp-server)），并且不再写入 `.github/copilot-instructions.md`：Copilot 改从 `.github/instructions/teamai-context.instructions.md` 获得这些块（见[这些块写到哪里](#这些块写到哪里)），下一次 pull 会从团队的文件中移除 teamai 的块。关闭此选项后，下一次 pull 会把它们移回去。
 
 被排除的 skill、rule 和 agent 仍会被 AI 工具加载：只有 git 忽略它们。遵循 git 忽略规则的搜索（ripgrep、大多数编辑器的搜索、agent 的搜索工具）会跳过它们，因此请按路径打开被排除的文件；`teamai skill path <name>` 会输出 CLI 内置 skill 所在的位置。
 
@@ -1593,13 +1600,14 @@ CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json` 不会列出�
 - 改动在下一次 `teamai pull` 生效，包括会话开始时的 pull，即使该 pull 发现团队仓库未变（"Already synced"）也一样：无需 `--force`。单仓模式下，对 `.teamai/teamai.yaml` 未提交的修改同样生效。
 - 只列出 teamai 在本 checkout 中写入、或确认归它所有的内容。位于 teamai 将要分发的路径上的你自己的文件（pull 会保留并指出它）仍然可见、可以 add。因你改过而被 pull 保留的副本，以及 teamai 不再分发、但仍留在磁盘上的副本（例如团队移除最后一个 source 之后的 source skill）同样如此。
 - 共享配置文件一旦含有其他内容（你自己的 server、hook 或 `instructions` 条目，或其他顶层键），就不再只属于 teamai。下一次 pull（包括会话开始时的 pull）会移除它的行，让 git 看到你的条目，并提示 ``<path> now holds entries teamai does not own, so git can see it.``。移除你的条目后，之后的 pull 会再次列出该文件。`.codex/hooks.json` 的处理见下一条。含有 teamai 解析值的 MCP 配置无论还含有什么，都留在 `mcp-exclude` 块中（见 [MCP Server](#mcp-server)），因此 git 仍看不到它，pull 也不会提示。
+- 当 git 无法回答它是否跟踪这样的文件时（索引损坏、git 出错），该文件保留上一次 pull 给它的行，pull 失败并提示 ``git could not say whether it tracks <path>: <error>.``。后台 pull 会把这条失败留给下一次交互式 pull 和 `doctor`。
 - Codex 团队 hooks：只要 `.codex/hooks.json` 含有不属于 teamai 的内容（仓库跟踪了它，或其中有你自己的 hook 或其他顶层键），teamai 就不再往其中写入团队 hook。团队的 Codex hooks 改由 `~/.codex/hooks.json` 中每个事件一条的条目运行：`teamai hook-dispatch <Event> --tool codex --team-hooks`，与内置条目并列。它按 Codex 的方式运行 Codex 会话工作目录所属项目的团队 hooks：匹配 matcher，遵守每个 hook 自己的超时（超时仍在运行的 hook 会被终止），把输出写到 stdout，并传递退出码 2 及其消息（即阻止）。在其他目录中它什么都不运行。该条目的超时取该事件所有团队 hook 超时中的最大值，未设超时的 hook 按 Codex 默认的 600 秒计。切换发生在发现变化的那次 pull：它把 teamai 的条目（无论有无记录）移出该文件，因此不会有团队 hook 运行两次；文件被删除，或再次只含 teamai 的条目后，下一次 pull 会把它们写回。teamai 会在 Codex 中信任这些条目；它们不含项目路径，因此 worktree 增减时信任依然有效。`teamai uninstall` 会从中移除该项目的团队 hooks，以及其他项目不再需要的条目。
 - 已知限制：这类文件始终未被跟踪。如果队友提交了同一路径的文件、而你运行 `git pull`，git 会直接覆盖你被排除的副本，不会询问。teamai 的条目会在你下一次 `teamai pull` 时回来，合并进这个已被跟踪的文件，但你在上一次 teamai 运行之后添加的条目会丢失。
 - 一个块服务于该克隆的所有 worktree：它列出每个仍存在的 checkout 上一次 pull 在那里分发的内容，因此在一个 worktree 中 pull 不会移除另一个 worktree 的行，用 `git init --separate-git-dir` 创建的仓库以及作为 submodule 的项目也是如此。你移除或 prune 的 worktree，其行会在任一 checkout 的下一次 pull 中移除。
 - 某个路径在另一个 checkout 中是你自己的文件（teamai 没有在那里分发它）时，该路径不写入任何行，因为这一行也会把那个文件隐藏：pull 会指出该路径，git 在每个 checkout 中都会显示它。linked worktree 中你自己的 `.claude/settings.local.json` 不在此列。某个 checkout 跟踪、而另一个 checkout 中由 teamai 分发且未被跟踪的文件仍会列出；被跟踪的那份的改动 git 照样显示。
 - 本身是 submodule 或嵌套克隆的工具目录（例如用 `git submodule add` 加入的 `.claude`），以及纳入 git 管理的工具 home（Hermes 的 `~/.hermes/skills`），其行写入那个仓库自己的 `.git/info/exclude`，放在以项目命名的块中（`# [teamai:delivered/<id>:start]`）。superproject 不再把该 submodule 显示为已修改，共用同一工具 home 的各项目只管理自己的块。
 - 切换角色或项目后，下一次 pull 会移除原选择对应的行。pull 未重写但仍归 teamai 所有的副本（因模型无法解析而暂缓的 agent、团队 hook 文件无法解析时的 hook 文件）仍会列出。
-- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用），无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.`` teamai 绝不删除 git 跟踪的文件。布局迁移改在别处写入该资源时（例如 Cursor rule 旧的 `.md` 副本），会保留已跟踪的旧副本，并补充一句：``The resource now lives at <new path>, and the tool may load both until the repository removes this copy.`` `teamai remove`、`teamai source remove` 和 `teamai uninstall` 会删除其余内容，并以同样方式指出每个已跟踪的路径；uninstall 的摘要把它们列在 `Kept (tracked)` 下。
+- 你的仓库已跟踪的分发副本不会被列出（对它加一行不起作用）；在 skill 中只有被跟踪的那个文件不列出，该 skill 的其他已分发文件仍各有一行。无论该设置如何，pull 也绝不删除它：teamai 不再分发它时（切换角色或项目、团队或 source 移除它），pull 会保留它，而不是在 `git status` 中留下一条删除，并在每次本应删除它时指出：``Kept <path>: this repository tracks it, so teamai does not delete it. Run `git rm -r <path>` and commit if the repository no longer needs it.`` teamai 绝不删除 git 跟踪的文件。布局迁移改在别处写入该资源时（例如 Cursor rule 旧的 `.md` 副本），会保留已跟踪的旧副本，并补充一句：``The resource now lives at <new path>, and the tool may load both until the repository removes this copy.`` `teamai remove`、`teamai source remove` 和 `teamai uninstall` 会删除其余内容，并以同样方式指出每个已跟踪的路径；uninstall 的摘要把它们列在 `Kept (tracked)` 下。
 - 关闭后，下一次 pull 只移除该项目的 `delivered` 块：你自己的行以及 teamai 的其他块（例如 MCP 的块，见 [MCP Server](#mcp-server)）保持不变。
 - 团队的 `teamai.yaml` 缺失或校验失败、且你没有设置 `gitExcludeEnabled` 时，该设置是未知的，而不是关闭：pull 保持 `delivered` 块原样并按失败处理，提示 ``teamai could not read sharing.gitExclude from the team's teamai.yaml (<path>), so it left its delivered git exclude blocks as they were. …``；`teamai doctor` 以同一行失败，并把来源显示为 `team config unreadable`。修复或恢复 `teamai.yaml`，或设置 `gitExcludeEnabled`，然后运行 `teamai pull`。HTTP 模式没有团队设置：由你的 `gitExcludeEnabled` 或默认值决定。
 - 无论该设置如何，teamai 都会记录每次 pull 向某个 checkout 分发的内容；因此从不保存这份记录的版本升级后，第一次 pull 一定是完整同步，而不会是 "Already synced"。
@@ -1616,14 +1624,14 @@ CodeBuddy 的 `.mcp.json` 以及 Qoder 的 `.qoder/settings.json` 不会列出�
 
 **卸载。** `teamai uninstall` 在删除这些块所隐藏的文件之后移除 teamai 的块，`uninstall --agent <tool>` 只移除该工具的行；见[卸载](#卸载)。
 
-**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
+**HTTP 模式。** 本地 agent 在项目中安装的 skills 和 rules 有自己的块 `# [teamai:local-agent:start]`，每个安装的文件一行（你在已安装的 skill 中添加的文件仍然可见），写在各自所落仓库的 exclude 文件中，前提是该项目的选项开启：项目 `config.yaml` 中的 `gitExcludeEnabled`，没有时取 `~/.teamai/config.yaml` 中的（HTTP 团队没有 `teamai.yaml` 设置）。
 
 - 每次会话启动结束时，agent 都会根据自己的记录和各项目的选项更新该块，因此开启或关闭该选项后，无需安装任何新内容，下一次会话启动即生效。agent 的其他运行（每次提问、工具调用和停止时）只在项目中安装或移除了 skill、rule 之后，或其记录、某个 `config.yaml` 自上次更新以来有变化时才更新该块。写过的 exclude 文件记录在 `~/.teamai/local-agent/git-exclude.json`。已不存在的 checkout 不贡献任何行。pull 从不移除这个块。
 - agent 无法更新该块时（exclude 文件不可写、git 出错），会把失败记录在 `~/.teamai/local-agent/git-exclude-notices.json`，直到某次更新成功：下一次交互式 `teamai pull` 打印一次，前缀为 `A local agent sync (<time>)`；在此之前 `teamai doctor` 的 `Last local agent sync could not keep its git exclude block up to date` 检查失败。agent 安装过内容的项目若遵循一个 git 模式配置，而其团队 `teamai.yaml` 无法读取、又未设置 `gitExcludeEnabled`，则保留已有的行，agent 将其记录为失败并指出要修复的文件；期间该项目中的每次安装或卸载都会失败、不写入任何内容，并指出项目、无法读取的文件以及两种解决办法：修复或恢复该 `teamai.yaml`，或在该项目的 `config.yaml` 中设置 `gitExcludeEnabled`。
 - 提示词（`CLAUDE.md` 片段）留在 agent 的缓存中，不会列出。
 - agent 要安装到的路径上若是你自己的文件，会被保留，安装失败并提示 ``Kept <path>: it is not teamai's (not in the local agent's records). Rename or delete it; the local agent installs <slug> on its next sync.`` 与下载内容相同的副本则归为 agent 所有。
-- `teamai uninstall` 从 agent 记录的每个 exclude 文件中移除该块，包括其他仓库的。`teamai source remove-http` 在卸载完每个资源后也会这样做。
-- agent 写入项目 `.codebuddy/models.json` 的模型 API key，无论该选项如何都会列入 `# [teamai:credentials:start]` 块，并且不会写到 git 会提交的位置（见 [HTTP 契约](#http-契约面向后端实现者) 中的 `apply_model_config`）。这些 exclude 文件也记录在同一个 `git-exclude.json` 中。
+- 项目的 `teamai uninstall` 只移除该项目的行：agent 仍为你的其他工作区服务，因此它们的行保留，无论在其他仓库中，还是在该项目与 linked worktree 共用的 exclude 文件中。卸载 user scope 会移除 agent，并从它记录的每个 exclude 文件中移除该块；`teamai source remove-http` 在卸载完每个资源后也会这样做。
+- agent 写入项目 `.codebuddy/models.json` 的模型 API key，无论该选项如何、也无论 teamai 的其他块是否已列出它，都会列入 `# [teamai:credentials:start]` 块，并且不会写到 git 会提交的位置（见 [HTTP 契约](#http-契约面向后端实现者) 中的 `apply_model_config`）。这些 exclude 文件也记录在同一个 `git-exclude.json` 中。
 
 **单仓模式。** 该设置开启时：
 
@@ -2652,7 +2660,9 @@ teamai source list
 teamai source remove-http
 ```
 
-HTTP 源通过 hook dispatch 在每次 session 中上报状态并拉取 skill 指令。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
+HTTP 源通过 hook dispatch 上报状态并拉取 skill 指令。其他 HTTP 源操作持有锁时，hook 同步会跳过，后续 hook 事件会再次尝试。每个安装仅支持一个 HTTP 源。若主仓本身已是 HTTP 模式（`init --http`），则 `add-http` 不可用（主仓已占用 HTTP 配置）。
+
+`source remove-http` 会等待正在运行的 HTTP 同步或插件协调结束，最多等待 30 秒。若无法获得共享锁，命令以退出码 1 结束且不开始清理；请等当前操作结束并检查目录权限后重试。获得锁后，命令会先禁用源，再清除 endpoint、凭据和缓存，并保留禁用配置，防止旧配置或环境变量重新连接。若某个 hook 无法移除，其记录会保留，命令以退出码 1 结束。修好命令指出的 settings 文件后再次运行即可。`source add-http` 或 `init --http` 可重新启用源。
 
 ---
 
@@ -2737,7 +2747,7 @@ sharing:
         retries: 3             # 可选，失败重试次数（默认 3）
 ```
 
-`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。你在团队曾有文档的位置放置的目录会整体保留，并以同样方式指出。你在镜像中团队从未有过的路径上放置的链接也会保留，并被指出（`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`）。团队仓库的历史无法读取时（团队克隆不是 git 仓库，或 git 出错），不会删除任何本地文件，因为无法证明它属于 teamai。过期的空目录也会删除，隐藏文件和隐藏目录会保留。团队仓库历史中从未出现过的路径上你自己的文件会保留，既不改动也不提示。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，且只替换团队历史能证明属于 teamai 的条目：团队现在是目录、本地是文件的位置，或团队现在是文件、本地是目录且其中每个文件都是团队版本的位置。其他这类条目属于你，会像上文的文件一样保留并被指出；链接也是如此，除非团队在该位置有相同的链接；pull 从不跟随链接。替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
+`teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。你在团队曾有文档的位置放置的目录会整体保留，并以同样方式指出。你在镜像中团队从未有过的路径上放置的链接也会保留，并被指出（`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`）。若 `sharing.docs.localDir` 本身是链接，它属于你：pull 不会通过它写入任何文档，也不会删除它指向的任何内容，并会指出它（`Kept <path>: it is a link of yours, so teamai delivers no docs through it. ...`）；`teamai doctor` 的 `Team docs delivered` 会以这一行失败；`teamai uninstall` 会保留它及其指向的内容。团队仓库的历史无法读取时（团队克隆不是 git 仓库，或 git 出错），不会删除任何本地文件，因为无法证明它属于 teamai。过期的空目录也会删除，隐藏文件和隐藏目录会保留。团队仓库历史中从未出现过的路径上你自己的文件会保留，既不改动也不提示。镜像不记录它写入的内容，因此团队文档路径上的文件，只有与团队仓库历史中该文档的某个版本相同时才算 teamai 的；其他文件属于你：pull 会保留它，并用上文的 `Kept <path>: it is not teamai's ...` 一行指出，`teamai doctor` 会在 `Team docs delivered` 中列出它；你将它改名或删除并运行 `teamai pull` 后，团队版本才会写到该路径。目标目录若与团队仓库重叠，或包含主目录／项目根目录，会被拒绝同步；若目标本身就是团队的 `docs/`，则无需复制或清理。同名路径的文件／目录类型变化会先准备替换内容，且只替换团队历史能证明属于 teamai 的条目：团队现在是目录、本地是文件的位置，或团队现在是文件、本地是目录且其中每个文件都是团队版本的位置。其他这类条目属于你，会像上文的文件一样保留并被指出；链接也是如此，除非团队在该位置有相同的链接；pull 从不跟随链接。替换失败时恢复冲突的本地条目。若待替换目录含本地隐藏条目，需先移走这些条目；同步不会丢弃它们。复制失败时不会继续清理。`teamai pull --dry-run` 只预览同步，不修改文件；对于旧版 CLI 已同步过的版本，可用 `teamai pull --force` 清理历史残留。
 
 ### config.yaml（本地配置）
 
@@ -2937,7 +2947,8 @@ teamai uninstall --agent claude
 
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
-- AI 工具 settings 中的 teamai hooks
+- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，卸载会报告未完成（退出码 1），并排除该工具，使留下的 hooks 不会把任何内容同步回来；修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 也会保留未移除的 agent hook 记录，禁用 HTTP 源，并以退出码 1 结束。
+- 用户级卸载时的 HTTP 源（`init --http`），移除方式与 `teamai source remove-http` 相同：卸载会等待正在运行的 HTTP 同步或插件协调结束，最多 30 秒；若无法获得该锁，则以退出码 1 结束，不移除任何内容
 - 各工具指令文件中的 teamai 块（文化、共享指令、recall），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 没有自身 rules 格式的工具在用户作用域读取的文件中的团队规则块（`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`、OpenClaw workspace 的 `AGENTS.md`、`~/.pi/agent/AGENTS.md`、`~/.joycode/rules.txt`）；该文件若是 teamai 只为这个块创建的，则整个删除
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
@@ -2945,7 +2956,7 @@ teamai uninstall --agent claude
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
-- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 在其记录的每个 exclude 文件中的 `local-agent` 块（包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
+- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。卸载未完成时，仍在磁盘上的文件的行全部保留，留待重试时移除。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
 - 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
 - `~/.teamai/` 目录
@@ -2960,9 +2971,9 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
 
-在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
+在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）；卸载未完成时，仍在磁盘上的路径也保留其行。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
 
-跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
+跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes、OpenCode 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
 
 已启用且已安装的 Pi、Oh My Pi、Hermes 或项目级 Codex 通过全局投递通道继续使用项目状态，即使项目中没有该工具的本地目录。卸载其他工具时会保留此状态，以便剩余工具继续投递该项目的指令。
 
@@ -2970,7 +2981,7 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 项目级卸载保留 Pi 和 Oh My Pi 的全局扩展、Hermes 的全局插件和配置、OpenCode 的用户级插件（它也为 V2 提供规则和指令）、Codex 系列的用户级 hooks 以及服务端下发的 agent hooks，因为本机的用户级安装、HTTP agent 或其他项目可能仍在使用它们，并在摘要中列出。若没有其他安装使用它们，请在卸载前于该项目中运行 `teamai hooks remove`，它会移除这些内容。定向项目级 Codex 卸载保留项目配置以记录排除设置，仅清理项目拥有的资源和旧 hook 副本。单工具卸载在项目配置仍保留时，将该工具加入此项目的排除列表。用户级卸载才移除这些全局投递通道。
 
-该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步和缓存 HTTP prompt 注入。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步、缓存 HTTP prompt 注入以及 session-start 时的 pull。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
 
 同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及团队指令块：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
 

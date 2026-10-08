@@ -124,13 +124,10 @@ export async function reconcileCodexDispatchers(hooksFile: string): Promise<void
       timeouts.set(hook.event, Math.max(timeouts.get(hook.event) ?? 0, timeout));
     }
   }
-  const read = await readJsonObject(hooksFile);
-  if (read.kind === 'missing' && timeouts.size === 0) return;
-  if (read.kind === 'invalid') {
-    log.warn(`Left ${hooksFile} as it is: it is not a JSON object, so the Codex team-hook dispatchers are not in it. Fix the file, then run \`teamai pull\`.`);
-    return;
-  }
-  const doc = (read.kind === 'ok' ? read.value : {}) as { hooks?: Record<string, CodexHookGroup[]> };
+  if (timeouts.size === 0 && (await readJsonObject(hooksFile)).kind === 'missing') return;
+  // One that does not parse is left byte-identical, as every hook writer leaves it (#993).
+  const { readHookFile } = await import('./hooks.js');
+  const doc = await readHookFile<{ hooks?: Record<string, CodexHookGroup[]> }>(hooksFile, {});
   const all = doc.hooks && typeof doc.hooks === 'object' ? doc.hooks : {};
   const isDispatcher = (group: CodexHookGroup) => isCodexTeamHookDispatcher(group?.hooks?.[0]?.command ?? '');
   let changed = false;

@@ -40,9 +40,9 @@ members pick them up on sync.
 
 A server with a `${VAR}` the tool cannot expand itself gets the resolved value
 written into its project config (`.mcp.json`, `.cursor/mcp.json`, ...). With
-`sharing.gitExclude` on, Claude's servers go to Claude Code's local scope in
-`~/.claude.json` instead, outside the project, and the next pull moves teamai's
-servers out of `.mcp.json`. Before
+`sharing.gitExclude` on, Claude's and CodeBuddy's servers go to their local
+scopes in `~/.claude.json` and `.codebuddy.json` instead, outside the project,
+and the next pull moves teamai's servers out of `.mcp.json`. Before
 that write, teamai lists the file in the clone's `.git/info/exclude`, inside a
 `# [teamai:mcp-exclude:start]` block; the committed `.gitignore` is never touched.
 A file under a symlinked directory is listed and checked where the write lands
@@ -195,7 +195,8 @@ necessarily the project's manifest id.
 ## Keep delivered files out of git
 
 With `sharing.gitExclude.enabled: true` in `teamai.yaml`, each member's pull lists
-the skills, rules (one file per line), agents, `teamai-context` files, hook
+the skills and rules (one file per line, never a skill's directory, so a file a
+member adds to a delivered skill stays visible), agents, `teamai-context` files, hook
 files and team docs (one file per line) it delivered into a project, and each shared
 config file (MCP, `.codex/hooks.json`, OpenCode's) while it holds only teamai's entries,
 in teamai's `delivered` block in the clone's

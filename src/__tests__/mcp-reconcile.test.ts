@@ -1082,6 +1082,27 @@ servers:
       expect(Object.keys((await fse.readJson(path.join(projectRoot, '.mcp.json')) as { mcpServers: object }).mcpServers)).toEqual(['x']);
     });
 
+    it('restores a file two tools write through linked paths to what it was before the run, when ownership cannot be saved', async () => {
+      const shared = { ...teamConfig, toolPaths: TOOL_PATHS } as TeamaiConfig;
+      await fse.ensureDir(path.join(projectRoot, '.cursor', 'skills'));
+      await fse.writeJson(path.join(projectRoot, '.mcp.json'), {});
+      await fse.symlink('../.mcp.json', path.join(projectRoot, '.cursor', 'mcp.json'));
+      await writeMcpYaml('servers:\n  - name: x\n    transport: http\n    url: https://example.com/x\n    tools: [claude, cursor]\n');
+      await reconcileMcpForConfig(shared, projectConfig);
+      const before = await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf8');
+      const { getDataHome, managedMcpManifestPath } = await import('../types.js');
+      const manifestDir = path.dirname(managedMcpManifestPath(getDataHome(projectConfig), projectRoot));
+      await writeMcpYaml('servers:\n  - name: x\n    transport: http\n    url: https://example.com/x2\n    tools: [claude, cursor]\n'
+        + '  - name: y\n    transport: http\n    url: https://example.com/y\n    tools: [cursor]\n');
+      await fse.chmod(manifestDir, 0o555);
+      try {
+        await expect(reconcileMcpForConfig(shared, projectConfig)).rejects.toThrow();
+      } finally {
+        await fse.chmod(manifestDir, 0o755);
+      }
+      expect(await fse.readFile(path.join(projectRoot, '.mcp.json'), 'utf8')).toBe(before);
+    });
+
     it('never lets one format\'s record claim a server of the same name under another format\'s key', async () => {
       const toolPaths = {
         ...UNMOVED_TOOL_PATHS,

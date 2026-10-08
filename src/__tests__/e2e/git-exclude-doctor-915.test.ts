@@ -265,22 +265,23 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     const m = member('on');
     const app = m.project(path.join(caseDir('on'), 'app'), { before: (dir) => write(path.join(dir, '.claude/skills/fe-skill/SKILL.md'), skillMd('fe-skill')) });
     const exclude = excludeFileOf(m, app);
-    expect(blockLines(exclude)).toEqual(expect.arrayContaining(['/.claude/rules/team-rule.md', '/.claude/skills/fe-skill/', '/.claude/skills/teamai/']));
+    expect(blockLines(exclude)).toEqual(expect.arrayContaining(['/.claude/rules/team-rule.md', '/.claude/skills/teamai/SKILL.md']));
+    expect(blockLines(exclude)).not.toContain('/.claude/skills/fe-skill/SKILL.md');
 
     const healthy = m.teamai(['doctor'], app);
     expect(healthy).toContain('Git exclude for delivered team resources: on, from sharing.gitExclude.enabled: true in the team\'s teamai.yaml.');
     expect(healthy).toContain('✔ Delivered team resources are kept out of git');
-    expect(healthy).toContain(`.claude/skills/fe-skill is delivered by teamai, but git tracks .claude/skills/fe-skill/SKILL.md in it in ${app}, so their changes stay visible. `
-      + 'Run `git rm -r --cached .claude/skills/fe-skill` there and commit if the repository should not hold it.');
+    expect(healthy).toContain(`.claude/skills/fe-skill/SKILL.md is delivered by teamai, but git tracks it in ${app}, so teamai lists no line for it. `
+      + 'Run `git rm --cached .claude/skills/fe-skill/SKILL.md` there and commit if the repository should not hold it.');
 
     write(path.join(app, '.gitignore'), '!/.claude/rules/team-rule.md\n');
     const content = read(exclude);
-    write(exclude, `${content.replace('/.claude/skills/teamai/\n', '').replace('# [teamai:delivered:end]\n', '/gone.md\n# [teamai:delivered:end]\n')}# [teamai:delivered:end]\n`);
+    write(exclude, `${content.replace('/.claude/skills/teamai/SKILL.md\n', '').replace('# [teamai:delivered:end]\n', '/gone.md\n# [teamai:delivered:end]\n')}# [teamai:delivered:end]\n`);
     const endLine = read(exclude).split('\n').length - 1;
 
     const broken = m.teamai(['doctor'], app);
     expect(broken).toContain('✖ Delivered team resources are kept out of git');
-    expect(broken).toContain(`Not listed in ${exclude}: .claude/skills/teamai. Run \`teamai pull\` to list them.`);
+    expect(broken).toContain(`Not listed in ${exclude}: .claude/skills/teamai/SKILL.md. Run \`teamai pull\` to list them.`);
     expect(broken).toContain(`git still sees .claude/rules/team-rule.md: \`!/.claude/rules/team-rule.md\` (${path.join(app, '.gitignore')}:1) re-includes it. Remove that rule.`);
     expect(broken).toContain(`${exclude} line ${endLine} ends teamai's block with no start marker: delete it, then run \`teamai pull\`.`);
     expect(broken).toContain(`Stale lines in teamai's delivered git exclude block in ${exclude}: /gone.md. The next \`teamai pull\` drops them.`);
@@ -292,7 +293,7 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(pulled).toContain('re-includes it');
     expect(pulled).not.toContain('Stale lines');
     expect(pulled).not.toContain('Git exclude for delivered team resources:');
-    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/SKILL.md');
     expect(blockLines(exclude)).not.toContain('/gone.md');
     expect(status(m, app)).toEqual(['?? .claude/rules/team-rule.md', '?? .gitignore']);
   }, 120_000);
@@ -349,7 +350,7 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     expect(listedAfter).toHaveLength(Number(line![1]));
     expect(listedBefore.filter((l) => !listedAfter.includes(l))).toHaveLength(Number(line![2]));
     expect(Number(line![2])).toBe(1);
-    expect(listedAfter).toEqual(expect.arrayContaining(['/.claude/rules/new-rule.md', '/.claude/rules/other-rule.md', '/.claude/skills/new-skill/']));
+    expect(listedAfter).toEqual(expect.arrayContaining(['/.claude/rules/new-rule.md', '/.claude/rules/other-rule.md', '/.claude/skills/new-skill/SKILL.md']));
 
     // Off, the preview names the block a pull would remove, and leaves it.
     setOverride(m, false);
@@ -578,11 +579,11 @@ describe.skipIf(process.platform === 'win32')('doctor, pull --dry-run and backgr
     const exclude = excludeFileOf(m, app);
     setOverride(m, true);
     fs.renameSync(path.join(teamClone(m), 'teamai.yaml'), path.join(teamClone(m), 'teamai.yaml.aside'));
-    write(exclude, read(exclude).replace('/.claude/skills/teamai/\n', ''));
+    write(exclude, read(exclude).replace('/.claude/skills/teamai/SKILL.md\n', ''));
 
     const pulled = m.run(process.execPath, [CLI, 'pull'], app);
     expect(pulled.output).not.toContain('could not read sharing.gitExclude');
-    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/SKILL.md');
     expect(status(m, app)).toEqual([]);
     const doctor = m.teamai(['doctor'], app);
     expect(doctor).toContain(`Git exclude for delivered team resources: on, from gitExcludeEnabled: true in ${m.partitionConfig()}.`);
@@ -631,7 +632,7 @@ describe.skipIf(process.platform === 'win32')('the git exclude setting in HTTP m
     write(config, `${read(config)}gitExcludeEnabled: true\n`);
     const on = await cli(['pull'], app);
     expect(on.code, on.output).toBe(0);
-    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/teamai/SKILL.md');
 
     write(config, read(config).replace('gitExcludeEnabled: true\n', ''));
     fs.rmSync(stub);

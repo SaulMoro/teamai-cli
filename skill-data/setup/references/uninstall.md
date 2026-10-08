@@ -92,7 +92,8 @@ and give it your team repo URL."*
   and retry the same uninstall command. Uninstall reports failure and keeps
   its ownership record and shared data directory, even for the last tool.
 - Project uninstall keeps the global Pi and Oh My Pi extensions, Hermes
-  plugin and config, and the Codex family's user-level hooks, which the user
+  plugin and config, OpenCode's user plugin, and the Codex family's
+  user-level hooks, which the user
   scope, the HTTP agent or another project may use, and names them. If none
   does, run `teamai hooks remove` in the project first: it removes them.
   Targeted project Codex uninstall keeps project config and records its
@@ -116,15 +117,17 @@ and give it your team repo URL."*
   once it has deleted the files they hid: the `delivered` block, the
   `delivered/<id>` block it keeps in another repository (a tool folder that is
   a nested clone or submodule, a tool home kept in git), the HTTP local
-  agent's `local-agent` block in every exclude file it recorded (another
-  repository's too), and every other `# [teamai:…]` block in those files. A file the user creates later at one of
+  agent's lines for this project (it keeps serving the other workspaces; a
+  user-scope uninstall removes its `local-agent` block in every exclude file it
+  recorded), and every other `# [teamai:…]` block in those files. A file the user creates later at one of
   those paths is visible to git. Their own lines stay, and so does another
   project's block in a shared repository. A read-only exclude file is left as
   it is, and the warning lists the lines to delete by hand. Copies in other
   worktrees stay on disk and become visible there. `--agent <tool>` drops only
   that tool's lines (`.agents/skills` too for Codex) from every worktree,
   keeping a path another tool in use reads. `--dry-run` lists the blocks under
-  `Git exclude blocks (teamai's):`. If another pull or push holds the
+  `Git exclude blocks (teamai's):`. An incomplete uninstall keeps the line of
+  every file still on disk until the retry. If another pull or push holds the
   project's sync lock, uninstall changes nothing and exits 1: run it again.
 - A `credentials` line stays, with a warning, while the models file it names
   still holds an API key in any checkout of that repository. MCP lines

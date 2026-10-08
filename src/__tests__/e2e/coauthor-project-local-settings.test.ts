@@ -182,6 +182,23 @@ describe.skipIf(process.platform === 'win32')('co-author setting in project scop
     expect(local.attribution).toEqual({ commit: '', pr: '' });
   }, 90_000);
 
+  it('leaves a settings.local.json that does not parse as it is, and writes the setting once it parses', async () => {
+    const project = makeBusinessRepo();
+    const localFile = path.join(project, '.claude', 'settings.local.json');
+    const broken = '{ "permissions": { "allow": ["Bash(npm test)"] }, \n';
+    writeFile(localFile, broken);
+    const result = await runCLI(['init', FAKE_URL, '--scope', 'project', '--agent', 'claude', '--force'], project);
+    expect(result.code, result.output).toBe(0);
+    expect(fs.readFileSync(localFile, 'utf8')).toBe(broken);
+
+    writeFile(localFile, '{ "permissions": { "allow": ["Bash(npm test)"] } }\n');
+    const pulled = await runCLI(['pull'], project);
+    expect(pulled.code, pulled.output).toBe(0);
+    const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
+    expect(local.permissions).toEqual({ allow: ['Bash(npm test)'] });
+    expect(local.attribution).toEqual({ commit: '', pr: '' });
+  }, 90_000);
+
   it('writes no project settings file of any other Claude-family tool', async () => {
     const project = makeBusinessRepo();
     const result = await runCLI(

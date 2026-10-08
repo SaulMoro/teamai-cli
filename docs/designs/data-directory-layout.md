@@ -103,7 +103,11 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 (`liveCheckoutRecords`), less paths that hold a file outside another live
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
-partition's anchor hash. The docs writer reports each doc file it wrote, never
+partition's anchor hash. Skill writers (team, source, built-in, Codex's
+`.agents/skills`, the local agent) report each file they wrote into a skill,
+never its directory, which the git exclude module refuses to list, so a file
+the member adds inside a delivered skill stays visible; a tracked file there
+gets no line while the skill's other files keep theirs. The docs writer reports each doc file it wrote, never
 an entry of the member's it kept nor a doc beneath one; with the mirror at
 `<root>/.teamai/docs`, outside single-repo mode, the sync also keeps teamai's
 block (`!/docs/**`) in `<root>/.teamai/.ignore` so ripgrep-based search finds
@@ -604,6 +608,20 @@ any tool writes it and restores those snapshots if saving ownership or a later
 config write fails. File records added by that failed run are cleaned up before
 Git protection is checked against the restored configs. If restoration also
 fails, the command reports both failures and keeps credential files excluded.
+
+HTTP source removal keeps `~/.teamai/local-agent/config.json` as `{disabled:true}`,
+without an endpoint or credentials, so legacy config and environment fallback
+cannot reconnect. Failed agent-hook removals retain `agent-hooks.json` and report
+exit code 1; removal can retry without an active source. HTTP initialization
+replaces the disabled config to enable a source again.
+
+Sync, detached plugin reconciliation and HTTP source removal share `~/.teamai/.local-agent-sync-lock`, outside the
+cache directory cleanup. A user-scope `teamai uninstall` removes the source the same way before its other steps. A sync runs a server-pushed
+`uninstall_teamai` command while it holds the lock, and passes it on: that
+uninstall's process, the sync's child, neither waits for the lock nor releases it. Each reloads config after acquiring the lock. Removal
+waits up to 30 seconds for the current operation, disables before teardown, and
+reports failure without teardown if the lock cannot be acquired. A hook sync
+skips while the lock is held; plugin reconciliation waits up to 30 seconds.
 
 `git worktree add` takes a path outside the repo, and the owning repo is still
 the business repo, whose refs every checkout shares. The search index is keyed

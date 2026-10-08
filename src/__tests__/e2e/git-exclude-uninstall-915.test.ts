@@ -67,7 +67,7 @@ const TEAM = {
   'rules/team-rule.md': '# Team\n\nTeam rule.\n',
 };
 const ON = 'sharing:\n  gitExclude:\n    enabled: true\n';
-/** The flag on, and one MCP server whose header teamai resolves into the project's `.mcp.json`. */
+/** One MCP server whose header teamai resolves into the project's `.mcp.json`. */
 const MCP_TEAM = {
   ...TEAM,
   'mcp/mcp.yaml': [
@@ -76,7 +76,7 @@ const MCP_TEAM = {
   ].join('\n'),
   'env/env.yaml': `variables:\n  - key: LAB_TOKEN\n    value: "${TOKEN}"\n`,
 };
-const MCP_ON = 'sharing:\n  gitExclude:\n    enabled: true\n  mcp:\n    autoApply: true\n';
+const MCP_OFF = 'sharing:\n  gitExclude:\n    enabled: false\n  mcp:\n    autoApply: true\n';
 
 interface Member {
   home: string;
@@ -220,7 +220,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const cursor = path.join(app, '.cursor');
     const appExclude = excludeFileOf(m, app);
     const cursorExclude = excludeFileOf(m, cursor);
-    expect(blockLines(appExclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(appExclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
     expect(owners(cursorExclude)).toEqual([expect.stringMatching(/^delivered\/[0-9a-f]{16}$/)]);
     // Another owner's block in the same file goes too.
     fs.appendFileSync(appExclude, '# [teamai:local-agent:start]\n/.claude/skills/http-skill/\n# [teamai:local-agent:end]\n');
@@ -241,6 +241,32 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(visible(m, cursor)).toContain('rules/team-rule.mdc');
   }, 120_000);
 
+  it('keeps the line of a hook file an incomplete uninstall left, and removes it on the retry', () => {
+    const m = member('hook-left', {
+      ...TEAM,
+      'hooks/hooks.yaml': 'hooks:\n  - id: team-stop\n    description: Team stop\n    event: Stop\n    command: echo team-stop\n',
+    });
+    const app = m.project(path.join(caseDir('hook-left'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const settings = path.join(app, '.claude', 'settings.local.json');
+    expect(blockLines(exclude)).toEqual(expect.arrayContaining(['/.claude/settings.local.json', '/.claude/skills/fe-skill/SKILL.md']));
+    const repaired = read(settings);
+    write(settings, `${repaired.trimEnd()}, \n`);
+
+    const first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Uninstall incomplete');
+    // The skill is gone and so is its line; the settings file is still there, hidden as before.
+    expect(blockLines(exclude), first.output).toEqual(['/.claude/settings.local.json']);
+    expect(status(m, app)).toEqual([]);
+
+    write(settings, repaired);
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(read(exclude)).not.toContain('# [teamai:');
+  }, 120_000);
+
   it('keeps the block another project holds in a tool home under version control', () => {
     const m = member('tool-home');
     fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });
@@ -257,7 +283,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const left = owners(homeExclude);
     expect(left).toHaveLength(1);
     expect(before).toContain(left[0]);
-    expect(blockLines(homeExclude, left[0])).toContain('/.hermes/skills/fe-skill/');
+    expect(blockLines(homeExclude, left[0])).toContain('/.hermes/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   it('uninstall --dry-run lists the blocks by owner and file, and writes nothing', () => {
@@ -303,7 +329,7 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
 
       expect(read(appExclude)).toBe(content);
       expect(out).toContain(appExclude);
-      expect(out).toContain('/.claude/skills/fe-skill/');
+      expect(out).toContain('/.claude/skills/fe-skill/SKILL.md');
       expect(out).not.toContain(cursorExclude);
       expect(out).toContain('teamai uninstalled');
     } finally {
@@ -321,12 +347,12 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     const wt = await m.worktree(main, path.join(root, 'wt'));
     const exclude = excludeFileOf(m, main);
     const codexLines = (): string[] => blockLines(exclude).filter((line) => line.startsWith('/.agents/') || line.startsWith('/.codex/'));
-    expect(codexLines()).toEqual(expect.arrayContaining(['/.agents/skills/fe-skill/', '/.codex/skills/fe-skill/']));
+    expect(codexLines()).toEqual(expect.arrayContaining(['/.agents/skills/fe-skill/SKILL.md', '/.codex/skills/fe-skill/SKILL.md']));
 
     m.teamai(['uninstall', '--agent', 'codex', '--force'], main);
 
     expect(codexLines()).toEqual([]);
-    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
     // The worktree's own Codex copy stays on disk, and is no longer hidden.
     expect(status(m, wt)).toContain('?? .codex/skills/fe-skill/SKILL.md');
     write(path.join(main, '.agents/skills/fe-skill/SKILL.md'), 'mine\n');
@@ -334,13 +360,13 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     // The worktree's list lost them too: its pull does not bring the lines back.
     m.teamai(['pull'], wt);
     expect(codexLines()).toEqual([]);
-    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/');
+    expect(blockLines(exclude)).toContain('/.claude/skills/fe-skill/SKILL.md');
   }, 120_000);
 
   // WorkBuddy reads CodeBuddy's `.codebuddy/rules` in a project: one copy, one line, for both.
   it.each([
-    { uninstalled: 'codebuddy', remaining: 'workbuddy', gone: '/.codebuddy/skills/fe-skill/', stays: '/.workbuddy/skills/fe-skill/' },
-    { uninstalled: 'workbuddy', remaining: 'codebuddy', gone: '/.workbuddy/skills/fe-skill/', stays: '/.codebuddy/skills/fe-skill/' },
+    { uninstalled: 'codebuddy', remaining: 'workbuddy', gone: '/.codebuddy/skills/fe-skill/SKILL.md', stays: '/.workbuddy/skills/fe-skill/SKILL.md' },
+    { uninstalled: 'workbuddy', remaining: 'codebuddy', gone: '/.workbuddy/skills/fe-skill/SKILL.md', stays: '/.codebuddy/skills/fe-skill/SKILL.md' },
   ])('uninstall --agent $uninstalled keeps the .codebuddy/rules lines $remaining still reads', ({ uninstalled, gone, stays }) => {
     const m = member(`agent-${uninstalled}`);
     const root = caseDir(`agent-${uninstalled}`);
@@ -365,9 +391,10 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
   }, 120_000);
 
   it('removes teamai\'s server and its resolved value from the main checkout of a --separate-git-dir repo, then its MCP line, uninstalling from a linked worktree', async () => {
-    const m = member('mcp-separate', MCP_TEAM, MCP_ON);
+    const m = member('mcp-separate', MCP_TEAM, MCP_OFF);
     const root = caseDir('mcp-separate');
-    // CodeBuddy: with sharing.gitExclude on, Claude's servers go to its local scope, not to .mcp.json.
+    // sharing.gitExclude off: with it on, Claude and CodeBuddy take the servers from their local scopes, and
+    // nothing writes .mcp.json. The MCP line does not depend on it.
     const main = m.project(path.join(root, 'main'), { initArgs: [`--separate-git-dir=${path.join(root, 'main.git')}`], agents: 'codebuddy' });
     expect(read(path.join(main, '.mcp.json'))).toContain(TOKEN);
     const wt = await m.worktree(main, path.join(root, 'wt'));

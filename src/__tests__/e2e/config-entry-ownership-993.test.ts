@@ -315,6 +315,92 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '').not.toContain('[mcp_servers.plain-api]');
   });
 
+  it('leaves a Claude settings file that does not parse as it is, and writes its hooks once it parses', () => {
+    const t = team('hook-broken', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const homeSettings = path.join(home, '.claude', 'settings.json');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = { home: fs.readFileSync(homeSettings, 'utf8'), local: fs.readFileSync(localSettings, 'utf8') };
+    // The member is mid-edit of both files.
+    const broken = '{ "permissions": { "allow": ["Bash(npm test)"] }, \n';
+    writeFile(homeSettings, broken);
+    writeFile(localSettings, broken);
+    t.publish({ 'hooks/hooks.yaml': hooksYaml('echo team-stop-v2') }, 'v2');
+    try {
+      const pulled = teamai(['pull'], dir);
+      expect(fs.readFileSync(homeSettings, 'utf8'), pulled.output).toBe(broken);
+      expect(fs.readFileSync(localSettings, 'utf8')).toBe(broken);
+      expect(pulled.output).toContain(`${homeSettings} does not parse`);
+    } finally {
+      writeFile(homeSettings, repaired.home);
+      writeFile(localSettings, repaired.local);
+    }
+    pull(dir);
+    expect(claudeTeamStops(dir).map((e) => e.hooks[0].command).join('\n')).toContain('echo team-stop-v2');
+  });
+
+  it('keeps the hook records when uninstall cannot read a settings file, so uninstall after the repair removes the hooks', () => {
+    const t = team('hook-broken-uninstall', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-uninstall-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = fs.readFileSync(localSettings, 'utf8');
+    expect(repaired).toContain('echo team-stop-v1');
+    const broken = `${repaired.trimEnd()}, \n`;
+    writeFile(localSettings, broken);
+    const first = teamai(['uninstall', '--force'], dir);
+    expect(fs.readFileSync(localSettings, 'utf8'), first.output).toBe(broken);
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).not.toContain('teamai uninstalled');
+
+    writeFile(localSettings, repaired);
+    const second = teamai(['uninstall', '--force'], dir);
+    expect(second.code, second.output).toBe(0);
+    expect(fs.readFileSync(localSettings, 'utf8'), second.output).not.toContain('echo team-stop-v1');
+    expect(first.output).toContain(`${localSettings}, which could not be removed`);
+  });
+
+  it('a hook an incomplete uninstall left in place syncs nothing back', () => {
+    const t = team('hook-broken-resync', {
+      'hooks/hooks.yaml': hooksYaml('echo team-stop-v1'),
+      'skills/team-skill/SKILL.md': '---\nname: team-skill\ndescription: d\n---\nTeam.\n',
+    });
+    const dir = business('hook-broken-resync-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+    expect(fs.existsSync(skill)).toBe(true);
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    writeFile(localSettings, `${fs.readFileSync(localSettings, 'utf8').trimEnd()}, \n`);
+    const removed = teamai(['uninstall', '--force'], dir);
+    expect(removed.code, removed.output).toBe(1);
+    expect(fs.existsSync(skill), removed.output).toBe(false);
+
+    // The team moves on, and the retained hook's session start runs its pull (the background pass, inline).
+    t.publish({ 'skills/team-skill/SKILL.md': '---\nname: team-skill\ndescription: d\n---\nTeam, v2.\n' }, 'v2');
+    const r = spawnSync(process.execPath, [CLI, 'hook-dispatch', 'session-start', '--tool', 'claude', '--stdin', '--bg-only'], {
+      cwd: dir, encoding: 'utf8', env: env(), input: JSON.stringify({ cwd: dir, session_id: 's1' }),
+    });
+    expect(fs.existsSync(skill), `${r.stdout}${r.stderr}`).toBe(false);
+  });
+
+  it('excludes the tool when a targeted uninstall cannot remove its hooks', () => {
+    const t = team('hook-broken-targeted', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
+    const dir = business('hook-broken-targeted-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    const repaired = fs.readFileSync(localSettings, 'utf8');
+    writeFile(localSettings, `${repaired.trimEnd()}, \n`);
+    const removed = teamai(['uninstall', '--agent', 'claude', '--force'], dir);
+    expect(removed.code, removed.output).toBe(1);
+    writeFile(localSettings, repaired);
+    // Excluded, so no pull syncs claude back over what is left.
+    const projects = path.join(home, '.teamai', 'projects');
+    const configs = fs.readdirSync(projects).map((id) => path.join(projects, id, 'config.yaml')).filter((f) => fs.existsSync(f))
+      .map((f) => fs.readFileSync(f, 'utf8')).filter((text) => text.includes(dir));
+    expect(configs.join('\n'), removed.output).toMatch(/disabledAgents:\s*\n\s*- claude/);
+  });
+
   it('leaves one entry per team hook in Claude and Codex files, with and without the hook manifest', () => {
     // The co-author setting shares settings.local.json with the team hooks (#993 bug 7).
     const t = team('hook-manifest', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') }, ['  coAuthor:', '    enabled: false']);

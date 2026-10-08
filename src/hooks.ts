@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { lstat, rm, stat } from 'node:fs/promises';
-import { readJson, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
+import { readJson, readJsonObject, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import {
   COPILOT_TOOL_ID,
@@ -1264,7 +1264,7 @@ async function reconcileClaudeFormat(
   };
   const expanded = expandHome(settingsPath);
   await ensureDir(path.dirname(expanded));
-  const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+  const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
   if (!settings.hooks) settings.hooks = {};
 
   let changed = false;
@@ -1311,7 +1311,7 @@ async function reconcileCursorFormat(
 ): Promise<void> {
   const expanded = expandHome(hooksPath);
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CursorHooksJson = (await readJson<CursorHooksJson>(expanded)) ?? { version: 1, hooks: {} };
+  const hooksJson: CursorHooksJson = await readHookFile<CursorHooksJson>(expanded, { version: 1, hooks: {} });
   if (!hooksJson.version) hooksJson.version = 1;
   if (!hooksJson.hooks) hooksJson.hooks = {};
 
@@ -1387,10 +1387,10 @@ async function reconcileCopilotFormat(
     return;
   }
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CopilotHooksJson = (await readJson<CopilotHooksJson>(expanded)) ?? {
+  const hooksJson: CopilotHooksJson = await readHookFile<CopilotHooksJson>(expanded, {
     version: COPILOT_HOOK_SCHEMA_VERSION,
     hooks: {},
-  };
+  });
   let changed = hooksJson.version !== COPILOT_HOOK_SCHEMA_VERSION;
   hooksJson.version = COPILOT_HOOK_SCHEMA_VERSION;
   if (!hooksJson.hooks) hooksJson.hooks = {};
@@ -1447,7 +1447,7 @@ async function reconcileCodexFormat(
 ): Promise<ManagedHookRecord[]> {
   const expanded = expandHome(hooksPath);
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+  const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
   if (!hooksJson.hooks) hooksJson.hooks = {};
 
   const isManaged = (event: string, index: number, entries: CodexHookMatcher[]): boolean => {
@@ -1559,7 +1559,7 @@ async function reconcileZcodeFormat(
       await writeFile(vbsPath, vbsScript);
     }
   }
-  const cfg: ZcodeHooksJson = (await readJson<ZcodeHooksJson>(expanded)) ?? {};
+  const cfg: ZcodeHooksJson = await readHookFile<ZcodeHooksJson>(expanded, {});
   if (!cfg.hooks) cfg.hooks = {};
   let changed = false;
   // ZCode validates the hooks block against a strict schema and REJECTS THE
@@ -1696,7 +1696,7 @@ export async function applyAgentHook(
   // manifest, the authoritative record for codex teardown). Backends must use
   // a unique command per codex agent-hook slug so replace/remove stay precise.
   if (format === 'codex') {
-    const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+    const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
     if (!hooksJson.hooks) hooksJson.hooks = {};
     const existing = hooksJson.hooks[def.event] ?? [];
     const untouched = existing.filter((e) => (e.hooks?.[0]?.command ?? '') !== def.command);
@@ -1709,7 +1709,7 @@ export async function applyAgentHook(
       log.debug(`agent hook [${def.slug}] already up-to-date in ${settingsPath}`);
     }
   } else {
-    const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+    const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
     if (!settings.hooks) settings.hooks = {};
     const existing = settings.hooks[def.event] ?? [];
     const untouched = existing.filter((e) => !isAgentClaudeEntry(e, def.slug));
@@ -1743,7 +1743,7 @@ export async function removeAgentHook(
   // for codex teardown.
   if (format === 'codex') {
     if (!opts.command) return;
-    const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+    const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
     if (!hooksJson.hooks) return;
     let changed = false;
     for (const event of Object.keys(hooksJson.hooks)) {
@@ -1763,7 +1763,7 @@ export async function removeAgentHook(
       log.success(`Removed agent hook [${opts.slug}] from ${settingsPath}`);
     }
   } else {
-    const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+    const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
     if (!settings.hooks) return;
     let changed = false;
     for (const event of Object.keys(settings.hooks)) {
@@ -1786,6 +1786,20 @@ export async function removeAgentHook(
 }
 
 // ─── Public reconcile API ───────────────────────────────────
+
+/**
+ * A hook settings file teamai writes back, or `fallback` when there is none. One that does not
+ * parse, or is not a JSON object, is the member's to repair (#993): writing it would replace all
+ * of it, so the hook pass for it stops here, the file left byte-identical and nothing recorded,
+ * and the first pull after the repair writes it.
+ */
+export async function readHookFile<T>(file: string, fallback: T): Promise<T> {
+  const read = await readJsonObject(file);
+  if (read.kind === 'invalid') {
+    throw new Error(`${file} does not parse (${read.error}), so teamai left it as it is. Fix it, then run the command again.`);
+  }
+  return read.kind === 'ok' ? read.value as T : fallback;
+}
 
 /**
  * Reconcile a single tool settings/hooks file to the desired teamai hook set

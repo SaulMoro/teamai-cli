@@ -224,6 +224,24 @@ describe('pull: docs by namespace', () => {
     expect(warned(/Kept \d+ doc/)).toBe(false);
   });
 
+  it('keeps a member\'s file in a deactivated namespace with the bytes of a team doc that is a link (#993)', async () => {
+    await team('docs/frontend/target.md', '# Shared\n');
+    await fse.symlink('target.md', path.join(repoPath, 'docs', 'frontend', 'linked.md'));
+    commitTeamRepo(repoPath);
+    await pull({});
+    // The member replaces the delivered link with a file of their own holding the same text.
+    await fse.remove(local('frontend/linked.md'));
+    await fse.outputFile(local('frontend/linked.md'), '# Shared\n');
+    await team('docs/devops/notes.md', '# Notes\n');
+    commitTeamRepo(repoPath);
+
+    as('devops');
+    await pull({});
+
+    expect(await fse.readFile(local('frontend/linked.md'), 'utf8')).toBe('# Shared\n');
+    expect(warned(/frontend\/linked\.md/)).toBe(true);
+  });
+
   it('never withdraws from the team repo when the docs destination is its docs/ directory', async () => {
     vi.mocked(loadTeamConfig).mockResolvedValue({
       ...teamConfig,
