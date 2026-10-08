@@ -339,6 +339,19 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     expect(read(path.join(first, 'skills', 'other-skill', 'SKILL.md'))).toBe(SOURCE_SKILL);
   });
 
+  it('source remove keeps a delivered source skill directory holding a file the member added', () => {
+    const w = world('extra-file');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude']), dir);
+    const copy = path.join(dir, '.claude', 'skills', 'other-skill');
+    expect(read(path.join(copy, 'SKILL.md'))).toBe(SOURCE_SKILL);
+    writeFile(path.join(copy, 'notes.md'), 'MY NOTES\n');
+
+    const removed = w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'notes.md'))).toBe('MY NOTES\n');
+    expect(removed.output).toContain(`Kept ${copy}: it holds notes.md, a file of yours`);
+  });
+
   it('puts the source skill in the same directory as the team skill for every built-in tool', () => {
     const w = world('all');
     const toolPaths = TeamaiConfigSchema.parse({ team: 't', repo: 'r' }).toolPaths;

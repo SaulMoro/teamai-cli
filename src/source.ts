@@ -29,6 +29,7 @@ import {
 } from './resources/delivered-copies.js';
 import { getHermesHome } from './hermes-home.js';
 import { warnOnce } from './utils/warn-once.js';
+import { historicalVersions } from './utils/team-history.js';
 import { resolveOpenclawStateDir, resolveOpenclawWorkspace, resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
 import { getUserHome } from './utils/home.js';
@@ -1404,8 +1405,23 @@ async function legacyCopyKeeper(
     const legacy = path.join(baseDir, configured);
     if (legacy !== delivered) legacyRoots.push(legacy);
   }
+  const history = await pathExists(path.join(repoDir, '.git'));
   return (skillName, sourcePath) => async (skillDir) => {
-    if (!legacyRoots.some((root) => skillDir.startsWith(root + path.sep))) return false;
+    if (!legacyRoots.some((root) => skillDir.startsWith(root + path.sep))) {
+      // A file the member added beside the source's goes with the directory: keep it all (#993).
+      // A file the source has, or ever had, is the source's, edited or not. Without history and
+      // without today's skill (withdrawn), nothing tells them apart: the record decides, as before.
+      if (!history && !sourcePath) return false;
+      for (const rel of await listFilesRecursive(skillDir)) {
+        if (path.basename(rel) === 'CONTRIBUTORS' || (sourcePath && await pathExists(path.join(sourcePath, rel)))) continue;
+        const versions = history ? await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`) : null;
+        if (versions === null || versions.length === 0) {
+          log.warn(`Kept ${skillDir}: it holds ${rel}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
+          return true;
+        }
+      }
+      return false;
+    }
     if (await isSourceSkillCopy(skillDir, repoDir, skillName, sourcePath)) return false;
     log.warn(`Kept ${skillDir}: teamai no longer delivers source skills here, and this copy differs from ${sourceName}/${skillName}. Delete it when you no longer need it.`);
     return true;

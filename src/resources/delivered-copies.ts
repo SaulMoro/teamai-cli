@@ -249,10 +249,31 @@ export async function ownsSkillDir(
 ): Promise<boolean> {
   // A link at or anywhere inside the directory is the member's: deleting the directory would take it.
   if (await isLink(dir) || await holdsNonRegular(dir)) return false;
-  if (recordedUnder(previous ?? {}, dir).length > 0) return true;
+  // On record, the directory is teamai's only when no file in it is the member's own (#993):
+  // removing it would take a file the member added beside teamai's.
+  if (recordedUnder(previous ?? {}, dir).length > 0) return !await holdsMembersFile(previous ?? {}, dir, origin);
   if (sources.length === 0) return isTeamaiSkillCopy(dir, origin);
   for (const source of sources) {
     if (await isTeamaiSkillCopy(dir, origin, await nextHashes({}, source, { tool: '', dest: dir }))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the recorded skill directory `dir` holds a file that is the member's own: not on
+ * `previous` and, with an `origin`, no version of that file of the skill in the history.
+ * Without an origin, any file off the record is the member's.
+ */
+async function holdsMembersFile(previous: DeliveredHashes, dir: string, origin?: CopyOrigin): Promise<boolean> {
+  for (const rel of await listFilesRecursive(dir)) {
+    if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
+    const file = path.join(dir, rel);
+    if (previous[file] !== undefined) continue;
+    if (origin === undefined) return true;
+    const fileOrigin: CopyOrigin = {
+      repoPath: origin.repoPath, pathspec: `${origin.pathspec}/${rel}`, renders: rel === SKILL_MD ? origin.renders : undefined,
+    };
+    if (!await isTeamaiCopy(file, fileOrigin)) return true;
   }
   return false;
 }
@@ -380,7 +401,9 @@ export async function judgeRemoval(
     // A link the member put inside a recorded skill changes it: removing the directory would take the link.
     if (await holdsNonRegular(dest)) return 'edited';
     const files = await withDisk(previous ?? {}, recorded.map((file) => [file, null]));
-    return classifyCopy(files).kind === 'keep' ? 'edited' : 'remove';
+    if (classifyCopy(files).kind === 'keep') return 'edited';
+    // A file the member added beside teamai's goes with the directory: keep it all.
+    return await isDirectory(dest) && await holdsMembersFile(previous ?? {}, dest, origin) ? 'edited' : 'remove';
   }
   if (origin === undefined) return 'remove';
   // A file there that cannot be read proves nothing, so it is not teamai's (isTeamaiCopy).
