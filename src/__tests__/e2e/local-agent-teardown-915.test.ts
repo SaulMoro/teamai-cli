@@ -217,7 +217,7 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     await m.sessionStart(app, 'workbuddy', [installPrompt('team-prompt', app)]);
     const files = ['.claude/rules/teamai-context.md', '.codebuddy/rules/teamai-context.md'];
     for (const file of files) expect(fs.readFileSync(path.join(app, file), 'utf8'), file).toContain('team-prompt');
-    expect(block(app)).toEqual(files.map((file) => `/${file}`));
+    expect(block(app)).toEqual([...files.map((file) => `/${file}`), '/.teamai/.gitignore']);
 
     const out = await m.cli(['source', 'remove-http'], app);
 
@@ -234,7 +234,7 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     // A repository with no teamai project of its own: the user scope's flag applies.
     const app = m.repository('app');
     await m.sessionStart(app, 'claude', [installRule('kept-rule', app)]);
-    expect(block(app)).toEqual(['/.claude/rules/kept-rule.md']);
+    expect(block(app)).toEqual(['/.claude/rules/kept-rule.md', '/.teamai/.gitignore']);
     const exclude = path.join(app, '.git', 'info', 'exclude');
 
     fs.chmodSync(exclude, 0o444);
@@ -246,7 +246,7 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     }
     expect(removed.output).toContain(`Kept the local agent's git exclude block in ${exclude}`);
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'kept-rule.md')), removed.output).toBe(false);
-    expect(block(app)).toEqual(['/.claude/rules/kept-rule.md']);
+    expect(block(app)).toEqual(['/.claude/rules/kept-rule.md', '/.teamai/.gitignore']);
 
     const out = await m.cli(['uninstall', '--force'], m.home);
 
