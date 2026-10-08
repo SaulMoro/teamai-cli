@@ -361,6 +361,29 @@ describe('ownership of unrecorded MCP servers and hook entries (#993 bug 12)', (
     expect(first.output).toContain(`${localSettings}, which could not be removed`);
   });
 
+  it('a hook an incomplete uninstall left in place syncs nothing back', () => {
+    const t = team('hook-broken-resync', {
+      'hooks/hooks.yaml': hooksYaml('echo team-stop-v1'),
+      'skills/team-skill/SKILL.md': '---\nname: team-skill\ndescription: d\n---\nTeam.\n',
+    });
+    const dir = business('hook-broken-resync-biz', { '.claude/.keep': '' });
+    init(t, dir, 'claude');
+    const skill = path.join(dir, '.claude', 'skills', 'team-skill');
+    expect(fs.existsSync(skill)).toBe(true);
+    const localSettings = path.join(dir, '.claude', 'settings.local.json');
+    writeFile(localSettings, `${fs.readFileSync(localSettings, 'utf8').trimEnd()}, \n`);
+    const removed = teamai(['uninstall', '--force'], dir);
+    expect(removed.code, removed.output).toBe(1);
+    expect(fs.existsSync(skill), removed.output).toBe(false);
+
+    // The team moves on, and the retained hook's session start runs its pull (the background pass, inline).
+    t.publish({ 'skills/team-skill/SKILL.md': '---\nname: team-skill\ndescription: d\n---\nTeam, v2.\n' }, 'v2');
+    const r = spawnSync(process.execPath, [CLI, 'hook-dispatch', 'session-start', '--tool', 'claude', '--stdin', '--bg-only'], {
+      cwd: dir, encoding: 'utf8', env: env(), input: JSON.stringify({ cwd: dir, session_id: 's1' }),
+    });
+    expect(fs.existsSync(skill), `${r.stdout}${r.stderr}`).toBe(false);
+  });
+
   it('excludes the tool when a targeted uninstall cannot remove its hooks', () => {
     const t = team('hook-broken-targeted', { 'hooks/hooks.yaml': hooksYaml('echo team-stop-v1') });
     const dir = business('hook-broken-targeted-biz', { '.claude/.keep': '' });

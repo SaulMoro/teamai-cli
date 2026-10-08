@@ -3732,7 +3732,7 @@ export async function teardownLocalAgentPlugins(): Promise<void> {
  * parse, say) keeps its record, so a later run finds it (#993); its slug and tool
  * are returned.
  */
-export async function removeAllAgentHooks(): Promise<string[]> {
+export async function removeAllAgentHooks(): Promise<Array<{ slug: string; tool: string }>> {
   const config = await loadLocalAgentConfig();
   if (!config) return [];
   const manifest = await loadAgentHookManifest();
@@ -3764,7 +3764,7 @@ export async function removeAllAgentHooks(): Promise<string[]> {
     }
   }
   await saveAgentHookManifest(left);
-  return Object.entries(left).map(([slug, rec]) => `${slug} (${rec.tool})`);
+  return Object.entries(left).map(([slug, rec]) => ({ slug, tool: rec.tool }));
 }
 
 /**
@@ -3805,7 +3805,7 @@ export async function removeLocalAgentHttp(): Promise<void> {
   const hooksLeft = await removeAllAgentHooks();
   if (hooksLeft.length > 0) {
     // Their records are in the local agent's home: it stays, so running this again removes them.
-    log.warn(`Kept ${getLocalAgentHome()}: it holds the record of agent hooks ${hooksLeft.join(', ')}, which could not be removed. `
+    log.warn(`Kept ${getLocalAgentHome()}: it holds the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')}, which could not be removed. `
       + 'Fix the files named above, then run `teamai source remove-http` again.');
     return;
   }

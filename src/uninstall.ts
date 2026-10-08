@@ -1327,7 +1327,7 @@ async function teardownPlugins(): Promise<void> {
  * ownership stays for a retry: OpenCode `instructions` entries still listed, and
  * hook files and agent hooks it could not clean (#993).
  */
-async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: string[] }> {
+async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }> }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
@@ -1348,7 +1348,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: Rem
   // below; in particular, project uninstall never owns Pi's global extension.
   // An entry no record claims goes when it equals exactly one hook in the team's history (#993).
   // A file whose hooks could not be removed keeps the records that own them, in the data home (#993).
-  const hooksLeft: string[] = [];
+  const hooksLeft: Array<{ what: string; tool: string }> = [];
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, teamHookProjectRoot } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath, teamHookHistory: plan.teamHookHistory,
@@ -1357,7 +1357,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: Rem
       });
     } catch (e) {
       log.warn(`Failed to remove hooks from ${settingsPath}: ${(e as Error).message}`);
-      hooksLeft.push(settingsPath);
+      hooksLeft.push({ what: settingsPath, tool });
     }
   }
 
@@ -1433,7 +1433,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: Rem
   // heavy dependency graph out of uninstall's static import chain. Best-effort.
   try {
     const { removeAllAgentHooks } = await import('./local-agent.js');
-    if (plan.globalAdapters) hooksLeft.push(...(await removeAllAgentHooks()).map((hook) => `agent hook ${hook}`));
+    if (plan.globalAdapters) hooksLeft.push(...(await removeAllAgentHooks()).map((hook) => ({ what: `agent hook ${hook.slug} (${hook.tool})`, tool: hook.tool })));
   } catch (e) {
     log.warn(`Failed to remove agent hooks: ${(e as Error).message}`);
   }
@@ -1591,7 +1591,7 @@ async function executeRemoval(plan: RemovalPlan): Promise<{ pendingOpencode: Rem
 
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
   if (plan.teamaiHomeExists && hooksLeft.length > 0) {
-    log.warn(`Kept ${plan.teamaiHome}: it holds the record of teamai's hooks in ${hooksLeft.join(', ')}, which could not be removed. `
+    log.warn(`Kept ${plan.teamaiHome}: it holds the record of teamai's hooks in ${hooksLeft.map((h) => h.what).join(', ')}, which could not be removed. `
       + 'Fix those files, then run `teamai uninstall` again.');
   } else if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
@@ -1823,9 +1823,14 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     if (agentKey && (!plan.includeShared || incomplete)) {
       await excludeUninstalledAgent(localConfig, agentKey);
     }
+    // A hook left in place would run a pull that restores what was removed: its tool is excluded,
+    // and a hook of an excluded tool syncs nothing, until the uninstall is retried (#993).
+    for (const tool of new Set(hooksLeft.map((hook) => hook.tool))) {
+      if (tool !== agentKey) await excludeUninstalledAgent(localConfig, tool);
+    }
 
     if (incomplete) {
-      const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft];
+      const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what)];
       log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
       process.exitCode = 1;
     } else {

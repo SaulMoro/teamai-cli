@@ -2817,7 +2817,7 @@ teamai uninstall --agent claude
 
 移除内容：
 - 如果 ownership 仍有效，先恢复 TeamAI 管理的模型配置
-- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 对无法移除的 agent hook 也会同样保留 local agent 目录。
+- AI 工具 settings 中的 teamai hooks。无法解析的 settings 文件会原样保留并被指出；记录其中 hooks 的 teamai 数据目录也会一并保留，卸载会报告未完成（退出码 1），并排除该工具，使留下的 hooks 不会把任何内容同步回来；修好该文件后再次运行 `teamai uninstall` 即可移除它们。`teamai source remove-http` 对无法移除的 agent hook 也会同样保留 local agent 目录。
 - 各工具指令文件中的 teamai 块（文化、共享指令、recall），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 没有自身 rules 格式的工具在用户作用域读取的文件中的团队规则块（`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`、OpenClaw workspace 的 `AGENTS.md`、`~/.pi/agent/AGENTS.md`、`~/.joycode/rules.txt`）；该文件若是 teamai 只为这个块创建的，则整个删除
 - 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
@@ -2842,7 +2842,7 @@ teamai uninstall --agent claude
 
 项目级卸载保留 Pi 和 Oh My Pi 的全局扩展、Hermes 的全局插件和配置、OpenCode 的用户级插件（它也为 V2 提供规则和指令）、Codex 系列的用户级 hooks 以及服务端下发的 agent hooks，因为本机的用户级安装、HTTP agent 或其他项目可能仍在使用它们，并在摘要中列出。若没有其他安装使用它们，请在卸载前于该项目中运行 `teamai hooks remove`，它会移除这些内容。定向项目级 Codex 卸载保留项目配置以记录排除设置，仅清理项目拥有的资源和旧 hook 副本。单工具卸载在项目配置仍保留时，将该工具加入此项目的排除列表。用户级卸载才移除这些全局投递通道。
 
-该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步和缓存 HTTP prompt 注入。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
+该排除是持久的：`uninstall --agent <tool>` 会把该工具从 `enabledAgents` 移除并记入 `disabledAgents`，因此之后的 `pull`（或其他工具的 session-start hook）不会再把它的 skills、rules、agents、团队指令块或 hooks 重新装回。保留的全局适配器也会跳过被排除工具的 HTTP 同步、缓存 HTTP prompt 注入以及 session-start 时的 pull。重新执行 `init --agent <tool>` 会清除该排除、恢复对该工具的同步。
 
 同一套 `enabledAgents` 白名单（来自 `init --agent`）也约束 CLI 内置 skills/rules/agents 以及团队指令块：即使工具根目录已经存在，白名单外的已安装工具也不会被写入或删除。`teamai remove` 对 agents、rules 和 skills 同样遵守该白名单，`teamai push` 也不会从白名单外的工具读取 rules 和 agents，`teamai pull` / `teamai mcp inject` 对 MCP servers 也遵守该白名单。不经过 `init` 直接把工具加进 `enabledAgents` 时，last-pull 跳过缓存会对新加入的工具失效。
 
