@@ -260,6 +260,62 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent keeps what i
     expect(status()).toEqual(['?? .claude/rules/mine.md', '?? .claude/rules/teamai-context.md']);
   }, 180_000);
 
+  it('keeps its cache in a workspace with no project config out of git, and drops the line with the cache', async () => {
+    const m = machine('cache');
+    const user = await m.cli(['init', '--http', server.url, '--token', API_KEY, '--scope', 'user', '--agent', 'claude', '--force'], m.home);
+    expect(user.code, user.output).toBe(0);
+    fs.appendFileSync(path.join(m.home, '.teamai', 'config.yaml'), 'gitExcludeEnabled: true\n');
+    const app = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'cache-app-')));
+    fs.writeFileSync(path.join(app, 'mine.md'), '# Mine\n');
+    m.git(['init', '-q', '-b', 'main'], app);
+    const status = (): string[] => m.git(['status', '--porcelain', '-uall'], app).out.split('\n').filter(Boolean);
+
+    // The agent caches what it installs under the workspace's `.teamai/`, which a `.gitignore` of its own hides but for itself.
+    await m.sessionStart(app, [install(51, 'skill', 'cache-skill', app), install(52, 'rule', 'cache-rule', app)]);
+    expect(server.acks.filter(({ id }) => id === 51 || id === 52).map(({ body }) => (body as { status: string }).status))
+      .toEqual(['success', 'success']);
+    expect(fs.existsSync(path.join(app, '.teamai', '.gitignore'))).toBe(true);
+    expect(block(app)).toEqual(['/.claude/rules/cache-rule.md', '/.claude/skills/cache-skill/SKILL.md', '/.teamai/.gitignore']);
+    expect(status()).toEqual(['?? mine.md']);
+
+    // A `.gitignore` the member already had there stays theirs, and visible, once the agent appends its line.
+    const own = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'cache-own-')));
+    fs.mkdirSync(path.join(own, '.teamai'));
+    fs.writeFileSync(path.join(own, '.teamai', '.gitignore'), '*.log\n');
+    m.git(['init', '-q', '-b', 'main'], own);
+    await m.sessionStart(own, [install(54, 'rule', 'own-rule', own)]);
+    expect(fs.readFileSync(path.join(own, '.teamai', '.gitignore'), 'utf8')).toBe('*.log\nlocal-agent/\n');
+    expect(block(own)).toEqual(['/.claude/rules/own-rule.md']);
+    expect(m.git(['status', '--porcelain', '-uall'], own).out.split('\n').filter(Boolean)).toEqual(['?? .teamai/.gitignore']);
+
+    // Turned off: the line goes with the block, and git sees the file again.
+    const userConfig = path.join(m.home, '.teamai', 'config.yaml');
+    const setFlag = (on: boolean): void => fs.writeFileSync(userConfig, fs.readFileSync(userConfig, 'utf8').replace(/gitExcludeEnabled: \w+/, `gitExcludeEnabled: ${on}`));
+    setFlag(false);
+    await m.sessionStart(app, []);
+    expect(block(app)).toBeNull();
+    expect(status()).toContain('?? .teamai/.gitignore');
+
+    // A member who committed the agent's `.gitignore` (an older release left it visible) keeps it.
+    const committed = fs.realpathSync.native(fs.mkdtempSync(path.join(sandbox, 'cache-committed-')));
+    m.git(['init', '-q', '-b', 'main'], committed);
+    await m.sessionStart(committed, [install(55, 'rule', 'committed-rule', committed)]);
+    m.git(['add', '.teamai/.gitignore'], committed);
+    expect(m.git(['commit', '-q', '-m', 'agent cache ignore'], committed).code).toBe(0);
+
+    // Removing the agent removes its cache from the workspace, and the line with it.
+    setFlag(true);
+    await m.sessionStart(app, []);
+    expect(block(app)).toContain('/.teamai/.gitignore');
+    const removed = await m.cli(['source', 'remove-http'], app);
+    expect(removed.code, removed.output).toBe(0);
+    expect(fs.existsSync(path.join(app, '.teamai'))).toBe(false);
+    expect(block(app)).toBeNull();
+    expect(status()).toEqual(['?? mine.md']);
+    expect(m.git(['status', '--porcelain', '-uall'], committed).out).toBe('');
+    expect(fs.existsSync(path.join(committed, '.teamai', '.gitignore'))).toBe(true);
+  }, 180_000);
+
   it('follows the flag at the next session start with no install from the backend', async () => {
     const m = machine('flip');
     const app = await m.project('app');

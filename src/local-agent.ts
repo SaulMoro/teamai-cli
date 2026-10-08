@@ -979,18 +979,33 @@ async function getResourceRepoPath(scope: LocalAgentScope, workspacePath?: strin
   return path.join(getLocalAgentHome(), 'resources', scope);
 }
 
+const WORKSPACE_CACHE_GITIGNORE = ['# teamai local state', 'local-agent/', ''].join('\n');
+
 async function ensureProjectGitignore(workspacePath: string): Promise<void> {
   const teamaiDir = path.join(workspacePath, '.teamai');
   await ensureDir(teamaiDir);
   const gitignorePath = path.join(teamaiDir, '.gitignore');
   const existing = await readFileSafe(gitignorePath);
   if (!existing) {
-    await writeFile(gitignorePath, ['# teamai local state', 'local-agent/', ''].join('\n'));
+    await writeFile(gitignorePath, WORKSPACE_CACHE_GITIGNORE);
     return;
   }
   if (!existing.split('\n').some((line) => line.trim() === 'local-agent/')) {
     await writeFile(gitignorePath, existing.trimEnd() + '\nlocal-agent/\n');
   }
+}
+
+/**
+ * The `.gitignore` that hides the cache the agent keeps inside a workspace
+ * with no project config of its own, while the cache lives there and the file
+ * is as the agent wrote it (#915). A `.gitignore` the member had, which the
+ * agent only appended to, is theirs.
+ */
+async function workspaceCacheGitignore(workspacePath: string, repoPath: string): Promise<string | null> {
+  const teamaiDir = path.join(workspacePath, '.teamai');
+  if (!repoPath.startsWith(teamaiDir + path.sep)) return null;
+  const file = path.join(teamaiDir, '.gitignore');
+  return await readFileSafe(file) === WORKSPACE_CACHE_GITIGNORE ? file : null;
 }
 
 function authHeaders(config: LocalAgentConfig, json = true): Record<string, string> {
@@ -2167,9 +2182,9 @@ async function installDownloadedResource(input: {
   const repoPath = await getResourceRepoPath(input.scope, input.workspacePath);
   if (input.scope === 'project' && input.workspacePath
       && repoPath.startsWith(path.join(input.workspacePath, '.teamai') + path.sep)) {
-    // Only gitignore when the cache actually lands inside the workspace (a legacy,
-    // un-migrated install). A partitioned install keeps it under ~/.teamai, so
-    // there is nothing in the workspace to ignore.
+    // Only gitignore when the cache actually lands inside the workspace (no
+    // project config there, or a legacy, un-migrated install). A partitioned
+    // install keeps it under ~/.teamai, so there is nothing in the workspace to ignore.
     await ensureProjectGitignore(input.workspacePath);
   }
   await ensureDir(repoPath);
@@ -2458,6 +2473,8 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
     const target = await instructionTargetAt(tool, path.resolve(resolveToolBaseDir(tool, localConfig), file), 'project', toolPath, true);
     if (target.owned && await holdsInstructionBlocks(target.path)) copies.push(target.path);
   }
+  const gitignore = await workspaceCacheGitignore(workspacePath, repoPath);
+  if (gitignore) copies.push(gitignore);
   return copies;
 }
 
@@ -4751,12 +4768,42 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
         }
       }
     }
+    const left = (await loadManifest()).scopes[key];
+    if (scope === 'project' && workspacePath && kinds.every((kind) => Object.keys(left?.[manifestKind(kind)] ?? {}).length === 0)) {
+      await removeWorkspaceCache(workspacePath);
+    }
   }
 
   // Before the state home goes: it records which exclude files hold the block (#915).
   await removeLocalAgentGitExclude(checkouts);
   await removeWorkspaceModels();
   return finishAgentHookTeardown(retry);
+}
+
+/**
+ * Remove the cache the agent kept inside a workspace with no project config,
+ * with the untracked `.gitignore` it wrote for it and the directories left
+ * empty, once the teardown uninstalled every entry of the workspace (#915). A
+ * cache an entry could not be removed from stays, hidden by that file, whose
+ * line then stays too.
+ */
+async function removeWorkspaceCache(workspacePath: string): Promise<void> {
+  const teamaiDir = path.join(workspacePath, '.teamai');
+  const repoPath = await getResourceRepoPath('project', workspacePath);
+  if (!repoPath.startsWith(teamaiDir + path.sep)) return;
+  const cache = path.dirname(repoPath);
+  try {
+    await remove(cache);
+    const gitignore = await workspaceCacheGitignore(workspacePath, repoPath);
+    // One the member committed is theirs now.
+    if (gitignore && (await gitTracks(gitignore, 'entry')).kind === 'untracked') await remove(gitignore);
+    for (let dir = path.dirname(cache); dir.startsWith(teamaiDir); dir = path.dirname(dir)) {
+      if ((await fse.readdir(dir)).length > 0) break;
+      await fse.rmdir(dir);
+    }
+  } catch (e) {
+    log.warn(`Could not remove the local agent's cache in ${teamaiDir}: ${(e as Error).message}`);
+  }
 }
 
 /**
