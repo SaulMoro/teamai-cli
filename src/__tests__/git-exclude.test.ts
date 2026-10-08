@@ -643,6 +643,33 @@ describe('git exclude blocks (#915)', () => {
       expect(await read()).not.toContain(MCP_EXCLUDE_START);
     });
 
+    it.each(['delivered', 'local-agent'])('a secret owner lists a file only teamai\'s %s block ignores, so the file stays ignored once that block drops it', async (other) => {
+      const config = inRepo('.cursor', 'mcp.json');
+      const models = inRepo('.codebuddy', 'models.json');
+      await fse.outputFile(config, '{}\n');
+      await fse.outputFile(models, '{}\n');
+      await fse.outputFile(excludeFile, `# [teamai:${other}:start]\n/.codebuddy/models.json\n/.cursor/mcp.json\n# [teamai:${other}:end]\n`);
+      expect(status(repo)).toBe('');
+
+      const [{ result: mcp }] = await ensure({ name: 'mcp-exclude' }, [config]);
+      const [{ result: key }] = await ensure({ name: 'credentials' }, [models]);
+      await sync(memoryOwner(other, [excludeFile]), []);
+
+      expect(mcp).toEqual({ kind: 'excluded', added: true });
+      expect(key).toEqual({ kind: 'excluded', added: true });
+      expect(await read()).not.toContain(`# [teamai:${other}:start]`);
+      expect(status(repo)).toBe('');
+    });
+
+    it('adds no mcp-exclude line for a file a line of the member\'s in .git/info/exclude ignores, beside teamai\'s blocks', async () => {
+      await fse.outputFile(excludeFile, '# [teamai:delivered:start]\n/a.md\n# [teamai:delivered:end]\n/.mcp.json\n');
+
+      const [{ result }] = await ensure({ name: 'mcp-exclude' }, [inRepo('.mcp.json')]);
+
+      expect(result).toEqual({ kind: 'excluded', added: false });
+      expect(await read()).not.toContain(MCP_EXCLUDE_START);
+    });
+
     it('fails for a tracked file before writing anything, with #886\'s text', async () => {
       const file = inRepo('models.json');
       await fse.outputFile(file, '{}\n');

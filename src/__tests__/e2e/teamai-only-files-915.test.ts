@@ -348,6 +348,48 @@ describe('an MCP config holding a value teamai resolved', () => {
   });
 });
 
+describe('a listed teamai-only MCP config that later gets a resolved value', () => {
+  const SECRET = {
+    'mcp/mcp.yaml': `${PLAIN}  - name: secret-api\n    transport: http\n    url: https://secret.example.com/mcp\n`
+      + '    headers:\n      Authorization: "Bearer ${LAB_TOKEN}"\n',
+    'env/env.yaml': 'variables:\n  - key: LAB_TOKEN\n    value: "lab-token-delivered-915"\n',
+  };
+  const mcpExcludeLines = (m: Machine): string[] => {
+    const lines = read(path.join(m.dir, '.git', 'info', 'exclude')).split('\n');
+    const start = lines.findIndex((line) => line.startsWith('# [teamai:mcp-exclude:start]'));
+    const end = lines.indexOf('# [teamai:mcp-exclude:end]');
+    return start < 0 || end < start ? [] : lines.slice(start + 1, end);
+  };
+  const turnOff = (m: Machine): void => {
+    const projects = path.join(m.home, '.teamai', 'projects');
+    for (const dir of fs.readdirSync(projects)) {
+      const config = path.join(projects, dir, 'config.yaml');
+      if (fs.existsSync(config)) fs.appendFileSync(config, 'gitExcludeEnabled: false\n');
+    }
+  };
+
+  it.each([
+    ['the member adds a server', (m: Machine) => addMemberServer(path.join(m.dir, '.cursor', 'mcp.json'))],
+    ['the option goes off', turnOff],
+  ])('keeps it out of git in its own block once %s', (_label, leave) => {
+    const m = machine('mcp-later-secret', { agents: 'cursor', files: { 'mcp/mcp.yaml': PLAIN } });
+    const file = path.join(m.dir, '.cursor', 'mcp.json');
+    expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
+
+    m.teamCommit(SECRET);
+    const resolved = m.ok(['pull']);
+    expect(read(file)).toContain('lab-token-delivered-915');
+    expect(mcpExcludeLines(m), resolved.output).toEqual(['/.cursor/mcp.json']);
+
+    leave(m);
+    const pulled = m.ok(['pull']);
+    expect(m.deliveredLines(), pulled.output).not.toContain('/.cursor/mcp.json');
+    expect(read(file)).toContain('lab-token-delivered-915');
+    expect(m.git(['check-ignore', '-q', '.cursor/mcp.json'])).toBe('');
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
+  });
+});
+
 describe('ownership without a record', () => {
   it('lists a file written before the upgrade, whose servers teamai has no record of, by its content', () => {
     const m = machine('mcp-before-upgrade', { agents: 'cursor', files: { 'mcp/mcp.yaml': PLAIN } });
@@ -373,7 +415,7 @@ describe('ownership without a record', () => {
     expect(m.status()).not.toContain('?? .codex/hooks.json');
   });
 
-  it('keeps out a file holding a member server no team version matches, and cleans and lists one holding a removed team server\'s copy', () => {
+  it('takes a file holding a member server no team version matches out of the delivered block, and cleans and lists one holding a removed team server\'s copy', () => {
     const m = machine('mcp-unrecorded', {
       agents: 'cursor',
       files: { 'mcp/mcp.yaml': mcpYaml(['plain-api', 'https://api.example.com/mcp'], ['old-api', 'https://old.example.com/mcp']) },
@@ -389,13 +431,16 @@ describe('ownership without a record', () => {
     expect(m.deliveredLines()).toContain('/.cursor/mcp.json');
     expect(m.status()).not.toContain('?? .cursor/mcp.json');
 
-    // An unrecorded server of the member's, matching no team version.
+    // An unrecorded server of the member's, matching no team version. With no record, the MCP sync cannot
+    // tell it holds no value teamai resolved, so the file gets its own mcp-exclude line: the delivered
+    // block's line never counted for that. It leaves the delivered block, and git still does not see it.
     loseMcpRecords(m.home);
     addMemberServer(file);
-    expect(m.ok(['pull']).output).toContain(nowVisible('.cursor/mcp.json'));
+    expect(m.ok(['pull']).output).not.toContain('now holds entries teamai does not own');
     expect(readJson(file).mcpServers['my-own']).toEqual(MEMBER_SERVER);
     expect(m.deliveredLines()).not.toContain('/.cursor/mcp.json');
-    expect(m.status()).toContain('?? .cursor/mcp.json');
+    expect(read(path.join(m.dir, '.git', 'info', 'exclude'))).toMatch(/# \[teamai:mcp-exclude:start\][^\n]*\n\/\.cursor\/mcp\.json\n/);
+    expect(m.status()).not.toContain('?? .cursor/mcp.json');
   });
 });
 

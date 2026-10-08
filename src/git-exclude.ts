@@ -302,6 +302,31 @@ export interface ReincludingRule {
   pattern: string;
 }
 
+/**
+ * Whether the rule `git check-ignore -v` says ignores `file` is the member's:
+ * not a line inside one of teamai's `# [teamai:<owner>:…]` blocks. False when
+ * git names no rule or its source cannot be read: the caller then lists the
+ * path itself, the safe direction.
+ */
+async function ignoredByMembersRule(file: string): Promise<boolean> {
+  const landed = await realFilePath(file);
+  const dir = await existingAncestor(landed);
+  const result = await runGit(['check-ignore', '-v', '--', path.relative(dir, landed)], dir);
+  const match = result.code === 0 ? /^(.*):(\d+):(.*)\t/.exec(result.stdout) : null;
+  if (!match) return false;
+  // git names the source from the toplevel, whatever the cwd.
+  const location = await locateExclude(dir);
+  const source = 'error' in location ? path.resolve(dir, match[1]) : path.resolve(location.root, match[1]);
+  const content = await readFileSafe(source);
+  if (content === null) return false;
+  let inBlock = false;
+  for (const line of content.split('\n').slice(0, Number(match[2]) - 1)) {
+    const marker = MARKER.exec(line.trim());
+    if (marker) inBlock = marker[2] === 'start';
+  }
+  return !inBlock;
+}
+
 /** The negated rule `git check-ignore -v` says decides `file` in the checkout at `root`, or null when it names none. */
 async function reincludingRule(file: string, root: string): Promise<ReincludingRule | null> {
   const dir = await existingAncestor(file);
@@ -792,7 +817,9 @@ async function ensureOne(
   if (refused) return { result: { kind: 'refused', problem: refused.problem, reason: refused.message, fix: `Rename it, then ${rerun}.` } };
   const tracking = await gitTracking(file);
   if (tracking.kind === 'outside-repo') return { result: { kind: 'outsideRepo' } };
-  if (tracking.kind === 'ignored' && isLegacy(owner)) return { result: { kind: 'excluded', added: false } };
+  // #886's rule, narrowed (#915): an ignore from teamai's own blocks does not count, as they change with the
+  // option, the team's config and `uninstall --agent`; only a rule of the member's does.
+  if (tracking.kind === 'ignored' && isLegacy(owner) && await ignoredByMembersRule(file)) return { result: { kind: 'excluded', added: false } };
   const inIndex = await gitTracks(file);
   if (inIndex.kind === 'tracked') {
     const named = await gitPathOf(file);
