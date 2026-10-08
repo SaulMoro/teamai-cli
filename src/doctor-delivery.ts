@@ -875,7 +875,9 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     if (problems.length === 0 && !withheld && desired.size === 0) continue;
 
     // A pull keeps a server of the member's own under a team name, and names it (#993).
-    const member = problems.length === 0 ? [] : await memberMcpServers(localConfig, targets, target, desired, desiredContext.vars);
+    // Judged with every tool mapping the file, detected or not, as pull judges it (#993).
+    const member = problems.length === 0 ? [] : await memberMcpServers(
+      localConfig, await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }), target, desired, desiredContext.vars);
     const delivery = problems.length === 0 ? [] : [`In ${target.file}, ${problems.join('; ')}. A server needing a variable reads it from `
       + '`env/env.yaml` or an active `env/<ns>/env.yaml`, whose top-level key is `variables:` — a plain `KEY: value` mapping '
       + 'parses as no variables at all. Then run `teamai pull`.',

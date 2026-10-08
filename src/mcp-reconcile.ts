@@ -1884,6 +1884,9 @@ async function reconcileTargets(
   }
   const targets = await resolveMcpTargets(teamConfig, localConfig);
   if (targets.length === 0) return { changes, wrote };
+  // Whose entries a file holds is judged with every tool mapping it, detected or not (#993):
+  // detection decides where teamai writes, never what it may delete.
+  const claimTargets = await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true });
 
   const { manifestPath, manifest } = await loadMcpManifest(localConfig, options.dryRun);
   // An adoption (#993) records a server without writing its file: the manifest must still be saved.
@@ -1924,7 +1927,7 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredMcpForTarget(resolved, teamDefs, desiredContext);
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(targets, resolved, manifest), history);
+    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, resolved, manifest), history);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
@@ -1968,7 +1971,7 @@ async function reconcileTargets(
       for (const record of nextRecords) record.file = target.file;
       // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
       const judgeFor = async (file: string): Promise<McpEntryJudge> => judgeUnrecordedMcpEntry(
-        localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(targets, { ...resolved, file }, manifest), history);
+        localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, { ...resolved, file }, manifest), history);
       const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {

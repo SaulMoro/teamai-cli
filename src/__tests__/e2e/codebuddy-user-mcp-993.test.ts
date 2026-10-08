@@ -151,6 +151,22 @@ describe('CodeBuddy user MCP goes to the file CodeBuddy reads (#993 bug 10)', ()
     expect(fs.lstatSync(m.file.mcp).isSymbolicLink()).toBe(true);
   });
 
+  it('leaves the server of a tool no longer detected in a CodeBuddy lookup file that links to its file', () => {
+    const m = machine('linked-lookup-gone', [], ['claude', 'codebuddy']);
+    const claudeFile = path.join(m.home, '.claude.json');
+    writeFile(claudeFile, JSON.stringify({ mcpServers: {} }));
+    fs.symlinkSync(claudeFile, m.file.mcp);
+    writeFile(m.file.dotMcp, JSON.stringify({ mcpServers: { 'my-user': MEMBER_SERVER } }));
+    fs.mkdirSync(path.join(m.home, '.claude'), { recursive: true });
+    m.teamaiOk('init', m.url, '--provider', 'git', '--agent', 'claude,codebuddy', '--scope', 'user', '--force');
+    expect(m.servers(claudeFile)).toEqual({ 'tm-user': TEAM_SERVER });
+
+    // Claude is no longer installed here; its file and its record stay.
+    fs.rmSync(path.join(m.home, '.claude'), { recursive: true, force: true });
+    m.teamaiOk('pull', '--force');
+    expect(m.servers(claudeFile)).toEqual({ 'tm-user': TEAM_SERVER });
+  });
+
   it('creates ~/.codebuddy/.mcp.json when no CodeBuddy user MCP file exists, and keeps a server the member adds there', () => {
     const m = machine('fresh');
     m.init();
