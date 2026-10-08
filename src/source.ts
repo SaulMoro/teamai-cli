@@ -975,6 +975,7 @@ async function pullSingleSource(
     }
   }
 
+  const keptInPlace = new Set<string>();
   for (const { skill, targets, retained, conflictingPath, conflictingRecord } of plans) {
     if (conflictingPath) {
       log.warn(`[source:${source.name}] Skipping "${skill.name}": another source repository owns ${conflictingPath}. Remove that installation before pulling this skill. Ownership record: ${conflictingRecord}`);
@@ -1009,6 +1010,8 @@ async function pullSingleSource(
       if (!skillPaths.includes(relativeTarget)) skillPaths.push(relativeTarget);
       installedPhysicalPaths[relativeTarget] = await resolveSourcePhysicalPath(targetDir);
     }
+    // A copy kept whole is still this source's on record, so removal judges it later.
+    if (retained.length > 0) keptInPlace.add(skill.name);
     if (targets.length === 0) continue;
 
     if (oldInstalled.has(skill.name)) {
@@ -1049,7 +1052,7 @@ async function pullSingleSource(
       teamCheckout: path.resolve(localConfig.repo.localPath),
       repositoryId,
       lastPull: new Date().toISOString(),
-      installedSkills: [...new Set([...deployed, ...retained, ...keptLegacy])],
+      installedSkills: [...new Set([...deployed, ...retained, ...keptInPlace, ...keptLegacy])],
       installedPaths, installedPhysicalPaths,
     });
   }
@@ -1450,22 +1453,33 @@ async function legacyCopyKeeper(
   const history = await pathExists(path.join(repoDir, '.git'));
   return (skillName, sourcePath) => async (skillDir) => {
     if (!legacyRoots.some((root) => skillDir.startsWith(root + path.sep))) {
-      // A file the member added beside the source's goes with the directory: keep it all (#993).
-      // A file the source has, or ever had, is the source's, edited or not. Without history and
+      // A file the member added or changed goes with the directory: keep it all (#993). A file is
+      // the source's only by its bytes, today's or a version from the history. Without history and
       // without today's skill (withdrawn), nothing tells them apart: the record decides, as before.
       if (!history && !sourcePath) return false;
       const pathspec = skillOrigin(repoDir, skillName).pathspec;
-      const fromSource = async (rel: string): Promise<'today' | 'history' | 'none'> => {
-        if (sourcePath && (await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) return 'today';
-        const versions = history ? await historicalVersions(repoDir, `${pathspec}/${rel}`) : null;
-        return versions?.some((version) => version.mode !== '120000') ? 'history' : 'none';
+      // Whether the source has or had this skill at all; a link was never a file of it.
+      const hadSkill = history
+        && ((await historicalVersions(repoDir, `${pathspec}/**`)) ?? []).some((version) => version.mode !== '120000');
+      // `foreign`: a path of a skill the source has or had, but never this file, which only history can tell.
+      const fromSource = async (rel: string): Promise<'today' | 'history' | 'changed' | 'foreign'> => {
+        const bytes = await fse.readFile(path.join(skillDir, rel));
+        const source = sourcePath ? await fse.lstat(path.join(sourcePath, rel)).catch(() => null) : null;
+        if (source?.isFile() && bytes.equals(await fse.readFile(path.join(sourcePath!, rel)))) return 'today';
+        if (!history) return 'changed';
+        const versions = ((await historicalVersions(repoDir, `${pathspec}/${rel}`)) ?? [])
+          .filter((version) => version.mode !== '120000');
+        if (versions.length === 0) return source || !hadSkill ? 'changed' : 'foreign';
+        const blob = await blobIdOf(repoDir, bytes);
+        return versions.some((version) => version.blob === blob) ? 'history' : 'changed';
       };
       const files = await listFilesRecursive(skillDir);
       const origins = await Promise.all(files.map((rel) => fromSource(rel)));
-      // Only a copy this source's files prove it delivered can hold a file of the member's: a copy
-      // from a replaced repository, or one an in-repo alias placed, is left to the record, as before.
-      if (!origins.some((origin) => origin !== 'none')) return false;
-      const member = files[origins.indexOf('none')];
+      // A file at a path the skill never had is the member's. Otherwise only a copy this source's
+      // files prove it delivered can hold a file of the member's: a copy from a replaced repository,
+      // or one an in-repo alias placed, is left to the record, as before.
+      const proven = origins.some((origin) => origin === 'today' || origin === 'history');
+      const member = files[origins.findIndex((origin) => origin === 'foreign' || (proven && origin === 'changed'))];
       if (member !== undefined) {
         log.warn(`Kept ${skillDir}: it holds ${member}, a file of yours, so teamai left it. Delete it when you no longer need it.`);
         return true;

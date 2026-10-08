@@ -365,6 +365,11 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     const pulled = w.ok(['pull', '--force'], dir);
     expect(read(path.join(copy, 'notes.md'))).toBe('MY NOTES\n');
     expect(pulled.output).toContain(`Kept ${copy}: notes.md there is yours`);
+
+    // Still on the record: source remove judges the copy rather than forget it.
+    const removed = w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'notes.md'))).toBe('MY NOTES\n');
+    expect(removed.output).toContain(`Kept ${copy}: it holds notes.md, a file of yours`);
   });
 
   it('source remove keeps a delivered source skill directory holding a file the member added', () => {
@@ -373,6 +378,19 @@ describe('source skills go where team skills go (#993 bug 8)', () => {
     w.ok(init(w, ['claude']), dir);
     const copy = path.join(dir, '.claude', 'skills', 'other-skill');
     expect(read(path.join(copy, 'SKILL.md'))).toBe(SOURCE_SKILL);
+    writeFile(path.join(copy, 'notes.md'), 'MY NOTES\n');
+
+    const removed = w.ok(['source', 'remove', 'other'], dir);
+    expect(read(path.join(copy, 'notes.md'))).toBe('MY NOTES\n');
+    expect(removed.output).toContain(`Kept ${copy}: it holds notes.md, a file of yours`);
+  });
+
+  it('source remove keeps a delivered source skill directory left holding only a file the member added', () => {
+    const w = world('only-member-file');
+    const dir = w.business('biz', { '.claude/.keep': '' });
+    w.ok(init(w, ['claude']), dir);
+    const copy = path.join(dir, '.claude', 'skills', 'other-skill');
+    fs.rmSync(path.join(copy, 'SKILL.md'));
     writeFile(path.join(copy, 'notes.md'), 'MY NOTES\n');
 
     const removed = w.ok(['source', 'remove', 'other'], dir);
