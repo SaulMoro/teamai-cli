@@ -1006,6 +1006,83 @@ export async function unclaimedMcpServers(target: McpTarget, claimed: readonly s
   return unclaimed.length === 0 || (await gitTracks(target.file)).kind === 'tracked' ? [] : unclaimed;
 }
 
+/**
+ * Tools whose project MCP config is not judged teamai-only (#915): Claude's
+ * and CodeBuddy's `.mcp.json`, whose servers have a per-member place outside
+ * the project, and Qoder's `settings.json`, which also holds its settings.
+ */
+const NOT_TEAMAI_ONLY_MCP_TOOLS = new Set(['claude', 'tclaude', 'codebuddy', 'qoder', 'qoder-cn']);
+
+/**
+ * Each project MCP config of this checkout that holds anything, and whether
+ * it holds only teamai's servers (#915): every top-level key is the server key
+ * of a tool writing the file, every server under it is one teamai's MCP
+ * records claim for that file, whichever tool's, and there is at least one. A
+ * `.codex/config.toml` holds nothing but teamai's `[mcp_servers.<name>]`
+ * blocks. Run after the reconcile, which records the unrecorded servers that
+ * equal a team render and removes the ones of servers the team deleted (#993),
+ * so a server no record claims is the member's or another program's. A
+ * symlink is the member's and is not judged. Read-only.
+ */
+export async function judgeTeamaiOnlyMcpConfigs(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+): Promise<Array<{ file: string; teamaiOnly: boolean }>> {
+  if (localConfig.scope !== 'project') return [];
+  const targets = await resolveMcpTargets(teamConfig, localConfig);
+  const { manifest } = await loadMcpManifest(localConfig, true);
+  const verdicts: Array<{ file: string; teamaiOnly: boolean }> = [];
+  for (const file of new Set(targets.map((t) => t.file))) {
+    const writers = targets.filter((t) => t.file === file);
+    if (writers.some((t) => NOT_TEAMAI_ONLY_MCP_TOOLS.has(t.tool))) continue;
+    if (!(await fs.promises.lstat(file).catch(() => null))?.isFile()) continue;
+    const raw = await readFileSafe(file);
+    if (raw === null || raw.trim() === '') continue;
+    // The names teamai's records claim in this file, for the tools keeping their servers under `key`.
+    const claimed = (key: string | null): Set<string> => new Set(writers
+      .filter((t) => (t.format === 'codex' ? null : MCP_SERVER_KEY[t.format as Exclude<McpFormat, 'codex'>]) === key)
+      .flatMap((t) => manifest[managedMcpManifestKey(t.tool, true)] ?? [])
+      .map((record) => record.name));
+    if (writers.every((t) => t.format === 'codex')) {
+      const names = codexServerNames(raw);
+      const ours = claimed(null);
+      const rest = names.filter((name) => ours.has(name)).reduce((source, name) => spliceCodexBlock(source, name, null), raw);
+      verdicts.push({ file, teamaiOnly: names.some((name) => ours.has(name)) && rest.trim() === '' });
+      continue;
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = null;
+    }
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      verdicts.push({ file, teamaiOnly: false });
+      continue;
+    }
+    const keys = Object.keys(data);
+    if (keys.length === 0) continue;
+    // A Copilot project file may hold its servers bare, at the top level (#882).
+    const bare = writers.every((t) => t.format === 'copilot') && !(MCP_SERVER_KEY.copilot in data);
+    const groups: Array<[string, unknown]> = bare ? [[MCP_SERVER_KEY.copilot, data]] : Object.entries(data);
+    let owned = 0;
+    let foreign = false;
+    for (const [key, servers] of groups) {
+      const ours = claimed(key);
+      if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
+        foreign = true;
+        continue;
+      }
+      for (const name of Object.keys(servers)) {
+        if (ours.has(name)) owned++;
+        else foreign = true;
+      }
+    }
+    verdicts.push({ file, teamaiOnly: owned > 0 && !foreign });
+  }
+  return verdicts;
+}
+
 /** Whether any target's file, or another file of its tool's lookup order (#993), holds an MCP server, recorded or not. */
 async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boolean> {
   for (const target of targets) {

@@ -59,6 +59,8 @@ import type { CultureFrontmatter } from './types.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
 import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
+import { describeNoLongerTeamaiOnly, judgeTeamaiOnlyFiles, type SharedFileJudgement } from './teamai-only-files.js';
+import { realFilePath } from './git-exclude.js';
 import type { EnvVariable } from './resources/env.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
@@ -2869,6 +2871,7 @@ export async function pull(
   if (!options.dryRun && !isBackgroundPull(options) && await sayGitExcludeNotices(localAgentGitExcludeNotices())) {
     reported.add('local-agent-git-exclude-failure');
   }
+  if (reconcileProject) await reportTeamaiOnlyFiles(reconcileProject, deliveryRecorder, options);
   if (reconcileProject && !options.dryRun) {
     if (!isBackgroundPull(options) && await sayGitExcludeNotices(reconcileProject)) reported.add('git-exclude-failure');
     try {
@@ -2986,6 +2989,40 @@ export async function syncDeliveredGitExclude(
   }
   await failGitExcludeSync(localConfig, outcome.failures, options);
   return false;
+}
+
+/**
+ * Report to the recorder each shared file of the project that holds only
+ * teamai's entries and that git does not track (judgeTeamaiOnlyFiles), judged
+ * on every pull, fast path included, so a file that took in an entry teamai
+ * does not own leaves the `delivered` block on the first pull that sees it.
+ * While the resolved `sharing.gitExclude` is on, that pull says so, or a
+ * background one keeps it for the next interactive pull. When the team config
+ * cannot be read, or judging fails, the previous list stands.
+ */
+async function reportTeamaiOnlyFiles(
+  localConfig: LocalConfig, recorder: DeliveryRecorder, options: Pick<GlobalOptions, 'silent' | 'gitHook' | 'dryRun'>,
+): Promise<void> {
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  if (!teamConfig || !localConfig.projectRoot) return;
+  let judged: SharedFileJudgement[];
+  try {
+    judged = await judgeTeamaiOnlyFiles(teamConfig, localConfig);
+  } catch (e) {
+    recorder.failed('teamai-only');
+    log.warn(`Could not tell which shared config files hold only teamai's entries: ${(e as Error).message}. `
+      + 'Their git exclude lines stay as the last pull left them. Fix the cause, then run `teamai pull` again.');
+    return;
+  }
+  for (const { file, state } of judged) if (state === 'teamai-only') recorder.report('teamai-only', file);
+  recorder.judgedAll('teamai-only');
+  if (options.dryRun || resolveGitExclude(localConfig, teamConfig) !== true) return;
+  const key = await checkoutRecordKey(localConfig);
+  const listed = key ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[key]?.gitExcludePaths?.['teamai-only'] ?? [] : [];
+  for (const { file, state } of judged) {
+    if (state !== 'mixed' || !listed.includes(await realFilePath(file))) continue;
+    await noticeGitExclude(localConfig, await describeNoLongerTeamaiOnly(file, localConfig.projectRoot), options);
+  }
 }
 
 /** Say a failed `delivered` sync, or, in a background pull, keep it in place of the last one. */

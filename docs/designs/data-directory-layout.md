@@ -104,7 +104,12 @@ The block is the union of the `gitExcludePaths` of the live checkouts
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
 home under git) go to that repository's exclude file under `delivered/<id>`, the
 partition's anchor hash. `state.gitExcludeFiles` records, per owner, the exclude
-files holding its block. A pull nobody watches (session start, git hooks) keeps
+files holding its block. The `teamai-only` entry is judged anew on every pull,
+fast path included, and replaces its previous list: the shared config files
+teamai writes entries into (project MCP configs with no per-member place,
+`.codex/hooks.json`, `.opencode/opencode.json`) that git does not track and that
+hold only entries teamai's records own, so a file that takes in a member's entry
+leaves the block on the next pull, which says so. A pull nobody watches (session start, git hooks) keeps
 what it could not say about the block in `<dataHome>/git-exclude-notices.json`:
 its last failure to update it (cleared by the next update that succeeds) and
 notices the next interactive pull says once and drops; `doctor` reads both.

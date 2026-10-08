@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
-import { rm, stat } from 'node:fs/promises';
+import { lstat, rm, stat } from 'node:fs/promises';
 import { readJson, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import {
@@ -2728,6 +2728,56 @@ export async function deliveredHookFiles(teamConfig: TeamaiConfig, localConfig: 
     if (await hasTeamaiHooks(file, COPILOT_TOOL_ID, getManagedHooksPath(localConfig))) files.push(file);
   }
   return files;
+}
+
+/**
+ * The project's `.codex/hooks.json`, when it exists and holds anything, and
+ * whether it holds only teamai's team hooks (#915): no top-level key but
+ * `hooks`, and every handler one that teamai's hook manifest for that file
+ * records (the main checkout's `managed-main-checkout-hooks.json`, or this
+ * checkout's `managed-hooks.json` in self mode), at least one. Run after the
+ * reconcile, which records the unrecorded entries that equal a team render
+ * (#993). A symlink is the member's and is not judged. Read-only.
+ */
+export async function judgeTeamaiOnlyCodexHooks(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+): Promise<{ file: string; teamaiOnly: boolean } | null> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return null;
+  let file: string | null;
+  let manifestPath: string;
+  if (isSelfMode(localConfig)) {
+    const settings = scopedToolPaths(teamConfig, localConfig)[CODEX_TOOL_ID]?.settings;
+    file = settings ? path.join(resolveHookScope(localConfig).baseDir, settings) : null;
+    manifestPath = getManagedHooksPath(localConfig);
+  } else {
+    const main = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
+    file = mainCheckoutHookFile(main, CODEX_TOOL_ID);
+    manifestPath = main?.manifestPath ?? '';
+  }
+  if (!file || !(await lstat(file).catch(() => null))?.isFile()) return null;
+  const raw = await readFileSafe(file);
+  if (raw === null || raw.trim() === '') return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return { file, teamaiOnly: false };
+  }
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) return { file, teamaiOnly: false };
+  if (Object.keys(json).length === 0) return null;
+  const { hooks, ...others } = json as { hooks?: unknown };
+  if (Object.keys(others).length > 0 || typeof hooks !== 'object' || hooks === null || Array.isArray(hooks)) return { file, teamaiOnly: false };
+  const records = (await readManifest(manifestPath))[CODEX_TOOL_ID] ?? [];
+  let owned = 0;
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!Array.isArray(entries)) return { file, teamaiOnly: false };
+    for (let index = 0; index < entries.length; index++) {
+      if (!records.some((record) => ownsCodexEntry(record, event, index, entries as CodexHookMatcher[]))) return { file, teamaiOnly: false };
+      owned++;
+    }
+  }
+  return { file, teamaiOnly: owned > 0 };
 }
 
 /**
