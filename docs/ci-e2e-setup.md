@@ -86,13 +86,11 @@ GitHub repo → **Settings → Secrets and variables → Actions → Variables �
 
 ## 本地验证改动
 
-大多数 e2e 用例使用本地 fixture，不需要远程仓或 token。开发时运行覆盖本次改动的测试文件：
+多数用例只用本地 fixture，无需 token。开发时只跑受影响的文件；修改 e2e runner、共享 fixture 或隔离机制时跑全量 `npm run test:e2e`（资源较少可加 `--maxWorkers=2`）：
 
 ```bash
-npm run test:e2e -- src/__tests__/e2e/git-hook-new-worktree.test.ts
+npm run test:e2e -- <test-file>
 ```
-
-该命令会先编译一次。修改 e2e runner、共享 fixture 或隔离机制时，用 `npm run test:e2e` 运行本地全量测试；CI 始终运行全量测试。资源较少的机器可追加 `--maxWorkers=2`。
 
 ## 本地复现 CI 的远程 e2e
 
