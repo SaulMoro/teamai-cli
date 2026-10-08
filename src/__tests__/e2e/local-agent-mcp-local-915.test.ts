@@ -287,6 +287,38 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent installs a p
     expect(servers(m.readJson(m.claudeJson), app)).toEqual({ 'my-local': MY_LOCAL });
   }, 180_000);
 
+  it.each([true, false])('project uninstall keeps edited servers and removes unchanged servers with git exclude %s', async (enabled) => {
+    const m = machine('project-edited');
+    const app = await m.project('app');
+    m.setFlag(app, enabled);
+    const offset = enabled ? 0 : 10;
+    await m.sessionStart(app, 'claude', [installMcp(61 + offset, 'edited-api', app, false), installMcp(62 + offset, 'unchanged-api', app, false)]);
+    await m.sessionStart(app, 'codebuddy', [installMcp(63 + offset, 'buddy-edited', app, false), installMcp(64 + offset, 'buddy-unchanged', app, false)]);
+    expect(ackStatus([61, 62, 63, 64].map((id) => id + offset))).toEqual(['success', 'success', 'success', 'success']);
+    const files = enabled ? [m.claudeJson, m.codebuddyJson] : [path.join(app, '.mcp.json')];
+    for (const file of files) {
+      const doc = m.readJson(file);
+      const entries = (enabled ? servers(doc, app)! : doc.mcpServers) as Record<string, unknown>;
+      for (const name of ['edited-api', 'buddy-edited']) if (entries[name]) entries[name] = { type: 'stdio', command: `my-${name}` };
+      entries['my-local'] = MY_LOCAL;
+      fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    }
+    const out = await m.cli(['uninstall', '--force'], app);
+    expect(out.code, out.output).toBe(0);
+    for (const file of files) {
+      const doc = m.readJson(file);
+      const entries = (enabled ? servers(doc, app)! : doc.mcpServers) as Record<string, unknown>;
+      expect(entries).not.toHaveProperty('unchanged-api');
+      expect(entries).not.toHaveProperty('buddy-unchanged');
+      expect(entries['my-local']).toEqual(MY_LOCAL);
+      const name = file === m.codebuddyJson ? 'buddy-edited' : 'edited-api';
+      expect(entries[name], out.output).toEqual({ type: 'stdio', command: `my-${name}` });
+      expect(out.output).toContain(`Kept MCP server ${name} in ${file}`);
+      expect(out.output).toContain('you changed it since teamai wrote it');
+      if (!enabled) expect(entries['buddy-edited']).toEqual({ type: 'stdio', command: 'my-buddy-edited' });
+    }
+  }, 180_000);
+
   it('an uninstall that finds no configuration, after remove-http, takes its servers out of both local scopes, and keeps the member\'s and an edited copy, named', async () => {
     const m = machine('home-only');
     const app = await m.project('app');

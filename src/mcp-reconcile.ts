@@ -2530,6 +2530,12 @@ async function applyJson(
 
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
+    const previous = ownedHere.find((record) => record.name === name);
+    if (options.removeAll && previous && doc.servers[name] !== undefined && entryHash(doc.servers[name]) !== previous.hash) {
+      log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it. `
+        + 'Remove it there when you no longer need it.');
+      continue;
+    }
     const kept = keep.get(name);
     if (kept && ((ownsJsonMcpEntry(doc, name, owned, allowBare) && doc.servers[name] !== undefined) || isTeamaiBareCopy(doc, name, owned))) {
       nextRecords.push(kept);
@@ -2712,8 +2718,8 @@ async function leaveMcpLocation(
  * this project that is gone (#915): a key teamai holds records of that names
  * no checkout `projectCheckouts` finds (a removed worktree). Only entries
  * those records claim, or that equal a render of their name today or in the
- * team's history, go; a copy the member changed stays, named (with
- * `removeAll`, it goes too), and so does the member's own server. Their
+ * team's history, go; a copy the member changed stays, named, and so does
+ * the member's own server. Their
  * records go through `manifest` (`saveMcpManifest`); a `.codebuddy.json` that
  * does not parse keeps them. Whether it wrote the file.
  */
@@ -2812,7 +2818,7 @@ async function leaveOtherLocalScopes(
 /**
  * Take the servers `records` claim out of the local scope `target` (#915).
  * Only an entry that still equals what teamai wrote goes; one the member
- * changed since stays, named, unless `removeAll`, and so does the member's own
+ * changed since stays, named, and so does the member's own
  * server. What it removed, and whether it wrote the file; null when the file
  * does not parse, and so was not read.
  */
