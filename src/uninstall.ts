@@ -401,10 +401,10 @@ async function discoverToolResources(
   /** Home, or the project root: where the skills link guard starts (`skillsGuardBase`). */
   scopeRoot: string,
   teamSkillNames: Set<string>,
-  /** Whether the skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
-  ownsSkill: (dir: string, name: string) => Promise<boolean>,
+  /** Whether `tool`'s skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
+  ownsSkill: (dir: string, name: string, tool: string) => Promise<boolean>,
   /** The files of a skill directory teamai does not own whole that are teamai's, and the member's (#993). */
-  skillFiles: (dir: string, name: string) => Promise<{ teamais: string[]; members: string[] }>,
+  skillFiles: (dir: string, name: string, tool: string) => Promise<{ teamais: string[]; members: string[] }>,
   teamRuleNames: Set<string>,
   teamAgentNames: ReadonlyMap<string, string>,
   hookTargets: HookTarget[],
@@ -630,12 +630,12 @@ async function discoverToolResources(
         for (const dir of dirs) {
           if (!teamSkillNames.has(dir)) continue;
           const skillDir = path.join(skillsDir, dir);
-          if (await ownsSkill(skillDir, dir)) {
+          if (await ownsSkill(skillDir, dir, tool)) {
             res.skillDirs.push({ dir: skillDir, baseDir: rootBase });
             continue;
           }
           // Ownership is per file: teamai's go, the member's stay, and so does the directory (#993).
-          const files = await isLink(skillDir) ? { teamais: [], members: [] } : await skillFiles(skillDir, dir);
+          const files = await isLink(skillDir) ? { teamais: [], members: [] } : await skillFiles(skillDir, dir, tool);
           if (files.teamais.length === 0) {
             res.keptSkillDirs.push(await describeKeptDir(skillDir, `skills/${dir}`, 'uninstall'));
             continue;
@@ -740,14 +740,23 @@ async function buildRemovalPlan(
 
   for (const name of localAgentSkillNames) teamSkillNames.add(name);
   for (const name of localAgentRuleNames) teamRuleNames.add(name);
-  // A skill directory is teamai's (#993) when it holds a built-in's name or one
-  // the local agent's manifest records installing, is on this checkout's
-  // record, or is a team version by the team repo's history.
+  // A skill directory is teamai's (#993) when it holds a built-in's name, is
+  // on this checkout's record, or is a team version by the team repo's
+  // history. A copy the local agent's manifest records for the tool is judged
+  // file by file against its cached source (#915): a file the member added or
+  // edited stays.
   const previous = await deliveredHashes(localConfig);
-  const ownsSkill = async (dir: string, name: string): Promise<boolean> =>
-    isCliOwnedSkillName(name) || localAgentSkillNames.has(name) || ownsSkillDir(previous, dir, skillOrigin(repoPath, name));
-  const skillFiles = (dir: string, name: string): Promise<{ teamais: string[]; members: string[] }> =>
-    teamaiSkillFiles(previous, dir, skillOrigin(repoPath, name));
+  const { localAgentCopyFiles } = await import('./local-agent.js');
+  const agentsCopy = async (kind: 'skill' | 'rule', names: Set<string>, name: string, tool: string, dest: string) =>
+    names.has(name) ? localAgentCopyFiles(kind, name, tool, dest) : null;
+  const ownsSkill = async (dir: string, name: string, tool: string): Promise<boolean> => {
+    if (isCliOwnedSkillName(name)) return true;
+    const agents = await agentsCopy('skill', localAgentSkillNames, name, tool, dir);
+    if (agents) return agents.members.length === 0 && agents.teamais.length > 0;
+    return ownsSkillDir(previous, dir, skillOrigin(repoPath, name));
+  };
+  const skillFiles = async (dir: string, name: string, tool: string): Promise<{ teamais: string[]; members: string[] }> =>
+    await agentsCopy('skill', localAgentSkillNames, name, tool, dir) ?? teamaiSkillFiles(previous, dir, skillOrigin(repoPath, name));
 
   // Discover per-tool resources. Hooks are discovered at the injection target
   // resolveHookScope reports (HOME + user manifest for a non-self project scope,
@@ -846,7 +855,8 @@ async function buildRemovalPlan(
         continue;
       }
       const name = ruleStemFromFilename(rel) ?? rel;
-      if (localAgentRuleNames.has(name) || await ownsRuleCopy(file, tool, `rules/${name}.md`, repoPath, previous)) owned.push(file);
+      const agents = await agentsCopy('rule', localAgentRuleNames, name, tool, file);
+      if (agents ? agents.teamais.length > 0 : await ownsRuleCopy(file, tool, `rules/${name}.md`, repoPath, previous)) owned.push(file);
       else res.keptFiles.push(describeMembersDirLeft(file, `rules/${name}.md`, 'uninstall'));
     }
     res.ruleFiles.splice(0, res.ruleFiles.length, ...owned);

@@ -224,6 +224,44 @@ describe.skipIf(process.platform === 'win32')('removing the HTTP local agent rem
     expect(fs.existsSync(path.join(m.home, '.teamai')), out.output).toBe(false);
   }, 180_000);
 
+  it('a project uninstall keeps a member\'s file inside a local agent skill and an edited rule, named, and removes teamai\'s other files', async () => {
+    const m = machine('members-files');
+    const app = await m.project('app');
+    await m.sessionStart(app, 'claude', [installSkill('la-skill', app), installRule('la-rule', app), installRule('plain-rule', app)]);
+    const skillDir = path.join(app, '.claude', 'skills', 'la-skill');
+    const notes = path.join(skillDir, 'notes.md');
+    fs.writeFileSync(notes, '# My notes\n');
+    const rule = path.join(app, '.claude', 'rules', 'la-rule.md');
+    fs.appendFileSync(rule, '\nMy own note.\n');
+
+    const out = await m.cli(['uninstall', '--force'], app);
+
+    expect(out.code, out.output).toBe(0);
+    expect(fs.existsSync(path.join(skillDir, 'SKILL.md')), out.output).toBe(false);
+    expect(fs.readFileSync(notes, 'utf8')).toBe('# My notes\n');
+    expect(out.output).toContain(`Kept ${notes}`);
+    expect(fs.readFileSync(rule, 'utf8')).toContain('My own note.');
+    expect(out.output).toContain(`Kept ${rule}`);
+    expect(fs.existsSync(path.join(app, '.claude', 'rules', 'plain-rule.md')), out.output).toBe(false);
+  }, 180_000);
+
+  it('remove-http keeps a member\'s file inside a skill it installed, named, and removes the skill\'s own files', async () => {
+    const m = machine('members-skill-file');
+    const app = await m.project('app');
+    await m.sessionStart(app, 'claude', [installSkill('kept-skill', app)]);
+    const skillDir = path.join(app, '.claude', 'skills', 'kept-skill');
+    const notes = path.join(skillDir, 'notes.md');
+    fs.writeFileSync(notes, '# My notes\n');
+
+    const out = await m.cli(['source', 'remove-http'], app);
+
+    expect(out.code, out.output).toBe(0);
+    expect(fs.existsSync(path.join(skillDir, 'SKILL.md')), out.output).toBe(false);
+    expect(fs.readFileSync(notes, 'utf8')).toBe('# My notes\n');
+    expect(out.output).toContain(`Kept ${notes}`);
+    expect(block(app), out.output).toBeNull();
+  }, 180_000);
+
   it('an uninstall that finds no configuration removes every teamai line whose file is gone, and keeps, and names, those of files it leaves', async () => {
     const m = machine('home-only');
     const app = await m.project('app');

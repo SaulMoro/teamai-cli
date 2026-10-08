@@ -12,6 +12,7 @@ import {
   fileHash,
   listDirs,
   listFilesRecursive,
+  pruneEmptyDirs,
   pathExists,
   readFileSafe,
   readFileIfExists,
@@ -102,8 +103,8 @@ import {
 import {
   clearGitExcludeFailure, localAgentGitExcludeNotices, noticeGitExclude, recordGitExcludeFailure,
 } from './git-exclude-notices.js';
-import { blockingEntries, contentHash, deliveredSkillFiles, ownsSkillDir } from './resources/delivered-copies.js';
-import { skillOrigin } from './resources/skills.js';
+import { blockingEntries, contentHash, deliveredSkillFiles, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir } from './resources/delivered-copies.js';
+import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
 import { acquireLock, releaseLock } from './update.js';
 
 const execFileAsync = promisify(execFile);
@@ -858,6 +859,72 @@ async function membersRuleCopy(
     };
     if (await recordsCopy(entry, tool, dest, equalsInstalled)) continue;
     return dest;
+  }
+  return null;
+}
+
+/**
+ * Which files of `dest`, a tool's copy of the local agent's skill or rule
+ * `name` (a skill: its directory name), are teamai's (#915). Null when no
+ * manifest entry records that copy for `tool`; an entry an older CLI wrote,
+ * without tools, counts for every tool. Otherwise `teamais` are the files
+ * equal to what the agent writes there today from its cached source, and
+ * `members` every other entry (a file the member added or edited, a link, a
+ * repository). Read-only; judge before the cache is deleted. `config`: the
+ * source's, when a teardown already disabled it.
+ */
+export async function localAgentCopyFiles(
+  kind: 'skill' | 'rule', name: string, tool: string, dest: string, config?: LocalAgentConfig,
+): Promise<{ teamais: string[]; members: string[] } | null> {
+  config ??= await loadLocalAgentConfig({ dryRun: true }) ?? undefined;
+  if (!config) return null;
+  const fullTeamConfig = createLocalAgentTeamConfig(config.endpoint);
+  const toolPath = fullTeamConfig.toolPaths[tool];
+  if (!toolPath) return null;
+  const real = async (file: string): Promise<string> => fs.promises.realpath(file).catch(() => path.resolve(file));
+  const at = await real(dest);
+  for (const [key, scopeManifest] of Object.entries((await loadManifest()).scopes)) {
+    const entries = Object.entries((kind === 'skill' ? scopeManifest.skills : scopeManifest.rules) ?? {});
+    const entry = entries.find(([slug, e]) => (kind === 'skill' ? e.dir_name ?? slug : slug) === name)?.[1];
+    if (!entry || (entry.tools && !entry.tools.includes(tool))) continue;
+    const { scope, workspacePath } = parseScopeKey(key);
+    const repoPath = await getResourceRepoPath(scope, workspacePath);
+    const localConfig = await createResourceLocalConfig(config, scope, repoPath, workspacePath);
+    const teamConfig = { ...fullTeamConfig, toolPaths: { [tool]: toolPath } };
+    const sourcePath = path.join(repoPath, kind === 'skill' ? 'skills' : 'rules', kind === 'skill' ? name : `${name}.md`);
+    const item: ResourceItem = { name, type: kind === 'skill' ? 'skills' : 'rules', sourcePath, relativePath: path.relative(repoPath, sourcePath).split(path.sep).join('/') };
+    const handler = kind === 'skill' ? new SkillsHandler() : new RulesHandler();
+    let target: DeliveryTarget | undefined;
+    for (const candidate of await handler.deliveryTargets(teamConfig, localConfig, item)) {
+      if (await real(candidate.dest) === at) target = candidate;
+    }
+    if (!target) continue;
+    if (kind === 'rule') {
+      const disk = await fileHash(dest);
+      const teamais = disk !== null && ((target.content !== undefined && disk === contentHash(target.content)) || disk === await fileHash(sourcePath));
+      return teamais ? { teamais: [dest], members: [] } : { teamais: [], members: [dest] };
+    }
+    if (await isLink(dest)) return { teamais: [], members: [dest] };
+    // What the agent writes there today: each cached file, SKILL.md with its frontmatter repaired.
+    const expected = new Map<string, string>();
+    for (const rel of await pathExists(sourcePath) ? await listFilesRecursive(sourcePath) : []) {
+      const bytes = await fse.readFile(path.join(sourcePath, rel));
+      const text = bytes.toString('utf-8');
+      const written = rel === 'SKILL.md' ? withSkillFrontmatter(text, name) : text;
+      expected.set(rel.split(path.sep).join('/'), contentHash(written === text ? bytes : written));
+    }
+    const result = { teamais: [] as string[], members: [] as string[] };
+    const walk = async (dir: string, rel: string): Promise<void> => {
+      for (const entry of await fse.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+        const file = path.join(dir, entry.name);
+        const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) await walk(file, entryRel);
+        else if (entry.isFile() && expected.get(entryRel) === await fileHash(file)) result.teamais.push(file);
+        else result.members.push(file);
+      }
+    };
+    await walk(dest, '');
+    return result;
   }
   return null;
 }
@@ -2237,6 +2304,23 @@ async function installDownloadedResource(input: {
   }
 }
 
+/**
+ * Delete teamai's files of the skill copy at `dest` (#915): the directory
+ * when every file in it is teamai's, else those files only, naming each the
+ * member's. A file git tracks stays (named).
+ */
+async function removeSkillCopy(dest: string, name: string, files: { teamais: string[]; members: string[] }): Promise<void> {
+  if (files.members.length === 0) {
+    if (!await keepsTrackedCopy(dest)) await remove(dest);
+    return;
+  }
+  for (const file of files.teamais) if (!await keepsTrackedCopy(file)) await remove(file);
+  await pruneEmptyDirs(dest);
+  for (const file of files.members) {
+    log.warn(describeMembersDirLeft(file, `skills/${name}/${path.relative(dest, file).split(path.sep).join('/')}`, 'the local agent'));
+  }
+}
+
 async function uninstallResource(input: {
   config: LocalAgentConfig;
   kind: CommandResourceKind;
@@ -2253,13 +2337,13 @@ async function uninstallResource(input: {
   const localConfig = await createResourceLocalConfig(input.config, input.scope, repoPath, input.workspacePath);
   const manifest = await loadManifest();
   const scopeManifest = getManifestScope(manifest, input.scope, input.workspacePath);
-  // The entry and its cached source go, so does each tool's copy (#915): the
-  // tools the entry records, or, for an older CLI's entry, every tool, whose
-  // copy the handler removes only on proof it is teamai's (today's render of
-  // the cached source, judged before the source is deleted).
-  const tools = input.kind === 'claudemd'
-    ? [input.tool ?? 'workbuddy']
-    : [...scopeManifest[manifestKind(input.kind)][input.slug]?.tools ?? Object.keys(fullTeamConfig.toolPaths), ...input.tool ? [input.tool] : []];
+  // The entry and its cached source go, and with them each copy the entry
+  // records (#915): for the tools it names, or, for an older CLI's entry,
+  // every tool. A copy goes only while it is what the agent writes today from
+  // the cached source, judged before the source is deleted; a skill file by
+  // file. Without an entry no copy is the agent's.
+  const entry = input.kind === 'claudemd' ? undefined : scopeManifest[manifestKind(input.kind)][input.slug];
+  const tools = input.kind === 'claudemd' ? [input.tool ?? 'workbuddy'] : entry ? entry.tools ?? Object.keys(fullTeamConfig.toolPaths) : [];
   const teamConfig = {
     ...fullTeamConfig,
     toolPaths: Object.fromEntries(tools.flatMap((tool) => fullTeamConfig.toolPaths[tool] ? [[tool, fullTeamConfig.toolPaths[tool]]] : [])),
@@ -2268,8 +2352,19 @@ async function uninstallResource(input: {
   if (input.kind === 'skill') {
     // The directory was created under the SKILL.md name (recorded as dir_name);
     // remove by that name, falling back to the slug for older installs.
-    const dirName = scopeManifest.skills[input.slug]?.dir_name ?? input.slug;
-    await new SkillsHandler().removeItem(dirName, teamConfig, localConfig);
+    const dirName = entry?.dir_name ?? input.slug;
+    const sourcePath = path.join(repoPath, 'skills', dirName);
+    const item: ResourceItem = { name: dirName, type: 'skills', sourcePath, relativePath: `skills/${dirName}` };
+    const copies: Array<{ dest: string; files: { teamais: string[]; members: string[] } }> = [];
+    for (const [tool, toolPath] of Object.entries(teamConfig.toolPaths)) {
+      for (const { dest } of await new SkillsHandler().deliveryTargets({ ...teamConfig, toolPaths: { [tool]: toolPath } }, localConfig, item)) {
+        const files = await pathExists(dest) ? await localAgentCopyFiles('skill', dirName, tool, dest, input.config) : null;
+        if (files) copies.push({ dest, files });
+      }
+    }
+    // A cache that cannot go fails the entry before any copy goes, so a retry finds both.
+    await remove(sourcePath);
+    for (const { dest, files } of copies) await removeSkillCopy(dest, dirName, files);
   } else if (input.kind === 'rule') {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
