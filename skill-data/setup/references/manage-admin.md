@@ -193,7 +193,9 @@ necessarily the project's manifest id.
 
 With `sharing.gitExclude.enabled: true` in `teamai.yaml`, each member's pull lists
 the skills, rules (one file per line), agents, `teamai-context` files, hook
-files and team docs (one file per line) it delivered into a project in teamai's `delivered` block in the clone's
+files and team docs (one file per line) it delivered into a project, and each shared
+config file (MCP, `.codex/hooks.json`, OpenCode's) while it holds only teamai's entries,
+in teamai's `delivered` block in the clone's
 `.git/info/exclude` (local to the clone, never committed), so `git add -A` does
 not commit them; a member's own files, and copies they edited, stay visible. `init` writes it for a
 new team; an existing team adds the line and commits it through the normal

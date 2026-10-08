@@ -47,6 +47,7 @@ export const DELIVERED_OWNER = 'delivered';
  * - full sync, writer `succeeded` and not `failed`: what it reported, possibly nothing.
  * - full sync, writer `failed`, or neither (it did not run): its previous
  *   entries that still exist on disk, plus what it reported.
+ * - writer `judgedAll` and not `failed`: what it reported, fast path or not.
  */
 export interface DeliveryRecorder {
   /** `file`, absolute, was written or confirmed as teamai's by `writer` in this run. */
@@ -57,6 +58,12 @@ export interface DeliveryRecorder {
   failed(writer: WriterId): void;
   /** This pull is a full sync, not the "Already synced" fast path. */
   fullSync(): void;
+  /**
+   * `writer` judged everything it could report in this run, fast path
+   * included: its reports replace its previous entries, as a successful
+   * writer's do on a full sync.
+   */
+  judgedAll(writer: WriterId): void;
   /** `previous` (the record's list) with this run's reports applied, as `gitExcludePaths` stores it. */
   merge(previous: Record<string, string[]> | undefined): Promise<GitExcludePaths>;
 }
@@ -65,6 +72,7 @@ export function createDeliveryRecorder(): DeliveryRecorder {
   const reports = new Map<string, Set<string>>();
   const succeeded = new Set<string>();
   const failed = new Set<string>();
+  const judged = new Set<string>();
   let full = false;
   return {
     report: (writer, file) => {
@@ -74,12 +82,14 @@ export function createDeliveryRecorder(): DeliveryRecorder {
     succeeded: (writer) => { succeeded.add(writer); },
     failed: (writer) => { failed.add(writer); },
     fullSync: () => { full = true; },
+    judgedAll: (writer) => { judged.add(writer); },
     merge: async (previous) => {
       const next: GitExcludePaths = {};
       for (const writer of new Set([...Object.keys(previous ?? {}), ...reports.keys()])) {
         const reported = await Promise.all([...reports.get(writer) ?? []].map((file) => realFilePath(file)));
         const before = previous?.[writer] ?? [];
-        const kept = !full ? before : succeeded.has(writer) && !failed.has(writer) ? [] : await existing(before);
+        const replaced = (full && succeeded.has(writer)) || judged.has(writer);
+        const kept = replaced && !failed.has(writer) ? [] : !full ? before : await existing(before);
         const paths = [...new Set([...kept, ...reported])].sort();
         if (paths.length > 0) next[writer] = paths;
       }
