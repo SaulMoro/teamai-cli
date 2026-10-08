@@ -432,6 +432,10 @@ async function discoverToolResources(
       // scope (#993): only a user-scope uninstall removes it, as for the other global adapters (#945).
       if (target.scope === 'user' && !globalAdapters) {
         if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) res.keptGlobal.push(path.join(pluginDir, OPENCODE_HOOK_FILE));
+        // Server-pushed agent hooks there are as global.
+        for (const file of await listFiles(pluginDir).catch(() => [] as string[])) {
+          if (path.basename(file).startsWith('teamai-agent-')) res.keptGlobal.push(path.join(pluginDir, path.basename(file)));
+        }
         continue;
       }
       if (await pathExists(path.join(pluginDir, OPENCODE_HOOK_FILE))) {
@@ -1664,7 +1668,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     for (const line of [...plan.keptSkillDirs, ...plan.keptFiles]) log.warn(line);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
-      && ['pi', 'omp', 'hermes', ...CODEX_TOOL_IDS].includes(agentKey);
+      && ['pi', 'omp', 'hermes', 'opencode', ...CODEX_TOOL_IDS].includes(agentKey);
     if (isPlanEmpty(plan) && !exclusionOnly) {
       log.info('Nothing to uninstall');
       return;
