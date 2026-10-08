@@ -2662,6 +2662,24 @@ servers:
         expect(await fse.readFile(mcpJson(), 'utf-8')).toBe(before);
       });
 
+      it('writes no value when git cannot confirm it ignores the config after listing it (#915)', async () => {
+        const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+        const bin = path.join(tmpDir, 'bin');
+        await fse.outputFile(
+          path.join(bin, 'git'),
+          `#!/bin/sh\nif [ "$1" = check-ignore ]; then echo 'fatal: cannot check' >&2; exit 128; fi\nexec '${realGit}' "$@"\n`,
+          { mode: 0o755 },
+        );
+        vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+        await writeMcpYaml(withSecret);
+
+        const { changes } = await reconcileMcpForConfig(teamConfig, claudeOnly());
+
+        expect(await fse.pathExists(mcpJson())).toBe(false);
+        expect(changes).toContainEqual(expect.objectContaining({ tool: 'claude', server: 'with-secret', action: 'skipped' }));
+        expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/could not confirm that it ignores[\s\S]*teamai pull/));
+      });
+
       it('writes no value while another command holds the exclude file\'s lock', async () => {
         const lock = path.join(infoDir(), 'exclude.teamai-lock');
         expect(await acquireLock(lock)).toBe(true);

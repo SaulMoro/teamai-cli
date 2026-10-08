@@ -846,9 +846,24 @@ async function ensureOne(
       },
     };
   }
-  if ((await gitTracking(file)).kind !== 'would-commit') return { result: { kind: 'excluded', added: write === 'written' }, excludeFile };
+  // Only git saying it ignores the file lets the caller write a secret into it.
+  const after = await gitTracking(file);
+  if (after.kind === 'ignored') return { result: { kind: 'excluded', added: write === 'written' }, excludeFile };
+  const named = await gitPathOf(file);
+  if (after.kind !== 'would-commit') {
+    const error = after.kind === 'unknown' ? after.error : 'git says the file is outside any repository';
+    return {
+      result: {
+        kind: 'gitFailed',
+        error,
+        reason: `git could not confirm that it ignores ${named.label}: ${error}`,
+        fix: `Fix the repository so \`git check-ignore ${named.path}\` succeeds, then ${rerun}.`,
+      },
+      excludeFile,
+    };
+  }
   // Untracked, as checked above: a rule git reads after teamai's line, or before it, re-includes the file.
-  return { result: reincluded(await gitPathOf(file), await reincludingRule(landed, placement.placed.root), rerun), excludeFile };
+  return { result: reincluded(named, await reincludingRule(landed, placement.placed.root), rerun), excludeFile };
 }
 
 /** The failure for a file a rule of the member's re-includes, naming `rule` when git could. */

@@ -649,6 +649,31 @@ describe('git exclude blocks (#915)', () => {
       expect(result).toMatchObject({ kind: 'gitFailed', error: expect.stringMatching(/config/) });
     });
 
+    it('fails when git cannot confirm it ignores the path after listing it', async () => {
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const bin = path.join(tmp, 'bin');
+      await fse.outputFile(
+        path.join(bin, 'git'),
+        `#!/bin/sh\nif [ "$1" = check-ignore ]; then echo 'fatal: cannot check' >&2; exit 128; fi\nexec '${realGit}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      const pathBefore = process.env.PATH;
+      process.env.PATH = `${bin}${path.delimiter}${pathBefore ?? ''}`;
+      let results: Awaited<ReturnType<typeof ensure>>;
+      try {
+        results = await ensure({ name: 'credentials' }, [inRepo('models.json')]);
+      } finally {
+        process.env.PATH = pathBefore;
+      }
+
+      expect(results[0].result).toEqual({
+        kind: 'gitFailed',
+        error: 'fatal: cannot check',
+        reason: `git could not confirm that it ignores ${inRepo('models.json')}: fatal: cannot check`,
+        fix: `Fix the repository so \`git check-ignore ${inRepo('models.json')}\` succeeds, then run \`teamai pull\` again.`,
+      });
+    });
+
     it('says a path outside any repository is outside', async () => {
       const [{ result }] = await ensure({ name: 'credentials' }, [path.join(tmp, 'plain', 'models.json')]);
 

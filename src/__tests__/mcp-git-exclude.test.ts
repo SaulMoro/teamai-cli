@@ -77,10 +77,13 @@ describe('teamai block in .git/info/exclude (#882)', () => {
       expect(await fse.readFile(excludeFile, 'utf8')).toMatch(/^\/\.mcp\.json$/m);
     });
 
-    it('excludes a file git answers it does not track', async () => {
+    it('lists a file git answers it does not track, but fails while git cannot confirm it ignores it (#915)', async () => {
       failCheckIgnore.on = true;
 
-      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toEqual({ kind: 'excluded', added: true });
+      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toMatchObject({
+        kind: 'failed',
+        reason: expect.stringMatching(/could not confirm that it ignores .*dubious ownership/),
+      });
       expect(await fse.readFile(excludeFile, 'utf8')).toMatch(/^\/\.mcp\.json$/m);
     });
 
@@ -431,7 +434,11 @@ describe('teamai block in .git/info/exclude (#882)', () => {
     it('judges a directory that links nowhere from the closest one that exists: no write lands through it', async () => {
       await fse.symlink('missing', path.join(repo, '.dangling'), 'dir');
 
-      expect(await ensureExcludedFromGit(path.join(repo, '.dangling', 'mcp.json'))).toEqual({ kind: 'excluded', added: true });
+      // git answers nothing for a path beyond a symlink, so the exclusion is not confirmed (#915).
+      expect(await ensureExcludedFromGit(path.join(repo, '.dangling', 'mcp.json'))).toMatchObject({
+        kind: 'failed',
+        reason: expect.stringMatching(/could not confirm that it ignores/),
+      });
       expect(await fse.readFile(excludeFile, 'utf8')).toMatch(/^\/\.dangling\/mcp\.json$/m);
       await expect(fse.ensureDir(path.join(repo, '.dangling'))).rejects.toThrow();
     });
