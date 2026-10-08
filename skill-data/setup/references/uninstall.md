@@ -133,7 +133,11 @@ and give it your team repo URL."*
   machine set up only with `init --http`, uninstall run outside its projects),
   uninstall removes `~/.teamai/` and the HTTP source, and first teamai's lines
   from every exclude file its records name, but the line of a file it leaves on
-  disk (named). The local agent's skills and rules go only as far as they are
+  disk (named), and the local agent's MCP servers in Claude's and CodeBuddy's
+  local scopes that are still as it wrote them (a changed copy stays, named).
+  If such a file does not parse, `~/.teamai/` and the records stay and it exits
+  1, naming the file: fix it and rerun. `teamai source remove-http` leaves
+  those servers but keeps their records, for this uninstall to remove. The local agent's skills and rules go only as far as they are
   still what it installed: a file the user added inside a skill, an edited
   copy, and a tracked file stay, named. If another pull or push holds the
   project's sync lock, uninstall changes nothing and exits 1: run it again.
