@@ -67,7 +67,7 @@ import {
   type GitExclusion,
 } from './mcp-git-exclude.js';
 import { gitTracks, realFilePath } from './git-exclude.js';
-import { createGit, getFileContentAtRev, listWorktrees } from './utils/git.js';
+import { createGit, getFileContentAtRev } from './utils/git.js';
 import {
   readResolvedMcpFiles,
   recordUnverifiedMcpServers,
@@ -1230,14 +1230,17 @@ async function settleRecordedMcpConfigs(
 }
 
 /**
- * `localConfig` and, in project scope, one config per other linked worktree:
- * each worktree has its own MCP configs and managed-mcp manifest.
+ * `localConfig` and, in project scope, one config per other checkout of the
+ * project (`projectCheckouts`, so also the main checkout of a
+ * `--separate-git-dir` repo or a submodule): each has its own MCP configs and
+ * managed-mcp manifest.
  */
 export async function projectWorktreeConfigs(localConfig: LocalConfig): Promise<LocalConfig[]> {
   const configs: LocalConfig[] = [localConfig];
   if (localConfig.scope === 'project' && localConfig.projectRoot) {
     const { resolveProjectDataHome } = await import('./config.js');
-    for (const wt of await listWorktrees(localConfig.projectRoot)) {
+    const { projectCheckouts } = await import('./pull.js');
+    for (const wt of await projectCheckouts(localConfig)) {
       if (wt === localConfig.projectRoot) continue;
       configs.push({ ...localConfig, projectRoot: wt, dataHome: await resolveProjectDataHome(wt) });
     }
@@ -1753,7 +1756,9 @@ async function releaseMcpGitExcludes(
   before?: ManagedMcpManifest,
   kept: string[] = [],
 ): Promise<void> {
-  const dirs = [projectRoot];
+  // Every checkout sharing a line judges it, also the main checkout `git worktree list` leaves out (#915).
+  const { projectCheckouts } = await import('./pull.js');
+  const dirs = [projectRoot, ...await projectCheckouts(localConfig)];
   for (const target of await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true })) dirs.push(path.dirname(target.file));
   for (const file of Object.keys((await readResolvedMcpFiles(localConfig)).files)) dirs.push(path.dirname(file));
   const excludes = await findMcpGitExcludes(dirs);

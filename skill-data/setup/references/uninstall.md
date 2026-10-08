@@ -127,7 +127,9 @@ and give it your team repo URL."*
   project's sync lock, uninstall changes nothing and exits 1: run it again.
 - A `credentials` line stays while the file it names is still there. MCP lines
   (the `# [teamai:mcp-exclude:start]` block) go only for MCP configs it proves
-  hold no resolved `${VAR}` value, judged in every worktree of the repository. A line names the path a write lands in: for a config
+  hold no resolved `${VAR}` value, judged in every checkout of the repository
+  (the main checkout of a `--separate-git-dir` repo or a submodule too), after
+  removing teamai's servers from each. A line names the path a write lands in: for a config
   under a symlinked directory, the link's target (`/config/mcp.json` for
   `.cursor/` linking to `config/`). For one it cannot prove clean (including one written
   under a `toolPaths` mapping since changed, at the built-in location of a tool

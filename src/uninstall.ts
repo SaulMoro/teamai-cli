@@ -48,7 +48,7 @@ import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs, ownsAgentCopy } from './resources/agents.js';
 import { RulesHandler, isLegacyLayoutCopy, ownsRuleCopy } from './resources/rules.js';
-import { deliveredHashes, liveCheckoutRecords, syncDeliveredGitExclude } from './pull.js';
+import { deliveredHashes, projectCheckouts, syncDeliveredGitExclude } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import {
@@ -80,7 +80,7 @@ import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from './utils/home.js';
-import { completeWorktreeList, gitCommonDir, listWorktrees } from './utils/git.js';
+import { listWorktrees } from './utils/git.js';
 import {
   detectShellProfile,
   findEnvBlockFor,
@@ -1315,22 +1315,6 @@ async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
 }
 
 // ─── Git exclude blocks (#915) ─────────────────────────
-
-/**
- * The project's checkouts: the current one, every live recorded one, and
- * every one `git worktree list` names when it names them all; when it cannot
- * (a `--separate-git-dir` repo or a submodule lists its git directory for its
- * main checkout), every recorded root instead.
- */
-async function projectCheckouts(localConfig: LocalConfig): Promise<string[]> {
-  const projectRoot = localConfig.projectRoot;
-  if (!projectRoot) return [];
-  const records = (await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
-  const roots = (from: typeof records | undefined): string[] => Object.values(from ?? {}).flatMap(({ root }) => root ? [root] : []);
-  const commonDir = await gitCommonDir(projectRoot);
-  const listed = commonDir ? await completeWorktreeList(projectRoot, commonDir) : null;
-  return [...new Set([projectRoot, ...roots(await liveCheckoutRecords(projectRoot, records)), ...listed ?? roots(records)])];
-}
 
 /**
  * Where this project's blocks are and which of them uninstall removes: the
