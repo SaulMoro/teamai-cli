@@ -726,6 +726,26 @@ describe('every writer keeps what it delivered out of git (#915)', () => {
     m.git(['add', '-A']);
     expect(m.git(['diff', '--cached', '--name-only'])).toContain('.claude/skills/ext-skill/SKILL.md');
   });
+
+  it('lists a skill delivered around a member\'s entry of the other type file by file, and the member\'s entry stays visible', () => {
+    const m = machine('blocked-skill', { team: ON, agents: 'claude' });
+    const skill = path.join(m.dir, '.claude', 'skills', 'fe-skill');
+    fs.writeFileSync(path.join(skill, 'docs'), 'MY DOCS\n');
+    m.teamCommit({ 'skills/fe-skill/docs/guide.md': 'TEAM GUIDE\n', 'skills/fe-skill/extra.md': 'TEAM EXTRA\n' });
+
+    const pulled = m.ok(['pull']);
+    expect(pulled.output).toContain(`Kept ${path.join(skill, 'docs')}: it is not teamai's`);
+    expect(m.deliveredLines(), pulled.output).toEqual(expect.arrayContaining(['/.claude/skills/fe-skill/SKILL.md', '/.claude/skills/fe-skill/extra.md']));
+    expect(m.deliveredLines().filter((line) => line === '/.claude/skills/fe-skill/' || line.startsWith('/.claude/skills/fe-skill/docs'))).toEqual([]);
+    expect(m.teamSkillEntries(), pulled.output).toEqual(['?? .claude/skills/fe-skill/docs']);
+
+    // Once the member's entry is gone, the whole skill is delivered and listed as one directory again.
+    fs.rmSync(path.join(skill, 'docs'));
+    const again = m.ok(['pull']);
+    expect(read(path.join(skill, 'docs', 'guide.md'))).toBe('TEAM GUIDE\n');
+    expect(m.deliveredLines(), again.output).toContain('/.claude/skills/fe-skill/');
+    expect(m.teamSkillEntries(), again.output).toEqual([]);
+  });
 });
 
 // ─── Copilot's instructions in a file teamai owns ───────────────────────────

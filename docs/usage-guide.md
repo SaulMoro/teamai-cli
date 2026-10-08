@@ -1705,7 +1705,7 @@ That file is local to your clone, shared by its worktrees, and never committed. 
 
 What the block lists:
 
-- skills, one line per skill directory: team, role, project and source skills, the CLI's `teamai` skill, and Codex's copies in `.agents/skills/<name>/`;
+- skills, one line per skill directory: team, role, project and source skills, the CLI's `teamai` skill, and Codex's copies in `.agents/skills/<name>/`. A team skill delivered around an entry of yours of the other type (a file where the team has a directory, or the reverse) is listed one file per line instead, so your entry stays visible;
 - rules one file per line, never a directory, so a file of your own beside them stays visible: namespace subdirectories (`.cursor/rules/fe/style.mdc`), flattened names (`.kiro/steering/fe.style.md`) and `.github/instructions/**/*.instructions.md` included;
 - agents, and the `teamai-recall` rule and agent;
 - your `teamai-context` files (`.claude/rules/teamai-context.md`, `.cursor/rules/teamai-context.mdc`, `.codebuddy/rules/teamai-context.md`, `.opencode/teamai-context.md`, `.github/instructions/teamai-context.instructions.md`);
@@ -3185,7 +3185,7 @@ An enabled, installed Pi, Oh My Pi, Hermes or project Codex keeps the project st
 
 If removing an OpenCode entry added by teamai fails, uninstall exits with an error and keeps the shared data directory and ownership record, even when OpenCode is the last tool. Repair the config or its permissions, then retry the same uninstall command.
 
-Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, the Codex family's user-level hooks and server-pushed agent hooks, which the user scope, the HTTP agent or another project on this machine may use, and names them in its summary. When none uses them, run `teamai hooks remove` in the project before uninstalling: it removes them. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
+Project uninstall keeps Pi's and Oh My Pi's global extensions, Hermes' global plugin and configuration, OpenCode's user plugin (which also carries V2's rules and instructions), the Codex family's user-level hooks and server-pushed agent hooks, which the user scope, the HTTP agent or another project on this machine may use, and names them in its summary. When none uses them, run `teamai hooks remove` in the project before uninstalling: it removes them. Targeted project Codex uninstall keeps the project config to record its exclusion and removes only project-owned resources and legacy hook copies. A targeted uninstall excludes the tool in this project's config when that config survives. User-scope uninstall removes these global delivery channels.
 
 The exclusion is durable: `uninstall --agent <tool>` drops the tool from `enabledAgents` and records it in `disabledAgents`, so a later `pull` (or another tool's session-start hook) will not resurrect its skills, rules, agents, team instruction blocks, or hooks. Retained global adapters also skip HTTP sync and cached HTTP prompt injection for that excluded tool. Running `init --agent <tool>` again clears the exclusion and re-enables sync for that tool.
 

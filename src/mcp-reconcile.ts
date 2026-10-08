@@ -340,7 +340,7 @@ export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, r
  * Whether two paths name one file: a lookup path may be a symlink to another
  * (`~/.codebuddy/.mcp.json` -> `mcp.json`), and is then not another file (#993).
  */
-async function sameMcpFile(a: string, b: string): Promise<boolean> {
+export async function sameMcpFile(a: string, b: string): Promise<boolean> {
   return a === b || await realFilePath(a) === await realFilePath(b);
 }
 
