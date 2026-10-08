@@ -856,8 +856,8 @@ async function ensureOne(
       result: {
         kind: 'gitFailed',
         error,
-        reason: `git could not confirm that it ignores ${named.label}: ${error}`,
-        fix: `Fix the repository so \`git check-ignore ${named.path}\` succeeds, then ${rerun}.`,
+        reason: `git could not confirm that it ignores ${named.label}: ${JSON.stringify(error)}`,
+        fix: `Check that \`git check-ignore -v ${named.path}\` works in that repository, then ${rerun}.`,
       },
       excludeFile,
     };

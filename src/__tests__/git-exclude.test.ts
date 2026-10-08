@@ -669,8 +669,8 @@ describe('git exclude blocks (#915)', () => {
       expect(results[0].result).toEqual({
         kind: 'gitFailed',
         error: 'fatal: cannot check',
-        reason: `git could not confirm that it ignores ${inRepo('models.json')}: fatal: cannot check`,
-        fix: `Fix the repository so \`git check-ignore ${inRepo('models.json')}\` succeeds, then run \`teamai pull\` again.`,
+        reason: `git could not confirm that it ignores ${inRepo('models.json')}: "fatal: cannot check"`,
+        fix: `Check that \`git check-ignore -v ${inRepo('models.json')}\` works in that repository, then run \`teamai pull\` again.`,
       });
     });
 

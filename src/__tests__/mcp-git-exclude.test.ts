@@ -78,13 +78,22 @@ describe('teamai block in .git/info/exclude (#882)', () => {
     });
 
     it('lists a file git answers it does not track, but fails while git cannot confirm it ignores it (#915)', async () => {
+      const file = path.join(repo, '.mcp.json');
       failCheckIgnore.on = true;
 
-      expect(await ensureExcludedFromGit(path.join(repo, '.mcp.json'))).toMatchObject({
+      expect(await ensureExcludedFromGit(file)).toEqual({
         kind: 'failed',
-        reason: expect.stringMatching(/could not confirm that it ignores .*dubious ownership/),
+        reason: `git could not confirm that it ignores ${file}: "fatal: detected dubious ownership in repository"`,
+        fix: `Check that \`git check-ignore -v ${file}\` works in that repository, then run \`teamai pull\` again.`,
       });
       expect(await fse.readFile(excludeFile, 'utf8')).toMatch(/^\/\.mcp\.json$/m);
+      await fse.writeJson(file, {});
+      await excludeFromGit(file);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${file} may hold a resolved MCP variable, and teamai could not keep it out of git: `
+        + `git could not confirm that it ignores ${file}: "fatal: detected dubious ownership in repository". `
+        + `Check that \`git check-ignore -v ${file}\` works in that repository, then run \`teamai pull\` again. Do not commit the file meanwhile.`,
+      );
     });
 
     it('fails for a file git tracks, and writes nothing', async () => {
