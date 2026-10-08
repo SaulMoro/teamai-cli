@@ -18,7 +18,7 @@ npx tsc --noEmit       # Type check
 npm run lint           # oxlint; CI fails on any warning
 npx vitest run         # Run unit tests
 npx vitest run --coverage
-npm run test:e2e       # E2E tests (optional, requires a live test repo)
+npm run test:e2e       # Build and run E2E tests; remote cases require credentials
 ```
 
 `npm run lint` needs Node ^20.19 or >=22.12 (oxlint's requirement); the CLI itself still supports Node 20.
@@ -96,6 +96,14 @@ Your PR also gets an informational `Code Erosion` report (SlopCodeBench verbosit
 - Unit tests go in `src/__tests__/`. Mirror the source file name (`init.ts` → `init.test.ts`).
 - Mock external I/O (git, fetch, child_process) at the module boundary.
 - Avoid relying on real network access unless guarded by an env variable (like `TEAMAI_TEST_TOKEN`).
+
+Iterate on the affected E2E files; run the full suite when changing the E2E runner, shared fixtures, or test isolation:
+
+```bash
+npm run test:e2e -- <test-file> [-t "<test-name>"]   # add --maxWorkers=2 on constrained machines
+```
+
+Workers share the prepared `dist/` and OpenCode binary: never rebuild or reinstall them inside a test. Cases needing remote credentials skip without them ([CI E2E setup](../docs/ci-e2e-setup.md)). PRs changing runtime behavior (not docs- or tests-only) include one real-CLI verification, such as a focused E2E run, with its command and result.
 
 ## Bug Reports & Feature Requests
 
