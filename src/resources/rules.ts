@@ -481,6 +481,7 @@ export class RulesHandler extends ResourceHandler {
       } catch (e) {
         ledger?.recorder?.failed('rules');
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
+        ledger?.failed.push({ name: item.name, tool });
       }
     }
   }
