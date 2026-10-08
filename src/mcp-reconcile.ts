@@ -1512,12 +1512,13 @@ export async function reconcileMcpForConfig(
     return await reconcileTargets(teamConfig, localConfig, options, exclusions, written, recorded, restoreConfigs);
   } catch (error) {
     const failures: string[] = [];
-    for (const [file, restore] of restoreConfigs) {
+    for (const [real, restore] of restoreConfigs) {
       try {
         await restore();
-        written.delete(file);
+        // `written` names files by the path a tool writes them at; the snapshot, by real path.
+        for (const file of written) if (file === real || await realFilePath(file) === real) written.delete(file);
       } catch (restoreError) {
-        failures.push(`${file}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+        failures.push(`${real}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
       }
     }
     if (failures.length > 0) {
@@ -2230,9 +2231,11 @@ async function applyJson(
   // writing the wrong key would strip the servers and, worse, leave a phantom
   // empty `mcpServers` in a file the tool never reads under that name.
   // A file that holds a resolved value is the member's alone, an existing one tightened.
+  // Keyed by real path: two tools' paths may reach one file, which keeps the state before its first write.
+  const snapshotKey = await realFilePath(target.file);
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
-  if (!restoreConfigs.has(target.file)) {
-    restoreConfigs.set(target.file, existed
+  if (!restoreConfigs.has(snapshotKey)) {
+    restoreConfigs.set(snapshotKey, existed
       ? () => writeMcpJson(target.file, previousData)
       : () => removeCreatedMcpFile(target.file));
   }
@@ -2358,8 +2361,9 @@ async function deleteLeftMcpFile(
     + `from ${former}, which held nothing else, to ${target.file}, and ${options.dryRun ? 'delete' : 'deleted'} ${former}: `
     + `${target.tool} reads only the first of its user MCP files that exists, so ${former} hid the servers in ${target.file}.`);
   if (options.dryRun || raw === null) return false;
+  const snapshotKey = await realFilePath(former);
   await fs.promises.rm(former, { force: true });
-  if (!restoreConfigs.has(former)) restoreConfigs.set(former, () => fs.promises.writeFile(former, raw));
+  if (!restoreConfigs.has(snapshotKey)) restoreConfigs.set(snapshotKey, () => fs.promises.writeFile(former, raw));
   return true;
 }
 
@@ -2434,9 +2438,10 @@ async function applyCodex(
     return false;
   }
 
+  const snapshotKey = await realFilePath(target.file);
   await writeCodexAtomic(target.file, source);
-  if (!restoreConfigs.has(target.file)) {
-    restoreConfigs.set(target.file, previous === null
+  if (!restoreConfigs.has(snapshotKey)) {
+    restoreConfigs.set(snapshotKey, previous === null
       ? () => removeCreatedMcpFile(target.file)
       : () => writeCodexAtomic(target.file, previous));
   }
