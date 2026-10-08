@@ -1414,14 +1414,23 @@ async function isCopyOfCurrent(dir: string, current: ReadonlyMap<string, string 
  */
 async function membersFileInTheWay(target: string, sourcePath: string, repoDir: string, skillName: string): Promise<string | null> {
   // Without history nothing tells a file of the member's from an older source version: the record decides, as before.
-  if (!await pathExists(path.join(repoDir, '.git'))) return null;
+  // An entry of another type is never a source version, so it is judged either way.
+  const history = await pathExists(path.join(repoDir, '.git'));
   for (const rel of await listFilesRecursive(sourcePath)) {
     const source = path.join(sourcePath, rel);
     if (!(await fse.lstat(source).catch(() => null))?.isFile()) continue;
+    // A file where one of the source file's directories goes.
+    const parts = rel.split(path.sep);
+    for (let i = 1; i < parts.length; i++) {
+      const ancestor = await fse.lstat(path.join(target, ...parts.slice(0, i))).catch(() => null);
+      if (!ancestor) break;
+      if (!ancestor.isDirectory()) return parts.slice(0, i).join(path.sep);
+    }
     const dest = path.join(target, rel);
     const stat = await fse.lstat(dest).catch(() => null);
     if (!stat) continue;
     if (!stat.isFile()) return rel;
+    if (!history) continue;
     if (await fileHash(dest) === await fileHash(source)) continue;
     const versions = await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`);
     if (versions === null) return null;
