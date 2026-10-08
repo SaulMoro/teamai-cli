@@ -1,6 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { autoDetectInit, saveLocalConfig, saveLocalConfigForScope, UnreadableProjectConfigError } from './config.js';
+import { autoDetectInit, loadStateForScope, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
+import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
+import { gitExcludeFile, MCP_EXCLUDE_OWNER, remove as removeGitExclude } from './git-exclude.js';
+import { mcpExcludePatternPath } from './mcp-git-exclude.js';
 import { migrateLegacyManagedHooks, reconcileHooks, hasTeamaiHooks, mainCheckoutHookFile, resolveMainCheckoutHooks, selfLocalTeamHookFile } from './hooks.js';
 import {
   removeOpenClawHooks,
@@ -31,6 +34,8 @@ import {
   resolveLegacyProjectHookScope,
   resolveToolBaseDir,
   scopedToolPaths,
+  SYNC_LOCK_FILENAME,
+  toolInstallRoot,
   type GlobalOptions,
   type TeamaiConfig,
   type LocalConfig,
@@ -43,7 +48,7 @@ import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs, ownsAgentCopy } from './resources/agents.js';
 import { RulesHandler, isLegacyLayoutCopy, ownsRuleCopy } from './resources/rules.js';
-import { deliveredHashes } from './pull.js';
+import { deliveredHashes, liveCheckoutRecords, syncDeliveredGitExclude } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import {
@@ -75,7 +80,7 @@ import { listQueuesIn } from './utils/pending-learnings.js';
 import { log } from './utils/logger.js';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from './utils/home.js';
-import { listWorktrees } from './utils/git.js';
+import { completeWorktreeList, gitCommonDir, listWorktrees } from './utils/git.js';
 import {
   detectShellProfile,
   findEnvBlockFor,
@@ -136,6 +141,14 @@ interface RemovalPlan {
   docsDir: string | null;
   /** The .git/info/exclude files holding teamai's MCP config block (#882), each with its patterns and the paths each protects. */
   gitExcludes: Map<string, Array<{ pattern: string; files: string[] }>>;
+  /** The exclude files teamai's blocks for this project are in (#915): its `delivered` records, the project's own, the MCP ones. */
+  gitExcludeFiles: string[];
+  /** The blocks uninstall removes from them, by file and owner (another project's block in a shared file stays). */
+  gitExcludeBlocks: Array<{ excludeFile: string; owner: string; lines: string[] }>;
+  /** Whether a block in a file is another project's: `delivered` outside this project's files, another partition's `delivered/<id>`. */
+  othersGitExcludeBlock: (owner: string, excludeFile: string) => boolean;
+  /** This project's checkouts, live by record or listed by git (every recorded root when git cannot list them all). */
+  checkouts: string[];
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
   gitHook: { repoDir: string; entries: string[] } | null;
   /** The .teamai home directory path. */
@@ -661,9 +674,12 @@ async function buildRemovalPlan(
     try {
       const raw = await readFileSafe(localAgentManifestPath);
       if (raw) {
-        const manifest = JSON.parse(raw) as { scopes?: Record<string, { skills?: Record<string, unknown>; rules?: Record<string, unknown> }> };
+        const manifest = JSON.parse(raw) as { scopes?: Record<string, { skills?: Record<string, { dir_name?: unknown } | null>; rules?: Record<string, unknown> }> };
         for (const scopeVal of Object.values(manifest.scopes ?? {})) {
-          for (const slug of Object.keys(scopeVal.skills ?? {})) localAgentSkillNames.add(slug);
+          // A skill lands under its SKILL.md name, which the manifest records when it is not the slug.
+          for (const [slug, entry] of Object.entries(scopeVal.skills ?? {})) {
+            localAgentSkillNames.add(typeof entry?.dir_name === 'string' ? entry.dir_name : slug);
+          }
           for (const slug of Object.keys(scopeVal.rules ?? {})) localAgentRuleNames.add(slug);
         }
       }
@@ -914,6 +930,10 @@ async function buildRemovalPlan(
     shellProfiles: [],
     docsDir: null,
     gitExcludes: new Map(),
+    gitExcludeFiles: [],
+    gitExcludeBlocks: [],
+    othersGitExcludeBlock: () => true,
+    checkouts: [],
     gitHook: null,
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
@@ -1059,7 +1079,10 @@ async function buildRemovalPlan(
       const { resolveMcpTargets, projectWorktreeConfigs } = await import('./mcp-reconcile.js');
       const { findMcpGitExcludes } = await import('./mcp-git-exclude.js');
       const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
-      const dirs: string[] = [];
+      // Every checkout judges a line they share, also the main checkout `git worktree list` leaves out
+      // from a linked worktree of a `--separate-git-dir` repo or a submodule (#915).
+      plan.checkouts = await projectCheckouts(localConfig);
+      const dirs: string[] = [...plan.checkouts];
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         if (cfg.projectRoot) dirs.push(cfg.projectRoot);
         for (const target of await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })) dirs.push(path.dirname(target.file));
@@ -1067,6 +1090,7 @@ async function buildRemovalPlan(
         for (const file of Object.keys((await readResolvedMcpFiles(cfg)).files)) dirs.push(path.dirname(file));
       }
       plan.gitExcludes = await findMcpGitExcludes(dirs);
+      await planGitExcludeBlocks(plan, localConfig);
       // (h) teamai's git hook, in the config every worktree shares.
       if (localConfig.projectRoot) {
         const { removeGitHook } = await import('./git-hook.js');
@@ -1099,6 +1123,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.shellProfiles.length === 0 &&
     plan.docsDir === null &&
     plan.gitExcludes.size === 0 &&
+    plan.gitExcludeBlocks.length === 0 &&
     plan.gitHook === null &&
     !plan.teamaiHomeExists
   );
@@ -1225,9 +1250,11 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('');
   }
 
-  if (plan.gitExcludes.size > 0) {
-    console.log('   Git exclude entries for MCP configs (teamai\'s block):');
-    for (const [file, entries] of plan.gitExcludes) console.log(`     ${file} (${entries.map((entry) => entry.pattern).join(', ')})`);
+  if (plan.gitExcludeBlocks.length > 0) {
+    console.log('   Git exclude blocks (teamai\'s):');
+    for (const { excludeFile, owner, lines } of plan.gitExcludeBlocks) {
+      console.log(`     ${owner} in ${excludeFile} (${lines.length} ${lines.length === 1 ? 'line' : 'lines'})`);
+    }
     console.log('');
   }
 
@@ -1287,6 +1314,171 @@ async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
   Object.assign(plan, { skillDirs, ruleFiles, agentFiles });
 }
 
+// ─── Git exclude blocks (#915) ─────────────────────────
+
+/**
+ * The project's checkouts: the current one, every live recorded one, and
+ * every one `git worktree list` names when it names them all; when it cannot
+ * (a `--separate-git-dir` repo or a submodule lists its git directory for its
+ * main checkout), every recorded root instead.
+ */
+async function projectCheckouts(localConfig: LocalConfig): Promise<string[]> {
+  const projectRoot = localConfig.projectRoot;
+  if (!projectRoot) return [];
+  const records = (await loadStateForScope(localConfig)).lastPullByWorkspace ?? {};
+  const roots = (from: typeof records | undefined): string[] => Object.values(from ?? {}).flatMap(({ root }) => root ? [root] : []);
+  const commonDir = await gitCommonDir(projectRoot);
+  const listed = commonDir ? await completeWorktreeList(projectRoot, commonDir) : null;
+  return [...new Set([projectRoot, ...roots(await liveCheckoutRecords(projectRoot, records)), ...listed ?? roots(records)])];
+}
+
+/**
+ * Where this project's blocks are and which of them uninstall removes: the
+ * exclude files its `delivered` owners recorded, the project's own (also when
+ * the record lost it), and those holding its MCP lines (`plan.gitExcludes`).
+ * Every teamai block in them goes, but another project's: a `delivered`
+ * block in a repository other than this project's, another partition's
+ * `delivered/<id>`. Read-only.
+ */
+async function planGitExcludeBlocks(plan: RemovalPlan, localConfig: LocalConfig): Promise<void> {
+  const own = localConfig.projectRoot ? (await gitExcludeFile(localConfig.projectRoot))?.excludeFile : undefined;
+  const here = deliveredOwner(localConfig);
+  const elsewhere = deliveredOwnerElsewhere(localConfig);
+  const ownFiles = new Set([...own ? [own] : [], ...await here.record?.files() ?? []]);
+  const files = new Set([...ownFiles, ...await elsewhere.record?.files() ?? [], ...plan.gitExcludes.keys()]);
+  plan.gitExcludeFiles = [...files];
+  plan.othersGitExcludeBlock = (owner, excludeFile) =>
+    (owner === here.name && !ownFiles.has(excludeFile)) || (owner.startsWith(`${here.name}/`) && owner !== elsewhere.name);
+  const preview = await removeGitExclude('all', {
+    files: plan.gitExcludeFiles,
+    keep: ({ owner, excludeFile }) => plan.othersGitExcludeBlock(owner, excludeFile),
+    dryRun: true,
+  });
+  plan.gitExcludeBlocks = preview.flatMap(({ excludeFile, removed }) =>
+    removed.filter(({ lines }) => lines.length > 0).map(({ owner, lines }) => ({ excludeFile, owner, lines })));
+}
+
+/**
+ * Remove the blocks `planGitExcludeBlocks` found, once uninstall deleted the
+ * files they hide. `heldMcp` keeps an MCP line (`<exclude file>\0<line>`)
+ * whose config may still hold a resolved value; a `credentials` line stays
+ * while the file it names is there. Each block that cannot go is named with
+ * the lines to delete by hand; a repository that is gone is skipped.
+ */
+async function removePlannedGitExcludeBlocks(plan: RemovalPlan, heldMcp: ReadonlySet<string>): Promise<void> {
+  const results = await removeGitExclude('all', {
+    files: plan.gitExcludeFiles,
+    keep: async ({ owner, line, excludeFile }) => {
+      if (plan.othersGitExcludeBlock(owner, excludeFile)) return true;
+      // A line uninstall did not find among this project's MCP configs is another project's.
+      if (owner === MCP_EXCLUDE_OWNER) return heldMcp.has(`${excludeFile}\0${line}`) || !plan.gitExcludes.get(excludeFile)?.some((e) => e.pattern === line);
+      if (owner === 'credentials') return keepsCredentialLine(plan, line, excludeFile);
+      return false;
+    },
+  });
+  for (const { excludeFile, write, removed, damaged } of results) {
+    const lines = removed.flatMap((block) => block.lines);
+    const byHand = `Delete these lines from it yourself, with each block's \`# [teamai:<owner>:start]\` and \`# [teamai:<owner>:end]\` markers: ${lines.join(', ')}.`;
+    switch (write.kind) {
+      case 'written':
+        log.info(`Removed teamai's git exclude blocks (${removed.map((block) => block.owner).join(', ')}) from ${excludeFile}`);
+        break;
+      case 'locked':
+        log.warn(`Kept teamai's git exclude blocks in ${excludeFile}: another teamai command held it past the wait. ${byHand}`);
+        break;
+      case 'notWritable':
+        log.warn(`Kept teamai's git exclude blocks in ${excludeFile}: ${write.message}. ${byHand}`);
+        break;
+      case 'writeFailed':
+        log.warn(`Kept teamai's git exclude blocks in ${excludeFile}: ${write.error}. ${byHand}`);
+        break;
+      case 'notReadable':
+        log.warn(`Kept teamai's git exclude blocks in ${excludeFile}: ${write.message}. Make it readable, then delete each block from its \`# [teamai:<owner>:start]\` line to its \`# [teamai:<owner>:end]\` line yourself.`);
+        break;
+      default:
+        break;
+    }
+    for (const { owner, line, problem } of damaged) {
+      if (problem === 'duplicate' || plan.othersGitExcludeBlock(owner, excludeFile)) continue;
+      log.warn(`Kept line ${line} of ${excludeFile}: a \`# [teamai:${owner}:${problem === 'unclosed' ? 'start' : 'end'}]\` marker with no ${problem === 'unclosed' ? 'end' : 'start'}, which teamai leaves with the lines after it. Delete it, and any of the lines that are teamai's, yourself.`);
+    }
+  }
+}
+
+/** Whether a `credentials` line stays: the file it names is still in a checkout of this project's repository. */
+async function keepsCredentialLine(plan: RemovalPlan, line: string, excludeFile: string): Promise<boolean> {
+  const rel = mcpExcludePatternPath(line);
+  const roots = await Promise.all(plan.checkouts.map(async (root) => (await gitExcludeFile(root))?.excludeFile === excludeFile ? root : null));
+  const present = (await Promise.all(roots.filter((root): root is string => root !== null).map(async (root) => {
+    const file = path.join(root, rel);
+    return await pathExists(file) ? file : null;
+  }))).filter((file): file is string => file !== null);
+  // A file of another repository, which this project's checkouts cannot judge, keeps its line too.
+  if (present.length === 0 && roots.some((root) => root !== null)) return false;
+  if (present.length > 0) {
+    log.warn(`Kept \`${line}\` in ${excludeFile}, so git still ignores ${present.join(', ')}: it may hold a credential. `
+      + `Delete it once you no longer need it, then delete that line from ${excludeFile} yourself, and the block's two marker lines with its last one.`);
+  }
+  return true;
+}
+
+/**
+ * `uninstall --agent <tool>`: drop the paths under the tool's roots (every
+ * path field of its `scopedToolPaths`, and `.agents/skills` for Codex) from
+ * every checkout's list, unless another tool still in use shares the root,
+ * then sync the `delivered` blocks with what is left.
+ */
+async function dropToolGitExcludePaths(localConfig: LocalConfig, teamConfig: TeamaiConfig, tool: string): Promise<void> {
+  const projectRoot = localConfig.projectRoot;
+  if (localConfig.scope !== 'project' || !projectRoot) return;
+  const toolPaths = scopedToolPaths(teamConfig, localConfig);
+  const pathsOf = (id: string): string[] => {
+    const paths = toolPaths[id] ?? {};
+    const fields = [paths.skills, paths.rules, paths.agents, paths.settings, paths.hooks, paths.claudemd, paths.mcpProject];
+    return fields.filter((p): p is string => typeof p === 'string' && p !== '');
+  };
+  const codexShared = (id: string): string[] => id === CODEX_TOOL ? [SHARED_AGENT_SKILLS_PATH] : [];
+  // The tool's roots (`.claude`, `.github`), less what another tool in use reads there (WorkBuddy's `.codebuddy/rules`).
+  const roots = [...new Set([...pathsOf(tool).map(toolInstallRoot), ...codexShared(tool)])];
+  const others = Object.keys(toolPaths).filter((id) => id !== tool && !isAgentExcluded(localConfig, id))
+    .flatMap((id) => [...pathsOf(id), ...codexShared(id)]);
+  const state = await loadStateForScope(localConfig);
+  const records = state.lastPullByWorkspace ?? {};
+  const checkouts = [...new Set([await realpath(projectRoot).catch(() => projectRoot), ...Object.values(records).flatMap(({ root }) => root ? [root] : [])])];
+  const inside = (rels: string[]) => {
+    const dirs = checkouts.flatMap((checkout) => rels.map((rel) => path.join(checkout, rel)));
+    return (file: string): boolean => dirs.some((dir) => file === dir || file.startsWith(`${dir}${path.sep}`));
+  };
+  const underTool = inside(roots);
+  const underOther = inside(others);
+  let changed = false;
+  for (const record of Object.values(records)) {
+    if (!record.gitExcludePaths) continue;
+    const kept: Record<string, string[]> = {};
+    for (const [writer, files] of Object.entries(record.gitExcludePaths)) {
+      const left = files.filter((file) => !underTool(file) || underOther(file));
+      if (left.length !== files.length) changed = true;
+      if (left.length > 0) kept[writer] = left;
+    }
+    record.gitExcludePaths = kept;
+  }
+  if (changed) await saveStateForScope(state, localConfig);
+  await syncDeliveredGitExclude(localConfig, createDeliveryRecorder());
+}
+
+/** The partition's sync lock, as pull and push take it; null when the scope has none (HTTP). */
+async function takeSyncLock(localConfig: LocalConfig): Promise<string | null | false> {
+  if (localConfig.repo.kind === 'http') return null;
+  const { acquireLock } = await import('./update.js');
+  const lock = path.join(getDataHome(localConfig), SYNC_LOCK_FILENAME);
+  // A pull a git hook or session start left running finishes soon.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (await acquireLock(lock)) return lock;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
 // ─── Execution ─────────────────────────────────────────
 
 /**
@@ -1303,7 +1495,8 @@ async function teardownPlugins(): Promise<void> {
   }
 }
 
-async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeInstructions']> {
+/** `heldMcp`: the MCP git exclude lines that stay (`<exclude file>\0<line>`), judged before the manifests go. */
+async function executeRemoval(plan: RemovalPlan, heldMcp: ReadonlySet<string>): Promise<RemovalPlan['opencodeInstructions']> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
@@ -1551,6 +1744,10 @@ async function executeRemoval(plan: RemovalPlan): Promise<RemovalPlan['opencodeI
     }
   }
 
+  // (f2) teamai's git exclude blocks (#915): after the files they hid, before
+  // the partition state that records which exclude files hold them.
+  if (plan.includeShared) await removePlannedGitExcludeBlocks(plan, heldMcp);
+
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
   if (plan.teamaiHomeExists && pendingOpencode.length === 0) {
     // Tear down plugins first: their manifest/config live under ~/.teamai/local-agent.
@@ -1652,183 +1849,209 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       }
     }
 
-    if (exclusionOnly) {
-      // Exclusion is a config write even when there are no local files to delete.
-      await excludeUninstalledAgent(localConfig, agentKey!);
-      log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
+    // As pull and push do: a pull beside uninstall would write the blocks back.
+    const syncLock = await takeSyncLock(localConfig);
+    if (syncLock === false) {
+      log.error('Another teamai pull or push is in progress for this project. Run `teamai uninstall` again once it finishes.');
+      process.exitCode = 1;
       return;
     }
-
-    // Model profiles are machine-global, independent of a project's resources.
-    // Only removal of the user-scope TeamAI home may restore them. Run this
-    // gate before MCP cleanup so a model conflict cannot partially uninstall
-    // integrations in this or another worktree.
-    if (plan.includeShared && localConfig.scope === 'user') {
-      let modelRestoreIncomplete = false;
-      try {
-        const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');
-        const results = await restoreModelProfiles(ALL_MODEL_AGENTS);
-        const restored = results.filter((result) => result.status === 'restored').length;
-        if (restored > 0) log.info(`Restored model settings for ${restored} agent(s)`);
-        for (const result of results.filter((item) => item.status === 'failed' || item.status === 'skipped')) {
-          log.warn(result.message);
-          modelRestoreIncomplete = true;
-        }
-      } catch (e) {
-        log.warn(`Failed to restore TeamAI-managed model settings: ${(e as Error).message}`);
-        modelRestoreIncomplete = true;
+    try {
+      await removeConfirmed(localConfig, teamConfig, plan, agentKey, !!exclusionOnly);
+    } finally {
+      if (syncLock) {
+        const { releaseLock } = await import('./update.js');
+        await releaseLock(syncLock);
       }
-      if (modelRestoreIncomplete) {
-        log.error('Cannot remove TeamAI home while model restoration is incomplete. Resolve the model conflict or run `teamai models restore` first.');
-        process.exitCode = 1;
-        return;
-      }
-    }
-
-    // MCP cleanup must run before executeRemoval deletes ~/.teamai/: ownership is
-    // tracked in managed-mcp.json inside that directory. Hooks already do this
-    // inside executeRemoval for the same reason. MCP servers are shared
-    // resources (see buildRemovalPlan), so only reconcile them away when this
-    // uninstall includes shared resources — a targeted non-last-tool uninstall
-    // must leave the remaining tools' MCP servers intact.
-    if (plan.includeShared) {
-      try {
-        const { reconcileMcpForConfig, projectWorktreeConfigs, mcpConfigsNotProvenClean } = await import('./mcp-reconcile.js');
-        // Project scope: the managed-mcp manifests are PER-WORKTREE under the
-        // shared partition (#374 P1-2C), and each worktree's MCP config lives in
-        // its own checkout. Since executeRemoval deletes the whole shared
-        // partition, we must first remove the managed MCP servers from EVERY
-        // linked worktree — otherwise a sibling worktree is left with an injected
-        // server whose ownership record just got deleted (orphaned). User scope
-        // has a single global manifest, so the current config is enough.
-        let removedTotal = 0;
-        for (const cfg of await projectWorktreeConfigs(localConfig)) {
-          const { changes } = await reconcileMcpForConfig(teamConfig, cfg, { removeAll: true });
-          removedTotal += changes.filter((c) => c.action === 'removed').length;
-        }
-        if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
-        // Worktrees share one info/exclude, so it goes once they are all clean,
-        // judged by what the files hold, not by what the cleanup reported: a
-        // lost manifest cleans nothing and reports nothing. Without the block,
-        // `git add -A` would commit a value teamai resolved.
-        if (plan.gitExcludes.size > 0) {
-          const { removeMcpGitExclude } = await import('./mcp-git-exclude.js');
-          const held = await mcpConfigsNotProvenClean(teamConfig, localConfig, [...plan.gitExcludes.values()].flat());
-          for (const [excludeFile, entries] of plan.gitExcludes) {
-            const clean: string[] = [];
-            for (const { pattern, files } of entries) {
-              const still = files.flatMap((file) => {
-                const why = held.get(file);
-                return why ? [`${file} (${why})`] : [];
-              });
-              if (still.length === 0) {
-                clean.push(pattern);
-                continue;
-              }
-              log.warn(
-                `Kept \`${pattern}\` in ${excludeFile}, so git still ignores ${still.join('; ')}: it may hold MCP values teamai resolved to plaintext. `
-                + `Remove teamai's MCP servers from it (or delete the file), then delete that line from ${excludeFile} yourself, and the block's two marker lines with its last one.`,
-              );
-            }
-            if (clean.length === 0) continue;
-            const result = await removeMcpGitExclude(excludeFile, clean);
-            if (result === 'written') log.info(`Removed teamai's MCP config entries ${clean.join(', ')} from ${excludeFile}`);
-            if (result === 'locked') {
-              log.warn(`Kept teamai's block in ${excludeFile}: another teamai command held it past the wait. Delete the block's ${clean.join(', ')} lines yourself.`);
-            }
-          }
-        }
-      } catch (e) {
-        log.warn(`Failed to remove MCP servers: ${(e as Error).message}`);
-      }
-    }
-
-    const pendingOpencode = await executeRemoval(plan);
-
-    // The OpenCode entries uninstall removed are no longer teamai's to track;
-    // one still listed (the write failed) stays recorded for the next try.
-    if (plan.opencodeInstructions.length > 0 && (!plan.includeShared || pendingOpencode.length > 0)) {
-      const { loadStateForScope, saveStateForScope } = await import('./config.js');
-      const state = await loadStateForScope(localConfig!);
-      if (state.opencodeContextEntries) {
-        const removed = plan.opencodeInstructions.filter((ref) => !pendingOpencode.some(
-          (pending) => pending.config === ref.config && pending.entry === ref.entry,
-        ));
-        state.opencodeContextEntries = state.opencodeContextEntries.filter(
-          (ref) => !removed.some((e) => e.config === ref.config && e.entry === ref.entry),
-        );
-        await saveStateForScope(state, localConfig!);
-      }
-    }
-
-    // Persist the exclusion so the next pull (or another tool's session-start
-    // hook) does not resurrect this tool's resources. Only meaningful when the
-    // shared ~/.teamai home survives (non-last-tool uninstall); on a last-tool
-    // uninstall the home is deleted and there is nothing to persist.
-    if (agentKey && (!plan.includeShared || pendingOpencode.length > 0)) {
-      await excludeUninstalledAgent(localConfig, agentKey);
-    }
-
-    if (pendingOpencode.length > 0) {
-      log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and OpenCode ownership so removal can be retried. Repair permissions or JSON in ${pendingOpencode.map((ref) => ref.config).join(', ')}, then run the same uninstall command again.`);
-      process.exitCode = 1;
-    } else {
-      log.success('teamai uninstalled');
     }
   } else {
-    // Minimal uninstall — just try to remove ~/.teamai/
-    if (opts.agent) {
-      log.warn('No valid teamai configuration detected; cannot target a specific tool with --agent');
-      process.exitCode = 2;
-      return;
-    }
-    const home = path.join(getUserHome(), '.teamai');
-    if (!await pathExists(home)) {
-      log.info('Nothing to uninstall');
-      return;
-    }
+    await uninstallHomeOnly(opts);
+  }
+}
 
-    console.log('');
-    console.log('⚠  Uninstalling user scope (no valid configuration detected — home directory only)');
-    console.log('⚠  The following TeamAI home directory will be removed:');
-    console.log(`     ${home}/`);
-    console.log('');
+/** Uninstall what `plan` names, once the member confirmed it, under the partition's sync lock. */
+async function removeConfirmed(
+  localConfig: LocalConfig,
+  teamConfig: TeamaiConfig,
+  plan: RemovalPlan,
+  agentKey: string | undefined,
+  exclusionOnly: boolean,
+): Promise<void> {
+  if (exclusionOnly) {
+    // Exclusion is a config write even when there are no local files to delete.
+    await dropToolGitExcludePaths(localConfig, teamConfig, agentKey!);
+    await excludeUninstalledAgent(localConfig, agentKey!);
+    log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
+    return;
+  }
 
-    if (opts.dryRun) {
-      log.info('Dry run — no changes made');
-      return;
-    }
-
-    if (!opts.force) {
-      const confirmed = await askConfirmation('Confirm uninstall? [y/N] ');
-      if (!confirmed) {
-        log.info('Cancelled');
-        return;
-      }
-    }
-
+  // Model profiles are machine-global, independent of a project's resources.
+  // Only removal of the user-scope TeamAI home may restore them. Run this
+  // gate before MCP cleanup so a model conflict cannot partially uninstall
+  // integrations in this or another worktree.
+  if (plan.includeShared && localConfig.scope === 'user') {
+    let modelRestoreIncomplete = false;
     try {
-      try {
-        const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');
-        const results = await restoreModelProfiles(ALL_MODEL_AGENTS);
-        const incomplete = results.filter((result) => result.status === 'failed' || result.status === 'skipped');
-        if (incomplete.length > 0) {
-          for (const result of incomplete) log.warn(result.message);
-          log.error('Cannot remove TeamAI home while model restoration is incomplete.');
-          process.exitCode = 1;
-          return;
+      const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');
+      const results = await restoreModelProfiles(ALL_MODEL_AGENTS);
+      const restored = results.filter((result) => result.status === 'restored').length;
+      if (restored > 0) log.info(`Restored model settings for ${restored} agent(s)`);
+      for (const result of results.filter((item) => item.status === 'failed' || item.status === 'skipped')) {
+        log.warn(result.message);
+        modelRestoreIncomplete = true;
+      }
+    } catch (e) {
+      log.warn(`Failed to restore TeamAI-managed model settings: ${(e as Error).message}`);
+      modelRestoreIncomplete = true;
+    }
+    if (modelRestoreIncomplete) {
+      log.error('Cannot remove TeamAI home while model restoration is incomplete. Resolve the model conflict or run `teamai models restore` first.');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // MCP cleanup must run before executeRemoval deletes ~/.teamai/: ownership is
+  // tracked in managed-mcp.json inside that directory. Hooks already do this
+  // inside executeRemoval for the same reason. MCP servers are shared
+  // resources (see buildRemovalPlan), so only reconcile them away when this
+  // uninstall includes shared resources — a targeted non-last-tool uninstall
+  // must leave the remaining tools' MCP servers intact.
+  // Every MCP line stays unless judged clean below (`<exclude file>\0<line>`).
+  const heldMcp = new Set([...plan.gitExcludes].flatMap(([file, entries]) => entries.map(({ pattern }) => `${file}\0${pattern}`)));
+  if (plan.includeShared) {
+    try {
+      const { reconcileMcpForConfig, projectWorktreeConfigs, mcpConfigsNotProvenClean } = await import('./mcp-reconcile.js');
+      // Project scope: the managed-mcp manifests are PER-WORKTREE under the
+      // shared partition (#374 P1-2C), and each worktree's MCP config lives in
+      // its own checkout. Since executeRemoval deletes the whole shared
+      // partition, we must first remove the managed MCP servers from EVERY
+      // linked worktree — otherwise a sibling worktree is left with an injected
+      // server whose ownership record just got deleted (orphaned). User scope
+      // has a single global manifest, so the current config is enough.
+      let removedTotal = 0;
+      for (const cfg of await projectWorktreeConfigs(localConfig)) {
+        const { changes } = await reconcileMcpForConfig(teamConfig, cfg, { removeAll: true });
+        removedTotal += changes.filter((c) => c.action === 'removed').length;
+      }
+      if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
+      // Worktrees share one info/exclude, so a line goes once they are all clean,
+      // judged by what the files hold, not by what the cleanup reported: a
+      // lost manifest cleans nothing and reports nothing. Without the line,
+      // `git add -A` would commit a value teamai resolved. Judged now, while
+      // the manifests are there; the line goes with the other blocks below.
+      if (plan.gitExcludes.size > 0) {
+        const held = await mcpConfigsNotProvenClean(teamConfig, localConfig, [...plan.gitExcludes.values()].flat());
+        heldMcp.clear();
+        for (const [excludeFile, entries] of plan.gitExcludes) {
+          for (const { pattern, files } of entries) {
+            const still = files.flatMap((file) => {
+              const why = held.get(file);
+              return why ? [`${file} (${why})`] : [];
+            });
+            if (still.length === 0) continue;
+            heldMcp.add(`${excludeFile}\0${pattern}`);
+            log.warn(
+              `Kept \`${pattern}\` in ${excludeFile}, so git still ignores ${still.join('; ')}: it may hold MCP values teamai resolved to plaintext. `
+              + `Remove teamai's MCP servers from it (or delete the file), then delete that line from ${excludeFile} yourself, and the block's two marker lines with its last one.`,
+            );
+          }
         }
-      } catch (e) {
-        log.warn(`Failed to restore TeamAI-managed model settings: ${(e as Error).message}`);
+      }
+    } catch (e) {
+      log.warn(`Failed to remove MCP servers: ${(e as Error).message}`);
+    }
+  }
+
+  const pendingOpencode = await executeRemoval(plan, heldMcp);
+
+  // The tool's files are gone: its lines go from every checkout's list (#915).
+  if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey);
+
+  // The OpenCode entries uninstall removed are no longer teamai's to track;
+  // one still listed (the write failed) stays recorded for the next try.
+  if (plan.opencodeInstructions.length > 0 && (!plan.includeShared || pendingOpencode.length > 0)) {
+    const state = await loadStateForScope(localConfig!);
+    if (state.opencodeContextEntries) {
+      const removed = plan.opencodeInstructions.filter((ref) => !pendingOpencode.some(
+        (pending) => pending.config === ref.config && pending.entry === ref.entry,
+      ));
+      state.opencodeContextEntries = state.opencodeContextEntries.filter(
+        (ref) => !removed.some((e) => e.config === ref.config && e.entry === ref.entry),
+      );
+      await saveStateForScope(state, localConfig!);
+    }
+  }
+
+  // Persist the exclusion so the next pull (or another tool's session-start
+  // hook) does not resurrect this tool's resources. Only meaningful when the
+  // shared ~/.teamai home survives (non-last-tool uninstall); on a last-tool
+  // uninstall the home is deleted and there is nothing to persist.
+  if (agentKey && (!plan.includeShared || pendingOpencode.length > 0)) {
+    await excludeUninstalledAgent(localConfig, agentKey);
+  }
+
+  if (pendingOpencode.length > 0) {
+    log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and OpenCode ownership so removal can be retried. Repair permissions or JSON in ${pendingOpencode.map((ref) => ref.config).join(', ')}, then run the same uninstall command again.`);
+    process.exitCode = 1;
+  } else {
+    log.success('teamai uninstalled');
+  }
+}
+
+/** No valid configuration: remove ~/.teamai/ only. */
+async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
+  if (opts.agent) {
+    log.warn('No valid teamai configuration detected; cannot target a specific tool with --agent');
+    process.exitCode = 2;
+    return;
+  }
+  const home = path.join(getUserHome(), '.teamai');
+  if (!await pathExists(home)) {
+    log.info('Nothing to uninstall');
+    return;
+  }
+
+  console.log('');
+  console.log('⚠  Uninstalling user scope (no valid configuration detected — home directory only)');
+  console.log('⚠  The following TeamAI home directory will be removed:');
+  console.log(`     ${home}/`);
+  console.log('');
+
+  if (opts.dryRun) {
+    log.info('Dry run — no changes made');
+    return;
+  }
+
+  if (!opts.force) {
+    const confirmed = await askConfirmation('Confirm uninstall? [y/N] ');
+    if (!confirmed) {
+      log.info('Cancelled');
+      return;
+    }
+  }
+
+  try {
+    try {
+      const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');
+      const results = await restoreModelProfiles(ALL_MODEL_AGENTS);
+      const incomplete = results.filter((result) => result.status === 'failed' || result.status === 'skipped');
+      if (incomplete.length > 0) {
+        for (const result of incomplete) log.warn(result.message);
+        log.error('Cannot remove TeamAI home while model restoration is incomplete.');
         process.exitCode = 1;
         return;
       }
-      await teardownPlugins();
-      await remove(home);
-      log.success(`Removed ${home}/`);
-      log.success('teamai uninstalled');
     } catch (e) {
-      log.warn(`Failed to remove ${home}: ${(e as Error).message}`);
+      log.warn(`Failed to restore TeamAI-managed model settings: ${(e as Error).message}`);
+      process.exitCode = 1;
+      return;
     }
+    await teardownPlugins();
+    await remove(home);
+    log.success(`Removed ${home}/`);
+    log.success('teamai uninstalled');
+  } catch (e) {
+    log.warn(`Failed to remove ${home}: ${(e as Error).message}`);
   }
 }

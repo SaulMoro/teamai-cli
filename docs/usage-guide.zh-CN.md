@@ -1583,6 +1583,8 @@ MCP 与 OpenCode 的配置文件、`.codex/hooks.json` 以及文档镜像不会�
 
 **预览。** `teamai pull --dry-run` 为每个块输出一行：``[dry-run] Would list N path(s) and drop M in teamai's delivered git exclude block in <file>``，选项关闭时为 ``[dry-run] Would remove teamai's delivered git exclude block from <file> (sharing.gitExclude is off)``。N 是该块将包含的行数：本次 pull 将写入的内容加上其他每个仍存在的 checkout 的列表。预览不写入任何内容：不改 exclude 文件，不创建 `info/` 目录，也不创建锁文件。hook 与 co-author 文件按它们当前含有 teamai 条目的情况预览。
 
+**卸载。** `teamai uninstall` 在删除这些块所隐藏的文件之后移除 teamai 的块，`uninstall --agent <tool>` 只移除该工具的行；见[卸载](#卸载)。
+
 **单仓模式。** 该设置开启时：
 
 - 内置 hooks 仍留在已提交的工具设置（`.claude/settings.json`）里，因此新 clone 依然带有它们。团队的 Claude Code hooks（`.teamai/hooks/hooks.yaml`）写入每个 checkout 自己的 `.claude/settings.local.json`，该文件会被列出，因此 pull 不再改动已提交的设置。开启该设置后的第一次 pull 会把团队 hooks 从 `.claude/settings.json` 中移除一次：请提交这次改动。关闭后，下一次 pull 会把它们放回 `.claude/settings.json`，并在 `.claude/settings.local.json` 不再含有其他内容时删除它。
@@ -2891,15 +2893,20 @@ teamai uninstall --agent claude
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
 - 项目中 teamai 的 git hook：仓库 git 配置中的 `hook.teamai-post-checkout`、`hook.teamai-post-merge` 与 `hook.teamai-post-rewrite` 条目，以及 `.git/hooks/post-checkout`、`post-merge` 与 `post-rewrite` 中带标记的代码块（移除后只剩 shebang 的脚本是 teamai 创建的，会被删除）。其他 hook 保留
+- 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在其指向的文件仍存在时同样保留。只读的 exclude 文件保持原样，警告中会列出需要手动删除的行；所属仓库已不存在的 exclude 文件会跳过
 - `~/.teamai/` 目录
 
 git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
+
+uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副本保留在磁盘上，块移除后 git 会在那里显示它们。`--dry-run` 在 `Git exclude blocks (teamai's):` 下列出将要移除的块，每个所有者和文件一行。与 pull 一样，uninstall 运行期间持有项目的同步锁，因此后台 pull 无法把块写回；若另一个 pull 或 push 在短暂等待后仍持有该锁，uninstall 不做任何改动并以状态 1 退出：待其结束后再运行一次。
 
 ### 只卸载单个工具（`--agent <tool>`）
 
 `--agent <tool>` 只移除该工具的 teamai 资源（hooks、团队指令块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
 多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
+
+在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
 
 跨工具共享资源（shell profile env 块、docs 目录、`~/.teamai/`）**仅当该工具自身存在 teamai 资源、且它是最后一个仍在使用 teamai 的工具时**才一并移除，否则会为其余工具保留。没有本地资源的工具即使是唯一的工具，定向卸载也会保留共享资源。Pi、Oh My Pi、Hermes 和 Codex 系列的指令通道位于全局，因此项目级卸载仍会记录对它们的排除设置。
 
