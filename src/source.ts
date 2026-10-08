@@ -1378,7 +1378,7 @@ async function isSourceSkillCopy(dir: string, repoDir: string, skillName: string
  */
 async function isCopyOfCurrent(dir: string, current: ReadonlyMap<string, string | null>): Promise<boolean> {
   if (await isLink(dir) || await holdsNonRegular(dir)) return false;
-  const files = (await listFilesRecursive(dir)).filter((rel) => path.basename(rel) !== 'CONTRIBUTORS');
+  const files = await listFilesRecursive(dir);
   for (const rel of files) {
     const next = current.get(path.join(dir, rel));
     if (next == null || await fileHash(path.join(dir, rel)) !== next) return false;
@@ -1413,8 +1413,7 @@ async function legacyCopyKeeper(
       // without today's skill (withdrawn), nothing tells them apart: the record decides, as before.
       if (!history && !sourcePath) return false;
       for (const rel of await listFilesRecursive(skillDir)) {
-        if (path.basename(rel) === 'CONTRIBUTORS') continue;
-        // Only a regular file the source has, or had, counts: a link in the source is never delivered.
+        // Only a regular file the source has, or had, counts (CONTRIBUTORS too): a link in the source is never delivered.
         if (sourcePath && (await fse.lstat(path.join(sourcePath, rel)).catch(() => null))?.isFile()) continue;
         const versions = history ? await historicalVersions(repoDir, `${skillOrigin(repoDir, skillName).pathspec}/${rel}`) : null;
         if (versions === null || !versions.some((version) => version.mode !== '120000')) {

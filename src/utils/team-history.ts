@@ -48,8 +48,8 @@ export async function historicalVersions(repoPath: string, pathspec: string): Pr
     if (!header) continue;
     const file = tokens[++i];
     for (const [blob, mode] of [[header[4], header[2]], [header[3], header[1]]] as const) {
-      if (/^0+$/.test(blob) || seen.has(`${file}\0${blob}`)) continue;
-      seen.add(`${file}\0${blob}`);
+      if (/^0+$/.test(blob) || seen.has(`${file}\0${blob}\0${mode}`)) continue;
+      seen.add(`${file}\0${blob}\0${mode}`);
       versions.push({ path: file, blob, mode });
     }
   }
@@ -93,8 +93,10 @@ export async function matchesHistory(
   candidate: string | Uint8Array,
   render?: HistoryRender,
 ): Promise<boolean | null> {
-  const versions = await historicalVersions(repoPath, pathspec);
-  if (versions === null) return null;
+  const all = await historicalVersions(repoPath, pathspec);
+  if (all === null) return null;
+  // A file is proven only by a file the team had: a link's blob is its target text, not content.
+  const versions = all.filter((version) => version.mode !== '120000');
   const id = await blobIdOf(repoPath, candidate);
   if (!render) return versions.some((v) => v.blob === id);
   for (const version of versions) {

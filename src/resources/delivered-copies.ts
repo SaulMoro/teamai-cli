@@ -208,7 +208,7 @@ export async function membersLinkAt(file: string): Promise<string | null> {
 
 /**
  * Whether the skill directory `dir` is teamai's copy (#993): it exists, and
- * every file in it but CONTRIBUTORS is either what pull writes there now
+ * every file in it is either what pull writes there now
  * (`current`, by absolute path) or a version of that file of the skill in the
  * history `origin` names (`pathspec` is the skill directory; `renders` apply
  * to its SKILL.md). One file that is neither, the member's own included,
@@ -221,8 +221,8 @@ export async function isTeamaiSkillCopy(
 ): Promise<boolean> {
   // A link in place of the directory, or any non-regular entry inside it, is the member's.
   if (await isLink(dir) || !await isDirectory(dir) || await holdsNonRegular(dir)) return false;
+  // A CONTRIBUTORS file too: teamai's only on the same proof, never by its name.
   for (const rel of await listFilesRecursive(dir)) {
-    if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
     const file = path.join(dir, rel);
     const next = current.get(file);
     if (next != null && await fileHash(file) === next) continue;
@@ -285,7 +285,7 @@ export async function teamaiSkillFiles(
       const fileOrigin: CopyOrigin = {
         repoPath: origin.repoPath, pathspec: `${origin.pathspec}/${entryRel}`, renders: entryRel === SKILL_MD ? origin.renders : undefined,
       };
-      const teamais = entry.name === CONTRIBUTORS_FILE || previous?.[file] !== undefined || await isTeamaiCopy(file, fileOrigin);
+      const teamais = previous?.[file] !== undefined || await isTeamaiCopy(file, fileOrigin);
       (teamais ? result.teamais : result.members).push(file);
     }
   };
@@ -300,7 +300,6 @@ export async function teamaiSkillFiles(
  */
 async function holdsMembersFile(previous: DeliveredHashes, dir: string, origin?: CopyOrigin): Promise<boolean> {
   for (const rel of await listFilesRecursive(dir)) {
-    if (path.basename(rel) === CONTRIBUTORS_FILE) continue;
     const file = path.join(dir, rel);
     if (previous[file] !== undefined) continue;
     if (origin === undefined) return true;
