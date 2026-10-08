@@ -1,6 +1,6 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { autoDetectInit, loadStateForScope, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
+import { autoDetectInit, loadLocalConfig, loadStateForScope, resolveMemberToolRoots, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError } from './config.js';
 import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
 import { gitExcludeFile, gitTracks, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord, type GitExcludeFileRemoval } from './git-exclude.js';
 import {
@@ -1582,6 +1582,26 @@ async function planHomeGitExcludeBlocks(home: string): Promise<HomeGitExcludeBlo
 }
 
 /**
+ * Take teamai's servers out of the tools' local scopes every project
+ * partition records (#915), each with the tool roots its project config
+ * gives. The files it could not clean, whose records stay.
+ */
+async function removeHomeLocalScopeMcpServers(): Promise<string[]> {
+  const { removeLocalScopeMcpServers } = await import('./mcp-reconcile.js');
+  const { projectsRootDir, readAnchorFile } = await import('./utils/partition.js');
+  const left = new Set<string>();
+  for (const dir of await listDirs(projectsRootDir())) {
+    const dataHome = path.join(projectsRootDir(), dir);
+    const anchor = await readAnchorFile(dataHome);
+    const toolRoots = anchor && await pathExists(anchor)
+      ? await resolveMemberToolRoots(anchor, { selfHeal: false })
+      : (await loadLocalConfig())?.toolRoots;
+    for (const file of await removeLocalScopeMcpServers(dataHome, toolRoots)) left.add(file);
+  }
+  return [...left];
+}
+
+/**
  * Remove every teamai block `planHomeGitExcludeBlocks` found (#915), but the
  * lines of files still on disk and untracked in a checkout that reads that
  * exclude file (for a `credentials` line, a file that may hold a key), and
@@ -2361,8 +2381,16 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
     const { shutdownLocalAgentHttp } = await import('./local-agent.js');
     const shutdown = await shutdownLocalAgentHttp('teamai uninstall');
     if (shutdown === 'locked') return;
+    // Their records go with the home: a server teamai could not take out keeps it (#915).
+    const mcpLeft = await removeHomeLocalScopeMcpServers();
     await removeHomeGitExcludeBlocks(blocks);
     if (shutdown === 'incomplete') return;
+    if (mcpLeft.length > 0) {
+      log.warn(`Uninstall incomplete: kept ${home} and the records of teamai's MCP servers so removal can be retried. `
+        + `Repair the JSON or permissions of ${mcpLeft.join(', ')}, then run \`teamai uninstall\` again.`);
+      process.exitCode = 1;
+      return;
+    }
     await remove(home);
     log.success(`Removed ${home}/`);
     log.success('teamai uninstalled');

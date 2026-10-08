@@ -1248,6 +1248,7 @@ CodeBuddy 的项目级 server 也以同样方式移到 CodeBuddy 的 local scope
 以前的安装留在 `.mcp.json` 中的 server 会在本地 agent 下一次同步时移过去；你改动过的副本留在原处并给出提示，归你所有；
 其他工具的记录仍认领的条目也留在原处。选项关闭时不会移动任何内容；teamai 无法读取该选项时，本地 agent 不会在该工作区为
 Claude 或 CodeBuddy 安装任何内容，并说明原因。`teamai doctor` 会指出本地 agent 记录的、仍在 `.mcp.json` 中的 server。
+`teamai source remove-http` 不移除这些 server，但保留它们的记录，因此之后的 `teamai uninstall`（包括找不到任何配置的卸载）会移除它们（见[卸载](#卸载)）。
 
 TeamAI 仅在所有权记录证明已完成顶层写入且内容仍匹配时，才删除 `mcpServers` 旁的 Copilot 顶层条目。旧记录缺少位置证据时，即使内容与团队定义相同，也保留顶层条目。顶层所有权记录不授权修改 `mcpServers` 下的同名成员条目；更新跳过该冲突，移除时只清理受管理的顶层副本。缺少位置标记的记录只有在哈希匹配嵌套条目且不同时匹配顶层条目时，才能认领嵌套条目。完成的嵌套写入记录 `bare: false`；位置记录写入失败时，所有权仍未得到证明。HTTP 本地代理首次安装先只读检查 Git 保护，再保存临时所有权记录，随后添加排除规则和文件记录，最后写入凭据。初始所有权记录写入失败不会改变 Git 排除规则或 MCP 配置。
 
@@ -2967,7 +2968,7 @@ teamai uninstall --agent claude
 - 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。卸载未完成时，仍在磁盘上的文件的行全部保留，留待重试时移除。只读的 exclude 文件（或被另一个 teamai 命令占用超过短暂等待时间的文件）保持原样，警告中会列出需要手动删除的行；此时记录该文件的 teamai 数据目录也会保留，卸载报告未完成（退出码 1），文件可写后再次运行即可移除该块。所属仓库已不存在的 exclude 文件会跳过
 - 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
-- `~/.teamai/` 目录。卸载找不到任何配置时（在所有项目之外运行，且没有 user scope 配置，例如只用 `init --http` 设置过的机器），会移除该目录和 HTTP 源，并在此之前从其记录中提到的每个 exclude 文件里移除 teamai 的 git exclude 行；它留在磁盘上的文件，其行会保留并被指出
+- `~/.teamai/` 目录。卸载找不到任何配置时（在所有项目之外运行，且没有 user scope 配置，例如只用 `init --http` 设置过的机器），会移除该目录和 HTTP 源，并在此之前从其记录中提到的每个 exclude 文件里移除 teamai 的 git exclude 行；它留在磁盘上的文件，其行会保留并被指出；还会移除本地 agent 记录在 Claude 和 CodeBuddy local scope（`~/.claude.json`、`.codebuddy.json`）中的 MCP server，只移除仍与 teamai 写入时相同的：你改动过的副本会保留并被指出，你自己的 server 也保留。若存放 teamai server 的文件无法读取或写入（例如无法解析），该目录连同这些记录一并保留，卸载报告未完成（退出码 1）并指出该文件；修好文件后再次运行即可
 
 git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
 

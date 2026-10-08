@@ -10,6 +10,7 @@ import type {
   ManagedMcpRecord,
 } from './types.js';
 import {
+  applyToolRoots,
   getMcpSharing,
   getEnvBackupPath,
   isAgentExcluded,
@@ -2793,20 +2794,11 @@ async function leaveOtherLocalScopes(
   for (const [key, records] of Object.entries(await readManifest(localMcpManifestPath(localConfig)))) {
     if (!key.startsWith(prefix) || ours(key) || key in ctx.manifest || !Array.isArray(records) || records.length === 0) continue;
     const target: McpTarget = { ...local, projectKey: key.slice(prefix.length) };
-    const installed = await installedMcpEntries(target);
-    const present = records.filter((record) => installed?.has(record.name));
-    const edited = ctx.options.removeAll ? [] : present.filter((record) => entryHash(installed?.get(record.name)) !== record.hash);
-    for (const { name } of edited) {
-      log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it. `
-        + `Remove it there when you no longer need it.`);
-    }
-    const owned = present.filter((record) => !edited.includes(record));
-    const removed: McpChange[] = [];
-    const result = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed,
-      async () => 'member', ctx.options, ctx.restoreConfigs);
+    const result = await leaveLocalScope(target, records, ctx.options, ctx.restoreConfigs);
     // Not read: its records stay.
     if (result === null) continue;
-    wrote ||= result;
+    const { removed } = result;
+    wrote ||= result.wrote;
     ctx.changes.push(...removed);
     ctx.manifest[key] = [];
     if (removed.length === 0 || ctx.options.removeAll) continue;
@@ -2815,6 +2807,77 @@ async function leaveOtherLocalScopes(
       + `${LOCAL_SCOPE_MCP_TOOLS[local.tool]} reads them from each checkout's MCP file.`);
   }
   return wrote;
+}
+
+/**
+ * Take the servers `records` claim out of the local scope `target` (#915).
+ * Only an entry that still equals what teamai wrote goes; one the member
+ * changed since stays, named, unless `removeAll`, and so does the member's own
+ * server. What it removed, and whether it wrote the file; null when the file
+ * does not parse, and so was not read.
+ */
+async function leaveLocalScope(
+  target: McpTarget,
+  records: readonly ManagedMcpRecord[],
+  options: McpReconcileOptions,
+  restoreConfigs: Map<string, () => Promise<void>>,
+): Promise<{ removed: McpChange[]; wrote: boolean } | null> {
+  const installed = await installedMcpEntries(target);
+  const present = records.filter((record) => installed?.has(record.name));
+  const edited = options.removeAll ? [] : present.filter((record) => entryHash(installed?.get(record.name)) !== record.hash);
+  for (const { name } of edited) {
+    log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it. `
+      + `Remove it there when you no longer need it.`);
+  }
+  const owned = present.filter((record) => !edited.includes(record));
+  const removed: McpChange[] = [];
+  const wrote = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed,
+    async () => 'member', options, restoreConfigs);
+  return wrote === null ? null : { removed, wrote };
+}
+
+/**
+ * Take teamai's servers out of every local scope the records in `dataHome`
+ * name (#915), for an uninstall that finds no configuration and so deletes
+ * those records with the data home: Claude's in its user config (as
+ * `toolRoots` places it), CodeBuddy's in `.codebuddy.json`. Only an entry
+ * that still equals what teamai wrote goes; a copy the member changed stays,
+ * named. The records of a scope it cleaned go; those of one it could not
+ * read or write stay. The files it could not clean.
+ */
+export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: Record<string, string>): Promise<string[]> {
+  const manifestPath = path.join(dataHome, 'managed-local-mcp.json');
+  const manifest = await readManifest(manifestPath);
+  const userMcp = applyToolRoots(TeamaiConfigSchema.shape.toolPaths.parse(undefined), toolRoots).claude?.mcp;
+  const files: Record<string, string | undefined> = {
+    claude: userMcp && path.join(getUserHome(), userMcp),
+    codebuddy: codebuddyLocalFile(),
+  };
+  const left = new Set<string>();
+  let removedTotal = 0;
+  for (const [key, records] of Object.entries(manifest)) {
+    const at = key.indexOf(LOCAL_KEY_INFIX);
+    const tool = key.slice(0, at);
+    const format = detectMcpFormat(tool);
+    const file = files[tool];
+    if (at < 0 || !Array.isArray(records) || !format || !file) continue;
+    const target: McpTarget = { tool, format, file, projectScope: true, projectKey: key.slice(at + LOCAL_KEY_INFIX.length) };
+    try {
+      const result = await leaveLocalScope(target, records, { removeAll: false }, new Map());
+      if (result === null) {
+        left.add(file);
+        continue;
+      }
+      removedTotal += result.removed.length;
+      delete manifest[key];
+    } catch (e) {
+      log.warn(`Could not remove teamai's MCP servers from ${describeMcpLocation(target)}: ${(e as Error).message}`);
+      left.add(file);
+    }
+  }
+  if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
+  if (left.size > 0) await writeJsonAtomic(manifestPath, manifest);
+  return [...left];
 }
 
 /**
