@@ -7,7 +7,9 @@
  * - CodeBuddy: `~/.codebuddy.json` → `projects[<worktree root>].mcpServers`.
  *
  * `uninstall_mcp` and `teamai uninstall` take out exactly what it installed
- * there. A server it installed in `.mcp.json` earlier moves at its next sync;
+ * there, and so does an uninstall that finds no configuration, which keeps
+ * teamai's home while a server stays in a file it cannot read. A server it
+ * installed in `.mcp.json` earlier moves at its next sync;
  * a copy the member changed stays, and is named. `git status` never shows an
  * MCP file.
  *
@@ -85,6 +87,7 @@ function machine(name: string) {
   });
   const readJson = (file: string): ToolJson => JSON.parse(fs.readFileSync(file, 'utf8')) as ToolJson;
   return {
+    base,
     home,
     git,
     cli,
@@ -282,5 +285,69 @@ describe.skipIf(process.platform === 'win32')('the HTTP local agent installs a p
     await m.sessionStart(wt, 'claude', [uninstallMcp(34, 'shared-api', wt)]);
     expect(ackStatus([34])).toEqual(['success']);
     expect(servers(m.readJson(m.claudeJson), app)).toEqual({ 'my-local': MY_LOCAL });
+  }, 180_000);
+
+  it('an uninstall that finds no configuration, after remove-http, takes its servers out of both local scopes, and keeps the member\'s and an edited copy, named', async () => {
+    const m = machine('home-only');
+    const app = await m.project('app');
+    m.setFlag(app, true);
+    await m.sessionStart(app, 'claude', [installMcp(41, 'claude-api', app), installMcp(42, 'edited-api', app)]);
+    await m.sessionStart(app, 'codebuddy', [installMcp(43, 'buddy-api', app)]);
+    expect(ackStatus([41, 42, 43])).toEqual(['success', 'success', 'success']);
+    // The member changes one of teamai's servers.
+    const claude = m.readJson(m.claudeJson);
+    const edited = { ...servers(claude, app)?.['edited-api'], url: 'https://mine.example.com/edited' };
+    servers(claude, app)!['edited-api'] = edited;
+    fs.writeFileSync(m.claudeJson, JSON.stringify(claude, null, 2));
+    // Removing the HTTP source leaves the servers, and their records.
+    const removed = await m.cli(['source', 'remove-http'], app);
+    expect(removed.code, removed.output).toBe(0);
+    expect(Object.keys(servers(m.readJson(m.claudeJson), app) ?? {}).sort()).toEqual(['claude-api', 'edited-api', 'my-local']);
+
+    // Outside the project, no configuration applies.
+    const out = await m.cli(['uninstall', '--force'], m.base);
+
+    expect(out.code, out.output).toBe(0);
+    expect(out.output).toContain('home directory only');
+    expect(fs.existsSync(path.join(m.home, '.teamai')), out.output).toBe(false);
+    expect(servers(m.readJson(m.claudeJson), app), out.output).toEqual({ 'my-local': MY_LOCAL, 'edited-api': edited });
+    expect(out.output).toContain(`Kept MCP server edited-api in ${m.claudeJson} (projects[${JSON.stringify(app)}]): you changed it since teamai wrote it`);
+    expect(servers(m.readJson(m.codebuddyJson), app), out.output).toEqual({ 'my-local': MY_LOCAL });
+    for (const file of [m.claudeJson, m.codebuddyJson]) {
+      expect(m.readJson(file).projects?.['/elsewhere/project'], file).toEqual(ELSEWHERE['/elsewhere/project']);
+      expect(m.readJson(file).numStartups, file).toBe(3);
+    }
+    expect(fs.readFileSync(m.codebuddyJson, 'utf8')).not.toContain(TOKEN);
+  }, 180_000);
+
+  it('an uninstall that finds no configuration keeps teamai\'s home while a local scope it holds servers in does not parse, and removes them once it does', async () => {
+    const m = machine('home-only-broken');
+    const app = await m.project('app');
+    m.setFlag(app, true);
+    await m.sessionStart(app, 'claude', [installMcp(51, 'claude-api', app)]);
+    expect(ackStatus([51])).toEqual(['success']);
+    const good = fs.readFileSync(m.claudeJson, 'utf8');
+    fs.writeFileSync(m.claudeJson, `${good}\n{ not json`);
+    const records = (): string[] => {
+      const projects = path.join(m.home, '.teamai', 'projects');
+      if (!fs.existsSync(projects)) return [];
+      return fs.readdirSync(projects).map((dir) => path.join(projects, dir, 'managed-local-mcp.json')).filter((file) => fs.existsSync(file));
+    };
+    expect(records()).toHaveLength(1);
+
+    const out = await m.cli(['uninstall', '--force'], m.base);
+
+    expect(out.code, out.output).toBe(1);
+    expect(out.output).toContain('Uninstall incomplete');
+    expect(out.output).toContain(m.claudeJson);
+    expect(records(), out.output).toHaveLength(1);
+
+    // Repaired, the same uninstall removes the server and the home.
+    fs.writeFileSync(m.claudeJson, good);
+    const retry = await m.cli(['uninstall', '--force'], m.base);
+    expect(retry.code, retry.output).toBe(0);
+    expect(servers(m.readJson(m.claudeJson), app), retry.output).toEqual({ 'my-local': MY_LOCAL });
+    expect(fs.readFileSync(m.claudeJson, 'utf8')).not.toContain(TOKEN);
+    expect(fs.existsSync(path.join(m.home, '.teamai')), retry.output).toBe(false);
   }, 180_000);
 });
