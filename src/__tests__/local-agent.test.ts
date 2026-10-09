@@ -2757,6 +2757,34 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(blockOf(app)).toEqual(['/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore']);
   });
 
+  it.skipIf(process.getuid?.() === 0)('keeps the record of a workspace cache removal could not delete, and deletes it on the retry', async () => {
+    await flag(true);
+    const app = await repo('app');
+    await run([rule(1, 'http-rule', app)], app);
+    const workspaces = path.join(app, '.teamai', 'workspaces');
+    const [id] = fs.readdirSync(workspaces);
+    const manifest = path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json');
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    fs.chmodSync(path.join(workspaces, id), 0o555);
+    process.exitCode = undefined;
+    try {
+      await removeLocalAgentHttp();
+    } finally {
+      fs.chmodSync(path.join(workspaces, id), 0o755);
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(fs.existsSync(path.join(workspaces, id, 'local-agent'))).toBe(true);
+    expect(fs.existsSync(manifest)).toBe(true);
+
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fs.existsSync(path.join(app, '.teamai'))).toBe(false);
+    expect(fs.existsSync(manifest)).toBe(false);
+  });
+
   it('follows a flag change at a run that brings no command, and leaves the block alone while nothing it is built from changed', async () => {
     await flag(true);
     const app = await repo('app');

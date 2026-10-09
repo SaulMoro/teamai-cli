@@ -1800,12 +1800,12 @@ async function teardownPlugins(): Promise<void> {
 async function executeRemoval(
   plan: RemovalPlan,
   heldMcp: ReadonlySet<string>,
-  /** Hooks that stay running whatever this removal does: their records stay too. */
-  hooksAlreadyLeft: Array<{ what: string; tool: string }> = [],
+  /** What stays whatever this removal does (hooks still running, files kept): their records stay too. */
+  alreadyLeft: { hooks?: Array<{ what: string; tool: string }>; files?: string[] } = {},
 ): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }>; blocksLeft: string[]; filesLeft: string[] }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   /** Delivered files a delete failed for: their lines and records stay for the retry. */
-  const filesLeft: string[] = [];
+  const filesLeft: string[] = [...alreadyLeft.files ?? []];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
     try {
@@ -1825,7 +1825,7 @@ async function executeRemoval(
   // below; in particular, project uninstall never owns Pi's global extension.
   // An entry no record claims goes when it equals exactly one hook in the team's history (#993).
   // A file whose hooks could not be removed keeps the records that own them, in the data home (#993).
-  const hooksLeft: Array<{ what: string; tool: string }> = [...hooksAlreadyLeft];
+  const hooksLeft: Array<{ what: string; tool: string }> = [...alreadyLeft.hooks ?? []];
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, teamHookProjectRoot, mainCheckout } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath, teamHookHistory: plan.teamHookHistory,
@@ -2354,10 +2354,14 @@ async function removeConfirmed(
   // sync holds, as `source remove-http` does (#993). User scope only
   // (globalAdapters), so the project's recorded exclude files, read when the
   // plan was built, are not involved.
+  const httpSourceLeft: string[] = [];
   if (plan.includeShared && plan.globalAdapters) {
     const { shutdownLocalAgentHttp } = await import('./local-agent.js');
     const retry = agentKey ? `teamai uninstall --agent ${agentKey}` : 'teamai uninstall';
-    if (await shutdownLocalAgentHttp(retry) === 'locked') return;
+    const shutdown = await shutdownLocalAgentHttp(retry);
+    if (shutdown === 'locked') return;
+    // What the HTTP source could not remove is recorded in its home, which must stay.
+    if (shutdown === 'incomplete') httpSourceLeft.push(path.join(plan.teamaiHome, 'local-agent'));
     if (localConfig.scope === 'user') {
       const left = await removeHomeLocalScopeMcpServers();
       if (left.length > 0) {
@@ -2424,8 +2428,10 @@ async function removeConfirmed(
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915),
   // before the data home goes: a dispatcher left running keeps the records for the retry.
   const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
-  const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp,
-    dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : []);
+  const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
+    hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
+    files: httpSourceLeft,
+  });
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
 
   // The tool's files are gone: its lines go from every checkout's list (#915).

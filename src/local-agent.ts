@@ -3147,20 +3147,24 @@ async function releaseModelKeyLines(): Promise<void> {
 
 /**
  * Local-agent removal: take teamai's models out of every project's models
- * file. A file left with nothing goes, and then its git exclude line.
+ * file. A file left with nothing goes, and then its git exclude line. The
+ * models files it could not clean, whose record the teardown then keeps.
  */
-async function removeWorkspaceModels(): Promise<void> {
+async function removeWorkspaceModels(): Promise<string[]> {
   const manifest = (await readJson<ModelConfigManifest>(getModelManifestPath()).catch(() => null)) ?? {};
+  const left: string[] = [];
   for (const [workspacePath, scopeManifest] of Object.entries(manifest.workspaceModels ?? {})) {
     for (const agentKind of ['codebuddy', 'workbuddy'] as const) {
       if (scopeManifest[agentKind] === undefined) continue;
       try {
         await reconcileBuddyModels([], true, scopeManifest, agentKind, workspacePath);
       } catch (e) {
+        left.push(buddyModelsPath(agentKind, workspacePath));
         log.warn(`Could not remove teamai's models from ${buddyModelsPath(agentKind, workspacePath)}: ${(e as Error).message}`);
       }
     }
   }
+  return left;
 }
 
 async function readBuddyModelEntries(
@@ -4758,8 +4762,16 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
   const config = await loadLocalAgentConfig();
   if (!config) {
     if (!await disabledSourceLeftovers()) return 'none';
+    // A retry: the caches an earlier run could not delete are still in the manifest.
+    const cachesLeft: string[] = [];
+    for (const [key, scopeManifest] of Object.entries((await loadManifest()).scopes)) {
+      const { scope, workspacePath } = parseScopeKey(key);
+      if (scope === 'project' && workspacePath && emptiedWorkspace(scopeManifest) && !await removeWorkspaceCache(workspacePath)) {
+        cachesLeft.push(workspacePath);
+      }
+    }
     await removeLocalAgentGitExclude(await localAgentCheckouts());
-    return finishAgentHookTeardown(retry);
+    return finishAgentHookTeardown(retry, { models: await removeWorkspaceModels(), caches: cachesLeft });
   }
   // Read before the marker and the teardown below delete what names them (#915).
   const checkouts = await localAgentCheckouts();
@@ -4774,6 +4786,7 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
 
   const kinds: CommandResourceKind[] = ['skill', 'rule', 'claudemd'];
   const manifest = await loadManifest();
+  const cachesLeft: string[] = [];
   for (const [key, scopeManifest] of Object.entries(manifest.scopes)) {
     const { scope, workspacePath } = parseScopeKey(key);
     for (const kind of kinds) {
@@ -4786,15 +4799,19 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
       }
     }
     const left = (await loadManifest()).scopes[key];
-    if (scope === 'project' && workspacePath && kinds.every((kind) => Object.keys(left?.[manifestKind(kind)] ?? {}).length === 0)) {
-      await removeWorkspaceCache(workspacePath);
+    if (scope === 'project' && workspacePath && emptiedWorkspace(left) && !await removeWorkspaceCache(workspacePath)) {
+      cachesLeft.push(workspacePath);
     }
   }
 
   // Before the state home goes: it records which exclude files hold the block (#915).
   await removeLocalAgentGitExclude(checkouts);
-  await removeWorkspaceModels();
-  return finishAgentHookTeardown(retry);
+  return finishAgentHookTeardown(retry, { models: await removeWorkspaceModels(), caches: cachesLeft });
+}
+
+/** Whether the teardown uninstalled every entry of a workspace, so its cache can go. */
+function emptiedWorkspace(scopeManifest: ManifestScope | undefined): boolean {
+  return (['skill', 'rule', 'claudemd'] as const).every((kind) => Object.keys(scopeManifest?.[manifestKind(kind)] ?? {}).length === 0);
 }
 
 /**
@@ -4802,12 +4819,12 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
  * with the untracked `.gitignore` it wrote for it and the directories left
  * empty, once the teardown uninstalled every entry of the workspace (#915). A
  * cache an entry could not be removed from stays, hidden by that file, whose
- * line then stays too.
+ * line then stays too. False when the cache could not be deleted.
  */
-async function removeWorkspaceCache(workspacePath: string): Promise<void> {
+async function removeWorkspaceCache(workspacePath: string): Promise<boolean> {
   const teamaiDir = path.join(workspacePath, '.teamai');
   const repoPath = await getResourceRepoPath('project', workspacePath);
-  if (!repoPath.startsWith(teamaiDir + path.sep)) return;
+  if (!repoPath.startsWith(teamaiDir + path.sep)) return true;
   const cache = path.dirname(repoPath);
   try {
     await remove(cache);
@@ -4818,8 +4835,10 @@ async function removeWorkspaceCache(workspacePath: string): Promise<void> {
       if ((await fse.readdir(dir)).length > 0) break;
       await fse.rmdir(dir);
     }
+    return true;
   } catch (e) {
     log.warn(`Could not remove the local agent's cache in ${teamaiDir}: ${(e as Error).message}`);
+    return false;
   }
 }
 
@@ -4829,19 +4848,27 @@ async function removeWorkspaceCache(workspacePath: string): Promise<void> {
  */
 async function disabledSourceLeftovers(): Promise<boolean> {
   if (Object.keys(await loadAgentHookManifest()).length > 0) return true;
+  // A teardown keeps these only for what it could not remove.
+  if (await pathExists(getModelManifestPath()) || await pathExists(getManifestPath())) return true;
   return (await localAgentGitExcludeOwner().record?.files().catch(() => []) ?? []).length > 0;
 }
 
 /**
  * Clear the HTTP source, preserving failed hook records for a retry, and the
  * record of exclude files still holding a teamai block (#915), so the next
- * `source remove-http` or `teamai uninstall` finds them.
+ * `source remove-http` or `teamai uninstall` finds them. So do models files
+ * and workspace caches `left` names: the manifests that name them stay.
  */
-async function finishAgentHookTeardown(retry: string): Promise<'removed' | 'incomplete'> {
+async function finishAgentHookTeardown(
+  retry: string,
+  left: { models: string[]; caches: string[] } = { models: [], caches: [] },
+): Promise<'removed' | 'incomplete'> {
   const hooksLeft = await removeAllAgentHooks();
   const home = getLocalAgentHome();
   const keep = new Set([path.basename(getConfigPath())]);
   if (hooksLeft.length > 0) keep.add(path.basename(getAgentHookManifestPath()));
+  if (left.models.length > 0) keep.add(path.basename(getModelManifestPath()));
+  if (left.caches.length > 0) keep.add(path.basename(getManifestPath()));
   const gitExcludeRecord = path.join(home, 'git-exclude.json');
   if (Object.keys(await readJson<Record<string, unknown>>(gitExcludeRecord).catch(() => null) ?? {}).length > 0) {
     keep.add(path.basename(gitExcludeRecord));
@@ -4850,8 +4877,13 @@ async function finishAgentHookTeardown(retry: string): Promise<'removed' | 'inco
   for (const entry of await fse.readdir(home)) {
     if (!keep.has(entry)) await remove(path.join(home, entry));
   }
-  if (hooksLeft.length > 0) {
-    log.warn(`HTTP source disabled, but removal is incomplete: kept the record of agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')} `
+  const held = [
+    ...hooksLeft.length > 0 ? [`agent hooks ${hooksLeft.map((h) => `${h.slug} (${h.tool})`).join(', ')}`] : [],
+    ...left.models.length > 0 ? [`teamai's models in ${left.models.join(', ')}`] : [],
+    ...left.caches.length > 0 ? [`the local agent's cache in ${left.caches.map((dir) => path.join(dir, '.teamai')).join(', ')}`] : [],
+  ];
+  if (held.length > 0) {
+    log.warn(`HTTP source disabled, but removal is incomplete: kept the record of ${held.join('; ')} `
       + `in ${home}, as they could not be removed. Fix the files named above, then run \`${retry}\` again.`);
     process.exitCode = 1;
     return 'incomplete';
