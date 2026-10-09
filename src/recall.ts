@@ -602,6 +602,9 @@ export async function recall(
   const scopeIndexes: Array<{ index: SearchIndex; scope: 'user' | 'project'; config: LocalConfig; learningsBase: string }> = [];
   // A failed build has named its cause; "no learnings" would misdirect to pull.
   let indexBuildFailed = false;
+  // An index that holds nothing is what pull leaves when the member receives
+  // nothing recall indexes (#1006); asking for a pull would misdirect too.
+  let indexEmpty = false;
 
   if (projectConfig) {
     // Project mode: project scope first.
@@ -610,7 +613,7 @@ export async function recall(
       if (result === 'build-failed') indexBuildFailed = true;
       else if (result && result.index.entries.length > 0) {
         scopeIndexes.push({ index: result.index, scope: 'project', config: projectConfig, learningsBase: result.learningsBase });
-      }
+      } else if (result) indexEmpty = true;
     } catch (e) {
       log.debug(`recall: project scope not available: ${(e as Error).message}`);
     }
@@ -623,7 +626,7 @@ export async function recall(
           if (result === 'build-failed') indexBuildFailed = true;
           else if (result && result.index.entries.length > 0) {
             scopeIndexes.push({ index: result.index, scope: 'user', config: userConfig, learningsBase: result.learningsBase });
-          }
+          } else if (result) indexEmpty = true;
         }
       } catch (e) {
         log.debug(`recall: inherited user scope not available: ${(e as Error).message}`);
@@ -637,7 +640,7 @@ export async function recall(
       if (result === 'build-failed') indexBuildFailed = true;
       else if (result && result.index.entries.length > 0) {
         scopeIndexes.push({ index: result.index, scope: 'user', config: userConfig, learningsBase: result.learningsBase });
-      }
+      } else if (result) indexEmpty = true;
     } catch (e) {
       log.debug(`recall: user scope not available: ${(e as Error).message}`);
     }
@@ -655,7 +658,9 @@ export async function recall(
       emitCheckVerdict(0);
       return;
     }
-    if (!indexBuildFailed) log.info('No learnings available. Run `teamai pull` first to sync team knowledge.');
+    if (indexBuildFailed) return;
+    if (indexEmpty) log.info('The search index is empty: nothing you receive from the team is indexed. `teamai pull` rebuilds it when that changes.');
+    else log.info('No learnings available. Run `teamai pull` first to sync team knowledge.');
     return;
   }
 

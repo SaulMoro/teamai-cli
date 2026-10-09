@@ -393,3 +393,32 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     ));
   });
 });
+
+/**
+ * An index that exists and holds nothing is what pull leaves once the member
+ * receives nothing recall indexes (#1006). Telling them to pull first sends
+ * them to the command they just ran.
+ */
+describe('recall with an empty index (#1006)', () => {
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-recall-empty-'));
+    process.env.HOME = tmp;
+    vi.mocked(log.info).mockClear();
+  });
+
+  afterEach(() => {
+    process.env.HOME = realHome;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('says the index is empty instead of asking for a pull', async () => {
+    const { buildIndex } = await import('../utils/search-index.js');
+    await buildIndex({ learningsDirs: [], indexPath: path.join(tmp, '.teamai', 'search-index.json') });
+
+    await recall('retry budget', {});
+
+    expect(vi.mocked(log.info).mock.calls.map(([message]) => String(message))).toEqual([
+      'The search index is empty: nothing you receive from the team is indexed. `teamai pull` rebuilds it when that changes.',
+    ]);
+  });
+});
