@@ -2767,6 +2767,37 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(fs.existsSync(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'))).toBe(false);
   });
 
+  it.skipIf(process.getuid?.() === 0)('keeps a rule copy it could not delete, with its line and its cached source, and the retry removes the copy', async () => {
+    await flag(true);
+    const app = await repo('app');
+    await run([rule(1, 'http-rule', app)], app);
+    const rules = path.join(app, '.claude', 'rules');
+    const copy = path.join(rules, 'http-rule.md');
+    fs.chmodSync(rules, 0o555);
+    process.exitCode = undefined;
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    const { log } = await import('../utils/logger.js');
+    (log.warn as ReturnType<typeof vi.fn>).mockClear();
+    try {
+      await removeLocalAgentHttp();
+    } finally {
+      fs.chmodSync(rules, 0o755);
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(fs.existsSync(copy)).toBe(true);
+    expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.teamai/.gitignore']);
+    // The warning names the file and why, so the member knows what to fix.
+    expect((log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0])).join('\n')).toContain(copy);
+
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fs.existsSync(copy)).toBe(false);
+    expect(blockOf(app)).toBeNull();
+  });
+
   it.skipIf(process.getuid?.() === 0)('keeps the record of a workspace cache removal could not delete, and deletes it on the retry', async () => {
     await flag(true);
     const app = await repo('app');

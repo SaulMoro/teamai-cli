@@ -193,6 +193,8 @@ interface RemovalPlan {
   keptGlobal: string[];
   /** Skill, rule and agent copies git tracks: never deleted, only named (#915). */
   keptTracked: string[];
+  /** Copies kept because git could not say whether it tracks them: the run stays incomplete, with its records, for the retry. */
+  keptUnjudged: string[];
   /** Shared main checkout manifest to preserve when this checkout's .teamai is removed, because another worktree still shares it. */
   preserveSharedManifest?: string | null;
   /** Synthetic main checkout manifest and directory to clean up when the last worktree is uninstalled and the main checkout has no install of its own. */
@@ -1065,6 +1067,7 @@ async function buildRemovalPlan(
     globalAdapters,
     keptGlobal: [],
     keptTracked: [],
+    keptUnjudged: [],
     preserveSharedManifest,
     syntheticManifestCleanup,
     mainCheckouts,
@@ -1446,7 +1449,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
 async function keepTrackedCopies(plan: RemovalPlan): Promise<void> {
   const untracked = async (file: string): Promise<boolean> => {
     if (!await keepsTrackedCopy(file)) return true;
-    plan.keptTracked.push(file);
+    ((await gitTracks(file, 'entry')).kind === 'tracked' ? plan.keptTracked : plan.keptUnjudged).push(file);
     return false;
   };
   const skillDirs: SkillDirEntry[] = [];
@@ -2430,7 +2433,7 @@ async function removeConfirmed(
   const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
-    files: httpSourceLeft,
+    files: [...httpSourceLeft, ...plan.keptUnjudged],
   });
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
 

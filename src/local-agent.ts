@@ -2415,7 +2415,15 @@ async function uninstallResource(input: {
   } else if (input.kind === 'rule') {
     const item: ResourceItem = { name: input.slug, type: 'rules', sourcePath: path.join(repoPath, 'rules', `${input.slug}.md`), relativePath: `rules/${input.slug}.md` };
     await failOnUnjudgedCopies((await new RulesHandler().deliveryTargets(teamConfig, localConfig, item)).map(({ dest }) => dest));
-    await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
+    // removeItem deletes the cached rule before its copies: one that cannot go
+    // gets the cache back, which proves it teamai's on the retry.
+    const cached = await readFileSafe(item.sourcePath);
+    try {
+      await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
+    } catch (error) {
+      if (cached !== null && !await pathExists(item.sourcePath)) await fse.outputFile(item.sourcePath, cached);
+      throw error;
+    }
   } else {
     const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
     const previous = await readFileSafe(dest);
@@ -3061,7 +3069,7 @@ async function removeTeamaiModelGitignore(workspacePath: string): Promise<void> 
   if (content === null) return;
   const lines = content.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   if (lines.length !== TEAMAI_MODEL_GITIGNORE.length || lines.some((line, i) => line !== TEAMAI_MODEL_GITIGNORE[i])) return;
-  if ((await gitTracks(file)).kind !== 'untracked') return;
+  if (!await gitUntracked(file)) return;
   await remove(file);
 }
 
@@ -4845,7 +4853,7 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
         try {
           await uninstallResource({ config, kind, slug, scope, workspacePath });
         } catch (e) {
-          log.debug(`local-agent: failed to uninstall ${kind} "${slug}": ${(e as Error).message}`);
+          log.warn(`Could not uninstall ${kind} ${slug}: ${(e as Error).message}`);
         }
       }
     }

@@ -324,6 +324,32 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(read(exclude)).not.toContain('# [teamai:');
   }, 120_000);
 
+  it('keeps the copies, their lines and the records while git cannot read the index, and removes them on the retry', () => {
+    const m = member('index-left');
+    const app = m.project(path.join(caseDir('index-left'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const index = path.join(app, '.git', 'index');
+    const intact = fs.readFileSync(index);
+    expect(blockLines(exclude)).toEqual(expect.arrayContaining(['/.claude/rules/team-rule.md', '/.claude/skills/fe-skill/SKILL.md']));
+    fs.writeFileSync(index, 'not an index\n');
+
+    const first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
+    fs.writeFileSync(index, intact);
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Uninstall incomplete');
+    expect(fs.existsSync(path.join(app, '.claude', 'rules', 'team-rule.md'))).toBe(true);
+    expect(blockLines(exclude), first.output).toEqual(expect.arrayContaining(['/.claude/rules/team-rule.md', '/.claude/skills/fe-skill/SKILL.md']));
+    expect(status(m, app)).toEqual([]);
+    expect(partitionDirs(m)).not.toEqual([]);
+
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(fs.existsSync(path.join(app, '.claude', 'rules', 'team-rule.md'))).toBe(false);
+    expect(read(exclude)).not.toContain('# [teamai:');
+    expect(status(m, app)).toEqual([]);
+  }, 120_000);
+
   it('keeps the block another project holds in a tool home under version control', () => {
     const m = member('tool-home');
     fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });
