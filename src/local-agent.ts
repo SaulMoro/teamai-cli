@@ -2525,8 +2525,10 @@ async function syncLocalAgentGitExclude(
         + `${enabled.fix}, then start a new session.`);
     }
     // A workspace whose flag is unknown keeps the lines it has: neither added nor dropped.
+    // A path git cannot place is passed on too, so the sync only adds and drops no line.
     if (unknown.length > 0) {
-      paths.push(...(await reportGitExclude(localAgentGitExcludeOwner(), unknown)).files.flatMap((file) => file.listed));
+      const current = await reportGitExclude(localAgentGitExcludeOwner(), unknown);
+      paths.push(...current.files.flatMap((file) => file.listed), ...current.gitFailed.map((failed) => failed.path));
     }
     const result = await syncGitExclude(localAgentGitExcludeOwner(), paths, { dryRun });
     for (const { excludeFile, dropped } of result.files) if (dropped.length > 0) changed.push({ excludeFile, dropped });

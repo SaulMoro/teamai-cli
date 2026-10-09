@@ -217,20 +217,27 @@ const TeamaiHooks = async ({ directory, worktree }) => {
 // opencode.json on V2.
 const USER_CONFIG_DIR = ${JSON.stringify(userConfigDir)};
 
-/** The nearest \`.opencode\` from \`directory\` up that teamai delivers to, if any. */
+/**
+ * The nearest \`.opencode\` from \`directory\` up that teamai delivers to, if any:
+ * one holding a teamai file, else, for a team with only rules, the nearest
+ * with a \`rules\` directory. A member's own \`.opencode/rules\` in a nested
+ * package does not hide the teamai project above it.
+ */
 const teamaiProject = async (directory) => {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
   const exists = (file) => fs.stat(file).then(() => true, () => false);
+  let rulesOnly;
   for (let dir = directory; dir;) {
     const project = path.join(dir, '.opencode');
-    for (const marker of ['teamai-context.md', 'rules', ${JSON.stringify(OPENCODE_MCP_FILE)}]) {
+    for (const marker of ['teamai-context.md', ${JSON.stringify(OPENCODE_MCP_FILE)}]) {
       if (await exists(path.join(project, marker))) return project;
     }
+    if (rulesOnly === undefined && await exists(path.join(project, 'rules'))) rulesOnly = project;
     const parent = path.dirname(dir);
     dir = parent === dir ? undefined : parent;
   }
-  return undefined;
+  return rulesOnly;
 };
 
 /** @param {string} directory */

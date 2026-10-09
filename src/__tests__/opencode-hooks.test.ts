@@ -484,6 +484,36 @@ describe('OpenCode V2 plugin: team MCP servers', () => {
     await host.cleanup?.();
   });
 
+  it('passes a nested .opencode that holds only the member\'s rules, to reach the teamai project above it', async () => {
+    const root = path.join(tmp, 'mono');
+    await fse.outputFile(path.join(root, '.opencode', 'teamai-context.md'), 'ROOT-CONTEXT\n');
+    await fse.outputJson(path.join(root, '.opencode', 'teamai-mcp.json'), { mcp: { api: { type: 'remote', url: 'https://root.example.com', enabled: true } } });
+    const pkg = path.join(root, 'packages', 'web');
+    await fse.outputFile(path.join(pkg, '.opencode', 'rules', 'mine.md'), 'MEMBER-RULE\n');
+    await fse.ensureDir(path.join(pkg, 'src'));
+
+    const host = await loadV2Plugin(buildPluginSource(path.join(tmp, 'user')), {}, path.join(pkg, 'src'));
+    expect(host.mcpServers()).toEqual({ api: { type: 'remote', url: 'https://root.example.com' } });
+    const event = { sessionID: 'ses', system: [] as Array<{ type: string; text: string }> };
+    await host.callbacks['session.context'](event);
+    const texts = event.system.map((part) => part.text).join('\n');
+    expect(texts).toContain('ROOT-CONTEXT');
+    expect(texts).not.toContain('MEMBER-RULE');
+    await host.cleanup?.();
+  });
+
+  it('falls back to the nearest rules directory when no .opencode above holds a teamai file', async () => {
+    const project = path.join(tmp, 'proj');
+    await fse.outputFile(path.join(project, '.opencode', 'rules', 'team.md'), 'TEAM-RULE\n');
+    await fse.ensureDir(path.join(project, 'src'));
+
+    const host = await loadV2Plugin(buildPluginSource(path.join(tmp, 'user')), {}, path.join(project, 'src'));
+    const event = { sessionID: 'ses', system: [] as Array<{ type: string; text: string }> };
+    await host.callbacks['session.context'](event);
+    expect(event.system.map((part) => part.text).join('\n')).toContain('TEAM-RULE');
+    await host.cleanup?.();
+  });
+
   it('adds nothing from an agent-hook plugin, so the servers are set once', async () => {
     await fse.outputJson(path.join(tmp, '.opencode', 'teamai-mcp.json'), { mcp: { api: { type: 'remote', url: 'https://x.example.com', enabled: true } } });
     const host = await loadV2Plugin(buildAgentHookPluginSource('s', 'session.created', 'echo hi'), {}, tmp);

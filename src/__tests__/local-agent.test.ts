@@ -2813,4 +2813,23 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'other-rule.md'))).toBe(false);
     expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore']);
   });
+
+  it('keeps those lines when git also cannot place the workspace\'s paths', async () => {
+    await flag(true);
+    const app = await repo('app');
+    await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
+    const before = ['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore'];
+    expect(blockOf(app)).toEqual(before);
+    const clone = path.join(tmpDir, '.teamai', 'team-repo');
+    await fse.ensureDir(clone);
+    await fse.outputFile(path.join(tmpDir, '.teamai', 'config.yaml'), [
+      'repo:', `  localPath: ${clone}`, '  remote: https://example.com/team.git', '  kind: git', '  url: https://example.com/team.git',
+      'username: tester', 'scope: user', '',
+    ].join('\n'));
+    await fse.writeFile(path.join(app, '.git', 'HEAD'), 'not a ref\n');
+
+    await run([], app, 'claude', 'prompt_submit');
+
+    expect(blockOf(app)).toEqual(before);
+  });
 });
