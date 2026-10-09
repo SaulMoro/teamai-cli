@@ -3137,6 +3137,17 @@ export async function liveDeliveredLists(
       paths: root !== undefined && gitExcludePaths ? Object.values(gitExcludePaths).flat() : null,
     }));
   if (current) lists.push({ root: projectRoot, paths: Object.values(current.paths).flat() });
+  // A checkout git lists that teamai has no record of (made before it was set
+  // up) has no list either: its files hold lines back like an unlisted one's.
+  const real = (dir: string): Promise<string> => realpath(dir).catch(() => dir);
+  const known = new Set(await Promise.all([projectRoot, ...lists.map(({ root }) => root)].map(real)));
+  const commonDir = await gitCommonDir(projectRoot);
+  for (const root of commonDir ? await completeWorktreeList(projectRoot, commonDir) ?? await listWorktrees(projectRoot) : []) {
+    const key = await real(root);
+    if (known.has(key)) continue;
+    known.add(key);
+    lists.push({ root, paths: null });
+  }
   return lists;
 }
 

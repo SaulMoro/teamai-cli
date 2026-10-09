@@ -21,6 +21,9 @@ vi.mock('../config.js', async (importOriginal) => ({
 vi.mock('../utils/git.js', () => ({
   pullRepo: vi.fn().mockResolvedValue('already up to date'),
   getHeadRev: vi.fn().mockResolvedValue('abc1234'),
+  // The project is no git checkout here.
+  gitCommonDir: vi.fn().mockResolvedValue(null),
+  listWorktrees: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../utils/logger.js', () => ({

@@ -2858,6 +2858,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     const app = await repo('app');
     await run([rule(1, 'http-rule', app)], app);
     const record = path.join(tmpDir, '.teamai', 'local-agent', 'git-exclude.json');
+    const intact = fs.readFileSync(record, 'utf8');
     fs.writeFileSync(record, '{ not json\n');
     const { removeLocalAgentHttp } = await import('../local-agent.js');
     process.exitCode = undefined;
@@ -2866,6 +2867,18 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
 
     expect(process.exitCode).toBe(1);
     expect(fs.readFileSync(record, 'utf8')).toBe('{ not json\n');
+
+    // The retry finds it still unreadable: still incomplete, not "nothing to remove".
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+    expect(process.exitCode).toBe(1);
+
+    fs.writeFileSync(record, intact);
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+    expect(process.exitCode).toBeUndefined();
+    expect(blockOf(app)).toBeNull();
+    expect(fs.existsSync(record)).toBe(false);
   });
 
   it('follows a flag change at a run that brings no command, and leaves the block alone while nothing it is built from changed', async () => {

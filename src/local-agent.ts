@@ -4923,7 +4923,9 @@ async function disabledSourceLeftovers(): Promise<boolean> {
   // A teardown keeps these only for what it could not remove.
   if (await pathExists(getModelManifestPath()) || await pathExists(getManifestPath())) return true;
   for (const owner of [localAgentGitExcludeOwner(), credentialsGitExcludeOwner()]) {
-    if ((await owner.record?.files().catch(() => []) ?? []).length > 0) return true;
+    // A record that cannot be read may name blocks still in place.
+    const files = await owner.record?.files().then((list) => list, () => null);
+    if (files === null || (files?.length ?? 0) > 0) return true;
   }
   return false;
 }

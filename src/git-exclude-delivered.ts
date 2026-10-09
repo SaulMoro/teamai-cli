@@ -182,8 +182,9 @@ const PERSONAL = new Set(['.claude/settings.local.json']);
  * checkout, since one line in the exclude file they share would hide that
  * checkout's file too. A path is foreign in checkout X when X's root joined
  * with its path from its own checkout's root exists (lstat) and is not in X's
- * list. A checkout without a list yet has every file foreign: nothing says
- * which of its files teamai delivered until its first full sync. A listed
+ * list. A checkout without a list yet (never pulled, or not since an older
+ * CLI) proves nothing about its files, so one there is foreign unless it holds
+ * the same bytes as the listed copy. A listed
  * path outside its own checkout (the main checkout's hook file) is not
  * tested. Read-only.
  */
@@ -201,7 +202,7 @@ export async function deliveredUnion(checkouts: ListedCheckout[]): Promise<Deliv
       const rel = path.relative(checkout.root, file);
       const inside = rel !== '' && !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel);
       const portable = rel.split(path.sep).join('/');
-      const foreign = inside && !PERSONAL.has(portable) ? await foreignIn(all.filter((other) => other !== checkout), rel) : [];
+      const foreign = inside && !PERSONAL.has(portable) ? await foreignIn(all.filter((other) => other !== checkout), rel, file) : [];
       result.foreign.push(...foreign.map((other) => ({
         path: file, rel: portable, checkout: other.root, file: other.file, ...other.unlisted ? { unlisted: true } : {},
       })));
@@ -213,13 +214,22 @@ export async function deliveredUnion(checkouts: ListedCheckout[]): Promise<Deliv
 }
 
 async function foreignIn(
-  others: Array<{ root: string; set: Set<string>; unlisted: boolean }>, rel: string,
+  others: Array<{ root: string; set: Set<string>; unlisted: boolean }>, rel: string, delivered: string,
 ): Promise<Array<{ root: string; file: string; unlisted: boolean }>> {
   const found = await Promise.all(others.map(async ({ root, set, unlisted }) => {
     const file = path.join(root, rel);
-    return !set.has(file) && await fse.lstat(file).then(() => true, () => false) ? { root, file, unlisted } : null;
+    if (set.has(file) || !await fse.lstat(file).then(() => true, () => false)) return null;
+    // A checkout with no list proves nothing either way: a file equal to teamai's copy is teamai's.
+    if (unlisted && await sameBytes(file, delivered)) return null;
+    return { root, file, unlisted };
   }));
   return found.filter((f) => f !== null);
+}
+
+/** Whether two regular files hold the same bytes; false when either cannot be read. */
+async function sameBytes(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([a, b].map((file) => fse.readFile(file).catch(() => null)));
+  return x !== null && y !== null && x.equals(y);
 }
 
 /** The pull line naming each foreign path once, by the file that holds its line back. */
@@ -228,7 +238,7 @@ export function describeForeign(foreign: ForeignPath[]): string[] {
   for (const { rel, file, checkout, unlisted } of foreign) {
     if (named.has(file)) continue;
     named.set(file, unlisted
-      ? `Left ${rel} visible to git in every checkout until \`teamai pull\` runs in ${checkout}: an older teamai set that checkout up, so nothing says yet whether ${file} is a copy teamai delivered, and a git exclude line would hide it too.`
+      ? `Left ${rel} visible to git in every checkout until \`teamai pull\` runs in ${checkout}: teamai has no record yet of what it delivered there, so ${file} may be the member's, and a git exclude line would hide it too.`
       : `Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
   }
   return [...named.values()];
