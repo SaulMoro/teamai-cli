@@ -143,6 +143,31 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     expect(pushedFiles()).toEqual([]);
   });
 
+  it.each([
+    { flag: ['--project', 'svc-b'], rule: 'rules/svc-b/new-rule.md' },
+    { flag: ['--role', 'platform'], rule: 'rules/platform/new-rule.md' },
+  ])('keeps the edit\'s namespace when $flag places new resources', ({ flag, rule }) => {
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+    writeFile(path.join(project, '.claude', 'rules', 'new-rule.md'), '# new rule\n');
+
+    const pushed = run(['push', '--all', ...flag]);
+
+    expect(pushedFiles(), pushed.output).toEqual(expect.arrayContaining(['skills/svc-a/a-skill/SKILL.md', rule]));
+    expect(pushedFiles().filter((file) => file.endsWith('a-skill/SKILL.md'))).toEqual(['skills/svc-a/a-skill/SKILL.md']);
+  });
+
+  it('says nothing about an unedited copy two inactive namespaces hold', () => {
+    commitOnTeam('skills/svc-b/a-skill/SKILL.md', skillMd('a-skill'));
+    expect(run(['projects', 'set', 'platform']).code).toBe(0);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).not.toContain('Skipped a-skill');
+    expect(pushedFiles()).toEqual([]);
+  });
+
   it('leaves out a member\'s own skill that only shares its name with an inactive namespace', () => {
     writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), skillMd('b-skill') + '\nMy own.\n');
 

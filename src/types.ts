@@ -973,6 +973,12 @@ export interface ResourceItem {
   relativePath: string;
   status?: ResourceItemStatus;
   namespace?: string;
+  /**
+   * A skill edit from a namespace not active here, such as a copy pull kept
+   * after a switch: it goes back to `namespace`, and `--role`/`--project`
+   * never relocate it (#1020).
+   */
+  fromInactiveNamespace?: true;
 }
 
 export interface ResourceDiff {

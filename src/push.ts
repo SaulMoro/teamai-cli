@@ -175,20 +175,21 @@ async function activeProjectNamespaces(type: PlaceableType, localConfig: LocalCo
   } catch (e) {
     return {
       ok: false,
-      message: `Cannot resolve where new ${type} should go: ${(e as Error).message}. `
+      message: `Cannot resolve where new ${type} should go: ${e instanceof Error ? e.message : String(e)}. `
         + 'Fix manifest/projects.yaml or run `teamai projects set <id>`, or pass --project <id> or --role <ns> '
         + 'to name the namespace for this push.',
     };
   }
-  const unsafe = candidates.find((namespace) => !isSafeNamespaceSegment(namespace));
-  if (unsafe !== undefined) {
-    return {
-      ok: false,
-      message: `The projects manifest declares an unusable ${axis} namespace "${unsafe}": ${NAMESPACE_RULE}. `
-        + 'Fix manifest/projects.yaml, or pass --role <ns> to name the namespace for this push.',
-    };
-  }
+  // The manifest schema already holds each namespace to one safe path segment.
   return { ok: true, candidates };
+}
+
+/**
+ * Whether `--role`/`--project` relocates `item`: every selected skill, except
+ * an edit from a namespace not active here, which goes back there (#1020).
+ */
+function isRelocatedByFlag(item: ResourceItem): boolean {
+  return item.type === 'skills' && !item.fromInactiveNamespace;
 }
 
 /**
@@ -560,9 +561,9 @@ async function placeNewResources(args: {
   const { items, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale } = args;
 
   // A project that declares no skills namespace only blocks the push once a
-  // skill is actually selected, so a rule can still go out from a scan that
-  // happens to contain an unrelated skill.
-  if (skillsDestinationError && items.some((i) => i.type === 'skills')) {
+  // skill the flag relocates is actually selected, so a rule can still go out
+  // from a scan that happens to contain an unrelated skill.
+  if (skillsDestinationError && items.some(isRelocatedByFlag)) {
     log.error(skillsDestinationError);
     process.exitCode = 2;
     return false;
@@ -1538,7 +1539,7 @@ async function pushCore(
       return;
     }
     skillsDestination = options.role;
-  } else if (options.project && projectsManifest && allItems.some((i) => i.type === 'skills')) {
+  } else if (options.project && projectsManifest && allItems.some(isRelocatedByFlag)) {
     const resolved = resolveProjectNamespace(projectsManifest, options.project, 'skills');
     if (resolved.ok) {
       skillsDestination = resolved.namespace;
@@ -1559,7 +1560,7 @@ async function pushCore(
       return;
     }
     for (const item of allItems) {
-      if (item.type !== 'skills') continue;
+      if (!isRelocatedByFlag(item)) continue;
       const placedAt = skillNamespacePath(skillsDestination, item.name);
       // Same rule as step 4: a MODIFIED skill is meant to land on its own
       // existing directory, a new one must never land on somebody else's.
@@ -1677,7 +1678,7 @@ async function pushCore(
   // so its open PR is still the right one to update, and treating it as a
   // conflict opened a second PR on the same file (#649 review).
   const scannedByKey = new Map(allItems.map((item) => [`${item.type}:${item.name}`, item]));
-  const movedByFlag = (item: ResourceItem): boolean => item.type === 'skills'
+  const movedByFlag = (item: ResourceItem): boolean => isRelocatedByFlag(item)
     || (item.status === 'new' && !item.namespace && isAtSharedRoot(item));
   const conflictsWithRequest = (
     recorded: { type: string; name: string; namespace?: string; relativePath: string },
