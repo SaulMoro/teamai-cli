@@ -8,12 +8,13 @@ import path from 'node:path';
 import YAML from 'yaml';
 
 import { envExec, exitLike, inTerminalForeground } from '../env-exec.js';
+import { EnvHandler } from '../resources/env.js';
 import { envShMarker } from '../env-sh-exports.js';
 import { getMachineSecretsPath, getTeamSecretsPath, writeSecretStore, type SecretStore } from '../secret-store.js';
 import { resolveAnchors } from '../utils/git.js';
 import { _resetState, _setLogFilePath, setStderrOnly } from '../utils/logger.js';
 import { projectDataHome } from '../utils/partition.js';
-import type { LocalConfig } from '../types.js';
+import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 /**
  * `teamai env exec -- <command>` (#875, #879 S8): the command runs with the
@@ -130,6 +131,51 @@ describe('teamai env exec', () => {
     env = await childEnv(home);
     expect(env.GITHUB_TOKEN).toBe('fixture-from-env');
     expect(text(stderr)).not.toContain('is not set');
+  });
+
+  // #1018: a shell started in another project carries that project's env.sh;
+  // a command run here gets this directory's env, not a mix of both.
+  describe('with values another scope exported', () => {
+    const exportedBy = async (config: LocalConfig, variables: { key: string; value: string }[]): Promise<void> => {
+      const teamConfig = { sharing: { env: { injectShellProfile: false } } } as TeamaiConfig;
+      await new EnvHandler().writeResolvedEnv(variables, teamConfig, config);
+      for (const { key, value } of variables) vi.stubEnv(key, value);
+    };
+
+    it("drops another project's values before applying this one's", async () => {
+      const { repoPath } = await team('work', { 'env/env.yaml': 'variables:\n  - key: API_URL\n    value: https://a.example\n' });
+      const { root } = await project(repoPath);
+      await exportedBy({
+        repo: { localPath: repoPath, remote: 'https://example.com/b.git' }, username: 't', scope: 'project',
+        projectRoot: path.join(tmpDir, 'b'), additionalRoles: [], dataHome: path.join(home, '.teamai', 'projects', 'b'),
+      }, [{ key: 'ONLY_B', value: 'b-only' }, { key: 'API_URL', value: 'https://b.example' }]);
+      vi.stubEnv('MINE', 'kept');
+
+      const env = await childEnv(root);
+
+      expect(env.ONLY_B).toBeUndefined();
+      expect(env.API_URL).toBe('https://a.example');
+      expect(env.MINE).toBe('kept');
+    });
+
+    it('puts the user scope\'s variables, never its secrets, under a project that inherits it', async () => {
+      const personal = await team('personal', {
+        'env/env.yaml': 'variables:\n  - key: USER_ONLY\n    value: u\n  - key: SHARED\n    value: user\n',
+        'env/secrets.yaml': GITHUB_SECRET,
+      });
+      const userConfig = await userScope(personal.repoPath);
+      await writeSecretStore(getTeamSecretsPath(userConfig), { GITHUB_TOKEN: { value: 'fixture-user-team' } });
+      const work = await team('work', { 'env/env.yaml': 'variables:\n  - key: SHARED\n    value: project\n' });
+      const { root, partition, config } = await project(work.repoPath);
+
+      expect((await childEnv(root)).USER_ONLY).toBeUndefined();
+
+      await fse.outputFile(path.join(partition, 'config.yaml'), YAML.stringify({ ...config, inheritUserScope: true }));
+      const env = await childEnv(root);
+      expect(env.USER_ONLY).toBe('u');
+      expect(env.SHARED).toBe('project');
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+    });
   });
 
   // #875 (#879 S9): the same order as MCP for a variable.

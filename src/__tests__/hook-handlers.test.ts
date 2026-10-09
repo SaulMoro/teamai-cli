@@ -1460,7 +1460,7 @@ describe('post-tool-use dispatch — local-agent runs detached, never blocks hos
   });
 });
 
-describe('session-start secrets hint (#875)', () => {
+describe('session-start team env hint (#875, #1018)', () => {
   let teamRepo: string;
 
   beforeEach(() => {
@@ -1504,7 +1504,19 @@ describe('session-start secrets hint (#875)', () => {
     expect(lines.filter((line) => line !== secretLines[0])).toEqual(['MR context', 'Package context']);
   });
 
-  it('adds nothing when the scope declares no secrets', async () => {
+  it('names the scope\'s env variables and env exec when it delivers variables but no secrets (#1018)', async () => {
+    fs.mkdirSync(path.join(teamRepo, 'env'));
+    fs.writeFileSync(path.join(teamRepo, 'env', 'env.yaml'), 'variables:\n  - key: API_URL\n    value: https://api.example\n');
+
+    const lines = await sessionContext();
+
+    const envLines = lines.filter((line) => line.includes('API_URL'));
+    expect(envLines).toHaveLength(1);
+    expect(envLines[0]).toContain('teamai env exec --');
+    expect(envLines[0]).not.toContain('teamai env set KEY');
+  });
+
+  it('adds nothing when the scope delivers no env', async () => {
     expect(await sessionContext()).toEqual(['MR context', 'Package context']);
   });
 
@@ -1516,10 +1528,10 @@ describe('session-start secrets hint (#875)', () => {
   });
 
   it('is a foreground team handler, so a directory without teamai never gets the line', () => {
-    const registration = buildHandlerRegistry().find((r) => r.handler.name === 'secrets-hint');
+    const registration = buildHandlerRegistry().find((r) => r.handler.name === 'team-env-hint');
     expect(registration).toMatchObject({ event: 'session-start', matcher: '*', requiresConfig: true });
     expect(registration?.background).not.toBe(true);
-    expect(filterHandlersForConfig(buildHandlerRegistry(), null).map((r) => r.handler.name)).not.toContain('secrets-hint');
+    expect(filterHandlersForConfig(buildHandlerRegistry(), null).map((r) => r.handler.name)).not.toContain('team-env-hint');
   });
 });
 
