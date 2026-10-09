@@ -112,7 +112,9 @@ token 需要 `repo` 权限。`GH_TOKEN` 作为别名也会被识别。
 
 | 操作                   | 实现                                                        |
 |------------------------|-------------------------------------------------------------|
-| clone                  | `git clone https://x-access-token:$TOKEN@github.com/...`    |
+| clone                  | `git clone https://github.com/<org>/<repo>.git`（URL 不带凭据）。认证分两段：clone 那一次调用以 `-c http.extraHeader` 注入 `Authorization: Basic x-access-token:<TOKEN>`；克隆完成后把 `credential.https://github.com.helper` 持久化到该仓库的**本地**配置，供随后的 `push` / `pull` 使用。token 不写进 URL，因此不会残留在克隆仓库的 `.git/config`（[#978](https://github.com/Tencent/teamai-cli/issues/978)） |
+
+> **为什么要先清空再写入 helper**：`credential.helper` 是多值键，git 按 system → global → local 依次调用全部 helper，**第一个交出凭据的赢**。克隆仓库里直接 `--local --add` 只是往继承列表尾部追加，用户全局配置的 Git Credential Manager 等 helper 仍会先应答，`git push` 于是以**它的**账号认证而非本次克隆用的 token，在无写权限或身份不一致时直接 401。因此持久化分两步执行——先 `git config --local --replace-all credential.https://github.com.helper ''` 清空继承项，再 `--add` 写入解析 `GITHUB_TOKEN` / `GH_TOKEN` 的 helper。两步都限定在 `https://github.com` 作用域内，其他 host 的 helper 不受影响。
 | 创建仓库               | `POST /user/repos` 或 `POST /orgs/:org/repos`               |
 | 创建 PR                | `gh pr create` 或 `POST /repos/:o/:r/pulls`                 |
 | 指定 reviewer          | `gh pr create -r` 或 `POST .../requested_reviewers`         |
@@ -320,7 +322,7 @@ GitCode 命名空间为单层（用户或组织），仓库地址形如 `owner/r
 
 > 注：仅支持公有云 `gitcode.com`，暂不支持自托管 GitCode 企业版。
 
-**关键方言**：GitCode 的 git-over-HTTPS 端点**拒绝 `Authorization: Bearer`**，只接受 Basic `oauth2:<token>`（已实机验证）。而 REST API 用 Bearer。因此团队仓 clone 把 token 内嵌进 remote URL（`oauth2:<token>@`），使 `git push`（分支 + PR 流程）能通过认证——与 GitHub / TGit 一致。
+**关键方言**：GitCode 的 git-over-HTTPS 端点**拒绝 `Authorization: Bearer`**，只接受 Basic `oauth2:<token>`（已实机验证）。而 REST API 用 Bearer。因此团队仓 clone 把 token 内嵌进 remote URL（`oauth2:<token>@`），使 `git push`（分支 + PR 流程）能通过认证——与 TGit 一致。（GitHub 原先也这么做，现已改为克隆时一次性 `-c http.extraHeader` + 持久化 URL 作用域的 `credential.helper`，token 不再进入 `.git/config`，见上一节。）
 
 ### 默认 email 域
 
