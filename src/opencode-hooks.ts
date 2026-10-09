@@ -423,8 +423,8 @@ export async function opencodeContextPlugin(): Promise<{ file: string; ready: bo
  */
 export async function opencodeDeliversThroughPlugin(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<boolean> {
   if (localConfig.scope !== 'project' || localConfig.repo.kind === 'http') return false;
-  if (!isGitExcludeEnabled(localConfig, teamConfig) || await opencodeMajorVersion() < 2) return false;
-  return (await opencodeContextPlugin()).ready;
+  if (!isGitExcludeEnabled(localConfig, teamConfig) || !(await opencodeContextPlugin()).ready) return false;
+  return await opencodeMajorVersion() >= 2;
 }
 
 /** Remove the teamai OpenCode plugin for a scope if present. */
