@@ -360,14 +360,16 @@ describe.skipIf(process.platform === 'win32')('one delivered block serves every 
     write(path.join(wt, '.claude/rules/new-rule.md'), membersRule);
     m.teamCommit({ 'rules/new-rule.md': rule('New') });
 
-    // A checkout without a list yet (state an older CLI saved) has no foreign files.
+    // A checkout without a list yet (state an older CLI saved) cannot say which of its files are teamai's:
+    // a file there at a delivered path holds the line back until that checkout's first full sync.
     const statePath = path.join(m.home, '.teamai', 'projects', fs.readdirSync(path.join(m.home, '.teamai', 'projects'))[0], 'state.json');
     const state = JSON.parse(read(statePath)) as { lastPullByWorkspace: Record<string, { root?: string; gitExcludePaths?: unknown }> };
     for (const record of Object.values(state.lastPullByWorkspace)) if (record.root === wt) delete record.gitExcludePaths;
     write(statePath, JSON.stringify(state, null, 2));
     const first = m.teamai(['pull'], main);
-    expect(first).not.toContain('new-rule.md');
-    expect(blockLines(excludeFileOf(m, main))).toContain('/.claude/rules/new-rule.md');
+    expect(first).toContain(`Left .claude/rules/new-rule.md visible to git in every checkout until \`teamai pull\` runs in ${wt}`);
+    expect(blockLines(excludeFileOf(m, main))).not.toContain('/.claude/rules/new-rule.md');
+    expect(status(m, wt)).toContain('?? .claude/rules/new-rule.md');
 
     // Its first full sync keeps the member's rule, and from then on it is foreign there.
     const inWorktree = m.teamai(['pull'], wt);

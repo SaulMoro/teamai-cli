@@ -163,6 +163,8 @@ export interface ForeignPath {
   rel: string;
   checkout: string;
   file: string;
+  /** That checkout has no list yet, so whether teamai delivered `file` is unknown until its first full sync. */
+  unlisted?: boolean;
 }
 
 export interface DeliveredUnion {
@@ -180,23 +182,29 @@ const PERSONAL = new Set(['.claude/settings.local.json']);
  * checkout, since one line in the exclude file they share would hide that
  * checkout's file too. A path is foreign in checkout X when X's root joined
  * with its path from its own checkout's root exists (lstat) and is not in X's
- * list. A checkout without a list has no foreign files; a listed path outside
- * its own checkout (the main checkout's hook file) is not tested. Read-only.
+ * list. A checkout without a list yet has every file foreign: nothing says
+ * which of its files teamai delivered until its first full sync. A listed
+ * path outside its own checkout (the main checkout's hook file) is not
+ * tested. Read-only.
  */
 export async function deliveredUnion(checkouts: ListedCheckout[]): Promise<DeliveredUnion> {
-  const listed = await Promise.all(checkouts.flatMap(({ root, paths }) => paths === null ? [] : [(async () => ({
+  const all = await Promise.all(checkouts.map(async ({ root, paths }) => ({
     root: await fse.realpath(root).catch(() => root),
-    paths,
-    set: new Set(paths),
-  }))()]));
+    paths: paths ?? [],
+    set: new Set(paths ?? []),
+    unlisted: paths === null,
+  })));
+  const listed = all.filter((checkout) => !checkout.unlisted);
   const result: DeliveredUnion = { paths: [], foreign: [] };
   for (const checkout of listed) {
     for (const file of checkout.paths) {
       const rel = path.relative(checkout.root, file);
       const inside = rel !== '' && !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel);
       const portable = rel.split(path.sep).join('/');
-      const foreign = inside && !PERSONAL.has(portable) ? await foreignIn(listed.filter((other) => other !== checkout), rel) : [];
-      result.foreign.push(...foreign.map((other) => ({ path: file, rel: portable, checkout: other.root, file: other.file })));
+      const foreign = inside && !PERSONAL.has(portable) ? await foreignIn(all.filter((other) => other !== checkout), rel) : [];
+      result.foreign.push(...foreign.map((other) => ({
+        path: file, rel: portable, checkout: other.root, file: other.file, ...other.unlisted ? { unlisted: true } : {},
+      })));
       if (foreign.length === 0) result.paths.push(file);
     }
   }
@@ -204,10 +212,12 @@ export async function deliveredUnion(checkouts: ListedCheckout[]): Promise<Deliv
   return result;
 }
 
-async function foreignIn(others: Array<{ root: string; set: Set<string> }>, rel: string): Promise<Array<{ root: string; file: string }>> {
-  const found = await Promise.all(others.map(async ({ root, set }) => {
+async function foreignIn(
+  others: Array<{ root: string; set: Set<string>; unlisted: boolean }>, rel: string,
+): Promise<Array<{ root: string; file: string; unlisted: boolean }>> {
+  const found = await Promise.all(others.map(async ({ root, set, unlisted }) => {
     const file = path.join(root, rel);
-    return !set.has(file) && await fse.lstat(file).then(() => true, () => false) ? { root, file } : null;
+    return !set.has(file) && await fse.lstat(file).then(() => true, () => false) ? { root, file, unlisted } : null;
   }));
   return found.filter((f) => f !== null);
 }
@@ -215,8 +225,11 @@ async function foreignIn(others: Array<{ root: string; set: Set<string> }>, rel:
 /** The pull line naming each foreign path once, by the file that holds its line back. */
 export function describeForeign(foreign: ForeignPath[]): string[] {
   const named = new Map<string, string>();
-  for (const { rel, file } of foreign) {
-    if (!named.has(file)) named.set(file, `Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
+  for (const { rel, file, checkout, unlisted } of foreign) {
+    if (named.has(file)) continue;
+    named.set(file, unlisted
+      ? `Left ${rel} visible to git in every checkout until \`teamai pull\` runs in ${checkout}: an older teamai set that checkout up, so nothing says yet whether ${file} is a copy teamai delivered, and a git exclude line would hide it too.`
+      : `Left ${rel} visible to git in every checkout: ${file} is not a copy teamai delivered there, and a git exclude line would hide it too.`);
   }
   return [...named.values()];
 }
